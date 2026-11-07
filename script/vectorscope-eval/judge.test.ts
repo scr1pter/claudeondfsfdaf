@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { RUBRIC_VERSION } from "../../packages/core/src/review/eval"
+import { IMPORTANCE_PROPOSAL, RUBRIC_VERSION } from "../../packages/core/src/review/eval"
 import { judgeRuns, type Matcher } from "../../packages/core/src/review/eval-judge"
 import { Ledger } from "./budget"
 import { ledgerAdmission, ledgerCase, main, type Worksheet } from "./judge"
@@ -257,5 +257,176 @@ describe("a model judge", () => {
       }),
     ).rejects.toThrow("never judges findings it produced")
     expect(ledger.entries.filter((entry) => entry.type === "admit")).toHaveLength(0)
+  })
+})
+
+// VS-45: judging under the proposed importance rubric (Q29) in a judgement file of its own.
+describe("judge.ts --proposal importance", () => {
+  const file = join(root, "importance.json")
+  const proposalArgs = (command: string, ...rest: string[]) => [
+    command,
+    "--outputs",
+    outputs,
+    "--judgements",
+    file,
+    "--proposal",
+    "importance",
+    ...rest,
+  ]
+  // The cause gets `cause`; the retry finding an extra with `retry` (or none); the rest are false alarms.
+  async function rate(path: string, cause: string, retry?: string) {
+    const worksheet = (await Bun.file(path).json()) as Worksheet
+    for (const task of worksheet.tasks)
+      for (const finding of task.findings)
+        finding.answer = (
+          finding.title.includes("not awaited")
+            ? { verdict: { kind: "match", defect: task.defects[0].id }, importance: cause }
+            : finding.title.includes("retried")
+              ? { verdict: { kind: "extra", issue: "no-retry" }, ...(retry ? { importance: retry } : {}) }
+              : { verdict: { kind: "false-alarm" } }
+        ) as Worksheet["tasks"][number]["findings"][number]["answer"]
+    writeFileSync(path, JSON.stringify(worksheet))
+  }
+
+  test("writes worksheets with no severity into a judgement file of the proposal's own, and records importances", async () => {
+    const tasks = await main(proposalArgs("tasks", "--judge", "human:alice", "--worksheet", sheet("imp-alice")))
+    expect(tasks).toMatchObject({ code: 0, stderr: "" })
+    expect(tasks.stdout).toContain("Wrote 2 task(s) with 3 finding(s) for human:alice")
+    const created = await readJudgements(file)
+    expect(created.proposal).toBe(IMPORTANCE_PROPOSAL)
+    const worksheet = (await Bun.file(sheet("imp-alice")).json()) as Worksheet
+    expect(worksheet).toMatchObject({ kind: "judge", rubric: RUBRIC_VERSION, proposal: IMPORTANCE_PROPOSAL })
+    expect(worksheet.instructions).toContain('Give every match and extra an "importance"')
+    expect(worksheet.instructions).toContain("judging-rubric-importance.md")
+    for (const task of worksheet.tasks) {
+      for (const finding of task.findings) expect(finding).not.toHaveProperty("severity")
+      for (const defect of task.defects) expect(defect).not.toHaveProperty("severity")
+    }
+
+    // Alice gives the retry extra no importance, so that answer is left out.
+    await rate(sheet("imp-alice"), "would-block")
+    const imported = await main(proposalArgs("import", "--judge", "human:alice", "--worksheet", sheet("imp-alice")))
+    expect(imported.code).toBe(1)
+    expect(imported.stdout).toContain("Recorded 2 pass(es) by human:alice")
+    expect(imported.stderr).toContain("is a match or an extra without an importance")
+    const passes = (await readJudgements(file)).judgements.flatMap((item) => item.passes)
+    expect(passes.every((pass) => pass.proposal === IMPORTANCE_PROPOSAL && pass.rubric === RUBRIC_VERSION)).toBe(true)
+    expect(passes.find((pass) => pass.verdict.kind === "match")!.importance).toBe("would-block")
+
+    // Bob agrees on every verdict but rates the cause should-fix: an importance dispute, adjudicated with importance.
+    await main(proposalArgs("tasks", "--judge", "human:bob", "--worksheet", sheet("imp-bob")))
+    await rate(sheet("imp-bob"), "should-fix", "minor")
+    expect((await main(proposalArgs("import", "--judge", "human:bob", "--worksheet", sheet("imp-bob")))).code).toBe(0)
+    const disputes = await main(proposalArgs("disputes", "--worksheet", sheet("imp-disputes")))
+    expect(disputes.stdout).toContain("Wrote 1 disagreement(s) to adjudicate")
+    const disputed = (await Bun.file(sheet("imp-disputes")).json()) as Worksheet
+    expect(disputed.proposal).toBe(IMPORTANCE_PROPOSAL)
+    const item = disputed.tasks[0].findings[0]
+    expect(item.title).toBe("Ledger post is not awaited")
+    expect(item.verdicts?.map((entry) => entry.importance).toSorted()).toEqual(["should-fix", "would-block"])
+    item.answer = { verdict: { kind: "match", defect: disputed.tasks[0].defects[0].id }, importance: "should-fix" }
+    writeFileSync(sheet("imp-disputes"), JSON.stringify(disputed))
+    const adjudicated = await main(
+      proposalArgs("adjudicate", "--worksheet", sheet("imp-disputes"), "--by", "human:owner", "--date", "2026-11-07"),
+    )
+    expect(adjudicated).toMatchObject({ code: 0, stderr: "" })
+    const settledFile = await readJudgements(file)
+    expect(settledFile.judgements.find((entry) => entry.adjudication)!.adjudication).toMatchObject({
+      by: "human:owner",
+      proposal: IMPORTANCE_PROPOSAL,
+      importance: "should-fix",
+    })
+
+    const scored = await report(["--outputs", outputs, "--judgements", file, "--proposal", "importance"])
+    expect(scored.code).toBe(0)
+    expect(scored.stdout).toContain(
+      "Adjudicated 1, agreed 1, agreed by models only (waiting for a human) 0, disagreed 0, one pass 1, none 0. Importance disagreed",
+    )
+    expect(scored.stdout).toContain("| Important precision (would-block or should-fix), unvalidated")
+  })
+
+  test("never pools the two rubrics' worksheets or files, and takes only a known proposal", async () => {
+    const current = join(root, "current-only.json")
+    const plain = await main([
+      "tasks",
+      "--outputs",
+      outputs,
+      "--judgements",
+      current,
+      "--judge",
+      "human:carol",
+      "--worksheet",
+      sheet("carol"),
+    ])
+    expect(plain.code).toBe(0)
+    // The current rubric's files and worksheets are as before VS-45: no proposal key, the same instructions.
+    expect(Object.keys(await Bun.file(current).json())).toEqual(["schema", "seed", "judgements", "calls"])
+    const worksheet = (await Bun.file(sheet("carol")).json()) as Worksheet
+    expect(Object.keys(worksheet)).toEqual(["schema", "kind", "rubric", "instructions", "tasks"])
+    expect(worksheet.instructions).not.toContain("importance")
+    expect(worksheet.tasks[0].findings[0].severity).toBe("blocking")
+
+    // A proposal worksheet read into the current rubric's file is refused, and so is the reverse.
+    const crossed = await main([
+      "import",
+      "--outputs",
+      outputs,
+      "--judgements",
+      current,
+      "--judge",
+      "human:alice",
+      "--worksheet",
+      sheet("imp-alice"),
+    ])
+    expect(crossed.code).toBe(1)
+    expect(crossed.stderr).toContain(`was written for rubric 1 with the proposal ${IMPORTANCE_PROPOSAL}, not rubric 1`)
+    // With no proposal on either side, a worksheet for another rubric is refused as before VS-45.
+    writeFileSync(sheet("carol-2"), JSON.stringify({ ...worksheet, rubric: 2 }))
+    const other = await main([
+      "import",
+      "--outputs",
+      outputs,
+      "--judgements",
+      current,
+      "--judge",
+      "human:carol",
+      "--worksheet",
+      sheet("carol-2"),
+    ])
+    expect(other.code).toBe(1)
+    expect(other.stderr).toBe(`${sheet("carol-2")} was written for rubric 2, not 1.\n`)
+    const reverse = await main([
+      "tasks",
+      "--outputs",
+      outputs,
+      "--judgements",
+      current,
+      "--judge",
+      "human:carol",
+      "--worksheet",
+      sheet("carol-imp"),
+      "--proposal",
+      "importance",
+    ])
+    expect(reverse.code).toBe(1)
+    expect(reverse.stderr).toContain("holds judgements under the current rubric 1")
+    expect(existsSync(sheet("carol-imp"))).toBe(false)
+    // The proposal's file without --proposal is refused too.
+    const unasked = await main([
+      "tasks",
+      "--outputs",
+      outputs,
+      "--judgements",
+      join(root, "importance.json"),
+      "--judge",
+      "human:carol",
+      "--worksheet",
+      sheet("x"),
+    ])
+    expect(unasked.code).toBe(1)
+    expect(unasked.stderr).toContain("give --proposal importance")
+    const unknown = await main(args("tasks", "--judge", "human:carol", "--worksheet", sheet("y"), "--proposal", "2"))
+    expect(unknown.code).toBe(2)
+    expect(unknown.stderr).toContain("--proposal takes importance.")
   })
 })

@@ -5,7 +5,10 @@
 // a revised rubric or gate re-scores them without another provider call. Each group also reports its operations (cost
 // per review, tokens, cache, wall time, zero-token reviews, early stops and route refusals, and the estimate error
 // against dry projections), class-scoped and cross-file recall, and trivial controls apart from the behaviour-preserving
-// ones (VS-21c). Dry projections are reported on their own.
+// ones (VS-21c). Dry projections are reported on their own. VS-45 adds precision by posted severity, whose blocking
+// share is precision@blocking, high-severity recall and a monitor of precision@blocking against engine:shared-verify;
+// under the proposed importance rubric (IMPORTANCE_PROPOSAL, Q29) also important precision, the would-block gradient and
+// inter-judge agreement on importance, in a report that is never a release decision.
 //
 // The gate needs its intervals to settle each statistical rule: a rule whose interval straddles its threshold is sent
 // to human review, as is any rule whose findings are not all judged. Only a held-out run on a frozen manifest, collected
@@ -13,18 +16,29 @@
 
 import {
   DEFAULT_SLACK,
+  IMPORTANCE_MIN_FINDINGS,
+  IMPORTANCE_MIN_KAPPA,
+  IMPORTANCE_PROPOSAL,
+  GRADIENT_MARGIN,
   RUBRIC_VERSION,
+  VARIANT_NAME,
+  importanceAgreement,
   isTrivialControl,
   pairedRecall,
   poissonInterval,
   proportion,
+  rubricName,
   runKey,
   scoreRun,
   settle,
+  severityTallies,
   summarize,
   type EvalCase,
   type EvalRun,
+  type ImportanceAgreement,
+  type ImportanceMetrics,
   type Judgement,
+  type KappaPart,
   type LabelledDefect,
   type Metrics,
   type PairedRecall,
@@ -32,6 +46,7 @@ import {
   type Proportion,
   type Rate,
   type RunScore,
+  type SeverityGradient,
   type Stage,
 } from "./eval"
 import { judgingStatus, type JudgeCall } from "./eval-judge"
@@ -101,6 +116,29 @@ export interface ReportInput {
   // Dry projections of the planned runs (VS-21b's records, through replay.ts projectedRun): what each would send and
   // its estimated dollars. They are reported on their own and joined with the runs for the estimate error.
   projected?: readonly ProjectedRun[]
+  // A proposed rubric the judgements were made under (IMPORTANCE_PROPOSAL); absent for the current rubric. Only passes
+  // made under the same rubric and proposal count, and such a report is never a release decision.
+  proposal?: string
+}
+
+// VS-45's monitor: flag a package whose precision@blocking falls by more than MAX_BLOCKING_DROP against this variant of
+// the same model. It compares point estimates on the runs both reviewed and decides nothing.
+export const BLOCKING_REFERENCE = "engine:shared-verify"
+export const MAX_BLOCKING_DROP = 0.05
+// Judged blocking findings each side needs before a drop is read; VS-46 shows rates only for strata of at least 50.
+export const MIN_BLOCKING_FINDINGS = 50
+
+export interface BlockingDrop extends Group {
+  reference: string
+  stage: Stage // the gate's, as for the breakdowns
+  // would-block only under the importance proposal once its kill rule keeps the axis. Either way the denominator is
+  // every judged blocking finding, so an unsettled importance counts as not would-block, as VS-45 defines it.
+  basis: "real" | "would-block"
+  pairs: number // case and repetition both reviewed
+  candidate: Proportion
+  baseline: Proportion // the reference's
+  drop: number | null // the reference's value less the candidate's
+  outcome: "flagged" | "within" | "too-few"
 }
 
 // A distribution's count, mean, median and 90th percentile, with type-7 quantiles (linear between order statistics),
@@ -172,6 +210,7 @@ export interface GroupReport extends Group {
     category: Record<string, Proportion> // end-to-end recall of the defects in each category
     classScoped: Proportion // end-to-end recall of the defects in one of the five failure classes (VS-22a)
     crossFile: Proportion // end-to-end recall of the defects of cross-file cases
+    highSeverity: Proportion // end-to-end recall of the defects labelled blocking (VS-45)
   }
   // Trivial controls (VS-22a), reported apart from the behaviour-preserving controls the D2 figure counts.
   trivial: { planned: number; reviewed: number; falseAlarms: Rate }
@@ -205,6 +244,7 @@ export interface Report {
   frozen: boolean
   sources: Record<string, string>
   rubric: number
+  proposal?: string // a proposed rubric the findings were judged under
   gate: { config: GateConfig; digest: string }
   groups: GroupReport[]
   projections: ProjectionGroup[]
@@ -215,6 +255,8 @@ export interface Report {
     costUsd: number
   }
   ledger?: ReportInput["ledger"]
+  importance?: ImportanceAgreement // under the importance proposal only
+  blockingDrops: BlockingDrop[]
   decision?: GateResult
   problems: string[]
 }
@@ -290,6 +332,7 @@ export function gateLoosening(gate: GateConfig, approved: GateConfig = DEFAULT_G
 }
 
 export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE): Report {
+  const proposal = input.proposal
   const cases = new Map(input.cases.map((item) => [item.id, item]))
   const plan = dedupe(input.plan ?? input.runs.map((run) => planEntry(run)))
   const runs = new Map<string, EvalRun>()
@@ -315,7 +358,7 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
           ...(run ? { run } : {}),
           verdict: (finding) => {
             const item = judgements.get(`${key}\n${finding.key}`)
-            return item ? settle(item, { reviewed: run?.models ?? [entry.model] }) : undefined
+            return item ? settle(item, { reviewed: run?.models ?? [entry.model], proposal }) : undefined
           },
           stage,
           countNits: gate.countNits,
@@ -323,7 +366,7 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
         })
         return [{ score, evalCase, ...(run ? { run } : {}) }]
       })
-  const options = { confidence: gate.confidence }
+  const options = { confidence: gate.confidence, ...(proposal ? { proposal } : {}) }
   const projected = new Map((input.projected ?? []).map((run) => [projectionKey(run), run]))
   const reports = groups.map((group): GroupReport & { entries: Entry[] } => {
     const entries = scored(group, gate.stage)
@@ -346,6 +389,7 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
           gate.confidence,
         ),
         crossFile: recallOf(entries, (entry) => entry.evalCase.crossFile === true, gate.confidence),
+        highSeverity: recallOf(entries, (_, defect) => defect.severity === "blocking", gate.confidence),
       },
       trivial: {
         planned: trivial.length,
@@ -361,17 +405,22 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
     }
   })
   const calls = input.judging ?? []
+  const present = [...runs.values()].filter((run) => planned.has(runKey(run)))
   const status = judgingStatus({
-    runs: [...runs.values()].filter((run) => planned.has(runKey(run))),
+    runs: present,
     judgements: input.judgements,
     nits: gate.countNits,
+    ...(proposal ? { proposal } : {}),
   })
+  const importance =
+    proposal === IMPORTANCE_PROPOSAL ? agreementOf(present, cases, judgements, gate.countNits) : undefined
   const report: Report = {
     title: input.title,
     ...(input.split ? { split: input.split } : {}),
     frozen: input.frozen === true,
     sources: input.sources ?? {},
     rubric: RUBRIC_VERSION,
+    ...(proposal ? { proposal } : {}),
     gate: { config: gate, digest: gateDigest(gate) },
     groups: reports.map((entry) => ({
       variant: entry.variant,
@@ -390,6 +439,8 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
       costUsd: calls.reduce((total, call) => total + (call.costUsd ?? 0), 0),
     },
     ...(input.ledger ? { ledger: input.ledger } : {}),
+    ...(importance ? { importance } : {}),
+    blockingDrops: blockingDrops(reports, gate, importance?.decision === "keep" ? "would-block" : "real"),
     problems: [
       ...(input.problems ?? []),
       ...input.runs
@@ -438,11 +489,104 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
       frozen: input.frozen === true,
       collected: input.collected ?? collectedOn(plan.map((entry) => runs.get(runKey(entry)))),
       problems: [...report.problems, ...status.problems],
+      ...(proposal ? { proposal } : {}),
     }),
   }
 }
 
 type Entry = { score: RunScore; evalCase: EvalCase; run?: EvalRun }
+
+// Agreement on importance over the findings the importance metrics count: the reviewed runs' findings on labelled cases
+// that are not adversarial, nits only when counted. A variant with a "+", outside VARIANT_NAME, is an offline copy of
+// another run (report.ts's <variant>+reselect-strict) scored on its original's judgements, so it is left out and each
+// judgement counts once, as the kill rule's minimum of double-judged findings needs.
+function agreementOf(
+  runs: readonly EvalRun[],
+  cases: ReadonlyMap<string, EvalCase>,
+  judgements: ReadonlyMap<string, Judgement>,
+  nits: boolean,
+) {
+  return importanceAgreement(
+    runs
+      .filter((run) => {
+        const kind = cases.get(run.case)?.kind
+        return (
+          (run.status === "completed" || run.status === "partial") &&
+          !run.variant.includes("+") &&
+          kind !== undefined &&
+          kind !== "adversarial"
+        )
+      })
+      .flatMap((run) =>
+        [
+          ...new Set(
+            [...run.proposed, ...run.posted]
+              .filter((finding) => nits || finding.severity !== "nit")
+              .map((finding) => finding.key),
+          ),
+        ].flatMap((key) => {
+          const judgement = judgements.get(`${runKey(run)}\n${key}`)
+          return judgement ? [{ judgement, reviewed: run.models ?? [run.model] }] : []
+        }),
+      ),
+  )
+}
+
+// Each engine variant's precision@blocking against BLOCKING_REFERENCE on the same model (VS-45's monitor), at the
+// gate's stage, over the cases and repetitions both reviewed, so a variant that ran on fewer cases or lost runs is
+// compared on the same ones. Only engine:<name> variants are packages: the frozen pipeline, the single-prompt harness,
+// the empty control and offline re-selections are not compared. Neither are desktop:<name> groups: admitReplay admits
+// engine replays only, so no desktop group or desktop reference on the same runner exists to compare with.
+function blockingDrops(
+  reports: readonly (GroupReport & { entries: Entry[] })[],
+  gate: GateConfig,
+  basis: BlockingDrop["basis"],
+): BlockingDrop[] {
+  return reports.flatMap((group) => {
+    const reference = reports.find((other) => other.variant === BLOCKING_REFERENCE && other.model === group.model)
+    if (
+      !reference ||
+      group.variant === BLOCKING_REFERENCE ||
+      !VARIANT_NAME.test(group.variant) ||
+      !group.variant.startsWith(`${BLOCKING_REFERENCE.split(":")[0]}:`)
+    )
+      return []
+    const counted = (entry: Entry) => entry.evalCase.kind !== "adversarial" && isReviewed(entry)
+    const pairKey = (entry: Entry) => `${entry.score.case}#${entry.score.repetition}`
+    const theirs = new Set(reference.entries.filter(counted).map(pairKey))
+    const ours = new Set(group.entries.filter(counted).map(pairKey))
+    const share = (entries: readonly Entry[]) => {
+      const blocking = severityTallies(
+        entries
+          .filter((entry) => counted(entry) && ours.has(pairKey(entry)) && theirs.has(pairKey(entry)))
+          .map((entry) => entry.score),
+      ).blocking
+      return proportion(basis === "real" ? blocking.real : blocking.wouldBlock, blocking.judged, gate.confidence)
+    }
+    const candidate = share(group.entries)
+    const baseline = share(reference.entries)
+    const drop = candidate.value === null || baseline.value === null ? null : baseline.value - candidate.value
+    return [
+      {
+        variant: group.variant,
+        model: group.model,
+        reference: BLOCKING_REFERENCE,
+        stage: gate.stage,
+        basis,
+        pairs: [...ours].filter((key) => theirs.has(key)).length,
+        candidate,
+        baseline,
+        drop,
+        outcome:
+          candidate.total < MIN_BLOCKING_FINDINGS || baseline.total < MIN_BLOCKING_FINDINGS || drop === null
+            ? "too-few"
+            : drop > MAX_BLOCKING_DROP + 1e-9
+              ? "flagged"
+              : "within",
+      },
+    ]
+  })
+}
 
 // Dry projections grouped by variant and model, in the order they first appear.
 export function projectionGroups(projected: readonly ProjectedRun[]): ProjectionGroup[] {
@@ -566,6 +710,7 @@ function evaluateGate(input: {
   frozen: boolean
   collected?: string
   problems: string[]
+  proposal?: string
 }): GateResult {
   const gate = input.gate
   const rules = gate.rules
@@ -667,6 +812,12 @@ function evaluateGate(input: {
         ? [`the gate was approved on ${gate.approved.date}, after the results were collected on ${input.collected}`]
         : []),
     ...(input.problems.length ? [`${input.problems.length} input or judging problem(s) are listed in the report`] : []),
+    // VS-45: a proposed rubric (Q29) reports, but only the current rubric makes a release decision.
+    ...(input.proposal !== undefined
+      ? [
+          `the findings are judged under ${rubricName(RUBRIC_VERSION, input.proposal)}, a proposed rubric, and only the current rubric ${RUBRIC_VERSION} makes a release decision`,
+        ]
+      : []),
     ...gateLoosening(gate).map((detail) => `the gate is weaker than the approved ${DEFAULT_GATE.decision}: ${detail}`),
     // A gate that is not the approved config cannot speak for that decision, even when it is stricter.
     ...(gate.decision === DEFAULT_GATE.decision && gateDigest(gate) !== gateDigest(DEFAULT_GATE)
@@ -756,7 +907,9 @@ export function renderReport(report: Report): string {
     [
       `Split: ${report.split ?? "unnamed"}`,
       `held-out labels frozen: ${report.frozen ? "yes" : "no"}`,
-      `rubric ${report.rubric}`,
+      report.proposal === undefined
+        ? `rubric ${report.rubric}`
+        : `${rubricName(report.rubric, report.proposal)} (proposed, not the current rubric; never a release decision)`,
       `gate ${gate.decision} (approved by ${gate.approved.by} on ${gate.approved.date}, digest ${report.gate.digest})`,
       `intervals at ${Math.round(gate.confidence * 100)}%`,
     ].join(" · "),
@@ -764,15 +917,17 @@ export function renderReport(report: Report): string {
     "",
     "Judging is blinded: a judge sees one run's findings at a time with opaque ids, and nothing names the pipeline, the model, the repetition or whether a finding was posted. A verdict counts when two judges with a human among them agree, or a human adjudicates; models agreeing alone, or one pass, count for nothing, and no model judges its own findings.",
     "",
-    `Findings to judge: ${judging.findings}. Adjudicated ${judging.adjudicated}, agreed ${judging.agreed}, agreed by models only (waiting for a human) ${judging.needsHuman}, disagreed ${judging.disagreed}, one pass ${judging.single}, none ${judging.none}.`,
+    `Findings to judge: ${judging.findings}. Adjudicated ${judging.adjudicated}, agreed ${judging.agreed}, agreed by models only (waiting for a human) ${judging.needsHuman}, disagreed ${judging.disagreed}, one pass ${judging.single}, none ${judging.none}.${judging.importanceDisagreed === undefined ? "" : ` Importance disagreed (an agreed real verdict with no one importance, sent to disputes): ${judging.importanceDisagreed}.`}`,
+    ...(report.importance ? [renderAgreement(report.importance)] : []),
     `Judge calls: ${judging.calls} (${judging.paid} paid, $${judging.costUsd.toFixed(4)} reported, ${judging.unaccounted} not admitted by the ledger).`,
     ...(report.ledger
       ? [
           `Eval ledger: $${report.ledger.spentUsd.toFixed(4)} spent as reported, $${report.ledger.uncertainUsd.toFixed(4)} uncertain, $${report.ledger.overshootUsd.toFixed(4)} overshoot, ${report.ledger.open} attempt(s) open${report.ledger.halted ? `; stopped admitting: ${report.ledger.halted}` : ""}.`,
         ]
       : []),
-    ...report.groups.flatMap((group) => renderGroup(group, gate.stage)),
+    ...report.groups.flatMap((group) => renderGroup(group, gate, report.importance)),
     ...(report.projections.length ? ["", "## Projections", "", ...renderProjections(report.projections)] : []),
+    ...(report.blockingDrops.length ? renderBlockingDrops(report.blockingDrops) : []),
     ...(report.decision ? renderDecision(report.decision, gate) : ["", "## Gate", "", "Not evaluated: no candidate."]),
     ...(report.problems.length || judging.problems.length
       ? ["", "## Problems", "", ...[...report.problems, ...judging.problems].map((problem) => `- ${problem}`)]
@@ -784,16 +939,52 @@ export function renderReport(report: Report): string {
     "- A failed, unsent or missing run stays in the denominators. End-to-end recall counts its defects as missed; conditional recall uses completed runs only.",
     "- A rate with nothing to count is n/a with its counts, never 1. Missing usage is never zero spend: its reservation is kept as uncertain.",
     "- Spend is as reported plus uncertain reservations. It is an estimate, not a bill.",
+    "- Precision@blocking and the real share by posted severity count duplicates in the denominator, as actionable precision does. Under the current rubric they are a table with no trend: a real concern is as real as a real blocking finding. A severity gradient is read only from the would-block share, under the importance proposal.",
+    ...(report.proposal === IMPORTANCE_PROPOSAL
+      ? [
+          `- A gradient step falls when its Newcombe interval for two independent proportions is above 0, is inverted when it is below 0, is flat when it rules out a fall of ${Math.round(GRADIENT_MARGIN * 100)} points or more, and is inconclusive otherwise; the gradient is flagged when flat or inverted. Importance agreement is Fleiss' kappa over the first two real verdicts of each finding, over all of them and over matches and extras apart; the importance rows are dropped when all findings or either part have a kappa below ${IMPORTANCE_MIN_KAPPA} over at least ${IMPORTANCE_MIN_FINDINGS} double-judged findings, and are unvalidated until all three pass. Precision@blocking (real and would-block) counts a real blocking finding with no settled importance as not would-block, as VS-45 defines it; the row with unsettled ones left out is the would-block share's blocking step.`,
+        ]
+      : []),
     "",
   ].join("\n")
 }
 
-function renderGroup(group: GroupReport, stage: Stage) {
+function renderAgreement(agreement: ImportanceAgreement) {
+  const part = (name: string, value: KappaPart) =>
+    `${name} ${value.kappa === null ? "n/a" : value.kappa.toFixed(2)} over ${value.findings} double-judged finding(s) (observed agreement ${value.observed === null ? "n/a" : percent(value.observed)}; ${value.decision})`
+  return `Importance agreement, Fleiss' kappa: ${part("matches", agreement.match)}; ${part("extras", agreement.extra)}; ${part("all", agreement.all)}. Kill rule (${IMPORTANCE_MIN_FINDINGS} findings and kappa ${IMPORTANCE_MIN_KAPPA}, over all and per part): ${agreement.decision}.`
+}
+
+function renderBlockingDrops(drops: readonly BlockingDrop[]) {
+  return [
+    "",
+    `## Precision@blocking against ${BLOCKING_REFERENCE}`,
+    "",
+    `A monitor (VS-45), not a gate rule: each engine variant's precision@blocking at the ${drops[0].stage} stage beside ${BLOCKING_REFERENCE} on the same model, over the cases and repetitions both reviewed. A drop of more than ${Math.round(MAX_BLOCKING_DROP * 100)} points in the point estimates is flagged; under ${MIN_BLOCKING_FINDINGS} judged blocking findings on either side it reads too few. It decides nothing.`,
+    "",
+    `| Variant · model | Basis | Paired runs | Precision@blocking | ${BLOCKING_REFERENCE} | Drop | Outcome |`,
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...drops.map(
+      (drop) =>
+        `| ${drop.variant} · ${drop.model} | ${drop.basis} | ${drop.pairs} | ${share(drop.candidate)} | ${share(drop.baseline)} | ${drop.drop === null ? "n/a" : `${(drop.drop * 100).toFixed(1)} points`} | ${drop.outcome} |`,
+    ),
+  ]
+}
+
+function renderGroup(group: GroupReport, gate: GateConfig, agreement?: ImportanceAgreement) {
+  const stage = gate.stage
   const proposed = group.stages.proposed
   const posted = group.stages.posted
   const row = (name: string, show: (metrics: Metrics) => string) => `| ${name} | ${show(proposed)} | ${show(posted)} |`
   const spend = group.stages[stage].spend
   const metrics = group.stages[stage]
+  // Until VS-45's kill rule keeps the axis, its rows say how far its agreement check has got.
+  const unvalidated =
+    agreement && agreement.decision !== "keep"
+      ? `, unvalidated: matches ${agreement.match.findings} and extras ${agreement.extra.findings} of ${IMPORTANCE_MIN_FINDINGS} double-judged`
+      : ""
+  const importanceShare = (m: Metrics, pick: (importance: ImportanceMetrics) => Proportion) =>
+    m.importance ? share(pick(m.importance)) : "n/a"
   const sliceRows = (name: string, slices: Record<string, Slice>) =>
     Object.entries(slices).map(
       ([value, slice]) =>
@@ -817,6 +1008,20 @@ function renderGroup(group: GroupReport, stage: Stage) {
     row("Comments per PR", (m) => perPr(m.commentsPerPr)),
     row("Duplicates per PR", (m) => perPr(m.duplicatesPerPr)),
     row("Severity agreement", (m) => share(m.severityAgreement)),
+    row("Precision@blocking (real of judged blocking)", (m) => share(m.severityPrecision.blocking)),
+    ...(metrics.importance && agreement?.decision !== "drop"
+      ? [
+          row(`Important precision (would-block or should-fix)${unvalidated}`, (m) =>
+            importanceShare(m, (importance) => importance.important),
+          ),
+          row(`Precision@blocking (real and would-block)${unvalidated}`, (m) =>
+            importanceShare(m, (importance) => importance.blocking),
+          ),
+          row(`Precision@blocking (real and would-block, unsettled left out)${unvalidated}`, (m) =>
+            importanceShare(m, (importance) => importance.wouldBlock.shares.blocking),
+          ),
+        ]
+      : []),
     row("Location validity", (m) => share(m.location)),
     row("Anchored on a diff line", (m) => share(m.anchors)),
     row("Valid suggestions", (m) => share(m.suggestions)),
@@ -831,7 +1036,18 @@ function renderGroup(group: GroupReport, stage: Stage) {
     `Wall time: ${(metrics.wallMs.total / 1000).toFixed(1)}s over ${metrics.wallMs.runs} run(s)${metrics.wallMs.median === null ? "" : `, median ${(metrics.wallMs.median / 1000).toFixed(1)}s`}.`,
     ...renderOperations(group.operations),
     "",
-    `Recall, class-scoped (defects in the five failure classes): ${share(group.breakdowns.classScoped)}. Recall, cross-file cases: ${share(group.breakdowns.crossFile)}.`,
+    `Real share by posted severity (${stage}; precision@blocking is its blocking share): ${severityShares(metrics.severityPrecision, gate.countNits)}.`,
+    ...(metrics.importance && agreement?.decision !== "drop"
+      ? [
+          `Would-block share by posted severity${unvalidated}: ${severityShares(metrics.importance.wouldBlock.shares, gate.countNits)}; ${describeGradient(metrics.importance.wouldBlock)}. ${metrics.importance.unsettled} real finding(s) with no settled importance are left out.`,
+        ]
+      : []),
+    ...(metrics.importance && agreement?.decision === "drop"
+      ? [
+          `The importance rows are left out: inter-judge kappa on importance is below ${IMPORTANCE_MIN_KAPPA} over at least ${IMPORTANCE_MIN_FINDINGS} double-judged findings (VS-45's kill rule), so precision@blocking is reported on real findings only.`,
+        ]
+      : []),
+    `Recall, class-scoped (defects in the five failure classes): ${share(group.breakdowns.classScoped)}. Recall, cross-file cases: ${share(group.breakdowns.crossFile)}. Recall, high severity (defects labelled blocking): ${share(group.breakdowns.highSeverity)}.`,
     `Trivial controls, apart from the behaviour-preserving controls above: ${group.trivial.planned} planned, ${group.trivial.reviewed} reviewed, false alarms per trivial PR ${perPr(group.trivial.falseAlarms)}.`,
     ...(metrics.adversarial.planned
       ? [
@@ -860,6 +1076,29 @@ function renderGroup(group: GroupReport, stage: Stage) {
         ]
       : []),
   ]
+}
+
+// Each severity's share, a nit as excluded when the gate does not count nits (D2 leaves them out, so none is judged).
+function severityShares(shares: Record<string, Proportion>, countNits: boolean) {
+  return Object.entries(shares)
+    .map(([severity, value]) =>
+      severity === "nit" && !countNits ? "nit excluded (the gate does not count nits)" : `${severity} ${share(value)}`,
+    )
+    .join(", ")
+}
+
+function describeGradient(gradient: SeverityGradient) {
+  if (!gradient.steps.length) return "gradient n/a (fewer than two severities with settled findings)"
+  return `gradient ${gradient.trend}${gradient.flagged ? " (flagged)" : ""}: ${gradient.steps
+    .map(
+      (step) =>
+        `${step.higher} to ${step.lower} ${signed(step.difference)} [${signed(step.interval[0])}, ${signed(step.interval[1])}] ${step.trend}`,
+    )
+    .join("; ")}`
+}
+
+function signed(value: number) {
+  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}`
 }
 
 function renderOperations(operations: Operations) {

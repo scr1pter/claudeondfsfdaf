@@ -12396,3 +12396,366 @@ table and the mutation note). Nothing is committed.
   `EVIDENCE_POLICY_KEYS`, `EvidenceScope` or `VARIANT_KEYS`, no runner or
   core change, no user-visible string (D14), no owner question decided, and
   nothing sent to a model.
+
+## 2026-11-07 · VS-45a Severity-calibration judging (eval)
+
+Addendum A §2, VS-45, in the Now window of §4 ("VS-45"). Built at `5abbc36c`
+on `vectorscope-engine`. Addendum A's packages are proposals pending Q18, and
+Q29 (a rubric revision with an importance axis) is open, so this is eval and
+report work only: no runtime key (§1, "VS-45 and VS-46 are eval and report
+work with no runtime key"), no §1a row, zero review tokens, and nothing calls
+it from a runner. `run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`,
+`posting.ts`, core `types.ts`, `config.ts`, `model-evidence.ts`, engine
+`review/eval.ts`, `desktop.ts`, `replay.ts`, `ci.ts`, `certify.ts`,
+`dataset.ts`, `annotation-guide.md`, `workflow.ts`, `command.ts`, `github.*`,
+`github-*.ts`, `vectorscope.astro` and `.github/workflows/*` are untouched. It
+implements the VS-45a plan as corrected by its critique: every critique point
+was taken, point 6 in a corrected form and point 3 in both of its forms
+(below). Nothing is committed.
+
+- **What landed.**
+  - **Core `eval.ts`:**
+    - `IMPORTANCE_PROPOSAL` (`"vs45-importance-1"`), `IMPORTANCE`
+      (would-block, should-fix, minor) and `Importance`,
+      `IMPORTANCE_MIN_FINDINGS` (100), `IMPORTANCE_MIN_KAPPA` (0.4) and
+      `GRADIENT_MARGIN` (0.1). `RUBRIC_VERSION` stays 1;
+    - `JudgePass` and `Adjudication` gain `proposal?` and `importance?`, beside
+      the verdict and never in it; `Settled`'s settled members gain
+      `importance?`. `Verdict`, `sameVerdict` and `namespaced` are unchanged;
+    - `settle` takes `proposal?`. A pass or adjudication counts only under
+      the rubric and the proposal it was made under; the importance settles
+      apart from the verdict (the adjudication's, or one every counted pass
+      gives, as for a suggestion);
+    - `importanceProblem` (used by `verdictProblem` and eval-judge's
+      `answerProblem`), `rubricName` and `staleAgainst`;
+    - `RunScore.bySeverity` (`SeverityTally`: judged, real, wouldBlock,
+      important, unsettled), built from the judged findings by posted
+      severity; `severityTallies` sums them, SEVERITIES first;
+    - `Metrics.severityPrecision` (real of judged by posted severity, a table
+      of proportions) and, under the proposal only, `Metrics.importance`
+      (`ImportanceMetrics`: important precision, precision@blocking as VS-45
+      defines it, the would-block `SeverityGradient`, unsettled);
+    - `independentDifference` (Newcombe's method 10 for two independent
+      proportions, beside `pairedDifference`) and `severityGradient`, defined
+      once for VS-45 and VS-46;
+    - `importanceAgreement` with `KappaPart` and `ImportanceAgreement` (`all`,
+      `match`, `extra`, `decision`).
+  - **Core `eval-judge.ts`:** `TaskFinding.severity` and `TaskDefect.severity`
+    optional; `blind`, `judgeRuns`, `disputeTasks` and `judgingStatus` take
+    `proposal?`; under the proposal a task shows no severity, a pass records
+    the proposal and the importance, an answer whose importance does not fit
+    is dropped, an agreed real verdict with no one importance is a dispute
+    listed with each pass's importance, and the status counts
+    `importanceDisagreed`. `judgeRuns` refuses an unknown proposal.
+  - **Core `eval-report.ts`:** `ReportInput.proposal?`; `Report.proposal?`,
+    `Report.importance?` (proposal only) and `Report.blockingDrops`;
+    `breakdowns.highSeverity`; `BLOCKING_REFERENCE`, `MAX_BLOCKING_DROP` and
+    `MIN_BLOCKING_FINDINGS` (50); a release reason under any proposal; the
+    rendering below.
+  - **`judge.ts` and `report.ts`:** `--proposal importance` (off by default).
+    `JudgementFile.proposal?` and `Worksheet.proposal?`, written only under
+    the proposal; `proposalOption` and `proposalMismatch` in `report.ts`,
+    shared by both CLIs; `readJudgements` refuses a proposal that is not a
+    name; `instructions(proposal)` for both worksheet kinds;
+    `WorksheetFinding.verdicts` carries `importance`; adjudications copy the
+    proposal and the importance.
+  - **Docs:** `judging-rubric.md` (a pointer to the proposal, the
+    summary-plus-inline rule with its S7 sentence, five metric rows, a release
+    note; no rule changed, so no version bump, as VS-22a added metric rows);
+    new `judging-rubric-importance.md`; `README.md` (two bullets).
+  - **Tests:** core `eval.test.ts` (13 new), `eval-judge.test.ts` (3),
+    `eval-report.test.ts` (9); `judge.test.ts` (2), `report.test.ts` (4). No
+    test that existed at HEAD changed; only import lists grew.
+- **Decisions.**
+  - **(a) Neutral on Q29.** `RUBRIC_VERSION` stays 1 and the current rubric
+    is the default everywhere. The importance axis is used only with
+    `--proposal importance`, and a report judged under it is never a release
+    decision (a release reason, so `certify.ts`, which needs
+    `release.eligible`, can never certify from it). If Q29 is "no", nothing
+    uses the option; if "yes", VS-45b adopts the axis as a new
+    `RUBRIC_VERSION` before the held-out freeze (I-13).
+  - **(b) A proposal is a name, never a rubric version** (critique point 1,
+    taken in its first form). The plan numbered the proposal 2, the number
+    VS-45b would give `RUBRIC_VERSION`; earlier entries (VS-42a (r), VS-22c
+    (c)) also tie the "not in this change" tag to version 2. Under the plan,
+    passes made today under this text would have counted once version 2 was
+    adopted, whatever it then held. Instead every proposal pass,
+    adjudication, worksheet and judgement file records `proposal:
+    "vs45-importance-1"` beside rubric 1, and `settle` compares both, so a
+    proposal pass is stale under every adopted rubric (tested with `rubric:
+    2`, with passes carrying rubric 1 or 2), a current pass is stale under
+    the proposal, and a pass under an earlier revision of the proposal is
+    stale under the current one. The name changes whenever
+    `judging-rubric-importance.md` changes. So the CLI option is `--proposal
+    importance` rather than the plan's `--rubric 2`, the file is
+    `judging-rubric-importance.md` rather than `judging-rubric-2.md`, and the
+    plan's `RUBRICS` list is not needed.
+  - **(c) Importance sits beside the verdict and settles apart from it.**
+    The verdict, recall and precision settle exactly as under the current
+    rubric; an importance disagreement goes to disputes. Corrected (critique
+    point 5, taken): the proposal cannot reuse the current rubric's passes, so
+    trying or adopting it repeats the whole judging, two passes per finding
+    with both verdict and importance disputes adjudicated. Keeping importance
+    apart only keeps adjudication within the proposal to the disputed
+    findings. `judging-rubric-importance.md` says so for the owner's Q29.
+  - **(d) Never pooled at three levels:** the pass (`settle`), the judgement
+    file (`proposal`, absent meaning the current rubric) and the worksheet and
+    report (each CLI refuses a file or worksheet under the other rubric, with
+    "verdicts under two rubrics are never pooled").
+  - **(e) No trend from the current rubric** (critique point 2, taken).
+    Precision by posted severity, whose blocking row is precision@blocking (the
+    kill rule's fallback), is a table with intervals and no trend or flag:
+    under the current rubric a real concern is as real as a real blocking
+    finding, so a flat real share says nothing about calibration. The gradient
+    and its flag are computed only from the would-block share, under the
+    proposal. Duplicates count in the denominator, as for actionable
+    precision.
+  - **(f) The gradient's step rule** (critique point 6, taken in a corrected
+    form). Four states: falling (the Newcombe interval is above 0), inverted
+    (below 0), flat (it rules out a fall of `GRADIENT_MARGIN`, 10 points, or
+    more) and inconclusive (otherwise, not flagged); the gradient is flagged
+    when flat or inverted. The critique offered "inverted on a point estimate
+    below zero"; that was not taken, because at pilot sizes a point estimate
+    below zero is noise as often as not, and it would bring back the
+    asymmetry the point was about. The margin is this build's choice for a
+    monitor that decides nothing; VS-45 names none. VS-46 inherits the rule
+    through `severityGradient`, with its own `order`.
+  - **(g) Severity hidden under the proposal, labels' included** (critique
+    point 3, taken in both forms). A proposal task leaves out each finding's
+    posted severity and each labelled defect's severity, and the proposal
+    drops the plan's "a match normally takes the label's severity mapping"
+    instruction, so two judges' importances on a match are not both read off
+    the label. And agreement is reported over every pair (`all`, VS-45's
+    rule as written) and for matches (both passes match) and extras (every
+    other pair) apart. The kill rule is applied to all three, each with its
+    own minimum of 100: drop if the whole or either part drops (at least 100
+    double-judged findings and kappa below 0.4), else too-few or undefined if
+    any of the three is, and keep only when all three keep. So the build is
+    never looser than VS-45 and is stricter where a part alone is
+    inconsistent. Amended in review: the first build applied the rule only
+    per part and computed no pooled kappa, so 100 double-judged findings split
+    60 matches and 40 extras with kappa 0.1 read too-few, not drop, and kept
+    the unvalidated importance rows that VS-45 drops; the pooled part closes
+    that case (tested: 60 disagreeing match pairs and 40 disagreeing extra
+    pairs give drop and no importance rows). A test also has judges agreeing
+    on every match while the extras alone give kappa 0.1667, and the decision
+    is drop. The sample is the findings the importance metrics count: a
+    finding of an adversarial case is left out (as `summarize`, `recallOf` and
+    the monitor leave it out), and so is a `<variant>+reselect-strict` copy,
+    which carries its original's judgements, so each judgement counts once
+    (the first build counted a re-selected engine replay's findings twice
+    under `--reselect strict --proposal importance`, which halved the real
+    sample the minimum of 100 needs). Severity words inside a title or body
+    cannot be hidden (stated in the proposal).
+  - **(h) Kappa over two ratings per finding** (critique point 7, taken in
+    its second form). Fleiss' kappa for two raters per finding, because the
+    raters change from finding to finding and their order is arbitrary
+    (Cohen's would read each judge's marginals). The two are the first two
+    counted real verdicts in the order the judges first judged the finding,
+    not the first two by name, so the result does not depend on judges'
+    names. Fleiss over every judge needs an adjustment for a varying number
+    of raters and the kill rule counts double-judged findings, so two per
+    finding is kept. Until the decision is keep, every importance row is
+    labelled "unvalidated: matches N and extras M of 100 double-judged".
+  - **(i) The precision@blocking monitor** (critique point 4, taken). Each
+    `engine:<name>` variant against `engine:shared-verify` on the same model,
+    on the cases and repetitions both reviewed (as `pairedRecall` pairs), at
+    the gate's stage, with both counts shown; "too-few" under 50 judged
+    blocking findings on either side (VS-46's floor for showing a rate);
+    flagged when the point estimates fall by more than 5 points. The
+    would-block basis is used only when the kill rule keeps the axis, real
+    findings otherwise; either way the denominator is every judged blocking
+    finding, so an unsettled importance counts as not would-block, as VS-45
+    defines precision@blocking (decision (o)). The frozen pipeline, the
+    single-prompt harness, the empty control and `+reselect-strict` groups are
+    not packages and are not compared. `desktop:<name>` groups are not
+    compared either, though §1a gives packages desktop halves: `admitReplay`
+    admits engine replays only, so no desktop group, and no
+    `desktop:shared-verify` reference on the same runner, can exist to compare
+    with, and comparing a desktop half with the engine reference would mix
+    runners. A desktop comparison waits for a desktop replay (VS-10). It is a
+    monitor, never a gate rule.
+  - **(j) Nits** (critique point 10, taken). D2 does not count nits, so they
+    are never judged; the render reads "nit excluded (the gate does not count
+    nits)" instead of an empty row, and the proposal says that rating minor
+    findings needs `--nits` and a gate that counts them, which is never a
+    release decision.
+  - **(k) The summary-plus-inline rule is written down and tested, with no
+    change to scoring** [GU3] (critique points 9 and 11, taken). The posted
+    list is the line comments, then the summary's lists; selection puts each
+    finding in one of them; prose restating a finding is not one; a finding
+    inline and another in the summary on one defect are a match and a
+    duplicate; an inline and a summary finding with the same place and title
+    share a key, so one judgement and a duplicate. `judging-rubric.md` adds
+    that a pair S7 keeps apart but the judges match to one defect is still a
+    match and a duplicate, so the eval is at least as strict as S7. The
+    replay test records both writes, as the existing artifact does.
+  - **(l) Contamination** (critique point 11). The proposal recommends
+    different judges for it, or judging it before the current rubric.
+  - **(m) D2 and `DEFAULT_GATE` are unchanged.** Its digest is still
+    `8a4fa86e5ea88c1d` (now pinned in a test); `gateLoosening` reasons appear
+    under the proposal too; the rules' outcomes, values and intervals are
+    equal under both rubrics for equivalent verdicts.
+  - **(n) The annotation guide is unchanged.** Importance is a verdict field,
+    not a label; any guide revision waits for Q29.
+  - **(o) Precision@blocking as VS-45 defines it, beside the share the
+    gradient needs** (added in review). VS-45 defines precision@blocking as
+    "posted blocking findings that are real and would-block, over all posted
+    blocking findings". The first build reported only the would-block share
+    with real findings whose importance is not settled left out of the
+    denominator (the gradient's basis), and used it for the monitor, which
+    reads higher than VS-45's form while an importance dispute is open. Now
+    `ImportanceMetrics.blocking` and the report's "Precision@blocking (real
+    and would-block)" row are VS-45's form, every judged blocking finding in
+    the denominator and an unsettled one counted as not would-block; the next
+    row, "unsettled left out", is the gradient's blocking step, and the
+    monitor's would-block basis uses VS-45's form.
+- **Off by default (I-1, I-12, §0.3).** No runner, key, request, prompt,
+  schema or `ReviewConfig` field changed, so §0.3 items 1 to 5 do not apply
+  (no key, no runner, no evidence-scope change, no variant, no desktop half);
+  item 6 is this entry. Under the current rubric `settle` and scoring are
+  byte-identical for every pass a tool wrote before VS-45, and so are the
+  stale-pass, stale-adjudication and worksheet refusals ("judged under rubric
+  0, not 1: the pass is stale", "used rubric 0, not 1", "was written for
+  rubric 2, not 1."): `staleAgainst` names the rubric in full only when a
+  proposal is on either side (tested; the first build had changed them to
+  "not rubric 1"). The one new
+  refusal is a current-rubric pass or adjudication that carries an
+  importance, which no earlier tool wrote, and it is listed as a problem
+  rather than silently counted. Blinded tasks, worksheets and new judgement
+  files are byte-identical (tested: no `proposal` key, the same instructions,
+  severity shown). The default report only gains rows, lines and JSON fields
+  (`severityPrecision` in each stage's metrics, `breakdowns.highSeverity`,
+  `blockingDrops`; `RunScore.bySeverity` is internal); existing numbers do not
+  move and no existing test changed.
+- **Pin, revision and rubric.** No file in `REVIEW_PIPELINE_FILES` changed:
+  `REVIEW_PIPELINE_SOURCES` stays `124e47864a16fea4` (`model-evidence.test.ts`
+  passes unchanged), `REVIEW_PIPELINE_REVISION` stays 1, `RUBRIC_VERSION`
+  stays 1, and `EVIDENCE_POLICY_KEYS` and `VARIANT_KEYS` are unchanged.
+- **Owner questions: none decided.** Q29, Q3, Q18 and Q30 stay open; every
+  part reads the same under either answer.
+- **Deferred.**
+  - Adopting the axis as a new `RUBRIC_VERSION`, any revision of the current
+    rubric's text and of the annotation guide: VS-45b, on Q29 "yes", before
+    the held-out freeze (I-13). Adoption judges again; no proposal pass
+    carries over.
+  - The "not in this change" judging tag (VS-42a (r), VS-22c (c)) stays
+    deferred: the proposal is the importance axis only, and a scope verdict
+    would widen Q29.
+  - High-severity recall by risk band [G2-5]: artifacts record no band until
+    VS-28 or VS-39 wiring.
+  - "Done when": the metrics on the D5 pilot's judged findings, after D7; no
+    paid run here.
+  - The kill rule needs at least 100 double-judged findings under the
+    proposal to drop the axis, and 100 matches and 100 extras to keep it, so
+    it needs Q29 and human time.
+  - The monitor needs real replays of `engine:shared-verify` and each package
+    variant on the same model.
+  - VS-46's use of `severityGradient` lands with VS-46.
+  - A model-judge prompt for importance: no model judge is wired (D5, D12).
+  - Importance on nits: needs `--nits` and a gate that counts them.
+- **Evidence.** Each test file ran alone through the lock with `--timeout
+  30000` and `GITHUB_ACTIONS=false`, with `TMPDIR` and the XDG roots under
+  `/tmp/vector-vectorscope/vs45a/`. Core tests ran from `packages/core`; the
+  eval script tests ran from `script/vectorscope-eval` (as its README runs
+  them, critique point 8), and again from `packages/script` as `test.yml`
+  runs them, with the same counts.
+
+  | File | HEAD | After |
+  | --- | --- | --- |
+  | core `eval.test.ts` | 42 | 55 |
+  | core `eval-judge.test.ts` | 12 | 15 |
+  | core `eval-report.test.ts` | 19 | 28 |
+  | core `model-evidence.test.ts` (pin unchanged) | 30 | 30 |
+  | `judge.test.ts` | 6 | 8 |
+  | `report.test.ts` | 34 | 38 |
+  | `certify.test.ts` | 7 | 7 |
+  | regressions: `fixtures.test.ts`, `replay.test.ts`, engine `test/review/eval.test.ts` | 103, 38, 33 | 103, 38, 33 |
+
+  All pass.
+  - **Typecheck.** `bun typecheck` in `packages/core`, `packages/engine` and
+    `packages/script`, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`: all
+    pass. The full root typecheck was not run: nothing is pushed.
+  - **Format.** prettier passes on every changed TypeScript file, the README
+    and the new proposal. `judging-rubric.md` was not prettier-clean at HEAD
+    (its tables), so only the new lines were added and the file was not
+    reformatted; this log is append-only, as before.
+  - **Mutation check.** Twenty-five mutations, each applied alone, the named
+    test file run through the lock, and the file restored and compared
+    (`cmp`, and `git diff --stat` before and after the batch): `RUBRIC_VERSION`
+    set to 2; an importance accepted under the current rubric; agreement
+    requiring one importance; proposal passes counted under an adopted rubric;
+    duplicates counted as real by severity; a step falling on a positive
+    point difference alone; a step inverted on a negative point difference
+    alone; Newcombe's bounds swapped; false-alarm passes in the kappa; Cohen's
+    kappa for Fleiss'; the kill rule ignoring extras; severity shown under the
+    proposal; importance disputes not disputed; `judgeRuns` dropping the
+    importance; the proposal's release reason removed; the drop check at `>=`;
+    the drop check unpaired; the would-block basis before keep; the frozen
+    pipeline compared; the unvalidated label removed; high-severity recall
+    counting every defect; `report.ts` and `judge.ts` skipping the file check;
+    `judge.ts` skipping the worksheet check; adjudications dropping the
+    importance. All were caught. Two boundary tests were added for them (a
+    6/10 against 4/10 step is inconclusive; exactly five points down is not
+    flagged).
+  - **Merge prediction.** `git diff --name-only HEAD...origin/<branch>` over
+    every file this package touches is empty for `origin/self-evolving`
+    (`f062bcce`), `origin/codium` (`5a079cbd`), `origin/vector-at-mention`
+    (`0b68e8f6`) and `origin/main` (`4299d743`), so it adds no conflict.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no user-visible string changed
+    (D14).
+- **Review fixes (round one).** Ten findings, two of them the same defect
+  reported twice; all taken, none disputed. Nothing is committed.
+  - **Blocking: re-selected copies counted twice in agreement.**
+    `agreementOf` now leaves out runs whose variant has a `+` (outside
+    `VARIANT_NAME`; report.ts's `<variant>+reselect-strict` copies, scored on
+    their original's judgements), so each judgement counts once. A variant
+    check rather than `passes` identity, because it does not depend on how
+    report.ts copies a judgement. Tested in core (copies under a `+` variant
+    leave `importance` equal) and end to end in `report.test.ts` (`--reselect
+    strict --proposal importance` gives the same match and extra counts as
+    without `--reselect`).
+  - **Blocking: no pooled kappa.** `ImportanceAgreement.all` and the decision
+    in decision (g), as amended; `renderAgreement` shows the pooled part and
+    the kill rule "over all and per part"; the report's note and
+    `judging-rubric-importance.md` say the same. Tested in core
+    (`importanceAgreement`, and a report whose 60 match and 40 extra pairs
+    all disagree gives drop and no importance rows).
+  - **Precision@blocking's denominator:** decision (o). The contract's form
+    is now the "Precision@blocking (real and would-block)" row and the
+    monitor's would-block basis; the share with unsettled findings left out
+    is its own row.
+  - **Desktop groups in the monitor:** decision (i) gives the reason.
+  - **Adversarial findings in agreement:** left out, as the importance
+    metrics leave them out (the case is looked up by `run.case`; a run on an
+    unlabelled case is left out too, as scoring leaves it out).
+  - **Stale wording under the default rubric:** restored by `staleAgainst`
+    (off-by-default paragraph above); tested for a pass, an adjudication and
+    a worksheet.
+  - **`severityTallies` and inherited keys:** `Object.hasOwn`, so a severity
+    such as `constructor` or `__proto__` in a hand-edited artifact reads only
+    a score's own tally (tested with both).
+  - **Style:** `(f) =>` renamed, the single-use `runner` inlined into the
+    `startsWith` check, and `proposalOption`'s explicit return type dropped
+    (inference gives `"vs45-importance-1" | null | undefined`).
+  - **Evidence.** Each file alone through the lock with `--timeout 30000`,
+    `GITHUB_ACTIONS=false` and `TMPDIR` and the XDG roots under
+    `/tmp/vector-vectorscope/vs45a/`: core `eval.test.ts` 55,
+    `eval-judge.test.ts` 15, `eval-report.test.ts` 28, `model-evidence.test.ts`
+    30 (pin unchanged); from `script/vectorscope-eval`, `judge.test.ts` 8,
+    `report.test.ts` 38, `certify.test.ts` 7, `replay.test.ts` 38; from
+    `packages/script`, `judge.test.ts` 8, `report.test.ts` 38,
+    `fixtures.test.ts` 103; engine `test/review/eval.test.ts` 33. All pass.
+    `bun typecheck` in `packages/core`, `packages/engine` and
+    `packages/script`, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`, all
+    pass; prettier passes on every changed TypeScript file, the README and the
+    proposal. Nine mutations, each applied alone, its test files run through
+    the lock, and the file restored and compared (`cmp`, and `git diff
+    --stat` before and after): the pooled part ignored in the decision; the
+    own-key check removed; the stale pass, adjudication and worksheet
+    wording each named in full; precision@blocking with unsettled findings
+    left out; the monitor with them left out; adversarial cases in agreement;
+    re-selected copies in agreement. All were caught.

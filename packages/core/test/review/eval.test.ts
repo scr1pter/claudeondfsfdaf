@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
   findingKey,
+  IMPORTANCE,
+  IMPORTANCE_MIN_FINDINGS,
+  IMPORTANCE_MIN_KAPPA,
+  IMPORTANCE_PROPOSAL,
+  importanceAgreement,
+  importanceProblem,
+  independentDifference,
   isSettled,
   pairedDifference,
   pairedRecall,
@@ -11,6 +18,8 @@ import {
   scoreRun,
   scoreReview,
   settle,
+  severityGradient,
+  severityTallies,
   summarize,
   totalScores,
   wilson,
@@ -18,6 +27,7 @@ import {
   type EvalExpectation,
   type EvalFinding,
   type EvalRun,
+  type Importance,
   type JudgePass,
   type Judgement,
   type PlanEntry,
@@ -786,5 +796,503 @@ describe("intervals", () => {
     expect(paired).toMatchObject({ pairs: 2, candidate: 1, baseline: 2, difference: -0.5, unjudged: 0 })
     expect(paired.interval![0]).toBeLessThan(-0.5)
     expect(pairedRecall(scored(candidateRuns), [])).toMatchObject({ pairs: 0, difference: null, interval: null })
+  })
+})
+
+// Severity calibration (VS-45). The current rubric's verdicts give precision by posted severity; the proposed importance
+// axis (IMPORTANCE_PROPOSAL, Q29) adds important precision, the would-block gradient and agreement on importance.
+
+const MATCH: Verdict = { kind: "match", defect: "missing-await" }
+
+// A pass under the importance proposal.
+function proposed(judge: string, verdict: Verdict, importance?: Importance, extra: Partial<JudgePass> = {}): JudgePass {
+  return {
+    judge,
+    rubric: RUBRIC_VERSION,
+    proposal: IMPORTANCE_PROPOSAL,
+    verdict,
+    ...(importance ? { importance } : {}),
+    ...extra,
+  }
+}
+
+// A human and a model that agree under the importance proposal, each giving its own importance.
+function agreedUnder(verdict: Verdict, first?: Importance, second: Importance | undefined = first) {
+  return { passes: [proposed("human:annotator", verdict, first), proposed("model:judge/one", verdict, second)] }
+}
+
+function scoreUnder(
+  run: EvalRun,
+  verdicts: Record<string, Pick<Judgement, "passes" | "adjudication">>,
+  proposal?: string,
+) {
+  return scoreRun({
+    evalCase: BUG,
+    planned: plan(run),
+    run,
+    verdict: (finding) => {
+      const judgement = verdicts[finding.key]
+      return judgement ? settle(judgement, { reviewed: run.models ?? [run.model], proposal }) : undefined
+    },
+    stage: "posted",
+  })
+}
+
+describe("severity calibration (VS-45)", () => {
+  test("precision by posted severity counts matched and extra over judged findings, duplicates in the denominator", () => {
+    const hit = evalFinding()
+    const again = evalFinding({ line: 41, title: "Unawaited promise" })
+    const wrong = evalFinding({ line: 44, title: "Magic number" })
+    const real = evalFinding({ line: 60, title: "Cache never expires", severity: "concern" })
+    const style = evalFinding({ line: 61, title: "Long function", severity: "concern" })
+    const open = evalFinding({ line: 62, title: "Maybe slow", severity: "concern" })
+    const findings = [hit, again, wrong, real, style, open]
+    const run = evalRun({ proposed: findings, posted: findings })
+    const result = score({
+      run,
+      verdicts: {
+        [hit.key]: agreed(MATCH),
+        [again.key]: agreed(MATCH),
+        [wrong.key]: agreed({ kind: "false-alarm" }),
+        [real.key]: agreed({ kind: "extra", issue: "cache" }),
+        [style.key]: agreed({ kind: "false-alarm" }),
+        // One pass settles nothing, so this finding is unjudged and in neither count.
+        [open.key]: {
+          passes: [{ judge: "human:annotator", rubric: RUBRIC_VERSION, verdict: { kind: "false-alarm" } }],
+        },
+      },
+    })
+    expect(result).toMatchObject({ matched: 1, extra: 1, duplicates: 1, falseAlarms: 2, unjudged: 1 })
+    expect(result.bySeverity).toEqual({
+      blocking: { judged: 3, real: 1, wouldBlock: 0, important: 0, unsettled: 1 },
+      concern: { judged: 2, real: 1, wouldBlock: 0, important: 0, unsettled: 1 },
+    })
+    const metrics = summarize([{ score: result, evalCase: BUG, run }])
+    expect(metrics.precision).toMatchObject({ count: 2, total: 5 })
+    expect(Object.keys(metrics.severityPrecision)).toEqual(["blocking", "concern", "nit"])
+    expect(metrics.severityPrecision.blocking).toMatchObject({ count: 1, total: 3 })
+    expect(metrics.severityPrecision.concern).toMatchObject({ count: 1, total: 2 })
+    expect(metrics.severityPrecision.nit).toEqual({ count: 0, total: 0, value: null, interval: null })
+    expect(metrics.importance).toBeUndefined()
+  })
+
+  test("a finding inline and another in the summary on one defect are a match and a duplicate", () => {
+    const inline = { ...evalFinding(), anchored: true }
+    const summary = {
+      ...evalFinding({ line: 12, path: "src/billing/ledger.ts", title: "Promise dropped" }),
+      anchored: false,
+    }
+    // The same place and title in both lists share a findingKey, so one judgement serves both.
+    const twin = { ...evalFinding(), anchored: false }
+    const run = evalRun({ proposed: [evalFinding(), summary], posted: [inline, summary, twin] })
+    const result = score({ run, verdicts: { [inline.key]: agreed(MATCH), [summary.key]: agreed(MATCH) } })
+    expect(twin.key).toBe(inline.key)
+    expect(result).toMatchObject({ matched: 1, duplicates: 2, detected: ["missing-await"] })
+    const metrics = summarize([{ score: result, evalCase: BUG, run }])
+    expect(metrics.precision).toMatchObject({ count: 1, total: 3 })
+    expect(metrics.severityPrecision.blocking).toMatchObject({ count: 1, total: 3 })
+    // Without the twin: one match, one duplicate.
+    const pair = evalRun({ proposed: [evalFinding(), summary], posted: [inline, summary] })
+    const two = score({ run: pair, verdicts: { [inline.key]: agreed(MATCH), [summary.key]: agreed(MATCH) } })
+    expect(two).toMatchObject({ matched: 1, duplicates: 1 })
+    expect(summarize([{ score: two, evalCase: BUG, run: pair }]).severityPrecision.blocking).toMatchObject({
+      count: 1,
+      total: 2,
+    })
+  })
+
+  test("a gradient step falls only when its interval is above 0, and a small sample is inconclusive", () => {
+    const falling = severityGradient({ blocking: { count: 9, total: 10 }, concern: { count: 3, total: 10 } })
+    expect(falling.steps).toHaveLength(1)
+    expect(falling.steps[0]).toMatchObject({ higher: "blocking", lower: "concern", trend: "falling" })
+    expect(falling.steps[0].difference).toBeCloseTo(0.6)
+    expect(falling.steps[0].interval[0]).toBeCloseTo(0.1705, 3)
+    expect(falling.steps[0].interval[1]).toBeCloseTo(0.809, 3)
+    expect(falling).toMatchObject({ trend: "falling", flagged: false })
+    expect(falling.shares.blocking).toMatchObject({ count: 9, total: 10, value: 0.9 })
+
+    // Small samples are no evidence either way.
+    for (const counts of [
+      { blocking: { count: 1, total: 2 }, concern: { count: 2, total: 3 } },
+      { blocking: { count: 5, total: 10 }, concern: { count: 5, total: 10 } },
+      { blocking: { count: 3, total: 10 }, concern: { count: 6, total: 10 } },
+      { blocking: { count: 6, total: 10 }, concern: { count: 4, total: 10 } },
+    ])
+      expect(severityGradient(counts)).toMatchObject({ trend: "inconclusive", flagged: false })
+
+    // A large sample that rules out a fall of ten points is flat; one that rises is inverted. Both are flagged.
+    const flat = severityGradient({ blocking: { count: 500, total: 1000 }, concern: { count: 500, total: 1000 } })
+    expect(flat.steps[0].interval[1]).toBeLessThan(0.1)
+    expect(flat).toMatchObject({ trend: "flat", flagged: true })
+    expect(severityGradient({ blocking: { count: 30, total: 100 }, concern: { count: 60, total: 100 } })).toMatchObject(
+      { trend: "inverted", flagged: true },
+    )
+    // The margin is an option.
+    expect(
+      severityGradient(
+        { blocking: { count: 500, total: 1000 }, concern: { count: 500, total: 1000 } },
+        { margin: 0.01 },
+      ).trend,
+    ).toBe("inconclusive")
+
+    const mixed = severityGradient({
+      blocking: { count: 90, total: 100 },
+      concern: { count: 30, total: 100 },
+      nit: { count: 80, total: 100 },
+    })
+    expect(mixed.steps.map((step) => [step.higher, step.lower, step.trend])).toEqual([
+      ["blocking", "concern", "falling"],
+      ["concern", "nit", "inverted"],
+    ])
+    expect(mixed).toMatchObject({ trend: "inverted", flagged: true })
+
+    expect(severityGradient({ blocking: { count: 3, total: 4 } })).toMatchObject({
+      steps: [],
+      trend: "n/a",
+      flagged: false,
+    })
+    // An empty severity is skipped, so the step runs from blocking to nit.
+    const skipped = severityGradient({
+      blocking: { count: 9, total: 10 },
+      concern: { count: 0, total: 0 },
+      nit: { count: 3, total: 10 },
+    })
+    expect(skipped.steps.map((step) => [step.higher, step.lower])).toEqual([["blocking", "nit"]])
+    expect(skipped.shares.concern.value).toBeNull()
+    // A severity outside the order is listed after it and gets no step.
+    const unknown = severityGradient({ critical: { count: 1, total: 1 }, blocking: { count: 9, total: 10 } })
+    expect(Object.keys(unknown.shares)).toEqual(["blocking", "concern", "nit", "critical"])
+    expect(unknown.steps).toEqual([])
+    // VS-46 passes its own order.
+    const custom = severityGradient(
+      { high: { count: 90, total: 100 }, low: { count: 10, total: 100 } },
+      { order: ["high", "medium", "low"] },
+    )
+    expect(Object.keys(custom.shares)).toEqual(["high", "medium", "low"])
+    expect(custom.steps.map((step) => [step.higher, step.lower, step.trend])).toEqual([["high", "low", "falling"]])
+  })
+
+  test("Newcombe's interval for two independent proportions", () => {
+    // Newcombe (1998), table II, examples (a) and (d), method 10.
+    const first = independentDifference({ count: 56, total: 70 }, { count: 48, total: 80 })!
+    expect(first.difference).toBeCloseTo(0.2)
+    expect(first.interval[0]).toBeCloseTo(0.0524, 4)
+    expect(first.interval[1]).toBeCloseTo(0.3339, 4)
+    const second = independentDifference({ count: 5, total: 56 }, { count: 0, total: 29 })!
+    expect(second.interval[0]).toBeCloseTo(-0.0381, 4)
+    expect(second.interval[1]).toBeCloseTo(0.1926, 4)
+    expect(independentDifference({ count: 0, total: 0 }, { count: 1, total: 2 })).toBeNull()
+    expect(independentDifference({ count: 1, total: 2 }, { count: 0, total: 0 })).toBeNull()
+  })
+})
+
+describe("the importance proposal (VS-45, Q29)", () => {
+  test("is a named proposal beside the current rubric, never a rubric version", () => {
+    expect(RUBRIC_VERSION).toBe(1)
+    expect(typeof IMPORTANCE_PROPOSAL).toBe("string")
+    expect(Number.isFinite(Number(IMPORTANCE_PROPOSAL))).toBe(false)
+    expect([...IMPORTANCE]).toEqual(["would-block", "should-fix", "minor"])
+    expect([IMPORTANCE_MIN_FINDINGS, IMPORTANCE_MIN_KAPPA]).toEqual([100, 0.4])
+  })
+
+  test("the current rubric refuses an importance on a pass or an adjudication", () => {
+    const passes: JudgePass[] = [
+      { judge: "human:annotator", rubric: RUBRIC_VERSION, verdict: MATCH, importance: "would-block" },
+      { judge: "model:judge/one", rubric: RUBRIC_VERSION, verdict: MATCH, importance: "would-block" },
+    ]
+    const settled = settle({ passes }, { reviewed: ["test/reviewer"] })
+    expect(settled.status).toBe("none")
+    expect(settled.problems).toEqual([
+      `human:annotator's verdict has an importance, which only the proposed importance rubric (${IMPORTANCE_PROPOSAL}) records`,
+      `model:judge/one's verdict has an importance, which only the proposed importance rubric (${IMPORTANCE_PROPOSAL}) records`,
+    ])
+    const adjudicated = settle(
+      {
+        passes: [],
+        adjudication: {
+          by: "human:owner",
+          date: "2026-11-07",
+          rubric: RUBRIC_VERSION,
+          verdict: MATCH,
+          importance: "minor",
+        },
+      },
+      { reviewed: [] },
+    )
+    expect(adjudicated.status).toBe("none")
+    expect(adjudicated.problems[0]).toContain("human:owner's verdict has an importance")
+  })
+
+  test("the proposal needs an importance on every match and extra, and none on a false alarm", () => {
+    expect(importanceProblem({ verdict: MATCH, importance: "would-block" }, IMPORTANCE_PROPOSAL)).toBeUndefined()
+    expect(importanceProblem({ verdict: { kind: "false-alarm" } }, IMPORTANCE_PROPOSAL)).toBeUndefined()
+    expect(importanceProblem({ verdict: MATCH }, IMPORTANCE_PROPOSAL)).toBe(
+      "is a match or an extra without an importance of would-block, should-fix, minor",
+    )
+    expect(
+      importanceProblem({ verdict: { kind: "extra", issue: "x" }, importance: "critical" }, IMPORTANCE_PROPOSAL),
+    ).toBe("is a match or an extra without an importance of would-block, should-fix, minor")
+    expect(importanceProblem({ verdict: { kind: "false-alarm" }, importance: "minor" }, IMPORTANCE_PROPOSAL)).toBe(
+      "gives an importance to a false alarm; only a match or an extra has one",
+    )
+    expect(importanceProblem({ verdict: MATCH, importance: "minor" })).toContain("only the proposed importance rubric")
+    expect(importanceProblem({ verdict: MATCH })).toBeUndefined()
+    const missing = settle(
+      { passes: [proposed("human:annotator", MATCH), proposed("human:other", MATCH, "minor")] },
+      { reviewed: [], proposal: IMPORTANCE_PROPOSAL },
+    )
+    expect(missing.status).toBe("single")
+    expect(missing.problems).toEqual([
+      "human:annotator's verdict is a match or an extra without an importance of would-block, should-fix, minor",
+    ])
+  })
+
+  test("the verdict settles apart from its importance", () => {
+    const under = { reviewed: ["test/reviewer"], proposal: IMPORTANCE_PROPOSAL }
+    const split = settle(agreedUnder(MATCH, "would-block", "should-fix"), under)
+    expect(split).toEqual({ status: "agreed", verdict: MATCH, human: true, problems: [] })
+    expect(settle(agreedUnder(MATCH, "should-fix"), under)).toEqual({
+      status: "agreed",
+      verdict: MATCH,
+      importance: "should-fix",
+      human: true,
+      problems: [],
+    })
+    const adjudication = {
+      by: "human:owner",
+      date: "2026-11-07",
+      rubric: RUBRIC_VERSION,
+      proposal: IMPORTANCE_PROPOSAL,
+      verdict: MATCH,
+    }
+    expect(
+      settle(
+        { ...agreedUnder(MATCH, "would-block", "should-fix"), adjudication: { ...adjudication, importance: "minor" } },
+        under,
+      ),
+    ).toMatchObject({ status: "adjudicated", verdict: MATCH, importance: "minor" })
+    const refused = settle({ ...agreedUnder(MATCH, "would-block", "should-fix"), adjudication }, under)
+    expect(refused.status).toBe("agreed")
+    expect(refused.problems).toEqual([
+      "human:owner's verdict is a match or an extra without an importance of would-block, should-fix, minor",
+    ])
+  })
+
+  test("passes under the current rubric and under the proposal are never pooled", () => {
+    const current: JudgePass = { judge: "human:annotator", rubric: RUBRIC_VERSION, verdict: MATCH }
+    const mixed = { passes: [current, proposed("model:judge/one", MATCH, "would-block")] }
+    const atCurrent = settle(mixed, { reviewed: [] })
+    expect(atCurrent.status).toBe("single")
+    expect(atCurrent.problems).toEqual([
+      `model:judge/one judged under rubric 1 with the proposal ${IMPORTANCE_PROPOSAL}, not rubric 1: the pass is stale`,
+    ])
+    const atProposal = settle(mixed, { reviewed: [], proposal: IMPORTANCE_PROPOSAL })
+    expect(atProposal.status).toBe("single")
+    expect(atProposal.problems).toEqual([
+      `human:annotator judged under rubric 1, not rubric 1 with the proposal ${IMPORTANCE_PROPOSAL}: the pass is stale`,
+    ])
+    // Once a RUBRIC_VERSION 2 is adopted, passes made under the proposal still count for nothing there, whatever rubric
+    // number they carry: adopting the axis means judging again.
+    for (const rubric of [1, 2]) {
+      const later = settle(
+        {
+          passes: [
+            proposed("human:annotator", MATCH, "would-block", { rubric }),
+            proposed("human:other", MATCH, "would-block", { rubric }),
+          ],
+        },
+        { reviewed: [], rubric: 2 },
+      )
+      expect(later.status).toBe("none")
+      expect(later.problems[0]).toContain("the pass is stale")
+    }
+    // A pass under an earlier revision of the proposal is stale under the current one.
+    const revised = settle(
+      {
+        passes: [
+          proposed("human:annotator", MATCH, "minor", { proposal: "vs45-importance-0" }),
+          proposed("human:other", MATCH, "minor"),
+        ],
+      },
+      { reviewed: [], proposal: IMPORTANCE_PROPOSAL },
+    )
+    expect(revised.status).toBe("single")
+    expect(revised.problems[0]).toContain("with the proposal vs45-importance-0, not rubric 1 with the proposal")
+    // With no proposal on either side, a stale pass and adjudication read as they did before VS-45.
+    const earlier = settle(
+      {
+        passes: [{ judge: "human:annotator", rubric: 0, verdict: MATCH }, current],
+        adjudication: { by: "human:owner", date: "2026-11-07", rubric: 0, verdict: MATCH },
+      },
+      { reviewed: [] },
+    )
+    expect(earlier.problems).toEqual([
+      "human:annotator judged under rubric 0, not 1: the pass is stale",
+      "the adjudication by human:owner used rubric 0, not 1",
+    ])
+  })
+
+  test("the same verdicts give the same quality metrics under either rubric", () => {
+    const hit = evalFinding()
+    const real = evalFinding({ line: 60, title: "Cache never expires", severity: "concern" })
+    const wrong = evalFinding({ line: 44, title: "Magic number" })
+    const run = evalRun({ proposed: [hit, real, wrong], posted: [hit, real, wrong] })
+    const current = scoreUnder(run, {
+      [hit.key]: agreed(MATCH),
+      [real.key]: agreed({ kind: "extra", issue: "cache" }),
+      [wrong.key]: agreed({ kind: "false-alarm" }),
+    })
+    const proposal = scoreUnder(
+      run,
+      {
+        [hit.key]: agreedUnder(MATCH, "would-block"),
+        [real.key]: agreedUnder({ kind: "extra", issue: "cache" }, "minor"),
+        [wrong.key]: agreedUnder({ kind: "false-alarm" }),
+      },
+      IMPORTANCE_PROPOSAL,
+    )
+    const before = summarize([{ score: current, evalCase: BUG, run }])
+    const after = summarize([{ score: proposal, evalCase: BUG, run }], { proposal: IMPORTANCE_PROPOSAL })
+    for (const metric of ["recall", "precision", "falseAlarmsPerPr", "severityPrecision", "findings"] as const)
+      expect(after[metric]).toEqual(before[metric])
+    expect(before.importance).toBeUndefined()
+    expect(after.importance).toBeDefined()
+    // Without the proposal summarize reports no importance metrics, even over passes that carry one.
+    expect(summarize([{ score: proposal, evalCase: BUG, run }]).importance).toBeUndefined()
+  })
+
+  test("important precision leaves out real findings whose importance is not settled, precision@blocking does not", () => {
+    const findings = [
+      evalFinding({ title: "Would block" }),
+      evalFinding({ line: 50, title: "Minor extra" }),
+      evalFinding({ line: 51, title: "False alarm" }),
+      evalFinding({ line: 52, title: "Unsettled extra" }),
+      evalFinding({ line: 60, title: "Should fix", severity: "concern" }),
+      evalFinding({ line: 61, title: "Concern alarm", severity: "concern" }),
+    ]
+    const run = evalRun({ proposed: findings, posted: findings })
+    const result = scoreUnder(
+      run,
+      {
+        [findings[0].key]: agreedUnder(MATCH, "would-block"),
+        [findings[1].key]: agreedUnder({ kind: "extra", issue: "minor" }, "minor"),
+        [findings[2].key]: agreedUnder({ kind: "false-alarm" }),
+        [findings[3].key]: agreedUnder({ kind: "extra", issue: "open" }, "would-block", "minor"),
+        [findings[4].key]: agreedUnder({ kind: "extra", issue: "fix" }, "should-fix"),
+        [findings[5].key]: agreedUnder({ kind: "false-alarm" }),
+      },
+      IMPORTANCE_PROPOSAL,
+    )
+    expect(result.bySeverity).toEqual({
+      blocking: { judged: 4, real: 3, wouldBlock: 1, important: 1, unsettled: 1 },
+      concern: { judged: 2, real: 1, wouldBlock: 0, important: 1, unsettled: 0 },
+    })
+    const metrics = summarize([{ score: result, evalCase: BUG, run }], { proposal: IMPORTANCE_PROPOSAL })
+    expect(metrics.importance!.important).toMatchObject({ count: 2, total: 5 })
+    // VS-45's precision@blocking counts the unsettled blocking extra as not would-block; the gradient leaves it out.
+    expect(metrics.importance!.blocking).toMatchObject({ count: 1, total: 4 })
+    expect(metrics.importance!.wouldBlock.shares.blocking).toMatchObject({ count: 1, total: 3 })
+    expect(metrics.importance!.wouldBlock.shares.concern).toMatchObject({ count: 0, total: 2 })
+    expect(metrics.importance!.unsettled).toBe(1)
+    expect(metrics.importance!.wouldBlock.trend).toBe("inconclusive")
+    // The real share on the current rubric's basis keeps every real finding.
+    expect(metrics.severityPrecision.blocking).toMatchObject({ count: 3, total: 4 })
+  })
+
+  test("a severity tally is read only from a score's own keys, whatever severity a hand-edited artifact gives", () => {
+    const tally = { judged: 2, real: 1, wouldBlock: 0, important: 0, unsettled: 1 }
+    const scores = JSON.parse(
+      `[{"bySeverity":{"constructor":${JSON.stringify(tally)},"__proto__":${JSON.stringify(tally)}}},{"bySeverity":{}}]`,
+    )
+    const tallies = severityTallies(scores)
+    // Each is the one score's own tally, not summed with an Object.prototype member the other score inherits.
+    expect(Object.entries(tallies).slice(3)).toEqual([
+      ["__proto__", tally],
+      ["constructor", tally],
+    ])
+    expect(Object.keys(tallies).slice(0, 3)).toEqual(["blocking", "concern", "nit"])
+    expect(tallies.blocking).toEqual({ judged: 0, real: 0, wouldBlock: 0, important: 0, unsettled: 0 })
+  })
+
+  test("agreement on importance is Fleiss' kappa over two real verdicts per finding, matches and extras apart", () => {
+    const EXTRA: Verdict = { kind: "extra", issue: "cache" }
+    const item = (passes: JudgePass[], reviewed = ["test/reviewer"]) => ({ judgement: { passes }, reviewed })
+    const pairs = (count: number, verdict: Verdict, first: Importance, second: Importance) =>
+      Array.from({ length: count }, () =>
+        item([proposed("human:a", verdict, first), proposed("human:b", verdict, second)]),
+      )
+    const sample = (verdict: Verdict, times = 1) =>
+      Array.from({ length: times }).flatMap(() => [
+        ...pairs(6, verdict, "would-block", "would-block"),
+        ...pairs(2, verdict, "minor", "minor"),
+        ...pairs(2, verdict, "would-block", "should-fix"),
+      ])
+
+    const small = importanceAgreement(sample(MATCH))
+    expect(small.match).toMatchObject({ findings: 10, observed: 0.8, decision: "too-few" })
+    expect(small.match.kappa).toBeCloseTo(0.5652, 4)
+    expect(small.extra).toEqual({ findings: 0, observed: null, kappa: null, decision: "too-few" })
+    expect(small.decision).toBe("too-few")
+
+    const large = importanceAgreement([...sample(MATCH, 10), ...sample(EXTRA, 10)])
+    expect(large.all).toMatchObject({ findings: 200, decision: "keep" })
+    expect(large.all.kappa).toBeCloseTo(0.5652, 4)
+    expect(large.match).toMatchObject({ findings: 100, decision: "keep" })
+    expect(large.extra).toMatchObject({ findings: 100, decision: "keep" })
+    expect(large.decision).toBe("keep")
+
+    // Judges who agree on every match but not on extras: the extras alone drop the axis.
+    const extrasDisagree = importanceAgreement([
+      ...sample(MATCH, 10),
+      ...pairs(40, EXTRA, "would-block", "would-block"),
+      ...pairs(20, EXTRA, "should-fix", "should-fix"),
+      ...pairs(40, EXTRA, "would-block", "should-fix"),
+    ])
+    expect(extrasDisagree.match.decision).toBe("keep")
+    expect(extrasDisagree.extra.kappa).toBeCloseTo(0.1667, 4)
+    expect(extrasDisagree.extra.decision).toBe("drop")
+    expect(extrasDisagree.decision).toBe("drop")
+
+    // VS-45's rule over every finding: 100 double-judged findings with kappa below 0.4 drop the axis, though neither
+    // part reaches 100 on its own.
+    const pooled = importanceAgreement([
+      ...pairs(60, MATCH, "would-block", "should-fix"),
+      ...pairs(40, EXTRA, "should-fix", "would-block"),
+    ])
+    expect(pooled.match).toMatchObject({ findings: 60, decision: "too-few" })
+    expect(pooled.extra).toMatchObject({ findings: 40, decision: "too-few" })
+    expect(pooled.all).toMatchObject({ findings: 100, observed: 0, decision: "drop" })
+    expect(pooled.all.kappa).toBeCloseTo(-1, 4)
+    expect(pooled.decision).toBe("drop")
+    // Under 100 in all, or kappa of at least 0.4 over them, the parts' too-few stands.
+    expect(importanceAgreement(pairs(99, MATCH, "would-block", "should-fix")).decision).toBe("too-few")
+    const agreeing = importanceAgreement([...sample(MATCH, 6), ...sample(EXTRA, 4)])
+    expect(agreeing.all).toMatchObject({ findings: 100, decision: "keep" })
+    expect(agreeing.decision).toBe("too-few")
+
+    const uniform = importanceAgreement(pairs(100, MATCH, "would-block", "would-block"))
+    expect(uniform.match).toMatchObject({ findings: 100, observed: 1, kappa: null, decision: "undefined" })
+
+    // A match and an extra on one finding count with the extras.
+    expect(
+      importanceAgreement([item([proposed("human:a", MATCH, "minor"), proposed("human:b", EXTRA, "minor")])]).extra
+        .findings,
+    ).toBe(1)
+
+    // Left out: a false alarm, a stale pass, a model judging its own run's findings and a third judge; a judge's latest
+    // pass stands, in the place it first judged the finding.
+    const filtered = importanceAgreement([
+      item([proposed("human:a", MATCH, "minor"), proposed("human:b", { kind: "false-alarm" })]),
+      item([proposed("human:a", MATCH, "minor"), { judge: "human:b", rubric: RUBRIC_VERSION, verdict: MATCH }]),
+      item([proposed("human:a", MATCH, "minor"), proposed("model:test/reviewer", MATCH, "minor")]),
+      item([
+        proposed("human:z", MATCH, "would-block"),
+        proposed("human:a", MATCH, "minor"),
+        proposed("human:z", MATCH, "minor"),
+        proposed("human:m", MATCH, "should-fix"),
+      ]),
+    ])
+    expect(filtered.match).toMatchObject({ findings: 1, observed: 1 })
+    expect(filtered.extra.findings).toBe(0)
   })
 })

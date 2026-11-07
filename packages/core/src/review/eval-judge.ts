@@ -11,6 +11,8 @@
 // any spelling of its id (sameModel), because a blinded judge cannot tell which findings are its own.
 
 import {
+  IMPORTANCE_PROPOSAL,
+  importanceProblem,
   RUBRIC_VERSION,
   runKey,
   sameModel,
@@ -20,9 +22,11 @@ import {
   type EvalCase,
   type EvalFinding,
   type EvalRun,
+  type Importance,
   type JudgePass,
   type Judgement,
   type LabelledDefect,
+  type Settled,
   type Suggestion,
   type Verdict,
 } from "./eval"
@@ -33,7 +37,9 @@ export interface TaskFinding {
   path: string
   line: number
   endLine?: number
-  severity: string
+  // The severity the finding was posted with. A task under the importance proposal leaves it out, so a judge's
+  // importance is not anchored on the reviewer's claim.
+  severity?: string
   category: string
   title: string
   body: string
@@ -41,11 +47,10 @@ export interface TaskFinding {
 }
 
 // What a judge sees of a labelled defect: what a verdict is given against. Annotators' failureClass is left out: no
-// verdict rule reads it, and a class shown beside the cause could sway a match.
-export type TaskDefect = Pick<
-  LabelledDefect,
-  "id" | "category" | "severity" | "summary" | "cause" | "locations" | "alternatives"
->
+// verdict rule reads it, and a class shown beside the cause could sway a match. A task under the importance proposal
+// also leaves out the label's severity, so two judges' importances on a match are not both read off the label.
+export type TaskDefect = Pick<LabelledDefect, "id" | "category" | "summary" | "cause" | "locations" | "alternatives"> &
+  Partial<Pick<LabelledDefect, "severity">>
 
 export interface JudgeTask {
   task: string // opaque
@@ -57,6 +62,7 @@ export interface JudgeTask {
 export interface JudgeAnswer {
   finding: string // a TaskFinding id
   verdict: Verdict
+  importance?: Importance // under the importance proposal, on a match or an extra
   suggestion?: Suggestion
   note?: string
 }
@@ -89,14 +95,17 @@ export interface RecordedPass {
 }
 
 // One task per reviewed run with findings to judge (nits only with `nits`, and only findings `only` keeps), and the key
-// that maps each opaque id back. The key stays with the coordinator; only the tasks go to a judge.
+// that maps each opaque id back. The key stays with the coordinator; only the tasks go to a judge. Under the importance
+// proposal neither the findings' nor the labels' severities are shown.
 export function blind(input: {
   runs: readonly EvalRun[]
   cases: readonly EvalCase[]
   seed: string
   nits?: boolean
+  proposal?: string
   only?: (run: string, finding: string) => boolean
 }) {
+  const hidden = input.proposal === IMPORTANCE_PROPOSAL
   const cases = new Map(input.cases.map((item) => [item.id, item]))
   const entries = input.runs
     .flatMap((run) => {
@@ -114,9 +123,9 @@ export function blind(input: {
         {
           task: {
             task: fnv1a64(`${input.seed}\ntask\n${key}`),
-            defects: evalCase.defects.map(shownDefect),
+            defects: evalCase.defects.map((defect) => shownDefect(defect, hidden)),
             ...(evalCase.code ? { code: evalCase.code } : {}),
-            findings: findings.map((entry) => shown(entry.id, entry.finding)),
+            findings: findings.map((entry) => shown(entry.id, entry.finding, hidden)),
           } satisfies JudgeTask,
           run,
           findings: new Map(findings.map((entry) => [entry.id, entry.finding.key])),
@@ -133,13 +142,15 @@ export function blind(input: {
 // Asks one judge about every blinded task, in task order, and returns its answers as passes. A model judge's calls are
 // each admitted first and settled at what it reports; a call that fails after it was sent is released, which the
 // ledger keeps as uncertain spend. Answers that name no finding of the task, or a defect the case does not label, are
-// reported as problems and dropped.
+// reported as problems and dropped, and so is one whose importance does not fit the proposal (importanceProblem).
+// Passes made under the importance proposal record it.
 export async function judgeRuns(input: {
   runs: readonly EvalRun[]
   cases: readonly EvalCase[]
   seed: string
   matcher: Matcher
   rubric?: number
+  proposal?: string
   nits?: boolean
   only?: (run: string, finding: string) => boolean
   admit?: (run: EvalRun, task: JudgeTask) => JudgeAdmission
@@ -147,6 +158,8 @@ export async function judgeRuns(input: {
   const judge = input.matcher.judge
   const model = judge.startsWith("model:") ? judge.slice("model:".length) : undefined
   if (!/^(human|model):\S/.test(judge)) throw new Error(`${judge} is not a human: or model: judge`)
+  if (input.proposal !== undefined && input.proposal !== IMPORTANCE_PROPOSAL)
+    throw new Error(`${input.proposal} is not a proposed rubric; the only one is ${IMPORTANCE_PROPOSAL}`)
   if (model && input.runs.some((run) => (run.models ?? [run.model]).some((id) => sameModel(id, model))))
     throw new Error(`${judge} reviewed runs being judged, and a model never judges findings it produced`)
   if (model && !input.admit) throw new Error(`${judge} makes paid calls, so each needs the eval ledger's admission`)
@@ -198,7 +211,7 @@ export async function judgeRuns(input: {
         ? `${judge} answered ${String(answer?.finding)}, which task ${task.task} does not have`
         : seen.has(answer.finding)
           ? `${judge} answered ${answer.finding} of task ${task.task} twice; the first answer stands`
-          : answerProblem(answer, task)
+          : answerProblem(answer, task, input.proposal)
       if (problem) {
         problems.push(problem)
         continue
@@ -210,7 +223,9 @@ export async function judgeRuns(input: {
         pass: {
           judge,
           rubric,
+          ...(input.proposal ? { proposal: input.proposal } : {}),
           verdict: answer.verdict,
+          ...(answer.importance ? { importance: answer.importance } : {}),
           ...(answer.suggestion ? { suggestion: answer.suggestion } : {}),
           ...(typeof answer.note === "string" && answer.note.trim() ? { note: answer.note.trim() } : {}),
         },
@@ -256,20 +271,24 @@ export function recordAdjudications(
 }
 
 // The disagreements a human must adjudicate, blinded like any task. Each finding lists the verdicts given, without the
-// judges' names, in an order that depends only on the seed.
+// judges' names, in an order that depends only on the seed. Under the importance proposal an agreed real verdict whose
+// importance the judges did not agree on is a dispute too, and the listings carry each pass's importance.
 export function disputeTasks(input: {
   runs: readonly EvalRun[]
   cases: readonly EvalCase[]
   judgements: readonly Judgement[]
   seed: string
   rubric?: number
+  proposal?: string
   nits?: boolean
 }) {
   const index = new Map(input.judgements.map((item) => [`${item.run}\n${item.finding}`, item]))
   const models = new Map(input.runs.map((run) => [runKey(run), run.models ?? [run.model]]))
   const disputed = (run: string, finding: string) => {
     const item = index.get(`${run}\n${finding}`)
-    return !!item && settle(item, { reviewed: models.get(run) ?? [], rubric: input.rubric }).status === "disagreed"
+    if (!item) return false
+    const outcome = settle(item, { reviewed: models.get(run) ?? [], rubric: input.rubric, proposal: input.proposal })
+    return outcome.status === "disagreed" || (input.proposal === IMPORTANCE_PROPOSAL && importanceDisputed(outcome))
   }
   const blinded = blind({ ...input, only: disputed })
   return {
@@ -281,11 +300,12 @@ export function disputeTasks(input: {
         findings: task.findings.map((finding) => {
           const item = index.get(`${run}\n${key.findings.get(finding.id)}`)!
           const verdicts = item.passes
-            .filter((pass) => pass.rubric === (input.rubric ?? RUBRIC_VERSION))
+            .filter((pass) => pass.rubric === (input.rubric ?? RUBRIC_VERSION) && pass.proposal === input.proposal)
             .map((pass) => ({ order: fnv1a64(`${input.seed}\nverdict\n${finding.id}\n${pass.judge}`), pass }))
             .toSorted((a, b) => compare(a.order, b.order))
             .map((entry) => ({
               verdict: entry.pass.verdict,
+              ...(entry.pass.importance ? { importance: entry.pass.importance } : {}),
               ...(entry.pass.suggestion ? { suggestion: entry.pass.suggestion } : {}),
               ...(entry.pass.note ? { note: entry.pass.note } : {}),
             }))
@@ -298,11 +318,13 @@ export function disputeTasks(input: {
   }
 }
 
-// Whether each judgement of these runs is settled, and how: the judging status a report shows.
+// Whether each judgement of these runs is settled, and how: the judging status a report shows. Under the importance
+// proposal it also counts the agreed real verdicts whose importance is not settled, which go to disputes.
 export function judgingStatus(input: {
   runs: readonly EvalRun[]
   judgements: readonly Judgement[]
   rubric?: number
+  proposal?: string
   nits?: boolean
 }) {
   const index = new Map(input.judgements.map((item) => [`${item.run}\n${item.finding}`, item]))
@@ -318,7 +340,7 @@ export function judgingStatus(input: {
       return keys.map((finding) => {
         const item = index.get(`${key}\n${finding}`)
         return item
-          ? settle(item, { reviewed: run.models ?? [run.model], rubric: input.rubric })
+          ? settle(item, { reviewed: run.models ?? [run.model], rubric: input.rubric, proposal: input.proposal })
           : { status: "none" as const, problems: [] }
       })
     })
@@ -331,17 +353,25 @@ export function judgingStatus(input: {
     disagreed: outcomes.filter((outcome) => outcome.status === "disagreed").length,
     single: outcomes.filter((outcome) => outcome.status === "single").length,
     none: outcomes.filter((outcome) => outcome.status === "none").length,
+    ...(input.proposal === IMPORTANCE_PROPOSAL
+      ? { importanceDisagreed: outcomes.filter(importanceDisputed).length }
+      : {}),
     problems: [...new Set(outcomes.flatMap((outcome) => outcome.problems))],
   }
 }
 
-function shown(id: string, finding: EvalFinding): TaskFinding {
+// An agreed real verdict whose judges gave it no one importance.
+function importanceDisputed(outcome: Settled) {
+  return outcome.status === "agreed" && outcome.verdict.kind !== "false-alarm" && outcome.importance === undefined
+}
+
+function shown(id: string, finding: EvalFinding, hidden: boolean): TaskFinding {
   return {
     id,
     path: finding.path,
     line: finding.line,
     ...(finding.endLine !== undefined ? { endLine: finding.endLine } : {}),
-    severity: finding.severity,
+    ...(hidden ? {} : { severity: finding.severity }),
     category: finding.category,
     title: finding.title,
     body: finding.body,
@@ -349,11 +379,11 @@ function shown(id: string, finding: EvalFinding): TaskFinding {
   }
 }
 
-function shownDefect(defect: LabelledDefect): TaskDefect {
+function shownDefect(defect: LabelledDefect, hidden: boolean): TaskDefect {
   return {
     id: defect.id,
     category: defect.category,
-    severity: defect.severity,
+    ...(hidden ? {} : { severity: defect.severity }),
     summary: defect.summary,
     cause: defect.cause,
     locations: defect.locations,
@@ -361,7 +391,7 @@ function shownDefect(defect: LabelledDefect): TaskDefect {
   }
 }
 
-function answerProblem(answer: JudgeAnswer, task: JudgeTask) {
+function answerProblem(answer: JudgeAnswer, task: JudgeTask, proposal?: string) {
   const verdict = answer.verdict
   const kind = verdict?.kind
   if (kind === "match" && !task.defects.some((defect) => defect.id === verdict.defect))
@@ -372,7 +402,8 @@ function answerProblem(answer: JudgeAnswer, task: JudgeTask) {
     return `the answer for ${answer.finding} is not a match, an extra or a false-alarm`
   if (answer.suggestion !== undefined && answer.suggestion !== "valid" && answer.suggestion !== "invalid")
     return `the answer for ${answer.finding} rates its suggestion ${String(answer.suggestion)}, not valid or invalid`
-  return undefined
+  const importance = importanceProblem(answer, proposal)
+  return importance ? `the answer for ${answer.finding} ${importance}` : undefined
 }
 
 function compare(a: string, b: string) {

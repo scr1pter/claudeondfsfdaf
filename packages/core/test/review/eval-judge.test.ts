@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   findingKey,
+  IMPORTANCE_PROPOSAL,
   RUBRIC_VERSION,
   runKey,
   scoreRun,
@@ -8,6 +9,7 @@ import {
   type EvalCase,
   type EvalFinding,
   type EvalRun,
+  type Importance,
 } from "@vectordevai/core/review/eval"
 import {
   blind,
@@ -404,6 +406,148 @@ describe("recording, disputes and status", () => {
         stage: "posted",
       }),
     ).toMatchObject({ matched: 1, detected: ["missing-await"] })
+  })
+})
+
+// The importance proposal (VS-45, Q29): tasks hide every severity, answers carry an importance, and an importance
+// disagreement is a dispute.
+
+// A reader that also rates each real finding's importance.
+function rater(judge: string, importance: (title: string) => Importance | undefined): Matcher {
+  return {
+    judge,
+    match: async (task) => ({
+      answers: task.findings.map((item): JudgeAnswer => {
+        const rated = importance(item.title)
+        return item.title.includes("not awaited")
+          ? {
+              finding: item.id,
+              verdict: { kind: "match", defect: task.defects[0].id },
+              ...(rated ? { importance: rated } : {}),
+            }
+          : { finding: item.id, verdict: { kind: "false-alarm" } }
+      }),
+    }),
+  }
+}
+
+describe("the importance proposal (VS-45)", () => {
+  test("a task under it shows no severity, and one without it is unchanged", () => {
+    const hidden = blind({ runs: RUNS, cases: [CASE], seed: "seed-1", proposal: IMPORTANCE_PROPOSAL })
+    expect(hidden.tasks).toHaveLength(2)
+    for (const task of hidden.tasks) {
+      for (const item of task.findings) expect(item).not.toHaveProperty("severity")
+      for (const defect of task.defects) expect(defect).not.toHaveProperty("severity")
+    }
+    expect(JSON.stringify(hidden.tasks)).not.toContain("blocking")
+    const plain = blind({ runs: RUNS, cases: [CASE], seed: "seed-1" })
+    // Without the proposal the tasks are what they were, byte for byte.
+    expect(JSON.stringify(blind({ runs: RUNS, cases: [CASE], seed: "seed-1", proposal: undefined }).tasks)).toBe(
+      JSON.stringify(plain.tasks),
+    )
+    expect(plain.tasks[0].findings[0].severity).toBeDefined()
+    expect(plain.tasks[0].defects[0].severity).toBe("blocking")
+    // The ids and order are the same: only the severities are left out.
+    expect(hidden.tasks.map((task) => task.findings.map((item) => item.id))).toEqual(
+      plain.tasks.map((task) => task.findings.map((item) => item.id)),
+    )
+  })
+
+  test("its passes record the proposal and the importance, and an answer that does not fit is dropped", async () => {
+    const result = await judgeRuns({
+      runs: [RUNS[0]],
+      cases: [CASE],
+      seed: "seed-1",
+      proposal: IMPORTANCE_PROPOSAL,
+      matcher: rater("human:annotator", () => "would-block"),
+    })
+    expect(result.problems).toEqual([])
+    expect(result.passes.find((entry) => entry.finding === CAUSE.key)!.pass).toEqual({
+      judge: "human:annotator",
+      rubric: RUBRIC_VERSION,
+      proposal: IMPORTANCE_PROPOSAL,
+      verdict: { kind: "match", defect: "missing-await" },
+      importance: "would-block",
+    })
+    // A false alarm carries no importance.
+    expect(result.passes.find((entry) => entry.finding === STYLE.key)!.pass).not.toHaveProperty("importance")
+    const missing = await judgeRuns({
+      runs: [RUNS[0]],
+      cases: [CASE],
+      seed: "seed-1",
+      proposal: IMPORTANCE_PROPOSAL,
+      matcher: rater("human:annotator", () => undefined),
+    })
+    expect(missing.passes.map((entry) => entry.finding)).toEqual([STYLE.key])
+    expect(missing.problems).toEqual([
+      expect.stringMatching(/^the answer for [0-9a-f]{12} is a match or an extra without an importance of/),
+    ])
+    // Under the current rubric an answer with an importance is dropped.
+    const current = await judgeRuns({
+      runs: [RUNS[0]],
+      cases: [CASE],
+      seed: "seed-1",
+      matcher: rater("human:annotator", () => "minor"),
+    })
+    expect(current.passes.map((entry) => entry.finding)).toEqual([STYLE.key])
+    expect(current.problems[0]).toContain("has an importance, which only the proposed importance rubric")
+    await expect(
+      judgeRuns({ runs: RUNS, cases: [CASE], seed: "s", proposal: "rubric-2", matcher: reader("human:annotator") }),
+    ).rejects.toThrow("is not a proposed rubric")
+  })
+
+  test("an importance disagreement is a dispute under the proposal only, listed with each importance", async () => {
+    const proposal = IMPORTANCE_PROPOSAL
+    const first = await judgeRuns({
+      runs: RUNS,
+      cases: [CASE],
+      seed: "seed-1",
+      proposal,
+      matcher: rater("human:annotator", () => "would-block"),
+    })
+    const second = await judgeRuns({
+      runs: RUNS,
+      cases: [CASE],
+      seed: "seed-1",
+      proposal,
+      matcher: rater("human:other", () => "should-fix"),
+    })
+    const judgements = recordPasses(recordPasses([], first.passes), second.passes)
+    const status = judgingStatus({ runs: RUNS, judgements, proposal })
+    expect(status).toMatchObject({ findings: 3, agreed: 3, disagreed: 0, importanceDisagreed: 1 })
+    // Without the proposal no pass counts, and the status has no importance count.
+    const current = judgingStatus({ runs: RUNS, judgements })
+    expect(current).toMatchObject({ findings: 3, agreed: 0, none: 3 })
+    expect(current).not.toHaveProperty("importanceDisagreed")
+    expect(disputeTasks({ runs: RUNS, cases: [CASE], judgements, seed: "seed-1" }).tasks).toEqual([])
+
+    const disputes = disputeTasks({ runs: RUNS, cases: [CASE], judgements, seed: "seed-1", proposal })
+    const items = disputes.tasks.flatMap((task) => task.findings)
+    expect(items).toHaveLength(1)
+    expect(items[0]).not.toHaveProperty("severity")
+    expect(items[0].verdicts.map((entry) => entry.importance).toSorted()).toEqual(["should-fix", "would-block"])
+    expect(JSON.stringify(disputes.tasks)).not.toContain("human:")
+
+    const large = runKey(RUNS[0])
+    const adjudicated = recordAdjudications(judgements, [
+      {
+        run: large,
+        finding: CAUSE.key,
+        adjudication: {
+          by: "human:owner",
+          date: "2026-11-07",
+          rubric: RUBRIC_VERSION,
+          proposal,
+          verdict: { kind: "match", defect: "missing-await" },
+          importance: "should-fix",
+        },
+      },
+    ])
+    expect(judgingStatus({ runs: RUNS, judgements: adjudicated, proposal })).toMatchObject({
+      adjudicated: 1,
+      agreed: 2,
+      importanceDisagreed: 0,
+    })
   })
 })
 

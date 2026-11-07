@@ -7,7 +7,7 @@
 // reported as no value with its counts.
 
 import { fnv1a64 } from "./fingerprint"
-import type { ReviewConfig } from "./types"
+import { SEVERITIES, type ReviewConfig } from "./types"
 
 export interface EvalExpectation {
   id: string
@@ -137,6 +137,23 @@ export const VARIANT_KEYS = {
 // Raised whenever the verdict rules in judging-rubric.md change. Passes made under another version must be redone.
 export const RUBRIC_VERSION = 1
 
+// VS-45's proposed importance axis (judging-rubric-importance.md), pending owner question Q29. It is a proposal, never a
+// rubric version: a pass made under it records this name beside the rubric whose verdict rules it follows, and counts
+// only where the same proposal is asked for, so no adopted RUBRIC_VERSION can ever count it. Adopting the axis (VS-45b)
+// means judging again under the new version. The name is revised whenever judging-rubric-importance.md changes, which
+// makes earlier proposal passes stale as well. Each match and extra under it gains an importance.
+export const IMPORTANCE_PROPOSAL = "vs45-importance-1"
+export const IMPORTANCE = ["would-block", "should-fix", "minor"] as const
+export type Importance = (typeof IMPORTANCE)[number]
+// VS-45's kill rule: the importance axis is dropped when inter-judge kappa on importance, over at least this many
+// double-judged findings, is below IMPORTANCE_MIN_KAPPA. This build applies it to every finding together, as VS-45
+// states it, and also to matches and extras apart, each part with its own minimum (importanceAgreement).
+export const IMPORTANCE_MIN_FINDINGS = 100
+export const IMPORTANCE_MIN_KAPPA = 0.4
+// A gradient step is flat when its interval rules out a fall of this much or more (severityGradient). This build's
+// choice for a monitor that decides nothing; VS-45 names no margin.
+export const GRADIENT_MARGIN = 0.1
+
 export type Stage = "proposed" | "posted"
 export type RunStatus = "completed" | "partial" | "failed" | "not-sent"
 
@@ -245,7 +262,9 @@ export type Suggestion = "valid" | "invalid"
 export interface JudgePass {
   judge: string // "human:<name>" or "model:<provider/model>"
   rubric: number
+  proposal?: string // a proposed rubric the pass was made under (IMPORTANCE_PROPOSAL); absent under the current one
   verdict: Verdict
+  importance?: Importance // under IMPORTANCE_PROPOSAL only, on a match or an extra; beside the verdict, never in it
   suggestion?: Suggestion // whether the finding's suggested change is correct, when it has one
   note?: string
 }
@@ -254,7 +273,9 @@ export interface Adjudication {
   by: string // "human:<name>"; a model never adjudicates
   date: string
   rubric: number
+  proposal?: string
   verdict: Verdict
+  importance?: Importance
   suggestion?: Suggestion
   note?: string
 }
@@ -269,7 +290,14 @@ export interface Judgement {
 // Every settled verdict has a human behind it: an adjudication, or an agreement with a human pass in it. Judges that
 // agree with no human among them are "needs-human" until a human judges or adjudicates the finding.
 export type Settled =
-  | { status: "adjudicated" | "agreed"; verdict: Verdict; suggestion?: Suggestion; human: true; problems: string[] }
+  | {
+      status: "adjudicated" | "agreed"
+      verdict: Verdict
+      suggestion?: Suggestion
+      importance?: Importance
+      human: true
+      problems: string[]
+    }
   | { status: "disagreed" | "needs-human" | "single" | "none"; problems: string[] }
 
 export function runKey(run: PlanEntry) {
@@ -292,15 +320,22 @@ export function isSettled(value: Settled | undefined): value is Extract<Settled,
 // adjudication, an agreement of models alone waits for a human, and a single pass waits for a second. A pass under
 // another rubric version, a malformed pass, and a model judging findings that model produced (`reviewed` lists the
 // run's models, compared by sameModel) do not count. An extra defect's issue is prefixed with its judge, so issues named
-// by different judges are never merged.
+// by different judges are never merged. A pass counts only under the rubric and the proposal it was made under: one made
+// under a proposed rubric (IMPORTANCE_PROPOSAL) is stale under any adopted one, and the reverse. Under the importance
+// proposal the verdict settles as it does without it, and its importance settles apart: an adjudication's, or one that
+// every counted pass gives, as for a suggestion.
 export function settle(
   judgement: Pick<Judgement, "passes" | "adjudication">,
-  options: { reviewed: readonly string[]; rubric?: number },
+  options: { reviewed: readonly string[]; rubric?: number; proposal?: string },
 ): Settled {
   const rubric = options.rubric ?? RUBRIC_VERSION
-  const checked = judgement.passes.map((pass) => ({ pass, problem: passProblem(pass, rubric, options.reviewed) }))
+  const proposal = options.proposal
+  const checked = judgement.passes.map((pass) => ({
+    pass,
+    problem: passProblem(pass, { rubric, proposal }, options.reviewed),
+  }))
   const adjudication = judgement.adjudication
-  const refused = adjudication ? adjudicationProblem(adjudication, rubric) : undefined
+  const refused = adjudication ? adjudicationProblem(adjudication, { rubric, proposal }) : undefined
   const problems = [
     ...checked.flatMap((entry) => (entry.problem ? [entry.problem] : [])),
     ...(refused ? [refused] : []),
@@ -310,6 +345,7 @@ export function settle(
       status: "adjudicated",
       verdict: namespaced(adjudication.verdict, adjudication.by),
       ...(adjudication.suggestion ? { suggestion: adjudication.suggestion } : {}),
+      ...(adjudication.importance ? { importance: adjudication.importance } : {}),
       human: true,
       problems,
     }
@@ -321,13 +357,45 @@ export function settle(
   // A model may assist with matching but is never the sole authority (Phase 0, "Metrics and judging").
   if (!passes.some((pass) => pass.judge.startsWith("human:"))) return { status: "needs-human", problems }
   const suggestion = passes[0].suggestion
+  const importance = passes[0].importance
   return {
     status: "agreed",
     verdict: namespaced(passes[0].verdict, passes[0].judge),
     ...(suggestion && passes.every((pass) => pass.suggestion === suggestion) ? { suggestion } : {}),
+    ...(importance && passes.every((pass) => pass.importance === importance) ? { importance } : {}),
     human: true,
     problems,
   }
+}
+
+// What is wrong with an entry's importance under a rubric and proposal, as a phrase that follows "the verdict" or "the
+// answer": only the importance proposal records one, only on a match or an extra, and there always one of IMPORTANCE.
+export function importanceProblem(entry: { verdict: Verdict; importance?: unknown }, proposal?: string) {
+  const real = entry.verdict?.kind === "match" || entry.verdict?.kind === "extra"
+  if (proposal !== IMPORTANCE_PROPOSAL)
+    return entry.importance === undefined
+      ? undefined
+      : `has an importance, which only the proposed importance rubric (${IMPORTANCE_PROPOSAL}) records`
+  if (!real)
+    return entry.importance === undefined
+      ? undefined
+      : "gives an importance to a false alarm; only a match or an extra has one"
+  return IMPORTANCE.some((value) => value === entry.importance)
+    ? undefined
+    : `is a match or an extra without an importance of ${IMPORTANCE.join(", ")}`
+}
+
+// The rubric a pass or a report was made under, as the report and the stale-pass problem name it.
+export function rubricName(rubric: unknown, proposal?: unknown) {
+  return proposal === undefined ? `rubric ${rubric}` : `rubric ${rubric} with the proposal ${String(proposal)}`
+}
+
+// The rubric a stale pass, adjudication or worksheet is told it is not (`theirs` is the proposal it was made under): the
+// bare version when neither side has a proposal, as these problems read before VS-45, else the rubric named in full.
+export function staleAgainst(under: { rubric: number; proposal?: string }, theirs: unknown) {
+  return under.proposal === undefined && theirs === undefined
+    ? `${under.rubric}`
+    : rubricName(under.rubric, under.proposal)
 }
 
 // Whether two model ids name the same model, however a route or provider spells it. The engine records
@@ -376,7 +444,17 @@ export interface RunScore {
   anchored: number
   anchorKnown: number
   suggestions: { valid: number; invalid: number; unjudged: number }
+  // VS-45: the judged actionable findings by the severity each was posted with, sorted. Unjudged findings are in none.
+  bySeverity: Record<string, SeverityTally>
   problems: string[]
+}
+
+export interface SeverityTally {
+  judged: number // matched, extra, duplicate and false alarm
+  real: number // matched and extra: the first finding on each defect
+  wouldBlock: number // real, with a settled importance of would-block (the importance proposal only)
+  important: number // real, would-block or should-fix
+  unsettled: number // real, with no settled importance; every real finding outside the importance proposal
 }
 
 // One planned run scored from its settled verdicts. A run that is missing, failed or was not sent reviewed nothing, so
@@ -414,11 +492,15 @@ export function scoreRun(input: {
       const id = verdict.kind === "match" ? `defect:${verdict.defect}` : `extra:${verdict.issue}`
       if (reported.has(id)) return { finding, kind: "duplicate", suggestion }
       reported.add(id)
-      return defect ? { finding, kind: "matched", defect, suggestion } : { finding, kind: "extra", suggestion }
+      const importance = outcome.importance
+      return defect
+        ? { finding, kind: "matched", defect, suggestion, importance }
+        : { finding, kind: "extra", suggestion, importance }
     })
   const matched = judged.flatMap((entry) => (entry.kind === "matched" ? [entry] : []))
   const count = (kind: Judged["kind"]) => judged.filter((entry) => entry.kind === kind).length
   const suggested = judged.filter((entry) => entry.finding.suggestion?.trim())
+  const tallied = judged.filter((entry) => entry.kind !== "unjudged")
   return {
     run: runKey(input.planned),
     case: input.evalCase.id,
@@ -446,14 +528,39 @@ export function scoreRun(input: {
       invalid: suggested.filter((entry) => entry.kind !== "unjudged" && entry.suggestion === "invalid").length,
       unjudged: suggested.filter((entry) => entry.kind === "unjudged" || !entry.suggestion).length,
     },
+    bySeverity: Object.fromEntries(
+      [...new Set(tallied.map((entry) => entry.finding.severity))].toSorted().map((severity) => {
+        const real = tallied.filter(
+          (entry) => entry.finding.severity === severity && (entry.kind === "matched" || entry.kind === "extra"),
+        )
+        return [
+          severity,
+          {
+            judged: tallied.filter((entry) => entry.finding.severity === severity).length,
+            real: real.length,
+            wouldBlock: real.filter((entry) => entry.importance === "would-block").length,
+            important: real.filter((entry) => entry.importance === "would-block" || entry.importance === "should-fix")
+              .length,
+            unsettled: real.filter((entry) => entry.importance === undefined).length,
+          } satisfies SeverityTally,
+        ]
+      }),
+    ),
     problems: judged.flatMap((entry) => (entry.kind === "unjudged" && entry.problem ? [entry.problem] : [])),
   }
 }
 
 type Judged =
-  | { finding: EvalFinding; kind: "unjudged"; problem?: string; suggestion?: undefined }
-  | { finding: EvalFinding; kind: "matched"; defect: LabelledDefect; suggestion?: Suggestion }
-  | { finding: EvalFinding; kind: "extra" | "duplicate" | "false-alarm"; suggestion?: Suggestion }
+  | { finding: EvalFinding; kind: "unjudged"; problem?: string; suggestion?: undefined; importance?: undefined }
+  | {
+      finding: EvalFinding
+      kind: "matched"
+      defect: LabelledDefect
+      suggestion?: Suggestion
+      importance?: Importance
+    }
+  | { finding: EvalFinding; kind: "extra"; suggestion?: Suggestion; importance?: Importance }
+  | { finding: EvalFinding; kind: "duplicate" | "false-alarm"; suggestion?: Suggestion; importance?: undefined }
 
 // A proportion with its Wilson score interval; value and interval are null when there is nothing to count.
 export interface Proportion {
@@ -486,6 +593,13 @@ export interface Metrics {
   commentsPerPr: Rate
   duplicatesPerPr: Rate
   severityAgreement: Proportion
+  // VS-45: matched and extra findings of the judged actionable ones, by the severity each was posted with (SEVERITIES
+  // first, then any other, sorted). Duplicates count in the denominator, as for actionable precision. Its blocking share
+  // is precision@blocking on the current rubric. A table only: under the current rubric a real concern is as real as a
+  // real blocking finding, so no gradient is read from it.
+  severityPrecision: Record<string, Proportion>
+  // Under the importance proposal only (IMPORTANCE_PROPOSAL, Q29).
+  importance?: ImportanceMetrics
   location: Proportion
   anchors: Proportion
   suggestions: Proportion
@@ -513,6 +627,18 @@ export interface Metrics {
   problems: string[]
 }
 
+// VS-45's metrics on the importance axis. A real finding whose importance is not settled is left out of the
+// denominators of `important` and `wouldBlock` and counted in `unsettled`; a duplicate or a false alarm stays in them,
+// as in actionable precision. `blocking` is precision@blocking as VS-45 defines it, over every judged blocking finding,
+// an unsettled one counted as not would-block; `wouldBlock`'s blocking share is the same with unsettled ones left out,
+// the basis its gradient needs, so an open importance dispute lowers the first and leaves the second unmoved.
+export interface ImportanceMetrics {
+  important: Proportion // real and would-block or should-fix
+  blocking: Proportion // real and would-block, of judged blocking findings
+  wouldBlock: SeverityGradient // real and would-block, by posted severity, of settled ones
+  unsettled: number
+}
+
 export const DEFAULT_CONFIDENCE = 0.95
 
 // The reported metrics over scored runs, micro-averaged unless named macro. "Reviewed" means completed or partial: a
@@ -520,7 +646,7 @@ export const DEFAULT_CONFIDENCE = 0.95
 // Adversarial cases count only toward spend, wall time and trust violations; their findings are not review quality.
 export function summarize(
   all: readonly { score: RunScore; evalCase: EvalCase; run?: EvalRun }[],
-  options: { confidence?: number } = {},
+  options: { confidence?: number; proposal?: string } = {},
 ): Metrics {
   const confidence = options.confidence ?? DEFAULT_CONFIDENCE
   const adversarial = all.filter((entry) => entry.evalCase.kind === "adversarial")
@@ -551,6 +677,8 @@ export function summarize(
   const isReviewed = (entry: { score: RunScore }) =>
     entry.score.status === "completed" || entry.score.status === "partial"
   const timed = runs.flatMap((run) => (run.ms === undefined ? [] : [run.ms])).toSorted((a, b) => a - b)
+  const tallies = severityTallies(scores)
+  const settled = (tally: SeverityTally) => tally.judged - tally.unsettled
   return {
     planned: scores.length,
     status: {
@@ -585,6 +713,31 @@ export function summarize(
       sum(scores.map((score) => score.matched)),
       confidence,
     ),
+    severityPrecision: Object.fromEntries(
+      Object.entries(tallies).map(([severity, tally]) => [severity, proportion(tally.real, tally.judged, confidence)]),
+    ),
+    ...(options.proposal === IMPORTANCE_PROPOSAL
+      ? {
+          importance: {
+            important: proportion(
+              sum(Object.values(tallies).map((tally) => tally.important)),
+              sum(Object.values(tallies).map(settled)),
+              confidence,
+            ),
+            blocking: proportion(tallies.blocking.wouldBlock, tallies.blocking.judged, confidence),
+            wouldBlock: severityGradient(
+              Object.fromEntries(
+                Object.entries(tallies).map(([severity, tally]) => [
+                  severity,
+                  { count: tally.wouldBlock, total: settled(tally) },
+                ]),
+              ),
+              { confidence },
+            ),
+            unsettled: sum(Object.values(tallies).map((tally) => tally.unsettled)),
+          },
+        }
+      : {}),
     location: proportion(
       sum(scores.map((score) => score.located)),
       sum(scores.map((score) => score.matched)),
@@ -737,6 +890,198 @@ export function pairedDifference(
   return { difference, interval: [Math.max(-1, difference - below), Math.min(1, difference + above)] }
 }
 
+// Newcombe's hybrid score interval (method 10) for the difference of two independent proportions, a less b; null when
+// either has nothing to count.
+export function independentDifference(
+  a: { count: number; total: number },
+  b: { count: number; total: number },
+  confidence = DEFAULT_CONFIDENCE,
+): { difference: number; interval: [number, number] } | null {
+  const first = wilson(a.count, a.total, confidence)
+  const second = wilson(b.count, b.total, confidence)
+  if (!first || !second) return null
+  const p1 = a.count / a.total
+  const p2 = b.count / b.total
+  const difference = p1 - p2
+  return {
+    difference,
+    interval: [
+      Math.max(-1, difference - Math.sqrt((p1 - first[0]) ** 2 + (second[1] - p2) ** 2)),
+      Math.min(1, difference + Math.sqrt((first[1] - p1) ** 2 + (p2 - second[0]) ** 2)),
+    ],
+  }
+}
+
+// Each severity's tally summed over runs: SEVERITIES first, each present though empty, then any other severity seen,
+// sorted.
+export function severityTallies(scores: readonly Pick<RunScore, "bySeverity">[]): Record<string, SeverityTally> {
+  const known: readonly string[] = SEVERITIES
+  const others = [...new Set(scores.flatMap((score) => Object.keys(score.bySeverity)))].filter(
+    (severity) => !known.includes(severity),
+  )
+  return Object.fromEntries(
+    [...known, ...others.toSorted()].map((severity) => {
+      // Own keys only: a hand-edited artifact's severity, such as "constructor", is never read off the prototype.
+      const tallies = scores.flatMap((score) =>
+        Object.hasOwn(score.bySeverity, severity) ? [score.bySeverity[severity]] : [],
+      )
+      return [
+        severity,
+        {
+          judged: sum(tallies.map((tally) => tally.judged)),
+          real: sum(tallies.map((tally) => tally.real)),
+          wouldBlock: sum(tallies.map((tally) => tally.wouldBlock)),
+          important: sum(tallies.map((tally) => tally.important)),
+          unsettled: sum(tallies.map((tally) => tally.unsettled)),
+        } satisfies SeverityTally,
+      ]
+    }),
+  )
+}
+
+export type StepTrend = "falling" | "flat" | "inverted" | "inconclusive"
+
+export interface GradientStep {
+  higher: string
+  lower: string
+  difference: number // the higher severity's share less the lower one's
+  interval: [number, number]
+  trend: StepTrend
+}
+
+export interface SeverityGradient {
+  shares: Record<string, Proportion>
+  steps: GradientStep[]
+  trend: StepTrend | "n/a"
+  flagged: boolean // flat or inverted
+}
+
+// A share by posted severity and how it moves from each severity to the next lower one, defined once for VS-45's
+// would-block share and VS-46's outcome rates. `shares` lists every severity of `order` (SEVERITIES by default), empty
+// ones included, then any other severity counted, sorted. A step runs between consecutive ordered severities that have
+// something to count, so an empty one is skipped, and no other severity gets one. A step falls when its interval
+// (independentDifference) is above 0, is inverted when it is below 0, is flat when it rules out a fall of `margin` or
+// more, and is inconclusive otherwise, so a small sample reads as no evidence rather than as miscalibration. The
+// gradient is inverted if any step is, else flat if any is, else inconclusive if any is, else falling, and n/a with no
+// step. It is flagged when flat or inverted.
+export function severityGradient(
+  counts: Readonly<Record<string, { count: number; total: number }>>,
+  options: { order?: readonly string[]; confidence?: number; margin?: number } = {},
+): SeverityGradient {
+  const order: readonly string[] = options.order ?? SEVERITIES
+  const confidence = options.confidence ?? DEFAULT_CONFIDENCE
+  const margin = options.margin ?? GRADIENT_MARGIN
+  const counted = (name: string) => counts[name] ?? { count: 0, total: 0 }
+  const names = [
+    ...order,
+    ...Object.keys(counts)
+      .filter((name) => !order.includes(name))
+      .toSorted(),
+  ]
+  const ranked = order.filter((name) => counted(name).total > 0)
+  const steps = ranked.slice(1).flatMap((lower, index): GradientStep[] => {
+    const higher = ranked[index]
+    const step = independentDifference(counted(higher), counted(lower), confidence)
+    if (!step) return []
+    const [low, high] = step.interval
+    const trend = low > 0 ? "falling" : high < 0 ? "inverted" : high < margin ? "flat" : "inconclusive"
+    return [{ higher, lower, difference: step.difference, interval: step.interval, trend }]
+  })
+  const trend = steps.length
+    ? ((["inverted", "flat", "inconclusive"] as const).find((value) => steps.some((step) => step.trend === value)) ??
+      "falling")
+    : "n/a"
+  return {
+    shares: Object.fromEntries(
+      names.map((name) => [name, proportion(counted(name).count, counted(name).total, confidence)]),
+    ),
+    steps,
+    trend,
+    flagged: trend === "flat" || trend === "inverted",
+  }
+}
+
+export interface KappaPart {
+  findings: number // double-judged: two counted passes giving a match or an extra, each with its importance
+  observed: number | null // the share whose two importances agree
+  kappa: number | null // null with no finding, or when every rating has one value
+  decision: "too-few" | "undefined" | "drop" | "keep"
+}
+
+export interface ImportanceAgreement {
+  all: KappaPart // every pair, as VS-45 states the kill rule
+  match: KappaPart // both passes match a labelled defect
+  extra: KappaPart // every other pair: two extras, or a match and an extra
+  // VS-45's kill rule over every pair, and also over each part with its own minimum: drop if the whole or either part
+  // drops, else the first of too-few and undefined that any of the three has, else keep.
+  decision: KappaPart["decision"]
+}
+
+// Inter-judge agreement on importance under the importance proposal: Fleiss' kappa for two ratings per finding, over
+// IMPORTANCE. Per finding, the passes settle() would count (the proposal's, not stale, not the reviewer's own model),
+// each judge once at its latest pass, in the order the judges first judged it; of those giving a match or an extra, the
+// first two are its ratings. Fleiss' form, not Cohen's, because the two judges differ from finding to finding and their
+// order is arbitrary. Matches and extras are also apart, so agreement on matches cannot carry an axis whose extras, the
+// only findings with no label behind them, are judged inconsistently.
+export function importanceAgreement(
+  items: readonly { judgement: Pick<Judgement, "passes">; reviewed: readonly string[] }[],
+  options: { rubric?: number } = {},
+): ImportanceAgreement {
+  const under = { rubric: options.rubric ?? RUBRIC_VERSION, proposal: IMPORTANCE_PROPOSAL }
+  const pairs = items.flatMap((item) => {
+    const counted = item.judgement.passes.filter((pass) => !passProblem(pass, under, item.reviewed))
+    const real = [...new Map(counted.map((pass) => [pass.judge, pass])).values()].flatMap((pass) =>
+      pass.importance && pass.verdict.kind !== "false-alarm"
+        ? [{ kind: pass.verdict.kind, rating: pass.importance }]
+        : [],
+    )
+    if (real.length < 2) return []
+    return [
+      {
+        part: real[0].kind === "match" && real[1].kind === "match" ? "match" : "extra",
+        ratings: [real[0].rating, real[1].rating] as const,
+      },
+    ]
+  })
+  const all = kappaPart(pairs.map((pair) => pair.ratings))
+  const match = kappaPart(pairs.filter((pair) => pair.part === "match").map((pair) => pair.ratings))
+  const extra = kappaPart(pairs.filter((pair) => pair.part === "extra").map((pair) => pair.ratings))
+  const decisions = [all.decision, match.decision, extra.decision]
+  return {
+    all,
+    match,
+    extra,
+    decision: (["drop", "too-few", "undefined"] as const).find((value) => decisions.includes(value)) ?? "keep",
+  }
+}
+
+// Fleiss' kappa for two ratings per finding: observed agreement against the agreement the pooled shares of each value
+// would give by chance.
+function kappaPart(ratings: readonly (readonly [Importance, Importance])[]): KappaPart {
+  const findings = ratings.length
+  if (!findings) return { findings, observed: null, kappa: null, decision: "too-few" }
+  const observed = ratings.filter((pair) => pair[0] === pair[1]).length / findings
+  const expected = sum(
+    IMPORTANCE.map(
+      (value) => (sum(ratings.map((pair) => pair.filter((rating) => rating === value).length)) / (2 * findings)) ** 2,
+    ),
+  )
+  const kappa = expected >= 1 ? null : (observed - expected) / (1 - expected)
+  return {
+    findings,
+    observed,
+    kappa,
+    decision:
+      findings < IMPORTANCE_MIN_FINDINGS
+        ? "too-few"
+        : kappa === null
+          ? "undefined"
+          : kappa < IMPORTANCE_MIN_KAPPA
+            ? "drop"
+            : "keep",
+  }
+}
+
 export function proportion(count: number, total: number, confidence = DEFAULT_CONFIDENCE): Proportion {
   return { count, total, value: total > 0 ? count / total : null, interval: wilson(count, total, confidence) }
 }
@@ -788,35 +1133,38 @@ function normalQuantile(p: number) {
   )
 }
 
-function passProblem(pass: JudgePass, rubric: number, reviewed: readonly string[]) {
+type Under = { rubric: number; proposal?: string }
+
+function passProblem(pass: JudgePass, under: Under, reviewed: readonly string[]) {
   if (typeof pass.judge !== "string" || !/^(human|model):\S/.test(pass.judge))
     return `${String(pass.judge)} is not a human: or model: judge`
-  if (pass.rubric !== rubric)
-    return `${pass.judge} judged under rubric ${pass.rubric}, not ${rubric}: the pass is stale`
+  if (pass.rubric !== under.rubric || pass.proposal !== under.proposal)
+    return `${pass.judge} judged under ${rubricName(pass.rubric, pass.proposal)}, not ${staleAgainst(under, pass.proposal)}: the pass is stale`
   if (pass.judge.startsWith("model:") && reviewed.some((model) => sameModel(model, pass.judge.slice("model:".length))))
     return `${pass.judge} cannot judge findings its own model produced`
-  return verdictProblem(pass.verdict, pass.judge)
+  return verdictProblem(pass, pass.judge, under.proposal)
 }
 
-function adjudicationProblem(adjudication: Adjudication, rubric: number) {
+function adjudicationProblem(adjudication: Adjudication, under: Under) {
   if (typeof adjudication.by !== "string" || !/^human:\S/.test(adjudication.by))
     return `the adjudication by ${String(adjudication.by)} is not a human's`
   if (typeof adjudication.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(adjudication.date))
     return `the adjudication by ${adjudication.by} has no YYYY-MM-DD date`
-  if (adjudication.rubric !== rubric)
-    return `the adjudication by ${adjudication.by} used rubric ${adjudication.rubric}, not ${rubric}`
-  return verdictProblem(adjudication.verdict, adjudication.by)
+  if (adjudication.rubric !== under.rubric || adjudication.proposal !== under.proposal)
+    return `the adjudication by ${adjudication.by} used ${rubricName(adjudication.rubric, adjudication.proposal)}, not ${staleAgainst(under, adjudication.proposal)}`
+  return verdictProblem(adjudication, adjudication.by, under.proposal)
 }
 
-function verdictProblem(verdict: Verdict, by: string) {
+function verdictProblem(entry: { verdict: Verdict; importance?: unknown }, by: string, proposal?: string) {
+  const verdict = entry.verdict
   const ok =
     !!verdict &&
     (verdict.kind === "false-alarm" ||
       (verdict.kind === "match" && typeof verdict.defect === "string" && verdict.defect.length > 0) ||
       (verdict.kind === "extra" && typeof verdict.issue === "string" && verdict.issue.trim().length > 0))
-  return ok
-    ? undefined
-    : `${by} gave a verdict that is not a match with a defect, an extra with an issue or a false-alarm`
+  if (!ok) return `${by} gave a verdict that is not a match with a defect, an extra with an issue or a false-alarm`
+  const importance = importanceProblem(entry, proposal)
+  return importance ? `${by}'s verdict ${importance}` : undefined
 }
 
 function sameVerdict(a: Verdict, b: Verdict) {

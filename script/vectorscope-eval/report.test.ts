@@ -2,9 +2,15 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { RUBRIC_VERSION, runKey, type EvalRun, type Judgement } from "../../packages/core/src/review/eval"
+import {
+  IMPORTANCE_PROPOSAL,
+  RUBRIC_VERSION,
+  runKey,
+  type EvalRun,
+  type Judgement,
+} from "../../packages/core/src/review/eval"
 import { DEFAULT_REVIEW_CONFIG, type ModelFinding } from "../../packages/core/src/review/types"
-import { DEFAULT_GATE } from "../../packages/core/src/review/eval-report"
+import { buildReport, DEFAULT_GATE } from "../../packages/core/src/review/eval-report"
 import type { ProjectionRecord, ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger } from "./budget"
 import { loadManifest, type Manifest } from "./dataset"
@@ -1324,6 +1330,73 @@ describe("--reselect strict (VS-27b)", () => {
     expect(bad.stderr).toContain("--reselect takes strict.")
   })
 
+  // VS-45's kill rule counts double-judged findings: a re-selected copy carries its original's judgements, not new ones.
+  test("report.ts --reselect strict --proposal importance counts each double-judged finding once", async () => {
+    const dir = join(root, "reselect-importance")
+    mkdirSync(dir)
+    const value = strict()
+    writeFileSync(join(dir, "one.json"), JSON.stringify(value))
+    const run = fromArtifact(value, seed, [])
+    const verdicts: Record<string, Judgement["passes"][number]["verdict"]> = {
+      [inline.title]: { kind: "match", defect: bug.labels.defects[0].id },
+      [overflow.title]: { kind: "false-alarm" },
+      "Unrelated concern": { kind: "extra", issue: "unrelated" },
+    }
+    const judgements = join(root, "reselect-importance-judgements.json")
+    writeFileSync(
+      judgements,
+      JSON.stringify({
+        schema: JUDGEMENTS_SCHEMA,
+        seed: "s",
+        proposal: IMPORTANCE_PROPOSAL,
+        judgements: [...run.proposed, ...run.posted]
+          .filter((finding, position, all) => all.findIndex((other) => other.key === finding.key) === position)
+          .map((finding) => {
+            const verdict = verdicts[finding.title] ?? { kind: "false-alarm" }
+            const importance = verdict.kind === "false-alarm" ? {} : { importance: "would-block" }
+            return {
+              run: runKey(run),
+              finding: finding.key,
+              passes: ["human:annotator", "human:other"].map((judge) => ({
+                judge,
+                rubric: RUBRIC_VERSION,
+                proposal: IMPORTANCE_PROPOSAL,
+                verdict,
+                ...importance,
+              })),
+            }
+          }),
+        calls: [],
+      }),
+    )
+    const agreement = async (extra: string[]) => {
+      const out = join(root, `reselect-importance${extra.length ? "-strict" : ""}.json`)
+      const result = await main([
+        "--outputs",
+        dir,
+        "--judgements",
+        judgements,
+        "--proposal",
+        "importance",
+        ...extra,
+        "--out",
+        out,
+      ])
+      expect(result.code).toBe(0)
+      const saved = await Bun.file(out).json()
+      return { groups: saved.groups.map((group: { variant: string }) => group.variant), importance: saved.importance }
+    }
+    const plain = await agreement([])
+    const reselected = await agreement(["--reselect", "strict"])
+    expect(plain.groups).toEqual(["engine"])
+    expect(reselected.groups).toEqual(["engine", "engine+reselect-strict"])
+    expect(plain.importance.match.findings).toBe(1)
+    expect(plain.importance.extra.findings).toBe(1)
+    expect(reselected.importance.match.findings).toBe(plain.importance.match.findings)
+    expect(reselected.importance.extra.findings).toBe(plain.importance.extra.findings)
+    expect(reselected.importance.all.findings).toBe(2)
+  })
+
   test("without --reselect nothing changes; with it and no engine replay, it says so", async () => {
     const dir = join(root, "reselect-none")
     mkdirSync(dir)
@@ -1348,5 +1421,138 @@ describe("--reselect strict (VS-27b)", () => {
     expect(reports.reselected).toEqual([])
     expect(reports.problems).toContain("--reselect strict found no engine replay artifact, so nothing was re-selected")
     expect(reports.sources).not.toHaveProperty("reselect")
+  })
+})
+
+// VS-45: precision by posted severity and high-severity recall in the default report, judgement files under the
+// proposed importance rubric kept apart, and the summary-plus-inline duplicate rule on a replay's writes.
+describe("severity calibration (VS-45)", () => {
+  const agreed = (run: EvalRun, finding: string, verdict: Judgement["passes"][number]["verdict"]): Judgement => ({
+    run: runKey(run),
+    finding,
+    passes: [
+      { judge: "human:annotator", rubric: RUBRIC_VERSION, verdict },
+      { judge: "model:vendor/judge", rubric: RUBRIC_VERSION, verdict },
+    ],
+  })
+  const judgementFile = (name: string, judgements: Judgement[], extra: Record<string, unknown> = {}) => {
+    const path = join(root, name)
+    writeFileSync(path, JSON.stringify({ schema: JUDGEMENTS_SCHEMA, seed: "s", ...extra, judgements, calls: [] }))
+    return path
+  }
+
+  test("a judgement file is read only under the rubric it was made for", async () => {
+    const current = judgementFile("vs45-current.json", [])
+    const proposal = judgementFile("vs45-proposal.json", [], { proposal: IMPORTANCE_PROPOSAL })
+    const refused = await main(["--outputs", savedRun.dir, "--judgements", current, "--proposal", "importance"])
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain("holds judgements under the current rubric 1")
+    expect(refused.stderr).toContain("verdicts under two rubrics are never pooled")
+    const unasked = await main(["--outputs", savedRun.dir, "--judgements", proposal])
+    expect(unasked.code).toBe(1)
+    expect(unasked.stderr).toContain(`holds judgements under rubric 1 with the proposal ${IMPORTANCE_PROPOSAL}`)
+    expect(unasked.stderr).toContain("give --proposal importance")
+    const stale = judgementFile("vs45-stale.json", [], { proposal: "vs45-importance-0" })
+    expect(
+      (await main(["--outputs", savedRun.dir, "--judgements", stale, "--proposal", "importance"])).stderr,
+    ).toContain("with the proposal vs45-importance-0, not rubric 1 with the proposal")
+    const unknown = await main(["--outputs", savedRun.dir, "--proposal", "2"])
+    expect(unknown.code).toBe(2)
+    expect(unknown.stderr).toContain("--proposal takes importance.")
+    await expect(
+      main(["--outputs", savedRun.dir, "--judgements", judgementFile("vs45-bad.json", [], { proposal: 2 })]),
+    ).rejects.toThrow("names a proposed rubric that is not a name")
+    // The matching pair reports, and its report is never a release decision.
+    const ok = await main(["--outputs", savedRun.dir, "--judgements", proposal, "--proposal", "importance"])
+    expect(ok.code).toBe(0)
+    expect(ok.stdout).toContain(`rubric 1 with the proposal ${IMPORTANCE_PROPOSAL} (proposed, not the current rubric`)
+    expect(ok.stdout).toContain("Importance agreement, Fleiss' kappa: matches n/a over 0")
+    expect(ok.stdout).toContain(`the findings are judged under rubric 1 with the proposal ${IMPORTANCE_PROPOSAL}`)
+  })
+
+  test("the default report on a run.ts report adds precision@blocking and high-severity recall, and no importance", async () => {
+    const runs = fromRunReport(savedRun.report, fixtures).runs
+    const judgements = judgementFile("vs45-run.json", [
+      agreed(runs[0], runs[0].proposed[0].key, { kind: "match", defect: "unawaited-ledger-post" }),
+      agreed(runs[1], runs[1].proposed[0].key, { kind: "false-alarm" }),
+    ])
+    const result = await main(["--outputs", savedRun.dir, "--judgements", judgements])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("| Precision@blocking (real of judged blocking) | 50.0% (1/2) [")
+    expect(result.stdout).toContain("Real share by posted severity (posted; precision@blocking is its blocking share)")
+    expect(result.stdout).toContain("Recall, high severity (defects labelled blocking): 50.0% (1/2) [")
+    for (const absent of ["Importance agreement", "Important precision", "Would-block share", "with the proposal"])
+      expect(result.stdout).not.toContain(absent)
+  })
+
+  test("a finding posted inline and another in the summary on one defect are a match and a duplicate", async () => {
+    const inline = {
+      ...modelFinding({ path: labelled.path, line: labelled.line, title: "The default argument may be None" }),
+      id: "a1",
+      side: "RIGHT",
+      source: "review",
+      verified: true,
+      anchor: { path: labelled.path, side: "RIGHT", line: labelled.line, hunk: 0 },
+    }
+    // The same defect, reported again outside the diff; and a third with the inline one's place and title.
+    const outside = { ...modelFinding({ path: "src/other.py", line: 3, title: "None reaches the host" }), id: "c3" }
+    const twin = { ...inline, id: "d4" }
+    const selection = (outsideDiff: unknown[]) => ({
+      inline: [inline],
+      outsideDiff,
+      elsewhere: [],
+      nits: [],
+      overflow: [],
+      stillOpen: [],
+      fixed: [],
+      dismissed: [],
+      reappeared: [],
+      raised: [],
+      dropped: [],
+      risk: "medium",
+    })
+    const replay = (outsideDiff: unknown[]) =>
+      fromArtifact(
+        artifact(
+          {},
+          {
+            report: { summary: "s", risk: "medium", files: [], findings: [inline, ...outsideDiff] },
+            selection: selection(outsideDiff),
+          },
+        ),
+        seed,
+        [],
+      )
+    const run = replay([outside])
+    // The artifact records both writes, so the summary's finding is posted beside the line comment.
+    expect(run.posted.map((finding) => [finding.title, finding.anchored])).toEqual([
+      ["The default argument may be None", true],
+      ["None reaches the host", false],
+    ])
+    expect(new Set(run.posted.map((finding) => finding.key)).size).toBe(2)
+    const match = { kind: "match" as const, defect: bug.labels.defects[0].id }
+    const score = (scored: EvalRun, judgements: Judgement[]) =>
+      buildReport({
+        title: "t",
+        cases: [manifestCase(bug)],
+        runs: [scored],
+        judgements,
+        candidate: { variant: scored.variant, model: scored.model },
+      }).groups[0].stages.posted.findings
+    expect(score(run, [agreed(run, run.posted[0].key, match), agreed(run, run.posted[1].key, match)])).toMatchObject({
+      matched: 1,
+      duplicates: 1,
+      falseAlarms: 0,
+      unjudged: 0,
+    })
+    // A summary finding with the inline one's place and title shares its key: one judgement, then a duplicate.
+    const twins = replay([twin])
+    expect(twins.posted.map((finding) => finding.anchored)).toEqual([true, false])
+    expect(twins.posted[1].key).toBe(twins.posted[0].key)
+    expect(score(twins, [agreed(twins, twins.posted[0].key, match)])).toMatchObject({
+      matched: 1,
+      duplicates: 1,
+      unjudged: 0,
+    })
   })
 })

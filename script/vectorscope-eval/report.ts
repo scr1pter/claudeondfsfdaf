@@ -6,6 +6,9 @@ import { join, relative, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import {
   findingKey,
+  IMPORTANCE_PROPOSAL,
+  RUBRIC_VERSION,
+  rubricName,
   runKey,
   type EvalCase,
   type EvalFinding,
@@ -73,12 +76,33 @@ const SINGLE_PROMPT = "single-prompt"
 const UNREGISTERED: readonly string[] = [SINGLE_PROMPT, EMPTY_CONTROL.variant]
 
 // The judge's record of every pass, adjudication and judge call, kept by the coordinator outside the repository. It
-// holds the seed that blinds the worksheets, so it is never given to a judge.
+// holds the seed that blinds the worksheets, so it is never given to a judge. A file made for a proposed rubric
+// (judge.ts --proposal) names it, and holds only that proposal's passes: verdicts under two rubrics are never pooled.
+// Absent means the current rubric, as every file before VS-45.
 export interface JudgementFile {
   schema: typeof JUDGEMENTS_SCHEMA
   seed: string
+  proposal?: string
   judgements: Judgement[]
   calls: JudgeCall[]
+}
+
+// The proposal a --proposal value names (judge.ts and report.ts): undefined for the current rubric, null when unknown.
+export function proposalOption(value: unknown) {
+  if (value === undefined) return undefined
+  return value === "importance" ? IMPORTANCE_PROPOSAL : null
+}
+
+// Why a judgement file cannot be used under the rubric asked for, if it cannot: verdicts under two rubrics are never
+// pooled, so a proposal's judgements live in a file of their own.
+export function proposalMismatch(path: string, file: Pick<JudgementFile, "proposal">, proposal: string | undefined) {
+  if (file.proposal === proposal) return undefined
+  const held = rubricName(RUBRIC_VERSION, file.proposal)
+  return file.proposal === IMPORTANCE_PROPOSAL
+    ? `${path} holds judgements under ${held}, the proposed importance rubric; give --proposal importance, or another judgement file: verdicts under two rubrics are never pooled.`
+    : file.proposal === undefined
+      ? `${path} holds judgements under the current ${held}; judge the importance proposal in a judgement file of its own: verdicts under two rubrics are never pooled.`
+      : `${path} holds judgements under ${held}, not ${rubricName(RUBRIC_VERSION, proposal)}; start another judgement file: verdicts under two rubrics are never pooled.`
 }
 
 export interface Outputs {
@@ -910,6 +934,8 @@ export async function readJudgements(path: string): Promise<JudgementFile> {
   const value = (await Bun.file(path).json()) as JudgementFile
   if (value?.schema !== JUDGEMENTS_SCHEMA || typeof value.seed !== "string" || !Array.isArray(value.judgements))
     throw new Error(`${path} is not a ${JUDGEMENTS_SCHEMA} judgement file`)
+  if (value.proposal !== undefined && !(typeof value.proposal === "string" && value.proposal.trim()))
+    throw new Error(`${path} names a proposed rubric that is not a name: ${JSON.stringify(value.proposal)}`)
   return { ...value, calls: Array.isArray(value.calls) ? value.calls : [] }
 }
 
@@ -935,6 +961,9 @@ Re-scores saved eval outputs against settled judgements and evaluates the releas
   --reselect strict        Also re-select what each engine replay posted under the strict guardrail's rules (VS-27b),
                            offline, as its own group <variant>+reselect-strict scored on the same judgements; the gate
                            never decides on or compares with such a group
+  --proposal importance    Score judgements made under the proposed importance rubric (judge.ts --proposal importance,
+                           judging-rubric-importance.md, VS-45, pending Q29) and add its importance metrics; the
+                           judgement file must be that proposal's, and the report is never a release decision
   --title <text>           Report title
   --out <path>             Also write the JSON report there; it must be outside the repository
   --print-gate             Print the default gate (the owner's approved D2) as JSON, to review or copy, and exit
@@ -953,6 +982,7 @@ const OPTIONS = {
   title: { type: "string" },
   out: { type: "string" },
   reselect: { type: "string" },
+  proposal: { type: "string" },
   "empty-control": { type: "boolean" },
   "print-gate": { type: "boolean" },
   help: { type: "boolean" },
@@ -973,6 +1003,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   if (split !== undefined && !SPLITS.includes(split as (typeof SPLITS)[number])) return usage(`Unknown split ${split}.`)
   const reselect = text("reselect")
   if (values.reselect !== undefined && reselect !== "strict") return usage("--reselect takes strict.")
+  const proposal = proposalOption(values.proposal)
+  if (proposal === null) return usage("--proposal takes importance.")
   const candidate = group("candidate", text("candidate"))
   const baseline = group("baseline", text("baseline"))
   if (typeof candidate === "string") return usage(candidate)
@@ -1007,7 +1039,10 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
     ...(text("ledger") ? { ledger: text("ledger")! } : {}),
     ...(reselect === "strict" ? { reselect } : {}),
   })
-  const judgements = text("judgements") ? await readJudgements(resolve(text("judgements")!)) : undefined
+  const judgementsPath = text("judgements") ? resolve(text("judgements")!) : undefined
+  const judgements = judgementsPath ? await readJudgements(judgementsPath) : undefined
+  const mismatch = judgements && proposalMismatch(judgementsPath!, judgements, proposal)
+  if (mismatch) return { code: 1, stdout: "", stderr: `${mismatch}\n` }
   // A re-selected run is scored on its original's settled verdicts, with no judge call of its own.
   const judged = (judgements?.judgements ?? []).flatMap((item) => [
     item,
@@ -1037,6 +1072,7 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       ...(loaded.ledger ? { ledger: loaded.ledger } : {}),
       projected: loaded.projected,
       problems: loaded.problems,
+      ...(proposal ? { proposal } : {}),
     },
     gate,
   )

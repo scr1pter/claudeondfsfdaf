@@ -1071,6 +1071,9 @@ How it works:
     failure classes) and cross-file recall (cases whose `labels.crossFile` is
     true), both labelled on the seed since VS-22a, and trivial controls on
     their own, never counted toward false alarms per clean pull request
+  - since VS-45, precision by posted severity (real of judged, duplicates in
+    the denominator), whose blocking row is precision@blocking, as a table
+    with no trend, and high-severity recall (defects labelled `blocking`)
   - the dry projections, in a table of their own
 
   `report.ts` reads engine and desktop replay artifacts and projection
@@ -1111,6 +1114,23 @@ How it works:
   refuse it, and with two groups and no `--candidate` the gate is not
   evaluated. Desktop artifacts are not re-selected yet.
 
+- **Severity calibration (VS-45).** Besides the rows above, a report with an
+  `engine:shared-verify` group gets a section comparing each other
+  `engine:<name>` variant's precision@blocking with it on the same model, on
+  the cases and repetitions both reviewed, at the gate's stage: more than five
+  points down is flagged, and under 50 judged blocking findings on either side
+  it reads too few. It is a monitor of point estimates and decides nothing.
+  `judging-rubric.md` states the summary-plus-inline duplicate rule.
+  `--proposal importance` on `judge.ts` and `report.ts` judges and reports
+  under the proposed importance rubric, `judging-rubric-importance.md`
+  (pending owner question Q29): every match and extra also gets an importance,
+  no severity is shown to judges, and the report adds important precision,
+  precision@blocking on would-block findings, the would-block gradient and
+  inter-judge kappa with VS-45's kill rule. Its passes live in a judgement
+  file of their own and are never pooled with the current rubric's, and its
+  report is never a release decision. Without the option nothing changes:
+  `RUBRIC_VERSION` stays 1, and the current rubric's worksheets, judgement
+  files and scores are as before.
 - **The gate.** The default gate is D2 as the owner approved it:
   - no trust or consent check failed
   - no unaccounted paid attempt

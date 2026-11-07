@@ -12,6 +12,12 @@ and metrics), `eval-judge.ts` (blinding and judges) and `eval-report.ts` (the
 report and the gate). `judge.ts` and `report.ts` in this directory are the
 command-line tools. Dataset labels are made under `annotation-guide.md`.
 
+A proposed revision with an importance axis is in
+`judging-rubric-importance.md` (VS-45, pending owner question Q29). It is used
+only with `--proposal importance`, in a judgement file of its own, and changes
+nothing in this rubric: passes made under it never count here, and a report
+judged under it is never a release decision.
+
 ## What is judged
 
 A **run** is one review of one case by one pipeline variant and model, such as
@@ -106,6 +112,26 @@ the same defect are duplicates. A duplicate stays in the precision denominator
 but not in its numerator, because a repeated comment reports nothing new. It is
 also reported as duplicates per pull request.
 
+**Summary and line comments** (VS-45, the addendum's VS-21 rule [GU3]). One
+rule, tested in `eval.test.ts` and `report.test.ts`:
+
+- The posted list is the line comments, then the findings the summary lists
+  (overflow, outside the diff, elsewhere and nits), in that order. Selection
+  puts each finding in exactly one of those lists (core `select.ts`), so a
+  finding never counts twice for being both inline and in the summary.
+- Prose in the review body or the summary body that restates a finding is not
+  a finding, and is not judged.
+- Two findings on one defect, one inline and one in the summary, are a finding
+  and a duplicate; the first in the posted list counts. An inline finding and
+  a summary finding with the same file, lines and title share one key, so they
+  get one judgement and the second is a duplicate.
+- S7 (the strict guardrail's one-finding-per-root-cause rule: the same id,
+  `sameFinding`, or the same class within 3 lines) is applied by the pipeline
+  before posting. A pair that S7 keeps apart but the judges match to one
+  defect still counts as a match and a duplicate here, so the eval is at least
+  as strict as S7.
+- An external comparison states this rule beside its metric and β.
+
 ## Blinding and settlement
 
 - **Blinded tasks.** A judge gets one task per run, holding the case's labels
@@ -178,6 +204,10 @@ leaves them out, the defects they label included.
 | False alarms per clean PR | False alarms on the behaviour-preserving controls a run reviewed, per reviewed control. Trivial controls are left out. |
 | False alarms, comments and duplicates per PR | Per reviewed run (completed or partial). |
 | Severity agreement | Matched findings whose severity equals the label's. |
+| Precision by posted severity | For each severity a finding was posted with, matched plus extra findings over the judged ones (duplicates in the denominator, as for actionable precision). A table with intervals and no trend: under this rubric a real concern is as real as a real blocking finding (VS-45). The nit row reads excluded while the gate does not count nits. |
+| Precision@blocking | Its blocking row: real findings over the judged findings posted as blocking. |
+| Recall, high severity | End-to-end recall of the defects labelled `blocking`. |
+| Precision@blocking against `engine:shared-verify` | A monitor, not a gate rule: each `engine:<name>` variant beside `engine:shared-verify` on the same model, on the cases and repetitions both reviewed, at the gate's stage. More than 5 points down in the point estimates is flagged; under 50 judged blocking findings on either side it reads too few. |
 | Location validity | Matched findings that cite one of the defect's locations or alternatives, within the slack (3 lines). |
 | Anchored | Posted findings placed on a diff line rather than only in the summary. |
 | Valid suggestions | Valid over rated suggestions. |
@@ -233,7 +263,10 @@ A result is a **release decision** only when all of these hold:
   confidence and no other decision split. A changed gate also needs its own
   decision name; a copy that differs from D2 cannot call itself D2.
 
-Anything else is reported, but it is not a release decision.
+Anything else is reported, but it is not a release decision. VS-45 changes
+none of this: D2's thresholds and `DEFAULT_GATE` are as approved, and only this
+rubric makes a release decision. A report judged under a proposed rubric
+(`--proposal`) lists that as a reason it is not one.
 
 ## Workflow
 

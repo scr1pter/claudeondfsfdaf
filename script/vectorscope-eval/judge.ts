@@ -4,7 +4,16 @@ import { existsSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { parseArgs } from "node:util"
-import { RUBRIC_VERSION, type EvalRun, type Verdict } from "../../packages/core/src/review/eval"
+import {
+  IMPORTANCE,
+  IMPORTANCE_PROPOSAL,
+  RUBRIC_VERSION,
+  rubricName,
+  staleAgainst,
+  type EvalRun,
+  type Importance,
+  type Verdict,
+} from "../../packages/core/src/review/eval"
 import {
   blind,
   disputeTasks,
@@ -20,7 +29,14 @@ import {
 import { estimateUsd, type Ledger, type Price } from "./budget"
 import { outsideRepository, REPO_ROOT } from "./paths"
 import { replayCaseKey } from "./replay"
-import { JUDGEMENTS_SCHEMA, loadOutputs, readJudgements, type JudgementFile } from "./report"
+import {
+  JUDGEMENTS_SCHEMA,
+  loadOutputs,
+  proposalMismatch,
+  proposalOption,
+  readJudgements,
+  type JudgementFile,
+} from "./report"
 
 // Blinded judging of saved eval outputs (VectorScope plan, VS-04). A coordinator keeps the judgement file, which holds
 // the seed that blinds every worksheet and maps answers back to runs. A judge gets only a worksheet: one task per run,
@@ -30,11 +46,16 @@ import { JUDGEMENTS_SCHEMA, loadOutputs, readJudgements, type JudgementFile } fr
 // This script sends nothing. Worksheets are filled by people. A model judge runs through judgeRuns in
 // packages/core/src/review/eval-judge.ts with ledgerAdmission below, so each of its calls is admitted by the eval budget
 // ledger (VS-03) and charged to the run it judges; no paid judge is wired to a provider here (D5, D12).
+//
+// With --proposal importance it judges under VS-45's proposed importance rubric (judging-rubric-importance.md, owner
+// question Q29) instead: each match and extra also gets an importance, no severity is shown, and the passes go into a
+// judgement file of that proposal's own, never pooled with the current rubric's.
 
 export const WORKSHEET_SCHEMA = "vectorscope-worksheet/1"
 
 export interface WorksheetFinding extends TaskFinding {
-  verdicts?: { verdict: Verdict; suggestion?: "valid" | "invalid"; note?: string }[] // a disputes worksheet's passes
+  // A disputes worksheet's passes.
+  verdicts?: { verdict: Verdict; importance?: Importance; suggestion?: "valid" | "invalid"; note?: string }[]
   answer: Omit<JudgeAnswer, "finding"> | null
 }
 
@@ -42,6 +63,7 @@ export interface Worksheet {
   schema: typeof WORKSHEET_SCHEMA
   kind: "judge" | "adjudicate"
   rubric: number
+  proposal?: string // the proposed rubric it was written for (--proposal); absent for the current rubric
   instructions: string
   tasks: (Omit<JudgeTask, "findings"> & { findings: WorksheetFinding[] })[]
 }
@@ -53,6 +75,17 @@ const INSTRUCTIONS = [
   'or {"verdict": {"kind": "false-alarm"}} otherwise, including a different complaint at a labelled line.',
   'Add "suggestion": "valid" or "invalid" when the finding suggests a change, and an optional "note". Leave answer null to skip a finding.',
 ].join(" ")
+
+// The worksheet's instructions: the current rubric's, and under the importance proposal its importance rule.
+function instructions(proposal: string | undefined) {
+  if (proposal !== IMPORTANCE_PROPOSAL) return INSTRUCTIONS
+  return [
+    INSTRUCTIONS,
+    `This worksheet is for the proposed importance rubric (script/vectorscope-eval/judging-rubric-importance.md), not the current one.`,
+    `Give every match and extra an "importance" of ${IMPORTANCE.map((value) => `"${value}"`).join(", ")}, judged from the code; a false alarm has none.`,
+    "Neither the finding's severity nor the label's is shown, on purpose.",
+  ].join(" ")
+}
 
 // The eval ledger's admission for a model judge's calls: a "judge" attempt charged to the run it judges, estimated from
 // the blinded task at the judge's price and output limit, as run.ts estimates a request.
@@ -129,6 +162,9 @@ Options:
   --judge <id>          human:<name>, the judge filling the worksheet (tasks, import)
   --by <id>             human:<name>, who adjudicated (adjudicate)
   --date <YYYY-MM-DD>   When they adjudicated (adjudicate)
+  --proposal importance Judge under the proposed importance rubric (judging-rubric-importance.md, VS-45, pending
+                        Q29) instead of the current one: every match and extra also gets an importance, and no
+                        severity is shown. It needs a judgement file of its own; the default is the current rubric
   --nits                Judge nit findings too
   --help                Print this message
 `
@@ -142,6 +178,7 @@ const OPTIONS = {
   judge: { type: "string" },
   by: { type: "string" },
   date: { type: "string" },
+  proposal: { type: "string" },
   nits: { type: "boolean" },
   help: { type: "boolean" },
 } as const
@@ -173,6 +210,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
     )
   if (command === "adjudicate" && (!/^human:\S/.test(by ?? "") || !/^\d{4}-\d{2}-\d{2}$/.test(text("date") ?? "")))
     return usage("adjudicate needs --by human:<name> and --date YYYY-MM-DD.")
+  const proposal = proposalOption(values.proposal)
+  if (proposal === null) return usage("--proposal takes importance.")
 
   const loaded = await loadOutputs({
     paths: outputs,
@@ -184,8 +223,17 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   const nits = values.nits === true
   const file: JudgementFile = existsSync(judgementsPath)
     ? await readJudgements(judgementsPath)
-    : { schema: JUDGEMENTS_SCHEMA, seed: randomBytes(16).toString("hex"), judgements: [], calls: [] }
-  const base = { runs: loaded.runs, cases: loaded.cases, seed: file.seed, nits }
+    : {
+        schema: JUDGEMENTS_SCHEMA,
+        seed: randomBytes(16).toString("hex"),
+        ...(proposal ? { proposal } : {}),
+        judgements: [],
+        calls: [],
+      }
+  const mismatch = proposalMismatch(judgementsPath, file, proposal)
+  if (mismatch) return { code: 1, stdout: "", stderr: `${mismatch}\n` }
+  const base = { runs: loaded.runs, cases: loaded.cases, seed: file.seed, nits, ...(proposal ? { proposal } : {}) }
+  const header = { rubric: RUBRIC_VERSION, ...(proposal ? { proposal } : {}), instructions: instructions(proposal) }
 
   if (command === "tasks") {
     const judged = (run: string, finding: string) =>
@@ -194,14 +242,15 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
           item.run === run &&
           item.finding === finding &&
           (item.adjudication !== undefined ||
-            item.passes.some((pass) => pass.judge === judge && pass.rubric === RUBRIC_VERSION)),
+            item.passes.some(
+              (pass) => pass.judge === judge && pass.rubric === RUBRIC_VERSION && pass.proposal === proposal,
+            )),
       )
     const blinded = blind({ ...base, only: (run, finding) => !judged(run, finding) })
     const sheet: Worksheet = {
       schema: WORKSHEET_SCHEMA,
       kind: "judge",
-      rubric: RUBRIC_VERSION,
-      instructions: INSTRUCTIONS,
+      ...header,
       tasks: blinded.tasks.map((task) => ({
         ...task,
         findings: task.findings.map((finding) => ({ ...finding, answer: null })),
@@ -219,8 +268,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
     const sheet: Worksheet = {
       schema: WORKSHEET_SCHEMA,
       kind: "adjudicate",
-      rubric: RUBRIC_VERSION,
-      instructions: `${INSTRUCTIONS} Each finding lists the verdicts the judges gave, in no particular order and without their names.`,
+      ...header,
+      instructions: `${header.instructions} Each finding lists the verdicts the judges gave, in no particular order and without their names.`,
       tasks: disputes.tasks.map((task) => ({
         ...task,
         findings: task.findings.map((finding) => ({ ...finding, answer: null })),
@@ -241,11 +290,11 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       stdout: "",
       stderr: `${worksheetPath} is for ${sheet.kind === "judge" ? "judging" : "adjudication"}, not for ${command}.\n`,
     }
-  if (sheet.rubric !== RUBRIC_VERSION)
+  if (sheet.rubric !== RUBRIC_VERSION || sheet.proposal !== proposal)
     return {
       code: 1,
       stdout: "",
-      stderr: `${worksheetPath} was written for rubric ${sheet.rubric}, not ${RUBRIC_VERSION}.\n`,
+      stderr: `${worksheetPath} was written for ${rubricName(sheet.rubric, sheet.proposal)}, not ${staleAgainst(header, sheet.proposal)}.\n`,
     }
   const answered = await judgeRuns({ ...base, matcher: worksheetMatcher(command === "import" ? judge! : by!, sheet) })
   const judgements =
@@ -260,7 +309,9 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
               by: by!,
               date: text("date")!,
               rubric: entry.pass.rubric,
+              ...(entry.pass.proposal ? { proposal: entry.pass.proposal } : {}),
               verdict: entry.pass.verdict,
+              ...(entry.pass.importance ? { importance: entry.pass.importance } : {}),
               ...(entry.pass.suggestion ? { suggestion: entry.pass.suggestion } : {}),
               ...(entry.pass.note ? { note: entry.pass.note } : {}),
             },
