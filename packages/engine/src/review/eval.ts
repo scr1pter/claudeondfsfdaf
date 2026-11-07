@@ -73,7 +73,7 @@ import { VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "@vectordevai/
 import type { ImpactRecord } from "@vectordevai/core/review/impact"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import { estimateCostUsd, nextStepCostUsd, type ReviewPrice } from "@vectordevai/core/review/plan"
-import type { RelatedCode } from "@vectordevai/core/review/prompt"
+import { MAX_HITS, MAX_SYMBOLS, type RelatedCode } from "@vectordevai/core/review/prompt"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { sendsToOpenRouter } from "@vectordevai/core/free-model-catalog"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
@@ -319,8 +319,10 @@ export interface ProjectionInput extends Omit<ReplayInput, "posting" | "check" |
   egress: EgressGuard.Handle["attempts"]
 }
 
-// A dollar-cap decision the projection ran anyway (Review.OverCap). `attempt` is the seq of the provider attempt it
-// admitted, for a decision made at admission ("attempt"); the others came before a session, a finalizer or verify.
+// A dollar-cap decision the projection ran anyway (Review.OverCap). Its `estimateUsd` is the whole reservation that went
+// over the cap: at a turn's "attempt", the turn's estimate and the finalizer share beside it, twice its request's
+// `estimateUsd`. `attempt` is the seq of the provider attempt it admitted, for a decision made at admission
+// ("attempt"); the others came before a session, a finalizer or verify.
 export type ProjectedOverCap = Review.OverCap & { attempt?: number }
 
 // One request a pass sent, paired with the admitted attempt it was sent for.
@@ -389,13 +391,11 @@ export interface ProjectionRecord {
 }
 
 const FULL_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/
-// buildPrompt's related_code caps (core review/prompt.ts:99-100, MAX_SYMBOLS and MAX_HITS), which quotedLocations
-// applies. They are copied, not imported: prompt.ts is in the pipeline pin and exports neither. The engine eval test
-// renders a prompt past both caps and checks quotedLocations against it.
-const PROMPT_RELATED_SYMBOLS = 10
-const PROMPT_RELATED_HITS = 15
 // How Review.run's admission turns prompt text into tokens (run.ts, `/ 3.5` in ask and in verify's estimate), which a
-// projection applies to each wire body. Copied, not exported from run.ts, so this package edits run.ts only for its hook.
+// projection applies to each wire body. A copy, because run.ts holds the rule as a literal and its edits beyond the
+// projection hook wait for the runner-wiring window (Q13). That window exports one constant from core plan.ts for
+// run.ts, core impact.ts and this file (the deviation log's wiring list); until then the engine eval test checks
+// verify's pre-check estimate against this value.
 export const CHARS_PER_TOKEN = 3.5
 // The SDKs whose requests the loopback provider answers: chat completions and responses.
 const PROJECTION_SDKS = ["@ai-sdk/openai-compatible", "@ai-sdk/openai"]
@@ -1148,8 +1148,8 @@ export function quotedLocations(related: readonly RelatedCode[]) {
     ...new Set(
       related
         .filter((entry) => entry.hits.length)
-        .slice(0, PROMPT_RELATED_SYMBOLS)
-        .flatMap((entry) => entry.hits.slice(0, PROMPT_RELATED_HITS).map((hit) => `${hit.path}:${hit.line}`)),
+        .slice(0, MAX_SYMBOLS)
+        .flatMap((entry) => entry.hits.slice(0, MAX_HITS).map((hit) => `${hit.path}:${hit.line}`)),
     ),
   ]
 }

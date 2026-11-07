@@ -219,6 +219,45 @@ export const VARIANTS = {
     engine: { pending: "VS-31" },
     desktop: { pending: "VS-31" },
   },
+  // Addendum A §1a's variants (pending Q18), registered once their package's first part has landed here, so a name
+  // whose package has begun reads as pending, not unknown. Each package's pure part landed with no key a runner applies,
+  // so every half is pending and none has keys. The desktop halves that §1a calls documented differences
+  // (`variant.applied: false`) say so.
+  "holdback-secrets": {
+    planned: 'holdback: "secrets"',
+    engine: { pending: "VS-34 wiring" },
+    desktop: { pending: "VS-34 wiring" },
+  },
+  "team-guarded": {
+    planned: 'teamMemory: "guarded"',
+    engine: { pending: "VS-35 wiring" },
+    desktop: { pending: "VS-35's desktop half, a documented difference while team memory is GitHub-only" },
+  },
+  // scopeGate acts only under guardrail "strict", so this variant sets both, and its ablation baseline is
+  // engine:guardrail-strict. VS-42 wiring may revise it before it flips.
+  "scope-introduced": {
+    planned: 'guardrail: "strict" and scopeGate: "introduced"',
+    engine: { pending: "VS-42 wiring" },
+    desktop: { pending: "VS-42 wiring, after VS-27c" },
+  },
+  "rule-strict": {
+    planned: 'ruleCheck: "strict"',
+    engine: { pending: "VS-43 wiring" },
+    desktop: { pending: "VS-43 wiring" },
+  },
+  // As scope-introduced: verifyEvidence acts only under guardrail "strict". VS-44 wiring may revise it before it flips.
+  "verify-cert": {
+    planned: 'guardrail: "strict" and verifyEvidence: "certificate"',
+    engine: { pending: "VS-44 wiring" },
+    desktop: { pending: "VS-44 wiring, after VS-27c" },
+  },
+  "explore-slice": {
+    planned: 'explore: "slice"',
+    engine: { pending: "VS-49 wiring" },
+    desktop: {
+      pending: "VS-49's desktop half, a documented difference until the desktop runner records session events",
+    },
+  },
 } as const satisfies Record<string, VariantEntry>
 
 export type VariantResolution =

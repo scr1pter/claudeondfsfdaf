@@ -25,7 +25,8 @@ export const BULK_RESOLVE_THREADS = 5
 export const BULK_RESOLVE_MS = 60_000
 // A dismissal this close to a push by a bot login, before or after it, on the same pull request.
 export const BOT_PUSH_MS = 120_000
-const MAX_PATTERNS = 30 // as teamPatterns
+// As state.ts teamPatterns' default and prompt.ts's MAX_TEAM_PATTERNS; VS-35 wiring shares one constant.
+const MAX_PATTERNS = 30
 const DAY_MS = 86_400_000
 
 // The `vector-dismissal` marker's tokens, as the addendum spells them, so the later writer needs no mapping. `w` is

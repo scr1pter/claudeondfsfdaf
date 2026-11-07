@@ -143,6 +143,9 @@ export interface OverCap {
   pass: Name
   phase: Phase
   site: "pass" | "attempt" | "finalizer" | "verify"
+  // The whole amount that went over the cap, which a lifted decision admits: at "pass" and at a turn's "attempt", the
+  // turn's estimate plus the finalizer share reserved beside it; at "finalizer", a finalizing "attempt" and "verify",
+  // which reserve no finalizer share, the estimate alone.
   estimateUsd: number
   sessionID?: SessionID
 }
@@ -299,7 +302,7 @@ export const run: (
     )
     if (
       state.spent + state.uncertain + others + turn + finalize > config.maxCostUsd &&
-      !lift({ pass: name, estimateUsd: turn, ...at })
+      !lift({ pass: name, estimateUsd: turn + finalize, ...at })
     )
       return false
     reservations.set(name, { turn, finalize })

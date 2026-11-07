@@ -110,8 +110,10 @@ export const INJECTION_TITLE = "Instructions aimed at AI reviewers"
 // Second-line caps. The gatherers in the engine cap these too; the prompt must stay bounded either way.
 const MAX_COMMENTS = 30
 const MAX_COMMENT_CHARS = 1_000
-const MAX_SYMBOLS = 10
-const MAX_HITS = 15
+// Exported for the engine eval's quotedLocations (engine review/eval.ts), which lists exactly the related-code
+// locations this prompt quotes.
+export const MAX_SYMBOLS = 10
+export const MAX_HITS = 15
 const MAX_HISTORY_FILES = 10
 // Exported for citation.ts (VS-43), which checks a cited rule against exactly the text trusted() sends.
 export const MAX_TRUSTED_CHARS = 16_000

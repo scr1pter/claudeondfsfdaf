@@ -13704,3 +13704,284 @@ different form (decision (e)). Nothing is committed.
       - the first legacy flag of a key winning over a later one.
     - Against `report.test.ts`: `loadOutputs` leaving the record's problems
       out.
+
+## 2026-11-07 · VectorScope upgrade Now window with addendum A (P0 to VS-49a)
+
+The phase review of the Now window, from the P0 merge to VS-49a. It had
+twelve findings, none of them blocking. Two are the same finding (both on
+the variant registry), so there are eleven distinct items, and two more
+overlap in part (both name the 3.5 characters-per-token copies). Built on
+`0608af4c` (`vectorscope-engine`):
+
+- six fixed in code;
+- three recorded in the runner-wiring list (below), as they asked: two
+  name runner files that wait for Q13, and one is a precondition of VS-25b
+  wiring;
+- one declined, with the reason given;
+- one answered with the vocabulary table below, with no code change.
+
+Nothing is committed.
+No runner behaviour changed: `run.ts` changed only in the value it hands
+the projection hook, and a review with no hook never reads that value.
+No owner question was decided, and no user-visible string changed (D14).
+No `ReviewConfig` key, `EVIDENCE_POLICY_KEYS` entry or `EvidenceScope`
+field was added. `ai-review.ts`, `provider.ts`, `session/llm.ts`,
+`posting.ts`, `desktop.ts`, `certify.ts`, `ci.ts` and every @vector-owned
+file are untouched. This log is append-only, so the earlier entries this one
+supersedes are named here, not edited.
+
+- **`POLICY_ONLY_WITH` and its comment disagreed** (`model-evidence.ts`).
+  Fixed in code, the finding's first option. `POLICY_ONLY_WITH` now also
+  holds `scopeGate` and `verifyEvidence`, each gated on
+  `guardrail === "strict"`, and its config `Pick` includes `guardrail`. The
+  comments above it and above `EVIDENCE_POLICY_KEYS` now say that one table
+  holds the strict and the `depth: "auto"` conditions. Once wiring applies
+  the keys, `policyDigest` and `evidenceScope`'s prompts digest therefore
+  gate both keys the same way.
+  - It is dormant while both keys are in `UNAPPLIED_REVIEW_KEYS`, so no
+    test or mutation can reach it yet (as for `lenses`, VS-28c decision (n)).
+    The scopeGate and verifyEvidence scope tests' comments now name the test
+    that VS-42 and VS-44 wiring must add: `guardrail: "off"` with the key
+    set equals the default policy digest.
+  - `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`, and
+    `model-evidence.ts` is not a pinned file.
+  - This settles VS-28c decision (n)'s hand-off for these two keys.
+- **Addendum variants resolved as unknown** (`replay.ts:161`, both
+  findings). Fixed, in the form VS-21a used. `VARIANTS` gains
+  `holdback-secrets`, `team-guarded`, `scope-introduced`, `rule-strict`,
+  `verify-cert` and `explore-slice`, after `precise`:
+  - Each sets no keys and is pending on both runners.
+  - Each engine half waits for `VS-34 wiring`, `VS-35 wiring`, `VS-42
+    wiring`, `VS-43 wiring`, `VS-44 wiring` and `VS-49 wiring` in turn.
+  - Each desktop half names its §1a plan. Two are named as documented
+    differences: `team-guarded`, since team memory is GitHub-only, and
+    `explore-slice`, until the desktop runner records session events.
+    `scope-introduced` and `verify-cert` wait for "VS-4x wiring, after
+    VS-27c", because §1a ties them to VS-27's desktop guardrail.
+  - `scope-introduced` and `verify-cert` set `guardrail: "strict"` too,
+    because their keys act only inside `strictSelect` (addendum §1). This
+    follows `lenses-high`, and their wiring may revise it before they flip.
+  - `rule-strict`'s `ruleCheck` is not typed yet (VS-43a decision (a)).
+    `planned` is only words, so the entry needs no type.
+
+  Only the packages whose first part landed here are registered. The four
+  remaining §1a names (`rereview-focused`, `receipt-json`,
+  `instructions-scoped`, `depth-rules`) belong to VS-41, VS-47 and VS-48,
+  which have built nothing here. Addendum A is pending Q18, so those names
+  are registered by each package's own first part, and until then resolve
+  as unknown. A test pins this for `engine:rereview-focused`, and the
+  README says so.
+  - Tests: `replay.test.ts`'s name list and pending-package map gained the
+    six names. A new loop checks that each has no keys or models and that
+    its desktop half is pending.
+  - README: six table rows and two bullets.
+  - Superseded: the registry-entry deferrals in VS-34a, VS-35a, VS-42a,
+    VS-43a, VS-44a and VS-49a decision (a). The rest of each deferral
+    stands (keys, parity, the desktop half). No half flipped, so no D3
+    parity test is owed.
+- **`PROMPT_RELATED_SYMBOLS` and `PROMPT_RELATED_HITS` copied `prompt.ts`**
+  (engine `eval.ts:297`). Fixed, the finding's first option. `prompt.ts`
+  now exports `MAX_SYMBOLS` and `MAX_HITS`, with a comment naming
+  `quotedLocations`. Engine `eval.ts` imports them, and both copies are
+  gone. The values are unchanged, so prompts and digests are unchanged.
+  - The test that renders a prompt past both caps stays.
+  - `prompt.ts` is pinned, so the pin moved (below).
+  - The engine gatherer's own caps (`review/context.ts`, also 10 and 15)
+    are the first line that `prompt.ts`'s "Second-line caps" comment
+    refers to. They are a separate bound and were left alone.
+- **`CHARS_PER_TOKEN` copied `run.ts`'s `/ 3.5`** (the same finding, and
+  the one on `impact.ts:37`). The stated reason was out of date: "so this
+  package edits run.ts only for its hook". The comment now gives the real
+  one. `run.ts` holds the rule as a literal, its edits beyond the
+  projection hook wait for the runner-wiring window, and that window
+  exports one constant.
+
+  There are five copies, not the four the finding counted:
+  - `run.ts:425` and `run.ts:753` (`run.ts:422` and `:750` at HEAD);
+  - core `impact.ts` `IMPACT_LIMITS.charsPerToken`;
+  - engine `eval.ts` `CHARS_PER_TOKEN`;
+  - the desktop `ai-review.ts:125` `CHARS_PER_TOKEN`;
+  - `plan.ts:244-248`, which bakes the rule into its `21/20` integer form.
+
+  Four of the five are runner files or wait with them, so the consolidation
+  goes on the wiring list (below). Exporting the constant from `plan.ts`
+  now for only `impact.ts` and `eval.ts` would still leave both runners on
+  literals. It would move two more pinned files without closing the gap.
+- **`LabelledDefect.failureClass` was a `string`** (core `eval.ts:178`).
+  Fixed. It is now `FailureClass | "other"`, imported as a type from
+  `./types`. `eval-report.ts`'s `classScoped` predicate now tests
+  membership in `FAILURE_CLASSES` instead of `!== "other"`.
+  - The existing class-scoped test labelled its defects `"logic"`, which is
+    none of the five, and the old predicate counted them. That is the gap
+    the finding describes. The test now uses `"crash"` and keeps its
+    expected counts. A new assertion in the same test gives one defect a
+    mistyped class through a `string`-to-`FailureClass` cast, and that
+    defect is not counted (count 1 of 2).
+  - `eval-judge.test.ts` needed `"crash" as const` for the narrower type.
+  - The dataset's own `DEFECT_CLASSES` is already
+    `[...FAILURE_CLASSES, "other"]`, and `report.ts:922` copies a validated
+    label, so nothing outside tests changed.
+- **`hunkKinds` uses `for...of`** (`trivial.ts:118`, optional). Declined.
+  The loop's early return stops the per-hunk work at the first refusal:
+  `whitespaceRefusal` and `commentRefusal` on every later hunk. A `map`
+  would run those checks on every hunk, and a `find` would need a verdict
+  computed twice or a side-effecting `Set`. Short-circuiting here saves
+  work rather than callbacks, and `classifyTrivial`'s comment states the
+  same rule. `trivial.ts` is pinned and shared by both runners, so a
+  rewrite with no behavioural gain was not worth moving it.
+- **Budget honesty of the projection record** (`run.ts:302`). Fixed.
+  - `reserve` now hands `lift` `estimateUsd: turn + finalize`, the whole
+    reservation that went over the cap and that a lifted decision admits.
+  - The `OverCap` comment says which amount it carries at each site:
+    - twice the turn's estimate at `pass` and at a turn's `attempt`;
+    - the estimate alone at `finalizer`, a finalizing `attempt` and
+      `verify`, which reserve no finalizer share.
+  - The `ProjectedOverCap` comment in engine `eval.ts` says the same.
+  - Unset, `lift` returns before it reads the decision, so a review without
+    a projection sends and returns exactly what it did. The D3 test still
+    holds for unset, declining and throwing hooks.
+  - No reader compares the amount: `report.ts` counts `cap.over`, and
+    projection records are sealed outputs, never committed.
+  - Tests:
+    - The engine projection test (`eval.test.ts`, "runs every decision a
+      tight cap refuses") now checks each `cap.over` decision at admission
+      against its request: the request's phase is `turn`, and the decision
+      is twice its request's `estimateUsd`.
+    - The D3 test (`run.test.ts`) now also observes each budget refusal,
+      which records the turn's estimate alone. It checks every site:
+      `pass`, `attempt`, `finalizer` and `verify`. Each decision is the
+      refusal's estimate times 2 at `pass` and at a turn's `attempt`, and
+      times 1 elsewhere.
+- **The lens fields were `string`** (`types.ts:338`). Fixed.
+  `ReviewOutcome.specialists[].lens`, `ReviewPass.lens` and core `eval.ts`
+  `PassUtilisation.lens` are now `ReviewLens`. Nothing produces a lens pass
+  yet, so no digest or behaviour moves.
+  - `replay.test.ts`'s utilisation fixtures used `"auth"` and
+    `"injection"`, which are not lenses. The valid records now use
+    `"access"` and `"resource"`, and the expected problem messages changed
+    with them. The second lens record is now typed `SliceUtilisation`.
+  - The hand-edit test that refuses a lens no pass ran still sets
+    `"injection"`, through an untyped edit, and a comment says so: an
+    artifact is untrusted JSON, so `utilisationProblems`' runtime check
+    keeps its coverage.
+- **The 3.5 rule in five places** (`impact.ts:37`). Recorded in the wiring
+  list, as the finding asked.
+- **`team.ts` copies `TEAM_SIMILARITY` and the pattern cap**
+  (`team.ts:13`). Recorded in the wiring list, as the finding asked. The
+  equality test in `team.test.ts` stays. A third copy of 30 exists, which
+  the finding did not name: `state.ts` `teamPatterns`' default `max`. The
+  `team.ts` comment beside `MAX_PATTERNS` now names both copies.
+- **The process-wide poisoned flag** (`util/tree-sitter.ts:36`). Recorded
+  in the wiring list as a precondition of VS-25b wiring, as the finding
+  asked. It joins VS-25a's open in-process-or-Worker decision (VS-25a
+  item 6). No code changed.
+- **Contract vocabulary and implemented vocabulary.** VS-23b, VS-23c,
+  VS-27c, VS-42 wiring and VS-44 wiring use the implemented names, never
+  §1.2's:
+
+  | Contract §1.2 | Implemented | Where | Logged |
+  | --- | --- | --- | --- |
+  | `StrictDrop`: ten reasons, `out-of-scope` before `not-blocking` | `STRICT_DROPS`: twelve. Adds `severity-unreadable` after `verdict-unreadable` (VS-27b) and `pre-existing` after `no-impact` (VS-42a), and checks `not-blocking` before `out-of-scope` | core `types.ts` | VS-27b, VS-42a |
+  | none | `CertificateDrop`: `verdict-unsure` and `certificate-mismatch`. They join `STRICT_DROPS` after `verdict-unreadable` at VS-44 wiring | core `guardrail.ts` | VS-44a |
+  | `STRICT_RESULT_JSON_SCHEMA`, a constant | `strictResultJsonSchema(keys)`, beside `strictReportJsonSchema(keys)` and `verifyCertJsonSchema(keys)`. Each is `undefined` unless `guardrail` is strict, and each adds a later key's fields and drops only under that key | core `schema.ts` | VS-27a, VS-42a, VS-44a |
+  | `RouteDecision.kind`: `"loopback"`, `"openrouter-attested"`, `"attested"` | `RouteKind`: `"standard"` (privacy standard, no rule applies), `"loopback"`, `"openrouter-attested"`, `"attested-provider"`, `"attested-host"`. An allowed decision may carry `attestations` | core `privacy.ts` | VS-23a, VS-33a |
+  | `RouteRefusal`: thirteen | `ROUTE_REFUSALS` adds `server-tool`, `provider-options`, `extended-cache-unattested`, `grounding-tool`, `durable-cache` and `anthropic-non-zdr-feature` | core `privacy.ts` | VS-33a |
+  | `decideRoute` policy `attested: readonly string[]` | `attested: readonly ZdrAttestedEntry[]`: text entries or VS-33's attestation objects | core `privacy.ts` | VS-33a |
+
+- **Runner-wiring list, additions from this review.**
+  - **One characters-per-token constant** (Q13's window). Core `plan.ts`
+    exports it, keeping its integer `21/20` form beside it with a comment
+    tying the two. `run.ts` (ask's context, verify's estimate),
+    `ai-review.ts`'s `CHARS_PER_TOKEN`, core `impact.ts`'s
+    `IMPACT_LIMITS.charsPerToken` and engine `eval.ts`'s `CHARS_PER_TOKEN`
+    import it.
+    - Moving the value is a pinned-file change, and needs no revision bump
+      while the value stays 3.5.
+    - Until then, the engine projection test checks verify's pre-check
+      estimate against `ReviewEval.CHARS_PER_TOKEN`. Nothing checks
+      `impact.ts`'s copy against the runners.
+  - **VS-35 wiring:** `select.ts` (`TEAM_SIMILARITY`), `prompt.ts`
+    (`MAX_TEAM_PATTERNS`) and `state.ts` (`teamPatterns`' default `max`)
+    import `team.ts`'s values, or every side imports one shared constant.
+    `team.test.ts`'s equality test stays until then.
+  - **VS-25b wiring precondition: the review parser must not share the
+    shell tool's runtime in a process that serves sessions.**
+    - The poisoned flag is process-wide. A PR file that traps the wasm
+      runtime would fail every later shell permission scan in that engine
+      process, the desktop sidecar's interactive sessions included. That
+      fails closed, but an untrusted change could then deny the user's
+      agent every shell command.
+    - Before the review parser parses untrusted files in a process that
+      also serves sessions, it runs in a Worker or child process, or on a
+      wasm runtime of its own. `util/tree-sitter.ts` notes that
+      `Parser.init` replaces web-tree-sitter 0.25.10's one global binding,
+      so a runtime of its own needs another realm, such as a Worker.
+    - The wiring package adds a test that a poisoned review parser leaves
+      an unrelated session's shell permission scan working, or that the
+      parser runs out of process.
+    - VS-25a's in-process-or-Worker decision (item 6) stays open until then.
+  - **VS-42 and VS-44 wiring tests:** `guardrail: "off"` with `scopeGate:
+    "introduced"`, and with `verifyEvidence: "certificate"`, each equal the
+    default policy digest (`POLICY_ONLY_WITH`, above).
+  - **VS-41, VS-47 and VS-48:** each package's first part registers its
+    §1a variant names as pending entries.
+- **Pin.** `REVIEW_PIPELINE_SOURCES` moves from `124e47864a16fea4` to
+  `66cc83db55a87db9`, for three pinned files:
+  - `run.ts`: the reservation amount handed to `lift`, and its comment;
+  - `prompt.ts`: two exports;
+  - `team.ts`: a comment.
+
+  `REVIEW_PIPELINE_REVISION` stays 1, because none of these changes what a
+  review finds or posts (only VS-31 may bump it). `promptsDigest` and every
+  digest golden in `model-evidence.test.ts` are unchanged, and
+  `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`.
+- **Evidence.** Each test file ran alone through the lock with
+  `--timeout 30000` and `GITHUB_ACTIONS=false`, with `TMPDIR` and the XDG
+  roots under `/tmp/vector-vectorscope/phase-fix/`. No test was added,
+  skipped or loosened, so the counts are HEAD's. All pass:
+
+  | Where | File | Tests |
+  | --- | --- | --- |
+  | core | `model-evidence.test.ts` (pin updated) | 30 |
+  | core | `eval-report.test.ts` | 28 |
+  | core | `eval.test.ts` | 55 |
+  | core | `eval-judge.test.ts` | 15 |
+  | core | `team.test.ts` | 44 |
+  | core | `prompt.test.ts` | 47 |
+  | engine | `test/review/run.test.ts` | 44 |
+  | engine | `test/review/eval.test.ts` | 34 |
+  | engine | `test/review/vectorscope-replay.test.ts` | 18 |
+  | `script/vectorscope-eval` | `replay.test.ts` | 47 |
+  | `script/vectorscope-eval` | `report.test.ts` | 41 |
+  | `script/vectorscope-eval` | `ci.test.ts` | 35 |
+  | `script/vectorscope-eval` | `certify.test.ts` | 7 |
+  | `script/vectorscope-eval` | `judge.test.ts` | 8 |
+  | `packages/script` | `replay.test.ts` and `report.test.ts` | 47 and 41 |
+
+  - **Typecheck.** `bun typecheck` passes in `packages/core`,
+    `packages/engine`, `packages/script` and `packages/app` (the app's
+    incremental `tsgo -b`). `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`
+    passes. The full root typecheck was not run, because nothing is pushed.
+  - **Format and lint.**
+    - prettier `--check` is clean on every changed file except `prompt.ts`
+      and `run.ts`. Those two were already unformatted at HEAD, and the
+      lines prettier would change there (`prompt.ts:497`, `run.ts:107` and
+      `run.ts:737`) are not lines this review touched.
+    - The README table was re-aligned by prettier.
+    - oxlint reports nothing on a changed line except the new test's
+      deliberate `string`-to-`FailureClass` cast and a `groups[0]!` in the
+      same style as its neighbours.
+  - **Mutation check.** Three mutations, each applied alone, its test run
+    through the lock, and the file restored and compared with `cmp`. All
+    were caught:
+    - `estimateUsd: turn` again: the D3 test and the engine projection
+      test;
+    - `turn + turn`: the D3 test, at the finalizer;
+    - the class-scoped predicate back to `!== "other"`: the class-scoped
+      test.
+
+    `POLICY_ONLY_WITH`'s new entries are unreachable while their keys are
+    unapplied, so there is no mutation for them.
+  - Nothing was sent to a model, no paid run started, no workflow was
+    dispatched, and no dependency changed.

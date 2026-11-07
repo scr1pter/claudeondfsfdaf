@@ -7,7 +7,7 @@
 // reported as no value with its counts.
 
 import { fnv1a64 } from "./fingerprint"
-import { SEVERITIES, type ReviewConfig, type ReviewOutcome } from "./types"
+import { SEVERITIES, type FailureClass, type ReviewConfig, type ReviewLens, type ReviewOutcome } from "./types"
 
 export interface EvalExpectation {
   id: string
@@ -173,9 +173,10 @@ export interface LabelledDefect {
   locations: DefectLocation[]
   alternatives: DefectLocation[]
   // VS-22a's failure class: one of the five classes, or "other", from the dataset defect's failureClass label (absent
-  // while unlabelled). Class-scoped recall (eval-report.ts) counts only defects with a class other than "other". Judges'
-  // blinded tasks leave it out (eval-judge.ts TaskDefect).
-  failureClass?: string
+  // while unlabelled). Class-scoped recall (eval-report.ts) counts only defects whose class is one of the five
+  // (FAILURE_CLASSES), so an unchecked value that is neither is never counted. Judges' blinded tasks leave it out
+  // (eval-judge.ts TaskDefect).
+  failureClass?: FailureClass | "other"
 }
 
 // Where a judge can read the code a case changed, so an unexpected finding is checked against the code and not only
@@ -235,7 +236,7 @@ export interface SliceUtilisation {
 
 export interface PassUtilisation {
   pass: ReviewOutcome["specialists"][number]["name"]
-  lens?: string // a "lens" pass's class (VS-28), which every lens entry has and no other entry has
+  lens?: ReviewLens // a "lens" pass's class (VS-28), which every lens entry has and no other entry has
   tools: Record<string, number> // the pass's tool calls by tool name, whatever their status; names with none left out
   // The distinct paths the pass read: inside when a slice location names the path, outside when none does. They hold
   // at least every completed read-tool call's filePath; a read through another tool may add more.

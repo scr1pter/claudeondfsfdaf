@@ -51,6 +51,7 @@ import {
 } from "./eval"
 import { judgingStatus, type JudgeCall } from "./eval-judge"
 import { fnv1a64 } from "./fingerprint"
+import { FAILURE_CLASSES } from "./types"
 
 export interface GateRules {
   maxTrustViolations: number
@@ -385,7 +386,7 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
         category: categories(entries, gate.confidence),
         classScoped: recallOf(
           entries,
-          (_, defect) => defect.failureClass !== undefined && defect.failureClass !== "other",
+          (_, defect) => FAILURE_CLASSES.some((name) => name === defect.failureClass),
           gate.confidence,
         ),
         crossFile: recallOf(entries, (entry) => entry.evalCase.crossFile === true, gate.confidence),

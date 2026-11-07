@@ -24,6 +24,7 @@ import {
   type GateConfig,
   type ReportInput,
 } from "@vectordevai/core/review/eval-report"
+import type { FailureClass } from "@vectordevai/core/review/types"
 
 // The report and the D2 gate over synthetic saved runs. Large samples settle the statistical rules; small ones leave
 // them to a human. Every verdict comes from two agreeing judges.
@@ -580,16 +581,32 @@ describe("operations and the new breakdowns", () => {
     expect(plain.groups[0]!.breakdowns.classScoped).toMatchObject({ count: 0, total: 0, value: null })
     expect(plain.groups[0]!.breakdowns.crossFile).toMatchObject({ count: 0, total: 0, value: null })
     expect(renderReport(plain)).toContain("Recall, class-scoped (defects in the five failure classes): n/a (0 of 0)")
-    const cases = built.cases.map((item, index) => ({
-      ...item,
-      ...(index < 2 ? { crossFile: true } : {}),
-      defects: item.defects.map((defect) => ({ ...defect, failureClass: index === 0 ? "other" : "logic" })),
-    }))
-    const labelled = buildReport({ title: "t", ...built, cases, candidate: CANDIDATE })
+    const labels = (classOf: (index: number) => FailureClass | "other") =>
+      built.cases.map((item, index) => ({
+        ...item,
+        ...(index < 2 ? { crossFile: true } : {}),
+        defects: item.defects.map((defect) => ({ ...defect, failureClass: classOf(index) })),
+      }))
+    const labelled = buildReport({
+      title: "t",
+      ...built,
+      cases: labels((index) => (index === 0 ? "other" : "crash")),
+      candidate: CANDIDATE,
+    })
     // bug-3 is the miss: class-scoped counts bug-1 to bug-3, cross-file bug-0 and bug-1.
     expect(labelled.groups[0]!.breakdowns.classScoped).toMatchObject({ count: 2, total: 3 })
     expect(labelled.groups[0]!.breakdowns.crossFile).toMatchObject({ count: 2, total: 2 })
     expect(labelled.groups[0]!.stages.posted.recall).toMatchObject(plain.groups[0]!.stages.posted.recall)
+    // A class that is neither one of the five nor "other", as a hand-built case that skipped the dataset's checks might
+    // carry, is never counted: bug-1's mistyped class leaves bug-2 and bug-3.
+    const mistyped: string = "logic"
+    const unchecked = buildReport({
+      title: "t",
+      ...built,
+      cases: labels((index) => (index === 0 ? "other" : index === 1 ? (mistyped as FailureClass) : "crash")),
+      candidate: CANDIDATE,
+    })
+    expect(unchecked.groups[0]!.breakdowns.classScoped).toMatchObject({ count: 1, total: 2 })
   })
 
   test("trivial controls are reported apart and never count toward false alarms per clean PR or the gate", () => {

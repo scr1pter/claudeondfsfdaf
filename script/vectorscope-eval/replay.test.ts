@@ -435,6 +435,13 @@ describe("the variant registry", () => {
       "engine:lenses-high",
       "engine:cross-family",
       "engine:precise",
+      // Addendum A §1a's, for the packages whose first part has landed.
+      "engine:holdback-secrets",
+      "engine:team-guarded",
+      "engine:scope-introduced",
+      "engine:rule-strict",
+      "engine:verify-cert",
+      "engine:explore-slice",
     ])
     for (const adapter of ["engine", "desktop"] as const)
       for (const name of variantNames(adapter)) {
@@ -517,7 +524,28 @@ describe("the variant registry", () => {
       "engine:depth-auto": "VS-28 wiring",
       "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
+      "engine:holdback-secrets": "VS-34 wiring",
+      "engine:team-guarded": "VS-35 wiring",
+      "engine:scope-introduced": "VS-42 wiring",
+      "engine:rule-strict": "VS-43 wiring",
+      "engine:verify-cert": "VS-44 wiring",
+      "engine:explore-slice": "VS-49 wiring",
     })
+    // Addendum A's entries are pending on both runners and set no key yet, and an addendum name whose package has not
+    // begun here is still unknown.
+    for (const suffix of [
+      "holdback-secrets",
+      "team-guarded",
+      "scope-introduced",
+      "rule-strict",
+      "verify-cert",
+      "explore-slice",
+    ] as const) {
+      const entry: VariantEntry = VARIANTS[suffix]
+      expect(Object.hasOwn(entry, "keys") || Object.hasOwn(entry, "models")).toBe(false)
+      expect(resolveVariant(`desktop:${suffix}`)).toMatchObject({ ok: false, reason: "pending" })
+    }
+    expect(resolveVariant("engine:rereview-focused")).toMatchObject({ ok: false, reason: "unknown" })
     // The cross-family pair is made by its models, never by a key. Its engine half is built (VS-29a); its desktop half
     // waits for VS-10, since the desktop adapter takes one model and refuses a keyless variant.
     expect(VARIANTS["cross-family"]).toMatchObject({ models: "triage-pair" })
@@ -1279,7 +1307,7 @@ describe("slice utilisation records (VS-49)", () => {
       { pass: "verify", tools: {}, reads: nothingRead, sliceGreps: 0, findings: [] },
       {
         pass: "lens",
-        lens: "auth",
+        lens: "access",
         tools: { read: 1 },
         reads: { inside: [], outside: ["src/auth/session.ts"] },
         sliceGreps: 0,
@@ -1305,7 +1333,7 @@ describe("slice utilisation records (VS-49)", () => {
     { name: "review", status: "ok", steps: 3 },
     { name: "security", status: "ok", steps: 1 },
     { name: "verify", status: "ok", steps: 1 },
-    { name: "lens", lens: "auth", status: "ok", steps: 2 },
+    { name: "lens", lens: "access", status: "ok", steps: 2 },
   ]
   // An engine replay artifact as far as the check reads it, with a tier1 record standing for a built slice.
   function measured(utilisation: unknown, overrides: Record<string, unknown> = {}) {
@@ -1368,26 +1396,24 @@ describe("slice utilisation records (VS-49)", () => {
       `its slice utilisation counts the tool calls of pass "verify" as "read" 1, not the no call its artifact records`,
     ])
     // Several lens entries share the "lens" pass's recorded calls.
-    const lenses = {
+    const lenses: SliceUtilisation = {
       ...WHOLE,
       passes: [
         ...WHOLE.passes,
-        { pass: "lens" as const, lens: "injection", tools: {}, reads: nothingRead, sliceGreps: 0, findings: [] },
+        { pass: "lens", lens: "resource", tools: {}, reads: nothingRead, sliceGreps: 0, findings: [] },
       ],
     }
     const twoLenses = {
-      outcome: { ...measured(WHOLE).outcome, specialists: [...SPECIALISTS, { name: "lens", lens: "injection" }] },
+      outcome: { ...measured(WHOLE).outcome, specialists: [...SPECIALISTS, { name: "lens", lens: "resource" }] },
     }
     expect(utilisationProblems(measured(lenses, twoLenses))).toEqual([])
-    expect(
-      utilisationProblems(measured(edited("lens (injection)", { tools: { read: 1 } }, lenses), twoLenses)),
-    ).toEqual([
-      `its slice utilisation counts the tool calls of pass "lens" as "read" 2, not the "read" 1 its artifact records`,
-    ])
+    expect(utilisationProblems(measured(edited("lens (resource)", { tools: { read: 1 } }, lenses), twoLenses))).toEqual(
+      [`its slice utilisation counts the tool calls of pass "lens" as "read" 2, not the "read" 1 its artifact records`],
+    )
     // Counts are positive whole numbers by name.
     for (const tools of [{ read: 0 }, { read: 1.5 }, { read: "3" }, [3], null])
-      expect(utilisationProblems(measured(edited("lens (auth)", { tools })))).toContain(
-        `its slice utilisation's entry "lens" ("auth") does not count its tool calls by name in positive whole numbers`,
+      expect(utilisationProblems(measured(edited("lens (access)", { tools })))).toContain(
+        `its slice utilisation's entry "lens" ("access") does not count its tool calls by name in positive whole numbers`,
       )
   })
 
@@ -1519,19 +1545,20 @@ describe("slice utilisation records (VS-49)", () => {
 
   test("an entry names a pass its outcome ran, a lens by its lens, and only a lens has received and cited locations", () => {
     const lens = WHOLE.passes[3]
-    expect(utilisationProblems(measured(edited("lens (auth)", { lens: "injection" })))).toEqual([
+    // The record is untrusted JSON, so a lens that is no ReviewLens is still checked against the passes that ran.
+    expect(utilisationProblems(measured(edited("lens (access)", { lens: "injection" })))).toEqual([
       `its slice utilisation's entry "lens" ("injection") names no pass its outcome ran`,
     ])
-    expect(utilisationProblems(measured(edited("lens (auth)", { lens: undefined })))).toEqual([
+    expect(utilisationProblems(measured(edited("lens (access)", { lens: undefined })))).toEqual([
       `its slice utilisation's entry "lens" names no pass its outcome ran`,
       `its slice utilisation's entry "lens" is a lens pass with no lens`,
     ])
-    expect(utilisationProblems(measured(edited("review", { lens: "auth" })))).toEqual([
-      `its slice utilisation's entry "review" ("auth") names no pass its outcome ran`,
-      `its slice utilisation's entry "review" ("auth") names a lens, but is no lens pass`,
+    expect(utilisationProblems(measured(edited("review", { lens: "access" })))).toEqual([
+      `its slice utilisation's entry "review" ("access") names no pass its outcome ran`,
+      `its slice utilisation's entry "review" ("access") names a lens, but is no lens pass`,
     ])
     expect(utilisationProblems(measured({ ...WHOLE, passes: [...WHOLE.passes, lens] }))).toEqual([
-      `its slice utilisation lists entry "lens" ("auth") twice`,
+      `its slice utilisation lists entry "lens" ("access") twice`,
       `its slice utilisation counts the tool calls of pass "lens" as "read" 2, not the "read" 1 its artifact records`,
     ])
     expect(
@@ -1540,21 +1567,23 @@ describe("slice utilisation records (VS-49)", () => {
     expect(utilisationProblems(measured(edited("review", { received: [], cited: [] })))).toEqual([
       `its slice utilisation's entry "review" lists received or cited locations, which only a lens pass has`,
     ])
-    expect(utilisationProblems(measured(edited("lens (auth)", { received: ["src/nowhere.ts:1"] })))).toEqual([
-      `its slice utilisation's entry "lens" ("auth") received "src/nowhere.ts:1", which its context does not quote`,
+    expect(utilisationProblems(measured(edited("lens (access)", { received: ["src/nowhere.ts:1"] })))).toEqual([
+      `its slice utilisation's entry "lens" ("access") received "src/nowhere.ts:1", which its context does not quote`,
     ])
-    expect(utilisationProblems(measured(edited("lens (auth)", { received: [SLICE[0], SLICE[0]] })))).toEqual([
-      `its slice utilisation's entry "lens" ("auth") does not list what it received as distinct locations`,
+    expect(utilisationProblems(measured(edited("lens (access)", { received: [SLICE[0], SLICE[0]] })))).toEqual([
+      `its slice utilisation's entry "lens" ("access") does not list what it received as distinct locations`,
     ])
-    expect(utilisationProblems(measured(edited("lens (auth)", { cited: "src/auth/session.ts:2" })))).toEqual([
-      `its slice utilisation's entry "lens" ("auth") does not list what it cited as distinct locations`,
+    expect(utilisationProblems(measured(edited("lens (access)", { cited: "src/auth/session.ts:2" })))).toEqual([
+      `its slice utilisation's entry "lens" ("access") does not list what it cited as distinct locations`,
     ])
     // A lens that places no finding cites nothing; security's places the finding instead.
-    expect(utilisationProblems(measured(edited("lens (auth)", { findings: [] })))).toEqual([
-      `its slice utilisation's entry "lens" ("auth") cites locations, but places no finding`,
+    expect(utilisationProblems(measured(edited("lens (access)", { findings: [] })))).toEqual([
+      `its slice utilisation's entry "lens" ("access") cites locations, but places no finding`,
     ])
     // Received and cited are optional.
-    expect(utilisationProblems(measured(edited("lens (auth)", { received: undefined, cited: undefined })))).toEqual([])
+    expect(utilisationProblems(measured(edited("lens (access)", { received: undefined, cited: undefined })))).toEqual(
+      [],
+    )
   })
 
   test("a hand-edited record is listed, never thrown on", () => {

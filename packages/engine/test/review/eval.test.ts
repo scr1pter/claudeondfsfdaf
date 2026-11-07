@@ -2041,6 +2041,15 @@ describe("ReviewEval.project", () => {
         expect(atAdmission.map((decision) => decision.attempt).toSorted()).toEqual(
           requests.map((request) => request.seq).toSorted(),
         )
+        // Each records the whole reservation that went over the cap, not only its turn: a turn reserves its estimate
+        // twice, once for the turn and once for the finalizer share beside it.
+        for (const decision of atAdmission) {
+          const request = requests.find((item) => item.seq === decision.attempt)
+          if (!request) throw new Error(`no request for attempt ${decision.attempt}`)
+          expect(request.phase).toBe("turn")
+          expect(request.estimateUsd).toBeGreaterThan(0)
+          expect(decision.estimateUsd).toBe(request.estimateUsd * 2)
+        }
         // Each pass was refused before its session too, verify at its pre-check first, and each pass names the first.
         expect(
           record.cap.over

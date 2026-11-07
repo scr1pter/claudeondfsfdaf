@@ -134,7 +134,7 @@ describe("blind", () => {
   })
 
   test("a task shows a defect's label without the annotators' failure class", () => {
-    const labelled = { ...CASE, defects: CASE.defects.map((defect) => ({ ...defect, failureClass: "crash" })) }
+    const labelled = { ...CASE, defects: CASE.defects.map((defect) => ({ ...defect, failureClass: "crash" as const })) }
     const blinded = blind({ runs: RUNS, cases: [labelled], seed: "seed-1" })
     expect(blinded.tasks).toHaveLength(2)
     for (const task of blinded.tasks) {

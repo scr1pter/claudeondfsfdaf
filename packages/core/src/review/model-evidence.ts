@@ -59,7 +59,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "124e47864a16fea4"
+export const REVIEW_PIPELINE_SOURCES = "66cc83db55a87db9"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -74,9 +74,9 @@ export const MAX_CERTIFICATE_DAYS = 90
 // on, and then only as "introduced" under `guardrail: "strict"`. VS-44's `verifyEvidence` is one (S1's certificate check
 // drops what would be posted), counted from VS-44 wiring on, and then only as "certificate" under `guardrail: "strict"`.
 // VS-28's `depth` and `lenses` are two (they choose which passes look for defects), counted from VS-28 wiring on, and
-// then only as non-default values, `lenses` only under `depth: "auto"` (POLICY_ONLY_WITH). VS-30's `runtime` is one (a
-// runtime confirmation changes what is verified, and so what is posted), counted from the VS-30 executor on, and then
-// only as "ask".
+// then only as non-default values, `lenses` only under `depth: "auto"`. POLICY_ONLY_WITH holds the strict and the
+// `depth: "auto"` conditions. VS-30's `runtime` is one (a runtime confirmation changes what is verified, and so what is
+// posted), counted from the VS-30 executor on, and then only as "ask".
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -524,12 +524,16 @@ export function promptsDigest(
 }
 
 // Policy keys that act only beside another setting, as the parser's "ignored without" notes say: `lenses` runs only under
-// `depth: "auto"`, so a review under `depth: "fixed"` and `lenses: "high"` is scoped as one without lenses. Dormant
-// until VS-28 wiring takes both keys off UNAPPLIED_REVIEW_KEYS.
+// `depth: "auto"`, so a review under `depth: "fixed"` and `lenses: "high"` is scoped as one without lenses; `scopeGate`
+// and `verifyEvidence` act only inside strictSelect, so either one under `guardrail: "off"` is scoped as unset, as
+// evidenceScope's prompts digest already scopes them. Dormant until VS-28, VS-42 and VS-44 wiring take the keys off
+// UNAPPLIED_REVIEW_KEYS.
 const POLICY_ONLY_WITH: Partial<
-  Record<(typeof EVIDENCE_POLICY_KEYS)[number], (config: Pick<ReviewConfig, "depth">) => boolean>
+  Record<(typeof EVIDENCE_POLICY_KEYS)[number], (config: Pick<ReviewConfig, "depth" | "guardrail">) => boolean>
 > = {
   lenses: (config) => config.depth === "auto",
+  scopeGate: (config) => config.guardrail === "strict",
+  verifyEvidence: (config) => config.guardrail === "strict",
 }
 
 // Default-stable (contract §0.3): a key with an entry in OPTIONAL_REVIEW_DEFAULTS counts only when set to another value,

@@ -1988,11 +1988,18 @@ describe("the projection hook (VS-21b)", () => {
         const { llm, directory } = yield* useServer(PRICE)
         for (const scenario of scenarios(directory)) {
           const asked: Review.OverCap[] = []
+          const refused: Extract<Review.Observation, { type: "attempt" }>[] = []
           const run = input(directory, { model: priced, config: scenario.config })
           const unset = yield* observeRun(llm, run, scenario.replies())
           const declining = yield* observeRun(
             llm,
-            { ...run, projection: { overCap: (decision) => (asked.push(decision), false) } },
+            {
+              ...run,
+              projection: { overCap: (decision) => (asked.push(decision), false) },
+              observe: (event) => {
+                if (event.type === "attempt" && !event.admitted && event.stop === "budget") refused.push(event)
+              },
+            },
             scenario.replies(),
           )
           const throwing = yield* observeRun(
@@ -2018,6 +2025,16 @@ describe("the projection hook (VS-21b)", () => {
             expect(decision.sessionID !== undefined).toBe(decision.site === "attempt" || decision.site === "finalizer")
             expect(decision.phase).toBe(decision.site === "finalizer" ? "finalize" : "turn")
           }
+          // Each decision carries the whole reservation that went over the cap. The refusal it caused records the
+          // turn's estimate alone; before a session and at a turn's attempt the turn reserves the same amount again
+          // for its finalizer, and the finalizer, a finalizing attempt and verify reserve no such share.
+          expect(refused.map((event) => event.phase)).toEqual(asked.map((decision) => decision.phase))
+          asked.forEach((decision, index) =>
+            expect(decision.estimateUsd).toBe(
+              (refused[index]?.estimateUsd ?? Number.NaN) *
+                (decision.site === "pass" || (decision.site === "attempt" && decision.phase === "turn") ? 2 : 1),
+            ),
+          )
           const session = asked.find((decision) => decision.sessionID)?.sessionID
           if (session) expect(declining.sessions).toContain(session)
         }

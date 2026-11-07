@@ -603,7 +603,8 @@ describe("scope", () => {
 
   // VS-42a: `scopeGate` is a policy key (S9 drops what would be posted) that no runner applies before VS-42 wiring, so
   // neither the policy digest nor the prompts digest of a scope moves with it yet. Once a runner applies it and the
-  // guardrail, the prompts digest counts it only as "introduced" under "strict".
+  // guardrail, the prompts digest counts it only as "introduced" under "strict", and the policy digest only under
+  // "strict" (dormant now; VS-42 wiring's test shows `guardrail: "off"` with "introduced" equals the default).
   test("the scope leaves out VS-42's scopeGate until a runner applies it", () => {
     const base = policyDigest(DEFAULT_REVIEW_CONFIG)
     expect(EVIDENCE_POLICY_KEYS).toContain("scopeGate")
@@ -621,7 +622,9 @@ describe("scope", () => {
 
   // VS-44a: `verifyEvidence` is a policy key (S1's certificate check drops what would be posted) that no runner applies
   // before VS-44 wiring, so neither the policy digest nor the prompts digest of a scope moves with it yet. Once a runner
-  // applies it and the guardrail, the prompts digest counts it only as "certificate" under "strict".
+  // applies it and the guardrail, the prompts digest counts it only as "certificate" under "strict", and the policy
+  // digest only under "strict" (dormant now; VS-44 wiring's test shows `guardrail: "off"` with "certificate" equals the
+  // default).
   test("the scope leaves out VS-44's verifyEvidence until a runner applies it", () => {
     const base = policyDigest(DEFAULT_REVIEW_CONFIG)
     expect(EVIDENCE_POLICY_KEYS).toContain("verifyEvidence")

@@ -335,7 +335,7 @@ export interface ReviewOutcome {
   unreviewed: string[]
   specialists: {
     name: "review" | "security" | "verify" | "judge" | "lens" | "repro" // judge: codium's; lens, repro: VS-28, VS-30
-    lens?: string // the single class a "lens" pass looked for (VS-28)
+    lens?: ReviewLens // the single class a "lens" pass looked for (VS-28)
     status: "ok" | "failed" | "timeout" | "stopped" | "skipped"
     steps: number
     detail?: string
@@ -351,7 +351,7 @@ export interface ReviewOutcome {
 
 export interface ReviewPass {
   name: "review" | "security" | "verify" | "judge" | "lens" | "repro" // as ReviewOutcome.specialists[].name
-  lens?: string // as ReviewOutcome.specialists[].lens
+  lens?: ReviewLens // as ReviewOutcome.specialists[].lens
   model: string // "provider/model"
   costUsd?: number // absent when the pass's usage carried no price
   input: number // cache reads and writes included
