@@ -22,6 +22,7 @@ import {
   admitReplay,
   checkoutDirectory,
   main,
+  pairProblems,
   PILOT,
   pilotProblems,
   pilotRemaining,
@@ -33,6 +34,7 @@ import {
   replayPlan,
   replayVariant,
   resolveVariant,
+  triagePairProblem,
   variantAdapter,
   variantNames,
   variantProblems,
@@ -262,7 +264,7 @@ describe("replay admission", () => {
     const before = ledger.entries.length
     for (const [variant, detail] of [
       ["engine:trivial-skip", "registered for VS-24 wiring, which has not landed"],
-      ["engine:cross-family", "registered for VS-29a, which has not landed"],
+      ["desktop:cross-family", "registered for VS-29a's desktop half, after VS-10, which has not landed"],
       ["engine:verify", "not a registered variant"],
       ["engine:shared-verify=test/review", "is not a variant name"],
       ["desktop:shared-verify", "admitReplay admits engine replays"],
@@ -274,6 +276,43 @@ describe("replay admission", () => {
       })
     expect(ledger.entries.length).toBe(before)
     expect(admitReplay(ledger, { id: "case-a", models: [priced] })).toMatchObject({ admitted: true })
+  })
+
+  // VS-29a: the cross-family variant is made by its models, the review model then a triage model other than it, and
+  // the ledger's case key and model name the pair.
+  const triage = { id: "test/triage", costKind: "priced" as const, price: { input: 1, output: 2 } }
+
+  test("admits engine:cross-family with the review model then a distinct triage model, and records the pair", () => {
+    const ledger = Ledger.open({ limits })
+    const pair = admitReplay(ledger, { id: "case-a", models: [priced, triage], variant: "engine:cross-family" })
+    if (!pair.admitted) throw new Error(pair.detail)
+    expect(pair.config).toEqual({ maxCostUsd: 3 })
+    expect(pair.variant).toEqual({ name: "engine:cross-family", keys: {}, models: "triage-pair" })
+    const recorded = variantRecord("engine:cross-family")
+    expect(recorded.ok && recorded.record).toEqual(pair.variant)
+    expect(ledger.entries.flatMap((entry) => (entry.type === "admit" ? [[entry.case, entry.model]] : []))).toEqual([
+      ["engine:cross-family test/review + test/triage case-a#1", "test/review + test/triage"],
+    ])
+  })
+
+  test("refuses engine:cross-family without two distinct models, before the ledger sees it", () => {
+    const ledger = Ledger.open({ limits })
+    const before = ledger.entries.length
+    const other = { ...triage, id: "test/other" }
+    for (const models of [[priced], [priced, priced], [priced, triage, other], []])
+      expect(admitReplay(ledger, { id: "case-a", models, variant: "engine:cross-family" })).toEqual({
+        admitted: false,
+        reason: "variant",
+        detail: expect.stringContaining("engine:cross-family is made by its models"),
+      })
+    expect(ledger.entries.length).toBe(before)
+    // The frozen pipeline with a triage model is unchanged: the pair check is the pair variant's alone.
+    expect(admitReplay(ledger, { id: "case-a", models: [priced, triage] })).toMatchObject({ admitted: true })
+    // A pair whose triage model has no price cannot be bounded, as for any other variant.
+    const free = { id: "test/free", costKind: "free" as const }
+    expect(admitReplay(ledger, { id: "case-b", models: [priced, free], variant: "engine:cross-family" })).toMatchObject(
+      { admitted: false, reason: "unpriced" },
+    )
   })
 
   test("refuses a model without a price, and the ledger stops admitting", () => {
@@ -391,7 +430,11 @@ describe("the variant registry", () => {
         "from" in entry[adapter] ? [{ name: `${adapter}:${suffix}`, adapter, entry }] : [],
       ),
     )
-    expect(built.map((item) => item.name)).toEqual(["engine:shared-verify", "desktop:shared-verify"])
+    expect(built.map((item) => item.name)).toEqual([
+      "engine:shared-verify",
+      "desktop:shared-verify",
+      "engine:cross-family",
+    ])
     for (const item of built) {
       const keys = Object.keys(item.entry.keys ?? {})
       expect(keys.length > 0 || item.entry.models !== undefined).toBe(true)
@@ -404,7 +447,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * (entries.length - 1))
+    expect(pending).toHaveLength(2 * entries.length - 3)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -425,12 +468,44 @@ describe("the variant registry", () => {
       "engine:guardrail-strict": "VS-27c",
       "engine:depth-auto": "VS-28 wiring",
       "engine:lenses-high": "VS-28 wiring",
-      "engine:cross-family": "VS-29a",
       "engine:precise": "VS-31",
     })
-    // The cross-family pair is made by its models, never by a key.
+    // The cross-family pair is made by its models, never by a key. Its engine half is built (VS-29a); its desktop half
+    // waits for VS-10, since the desktop adapter takes one model and refuses a keyless variant.
     expect(VARIANTS["cross-family"]).toMatchObject({ models: "triage-pair" })
     expect(Object.hasOwn(VARIANTS["cross-family"], "keys")).toBe(false)
+    expect(resolveVariant("engine:cross-family")).toEqual({
+      ok: true,
+      name: "engine:cross-family",
+      adapter: "engine",
+      keys: {},
+      models: "triage-pair",
+      frozen: false,
+    })
+    expect(pending).toContainEqual({ name: "desktop:cross-family", package: "VS-29a's desktop half, after VS-10" })
+  })
+
+  test("a variant made by its models needs the review model, then a triage model other than it (VS-29a)", () => {
+    const pair = { name: "engine:cross-family", keys: {}, models: "triage-pair" as const }
+    expect(variantProblems("engine", pair)).toEqual([])
+    expect(variantProblems("engine", { name: pair.name, keys: {} })).toEqual([
+      'its variant engine:cross-family set {"keys":{}}, not the registry\'s {"keys":{},"models":"triage-pair"}',
+    ])
+    expect(variantProblems("engine", { ...pair, keys: { verifyPolicy: "shared" } })).toHaveLength(1)
+    expect(triagePairProblem("engine:cross-family", ["a/review", "b/triage"])).toBeUndefined()
+    for (const [models, named] of [
+      [["a/review"], "a/review"],
+      [["a/review", "a/review"], "a/review + a/review"],
+      [[], "no model"],
+      [["a/review", "b/triage", "c/other"], "a/review + b/triage + c/other"],
+    ] as const)
+      expect(triagePairProblem("engine:cross-family", models)).toBe(
+        `engine:cross-family is made by its models: it needs the review model, then a triage model other than it, not ${named}.`,
+      )
+    // A tripwire, not wanted behaviour: two models of one lab pass today, because the same-lab refusal waits for
+    // codium's labOf (contract §0.5) and no stopgap was built. When labOf merges, this pair is refused and this line
+    // changes with it.
+    expect(triagePairProblem("engine:cross-family", ["vendor-a/x", "vendor-a/y"])).toBeUndefined()
   })
 
   test("refuses malformed names and names it does not know, prototype names included", () => {
@@ -966,6 +1041,63 @@ describe("projection records (VS-21b)", () => {
     expect(projected.usd.high).toBeCloseTo(0.15)
     expect(projectedRun(record()).variant).toBe("engine")
   })
+
+  // VS-29a: a cross-family projection records the pair, the review model first, and the report reads both.
+  test("a cross-family record names the pair: the review model, then the triage model of its first pass", () => {
+    const triage = { id: "lmstudio/triage-model", context: 100_000, costKind: "priced" as const }
+    const pair = record({
+      variant: { name: "engine:cross-family", keys: {}, models: "triage-pair" },
+      scope: evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG, triage: triage.id }),
+      models: { ...record().models, triage: { ...triage, price: { input: 1, output: 2 } } },
+      passes: [pass("review", { model: triage.id }), pass("security", { model: triage.id }), pass("verify")],
+    })
+    expect(projectionProblems(pair)).toEqual([])
+    expect(projectedRun(pair)).toMatchObject({
+      variant: "engine:cross-family",
+      model: "lmstudio/test-model",
+      models: ["lmstudio/test-model", "lmstudio/triage-model"],
+    })
+  })
+
+  // VS-29a: report.ts and certify.ts read records back as untrusted JSON, so a record named for the pair must show it:
+  // a triage model other than the review model, which its scope names too.
+  test("a record read back under a variant made by its models must show the pair, and any other needs none", () => {
+    const triage = { id: "lmstudio/triage-model", context: 100_000, costKind: "priced" as const }
+    const variant = { name: "engine:cross-family", keys: {}, models: "triage-pair" as const }
+    const scope = evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG, triage: triage.id })
+    const models = { ...record().models, triage: { ...triage, price: { input: 1, output: 2 } } }
+    const passes = [pass("review", { model: triage.id }), pass("security", { model: triage.id }), pass("verify")]
+    expect(pairProblems(record({ variant, scope, models, passes }))).toEqual([])
+    // A hand-edited or buggy record: no triage model, the review model as its own triage model, a scope that names
+    // another triage model or none.
+    const scopeless = evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG })
+    const unpaired = record({ variant, scope: scopeless, passes })
+    expect(pairProblems(unpaired)).toEqual(["its variant is made by its models, but it records no triage model"])
+    expect(projectionProblems(unpaired)).toContain("its variant is made by its models, but it records no triage model")
+    const review = record().models.review
+    expect(pairProblems(record({ variant, scope, models: { review, triage: review }, passes }))).toEqual([
+      'its variant is made by its models, but its triage model is its review model, "lmstudio/test-model"',
+      'its variant is made by its models, but its evidence scope names "lmstudio/triage-model", not its triage model "lmstudio/test-model"',
+    ])
+    expect(pairProblems(record({ variant, scope: scopeless, models, passes }))).toEqual([
+      'its variant is made by its models, but its evidence scope names no triage model, not its triage model "lmstudio/triage-model"',
+    ])
+    // A replay artifact is read the same way, field by field.
+    expect(
+      pairProblems({ variant, scope, models: { review: { id: "a/review" }, triage: { id: "a/review" } } }),
+    ).toEqual([
+      'its variant is made by its models, but its triage model is its review model, "a/review"',
+      'its variant is made by its models, but its evidence scope names "lmstudio/triage-model", not its triage model "a/review"',
+    ])
+    // Any other variant, the frozen pipeline included, needs no pair, and a triage model it has is not checked here.
+    expect(pairProblems(record())).toEqual([])
+    expect(
+      pairProblems(record({ variant: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } })),
+    ).toEqual([])
+    expect(pairProblems(record({ models: { review, triage: review } }))).toEqual([])
+    for (const value of [undefined, null, "x", 1, [], { variant: "engine:cross-family" }])
+      expect(pairProblems(value)).toEqual([])
+  })
 })
 
 // VS-21c: the entry point's variant records, and the D5 pilot's limits on a paid replay.
@@ -976,6 +1108,16 @@ describe("the entry point's variants and the pilot's limits", () => {
       ok: true,
       name: "engine:shared-verify",
       record: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } },
+    })
+    // VS-29a: the cross-family pair's record carries its model requirement and no key.
+    expect(variantRecord("engine:cross-family")).toEqual({
+      ok: true,
+      name: "engine:cross-family",
+      record: { name: "engine:cross-family", keys: {}, models: "triage-pair" },
+    })
+    expect(variantRecord("desktop:cross-family")).toEqual({
+      ok: false,
+      detail: expect.stringContaining("registered for VS-29a's desktop half, after VS-10"),
     })
     expect(variantRecord("desktop")).toEqual({
       ok: false,

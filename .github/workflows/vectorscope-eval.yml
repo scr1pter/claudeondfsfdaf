@@ -23,7 +23,8 @@ name: vectorscope eval
 # dispatch's budget_usd is at most $50 less what the earlier dispatches' sealed ledgers settled (their uncertain
 # reservations included), given as pilot_spent_usd, and the dispatches split the pilot by the variants and models
 # inputs, never repeating a case, variant and model. Each dispatch restarts at the first development case, and nothing
-# carries spend between them.
+# carries spend between them. The engine:cross-family variant (VS-29a) pairs each model with triage_model as its first
+# pass, in dry runs only; nothing checks the pair's labs or tier until codium's labOf merges and the owner chooses it.
 
 on:
   workflow_dispatch:
@@ -83,6 +84,11 @@ on:
         required: false
         default: ""
         type: string
+      triage_model:
+        description: "replay only: model=input:output, the first pass engine:cross-family pairs with each models entry; dry runs only (empty for none)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -128,6 +134,7 @@ jobs:
           EVAL_PIPELINE: ${{ inputs.pipeline }}
           EVAL_VARIANTS: ${{ inputs.variants }}
           EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_TRIAGE_MODEL: ${{ inputs.triage_model }}
           EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
           EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
         run: bun script/vectorscope-eval/ci.ts plan
@@ -180,6 +187,7 @@ jobs:
           EVAL_PIPELINE: ${{ inputs.pipeline }}
           EVAL_VARIANTS: ${{ inputs.variants }}
           EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_TRIAGE_MODEL: ${{ inputs.triage_model }}
           EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
           EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
           EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
@@ -199,6 +207,7 @@ jobs:
           EVAL_PIPELINE: ${{ inputs.pipeline }}
           EVAL_VARIANTS: ${{ inputs.variants }}
           EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_TRIAGE_MODEL: ${{ inputs.triage_model }}
           EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
           EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
           EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval

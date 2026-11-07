@@ -490,6 +490,111 @@ describe("the replay pipeline", () => {
     expect(replayArgs(inputs(REPLAY), 0, where)).not.toContain("--budget-usd")
   })
 
+  // VS-29a: the cross-family variant's triage model comes from the dispatch, for that variant, in a dry run.
+  const PAIR = {
+    ...REPLAY,
+    EVAL_VARIANTS: "engine,engine:cross-family",
+    EVAL_TRIAGE_MODEL: " google/gemini-2.5-pro=1.25:10 ",
+  }
+  const PAIR_PROBLEM =
+    "engine:cross-family is made by its models: it needs the review model, then a triage model other than it"
+
+  test("takes a triage model only for a variant made by its models, in a dry run (VS-29a)", () => {
+    expect(inputs(PAIR).triageModel).toEqual({ id: "google/gemini-2.5-pro", price: { input: 1.25, output: 10 } })
+    expect(inputs(PAIR).variants).toEqual(["engine", "engine:cross-family"])
+    expect(inputs(REPLAY)).not.toHaveProperty("triageModel")
+    expect(inputs({ ...REPLAY, EVAL_TRIAGE_MODEL: "  " })).not.toHaveProperty("triageModel")
+    expect(problems({ ...DRY, EVAL_TRIAGE_MODEL: "google/gemini-2.5-pro=1.25:10" })).toEqual([
+      "triage_model belongs to the replay pipeline: leave it empty for the smoke pipeline",
+    ])
+    // The default variants are not made by their models, so they take no triage model.
+    expect(problems({ ...REPLAY, EVAL_TRIAGE_MODEL: "google/gemini-2.5-pro=1.25:10" })).toEqual([
+      "triage_model is for a variant made by its models (engine:cross-family); variants names none",
+    ])
+    // The cross-family variant without one would fail the entry point on every model, so it is refused here, per model.
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:cross-family" })).toEqual([
+      `${PAIR_PROBLEM}, not anthropic/claude-sonnet-4.5. Set triage_model.`,
+      `${PAIR_PROBLEM}, not openai/gpt-5-mini. Set triage_model.`,
+    ])
+    // A triage model that is one of the review models is no pair for that model.
+    expect(problems({ ...PAIR, EVAL_TRIAGE_MODEL: "openai/gpt-5-mini=0.25:2" })).toEqual([
+      `${PAIR_PROBLEM}, not openai/gpt-5-mini + openai/gpt-5-mini.`,
+    ])
+    // A paid cross-family replay is not wired, so a paid dispatch naming the variant is refused as dry only, whatever
+    // its triage model: it is never first asked for one that would then be refused.
+    const DRY_ONLY =
+      "runs in dry runs only: a paid cross-family replay is not wired until the owner chooses the pair (Q5) and funds its ablation (Q9)"
+    expect(problems({ ...PAIR, ...PAID_REPLAY, EVAL_VARIANTS: PAIR.EVAL_VARIANTS })).toEqual([
+      `engine:cross-family ${DRY_ONLY}`,
+    ])
+    expect(problems({ ...PAID_REPLAY, EVAL_VARIANTS: "engine:cross-family" })).toEqual([
+      `engine:cross-family ${DRY_ONLY}`,
+    ])
+    expect(
+      problems({ ...PAID_REPLAY, EVAL_VARIANTS: "engine:cross-family", EVAL_TRIAGE_MODEL: "openai/gpt-5-mini=0.25:2" }),
+    ).toEqual([`engine:cross-family ${DRY_ONLY}`])
+    expect(problems({ ...PAID_REPLAY, EVAL_TRIAGE_MODEL: "google/gemini-2.5-pro=1.25:10" })).toEqual([
+      "triage_model is for a variant made by its models (engine:cross-family); variants names none",
+      `triage_model ${DRY_ONLY}`,
+    ])
+    // Malformed text is quoted on one line, never read as a workflow command.
+    for (const bad of ["a/b=1:1\n::warning::x", "a/b", "a/b=x:y", "--x=1:1", "a/b=1:1,c/d=1:1"]) {
+      const found = problems({ ...PAIR, EVAL_TRIAGE_MODEL: bad })
+      expect(found).toEqual([
+        `triage_model ${JSON.stringify(bad)} must be model=input:output, with USD per million tokens, such as openai/gpt-5=1.25:10, or empty for none`,
+      ])
+      for (const line of found) {
+        expect(line.split("\n")).toHaveLength(1)
+        expect(line.startsWith("::")).toBe(false)
+      }
+    }
+  })
+
+  test("hands the entry point --triage-model after --model, and changes no argument array without it", async () => {
+    const where = { mirrors: "/runner/tmp/mirrors", work: "/runner/tmp/work" }
+    const paired = inputs(PAIR)
+    const unpaired = { ...paired, triageModel: undefined }
+    for (const index of [0, 1]) {
+      const without = replayArgs(unpaired, index, where)
+      expect(replayArgs(paired, index, where)).toEqual([
+        ...without.slice(0, 2),
+        "--triage-model",
+        "google/gemini-2.5-pro=1.25:10",
+        ...without.slice(2),
+      ])
+      expect(without).not.toContain("--triage-model")
+    }
+    // The plan names the pair and says what is not checked.
+    const started: string[][] = []
+    const out: string[] = []
+    expect(
+      await main("plan", {
+        env: { ...PAIR, ...dirs },
+        spawn: (argv) => {
+          started.push(argv)
+          return { stdout: Promise.resolve(""), exited: Promise.resolve(0), kill: () => {} }
+        },
+        stdout: (text) => void out.push(text),
+        stderr: () => {},
+      }),
+    ).toBe(0)
+    expect(started.map((argv) => argv.slice(2, 6))).toEqual([
+      ["--model", "anthropic/claude-sonnet-4.5=3:15", "--triage-model", "google/gemini-2.5-pro=1.25:10"],
+      ["--model", "openai/gpt-5-mini=0.25:2", "--triage-model", "google/gemini-2.5-pro=1.25:10"],
+    ])
+    expect(out.join("")).toContain(
+      "engine:cross-family pairs each model with google/gemini-2.5-pro as its first pass (triage_model); nothing checks the pair's labs or tier until codium's labOf merges and the owner chooses the pair (Q5).",
+    )
+    const plain: string[] = []
+    await main("plan", {
+      env: { ...REPLAY, ...dirs },
+      spawn: () => ({ stdout: Promise.resolve(""), exited: Promise.resolve(0), kill: () => {} }),
+      stdout: (text) => void plain.push(text),
+      stderr: () => {},
+    })
+    expect(plain.join("")).not.toContain("triage_model")
+  })
+
   test("the mirror plan is one bare mirror per seed repository, with its cases' heads and bases", async () => {
     const seed = (await loadManifest()) as Manifest
     const plan = mirrorPlan(seed)
@@ -863,6 +968,21 @@ describe("the workflow", () => {
     for (const job of Object.values(jobs))
       for (const step of job.steps.filter((entry) => added.includes(entry.name)))
         expect(step.if).toBe("inputs.pipeline == 'replay'")
+  })
+
+  // VS-29a. GitHub raised workflow_dispatch's input limit from 10 to 25 on 2025-12-04 (its changelog); an input past
+  // the limit would break every dispatch, so the count is pinned here and a later addition fails loudly.
+  test("takes the cross-family triage model as an optional input, empty by default, in every validating step", () => {
+    const inputs = workflow.on.workflow_dispatch.inputs
+    expect(inputs.triage_model).toMatchObject({ default: "", required: false })
+    expect(Object.keys(inputs)).toHaveLength(11)
+    expect(Object.keys(inputs).length).toBeLessThanOrEqual(25)
+    const jobs = workflow.jobs as Record<string, { steps: Step[] }>
+    const validating = Object.values(jobs).flatMap((job) =>
+      job.steps.filter((step) => /ci\.ts (plan|project|paid)$/.test(step.run ?? "")),
+    )
+    expect(validating).toHaveLength(3)
+    for (const step of validating) expect(step.env).toMatchObject({ EVAL_TRIAGE_MODEL: "${{ inputs.triage_model }}" })
   })
 
   test("fetches the mirrors in both jobs without a secret, and projects the paid cases before paying, with no key", () => {

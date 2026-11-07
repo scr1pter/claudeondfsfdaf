@@ -298,6 +298,7 @@ const checkout = (input: {
   untrusted?: boolean
   price?: typeof PRICE
   baseURL?: string
+  triage?: boolean // also registers lmstudio/triage-model, a copy of test-model, for a cross-family pair (VS-29a)
 }) =>
   Effect.gen(function* () {
     const directory = (yield* TestInstance).directory
@@ -309,10 +310,24 @@ const checkout = (input: {
     const provider = testProviderConfig(llm.url)
     if (input.price) provider.provider.lmstudio.models["test-model"].cost = input.price
     if (input.baseURL) provider.provider.lmstudio.options.baseURL = input.baseURL
+    const models = input.triage
+      ? {
+          ...provider.provider.lmstudio.models,
+          "triage-model": {
+            ...provider.provider.lmstudio.models["test-model"],
+            id: "triage-model",
+            name: "Triage Model",
+          },
+        }
+      : provider.provider.lmstudio.models
     yield* Effect.promise(() =>
       Bun.write(
         path.join(directory, "vector.json"),
-        JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...provider }),
+        JSON.stringify({
+          $schema: "https://vectordev.ai/config.json",
+          ...provider,
+          provider: { lmstudio: { ...provider.provider.lmstudio, models } },
+        }),
       ),
     )
     yield* Effect.promise(() => trustWorkspace(directory))
@@ -537,6 +552,87 @@ describe("ReviewEval.replay", () => {
           input: { filePath: "src/list.ts" },
         })
         expect(artifact.runtime.platform).toBe(process.platform)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-29a: the cross-family variant is the existing triageModel/model pair, with no key. The review pass runs on the
+  // triage model, the review model double-checks it, only what it confirmed is reported, and the scope names the pair.
+  it.instance(
+    "records a cross-family pair: the first pass on the triage model, the double-check on the review model, and the pair in the scope (VS-29a)",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+          triage: true,
+        })
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const [bugID, falseID] = Review.normalizeFindings([listBug, listFalse], "review", anchors).map(
+          (item) => item.id,
+        )
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", report([listBug, listFalse]))
+            .usage({ input: 1_000, output: 30 }),
+        )
+        yield* llm.pushMatch(
+          VERIFY,
+          reply()
+            .tool("StructuredOutput", {
+              results: [
+                { id: bugID, verdict: "confirmed", reason: "Reproduced with a one-item array." },
+                { id: falseID, verdict: "rejected", reason: "Not a defect." },
+              ],
+            })
+            .usage({ input: 1_500, output: 20 }),
+        )
+        const triage = { ...MODEL, modelID: ModelV2.ID.make("triage-model") }
+        const pair = { name: "engine:cross-family", keys: {}, models: "triage-pair" as const }
+
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          triage,
+          config: { maxCostUsd: 2 },
+          variant: pair,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+
+        expect(artifact.variant).toEqual(pair)
+        expect(artifact.models.review.id).toBe("lmstudio/test-model")
+        expect(artifact.models.triage).toEqual({
+          id: "lmstudio/triage-model",
+          context: 100_000,
+          costKind: "priced",
+          price: PRICE,
+        })
+        expect(artifact.scope).toEqual(
+          evidenceScope({ adapter: "engine", config: artifact.config.value, triage: "lmstudio/triage-model" }),
+        )
+        // The pair is the replay's models, never a setting: the review settings hold no triage model.
+        expect(artifact.config.value.triageModel).toBeUndefined()
+        expect(artifact.config.value).toEqual(DEFAULT_REVIEW_CONFIG)
+        expect(artifact.passes.map((entry) => [entry.pass, entry.model]).toSorted()).toEqual([
+          ["review", "lmstudio/triage-model"],
+          ["verify", "lmstudio/test-model"],
+        ])
+        expect(
+          artifact.attempts
+            .filter((attempt) => attempt.admitted)
+            .map((attempt) => [attempt.pass, attempt.model?.modelID])
+            .toSorted(),
+        ).toEqual([
+          ["review", "triage-model"],
+          ["verify", "test-model"],
+        ])
+        // Only what the review model confirmed is reported.
+        expect(artifact.placed.map((entry) => [entry.title, entry.verified])).toEqual([[listBug.title, true]])
+        expect(artifact.outcome?.selection.dropped).toEqual([{ reason: "rejected-by-verify", count: 1 }])
       }),
     GIT,
     TIMEOUT,

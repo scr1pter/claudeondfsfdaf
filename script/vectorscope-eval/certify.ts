@@ -6,7 +6,7 @@ import { parseArgs } from "node:util"
 import type { Report } from "../../packages/core/src/review/eval-report"
 import { certify, type EvidenceScope, type ModelCertificate } from "../../packages/core/src/review/model-evidence"
 import type { ReplayVariant } from "../../packages/engine/src/review/eval"
-import { replayVariant, variantAdapter, variantProblems } from "./replay"
+import { pairProblems, replayVariant, variantAdapter, variantProblems } from "./replay"
 
 // Model evidence (VectorScope plan, VS-07): turns a held-out report whose gate passed into a model certificate, for the
 // owner to approve. The certificate names the report file by digest, the frozen manifest by its freeze digest, the gate
@@ -92,7 +92,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   const candidate = report.decision?.candidate
   // The candidate's runs: the artifacts of its model whose pipeline variant is the report's (replayVariant, such as
   // "engine" or "engine:shared-verify"). A desktop replay whose variant never reached the runner ran without it, and
-  // a variant record the registry does not bear out (variantProblems) may not be the run it names.
+  // a variant record the registry does not bear out (variantProblems), or a variant made by its models whose record
+  // does not show the pair (pairProblems, VS-29a), may not be the run it names.
   const asked = candidate
     ? artifacts.filter(
         (entry) =>
@@ -137,7 +138,9 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       : []),
     ...unapplied.map((entry) => `${entry.file} asked for the variant, but it never reached the runner`),
     ...runs.flatMap((entry) =>
-      variantProblems(entry.value.adapter, entry.value.variant).map((problem) => `${entry.file}: ${problem}`),
+      [...variantProblems(entry.value.adapter, entry.value.variant), ...pairProblems(entry.value)].map(
+        (problem) => `${entry.file}: ${problem}`,
+      ),
     ),
     ...unscoped.map((entry) => `${entry.file} records no evidence scope (made before VS-07), so it is left out`),
     ...result.problems,

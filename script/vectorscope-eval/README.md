@@ -210,6 +210,7 @@ needs every amount typed in.
 | `fixtures`        | Comma-separated fixture names, or empty for all                                            |
 | `pipeline`        | `smoke` (default): the fixtures through `run.ts`; `replay`: the dataset through the engine |
 | `variants`        | Replay only: registry names, or empty for `engine,engine:shared-verify`                    |
+| `triage_model`    | Replay dry runs only: the `model=input:output` first pass of `engine:cross-family`         |
 
 The inputs reach `ci.ts` as environment variables and are validated there; no
 input is written into a shell command, and `run.ts` is started with an argument
@@ -295,6 +296,13 @@ it. `max_tokens` applies to the smoke pipeline only.
   is left. Each dispatch restarts at the first development case, so the
   dispatches split the pilot by the `variants` and `models` inputs and never
   repeat a case, variant and model: one dispatch per model, for example.
+- **The cross-family pair (VS-29a).** `triage_model` is the first pass that
+  `engine:cross-family` pairs with each `models` entry, below. `ci.ts`
+  refuses it on the smoke pipeline, without a variant made by its models or
+  equal to a `models` entry, and refuses `engine:cross-family` without it in
+  a dry run. A `mode: paid` dispatch that names `engine:cross-family` or
+  `triage_model` is refused as dry only, whatever its models, so it is never
+  first asked for a triage model. It never reaches another variant.
 
 ### Owner setup (D7)
 
@@ -642,7 +650,7 @@ word, so only the registry keeps model ids out.
 | `guardrail-strict` | `guardrail: "strict"`                                                        | pending VS-27c        | pending VS-27c       |
 | `depth-auto`       | `depth: "auto"`                                                              | pending VS-28 wiring  | pending, after VS-10 |
 | `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                         | pending VS-28 wiring  | pending, after VS-10 |
-| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`) | pending VS-29a        | pending VS-29a       |
+| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`) | built (VS-29a)        | pending, after VS-10 |
 | `precise`          | `mode: "precise"`                                                            | pending VS-31         | pending VS-31        |
 
 - `resolveVariant(name)` gives a built variant's keys, or refuses the name as
@@ -661,7 +669,10 @@ word, so only the registry keeps model ids out.
   Adding a `ReviewConfig` key, or landing a core module (VS-24's `trivial`
   and `dispatch`, VS-25b's core slice, VS-28's `risk.ts`), never flips one.
   Readiness is per runner: the engine half of a variant can be built while
-  its desktop half waits for VS-10.
+  its desktop half waits for VS-10. A variant made by its models rather than
+  a key (`models`, so far `cross-family` alone) flips in the package that
+  supplies its models to the replay, since the runner already runs them and
+  nothing about the runner changes.
 - `lenses-high` sets `depth: "auto"` too, because lenses run only on the high
   band under depth `auto`; its ablation baseline is `engine:depth-auto`.
   VS-28 may revise this before it flips.
@@ -678,6 +689,100 @@ word, so only the registry keeps model ids out.
   which keeps the report from a release decision, and `certify.ts` refuses
   the certificate. `replayVariant` names a record that is not an object the
   frozen pipeline, as VS-06's reader did.
+
+### Cross-family pair (VS-29a)
+
+`engine:cross-family` is the only variant made by its models rather than a
+key (`models: "triage-pair"`). It adds no setting and no runtime code: the
+engine already runs a triage pair (contract §1.3).
+
+- **What it runs.** It is the existing `triageModel`/`model` pair
+  (core `review/types.ts:490-493`). The review and security passes run on
+  the triage model (engine `review/run.ts:251-252`, `689-701`). Every
+  finding of concern or above is then double-checked on the review model,
+  whatever `verify` says (`run.ts:712-724`), and only what the review model
+  confirmed is reported (`run.ts:785-797`). The pair is the replay's models
+  (`ReplayInput.triage`), never `config.triageModel`, so the artifact's
+  review settings stay the default's.
+- **How the pair is supplied.** It comes from the eval config: the entry
+  point's `--triage-model <id>=<in>:<out>` and the workflow's
+  `triage_model` input, beside `--model` and `models`. A model id never goes
+  in a variant name. The triage model applies to the variants made by their
+  models alone: in the same dispatch, `engine` and `engine:shared-verify`
+  run on the review model exactly as they do without it.
+- **What is recorded.**
+  - The ledger case key `engine:cross-family <review> + <triage> <case>#n`,
+    with the model `<review> + <triage>`.
+  - The variant record `{ name: "engine:cross-family", keys: {}, models: "triage-pair" }`.
+  - `models.review`, `models.triage` and `scope.triage` (core
+    `EvidenceScope.triage`) in each artifact and projection record, and
+    `ProjectedRun.models` in the report.
+  - A projection file named `<review>+<triage>--<case>--engine_cross-family--r1.projection.json`.
+- **Refusals.** `admitReplay` refuses the variant, before the ledger writes
+  anything, unless its models are the review model then a triage model other
+  than it (`triagePairProblem`). `ReviewEval.replay` refuses it without a
+  distinct triage model, as a backstop. `ci.ts` refuses `triage_model` on the
+  smoke pipeline, without a variant made by its models or equal to a
+  `models` entry, and refuses the variant without one in a dry run. The
+  entry point refuses the same, and a triage model the committed catalog does
+  not hold at that price, before it creates anything. A run that would send,
+  in either, is refused as dry only whatever its models (below).
+- **Records read back.** `report.ts` and `certify.ts` list an artifact or
+  projection record whose variant is made by its models unless it records a
+  triage model other than its review model, which `scope.triage` names too
+  (`pairProblems`), so a hand-edited or buggy record keeps the report from a
+  release decision and is never certified. Like `triagePairProblem`, it
+  compares ids and checks no lab.
+- **The baseline.** The frozen `engine` and `engine:shared-verify` are not
+  this variant's baseline. Under a triage model every finding of concern or
+  above is double-checked, `verify: off` is ignored and only confirmed
+  findings are reported, so comparing `engine:cross-family` with `engine`
+  would credit that triage-mode effect to cross-family checking. `report.ts`
+  refuses a `--candidate` and `--baseline` of which only one is made by its
+  models, either way round. The comparison arm is the same pipeline with an
+  equal-tier pair from one lab. That arm has no registry name yet and cannot
+  run until the owner decides the pairs (Q5) and funds the ablation (Q9).
+- **What is not checked.**
+  - **Labs.** Nothing checks that the two models are from different labs.
+    That refusal waits for codium's `labOf` and `checkedLabs` (contract
+    §0.5, I-10), and no provider-prefix stopgap was built. So the name does
+    not prove the labs differ, and the dry projection's summary line says the
+    pair's labs are unchecked. `models.review` and `models.triage` are
+    recorded so that a later lab check can re-check every artifact offline.
+    Wiring a paid cross-family replay waits for that refusal, or comes in the
+    same change.
+  - **Tier.** A price is not a capability: equal tier is the owner's choice
+    of pair (Q5).
+  - **D6 and the no-training rule** for both models (Q5), and the VS-23
+    route rules, once they are wired.
+- **Paid replays are not wired.** `engine:cross-family` and
+  `--triage-model` run dry only. The entry point and `ci.ts` refuse a run
+  that would send with either, whatever its models, with that reason alone
+  rather than first asking for a triage model, until the owner chooses the
+  pair (Q5) and funds its ablation (Q9).
+- **The desktop half** waits for VS-10. The desktop runner already reads
+  `triageModel` (`ai-review.ts:772-773`), so the gap is in the eval
+  adapter: `desktop.ts` takes one model, records no triage model in its
+  `models`, and `appliable()` refuses a keyless variant.
+- **The claim.** The "~10% uplift" from cross-model checking is not
+  supported by VectorScope's research (contract C-3;
+  `docs/vector/build/vectorscope-research/REPORT.md`, finding 4 and §4.5):
+  - Its only code-review figure is a vendor's ("~10% higher catch rate"),
+    published with no method, confidence intervals or per-model table.
+  - The research report's verdict (§4.5) is that capability matters more
+    than family. Its evidence: on BIG-Bench Mistake, read from the dataset's
+    own table, a weaker checker from another family did worse than
+    self-review; and Kim et al. (ICML 2025, arXiv 2506.07962, marked
+    "(recalled)" in `evidence.md`) found that larger, more accurate models
+    have highly correlated errors, even across providers.
+  - On AACR-Bench about 74% of the goldens are model-written, so
+    cross-family comparisons on it are confounded (round-two `REPORT.md`
+    finding 11, [VOI15]).
+
+  This variant exists only to measure the claim: an A/B at equal tier and a
+  fixed top-k, the same-family pair against the cross-family pair, with the
+  change in precision and recall and Newcombe intervals, in a funded
+  ablation (Q9). No claim either way (D12).
 
 ### Projection (VS-21b)
 
@@ -797,7 +902,7 @@ replay pipeline.
 ```
 cd packages/engine && bun script/vectorscope-replay.ts --model anthropic/claude-sonnet-4.5=3:15 \
   --mirrors <dir> --work <dir> [--split development|calibration|held-out|all] \
-  [--variant engine --variant engine:shared-verify] [--out <dir>]
+  [--variant engine --variant engine:shared-verify] [--triage-model <id>=<in>:<out>] [--out <dir>]
 ```
 
 - **Dry by default.** Without `--budget-usd` and `--case-budget-usd`, or with
@@ -829,6 +934,10 @@ cd packages/engine && bun script/vectorscope-replay.ts --model anthropic/claude-
   (`packages/web/public/models/api.json`, which both branches boot with as
   `VECTOR_MODELS_PATH`), since the engine reserves at that price; the model
   must call tools.
+- **`--triage-model`** (VS-29a, above) is the first pass of a variant made
+  by its models, and of no other. It must be in the committed catalog at
+  its price and differ from `--model`; the dry provider lists both models.
+  It runs dry only.
 - **Isolation.** Fresh XDG roots and home under `--work`, no catalog fetch,
   `VECTOR_PURE`, no project config, no update check or usage report, no
   search model, the session database in memory, and one provider in
@@ -849,6 +958,8 @@ cd packages/engine && bun script/vectorscope-replay.ts --model anthropic/claude-
 - **Files.** `<model>--<case>--<variant>--r<n>.json` for a replay artifact and
   `<model>--<case>--<variant>--r1.projection.json` for a projection record,
   with `/` and `:` written as `_`, so two models sharing `--out` never collide.
+  A pair's projection names both models, `<review>+<triage>`; `+` is never
+  written for any other character, so one pair's name is never another's.
 - **Test-tree imports.** The dry branch imports the fake server and the canned
   model from `packages/engine/test` on purpose (the deviation log): its safety
   rests on the strict guard, `ReviewEval.project`'s refusals and the egress

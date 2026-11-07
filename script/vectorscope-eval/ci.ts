@@ -27,7 +27,7 @@ import {
 import { loadManifest, manifestProblems, SEED_MANIFEST, untrustedGitEnv, type Manifest } from "./dataset"
 import { fixtureProblems, listFixtures, loadFixture } from "./fixture"
 import { outsideRepository, REPO_ROOT } from "./paths"
-import { PILOT, pilotProblems, pilotRemaining, replayBudget, variantRecord } from "./replay"
+import { PILOT, pilotProblems, pilotRemaining, replayBudget, triagePairProblem, variantRecord } from "./replay"
 import {
   DEFAULT_BASE_URL,
   estimateCases,
@@ -45,7 +45,8 @@ import {
 //
 // Two pipelines (EVAL_PIPELINE): "smoke", the default, sends the review prompt for each synthetic fixture to each
 // model (run.ts); "replay" runs the dataset's cases through the engine's review pipeline, for each registry variant in
-// EVAL_VARIANTS (engine and engine:shared-verify when empty).
+// EVAL_VARIANTS (engine and engine:shared-verify when empty). A variant made by its models (VS-29a's
+// engine:cross-family) pairs each model with EVAL_TRIAGE_MODEL as its first pass, in dry runs only.
 //
 //   plan     Validates the inputs and estimates the worst case. Smoke checks the fixtures. Replay projects every
 //            seed case, every split, for each variant against a canned model on this computer, which spends nothing,
@@ -101,6 +102,9 @@ export interface Inputs {
   fixtures?: string[]
   variants: string[] // registry names for the replay pipeline; empty for smoke
   pilotSpentUsd?: number // replay only: what the pilot's earlier dispatches settled; absent when none was given
+  // Replay dry runs only: the first pass the variants made by their models pair each model with (VS-29a); absent when
+  // none was given.
+  triageModel?: { id: string; price: Price }
 }
 
 type Env = Record<string, string | undefined>
@@ -216,6 +220,40 @@ export function parseInputs(env: Env): { inputs: Inputs } | { problems: string[]
         ...(spentUsd !== undefined ? { spentUsd } : {}),
       }),
     )
+  // VS-29a: the triage model of the variants made by their models, which need one, for no other variant. Once
+  // engine:cross-family is built, a dry dispatch naming it without one would fail the entry point on every model, so it
+  // is refused here first, as is a triage model equal to a review model. A paid dispatch is refused for the pair
+  // outright, whatever its models, so it is never asked for a triage model that would then be refused as dry only.
+  const triageText = env.EVAL_TRIAGE_MODEL?.trim() ?? ""
+  const triageMatch = MODEL.exec(triageText)
+  const triageModel = triageMatch
+    ? { id: triageMatch[1], price: { input: Number(triageMatch[2]), output: Number(triageMatch[3]) } }
+    : undefined
+  if (triageText && !triageMatch)
+    problems.push(
+      `triage_model ${JSON.stringify(triageText)} must be model=input:output, with USD per million tokens, such as openai/gpt-5=1.25:10, or empty for none`,
+    )
+  if (triageText && pipeline !== "replay")
+    problems.push("triage_model belongs to the replay pipeline: leave it empty for the smoke pipeline")
+  if (pipeline === "replay") {
+    const paired = pairedVariants(named.length ? named : DEFAULT_VARIANTS)
+    if (triageModel && !paired.length)
+      problems.push("triage_model is for a variant made by its models (engine:cross-family); variants names none")
+    if (mode === "paid" && (paired.length || triageText))
+      problems.push(
+        `${paired.length ? paired.join(", ") : "triage_model"} runs in dry runs only: a paid cross-family replay is not wired until the owner chooses the pair (Q5) and funds its ablation (Q9)`,
+      )
+    if (mode !== "paid" && (!triageText || triageModel))
+      problems.push(
+        ...paired.flatMap((name) =>
+          models.flatMap((model) => {
+            const problem = triagePairProblem(name, [model.id, ...(triageModel ? [triageModel.id] : [])])
+            if (!problem) return []
+            return [triageModel ? problem : `${problem} Set triage_model.`]
+          }),
+        ),
+      )
+  }
 
   if (problems.length) return { problems }
   return {
@@ -229,8 +267,17 @@ export function parseInputs(env: Env): { inputs: Inputs } | { problems: string[]
       ...(fixtures ? { fixtures: fixtures.split(",") } : {}),
       variants: pipeline === "replay" ? (named.length ? named : [...DEFAULT_VARIANTS]) : [],
       ...(spentUsd !== undefined ? { pilotSpentUsd: spentUsd } : {}),
+      ...(triageModel ? { triageModel } : {}),
     },
   }
+}
+
+// The registry names among these that are variants made by their models (VS-29a), which take the triage model.
+function pairedVariants(names: readonly string[]) {
+  return names.filter((entry) => {
+    const resolved = variantRecord(entry)
+    return resolved.ok && resolved.record?.models === "triage-pair"
+  })
 }
 
 // run.ts's arguments for one model. Without an output directory it is a dry run. With one, it sends with the eval's
@@ -276,9 +323,11 @@ export function replayArgs(
   target?: { outDir: string; send: boolean },
 ): string[] {
   const model = inputs.models[index]!
+  const triage = inputs.triageModel
   return [
     "--model",
     `${model.id}=${model.price.input}:${model.price.output}`,
+    ...(triage ? ["--triage-model", `${triage.id}=${triage.price.input}:${triage.price.output}`] : []),
     "--manifest",
     SEED_MANIFEST,
     "--mirrors",
@@ -470,8 +519,15 @@ async function planReplay(
   }
   const development = (value as Manifest).cases.filter((item) => item.split === "development").length
   const spent = inputs.pilotSpentUsd ?? 0
+  const triage = inputs.triageModel
+  const paired = pairedVariants(inputs.variants)
   const text = [
     `Mode ${inputs.mode}, replay pipeline. ${inputs.variants.length} variant(s) (${inputs.variants.join(", ")}) for each of ${inputs.models.length} model(s); max_tokens applies to the smoke pipeline only.`,
+    ...(triage
+      ? [
+          `${paired.join(", ")} pair${paired.length > 1 ? "" : "s"} each model with ${triage.id} as its first pass (triage_model); nothing checks the pair's labs or tier until codium's labOf merges and the owner chooses the pair (Q5).`,
+        ]
+      : []),
     ...(inputs.limits
       ? [
           `A paid replay runs the ${development} development case(s) x ${inputs.variants.length} variant(s) x ${inputs.repeat} x ${inputs.models.length} model(s). ${replayBudget(development * inputs.variants.length * inputs.repeat * inputs.models.length, inputs.limits).text}`,

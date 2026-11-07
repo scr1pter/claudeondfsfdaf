@@ -49,6 +49,7 @@ import {
   replayCaseKey,
   replayCharge,
   replayVariant,
+  pairProblems,
   resolveVariant,
   variantProblems,
 } from "./replay"
@@ -245,14 +246,15 @@ export async function loadOutputs(input: {
       ),
       ...invalid.map((problem) => `manifest ${manifestPath}: ${problem}`),
       ...(replayed && reports.length ? ["run.ts reports and replay artifacts are reported together"] : []),
-      // A variant record the registry does not bear out names a run it may not be.
+      // A variant record the registry does not bear out names a run it may not be, as does a variant made by its
+      // models whose record does not show the pair (VS-29a).
       ...artifacts.flatMap((entry) =>
-        variantProblems("engine", (entry.value as ReplayArtifact).variant).map(
+        [...variantProblems("engine", (entry.value as ReplayArtifact).variant), ...pairProblems(entry.value)].map(
           (problem) => `${entry.file}: ${problem}`,
         ),
       ),
       ...desktops.flatMap((entry) =>
-        variantProblems("desktop", (entry.value as DesktopArtifact).variant).map(
+        [...variantProblems("desktop", (entry.value as DesktopArtifact).variant), ...pairProblems(entry.value)].map(
           (problem) => `${entry.file}: ${problem}`,
         ),
       ),
@@ -924,7 +926,8 @@ Re-scores saved eval outputs against settled judgements and evaluates the releas
                            for run.ts reports, empty for the control, or a registry name from replay.ts (engine,
                            engine:shared-verify, ...); any other name, or one whose package has not landed, is
                            refused
-  --baseline <v>=<model>   The frozen pipeline to compare recall with on paired cases, such as engine=<model>
+  --baseline <v>=<model>   The frozen pipeline to compare recall with on paired cases, such as engine=<model>; a
+                           variant made by its models (engine:cross-family) is compared only with another
   --gate <path>            Gate config JSON (default: the owner's approved D2 gate)
   --ledger <path>          Eval ledger journal, which shows what each replay was admitted for; its summary is the
                            report's ledger line, instead of the journals the run.ts reports carry
@@ -974,6 +977,17 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   const baseline = group("baseline", text("baseline"))
   if (typeof candidate === "string") return usage(candidate)
   if (typeof baseline === "string") return usage(baseline)
+  // VS-29a: a variant made by its models runs a triage pass, which double-checks every finding of concern or above and
+  // reports only the confirmed ones, so a comparison with a variant that is not made by its models would credit that
+  // pass to the pair. Its comparison arm, the same pipeline with a pair from one lab, is not registered (Q5, Q9).
+  const paired = (variant: string) => {
+    const resolved = resolveVariant(variant)
+    return resolved.ok && resolved.models === "triage-pair"
+  }
+  if (candidate && baseline && paired(candidate.variant) !== paired(baseline.variant))
+    return usage(
+      `--candidate ${candidate.variant} and --baseline ${baseline.variant}: only one is made by its models, so the comparison would credit its triage pass to the pair; a pair's baseline is the same pipeline with a pair from one lab, which is not registered yet (Q5, Q9).`,
+    )
   const out = text("out") ? resolve(text("out")!) : undefined
   if (out && !outsideRepository(out)) return usage(`--out must be outside the repository (${REPO_ROOT}).`)
 

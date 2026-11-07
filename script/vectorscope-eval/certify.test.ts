@@ -263,4 +263,28 @@ describe("certify.ts", () => {
     expect(primitive.code).toBe(1)
     expect(primitive.stderr).toContain("1.json: its variant record is not an object")
   })
+
+  // VS-29a: a run named for the cross-family pair must show it, a triage model its scope names too, as report.ts reads it.
+  test("refuses a cross-family run that does not show its pair", async () => {
+    const scope = evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG, triage: "other/triage" })
+    const variant = { name: "engine:cross-family", keys: {}, models: "triage-pair" }
+    const paired = (label: string) =>
+      artifact(label, { variant, scope, models: { review: { id: MODEL }, triage: { id: "other/triage" } } })
+    const matching = await main(
+      files("pair-matching", {
+        report: report({ variant: "engine:cross-family" }),
+        artifacts: [paired("a"), paired("b")],
+      }).args(),
+    )
+    expect(matching.stderr).toBe("")
+    expect(matching.code).toBe(0)
+    const unpaired = await main(
+      files("pair-unpaired", {
+        report: report({ variant: "engine:cross-family" }),
+        artifacts: [paired("a"), artifact("b", { variant, scope })],
+      }).args(),
+    )
+    expect(unpaired.code).toBe(1)
+    expect(unpaired.stderr).toContain("1.json: its variant is made by its models, but it records no triage model")
+  })
 })

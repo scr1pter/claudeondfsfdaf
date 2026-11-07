@@ -12,6 +12,10 @@
 // eval key, which is removed from its environment with every other provider key the catalog names. A refusal is
 // decided before anything is created or any engine module loads.
 //
+// A variant made by its models (VS-29a's engine:cross-family) takes its triage model from --triage-model, which the
+// eval config supplies and a variant name never holds. It applies to that variant alone, and only in a dry run: a paid
+// cross-family replay waits for the owner's choice of pair (Q5) and a funded ablation (Q9).
+//
 // Load order matters. Static imports are node builtins, effect, the eval scripts' pure modules and types only: none
 // loads core flag.ts, which reads VECTOR_DISABLE_MODELS_FETCH once, or touches the network. main sets the engine's
 // environment first; a dry run then installs the strict egress guard before the first engine module loads, and a paid
@@ -61,6 +65,7 @@ import {
   projectedRun,
   projectionProblems,
   replayPlan,
+  triagePairProblem,
   variantRecord,
   type PlannedReplay,
 } from "../../../script/vectorscope-eval/replay"
@@ -87,6 +92,10 @@ it projects each case against a canned model on this computer, under the strict 
   --split <name>           development (default), calibration, held-out or all; a paid replay runs development only
   --variant <name>         A registry variant built for the engine, such as engine:shared-verify (repeatable;
                            default engine)
+  --triage-model <id>=<in>:<out>
+                           For a variant made by its models (engine:cross-family): its first-pass model, an
+                           ${PAID_PROVIDER} model other than --model at its committed catalog price, which --model
+                           double-checks. Dry runs only; other variants run on --model alone
   --repeat <n>             Repetitions, 1 to 5 (default 1). A dry run projects repetition 1 only; a paid one runs once
   --budget-usd <usd>       With --case-budget-usd, the ledger's limits; a paid replay stays within D5's $${PILOT.totalUsd}
   --case-budget-usd <usd>  The per-case bound, at most $${PILOT.caseUsd}; also a dry run's dollar cap (default $${PILOT.caseUsd})
@@ -108,6 +117,8 @@ export interface ReplayFlags {
   work: string
   split: Split | "all"
   variants: { name: string; record?: Omit<VariantRecord, "applied"> }[] // registry names, each built for the engine
+  // The first pass of the variants made by their models (VS-29a), and of no other; absent when none is named.
+  triage?: { id: string; price: Price }
   repeat: number
   limits?: Limits
   ledger?: string
@@ -122,6 +133,7 @@ const OPTIONS = {
   work: { type: "string" },
   split: { type: "string" },
   variant: { type: "string", multiple: true },
+  "triage-model": { type: "string" },
   repeat: { type: "string" },
   "budget-usd": { type: "string" },
   "case-budget-usd": { type: "string" },
@@ -169,6 +181,11 @@ export function parseReplayArgs(argv: readonly string[]): ReplayFlags | string {
   const price = model ? parsePrice(model[2]!) : undefined
   if (!model || !price)
     return "--model must be <id>=<in>:<out>, with USD per million input and output tokens, such as anthropic/claude-sonnet-4.5=3:15."
+  const triageText = text("triage-model")
+  const triageModel = triageText === undefined ? undefined : MODEL.exec(triageText)
+  const triagePrice = triageModel ? parsePrice(triageModel[2]) : undefined
+  if (triageText !== undefined && (!triageModel || !triagePrice))
+    return "--triage-model must be <id>=<in>:<out>, with USD per million input and output tokens, such as openai/gpt-5=1.25:10."
   const mirrors = text("mirrors")
   if (!mirrors)
     return "--mirrors is needed: the directory of local mirrors (bun script/vectorscope-eval/ci.ts mirrors)."
@@ -199,15 +216,29 @@ export function parseReplayArgs(argv: readonly string[]): ReplayFlags | string {
   const resolved = asked.map(variantRecord)
   const refused = resolved.flatMap((entry) => (entry.ok ? [] : [entry.detail]))
   if (refused.length) return refused.join("\n")
+  const variants = resolved.flatMap((entry) =>
+    entry.ok ? [{ name: entry.name, ...(entry.record ? { record: entry.record } : {}) }] : [],
+  )
+  // VS-29a: the triage model belongs to the variants made by their models, which need it, and to no other.
+  const triage = triageModel && triagePrice ? { id: triageModel[1], price: triagePrice } : undefined
+  const paired = variants.filter((entry) => entry.record?.models === "triage-pair")
+  if (triage && !paired.length)
+    return "--triage-model is for a variant made by its models (engine:cross-family); no --variant is."
+  const unpaired = paired.flatMap(
+    (entry) => triagePairProblem(entry.name, [model[1], ...(triage ? [triage.id] : [])]) ?? [],
+  )
+  // A run that would send (replayMode's rule) is refused for the pair there, whatever its models, so it is not first
+  // asked for a triage model that would then be refused as dry only (Q5, Q9).
+  const sends = limits !== undefined && values["dry-run"] !== true
+  if (unpaired.length && !sends) return `${unpaired.join("\n")}${triage ? "" : " Give --triage-model."}`
   return {
     model: { id: model[1]!, price },
     manifest: text("manifest") ? resolve(text("manifest")!) : SEED_MANIFEST,
     mirrors: resolve(mirrors),
     work,
     split: split as Split | "all",
-    variants: resolved.flatMap((entry) =>
-      entry.ok ? [{ name: entry.name, ...(entry.record ? { record: entry.record } : {}) }] : [],
-    ),
+    variants,
+    ...(triage ? { triage } : {}),
     repeat: Number(repeat),
     ...(limits ? { limits } : {}),
     ...(ledger ? { ledger } : {}),
@@ -221,11 +252,17 @@ export type ReplayMode = { mode: "dry" } | { mode: "paid" } | { refused: string 
 // Whether this run sends. Dry without a budget or with --dry-run. Otherwise it sends only when every rule holds, and is
 // refused when one does not: prices above zero, so estimates bound spend; the protected environment's two marks and its
 // own key; a ledger and an output directory; and the D5 pilot's limits. A paid replay always goes to OpenRouter, so
-// there is no loopback exception. It reads these three variables of the environment and no other.
+// there is no loopback exception. A variant made by its models and a triage model (VS-29a) run dry only, so a budgeted
+// run with either is refused, whatever its models. It reads these three variables of the environment and no other.
 export function replayMode(flags: ReplayFlags, env: Readonly<Record<string, string | undefined>>): ReplayMode {
   if (!flags.limits || flags.dryRun) return { mode: "dry" }
   const price = flags.model.price
   const refusals = [
+    ...(flags.triage || flags.variants.some((variant) => variant.record?.models === "triage-pair")
+      ? [
+          "A paid cross-family replay is not wired: engine:cross-family and --triage-model run dry only, until the owner chooses the pair (Q5) and funds its ablation (Q9).",
+        ]
+      : []),
     ...(price.input > 0 && price.output > 0
       ? []
       : ["A paid replay needs input and output prices above zero, so its estimates bound what it can spend."]),
@@ -362,10 +399,13 @@ export function engineEnvironment(root: string): Record<string, string> {
 // VECTOR_CONFIG_CONTENT: lsp, formatter and snapshot off, as the GitHub review job sets them, and one provider only.
 // Dry: the catalog model under PROJECTION_PROVIDER at the fake server, with a dummy key. Its long-context rate comes as
 // context_over_200k, the config's only form; the catalog's exact tiers are not carried, and seed prompts are far below
-// them. Paid: OpenRouter from the catalog, with its key as the literal {env:...} reference the engine fills in, so the
-// key's value never enters this text.
+// them. A dry run with a triage model (VS-29a) lists it beside the review model, under the same provider and key.
+// Paid: OpenRouter from the catalog, with its key as the literal {env:...} reference the engine fills in, so the key's
+// value never enters this text.
 export function engineConfig(
-  input: { mode: "dry"; server: string; id: string; entry: CatalogEntry } | { mode: "paid" },
+  input:
+    | { mode: "dry"; server: string; id: string; entry: CatalogEntry; triage?: { id: string; entry: CatalogEntry } }
+    | { mode: "paid" },
 ): string {
   const base = { $schema: "https://vectordev.ai/config.json", lsp: false, formatter: false, snapshot: false }
   if (input.mode === "paid")
@@ -374,7 +414,6 @@ export function engineConfig(
       enabled_providers: [PAID_PROVIDER],
       provider: { [PAID_PROVIDER]: { options: { apiKey: `{env:${EVAL_KEY_ENV}}` } } },
     })
-  const entry = input.entry
   return JSON.stringify({
     ...base,
     enabled_providers: [PROJECTION_PROVIDER],
@@ -387,22 +426,28 @@ export function engineConfig(
         // The fake server answers any number of requests at once (test/lib/test-provider.ts says why it is set).
         options: { apiKey: "projection-dummy-key", baseURL: input.server, concurrency: 64 },
         models: {
-          [input.id]: {
-            id: input.id,
-            name: entry.name ?? input.id,
-            release_date: entry.release_date ?? "2025-01-01",
-            attachment: entry.attachment ?? false,
-            reasoning: entry.reasoning ?? false,
-            temperature: entry.temperature ?? false,
-            tool_call: true,
-            limit: entry.limit,
-            cost: entry.cost,
-            options: {},
-          },
+          [input.id]: dryModel(input.id, input.entry),
+          ...(input.triage ? { [input.triage.id]: dryModel(input.triage.id, input.triage.entry) } : {}),
         },
       },
     },
   })
+}
+
+// A catalog model as the dry provider lists it.
+function dryModel(id: string, entry: CatalogEntry) {
+  return {
+    id,
+    name: entry.name ?? id,
+    release_date: entry.release_date ?? "2025-01-01",
+    attachment: entry.attachment ?? false,
+    reasoning: entry.reasoning ?? false,
+    temperature: entry.temperature ?? false,
+    tool_call: true,
+    limit: entry.limit,
+    cost: entry.cost,
+    options: {},
+  }
 }
 
 // The dry branch's model, as the engine booted it under PROJECTION_PROVIDER: priced as the engine prices it,
@@ -481,6 +526,12 @@ export async function main(argv: string[], io: Io): Promise<number> {
     io.err(`${chosen.problem}\n`)
     return 2
   }
+  // The triage model is booted from the catalog as the review model is, so its price must be the catalog's too.
+  const triaged = flags.triage ? catalogModel(catalog, flags.triage.id, flags.triage.price) : undefined
+  if (triaged && "problem" in triaged) {
+    io.err(`--triage-model: ${triaged.problem}\n`)
+    return 2
+  }
 
   mkdirSync(flags.work, { recursive: true })
   const root = mkdtempSync(join(flags.work, "run-"))
@@ -497,7 +548,15 @@ export async function main(argv: string[], io: Io): Promise<number> {
       ...(vector.exitCode === 0 ? { vector: vector.stdout.toString().trim() } : {}),
       manifest: createHash("sha256").update(manifestText).digest("hex"),
     }
-    const run = { flags, planned, entry: chosen.entry, cases: join(root, "cases"), source, io }
+    const run = {
+      flags,
+      planned,
+      entry: chosen.entry,
+      ...(flags.triage && triaged ? { triage: { id: flags.triage.id, entry: triaged.entry } } : {}),
+      cases: join(root, "cases"),
+      source,
+      io,
+    }
     if (decided.mode === "dry") return await projectDry(run)
     return await replayPaid({ ...run, key: io.env[EVAL_KEY_ENV] ?? "" })
   } finally {
@@ -509,6 +568,7 @@ interface Run {
   flags: ReplayFlags
   planned: PlannedReplay[]
   entry: CatalogEntry
+  triage?: { id: string; entry: CatalogEntry } // --triage-model's catalog entry (VS-29a); a dry run's only
   cases: string // where each case's checkout is prepared
   source: { vector?: string; manifest: string }
   io: Io
@@ -540,6 +600,12 @@ async function projectDry(run: Run): Promise<number> {
   const { projectionReplies, received } = await import("../test/fixture/projection")
   const flags = run.flags
   const cap = flags.limits?.caseUsd ?? PILOT.caseUsd
+  // A variant's models, the review model first: a variant made by its models (VS-29a) adds the triage model, and every
+  // other variant runs on the review model alone, as it does without --triage-model.
+  const modelsOf = (variant: ReplayFlags["variants"][number]) => [
+    flags.model.id,
+    ...(variant.record?.models === "triage-pair" && run.triage ? [run.triage.id] : []),
+  ]
 
   const program = Effect.gen(function* () {
     const llm = yield* TestLLMServer
@@ -549,24 +615,28 @@ async function projectDry(run: Run): Promise<number> {
       server: llm.url,
       id: flags.model.id,
       entry: run.entry,
+      ...(run.triage ? { triage: run.triage } : {}),
     })
     const store = yield* InstanceStore.Service
     const one = Effect.fnUntraced(function* (item: PlannedReplay, variant: ReplayFlags["variants"][number]) {
       const directory = checkoutDirectory(run.cases, `${item.id}#${variant.name}#1`)
       const ready = checkout(item, directory)
       if (ready) return { item, variant, line: ready }
+      const paired = modelsOf(variant)[1]
       // The instance loads inside the exit, so a case whose instance cannot load is a line too.
       const exit = yield* Effect.acquireUseRelease(
         store.load({ directory }),
         (ctx) =>
           Effect.gen(function* () {
             const model = yield* projectionModel(flags.model.id)
+            const triage = paired ? yield* projectionModel(paired) : undefined
             const files = yield* ReviewSource.prDiff({ directory, mergeBase: item.case.base, head: item.case.head })
             yield* llm.reset
             yield* llm.respond(projectionReplies({ files }))
             return yield* ReviewEval.project({
               case: { ...item.case, directory },
               model,
+              ...(triage ? { triage } : {}),
               config: { maxCostUsd: cap },
               ...(variant.record ? { variant: variant.record } : {}),
               server: llm.url,
@@ -598,7 +668,10 @@ async function projectDry(run: Run): Promise<number> {
     for (const result of checked)
       if (result.record)
         writeFileSync(
-          join(flags.out, `${outputName(flags.model.id, result.item.id, result.variant.name, 1)}.projection.json`),
+          join(
+            flags.out,
+            `${outputName(modelsOf(result.variant), result.item.id, result.variant.name, 1)}.projection.json`,
+          ),
           JSON.stringify(result.record, null, 2) + "\n",
         )
   }
@@ -609,7 +682,14 @@ async function projectDry(run: Run): Promise<number> {
   const outside = attempts.filter((attempt) => !attempt.allowed || !LocalPolicy.loopback(attempt.host)).length
   run.io.out(
     [
-      `Dry projection of ${run.planned.length} case(s) x ${flags.variants.length} variant(s) on ${flags.model.id}, repetition 1 only: the canned model answers the same way every time.`,
+      `Dry projection of ${run.planned.length} case(s) x ${flags.variants.length} variant(s) on ${flags.model.id}${
+        run.triage
+          ? `, with ${run.triage.id} as the first pass of ${flags.variants
+              .filter((variant) => modelsOf(variant).length > 1)
+              .map((variant) => variant.name)
+              .join(", ")} (the pair's labs unchecked until codium's labOf merges)`
+          : ""
+      }, repetition 1 only: the canned model answers the same way every time.`,
       ...checked.map(
         (result) =>
           `${result.item.id}  ${result.variant.name}  ${
@@ -755,7 +835,7 @@ async function replayPaid(run: Run & { key: string }): Promise<number> {
       }
       // Directly in --out: ci.ts seal seals the top-level files only.
       writeFileSync(
-        join(out, `${outputName(flags.model.id, entry.item.id, entry.variant.name, entry.repetition)}.json`),
+        join(out, `${outputName([flags.model.id], entry.item.id, entry.variant.name, entry.repetition)}.json`),
         JSON.stringify(result.artifact, null, 2) + "\n",
       )
       lines.push(
@@ -807,11 +887,12 @@ function openLedger(limits: Limits, journal: string | undefined): Ledger | strin
   }
 }
 
-// An output's name: the model, the case, the variant and the repetition, so two models sharing --out never overwrite
-// each other.
-function outputName(model: string, id: string, variant: string, repetition: number) {
+// An output's name: the models, the case, the variant and the repetition, so two models sharing --out never overwrite
+// each other. A pair's models (VS-29a), the review model first, are joined by "+" outside the slug, which never writes
+// one, so one pair's name is never another's.
+function outputName(models: readonly string[], id: string, variant: string, repetition: number) {
   const slug = (text: string) => text.replace(/[^A-Za-z0-9._-]/g, "_")
-  return `${slug(model)}--${slug(id)}--${slug(variant)}--r${repetition}`
+  return `${models.map(slug).join("+")}--${slug(id)}--${slug(variant)}--r${repetition}`
 }
 
 // The first line of a failure's first error, short: errors name case ids, commits and settings, never bodies.

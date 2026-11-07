@@ -109,6 +109,8 @@ function planned(item: Case, mirror: string | undefined): PlannedReplay {
 // runner does, `pending` the package that will. A pending half is refused (resolveVariant), because a replay under its
 // name would run the frozen pipeline. A half flips to built only in the package that makes its keys change what the
 // runner does, with that package's D3 parity test: a ReviewConfig key or a core module landing alone never flips it.
+// A half made by its models rather than a key (`models`) flips in the package that supplies them to its replays: the
+// runner already runs the pair, and nothing about it changes, so there is no key and no parity test to carry.
 // Names never hold a model id or "=" (VARIANT_NAME in core review/eval.ts). Every older name is one of these:
 // "engine", "engine:shared-verify", "desktop", "desktop:shared-verify", and VS-06's { verifyPolicy } records, which
 // replayVariant reads; so there are no aliases.
@@ -165,13 +167,17 @@ export const VARIANTS = {
     engine: { pending: "VS-28 wiring" },
     desktop: { pending: "VS-28's desktop half, after VS-10" },
   },
-  // No key: the existing triageModel/model pair, equal tier from two families. The family check is codium's
-  // (labOf, checkedLabs), never built here.
+  // No key: the existing triageModel/model pair, which the eval config supplies (VS-29a: the entry point's
+  // --triage-model, ci.ts's triage_model), never the name. Nothing here checks that the two models are from different
+  // labs or of equal tier: the lab check is codium's (labOf, checkedLabs), never built here (contract §0.5, I-10), and
+  // no stopgap was built until it merges; the tier is the owner's choice of pair (Q5). So the name does not prove the
+  // labs differ: the artifact records both models, so a later lab check can re-check it offline. The desktop half waits
+  // for VS-10: desktop.ts takes one model, records no triage model in `models`, and refuses a keyless variant.
   "cross-family": {
     planned: "a triage model other than the review model, at equal tier from another family; no new key",
     models: "triage-pair",
-    engine: { pending: "VS-29a" },
-    desktop: { pending: "VS-29a" },
+    engine: { from: "VS-29a" },
+    desktop: { pending: "VS-29a's desktop half, after VS-10" },
   },
   precise: {
     planned: 'mode: "precise", which never sets privacy',
@@ -263,6 +269,30 @@ export function variantProblems(adapter: string, record?: ReplayVariant): string
   return []
 }
 
+// Why a record read back whose variant is made by its models (`models: "triage-pair"`, VS-29a) does not show the pair,
+// if it does not: a triage model other than its review model, which its evidence scope names too. A replay or
+// projection is checked twice before it runs (triagePairProblem, then ReviewEval's own refusal); this is for the
+// artifact or projection record report.ts and certify.ts read, which is untrusted JSON. It compares ids only, as
+// triagePairProblem does, and so checks no lab. A record of any other variant has none.
+export function pairProblems(record: unknown): string[] {
+  if (field<VariantRecord>(field<ProjectionRecord>(record, "variant"), "models") !== "triage-pair") return []
+  const models = field<ProjectionRecord>(record, "models")
+  const review = field<ModelRecord>(field<ProjectionRecord["models"]>(models, "review"), "id")
+  const triage = field<ModelRecord>(field<ProjectionRecord["models"]>(models, "triage"), "id")
+  const scoped = field<ProjectionRecord["scope"]>(field<ProjectionRecord>(record, "scope"), "triage")
+  if (typeof triage !== "string") return ["its variant is made by its models, but it records no triage model"]
+  return [
+    ...(triage === review
+      ? [`its variant is made by its models, but its triage model is its review model, ${JSON.stringify(triage)}`]
+      : []),
+    ...(scoped !== triage
+      ? [
+          `its variant is made by its models, but its evidence scope names ${scoped === undefined ? "no triage model" : JSON.stringify(scoped)}, not its triage model ${JSON.stringify(triage)}`,
+        ]
+      : []),
+  ]
+}
+
 // The runner a replayVariant name runs on.
 export function variantAdapter(name: string) {
   return name.split(":")[0] ?? name
@@ -288,6 +318,16 @@ export function variantRecord(
 function recordOf(resolved: Extract<VariantResolution, { ok: true }>): Omit<VariantRecord, "applied"> | undefined {
   if (resolved.frozen) return undefined
   return { name: resolved.name, keys: resolved.keys, ...(resolved.models ? { models: resolved.models } : {}) }
+}
+
+// Why a variant made by its models (`models: "triage-pair"`, VS-29a's engine:cross-family) cannot run on these models,
+// the review model first: it needs exactly two, the second a triage model other than the first. The one rule for
+// admitReplay, ci.ts and the entry point. It compares ids only: it does not check that the two are from different labs,
+// which waits for codium's labOf (contract §0.5, I-10, and no stopgap is built here), nor that they are of equal tier,
+// which is the owner's choice of pair (Q5). The lab check slots in here once labOf merges.
+export function triagePairProblem(variant: string, models: readonly string[]): string | undefined {
+  if (models.length === 2 && models[0] !== models[1]) return undefined
+  return `${variant} is made by its models: it needs the review model, then a triage model other than it, not ${models.length ? models.join(" + ") : "no model"}.`
 }
 
 // The D5 pilot (vectorscope-plan.md D5): one pilot, capped at $50 in total and $0.75 a case, one repetition, on the
@@ -357,8 +397,9 @@ export function projectedRun(record: ProjectionRecord): ProjectedRun {
 // does not. A record is untrusted JSON, read field by field under the record's own type names. It needs a body for
 // every planned pass, each pass finished, every request paired with an admitted attempt and every attempt with a
 // request, a price snapshot for every pass, an egress log that saw the run and no connection off this computer, and
-// its variant record as the registry has it. The decisions the dollar cap refused (`cap.over`) are reported, never a
-// problem: from the first one on the record describes an uncapped run, the upper side of the cost estimate.
+// its variant record as the registry has it, with the pair a variant made by its models names (pairProblems). The
+// decisions the dollar cap refused (`cap.over`) are reported, never a problem: from the first one on the record
+// describes an uncapped run, the upper side of the cost estimate.
 export function projectionProblems(record: unknown): string[] {
   if (typeof record !== "object" || record === null) return ["the projection is not an object"]
   if (field<ProjectionRecord>(record, "version") !== 1 || field<ProjectionRecord>(record, "kind") !== "projection")
@@ -393,6 +434,7 @@ export function projectionProblems(record: unknown): string[] {
     ...(typeof outside === "number" && outside > 0 ? [`${outside} connections went outside this computer`] : []),
     // variantProblems reads an untrusted record itself, one that is not an object included.
     ...variantProblems("engine", field<ProjectionRecord>(record, "variant") as ReplayVariant | undefined),
+    ...pairProblems(record),
   ]
 }
 
@@ -449,9 +491,10 @@ export function replayCaseKey(input: { variant: string; models: readonly string[
 // before a replay starts and hands Review.run that bound as its cap: every attempt is admitted against money the
 // ledger has set aside. A model without a price cannot be bounded, so it is refused and the ledger stops admitting.
 // The variant is a registry name (resolveVariant): one that is not built for the engine is refused before the ledger
-// sees it, so it writes no entry. The admission hands ReviewEval.replay the variant's record, so the artifact names
-// the variant the replay was admitted for. (No built variant has a model requirement yet; VS-29a, which builds the
-// first, checks the pair here too. ReviewEval.replay already refuses a triage-pair variant without one.)
+// sees it, so it writes no entry. So is a variant made by its models (engine:cross-family, VS-29a) whose models are not
+// the review model then a distinct triage model (triagePairProblem), with ReviewEval.replay's own refusal behind it as
+// a backstop; every other variant takes the models as before. The admission hands ReviewEval.replay the variant's
+// record, so the artifact names the variant the replay was admitted for.
 export function admitReplay(
   ledger: Ledger,
   input: {
@@ -478,6 +521,8 @@ export function admitReplay(
   if (resolved.adapter !== "engine")
     return { admitted: false, reason: "variant", detail: `admitReplay admits engine replays, not ${resolved.name}.` }
   const models = input.models.map((item) => item.id)
+  const unpaired = resolved.models === "triage-pair" ? triagePairProblem(resolved.name, models) : undefined
+  if (unpaired) return { admitted: false, reason: "variant", detail: unpaired }
   const priced =
     input.models.length > 0 && input.models.every((model) => model.costKind === "priced" && model.price !== undefined)
   const admission = ledger.admit({

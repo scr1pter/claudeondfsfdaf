@@ -725,6 +725,56 @@ describe("report.ts", () => {
     ).toBe(0)
   })
 
+  // VS-29a: an artifact named for the cross-family pair must show it, and the pair is compared only with a pair.
+  test("lists a pair artifact that does not show its pair, and refuses to compare a pair with a variant that is not", async () => {
+    const dir = join(root, "pair-records")
+    mkdirSync(dir)
+    const variant = { name: "engine:cross-family", keys: {}, models: "triage-pair" }
+    writeFileSync(
+      join(dir, "paired.json"),
+      JSON.stringify(artifact({ label: "paired", variant, scope: { triage: "vendor/triage-small" } })),
+    )
+    writeFileSync(join(dir, "unscoped.json"), JSON.stringify(artifact({ label: "unscoped", variant })))
+    const loaded = await loadOutputs({ paths: [dir] })
+    expect(loaded.problems.filter((problem) => problem.startsWith(dir))).toEqual([
+      `${join(dir, "unscoped.json")}: its variant is made by its models, but its evidence scope names no triage model, not its triage model "vendor/triage-small"`,
+    ])
+    expect(loaded.runs.map((run) => run.variant)).toEqual(["engine:cross-family", "engine:cross-family"])
+    // Its triage pass is not in a variant that is not made by its models, either way round.
+    for (const [candidate, baseline] of [
+      ["engine:cross-family", "engine"],
+      ["engine:cross-family", "engine:shared-verify"],
+      ["engine", "engine:cross-family"],
+    ]) {
+      const refused = await main([
+        "--outputs",
+        dir,
+        "--candidate",
+        `${candidate}=vendor/reviewer-large`,
+        "--baseline",
+        `${baseline}=vendor/reviewer-large`,
+      ])
+      expect(refused.code).toBe(2)
+      expect(refused.stderr).toContain(
+        `--candidate ${candidate} and --baseline ${baseline}: only one is made by its models, so the comparison would credit its triage pass to the pair`,
+      )
+    }
+    // A pair alone, or against another pair, is not refused.
+    expect((await main(["--outputs", dir, "--candidate", "engine:cross-family=vendor/reviewer-large"])).code).toBe(0)
+    expect(
+      (
+        await main([
+          "--outputs",
+          dir,
+          "--candidate",
+          "engine:cross-family=vendor/reviewer-large",
+          "--baseline",
+          "engine:cross-family=vendor/reviewer-small",
+        ])
+      ).code,
+    ).toBe(0)
+  })
+
   test("refuses output inside the repository, an unknown split and an invalid gate", async () => {
     const dir = savedRun.dir
     expect((await main(["--outputs", dir, "--out", join(import.meta.dir, "report.json")])).code).toBe(2)

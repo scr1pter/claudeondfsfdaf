@@ -10863,3 +10863,463 @@ digests, the hand-offs and two test counts). Nothing is committed.
 - **Not done.** Nothing was sent to a model; there was no paid run, no
   workflow dispatched, nothing published and nothing committed; no MCP
   access changed and no user-visible string changed (D14).
+
+## 2026-11-07 · VS-29a Cross-family replay variant (measurement only)
+
+Contract §4 VS-29a of `vectorscope-upgrade.md` (29a, now: measurement only,
+no new key), §1.1 ("There is no new verifier key"), §1.3 (the cross-family
+verifier "works today" on every surface) and §7 C-3 (no claims; measure
+the existing `triageModel`/`model` pair at equal tier; A/B). Addendum A
+§3 VS-29 and the round-two amendment, which changes nothing in the
+variant, its `models: "triage-pair"` flip or `admitReplay`'s two-model
+check, and drops the brief's provider-prefix stopgap. Evidence: research
+`REPORT.md` finding 4 and §4.5, `evidence.md` §2.2 and its sources
+(`:100`, `:118`, `:538`), and round-two `REPORT.md` finding 11 [VOI15].
+Built at `3281d09e` (VS-30c). Now window only: eval scripts, the eval
+entry point (VS-21c), the eval workflow and tests; no `ReviewConfig` key,
+no core module and no runtime code. It implements the VS-29a plan as
+corrected by its critique: eight critique points were taken, and two were
+taken in part, with the reasons below. Nothing is committed (the lane
+brief).
+
+- **Citations re-located at `3281d09e`** (the contract cites `02c23b4c`),
+  each re-checked at build time. Core `types.ts` `model`/`triageModel`
+  `:490-493` (contract `:247-249`); engine `run.ts` `triage`/`triaged`
+  `:251-252` (contract `:226-227`), the specialists asked on `triage`
+  `:689-701` (`model: triage` at `:694`), verify after a triage pass
+  `:712-724`, only confirmed findings reported `:785-797` (contract
+  `:668-681`); `model-evidence.ts` `EvidenceScope` `:106-115`, `triage`
+  `:111` (contract `:66-74`), `REVIEW_PIPELINE_SOURCES` `:62`; engine
+  `eval.ts` `ReplayInput.triage` `:139`, `VariantRecord.models` `:185-193`,
+  the projection's `triaged` `:664-668`, `scope`/`models` `:702-704`,
+  `variantProblem`'s pair refusal `:1198-1200`; app `ai-review.ts` reads
+  `triageModel` at `:772-773`; `desktop.ts` writes `scope.triage` at `:166`
+  and `appliable()` is `:247-251`.
+- **Untouched:** `run.ts`, `eval.ts`, `ai-review.ts`, `provider.ts`,
+  `session/llm.ts`, `posting.ts`, `desktop.ts`, every core file, every
+  engine `src/` file, and every @vector file
+  (`workflow.ts`, `command.ts`, `github.*`, `github-*.ts`, the GitHub
+  sections of `vectorscope.astro`). `REVIEW_PIPELINE_REVISION` stays 1.
+
+- **What landed.**
+  - **`script/vectorscope-eval/replay.ts`.**
+    - `VARIANTS["cross-family"].engine` is `{ from: "VS-29a" }`. Its
+      desktop half is relabelled `{ pending: "VS-29a's desktop half, after
+      VS-10" }` (the §0.3 item 5 difference, below). `planned`, `models:
+      "triage-pair"` and the absence of `keys` are unchanged. The entry's
+      comment says the pair comes from the eval config, that nothing checks
+      its labs or tier, and that the name does not prove the labs differ.
+    - The registry doc gains the flip rule for a half made by its models:
+      it flips in the package that supplies the models, since the runner
+      already runs the pair and nothing about the runner changes.
+    - New `triagePairProblem(variant, models)`: undefined only for exactly
+      two models with distinct ids, the review model first; otherwise
+      `<variant> is made by its models: it needs the review model, then a
+      triage model other than it, not <a + b | no model>.` It compares ids
+      only. It is the one rule for `admitReplay`, `ci.ts` and the entry
+      point, and where `labOf` slots in.
+    - `admitReplay`: VS-21a's deferred two-model check (that entry, choice
+      two). A `triage-pair` variant whose models fail `triagePairProblem`
+      is refused with reason `variant` before `ledger.admit`, so the ledger
+      writes nothing. Every other variant, the frozen pipeline with a
+      triage model included, is unchanged. Its doc says so. The case key
+      and model for the pair are `engine:cross-family <review> + <triage>
+      <case>#n` and `<review> + <triage>` (the existing `replayCaseKey`).
+  - **`packages/engine/script/vectorscope-replay.ts`** (the eval entry
+    point, VS-21c; not runtime code).
+    - `--triage-model <id>=<in>:<out>`, parsed with the `--model` grammar
+      and `parsePrice` into `ReplayFlags.triage`. Refusals, in the code's
+      order: a missing value (the existing valueless check, first); a
+      malformed value; the flag with no variant made by its models; a pair
+      variant without the flag (`triagePairProblem` plus ` Give
+      --triage-model.`); and a triage id equal to `--model`. The last two
+      apply to a run that stays dry only (the review fixes below).
+    - `replayMode`: a run that would send with a triage model, or naming a
+      variant made by its models, is refused whatever its models: `A paid
+      cross-family replay is not wired: engine:cross-family and
+      --triage-model run dry only, until the owner chooses the pair (Q5)
+      and funds its ablation (Q9).` `--dry-run`, or no budget, stays dry.
+    - `main` checks the triage model with `catalogModel` (in the committed
+      catalog, calls tools, priced above zero, at that price) and exits 2
+      before anything is created.
+    - `engineConfig`'s dry input takes `triage`, and the one dry provider
+      lists both models, each from its catalog entry (`dryModel`, shared by
+      both), with the same dummy key. Without it the text is byte-identical
+      to `3281d09e`'s (checked for three catalog models and the paid
+      config, `/tmp/vector-vectorscope/vs29a-exp/check.ts`).
+    - `projectDry`: only a variant whose record has `models:
+      "triage-pair"` gets the triage model (`projectionModel`) as
+      `ReviewEval.project`'s `triage`. Its file names both models, and the
+      summary line names the triage model as the first pass of those
+      variants and says the pair's labs are unchecked until codium's
+      `labOf` merges.
+    - `outputName(models, ...)` joins each model's slug with `+`, which the
+      slug never writes, so one pair's name is never another's. The paid
+      branch passes `[--model]`, so its names are unchanged. `ci.ts seal`
+      reads every top-level file, and `report.ts` and `certify.ts` every
+      `.json`, so `+` is read as before.
+    - The paid branch is unchanged and unreachable with a triage model.
+  - **`script/vectorscope-eval/ci.ts`.** `Inputs.triageModel` from
+    `EVAL_TRIAGE_MODEL`, trimmed, with the `models` grammar. Problems: a
+    malformed value (quoted as JSON, one line); the input on the smoke
+    pipeline; the input with no variant made by its models among the
+    named (or default) variants; in a dry run, a named pair variant without
+    the input (`triagePairProblem` plus ` Set triage_model.`, once per
+    model) and a triage model equal to a `models` entry
+    (`triagePairProblem` per model); and, with `mode: paid`, a pair variant
+    or the input, refused once as dry only whatever the models (the review
+    fixes below). `replayArgs` inserts `--triage-model` right after the
+    `--model` pair, only when set. The plan text gains one line, only when
+    set, naming the pair variants and saying that nothing checks the pair's
+    labs or tier until codium's `labOf` merges and the owner chooses the
+    pair (Q5). A small `pairedVariants` helper is shared by `parseInputs`
+    and `planReplay`.
+  - **`.github/workflows/vectorscope-eval.yml`** (edited, never
+    dispatched). A new optional `triage_model` input (`default: ""`,
+    `type: string`), `EVAL_TRIAGE_MODEL: ${{ inputs.triage_model }}` in
+    the plan, project and paid steps, and one header sentence. That makes
+    11 inputs. GitHub raised the `workflow_dispatch` input limit from 10 to
+    25 on 2025-12-04
+    (https://github.blog/changelog/2025-12-04-actions-workflow-dispatch-workflows-now-support-25-inputs/);
+    the lane cannot dispatch to check it, so `ci.test.ts` pins the count
+    at 11, and at most 25, and a later addition fails loudly. The limit
+    itself is not verified (the review fixes below): confirm it before
+    this is pushed or merged.
+  - **`script/vectorscope-eval/README.md`.** The `triage_model` row in
+    "Budgeted CI runs", a replay-pipeline bullet, the registry row (engine
+    built (VS-29a), desktop pending, after VS-10), the made-by-its-models
+    flip rule, the `--triage-model` usage, bullet and file names in "Paid
+    entry point", and a new "Cross-family pair (VS-29a)" section: what it
+    runs, how the pair is supplied, what is recorded, the refusals, the
+    baseline, what is not checked, paid replays, the desktop half and the
+    claim.
+  - **Tests** (below), with no existing assertion loosened: the
+    pending-refusal row for `engine:cross-family` became
+    `desktop:cross-family`'s, the built list gained `engine:cross-family`,
+    and the pending count became `2 * entries.length - 3`.
+
+- **The stopgap not built, and why.** The brief's "small eval-script-only
+  provider-prefix check" would be a second cross-lab checker, which
+  contract §0.5 forbids beside codium's `labOf`/`checkedLabs`
+  (`codium:packages/core/src/model-lab.ts:94`,
+  `codium:packages/core/src/review/second-lab.ts:31`), and the VS-21a
+  entry recorded "No family or lab check was built". `origin/codium` is
+  not merged into this branch (checked: `git merge-base --is-ancestor`
+  fails, and no `labOf` exists here). So the same-lab refusal stays
+  pending codium's `labOf`, as the round-two amendment says, and the README
+  and this entry say so. A replay-test line keeps a same-vendor pair
+  (`vendor-a/x`, `vendor-a/y`) passing `triagePairProblem` as a named
+  tripwire, commented as the pending refusal, not wanted behaviour: it
+  changes when `labOf` lands. Until then the variant's name does not prove
+  the labs differ, and a same-lab pair projected under it would be
+  mislabelled data; `models.review` and `models.triage` are in every
+  artifact and projection, so a later lab check can re-check them offline.
+- **Departures from the contract's file list.** The list says "script
+  variant; no runtime code", and VS-21a expected the flip "in the script
+  alone". This package also edits the entry point, `ci.ts` and the
+  workflow, and two engine test files. None is runtime code. The reason:
+  once the entry is built, `ci.ts`'s `variantRecord` accepts
+  `engine:cross-family` in `EVAL_VARIANTS`, and without a triage model the
+  entry point would then exit 2 on every plan job that names it; and "Done:
+  the variant runs in Phase A projections" needs the pair from the eval
+  config. If `ci.ts` and the workflow were ever cut from the package,
+  `ci.ts` must still refuse a pair variant without a triage model.
+- **Design choices.**
+  - The triage model applies only to the variants made by their models, so
+    a dispatch's frozen and key-only variants run exactly as without it
+    (tested, I-1 below).
+  - Paid is refused rather than wired, which keeps an untested money path
+    out of the code until Q5 and Q9. A paid pair would resolve the triage
+    model with `resolveReviewModel` and admit both models; deferred.
+  - No tier check: a price is not a capability, and equal tier is the
+    owner's choice of pair (Q5).
+  - **The baseline** (critique, major). Under a triage model every finding
+    of concern or above is double-checked, `verify: off` is ignored and
+    only confirmed findings are reported, so `report.ts --candidate
+    engine:cross-family --baseline engine` would credit that triage-mode
+    effect to cross-family checking. The README says the frozen `engine`
+    and `engine:shared-verify` are not this variant's baseline, and
+    `report.ts` now refuses the comparison (the review fixes below). The
+    comparison arm is the same pipeline with an equal-tier pair from one
+    lab. It has no registry name and cannot run, not even dry, until the
+    owner decides the pairs (Q5) and funds the ablation (Q9); it was not
+    built.
+  - The desktop half is relabelled "after VS-10". The desktop runner reads
+    `triageModel` and runs the pair today (contract §1.3;
+    `ai-review.ts:772-773`), and `desktop.ts` already writes `scope.triage`
+    when the runner reports one (`:166`). The gap is in the eval adapter:
+    `desktop.ts` takes one model, records no triage model in its `models`,
+    and `appliable()` refuses a keyless variant; and no desktop replay is
+    paid or projected before VS-10 (VS-21c's deferral).
+
+- **Critique points.**
+  1. *The `+` slug* (major): taken, by the first option. The model part is
+     `${slug(model)}+${slug(triage)}` outside the slug; `outputName` takes
+     the models, and the paid branch passes `[--model]`. The plan's "the
+     slug keeps `+`" was wrong and is corrected here. A mutation that
+     slugs the joined string turns the subprocess test red.
+  2. *The measurement baseline* (major): taken, in the README and above.
+  3. *I-1 evidence* (major): taken. The existing subprocess test is
+     unchanged. A new posix test runs `engine` and `engine:shared-verify`
+     without the flag, then `engine`, `engine:shared-verify` and
+     `engine:cross-family` with `--triage-model`, and compares the two runs'
+     frozen and key-only records whole: every pass's model, prompt digest,
+     chars and request bodies, plus `scope` and `models`. Only the run's
+     own temporary directory, which the prompts name, is normalised, and so
+     the digests of those bodies are left out; the two work directories'
+     names have one length, so every count matches. The records have no
+     time fields; `source` and `runtime` matched as well and are compared.
+     Its timeout is 240 s, not the 120 s the critique named: it runs two
+     subprocesses (about 5 s each here) where the single-run tests have
+     120 s. That is a bound, not a loosening.
+  4. *The refusal order* (minor): taken. The entry describes the code's
+     order (the missing value first), and each refusal test has one fault.
+  5. *Off-by-one citations* (minor): taken in part. Every citation was
+     re-checked at build time. The critique's corrections were themselves
+     off: at `3281d09e` `triage`/`triaged` are at `run.ts:251-252` (as the
+     plan had), the specialists at `:689-701`, verify at `:712-724` and the
+     confirmed-only filter at `:785-797`.
+  6. *The 11th input* (minor): taken: the changelog URL above and the
+     count assertion.
+  7. *The same-vendor test* (minor): taken: kept only as a named tripwire,
+     and the README and this entry say the name does not prove the labs
+     differ.
+  8. *Missing mutations* (minor): taken, with more (below).
+  9. *The claim's wording and the desktop difference* (minor): taken in
+     part. The README attributes the claim to the research report (C-3,
+     finding 4, §4.5) and says what is VectorScope's own: nothing. "Capability
+     matters more than family" is the report's verdict, and its evidence
+     is shown with its marker: Kim et al. is "(recalled)" in
+     `evidence.md:100`, while the BIG-Bench Mistake table was read from the
+     dataset's repository (`evidence.md:118`), so it is not marked
+     recalled. The desktop wording is as corrected above.
+  10. *The reason for touching `ci.ts` and the workflow* (minor): taken, in
+      "Departures".
+
+- **§0.3 items.** (1) No key. (2) No runner change, so no D3 parity test;
+  the engine replay test pins the runner's existing pair behaviour. (3) No
+  new key, no `EvidenceScope` or `EVIDENCE_POLICY_KEYS` change; no pinned
+  file changed, so `REVIEW_PIPELINE_SOURCES` stays `dd477fd3a04e6efb` (the
+  pin test re-run, 30 pass), and `REVIEW_PIPELINE_REVISION` stays 1. (4)
+  The variant flipped for the engine. (5) The desktop difference above.
+  (6) This entry.
+- **Off by default (I-1).** With `triage_model` and `--triage-model` unset,
+  every argument array, config text, projection and artifact is unchanged:
+  the existing exact-array tests pass untouched, a new test checks that the
+  arrays without the triage model hold no `--triage-model`, `engineConfig`
+  is byte-identical to `3281d09e`'s, and the subprocess test shows the
+  frozen and key-only records unchanged with the flag given. No runner,
+  generated code, dependency or user-visible string changed (D14).
+- **Owner questions.** None of Q1 to Q34 is decided. Q5 and Q9 stay open:
+  no pair was chosen (the tests' `openai/gpt-5` and
+  `google/gemini-2.5-pro` are fixture pairs from the committed catalog,
+  not recommendations), and paid is refused. Q6, Q13, Q15 and Q18 are
+  untouched.
+
+- **Evidence.** Each file alone through the lock with `--timeout 30000`,
+  from its own directory, with `TMPDIR` and fresh XDG roots under
+  `/tmp/vector-vectorscope/vs29a-*`:
+  - `script/vectorscope-eval/replay.test.ts` 37 pass (32 at `3281d09e`;
+    36 before the review fixes);
+  - `script/vectorscope-eval/ci.test.ts` 33 (30);
+  - engine `test/review/vectorscope-replay.test.ts` 18 (13), the new
+    subprocess test included;
+  - engine `test/review/eval.test.ts` 33 (32): a new `ReviewEval.replay`
+    test with `lmstudio/triage-model`, a copy of `test-model` registered by
+    the checkout helper's new `triage` option. The artifact's variant is
+    the pair record, `models.triage` is the triage model, `scope` is
+    `evidenceScope` with `triage`, the review pass and its attempts ran on
+    the triage model and verify's on the review model, the rejected
+    finding is dropped, the confirmed one is placed and verified, and
+    `config.value` is the default (no `triageModel`);
+  - `report.test.ts` 34 (33) and `certify.test.ts` 7 (6), each with one
+    test from the review fixes; `judge.test.ts` 6 after them;
+  - regressions: core
+    `test/review/model-evidence.test.ts` 30, core `test/review/eval.test.ts`
+    42.
+  - `bun typecheck` passes in `packages/engine`, and the eval scripts pass
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine` (as `typecheck.yml` runs it).
+  - prettier is clean on every changed code file and on the README. This
+    log was already not prettier-clean at `3281d09e` and is left as it is.
+    oxlint reports nothing new in the added lines except two `toSorted()`
+    calls without a compare in `eval.test.ts`, which follow that file's
+    existing pattern.
+  - A dry projection of the synthetic case with `--variant engine
+    --variant engine:shared-verify --variant engine:cross-family
+    --triage-model openai/gpt-5=1.25:10` projected all three, sent nothing
+    and logged no connection off this computer. The pair's record has
+    `scope.triage` and `models.triage`, its review pass on the triage model
+    and verify on the review model.
+  - Sixteen mutation runs (fifteen mutations), each applied alone, its test
+    file run through the lock and the file restored by hash (scripts under
+    `/tmp/vector-vectorscope/vs29a-mut/`), all caught: `admitReplay`'s pair
+    check dropped; the triage model on every variant in `projectDry`
+    (caught only by the new I-1 subprocess test); `replayMode`'s paid
+    refusal dropped; `ci.ts`'s pair-variant-without-`triage_model` problem
+    dropped; the desktop half flipped to built; `triagePairProblem`
+    accepting equal ids (caught in `replay.test.ts` and in `ci.test.ts`);
+    `ci.ts`'s no-pair-variant problem dropped; the smoke-pipeline refusal
+    dropped; the paid refusal in `ci.ts` dropped; `--triage-model` never
+    passed by `replayArgs`; `engineConfig` listing the review model only;
+    the pair's file name slugged whole; the flag accepted without a pair
+    variant; the triage model's catalog check skipped; and the paid step
+    of the workflow without `EVAL_TRIAGE_MODEL`.
+
+- **Deferred.**
+  - **The same-lab refusal**, after codium's `labOf` merges (or the owner's
+    Q6 exception): refuse equal or unknown labs in `triagePairProblem`,
+    with tests in `replay.test.ts` (the tripwire line changes then), built
+    on codium's `reviewModels`, `checkedLabs` and `judgeModel` rather than
+    a new mechanism (§0.5, contract §5's codium row). Wiring the paid
+    cross-family replay must wait for this refusal, or come in the same
+    change: until then the name `engine:cross-family` admits any two
+    distinct ids, so a paid run could write measured data under a
+    cross-family name for a same-lab pair. Only dry projections run today,
+    so no measured data can be mislabelled yet.
+  - **The paid cross-family replay**: resolve the triage model with
+    `resolveReviewModel` as the review model is, check its price, and admit
+    both through `admitReplay`. After Q5 and Q9.
+  - **The A/B design** (Q9): the same-family arm has no registry name, and
+    the report groups `variant · model` by the review model only (core
+    `eval-report.ts:474` and `:804`, from `model: artifact.models.review.id`
+    at `report.ts:654`; the pair's `models` list is carried beside it), so
+    the pair's two models are not yet a report dimension.
+  - **Addendum §3 VS-29**: the AACR A/B stratified by golden
+    `source_model`, or scored on the 274 human goldens of the permissive
+    subset [VOI15].
+  - **Addendum §3 VS-21**: ReviewBench results stratified by the `ccr`
+    producer's models [GU7].
+  - **VS-44 composition**: a cross-family verifier that shows its work
+    through VS-44 [GU8].
+  - **The desktop half**, after VS-10.
+  - All of the A/B work needs the funded ablation (Q9).
+- **Not verified.** No paid run, so the uplift is unmeasured, as intended
+  (D12). The subprocess dry-run tests are posix-only, as before. The full
+  root typecheck was not run, since nothing is pushed.
+- **Not done.** Nothing was sent to a model; there was no paid run, no
+  workflow dispatched, nothing published and nothing committed; no MCP
+  access changed and no user-visible string changed (D14).
+
+### 2026-11-07 · VS-29a review fixes
+
+Seven review findings, none blocking. Six were fixed in code, one of them
+(the baseline comparison) though it was marked optional, and one (the
+workflow's eleventh input) could not be verified from this session and is
+recorded below as a condition on pushing or merging. Only the eval scripts
+(`ci.ts`, `replay.ts`, `report.ts`, `certify.ts`), the eval entry point
+(`packages/engine/script/vectorscope-replay.ts`), their tests, the eval
+README and this log changed. No runner, core file, engine `src/` file,
+workflow line or file @vector owns changed, and no key, pin or revision
+moved. The entry above is updated in place where its facts changed (the
+untouched list, the entry point's refusals and `replayMode`, the dry
+summary line, `ci.ts`'s problems, the workflow input, the baseline, the
+same-lab deferral and the test counts). Nothing is committed.
+
+- **Two refusals in a row for a paid cross-family run** (`ci.ts:246`,
+  `vectorscope-replay.ts:230`). Fixed as suggested. `ci.ts`: with `mode:
+  paid`, a named variant made by its models, or `triage_model`, gets one
+  problem, `<variant, or triage_model> runs in dry runs only: a paid
+  cross-family replay is not wired until the owner chooses the pair (Q5)
+  and funds its ablation (Q9)`, whatever the models, and the per-model
+  `Set triage_model.` and equal-model problems apply to a dry dispatch
+  only. A malformed `triage_model` in a paid dispatch now gets both its
+  own problem and this one at once. The entry point: `parseReplayArgs`
+  asks for `--triage-model` (or refuses one equal to `--model`) only when
+  the run stays dry (no budget, or `--dry-run`, the same rule as
+  `replayMode`'s first line), and `replayMode` refuses a run that would
+  send when it names a variant made by its models or has a triage model,
+  with `A paid cross-family replay is not wired: engine:cross-family and
+  --triage-model run dry only, ...` beside any other refusal, so every
+  reason shows at once. Tests: `ci.test.ts` asserts the one problem for a
+  paid dispatch naming the variant without `triage_model`, with one, and
+  with one equal to a `models` entry, and the two problems for a paid
+  `triage_model` with no pair variant; `vectorscope-replay.test.ts`
+  asserts the refusal for a sending run naming the variant without
+  `--triage-model` and with one equal to `--model`, and that a dry run is
+  still asked for it.
+- **`escapeRegExp`, a single-use helper** (`vectorscope-replay.test.ts`).
+  Inlined in the posix test's `read` helper as one local `escaped`; the
+  function is gone.
+- **Rename-destructuring to drop a field** (`ci.test.ts:543`). Now
+  `const unpaired = { ...paired, triageModel: undefined }`, since
+  `replayArgs` reads `inputs.triageModel` for truthiness only (the eval
+  tsconfig has no `exactOptionalPropertyTypes`).
+- **The same-vendor tripwire** (`replay.test.ts:507`). The line is kept as
+  it is. The same-lab deferral above now says that wiring the paid
+  cross-family replay must wait for the `labOf` refusal, or come in the
+  same change. The dry projection's summary line now says `(the pair's
+  labs unchecked until codium's labOf merges)`, as `ci.ts`'s plan line
+  already did, and the subprocess test asserts it; the README's labs
+  bullet says both.
+- **Read-back records were not checked for the pair** (`replay.ts:256`).
+  Fixed. New `pairProblems(record)` in `replay.ts`: for a record whose
+  `variant.models` is `"triage-pair"`, it lists a missing triage model
+  (`it records no triage model`), a triage id equal to the review id, and
+  a `scope.triage` other than the triage id (or none); ids from the record
+  are quoted as JSON. It compares ids only, as `triagePairProblem` does,
+  and so checks no lab. It is untrusted-input safe (anything that is not
+  an object has none). It runs beside `variantProblems` in
+  `projectionProblems`, in `report.ts` for engine and desktop artifacts,
+  and in `certify.ts` for the candidate's runs, so such a record keeps
+  the report from a release decision and is never certified.
+  `variantProblems`'s signature is unchanged. Tests: `replay.test.ts`
+  (one case: a whole pair record, each of the three faults, a replay
+  artifact shape, other variants and non-objects), and one case each in
+  `report.test.ts` (a pair artifact with no scope triage listed) and
+  `certify.test.ts` (a pair certified when whole, refused when one run
+  records no triage model).
+- **`report.ts` accepted a pair compared with a variant that is not**
+  (README, optional). Taken: it is cheap and makes the tooling enforce
+  what the README already said, and it decides neither Q5 nor Q9. `report.ts
+  main` refuses, as a usage error, a `--candidate` and `--baseline` of
+  which only one resolves to a variant made by its models, either way
+  round, since the triage pass (every finding of concern or above
+  double-checked, only confirmed findings reported) would otherwise be
+  credited to, or charged against, the pair. A pair alone, or two pairs
+  (another model, or a future registered same-lab arm with `models:
+  "triage-pair"`), still passes. The `--baseline` usage line says so, and
+  so does the README's baseline bullet. A refusal rather than a warning: a
+  report problem line already blocks the release decision, but a
+  comparison that the README calls invalid should not be produced at all.
+  Test: `report.test.ts`, three refused pairings and two accepted ones.
+- **The eleventh `workflow_dispatch` input** (`vectorscope-eval.yml:87`).
+  Not verified, and the workflow is unchanged. The lane may not dispatch
+  `vectorscope-eval.yml`, and reading GitHub's workflow-syntax docs from
+  this session failed: `docs.github.com` is outside the session's allowed
+  network. The only evidence remains the changelog of 2025-12-04 cited
+  above. So, before this branch is pushed or merged, one of these must
+  happen: someone allowed to dispatch runs a dry dispatch of the workflow
+  on a non-main branch with `triage_model` empty, and it starts; or the
+  owner signs off on the 25-input limit. If neither happens, fold
+  `triage_model` into an existing free-form input instead (`models` or
+  `variants`), which changes that input's grammar and needs its own I-1
+  check. Not folded now: either fold puts a model id where the input's
+  grammar has none (the registry keeps model ids out of variant names),
+  and the documented limit is the likelier answer. `ci.test.ts`'s count
+  pin still catches a later addition.
+- **Evidence.** Each file alone through the lock with `--timeout 30000`,
+  from its own directory, with `TMPDIR` and fresh XDG roots under
+  `/tmp/vector-vectorscope/vs29a-fix/`: `ci.test.ts` 33 pass,
+  `replay.test.ts` 37, `report.test.ts` 34, `certify.test.ts` 7,
+  `judge.test.ts` 6, engine `test/review/vectorscope-replay.test.ts` 18
+  (its posix subprocess tests included). `bun typecheck` passes in
+  `packages/engine`, and `bun tsgo -p
+  ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  prettier is clean on every changed code file and the README; oxlint
+  reports nothing new on the changed lines (the warnings it lists there
+  are type assertions that were already in those expressions). Twelve
+  mutations, each applied alone, its test file run through the lock and
+  the file restored by hash (`/tmp/vector-vectorscope/vs29a-fix/mut/`),
+  all caught: `ci.ts`'s paid guard on the per-model problems dropped;
+  `ci.ts`'s paid refusal dropped; the entry point's `sends` guard dropped;
+  `replayMode`'s variant check dropped; `pairProblems` returning nothing
+  (caught in `replay.test.ts`, `report.test.ts` and `certify.test.ts`);
+  its scope check dropped; it not called in `report.ts`; not called in
+  `certify.ts`; the baseline refusal dropped; and the baseline refusal one
+  way only.
+- **Not verified.** The workflow's input limit (above). The full root
+  typecheck was not run, since nothing is pushed.
+- **Not done.** Nothing was sent to a model; there was no paid run, no
+  workflow dispatched, nothing published and nothing committed; no MCP
+  access changed and no user-visible string changed (D14).

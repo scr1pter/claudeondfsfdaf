@@ -16,7 +16,7 @@ import {
   type ReplayFlags,
 } from "../../script/vectorscope-replay"
 import { gitEnv, type Manifest } from "../../../../script/vectorscope-eval/dataset"
-import { projectionProblems } from "../../../../script/vectorscope-eval/replay"
+import { projectedRun, projectionProblems } from "../../../../script/vectorscope-eval/replay"
 
 // VS-21c's entry point (packages/engine/script/vectorscope-replay.ts). Its send decision is tested as a pure function
 // only: no test here, or anywhere, runs its paid branch. The dry branch runs as a subprocess against a synthetic mirror,
@@ -29,6 +29,10 @@ const ENGINE = path.join(import.meta.dir, "..", "..")
 const SEED = path.join(ENGINE, "..", "..", "script", "vectorscope-eval", "dataset", "seed.json")
 const MODEL = "anthropic/claude-sonnet-4.5"
 const PRICE = "3:15"
+// A triage model from the committed catalog at its price, for VS-29a's cross-family variant: a fixture pair, not a
+// recommendation (the owner chooses the pair, Q5).
+const TRIAGE_MODEL = "openai/gpt-5"
+const TRIAGE = `${TRIAGE_MODEL}=1.25:10`
 const DUMMY_KEY = "vs21c-dummy-eval-key-never-used"
 // The protected environment's marks and its key, all of which a dry run must ignore.
 const PROTECTED = {
@@ -96,6 +100,31 @@ describe("the flags", () => {
     expect(parseReplayArgs([...base, "--variant", "engine", "--variant", "engine"])).toContain("more than once")
     expect(parseReplayArgs([...base, "--variant"])).toContain("Missing value for --variant")
   })
+
+  // VS-29a. Each refusal below has one fault only, so none depends on the order the checks run in.
+  test("take a triage model for a variant made by its models alone, other than --model", () => {
+    const pair = [...base, "--variant", "engine", "--variant", "engine:cross-family"]
+    const parsed = flags([...pair, "--triage-model", TRIAGE])
+    expect(parsed.triage).toEqual({ id: TRIAGE_MODEL, price: { input: 1.25, output: 10 } })
+    expect(parsed.variants).toEqual([
+      { name: "engine" },
+      { name: "engine:cross-family", record: { name: "engine:cross-family", keys: {}, models: "triage-pair" } },
+    ])
+    expect(flags(base)).not.toHaveProperty("triage")
+    expect(parseReplayArgs([...pair, "--triage-model"])).toBe("Missing value for --triage-model")
+    for (const bad of [TRIAGE_MODEL, `${TRIAGE_MODEL}=1.25`, "=1.25:10", `${TRIAGE_MODEL}=x:y`, `_${TRIAGE}`])
+      expect(parseReplayArgs([...pair, "--triage-model", bad])).toBe(
+        "--triage-model must be <id>=<in>:<out>, with USD per million input and output tokens, such as openai/gpt-5=1.25:10.",
+      )
+    const needs =
+      "engine:cross-family is made by its models: it needs the review model, then a triage model other than it"
+    expect(parseReplayArgs(pair)).toBe(`${needs}, not ${MODEL}. Give --triage-model.`)
+    for (const variants of [[], ["--variant", "engine:shared-verify"]])
+      expect(parseReplayArgs([...base, ...variants, "--triage-model", TRIAGE])).toBe(
+        "--triage-model is for a variant made by its models (engine:cross-family); no --variant is.",
+      )
+    expect(parseReplayArgs([...pair, "--triage-model", `${MODEL}=${PRICE}`])).toBe(`${needs}, not ${MODEL} + ${MODEL}.`)
+  })
 })
 
 describe("the send decision", () => {
@@ -139,6 +168,27 @@ describe("the send decision", () => {
     )
   })
 
+  // VS-29a: a paid cross-family replay is not wired, so a triage model keeps a run dry or refuses it.
+  test("refuses a run that would send with a triage model, which runs dry only", () => {
+    const pair = [...base, "--variant", "engine:cross-family", "--triage-model", TRIAGE]
+    const dryOnly = {
+      refused:
+        "Nothing was sent. A paid cross-family replay is not wired: engine:cross-family and --triage-model run dry only, until the owner chooses the pair (Q5) and funds its ablation (Q9).",
+    }
+    expect(replayMode(flags([...pair, ...sending]), protectedEnv)).toEqual(dryOnly)
+    expect(replayMode(flags([...pair, ...sending, "--dry-run"]), protectedEnv)).toEqual({ mode: "dry" })
+    expect(replayMode(flags(pair), protectedEnv)).toEqual({ mode: "dry" })
+    // A run that would send names the variant without a triage model, or with one equal to --model: it is refused as
+    // dry only, never first asked for a triage model that would then be refused.
+    const variant = [...base, "--variant", "engine:cross-family"]
+    expect(replayMode(flags([...variant, ...sending]), protectedEnv)).toEqual(dryOnly)
+    expect(replayMode(flags([...variant, "--triage-model", `${MODEL}=${PRICE}`, ...sending]), protectedEnv)).toEqual(
+      dryOnly,
+    )
+    // A dry one is still asked for it.
+    expect(parseReplayArgs([...variant, ...sending, "--dry-run"])).toContain("Give --triage-model.")
+  })
+
   test("reads three variables of the environment and no other", () => {
     const read = new Set<string>()
     const env = new Proxy(
@@ -180,6 +230,18 @@ describe("the send decision", () => {
     expect(err.join("")).toContain("--dry-run takes no value")
     expect(await main(["--help=x"], io(PROTECTED))).toBe(2)
     for (const made of [work, out, ledger]) expect(existsSync(made)).toBe(false)
+  })
+
+  test("refuses a triage model the committed catalog does not hold at that price, before it creates anything", async () => {
+    const err: string[] = []
+    const work = path.join(root, "triage-work")
+    const io = { env: PROTECTED, out: () => {}, err: (text: string) => void err.push(text) }
+    const argv = ["--model", `${MODEL}=${PRICE}`, "--mirrors", root, "--work", work, "--variant", "engine:cross-family"]
+    expect(await main([...argv, "--triage-model", "vendor/no-such-model=1:1"], io)).toBe(2)
+    expect(await main([...argv, "--triage-model", `${TRIAGE_MODEL}=1:10`], io)).toBe(2)
+    expect(err.join("")).toContain("--triage-model: vendor/no-such-model is not one of the committed catalog's")
+    expect(err.join("")).toContain(`--triage-model: ${TRIAGE_MODEL} costs 1.25:10 in the committed catalog`)
+    expect(existsSync(work)).toBe(false)
   })
 
   test("refuses a manifest that is not JSON, and fails a plan with no case, before it creates anything", async () => {
@@ -286,6 +348,45 @@ describe("the catalog and the engine's settings", () => {
     })
     expect(paid).not.toContain(DUMMY_KEY)
   })
+
+  test("the dry config lists a triage model beside the review model, under the one provider and its dummy key", () => {
+    const review = catalogModel(catalog, MODEL, { input: 3, output: 15 })
+    const triage = catalogModel(catalog, TRIAGE_MODEL, { input: 1.25, output: 10 })
+    if ("problem" in review) throw new Error(review.problem)
+    if ("problem" in triage) throw new Error(triage.problem)
+    const server = "http://127.0.0.1:4096/v1"
+    const alone = JSON.parse(engineConfig({ mode: "dry", server, id: MODEL, entry: review.entry }))
+    const dry = JSON.parse(
+      engineConfig({
+        mode: "dry",
+        server,
+        id: MODEL,
+        entry: review.entry,
+        triage: { id: TRIAGE_MODEL, entry: triage.entry },
+      }),
+    )
+    expect(dry.enabled_providers).toEqual([PROJECTION_PROVIDER])
+    expect(Object.keys(dry.provider)).toEqual([PROJECTION_PROVIDER])
+    const provider = dry.provider[PROJECTION_PROVIDER]
+    expect(provider.options).toEqual(alone.provider[PROJECTION_PROVIDER].options)
+    expect(provider.options.apiKey).toBe("projection-dummy-key")
+    expect(Object.keys(provider.models)).toEqual([MODEL, TRIAGE_MODEL])
+    // The review model is listed as it is alone, and the triage model the same way, from its own catalog entry.
+    expect(provider.models[MODEL]).toEqual(alone.provider[PROJECTION_PROVIDER].models[MODEL])
+    expect(Object.keys(alone.provider[PROJECTION_PROVIDER].models)).toEqual([MODEL])
+    expect(provider.models[TRIAGE_MODEL]).toEqual({
+      id: TRIAGE_MODEL,
+      name: triage.entry.name ?? TRIAGE_MODEL,
+      release_date: triage.entry.release_date ?? "2025-01-01",
+      attachment: triage.entry.attachment ?? false,
+      reasoning: triage.entry.reasoning ?? false,
+      temperature: triage.entry.temperature ?? false,
+      tool_call: true,
+      limit: triage.entry.limit,
+      cost: { input: 1.25, output: 10, cache_read: 0.125 },
+      options: {},
+    })
+  })
 })
 
 // The entry point runs on the eval workflow's Linux runners. Its child here gets a POSIX environment (a path, a home and
@@ -379,6 +480,112 @@ describe("a dry run, as a subprocess", () => {
       expect(readdirSync(work)).toEqual([])
     },
     120_000,
+  )
+
+  // VS-29a and I-1: --triage-model changes nothing for a variant not made by its models. The same variants run with and
+  // without it, and their records match field for field, except where the prompts name the run's own temporary
+  // directory (and so the digests of those bodies): the two work directories' names have one length, so every count
+  // matches too. Two runs, so twice the single run's time.
+  posix(
+    "projects engine:cross-family on the pair, and leaves every other variant's record as it is without --triage-model",
+    () => {
+      const project = (name: string, extra: string[]) => {
+        const work = path.join(root, `pair-work-${name}`)
+        const out = path.join(root, `pair-out-${name}`)
+        const result = run([
+          "--model",
+          `${MODEL}=${PRICE}`,
+          "--manifest",
+          manifest,
+          "--mirrors",
+          path.join(root, "mirrors"),
+          "--work",
+          work,
+          "--out",
+          out,
+          "--variant",
+          "engine",
+          "--variant",
+          "engine:shared-verify",
+          ...extra,
+        ])
+        expect(result.stderr).toBe("")
+        expect(result.code).toBe(0)
+        expect(result.stdout).toMatch(/connection attempts, 0 off this computer\./)
+        expect(result.stdout).not.toContain(DUMMY_KEY)
+        const text = (file: string) => {
+          const written = readFileSync(path.join(out, file), "utf8")
+          expect(written).not.toContain(DUMMY_KEY)
+          return written
+        }
+        // Each record as written, which projectionProblems checks.
+        const raw = (file: string) => JSON.parse(text(file))
+        // Each record with the run's temporary directory named alike and its request digests left out.
+        const read = (file: string) => {
+          const escaped = work.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          const record = JSON.parse(text(file).replace(new RegExp(`${escaped}/run-[A-Za-z0-9]{6}`, "g"), "<run>"))
+          return {
+            ...record,
+            passes: record.passes.map((pass: { requests: { digest: string }[] }) => ({
+              ...pass,
+              requests: pass.requests.map((request) => ({ ...request, digest: undefined })),
+            })),
+          }
+        }
+        return { result, out, raw, read }
+      }
+      const alone = project("a", [])
+      const paired = project("b", ["--variant", "engine:cross-family", "--triage-model", TRIAGE])
+      const frozen = [
+        "anthropic_claude-sonnet-4.5--pallets-werkzeug-1--engine--r1.projection.json",
+        "anthropic_claude-sonnet-4.5--pallets-werkzeug-1--engine_shared-verify--r1.projection.json",
+      ]
+      // The pair's models name its file, joined by "+", which the slug never writes.
+      const pairFile =
+        "anthropic_claude-sonnet-4.5+openai_gpt-5--pallets-werkzeug-1--engine_cross-family--r1.projection.json"
+      expect(readdirSync(alone.out).toSorted()).toEqual(frozen)
+      expect(readdirSync(paired.out).toSorted()).toEqual([pairFile, ...frozen])
+      expect(paired.result.stdout).toContain(
+        `on ${MODEL}, with ${TRIAGE_MODEL} as the first pass of engine:cross-family (the pair's labs unchecked until codium's labOf merges), repetition 1 only`,
+      )
+      expect(paired.result.stdout).toContain("pallets-werkzeug-1  engine:cross-family  projected")
+      for (const variant of ["engine", "engine:shared-verify"]) {
+        const line = (text: string) =>
+          text.split("\n").find((entry) => entry.startsWith(`pallets-werkzeug-1  ${variant}  `))
+        expect(line(paired.result.stdout)).toBe(line(alone.result.stdout))
+      }
+      for (const file of frozen) {
+        expect(projectionProblems(paired.raw(file))).toEqual([])
+        const record = paired.read(file)
+        expect(record).toEqual(alone.read(file))
+        expect(record.models.triage).toBeUndefined()
+        expect(record.scope.triage).toBeUndefined()
+      }
+
+      // The pair: its first pass on the triage model, the double-check on the review model, and both recorded.
+      const pair = paired.raw(pairFile)
+      expect(projectionProblems(pair)).toEqual([])
+      expect(pair.variant).toEqual({ name: "engine:cross-family", keys: {}, models: "triage-pair" })
+      const review = `${PROJECTION_PROVIDER}/${MODEL}`
+      const triage = `${PROJECTION_PROVIDER}/${TRIAGE_MODEL}`
+      expect(pair.models.review.id).toBe(review)
+      expect(pair.models.triage).toMatchObject({
+        id: triage,
+        costKind: "priced",
+        price: { input: 1.25, output: 10, cacheRead: 0.125 },
+      })
+      expect(pair.scope.triage).toBe(triage)
+      const passes: { pass: string; model: string }[] = pair.passes
+      expect(passes.map((pass) => pass.pass)).toContain("review")
+      expect(passes.map((pass) => pass.pass)).toContain("verify")
+      for (const pass of passes) expect(pass.model).toBe(pass.pass === "verify" ? review : triage)
+      expect(projectedRun(pair)).toMatchObject({
+        variant: "engine:cross-family",
+        model: review,
+        models: [review, triage],
+      })
+    },
+    240_000,
   )
 
   posix(
