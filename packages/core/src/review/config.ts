@@ -173,6 +173,7 @@ const FIELDS: Record<PlainKey, Field> = {
   impact: oneOf(["grep", "graph"]),
   guardrail: oneOf(["off", "strict"]),
   scopeGate: oneOf(["off", "introduced"]),
+  verifyEvidence: oneOf(["off", "certificate"]),
   failOn: oneOf(["never", "blocking"]),
   ignore: strings,
   ignoreDefaults: bool,
@@ -247,6 +248,12 @@ const UNAPPLIED: Record<
   scopeGate: {
     applies: (config) => config.scopeGate === "introduced" && config.guardrail === "strict",
     warning: '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.',
+  },
+  // The same: only under "strict".
+  verifyEvidence: {
+    applies: (config) => config.verifyEvidence === "certificate" && config.guardrail === "strict",
+    warning:
+      '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.',
   },
 }
 
@@ -448,6 +455,11 @@ function settle(
   if (config.scopeGate === "introduced" && config.guardrail !== "strict")
     warnings.push(
       '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.',
+    )
+  // VS-44's certificate check also runs inside the strict guardrail. The value is kept as written.
+  if (config.verifyEvidence === "certificate" && config.guardrail !== "strict")
+    warnings.push(
+      '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.',
     )
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),

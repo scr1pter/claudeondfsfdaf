@@ -279,6 +279,42 @@ describe("scope", () => {
     expect(gatedGraph).toBe("8335adf9de513ee5")
   })
 
+  // VS-44a: `verifyEvidence: "certificate"` adds the certificate verify schema (verifyCertJsonSchema) after the strict
+  // schemas, so it moves the digest only under `guardrail: "strict"`; with it off, or without strict, every digest holds
+  // (the engine:guardrail-strict and VS-42 digests included).
+  test("the prompts digest covers VS-44's verifyEvidence under guardrail: strict only", () => {
+    const strict = promptsDigest({ guardrail: "strict" })
+    const both = promptsDigest({ impact: "graph", guardrail: "strict" })
+    const gated = promptsDigest({ guardrail: "strict", scopeGate: "introduced" })
+    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "off" })).toBe(strict)
+    expect(promptsDigest({ impact: "graph", guardrail: "strict", verifyEvidence: "off" })).toBe(both)
+    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "off" })).toBe(gated)
+    for (const keys of [
+      { verifyEvidence: "certificate" as const },
+      { guardrail: "off" as const, verifyEvidence: "certificate" as const },
+      { scopeGate: "introduced" as const, verifyEvidence: "certificate" as const },
+    ])
+      expect(promptsDigest(keys)).toBe(promptsDigest())
+    expect(promptsDigest({ impact: "graph", verifyEvidence: "certificate" })).toBe(promptsDigest({ impact: "graph" }))
+    const cert = promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })
+    const certGraph = promptsDigest({ impact: "graph", guardrail: "strict", verifyEvidence: "certificate" })
+    const certGated = promptsDigest({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" })
+    expect(
+      new Set([promptsDigest(), promptsDigest({ impact: "graph" }), strict, both, gated, cert, certGraph, certGated])
+        .size,
+    ).toBe(8)
+    // VS-44a held every earlier digest, and printed these (built at cd0903b5). VS-44 wiring moves them on purpose when
+    // the blind candidate and the certificate prompt join, and the result schema gains VS-44's drops, under the key.
+    expect(promptsDigest()).toBe("5d59e9ee06077c23")
+    expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
+    expect(strict).toBe("b98afb0e878dfe26")
+    expect(both).toBe("3ba21b5bc883cd70")
+    expect(gated).toBe("4aa712221043a3a7")
+    expect(cert).toBe("d209592d08bb1e0c")
+    expect(certGraph).toBe("468fcac8cde18fe2")
+    expect(certGated).toBe("0f3ff2dd0f7c1d7d")
+  })
+
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of
   // these files fails here until someone decides whether REVIEW_PIPELINE_REVISION goes up and updates the pin.
   test("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION", () => {
@@ -330,6 +366,10 @@ describe("scope", () => {
       { scopeGate: "off" as const },
       { scopeGate: "introduced" as const },
       { guardrail: "strict" as const, scopeGate: "introduced" as const },
+      // Nor VS-44's verifyEvidence, with or without strict.
+      { verifyEvidence: "off" as const },
+      { verifyEvidence: "certificate" as const },
+      { guardrail: "strict" as const, verifyEvidence: "certificate" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -402,6 +442,24 @@ describe("scope", () => {
       evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
     )
     expect(policyDigest({ ...gated, nits: true })).not.toBe(policyDigest(gated))
+  })
+
+  // VS-44a: `verifyEvidence` is a policy key (S1's certificate check drops what would be posted) that no runner applies
+  // before VS-44 wiring, so neither the policy digest nor the prompts digest of a scope moves with it yet. Once a runner
+  // applies it and the guardrail, the prompts digest counts it only as "certificate" under "strict".
+  test("the scope leaves out VS-44's verifyEvidence until a runner applies it", () => {
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    expect(EVIDENCE_POLICY_KEYS).toContain("verifyEvidence")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("verifyEvidence")
+    for (const verifyEvidence of ["certificate", "off", undefined] as const)
+      for (const guardrail of ["strict", "off", undefined] as const)
+        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail, verifyEvidence })).toBe(base)
+    const cert: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", verifyEvidence: "certificate" }
+    expect(evidenceScope({ adapter: "engine", config: cert })).toEqual(SCOPE)
+    expect(
+      evidenceScope({ adapter: "desktop", config: { ...cert, scopeGate: "introduced", impact: "graph" } }),
+    ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
+    expect(policyDigest({ ...cert, nits: true })).not.toBe(policyDigest(cert))
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

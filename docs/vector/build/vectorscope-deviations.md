@@ -8949,3 +8949,635 @@ committed. Where these points differ from the entry above, they supersede it.
   - **Not run.** The engine and app runner suites were not re-run: nothing
     they import changed. The full root typecheck was not run, since nothing
     is pushed.
+
+## 2026-11-07 · VS-44a Verification certificate schema and checker (pure)
+
+Addendum A §2 VS-44 (its Now part only: "the schema and `certified()`"),
+with the §1 `verifyEvidence` row ("policy key; effective only with
+`guardrail: strict`", "existing"), §1's rule that a key effective only
+under strict is ignored with a note and a test, §1a's VS-44 row
+(`engine:verify-cert`, "As VS-42"), §3 VS-27 (certificate evidence attached
+to the matching finding, never a separate comment; the S1 certificate joins
+only after its gate) and VS-31 (VS-44 joins `precise` only after its gate),
+and §4's windows. Evidence: round-two REPORT [GP3] (Greptile merges its
+verified evidence into the review comment at the same location, as
+`verifiedEvidence`) and [GU8] (Archer reports only findings with a proof of
+concept; §3 VS-29 asks a cross-family verifier to show its work through
+VS-44). Built at `cd0903b5` (VS-43a). The addendum's citations at
+`7cadfcb8` were re-located on HEAD: `VERIFY_JSON_SCHEMA` is at
+`schema.ts:115-132` (addendum: `:92`) and `decodeVerify` at `:400-429`; the
+verifier reads the body and suggestion through `prompt.ts` `candidate()`
+`:610-622` and `buildVerifyPrompt` `:246-271` (addendum: `:465-477`); the
+runners decode verify at `run.ts:772-782` (`schema: VERIFY_JSON_SCHEMA`,
+`decode: decodeVerify`) and `ai-review.ts:128` (`VERIFY_FORMAT`) and
+`:1567`. Now window only: pure core code and a parsed, unapplied key, which
+nothing calls or reads. `run.ts`, `ai-review.ts`, `provider.ts`,
+`session/llm.ts`, `posting.ts`, `prompt.ts`, `select.ts`, `plan.ts`,
+`replay.ts`, `report.ts` and every @vector file are untouched. It implements
+the VS-44a plan as corrected by its critique: all eight critique points were
+taken, two of them by their stated alternative (noted at (d) and (f)).
+Nothing is committed (the lane brief). An earlier run of this step was
+stopped by a container restart before it wrote this entry; its working-tree
+edits were kept, read against the plan and critique, corrected where needed
+(two test typings, below) and every check was run again on the finished
+tree.
+
+- **What landed.**
+  - **Core `review/types.ts`** (still import-free): after the `RuleCitation`
+    block, `CERTIFICATE_VERDICTS` (`confirmed`, `rejected`, `unsure`) and
+    `CertificateVerdict`; `CERTIFICATE_REACH` (`caller-shown`,
+    `entry-point`, `assumed`) and `CertificateReach`; `VerifyCertificate`
+    (`id`, `verdict`, `reason`, `trace?`, `traceUnreadable?: true`,
+    `guards`, `noGuards?`, `reach?`); and `CertificateEvidence` (`trace`,
+    `guards`, `reach` other than `assumed`), what wiring attaches to a
+    `StrictFinding` [GP3]. `ReviewConfig.verifyEvidence?: "off" |
+    "certificate"`, after `scopeGate`; `OPTIONAL_REVIEW_DEFAULTS.verifyEvidence
+    = "off"`; `UNAPPLIED_REVIEW_KEYS` gains `verifyEvidence` after
+    `scopeGate`. Comments only on `Quote` (the trace and guards reuse it)
+    and `STRICT_DROPS` (VS-44's two drops join with wiring).
+  - **Core `review/config.ts`**: `FIELDS.verifyEvidence =
+    oneOf(["off", "certificate"])`, no `ENV` entry. Under strict the
+    `UNAPPLIED` warning reads `"verifyEvidence": "certificate" is not
+    applied yet: verify verdicts are still read without a certificate.`;
+    without strict, `settle` adds `"verifyEvidence": "certificate" is
+    ignored without "guardrail": "strict": certificate-backed verification
+    runs only inside the strict guardrail.` and keeps the value as written.
+    A plain key, not source-tagged (§1: "existing").
+  - **Core `review/schema.ts`**: `StrictSchemaKeys` gains `verifyEvidence`;
+    `MAX_TRACE_QUOTES = MAX_FINDING_QUOTES` (6); `verifyCertJsonSchema(keys)`,
+    undefined unless `guardrail: "strict"` and `verifyEvidence:
+    "certificate"`, built from `structuredClone(VERIFY_JSON_SCHEMA)` with
+    spreads (the VS-27a pattern): the result's `verdict` enum becomes the
+    three verdicts, and `trace`, `guards`, `noGuards` and `reach` are added
+    in that order. And `decodeVerifyCertificates(input)`, uncalled, in
+    `decodeVerify`'s shape (it drops into `decode:` at `run.ts:782`), with a
+    private `decodeTrace`. `decodeVerify`, `decodeReport`,
+    `strictReportJsonSchema` and `strictResultJsonSchema` are unchanged; the
+    last one's comment says VS-44's drops and certificate field join with
+    wiring.
+  - **Core `review/guardrail.ts`** (pinned, pure): `certified(finding,
+    certificate, { anchors, blobs })`, `CERTIFICATE_MISMATCHES` (`id`,
+    `no-trace`, `trace-unreadable`, `trace`, `unanchored`, `reach`) and
+    `CertificateMismatch`, `CertificateDrop` (`verdict-unsure`,
+    `certificate-mismatch`, typed only), `CertificateCheck`, and
+    `certificateBlobRequests(findings, certificates, anchors)`. The body is
+    a private `certify(finding, certificate, context)` over a
+    `CertificateContext` (`index`, `anchors`, `read`), with private
+    `usableTrace`, `certificateQuotes`, `readQuote` and `anchored`. It
+    reuses `blobKey`, `lineReader`, `matchAt`, `trimQuote`, `lookupFile`,
+    `resolveAnchor` and diff.ts `touched` (I-10). The header and the
+    `quoteMatches` comment name it. strictSelect, strictCandidates,
+    strictRules, strictBlobRequests and every existing export are unchanged.
+  - **Core `review/model-evidence.ts`**: `EVIDENCE_POLICY_KEYS` gains
+    `verifyEvidence` after `scopeGate`, with a comment (counted from VS-44
+    wiring on, and then only as `certificate` under strict).
+    `promptsDigest` takes `verifyEvidence`, joins
+    `verifyEvidence:certificate` to the memo key only under strict, and
+    appends `verifyCertJsonSchema(keys)` after the two strict schemas.
+    `evidenceScope` passes `verifyEvidence: "certificate"` only when strict
+    and the key are both set and neither is in `UNAPPLIED_REVIEW_KEYS`.
+    `canonicalPrompts` is unchanged. `REVIEW_PIPELINE_SOURCES` moves from
+    `c8568097f8a427b4` to `53dfe88102cb2a49` (guardrail.ts changed);
+    `REVIEW_PIPELINE_REVISION` stays 1, since nothing a runner finds or
+    posts changes.
+  - **Engine `review/eval.ts`** (the eval replay, not a runner):
+    `WIRING.verifyEvidence = "VS-44 wiring"` (the `Record` over
+    `UNAPPLIED_REVIEW_KEYS` requires it) and the `ReplayInput.config`
+    comment. The replay's drop of unapplied keys and step 0b's refusal are
+    generic, so nothing else changed.
+  - **Tests**: core `schema.test.ts` 54 → 64 (the schema's existence,
+    shape, independence, keyword set and conformance; the decoder's
+    verdicts, containers, trace, pathless quotes, guards, `noGuards` and
+    `reach`); core `guardrail.test.ts` 44 → 59 (13 `certified` cases, a
+    `certificateBlobRequests` parity case and a 400-case property test);
+    core `config.test.ts` 55 → 59; core `model-evidence.test.ts` 24 → 26;
+    engine `eval.test.ts` 30 → 31 (a replay of a base review.json that sets
+    the key, with and without strict, plus refusal cases in the existing
+    test). Changed on purpose: config.test.ts's `OPTIONAL_REVIEW_DEFAULTS`
+    equality gains `verifyEvidence: "off"`; model-evidence.test.ts's "no
+    others" policy list gains three cases; the pin. No existing assertion
+    was loosened.
+- **How `certified()` decides**, in order:
+  1. **Id.** A certificate for another id is `certificate-mismatch` with
+     `["id"]` alone, and reads no file.
+  2. **Verdict.** `rejected` is `unverified` and `unsure` is
+     `verdict-unsure`; neither reads a file. Only `confirmed` goes on.
+  3. **Trace.** Usable when it holds 1 to `MAX_TRACE_QUOTES` quotes;
+     otherwise `no-trace`, or `trace-unreadable` when the decoder marked it,
+     and no trace or guard file is read. Each usable quote is read at its
+     `blobKey` (a diff path at head, a renamed file's old path at base, a
+     path outside the diff as written; path `""` is the finding's file)
+     through a per-call `lineReader`, and matched with `matchAt` (S4's
+     body: whitespace and CRLF forgiven, a quote with no letter or digit
+     matching nothing, LEFT against base). One unmatched quote gives
+     `trace`.
+  4. **Anchoring.** Some trace quote that matched, or whose file could not
+     be read, spans (after `trimQuote`) a RIGHT line that `touched(anchors,
+     path, line, 0)` holds for, a LEFT line the change removed, or a line on
+     the finding's anchor as `resolveAnchor` places it: the same side, the
+     same diff file, between `startLine ?? line` and `line`. Otherwise
+     `unanchored`.
+  5. **Reach.** `caller-shown` or `entry-point`; `assumed` or absent gives
+     `reach`.
+  6. **Result.** With no reason: `{ certified: true, trace, guards, reach }`,
+     the trace whole at its read paths and the guards that matched among the
+     first `MAX_FINDING_QUOTES`, in input order. Otherwise
+     `certificate-mismatch` with every failing reason, in
+     `CERTIFICATE_MISMATCHES` order, and `blobUnreadable`, which holds only
+     when the reasons are exactly `["trace"]` and every unmatched trace
+     quote's file is null or missing from the map.
+- **Off by default (I-1, I-12).**
+  - **The key.** Optional, absent from `DEFAULT_REVIEW_CONFIG`, in
+    `UNAPPLIED_REVIEW_KEYS`, read from no environment variable (a test
+    sets `REVIEW_VERIFY_EVIDENCE` and `REVIEW_VERIFYEVIDENCE` and sees no
+    change). The parser only warns. `policyDigest` reads it as absent, with
+    or without strict, and `evidenceScope` never passes it.
+  - **Nothing calls the new code.** A grep over `packages/engine/src`,
+    `packages/app/src`, `packages/desktop/src`, `packages/web/src` and
+    `script` finds none of `certified(`, `certificateBlobRequests`,
+    `decodeVerifyCertificates`, `verifyCertJsonSchema`, the new constants or
+    types, or `verifyEvidence`, except eval.ts's `WIRING` entry and its
+    comment.
+  - **Digests** (printed at HEAD and on the finished tree, all held):
+    `promptsDigest()` `5d59e9ee06077c23`; `{ impact: "graph" }`
+    `74a2111826c226b1`; `{ guardrail: "strict" }` `b98afb0e878dfe26`; with
+    `impact: "graph"` `3ba21b5bc883cd70`; `{ guardrail: "strict",
+    scopeGate: "introduced" }` `4aa712221043a3a7`; with `impact: "graph"`
+    `8335adf9de513ee5`; `{ verifyEvidence: "certificate" }` and
+    `{ guardrail: "strict", verifyEvidence: "off" }` equal `{}` and strict;
+    `policyDigest(DEFAULT_REVIEW_CONFIG)` `70512122f41ec160`, also with
+    strict and the key. Three new schema-only digests are pinned in
+    model-evidence.test.ts, each moving only under both keys: `{ guardrail:
+    "strict", verifyEvidence: "certificate" }` `d209592d08bb1e0c`; with
+    `impact: "graph"` `468fcac8cde18fe2`; with `scopeGate: "introduced"`
+    `0f3ff2dd0f7c1d7d`. VS-44 wiring moves them on purpose (the blind
+    candidate, the prompt and the result schema's drops, under the key).
+  - **The replay.** A base review.json that sets the key, with or without
+    strict, is replayed and recorded without it (and without the
+    guardrail), keeping the parser's warnings; the verify request carries
+    the legacy schema (no `trace`, `guards`, `noGuards`, `reach` or
+    `unsure`), a certificate sent anyway changes nothing, and the scope
+    claims neither the policy nor the certificate schema. `ReplayInput.config`
+    refuses the key, alone and beside the guardrail and `scopeGate`.
+  - **Runner suites** pass with unchanged counts (table below).
+  - **§0.3 items 4 and 5.** The variant `engine:verify-cert` and the desktop
+    half wait for VS-44 wiring: no registry, README, `replay.test.ts` or
+    `ai-review.ts` change.
+- **Decisions.**
+  - (a) **The key is typed and parsed now.** §4's Now entry names no config
+    parse for VS-44 and puts no parse in the runner-wiring window either
+    (unlike VS-43, whose parse §4 places in runner-wiring, VS-43a decision
+    (a)), as for VS-42 (VS-42a decision (a)); §1's ignored-with-a-note test
+    needs a parsed key, and the lane brief allows config additions that are
+    off by default. It is unapplied, so either answer to Q18 stays open.
+  - (b) **Builder form.** The addendum names a constant,
+    `VERIFY_CERT_JSON_SCHEMA`; the round-two amendment and the lane brief
+    ask for VS-27a's key-conditional builders, so the schema enters
+    `promptsDigest` only under both keys. It is a deep copy, so no object is
+    shared with the legacy schema or another call (tested by mutating one).
+  - (c) **A separate decoder.** `decodeVerify` stays byte-identical (I-1):
+    it still drops `unsure`, which leaves the id unanswered and so
+    `verdict-unreadable` (tested on one answer through both decoders).
+    `decodeVerifyCertificates` reads verdicts by prefix (`confirm`,
+    `reject`, `unsure`); any other verdict drops the result, so its id stays
+    unanswered and still fails closed. Results sharing an id are all kept;
+    what conflicting ones mean is wiring's to decide.
+  - (d) **The trace is whole or absent** (critique point 2, taken). The
+    decoder keeps a trace only when it is 1 to 6 entries that all decode
+    through `decodeQuote`; it never cuts one, since part of a trace is not a
+    path from the trigger to the failure. A non-empty array it cannot keep
+    (a bad line, an escaping path, empty or over-cap code, a string entry,
+    more than 6 entries) sets `traceUnreadable`, and `certified()` reports
+    it as `trace-unreadable`, between `no-trace` and `trace`. So the kill
+    criterion's `certificate-mismatch` count can separate format failures
+    from missing evidence, as `severityUnreadable` (VS-27a hand-off (d),
+    built in VS-27b) does for severity. `certified()` also enforces the
+    length cap, for certificates
+    built without the decoder, and reads no file for an unusable trace
+    (critique point 4).
+  - (e) **Guards never veto, and are capped.** Only the first
+    `MAX_FINDING_QUOTES` are read (the decoder keeps at most that many of
+    its first `MAX_QUOTES_READ` entries), and only when the trace is usable;
+    unmatched, unreadable or escaping guards are left out of the evidence.
+    `certified`, `drop`, `because` and `blobUnreadable` never depend on the
+    guards, their order or whether there are any; the returned guards are
+    the matched ones in input order (critique point 5, the property now says
+    exactly that). `noGuards` and `reason` are decoded and never attached.
+  - (f) **"Lies in a changed hunk or on the anchor"** is read as touching a
+    change, or inside the resolved anchor (critique major point, taken). A
+    RIGHT line touches a change when `touched` holds with radius 0 (an added
+    line, or one next to a deletion; a whole added or deleted file), a LEFT
+    line when the change removed it. So the reading does not depend on the
+    diff's context width; the alternative, any line inside a hunk's range,
+    would count context lines and widen with `-U`. "On the anchor" uses
+    `resolveAnchor`'s anchor, never the model's own `line..endLine`: a range
+    across hunks anchors on its end line only, and a snapped RIGHT anchor is
+    the line it snapped to. So a finding at 10..200 where only line 200
+    changed gives `unanchored` for a trace of unchanged line 50 (tests: a
+    cross-hunk range, a single-hunk range whose context lines count, a
+    snapped anchor, side and file mismatches; the property asserts every
+    certified trace has a quote that touches a change or lies in the
+    resolved anchor's span). Two further readings, named so the owner can
+    reverse them (critique point 6, taken by its alternative): **guards
+    never anchor** a trace, only trace quotes do; and `unanchored` is worked
+    out over the trace quotes that matched or whose file could not be read,
+    so an invented quote on a changed line shows both `trace` and
+    `unanchored` and cannot hide that the rest of the trace is unchanged
+    code.
+  - (g) **Unreadable files fail closed (I-7).** `blobUnreadable` (the plan
+    called it `unreadable`; renamed to say which drop wiring maps it to)
+    holds only when a read the engine could not make is all that stands
+    between the certificate and verified: the reasons are exactly
+    `["trace"]`, and every unmatched trace quote is on a file that is null
+    or missing from the map. An unreadable quote still counts for
+    anchoring, so a quote on an added line whose file was not read leaves
+    only `trace`. A file the tree lacks, or a path that could leave the
+    repository (read as absent, never requested), is a plain mismatch.
+  - (h) **No `STRICT_DROPS` change and no strictSelect integration.**
+    §4's Now entry for VS-44 names "schema and checker" only (VS-42's names
+    "the strict drop"); how an `unsure` verdict flows depends on how the
+    runner builds its verdict maps (plan.ts `Verdicts` holds only confirmed
+    and rejected, and legacy selection drops rejected findings before
+    strictSelect sees them), a VS-27c/VS-44-wiring decision; and the
+    strictSelect property test requires every `STRICT_DROPS` value to
+    occur, so the drops can join only together with strictSelect producing
+    them. `CertificateDrop` names them, typed only. The integration is pure
+    core, so it could land before wiring as a VS-44b if the orchestrator
+    asks.
+  - (i) **Reach is an unchecked label that can only veto** (critique point
+    7, recorded). `assumed`, or a reach the decoder could not read (read
+    leniently: case, spaces or underscores for hyphens), blocks
+    certification; `caller-shown` and `entry-point` only permit it. The
+    schema's description says `caller-shown` means "the trace quotes a
+    caller that reaches it", and nothing checks that. A structural check (a
+    trace quote outside the anchor's file or function) is handed to wiring
+    as an option after the I-13 freeze; the description stays untuned
+    text.
+  - (j) **The id check.** `certified()` takes the pair separately, so a
+    certificate for another finding is a mismatch on `id` alone, ending the
+    check before any read.
+  - (k) **The `required` list stays legacy** (`id`, `verdict`, `reason`):
+    fixed claims are answered in the same results, and a rejected verdict
+    needs no trace. The caps are in the descriptions, with no `minItems` or
+    `maxItems` (VS-27a decision (l)): a test asserts the schema sends no
+    keyword the legacy verify and report schemas do not already send.
+    `noGuards` has `maxLength` 400, which the report schema already sends.
+  - (l) **Schema text is untuned** model-facing text; tuning waits for the
+    held-out freeze (I-13).
+  - (m) **A quote with no path is the finding's file** (critique point 3,
+    its first option). The decoder keeps `decodeQuote(entry, "")`'s path
+    `""`, as `decodeReport`'s strict path treats a pathless quote as the
+    finding's file; `certified()` and `certificateBlobRequests` put
+    `finding.path` in its place before `blobKey`, so the requests take the
+    findings and pair each certificate with each finding of its id. The
+    cost: the decoder does not know the file, so a pathless quote of a
+    Markdown file loses a fence around it (`decodeQuote`'s `keepFence`
+    reads the path), and such a quote then fails as `trace`.
+  - (n) **A shared-context body** (critique point 8, taken). `certified()`
+    builds its own index and reader, as `preExistingSuspect` does; its body
+    `certify()` takes a `CertificateContext`, so wiring can check every
+    certificate of a run through strictCandidates' one cached reader
+    without splitting a file again per certificate.
+  - (o) **Reads equal requests.** `certificateBlobRequests` names exactly
+    what `certified()` reads for each finding paired with a certificate of
+    its id: nothing for a non-confirmed verdict or an unusable trace;
+    otherwise each trace quote and the first `MAX_FINDING_QUOTES` guards, on
+    their own sides, escaping paths excluded, unique and sorted. A recording
+    blob map checks equality in a parity test and in each of the 400
+    generated cases, so over-requesting fails as well as under-requesting.
+    Containment against the tree-ish stays the engine's (I-8).
+  - (p) **Not checked**, by design at this stage: the trace's order
+    ("from the trigger to the failure" is model-facing only) and repeated
+    trace quotes.
+- **Corrections to the interrupted run's edits.** Two schema-test typings
+  failed `bun typecheck` in core: a test pushed `"maybe"` into the copied
+  verdict enum (now `"unsure"`, which the legacy enum never holds, so a
+  shared array would still show), and the reach table lacked `as const`.
+  Neither changed what is tested. Everything else matched the plan as
+  corrected by the critique and was kept.
+- **Hand-offs to VS-44 wiring (runner-wiring window, with VS-27c; Q13,
+  Q18).**
+  - **Blind candidate and prompt.** The verifier sees id, path, line, side,
+    severity, the strict `failure` fields and the evidence path:line list,
+    without body or suggestion; the certificate clauses. Both enter
+    `canonicalPrompts` and `promptsDigest` only under both keys.
+  - **S1 under both keys.** `verdict-unsure` and `certificate-mismatch`
+    join `STRICT_DROPS` after `verdict-unreadable`, and the result schema's
+    enum only under the key; `StrictInput.certificates`; `blobUnreadable`
+    mapped to `blob-unreadable` (incomplete); `strictBlobRequests` merging
+    `certificateBlobRequests`; `certify()` called through strictCandidates'
+    reader; the strictSelect property test gains the dimension.
+  - **Attachment [GP3].** `StrictFinding.certificate?: CertificateEvidence`
+    in the result schema under the key, never posted as a separate comment.
+  - **Verdict maps.** Mapping certificate verdicts onto `verifyUnanswered`
+    and the runner's verdict map: `unsure` is read, not unanswered;
+    `rejected` is `unverified`; conflicting results for one id fail closed;
+    fixed claims keep the legacy reading. Counting `trace-unreadable` and
+    the other reasons by kind for the kill criterion.
+  - **Composition.** VS-42's S9 reading certified trace quotes beside
+    S4's (`preExistingSuspect` (c) to (e)); VS-29a; VS-40's estimate of
+    the extra output tokens (I-5).
+  - **Variant and desktop.** `engine:verify-cert` and its D3 parity tests;
+    the desktop half "As VS-42" (a documented difference,
+    `variant.applied: false`) until VS-27's desktop guardrail.
+  - **Digests and reports.** `policyDigest` counting the key only as
+    `certificate` under strict, once applied; report.ts's `--reselect`
+    sources line naming the certificate check as left out (an artifact
+    records no certificates), with its README and test.
+  - **Reads.** The engine's `cat-file --batch` read with containment (the
+    I-8 amendment, VS-36, Q18); the optional structural reach check in (i).
+- **Deferred verification.**
+  - Provider acceptance of the certificate schema in forced tool calls:
+    the OpenAI sanitizer path, then fake-provider tests at wiring, then a
+    paid run under D7 and Q9. None was run.
+  - The fork read of a trace quote through `cat-file --batch` within the
+    head tree-ish (an addendum test) needs the engine read, at wiring.
+  - The kill pre-check (verify-confirmed false alarms under 15% of settled
+    false alarms) and the Q9 funded ablation need settled artifacts, which
+    do not exist yet. No model emits certificates.
+  - The merge conflicts are only predicted.
+- **Owner questions.** None new. Q18 (whether VS-44 is approved, with the
+  I-8 amendment), Q13 (runner wiring before `self-evolving`), Q9 (the
+  ablation budget) and Q3/Q4 (class-scoped recall and its classes, which
+  the kill criterion's recall terms read) stay open; this package is
+  neutral on them, since nothing calls it. Lane readings the owner may
+  reverse with small, local changes: (e) guards capped and never vetoing,
+  (f) the anchoring readings (radius-0 change or resolved anchor; guards
+  never anchor; `unanchored` over matched and unreadable quotes), (i) an
+  unreadable reach read as `assumed`, and (m) a pathless quote as the
+  finding's file.
+- **Predicted merge conflicts.** Read-only: `git merge-tree --write-tree
+  --name-only` at HEAD, then a three-way `git merge-file` of each touched
+  file that either branch changes, comparing the working tree with HEAD
+  against each branch's merge base and tip, with fixed marker labels.
+  - Of the touched files, `config.ts` and `types.ts` change on
+    `origin/codium` (`5a079cbd`), and `types.ts` on `origin/self-evolving`
+    (`f062bcce`). `schema.ts`, `guardrail.ts`, `model-evidence.ts`, engine
+    `eval.ts` and the tests are untouched by both.
+  - `config.ts`: no conflict with codium, at HEAD or with VS-44a.
+  - `types.ts`: 2 conflict hunks with codium and 1 with self-evolving,
+    byte-identical at HEAD and with VS-44a (the VS-27a pass-name lines). No
+    new conflict hunk.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory; the engine ones with fresh XDG roots
+  under `/tmp/vector-vectorscope/vs44a/xdg/`. Counts are at HEAD → with
+  VS-44a.
+
+  | File | HEAD | VS-44a |
+  |---|---|---|
+  | core `test/review/schema.test.ts` | 54 | 64 |
+  | core `test/review/guardrail.test.ts` | 44 | 59 |
+  | core `test/review/config.test.ts` | 55 | 59 |
+  | core `test/review/model-evidence.test.ts` | 24 | 26 |
+  | core `test/review/select.test.ts` | 45 | 45 |
+  | core `test/review/diff.test.ts` | 52 | 52 |
+  | core `test/review/format.test.ts` | 51 | 51 |
+  | core `test/review/verdict.test.ts` | 45 | 45 |
+  | core `test/review/prompt.test.ts` | 36 | 36 |
+  | core `test/review/trivial.test.ts` | 44 | 44 |
+  | core `test/review/citation.test.ts` | 33 | 33 |
+  | engine `test/review/eval.test.ts` | 30 | 31 |
+  | engine `test/review/run.test.ts` | 44 | 44 |
+  | engine `test/cli/github.review.test.ts` | 40 | 40 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 | 107 |
+  | eval `report.test.ts` (from `script/vectorscope-eval`) | 33 | 33 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 | 32 |
+
+  - **Run notes.** The HEAD column was run at `cd0903b5` before any edit.
+  - **Typecheck.** `bun typecheck` passes in core and engine; app and
+    desktop pass `bun typecheck --force`; the eval scripts pass `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - **Lint.** prettier is clean on all eleven changed files. oxlint reports
+    30 warnings in them, none on an added or changed line.
+  - **Mutation check.** 45 mutations, each applied alone and run against
+    the named test file (the engine one with `-t` on its refusal test),
+    each file restored byte for byte (checked by hash, and every changed
+    file's hash compared after the run). 44 are caught; the survivor is the
+    expected equivalent one.
+    - In `guardrail.ts`, against `guardrail.test.ts` (26): the id check
+      skipped; a rejected verdict reading its trace; the trace length cap
+      skipped; the usable trace ignoring the verdict (requests name rejected
+      quotes); the anchor ignoring side; ignoring file; the anchor taken
+      from the model's own range; `unanchored` skipped; `unanchored` over
+      unmatched quotes too; guards anchoring a trace; `assumed` accepted; an
+      absent reach accepted; `blobUnreadable` with another reason; with an
+      absent file; guards vetoing; the guard cap removed in `certified()`;
+      and in the requests; unmatched guards kept; path `""` not the
+      finding's file in `certified()`; and in the requests;
+      `trace-unreadable` folded into `no-trace`; an unusable trace read;
+      `touched` with radius 5; removed lines not a change; the matcher
+      skipped; a quote read at its path as written (no rename).
+    - In `schema.ts`, against `schema.test.ts` (9): the builder ignoring
+      strict; ignoring its key; sharing the legacy verdict object; the
+      decoder keeping a partial trace; cutting a long one; never marking one
+      unreadable; accepting an unknown verdict; cutting a long `noGuards`;
+      the guard cap removed.
+    - In `model-evidence.ts`, against `model-evidence.test.ts` (5): the
+      memo key without `verifyEvidence`; the certificate schema left out of
+      the digest; placed before the strict schemas; `verifyEvidence` not a
+      policy key. Survived, as expected: `evidenceScope` passing the key
+      while it is unapplied. It is equivalent by construction, as in
+      VS-42a: the guardrail is unapplied too, so the scope never passes
+      strict, and `promptsDigest` ignores the key without it.
+    - In `config.ts` and `types.ts`, against `config.test.ts` (4): the
+      ignored note missing; the not-applied warning without strict; the
+      default `certificate`; the key left off `UNAPPLIED_REVIEW_KEYS`.
+    - In engine `eval.ts`, against `eval.test.ts` (1): `WIRING` naming
+      VS-42 wiring.
+  - **Not run.** The full root typecheck was not run, since nothing is
+    pushed.
+  - **Not done.** Nothing was sent to a model; there was no paid run, no
+    workflow dispatched, nothing published and nothing committed; no
+    user-visible string changed (D14).
+  - **Commit (when the orchestrator asks).** `feat(review): VS-44a
+    verification certificate schema and checker`, staging the explicit
+    paths, with the lane identity and trailers.
+
+### 2026-11-07 · VS-44a review fixes
+
+Eight review findings, none blocking. Five were fixed in code, one of them
+a little wider than the finding asks (below). The other three asked for no
+change now; they are recorded here as hand-offs to VS-44 wiring. Only core
+`review/guardrail.ts`, `review/schema.ts`, `review/types.ts` (one comment),
+`review/model-evidence.ts` (the pin), `test/review/guardrail.test.ts` and
+`test/review/schema.test.ts` changed, with this log. No runner, provider,
+LLM or posting file, no prompt and no file @vector owns changed. Nothing is
+committed. Where these points differ from the entry above, they supersede it.
+
+- **`blobUnreadable` only when the read is all that is missing.** Taken.
+  - **The bug.** A trace quote that could never match, such as a lone `}`
+    (no letter or digit, which the matcher always rejects), on a file that
+    was null or missing from the map set `blobUnreadable`. Wiring maps that
+    to `blob-unreadable`, so a model could turn a plain mismatch into an
+    incomplete review by quoting punctuation in a file the engine did not
+    read.
+  - **The fix.** A new private `matchable(quote)` holds the matcher's own
+    preconditions: `trimQuote` leaves a line, the line is a whole number
+    from 1, and the code has a letter or digit (`/[\p{L}\p{N}]/u`). `matchAt`
+    now calls it, so the matcher and the new check cannot drift apart.
+    `matchAt` behaves as before: whitespace is never a letter or digit, so
+    testing the trimmed code is the same as testing its bare form, and the
+    earlier length check also returned false. An unmatched step now counts
+    as "only the read is missing" (`pending`) only when its file is
+    unreadable and `matchable` holds. `blobUnreadable` needs every unmatched
+    step to be pending.
+  - **Wider than the finding.** Anchoring uses the same test. A quote whose
+    file could not be read used to anchor a trace whatever it held. It now
+    anchors only when it is pending. Decision (f) let an unreadable quote
+    anchor because it might have matched if read, and a quote that can match
+    nothing never could. So a lone `}` on token.ts's added line, with
+    token.ts unreadable, now gives `["trace", "unanchored"]`, not
+    `["trace"]`. Both are `certificate-mismatch` with `blobUnreadable`
+    false; the kill criterion just counts it by its real kind. The owner may
+    reverse this alone, with a one-line change.
+  - **Tests.** In `guardrail.test.ts`, the `blobUnreadable` test gains a `}`
+    quote, a whitespace-only quote and a line-0 quote on a null `store.ts`,
+    each a plain mismatch. The anchoring test gains the `}` on token.ts's
+    added line. The property pool gains a `}` on `store.ts` (outside the
+    diff) and one on token.ts head line 1 (changed); both files can be null.
+- **A trace that is not a list is a format failure.** Taken.
+  `decodeTrace` returns no trace only for undefined, null, an empty list or
+  a blank text. Any other value that is not a list sets `traceUnreadable`:
+  one quote object, a non-blank text such as `"src/a.ts:3"` or `"none"`, a
+  number or a boolean. So decision (d)'s split between format failures and
+  missing traces now holds for these too. The schema test that pinned the
+  old reading now pins this one. The decoder's comment and the
+  `VerifyCertificate.traceUnreadable` comment say so.
+- **One envelope reader for both verify decoders.** Taken. A private
+  `verifyEntries(input, verdicts)` holds the shared envelope handling: the
+  `extractJson` predicate, unwrapping a list or `{ results }`, and the
+  id/verdict prefix test. `decodeVerify` passes `/^(confirm|reject)/` and
+  `decodeVerifyCertificates` passes `/^(confirm|reject|unsure)/`. Neither
+  pattern has the g flag, so `test` keeps no state between calls.
+  `decodeVerify` behaves exactly as before (I-1). Its existing tests pass
+  unchanged, and so do the engine and app runner suites that decode verify
+  through it. A new assertion pins the only difference between the two:
+  text whose only results are `unsure` is no answer to `decodeVerify`
+  (`undefined`) and one result to the certificate decoder. Decision (c)'s
+  "`decodeVerify` stays byte-identical" now means its behaviour; its code
+  calls the shared reader.
+- **Reads equal requests by construction.** Taken as the first option.
+  `certify()` reads `certificateQuotes(certificate)`, the same list
+  `certificateBlobRequests` names. It splits the list by the usable trace's
+  length: the first part is the trace steps, the rest the guards. The
+  separate `slice(0, MAX_FINDING_QUOTES)` in `certify()` is gone, and
+  `certificateQuotes` now has two callers. The parity test and the
+  property's parity check still pass. A mutation that moved the split point
+  by one was caught by five tests.
+  - **Helpers kept, with reasons.** `anchored` and `decodeTrace` stay single
+    use. Each names a concept the contract states: "lies in a changed hunk
+    or on the anchor", and a trace kept "whole or not at all". Each keeps
+    the main function on its happy path, which AGENTS.md's Complex Logic
+    section asks for. Inlining `anchored` would put ten lines of side, file
+    and span tests inside the `because` filter.
+- **The property test's oracle no longer copies the checker.** Taken as the
+  table option.
+  - **Where a quote is read.** `keyOf`, which copied `blobKey` through
+    `lookupFile`, is replaced by `read`. It is written from the fixture by
+    hand: a quote with no path is the finding's file, a leading `./` is
+    dropped, and token.ts on the base side is read at `old-token.ts`.
+  - **Anchoring.** The block that copied `anchored()` (`touched` with radius
+    0, `entry.left`, the anchor span) is replaced by two hand-written
+    tables. Each place carries the positions its anchor covers
+    (`RIGHT src/auth/session.ts 6` to `8` for the 6..8 range, line 8 only
+    for 1..8 and for the snapped line 10, none for `store.ts`). `CHANGED`
+    lists the touched positions: session.ts head 2, 3 and 8, base 3; token.ts
+    head 1; old-token.ts base 1. Both tables were checked once against
+    `resolveAnchor` and `touched` with a scratch script
+    (`/tmp/vector-vectorscope/vs44a-fix/spans.ts`), not from the test.
+  - **One-line quotes.** The test asserts every pool quote is one line, so a
+    quote's position is its line and no `split("\n")` or trimming is
+    needed.
+  - **Stronger checks.** The property was one-directional: a certified trace
+    anchors. It now also checks, both ways, `unanchored` and
+    `blobUnreadable` against the tables. Its `seen` set must also include
+    `unmatchable-unread`, so the generator really reaches the new case.
+    Read/request parity and guard independence are kept as they were: they
+    compare against independent observations.
+  - **What the new oracle catches alone** (each mutation run against the
+    property test alone, then restored by hash): `touched` with radius 5;
+    an anchor that ignores side; reading at the path as written, with no
+    rename; removed lines not counted as a change; `blobUnreadable` that
+    ignores `matchable`; anchoring that ignores `matchable`.
+- **Context lines inside the anchor's span (reading (f)).** Kept as
+  recorded, as the finding says. Hand-off to VS-44 wiring: add (f)'s reading
+  to Q18's list of readings for the owner to choose. If the owner wants the
+  stricter form, the anchor branch of `anchored()` should hold only when the
+  anchor's span also contains a line that `touched(anchors, path, line, 0)`
+  holds for. Then unchanged context inside a wide range in one hunk cannot
+  anchor a trace on its own. The unit test's 6..8 range (head line 8 was
+  added) would still certify a trace of lines 6 and 7; a range in one hunk
+  over unchanged lines only would no longer anchor one.
+- **Conflicting certificates for one id (hand-off).** No change now, as the
+  finding says; the decoder still keeps every result. At VS-44 wiring:
+  - several certificates for one id that disagree fail closed, as
+    `certificate-mismatch` or `verdict-unreadable` (wiring decides which,
+    and pins it);
+  - the results are bounded to the ids sent to verify, so a long answer
+    cannot grow the work;
+  - a test sends two conflicting certificates for one id.
+
+  The existing hand-off line "conflicting results for one id fail closed"
+  now includes the bound and the test.
+- **Reach is a label (decision (i), hand-off).** Kept as recorded. Before
+  VS-44 joins `precise` (VS-31), consider decision (i)'s structural reach
+  check. For `caller-shown`, it would require a matched trace quote outside
+  the anchor's file, or outside its function (through `BrainCode` or
+  `review/symbols.ts`, I-10, never a third reader). It needs the I-13
+  freeze, as the schema text does.
+- **Off by default (I-1, I-12).**
+  - Nothing outside core's tests calls `certified`, `certificateBlobRequests`
+    or `decodeVerifyCertificates`.
+  - `matchAt` and `decodeVerify` behave as before. Their suites (select,
+    citation, pipeline, guardrail's strictSelect properties, run, app
+    ai-review, structured-output-review, eval report and replay) pass with
+    unchanged counts.
+  - The prompt and policy digests are unchanged: `model-evidence.test.ts`
+    pins all of them, the three schema-only digests included, and passes.
+- **Pin (I-12).** `REVIEW_PIPELINE_SOURCES` moves from `53dfe88102cb2a49` to
+  `e8054845bd8f2858`, because `guardrail.ts` changed.
+  `REVIEW_PIPELINE_REVISION` stays 1. `schema.ts` and `types.ts` are not
+  pinned files.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory; the engine ones with fresh XDG roots
+  under `/tmp/vector-vectorscope/vs44a-fix/xdg/`. No test was added or
+  removed. The new checks are assertions in existing tests, so the counts
+  match the entry above.
+
+  | File | Count |
+  |---|---|
+  | core `test/review/guardrail.test.ts` | 59 |
+  | core `test/review/schema.test.ts` | 64 |
+  | core `test/review/model-evidence.test.ts` | 26 |
+  | core `test/review/config.test.ts` | 59 |
+  | core `test/review/citation.test.ts` | 33 |
+  | core `test/review/pipeline.test.ts` | 2 |
+  | core `test/review/select.test.ts` | 45 |
+  | core `test/review/diff.test.ts` | 52 |
+  | engine `test/review/structured-output-review.test.ts` | 3 |
+  | engine `test/review/run.test.ts` | 44 |
+  | engine `test/review/eval.test.ts` | 31 |
+  | engine `test/cli/github.review.test.ts` | 40 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 |
+  | eval `report.test.ts` (from `script/vectorscope-eval`) | 33 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 |
+
+  - **Typecheck.** `bun typecheck` passes in core, engine and app. The eval
+    scripts pass `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`
+    from `packages/engine`.
+  - **Lint.** prettier is clean on the six changed source and test files.
+    oxlint reports 0 warnings on `guardrail.ts`, `schema.ts` and both
+    tests.
+  - **Mutations.** Each was applied alone and the file restored byte for
+    byte (checked by hash). All were caught.
+    - Against `guardrail.test.ts`: `blobUnreadable` ignoring `matchable` (2
+      tests fail); anchoring ignoring it (1); the trace/guard split moved by
+      one (5); `matchable` without the letter test (5).
+    - Against the property alone: the six mutations listed above.
+    - Against `schema.test.ts`: `decodeVerify` accepting `unsure` in text; a
+      non-list trace read as no trace; a blank text marked unreadable.
+  - **Not run.** The full root typecheck was not run, since nothing is
+    pushed.
+  - **Not done.** Nothing was sent to a model; there was no paid run, no
+    workflow dispatched, nothing published and nothing committed; no
+    user-visible string changed (D14).

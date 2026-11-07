@@ -24,6 +24,10 @@
 //   kept as an unchecked plain diff, counted in fixUnchecked (C-14, Q17).
 // - S7: no stronger finding already kept is the same one: the same id, sameFinding, or the same class within 3 lines.
 // - S8: it falls within maxComments.
+//
+// VS-44's certificate check (certified(), with certificateBlobRequests) is S1's under `guardrail: "strict"` with
+// `verifyEvidence: "certificate"`: a confirmed verdict counts as verified only when its certificate holds. It is pure
+// and exported, and no rule in strictSelect calls it before VS-44 wiring, which adds its drops (CertificateDrop).
 
 import {
   anchorText,
@@ -39,12 +43,19 @@ import {
   type DiffFile,
 } from "./diff"
 import { normalizeCode } from "./fingerprint"
-import { ESCAPING_PATH, MAX_FAILURE_TEXT_CHARS, MAX_SUGGESTION_CHARS } from "./schema"
+import {
+  ESCAPING_PATH,
+  MAX_FAILURE_TEXT_CHARS,
+  MAX_FINDING_QUOTES,
+  MAX_SUGGESTION_CHARS,
+  MAX_TRACE_QUOTES,
+} from "./schema"
 import { gap, MAX_INLINE, NEAR, sameFinding } from "./select"
 import { otherSide } from "./trivial"
 import {
   STRICT_DROPS,
   type Anchor,
+  type CertificateEvidence,
   type FailureClass,
   type Finding,
   type Quote,
@@ -54,6 +65,7 @@ import {
   type StrictFinding,
   type StrictResult,
   type Trust,
+  type VerifyCertificate,
 } from "./types"
 import { unfinishedCauses, type UnfinishedCause, type VerdictCoverage } from "./verdict"
 
@@ -172,6 +184,90 @@ export function preExistingSuspect(
   return suspect(finding, resolved.ok ? resolved.anchor : undefined, matched, context) === true
 }
 
+// VS-44's certificate check (addendum A item 3): whether a verify certificate makes its finding verified, and if not,
+// why. S1's under `guardrail: "strict"` with `verifyEvidence: "certificate"`; no rule in strictSelect calls it before
+// VS-44 wiring. "rejected" is S1's `unverified` and "unsure" is `verdict-unsure`, and neither reads a file. A confirmed
+// certificate is certified only when all of these hold (CERTIFICATE_MISMATCHES names each failure):
+// - it answers this finding: the same id;
+// - its trace holds 1 to MAX_TRACE_QUOTES quotes, and each is its file's text at its line as S4 reads a quote
+//   (quoteMatches: whitespace and CRLF forgiven, a quote with no letter or digit matching nothing, a LEFT quote read
+//   against the base). A quote with path "" is the finding's file;
+// - a trace quote that matched, or whose file could not be read, lies in a change or on the anchor: a RIGHT line it spans
+//   was added or sits next to a deletion (diff.ts touched with no radius), a LEFT line it spans is one the change
+//   removed, or a line it spans is on the finding's anchor as resolveAnchor places it, on the anchor's side, in its file
+//   and within its lines (startLine to line). The anchor is used, not the model's own range, which can cover lines in
+//   hunks the anchor leaves out. Guards never anchor a trace, and a quote that did not match never does, nor does one
+//   whose file could not be read when it could match no file (no letter or digit, or no line from 1);
+// - its reach is "caller-shown" or "entry-point". Nothing checks the label, so it can only veto (I-2).
+// Quotes can only veto: a matching trace never verifies a finding the verifier did not confirm (I-2). Guards never veto:
+// the first MAX_FINDING_QUOTES are read, and those that match are kept as evidence. `noGuards` and `reason` are never
+// attached. `blobUnreadable` holds when the only failure is the trace and every quote that did not match is on a file
+// that could not be read (null or missing from the map) and could match were it read, so VS-44 wiring can fail closed
+// as `blob-unreadable` (I-7). A quote that could match no file, such as a lone `}`, leaves a plain mismatch, so a model
+// cannot turn a mismatch into an incomplete review by quoting punctuation in a file the engine did not read; so does a
+// file the tree lacks. Paths resolve as strictSelect resolves them (a diff path at head, a
+// renamed file's old path at base, a path outside the diff as written), a path that could leave the repository reads
+// as a file the tree lacks, and files are read as strictSelect reads them (lineReader), keyed as
+// certificateBlobRequests names them.
+export function certified(
+  finding: Pick<Finding, "id" | "path" | "line" | "endLine" | "side">,
+  certificate: VerifyCertificate,
+  input: Pick<StrictInput, "anchors" | "blobs">,
+): CertificateCheck {
+  return certify(finding, certificate, {
+    index: buildAnchorIndex(input.anchors),
+    anchors: input.anchors,
+    read: lineReader(input.blobs),
+  })
+}
+
+// Why a confirmed certificate failed certified(), in the order they are listed; "id" alone ends the check. "no-trace"
+// is a trace that is missing, empty or over MAX_TRACE_QUOTES, and "trace-unreadable" one the decoder could not keep
+// (VerifyCertificate.traceUnreadable), so a format failure is counted apart. "trace": some trace quote does not match.
+// "unanchored" is worked out over the quotes that matched, or whose file could not be read and that could match, so a
+// trace that is all invented shows both "trace" and "unanchored". "reach": it is "assumed" or could not be read.
+export const CERTIFICATE_MISMATCHES = ["id", "no-trace", "trace-unreadable", "trace", "unanchored", "reach"] as const
+export type CertificateMismatch = (typeof CERTIFICATE_MISMATCHES)[number]
+
+// The StrictDrop values VS-44 wiring adds after `verdict-unreadable`, as S1's: the verifier was unsure, or its
+// certificate failed certified(). They join STRICT_DROPS, and the result schema's enum under the key, with that wiring.
+export type CertificateDrop = "verdict-unsure" | "certificate-mismatch"
+
+export type CertificateCheck =
+  | ({ certified: true } & CertificateEvidence)
+  | { certified: false; drop: Extract<StrictDrop, "unverified"> | Extract<CertificateDrop, "verdict-unsure"> }
+  | {
+      certified: false
+      drop: Extract<CertificateDrop, "certificate-mismatch">
+      because: CertificateMismatch[]
+      blobUnreadable: boolean
+    }
+
+// The head and base paths certified() reads for these certificates, as the keys StrictBlobs must hold, so VS-44 wiring
+// merges them with strictBlobRequests. A certificate is paired with each finding of its id, and only a confirmed one
+// whose trace holds 1 to MAX_TRACE_QUOTES quotes is read: each trace quote's file and the first MAX_FINDING_QUOTES
+// guards' files, on their own sides, a quote with path "" naming the finding's file. That is exactly what certified()
+// reads for the pair. Paths resolve as strictBlobRequests resolves them, and a path that could leave the repository is
+// never named. Containment against the tree-ish stays the engine's (I-8).
+export function certificateBlobRequests(
+  findings: readonly Pick<Finding, "id" | "path">[],
+  certificates: readonly VerifyCertificate[],
+  anchors: DiffFile[],
+): { head: string[]; base: string[] } {
+  const index = buildAnchorIndex(anchors)
+  const wanted = certificates
+    .flatMap((certificate) => {
+      const quotes = certificateQuotes(certificate)
+      return findings
+        .filter((finding) => finding.id === certificate.id)
+        .flatMap((finding) => quotes.map((quote) => blobKey(index, quote.path || finding.path, quote.side)))
+    })
+    .filter((entry) => !ESCAPING_PATH.test(entry.path))
+  const keys = (side: Side) =>
+    [...new Set(wanted.filter((entry) => entry.side === side).map((entry) => entry.path))].toSorted()
+  return { head: keys("RIGHT"), base: keys("LEFT") }
+}
+
 // S4's matcher, exported for VS-42's preExistingSuspect and VS-44's certified() (I-10): whether a quote's code is the
 // text of its file at its line, apart from whitespace. A RIGHT quote reads `head` and a LEFT quote `base`; a text that
 // is missing or null never matches. Whitespace-only lines at the quote's start and end are left out first, its line
@@ -182,7 +278,8 @@ export function preExistingSuspect(
 // with no letter or digit (a lone `}` or `);`) matches nothing: it matches almost any file, so it is no evidence the
 // model read the code. It is positional: to ask whether head code also appears in base (VS-42), map its line to the
 // base first (trivial.ts otherSide, as preExistingSuspect does; diff.ts mapLine maps base to head) and pass a LEFT
-// quote at that line.
+// quote at that line. strictSelect, preExistingSuspect and certified() apply its body (matchAt) to the lines lineReader
+// gives, so all of them match a quote as this does.
 export function quoteMatches(quote: Quote, text: { head?: string | null; base?: string | null }): boolean {
   const file = quote.side === "LEFT" ? text.base : text.head
   return typeof file === "string" && matchAt(file.split(LINE_BREAK), quote)
@@ -513,6 +610,104 @@ function unchangedSinceBase(quote: Quote, context: SuspectContext): boolean | "u
   return base !== "absent" && matchAt(base, { ...trimmed, side: "LEFT", line })
 }
 
+// What certified() reads beside a finding: the diff, and each file's lines as lineReader gives them. Shared, so VS-44
+// wiring can check every certificate of a run through strictCandidates' one reader.
+type CertificateContext = { index: AnchorIndex; anchors: DiffFile[]; read: (side: Side, path: string) => FileLines }
+
+// certified() over a context already built (certified() lists the conditions).
+function certify(
+  finding: Pick<Finding, "id" | "path" | "line" | "endLine" | "side">,
+  certificate: VerifyCertificate,
+  context: CertificateContext,
+): CertificateCheck {
+  if (certificate.id !== finding.id)
+    return { certified: false, drop: "certificate-mismatch", because: ["id"], blobUnreadable: false }
+  if (certificate.verdict === "rejected") return { certified: false, drop: "unverified" }
+  if (certificate.verdict === "unsure") return { certified: false, drop: "verdict-unsure" }
+  const trace = usableTrace(certificate)
+  // The list certificateBlobRequests names, so certified() reads exactly that: the trace's quotes, then the guards'.
+  const read = certificateQuotes(certificate).map((quote) => readQuote(quote, finding.path, context))
+  const steps = read.slice(0, trace?.length ?? 0)
+  const guards = read.slice(steps.length).flatMap((entry) => (entry.matched ? [entry.quote] : []))
+  const resolved = resolveAnchor(context.index, finding)
+  const anchor = resolved.ok ? resolved.anchor : undefined
+  const unmatched = steps.filter((step) => !step.matched)
+  // A quote whose file could not be read and that could match were it read: only the read is missing for it.
+  const pending = (step: ReturnType<typeof readQuote>) =>
+    step.file === "unreadable" && matchable(step.quote) !== undefined
+  const reach =
+    certificate.reach === "caller-shown" || certificate.reach === "entry-point" ? certificate.reach : undefined
+  const because = CERTIFICATE_MISMATCHES.filter((reason) => {
+    if (reason === "no-trace") return !trace && certificate.traceUnreadable !== true
+    if (reason === "trace-unreadable") return !trace && certificate.traceUnreadable === true
+    if (reason === "trace") return unmatched.length > 0
+    if (reason === "unanchored")
+      return (
+        trace !== undefined && !steps.some((step) => (step.matched || pending(step)) && anchored(step, anchor, context))
+      )
+    if (reason === "reach") return reach === undefined
+    return false
+  })
+  // `reach` is tested again only so that TypeScript knows it is set: an unset reach is already in `because`.
+  if (because.length || reach === undefined)
+    return {
+      certified: false,
+      drop: "certificate-mismatch",
+      because,
+      blobUnreadable: because.length === 1 && because[0] === "trace" && unmatched.every(pending),
+    }
+  return { certified: true, trace: steps.map((step) => step.quote), guards, reach }
+}
+
+// A certificate's trace when certified() checks it: a confirmed verdict's trace of 1 to MAX_TRACE_QUOTES quotes.
+function usableTrace(certificate: VerifyCertificate) {
+  if (certificate.verdict !== "confirmed" || !certificate.trace) return undefined
+  return certificate.trace.length >= 1 && certificate.trace.length <= MAX_TRACE_QUOTES ? certificate.trace : undefined
+}
+
+// Every quote certified() reads for a certificate, in the order it reads them: its usable trace, then its first
+// MAX_FINDING_QUOTES guards, or nothing when the trace is not usable. certified() and certificateBlobRequests both read
+// this one list, so what is read is what is requested by construction.
+function certificateQuotes(certificate: VerifyCertificate) {
+  const trace = usableTrace(certificate)
+  return trace ? [...trace, ...certificate.guards.slice(0, MAX_FINDING_QUOTES)] : []
+}
+
+// One certificate quote read for certified(): at the path it names, or the finding's when it names none, resolved as
+// strictSelect resolves a quote's file.
+function readQuote(quote: Quote, findingPath: string, context: CertificateContext) {
+  const path = quote.path || findingPath
+  const key = blobKey(context.index, path, quote.side)
+  const own = { ...quote, path: key.path }
+  const file = context.read(quote.side, key.path)
+  return {
+    quote: own,
+    entry: lookupFile(context.index, path),
+    file,
+    matched: Array.isArray(file) && matchAt(file, own),
+  }
+}
+
+// Whether a trace quote lies in a change or on the anchor (certified() says how each is read).
+function anchored(
+  step: ReturnType<typeof readQuote>,
+  anchor: Anchor | undefined,
+  context: CertificateContext,
+): boolean {
+  const trimmed = trimQuote(step.quote)
+  const entry = step.entry
+  if (!trimmed || !entry) return false
+  const lines = Array.from({ length: trimmed.code.split(LINE_BREAK).length }, (_, offset) => trimmed.line + offset)
+  const changed =
+    step.quote.side === "RIGHT"
+      ? lines.some((line) => touched(context.anchors, entry.file.path, line, 0))
+      : lines.some((line) => entry.left.has(line))
+  if (changed) return true
+  if (!anchor || anchor.side !== step.quote.side || anchor.path !== entry.file.path) return false
+  const start = anchor.startLine ?? anchor.line
+  return lines.some((line) => line >= start && line <= anchor.line)
+}
+
 // S5: present, and at most MAX_FAILURE_TEXT_CHARS characters as JSON Schema's maxLength counts them: code points, which
 // Array.from yields, not UTF-16 units.
 function bounded(text: string) {
@@ -557,14 +752,23 @@ const LINE_BREAK = /\r\n?|\n/
 
 // quoteMatches over a file already split into lines.
 function matchAt(lines: readonly string[], quote: Quote) {
-  const trimmed = trimQuote(quote)
-  if (!trimmed || !Number.isSafeInteger(quote.line) || quote.line < 1) return false
+  const trimmed = matchable(quote)
+  if (!trimmed) return false
   const code = trimmed.code.split(LINE_BREAK)
-  const wanted = bare(code)
   const start = trimmed.line - 1
   const end = start + code.length
   if (end > lines.length) return false
-  return /[\p{L}\p{N}]/u.test(wanted) && bare(lines.slice(start, end)) === wanted
+  return bare(lines.slice(start, end)) === bare(code)
+}
+
+// A quote as matchAt compares it (trimQuote's form), or undefined when it can match no file whatever the file holds:
+// nothing but whitespace, a line that is not a whole number from 1, or no letter or digit (whitespace is neither, so
+// testing the trimmed code tests its bare form). certified() reads it to tell a quote whose unread file is all that is
+// missing from one that could never match.
+function matchable(quote: Quote) {
+  const trimmed = trimQuote(quote)
+  if (!trimmed || !Number.isSafeInteger(quote.line) || quote.line < 1) return undefined
+  return /[\p{L}\p{N}]/u.test(trimmed.code) ? trimmed : undefined
 }
 
 // S4's trimming rule, shared by S9 to find the head lines a quote spans: the quote without the whitespace-only lines at

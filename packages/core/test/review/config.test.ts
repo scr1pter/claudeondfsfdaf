@@ -798,6 +798,7 @@ describe("VS-24's keys", () => {
       impact: "grep",
       guardrail: "off",
       scopeGate: "off",
+      verifyEvidence: "off",
     })
   })
 
@@ -1035,6 +1036,93 @@ describe("VS-42's scopeGate key", () => {
     for (const text of [
       JSON.stringify({ scopeGate: "introduced" }),
       JSON.stringify({ guardrail: "strict", scopeGate: "introduced" }),
+    ]) {
+      expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, trigger: "auto" })).toEqual(
+        parseReviewConfig({ json: text, trigger: "auto" }),
+      )
+      expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
+        parseReviewConfig({ json: text, trigger: "desktop" }),
+      )
+    }
+  })
+})
+
+// VS-44a: `verifyEvidence` is parsed as scopeGate is, and no runner reads it before VS-44 wiring. It acts inside the
+// strict guardrail (S1's certificate check), so it is effective only with `guardrail: "strict"`: with it, the value says
+// it is not applied yet; without it, it is ignored with a note. A plain key with no environment variable.
+describe("VS-44's verifyEvidence key", () => {
+  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
+  const UNAPPLIED =
+    '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
+  const IGNORED =
+    '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
+  const GATE_UNAPPLIED =
+    '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
+  const GATE_IGNORED =
+    '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
+
+  test("has no default entry, so the defaults and their digests stay as they were", () => {
+    const { config, warnings } = parseReviewConfig()
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "verifyEvidence")).toBe(false)
+    expect(Object.hasOwn(config, "verifyEvidence")).toBe(false)
+    expect(warnings).toEqual([])
+    expect(OPTIONAL_REVIEW_DEFAULTS.verifyEvidence).toBe("off")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("verifyEvidence")
+    expect(SOURCED_REVIEW_KEYS).not.toContain("verifyEvidence")
+  })
+
+  test("under strict it says it is not applied; without strict it is ignored with a note, its value kept", () => {
+    const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
+    expect(json({ guardrail: "strict", verifyEvidence: "certificate" })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", verifyEvidence: "certificate" },
+      warnings: [STRICT, UNAPPLIED],
+    })
+    for (const value of [
+      { verifyEvidence: "certificate" },
+      { guardrail: "off", verifyEvidence: "certificate" },
+    ] as const)
+      expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
+    expect(json({ verifyEvidence: "off" })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, verifyEvidence: "off" },
+      warnings: [],
+    })
+    expect(json({ guardrail: "strict", verifyEvidence: "off" }).warnings).toEqual([STRICT])
+    // REVIEW_GUARDRAIL decides which warning a review.json verifyEvidence gets.
+    expect(
+      parseReviewConfig({
+        json: JSON.stringify({ verifyEvidence: "certificate" }),
+        env: { REVIEW_GUARDRAIL: "strict" },
+      }).warnings,
+    ).toEqual([STRICT, UNAPPLIED])
+    expect(
+      parseReviewConfig({
+        json: JSON.stringify({ guardrail: "strict", verifyEvidence: "certificate" }),
+        env: { REVIEW_GUARDRAIL: "off" },
+      }).warnings,
+    ).toEqual([IGNORED])
+    // Beside VS-42's key, each gets its own warning, in the keys' order.
+    expect(json({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([
+      STRICT,
+      GATE_UNAPPLIED,
+      UNAPPLIED,
+    ])
+    expect(json({ scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([GATE_IGNORED, IGNORED])
+  })
+
+  test("no environment variable sets it, and a bad value warns naming the value in use", () => {
+    expect(
+      parseReviewConfig({ env: { REVIEW_VERIFY_EVIDENCE: "certificate", REVIEW_VERIFYEVIDENCE: "certificate" } }),
+    ).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
+    expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict", verifyEvidence: "cert" }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
+      warnings: [`${REVIEW_CONFIG_PATH}: "verifyEvidence" must be "off", "certificate"; using "off".`, STRICT],
+    })
+  })
+
+  test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
+    for (const text of [
+      JSON.stringify({ verifyEvidence: "certificate" }),
+      JSON.stringify({ guardrail: "strict", verifyEvidence: "certificate" }),
     ]) {
       expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, trigger: "auto" })).toEqual(
         parseReviewConfig({ json: text, trigger: "auto" }),

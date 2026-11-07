@@ -142,8 +142,8 @@ export interface ReplayInput {
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
   // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from a trusted source through
   // mergeReviewConfig once a runner enforces it (VS-23b). Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
-  // VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's guardrail, VS-42's scopeGate). The type says so, and
-  // step 0b refuses any of them from an untyped caller.
+  // VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence).
+  // The type says so, and step 0b refuses any of them from an untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
   >
@@ -1154,6 +1154,7 @@ const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
   impact: "VS-25b wiring",
   guardrail: "VS-27c",
   scopeGate: "VS-42 wiring",
+  verifyEvidence: "VS-44 wiring",
 }
 
 // Why a replay's settings cannot name its run, if they cannot: a variant's key set through `config`, which would leave

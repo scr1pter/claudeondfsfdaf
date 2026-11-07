@@ -10,6 +10,9 @@ import {
 } from "@vectordevai/core/review/diff"
 import { normalizeCode } from "@vectordevai/core/review/fingerprint"
 import {
+  CERTIFICATE_MISMATCHES,
+  certificateBlobRequests,
+  certified,
   MAX_FIX_HUNKS,
   preExistingSuspect,
   quoteMatches,
@@ -22,7 +25,15 @@ import {
   type StrictInput,
 } from "@vectordevai/core/review/guardrail"
 import { buildSummaryBody } from "@vectordevai/core/review/format"
-import { decodeReport, MAX_FAILURE_TEXT_CHARS, strictResultJsonSchema } from "@vectordevai/core/review/schema"
+import {
+  decodeReport,
+  decodeVerifyCertificates,
+  ESCAPING_PATH,
+  MAX_FAILURE_TEXT_CHARS,
+  MAX_FINDING_QUOTES,
+  MAX_TRACE_QUOTES,
+  strictResultJsonSchema,
+} from "@vectordevai/core/review/schema"
 import { gap, MAX_INLINE, NEAR, sameFinding } from "@vectordevai/core/review/select"
 import {
   FAILURE_CLASSES,
@@ -34,6 +45,7 @@ import {
   type Quote,
   type StrictFinding,
   type StrictResult,
+  type VerifyCertificate,
 } from "@vectordevai/core/review/types"
 import type { VerdictCoverage } from "@vectordevai/core/review/verdict"
 import { violations } from "./fixtures/json-schema"
@@ -1493,5 +1505,603 @@ describe("strictSelect: properties", () => {
     expect(fates.some((fate) => fate.on === "kept")).toBe(true)
     // Suspects that an earlier rule drops keep that rule's reason.
     expect(fates.some((fate) => fate.suspect && fate.on !== "pre-existing")).toBe(true)
+  })
+})
+
+// VS-44a: the certificate check S1 will run under `verifyEvidence: "certificate"`. No rule in strictSelect calls it
+// before VS-44 wiring. The fixture is the change above: head line 3 sits next to the removed guard (base line 3), head
+// line 8 was added, and head lines 6 and 7 are unchanged context in the second hunk.
+const CLEAR_QUOTE: Quote = { path: SESSION, line: 6, side: "RIGHT", code: "export function clear(store) {" }
+
+function certificate(overrides: Partial<VerifyCertificate> = {}): VerifyCertificate {
+  return {
+    id: "c1",
+    verdict: "confirmed",
+    reason: "logout() clears the store before current() reads it.",
+    trace: [RETURN_QUOTE],
+    guards: [],
+    reach: "caller-shown",
+    ...overrides,
+  }
+}
+
+function certifiedOf(entry: Partial<Finding>, cert: VerifyCertificate, source: StrictInput["blobs"] = blobs()) {
+  return certified(finding({ id: "c1", ...entry }), cert, { anchors, blobs: source })
+}
+
+// The reasons a lone certificate failed for, or "certified".
+function becauseOf(entry: Partial<Finding>, cert: VerifyCertificate, source?: StrictInput["blobs"]) {
+  const result = certifiedOf(entry, cert, source)
+  if (result.certified) return "certified"
+  return "because" in result ? result.because : result.drop
+}
+
+function recorded(source: StrictInput["blobs"] = blobs()) {
+  const head = new Recording(source.head)
+  const base = new Recording(source.base)
+  return {
+    blobs: { head, base },
+    asked: () => ({ head: [...head.asked].toSorted(), base: [...base.asked].toSorted() }),
+  }
+}
+
+describe("certified: VS-44's certificate check (VS-44a)", () => {
+  test("a confirmed certificate whose trace matches, touches the change and is reached is certified", () => {
+    const cert = certificate({
+      trace: [
+        { ...RETURN_QUOTE, path: "./src/auth/session.ts" },
+        { path: "src/auth/token.ts", line: 1, side: "LEFT", code: "export const ttl = 60" },
+        FLUSH_QUOTE,
+      ],
+      guards: [RESET_QUOTE, { ...RESET_QUOTE, code: "  store.clear()" }],
+      noGuards: "Looked in logout().",
+    })
+    // The trace and the guards that matched, at the paths they were read from; noGuards and the reason stay out.
+    expect(certifiedOf({}, cert)).toEqual({
+      certified: true,
+      trace: [
+        RETURN_QUOTE,
+        { path: "src/auth/old-token.ts", line: 1, side: "LEFT", code: "export const ttl = 60" },
+        FLUSH_QUOTE,
+      ],
+      guards: [RESET_QUOTE],
+      reach: "caller-shown",
+    })
+    expect(certifiedOf({}, certificate({ reach: "entry-point" }))).toMatchObject({
+      certified: true,
+      reach: "entry-point",
+    })
+    // The finding's own path is resolved as strictSelect resolves it.
+    expect(becauseOf({ path: "b/src/auth/session.ts" }, certificate())).toBe("certified")
+  })
+
+  test("only a confirmed verdict certifies, and rejected or unsure reads no file (I-2)", () => {
+    for (const [verdict, drop] of [
+      ["rejected", "unverified"],
+      ["unsure", "verdict-unsure"],
+    ] as const) {
+      const source = recorded()
+      expect(certified(finding({ id: "c1" }), certificate({ verdict }), { anchors, blobs: source.blobs })).toEqual({
+        certified: false,
+        drop,
+      })
+      expect(source.asked()).toEqual({ head: [], base: [] })
+    }
+  })
+
+  test("a certificate for another finding is a mismatch on its id, and reads no file", () => {
+    const source = recorded()
+    expect(certified(finding({ id: "c2" }), certificate(), { anchors, blobs: source.blobs })).toEqual({
+      certified: false,
+      drop: "certificate-mismatch",
+      because: ["id"],
+      blobUnreadable: false,
+    })
+    expect(source.asked()).toEqual({ head: [], base: [] })
+  })
+
+  test("a fabricated trace is vetoed: every quote must be its file's text at its line", () => {
+    for (const quote of [
+      { ...RETURN_QUOTE, code: "  return session.id" },
+      { ...RESET_QUOTE, line: 6 },
+      { ...GUARD_QUOTE, side: "RIGHT" as const },
+      // A quote with no letter or digit matches almost anywhere, so it matches nothing.
+      { path: SESSION, line: 4, side: "RIGHT" as const, code: "}" },
+      // A file the tree lacks: a plain mismatch (a file missing from the map is one the engine could not read).
+      { ...RETURN_QUOTE, path: "src/auth/missing.ts" },
+    ])
+      expect(
+        certifiedOf(
+          {},
+          certificate({ trace: [RETURN_QUOTE, quote] }),
+          blobs({ "src/auth/missing.ts": { absent: true } }),
+        ),
+      ).toEqual({
+        certified: false,
+        drop: "certificate-mismatch",
+        because: ["trace"],
+        blobUnreadable: false,
+      })
+  })
+
+  test("the matcher forgives whitespace and CRLF, and reads a LEFT quote against the base, at a rename's old path", () => {
+    const crlf = blobs({ [SESSION]: SESSION_HEAD.replaceAll("\n", "\r\n") })
+    expect(
+      becauseOf({}, certificate({ trace: [{ ...RETURN_QUOTE, code: "return   session.user.id\r\n" }] }), crlf),
+    ).toBe("certified")
+    expect(becauseOf({}, certificate({ trace: [GUARD_QUOTE] }))).toBe("certified")
+    const renamed = { path: "src/auth/token.ts", line: 1, side: "LEFT" as const, code: "export const ttl = 60" }
+    expect(becauseOf({ path: "src/auth/token.ts", line: 1 }, certificate({ trace: [renamed] }))).toBe("certified")
+    expect(
+      becauseOf({}, certificate({ trace: [renamed] }), blobs({}, { "src/auth/old-token.ts": { absent: true } })),
+    ).toEqual(["trace", "unanchored"])
+  })
+
+  test("a trace that is missing, empty or over the cap reads no file, and one the decoder could not keep is counted apart", () => {
+    for (const trace of [undefined, [], Array.from({ length: MAX_TRACE_QUOTES + 1 }, () => RETURN_QUOTE)]) {
+      const source = recorded()
+      const cert = certificate({ trace, guards: [RESET_QUOTE] })
+      expect(certified(finding({ id: "c1" }), cert, { anchors, blobs: source.blobs })).toEqual({
+        certified: false,
+        drop: "certificate-mismatch",
+        because: ["no-trace"],
+        blobUnreadable: false,
+      })
+      expect(source.asked()).toEqual({ head: [], base: [] })
+    }
+    expect(becauseOf({}, certificate({ trace: undefined, traceUnreadable: true }))).toEqual(["trace-unreadable"])
+    expect(becauseOf({}, certificate({ trace: [], traceUnreadable: true, reach: "assumed" }))).toEqual([
+      "trace-unreadable",
+      "reach",
+    ])
+    // The flag is read only when there is no trace to check.
+    expect(becauseOf({}, certificate({ traceUnreadable: true }))).toBe("certified")
+    expect(becauseOf({}, certificate({ trace: Array.from({ length: MAX_TRACE_QUOTES }, () => RETURN_QUOTE) }))).toBe(
+      "certified",
+    )
+    // Through the decoder: a trace with one malformed quote is a format failure, not a missing trace.
+    const decode = (trace: unknown) =>
+      decodeVerifyCertificates([{ id: "c1", verdict: "confirmed", reason: "r", trace, reach: "caller-shown" }])![0]
+    expect(becauseOf({}, decode([RETURN_QUOTE, { ...FLUSH_QUOTE, line: 0 }]))).toEqual(["trace-unreadable"])
+    expect(becauseOf({}, decode(undefined))).toEqual(["no-trace"])
+    expect(becauseOf({}, decode([RETURN_QUOTE, FLUSH_QUOTE]))).toBe("certified")
+  })
+
+  test("an assumed or unreadable reach vetoes; caller-shown and entry-point only let a certificate through", () => {
+    expect(becauseOf({}, certificate({ reach: "assumed" }))).toEqual(["reach"])
+    expect(becauseOf({}, certificate({ reach: undefined }))).toEqual(["reach"])
+    expect(becauseOf({}, certificate({ reach: "assumed", trace: [{ ...RETURN_QUOTE, code: "x1" }] }))).toEqual([
+      "trace",
+      "unanchored",
+      "reach",
+    ])
+    // A reach the model claims never saves a trace that fails.
+    expect(becauseOf({}, certificate({ reach: "entry-point", trace: [RESET_QUOTE] }))).toEqual(["unanchored"])
+  })
+
+  test("a trace of unchanged code only is unanchored, measured at the anchor resolveAnchor places", () => {
+    // The finding sits on a changed line, but its trace quotes only unchanged code elsewhere.
+    expect(becauseOf({}, certificate({ trace: [RESET_QUOTE] }))).toEqual(["unanchored"])
+    expect(becauseOf({}, certificate({ trace: [STORE_QUOTE] }))).toEqual(["unanchored"])
+    // A single-hunk range: its anchor spans 6 to 8, so unchanged context inside it is on the anchor.
+    const index = buildAnchorIndex(anchors)
+    expect(resolveAnchor(index, { path: SESSION, line: 6, endLine: 8, side: "RIGHT" })).toMatchObject({
+      anchor: { line: 8, startLine: 6 },
+    })
+    expect(becauseOf({ line: 6, endLine: 8 }, certificate({ trace: [CLEAR_QUOTE, RESET_QUOTE] }))).toBe("certified")
+    // A range across hunks is anchored on its last line only, so the model's own range never widens it.
+    const across = resolveAnchor(index, { path: SESSION, line: 1, endLine: 8, side: "RIGHT" })
+    expect(across).toMatchObject({ anchor: { line: 8 } })
+    expect(across.ok && across.anchor.startLine).toBeUndefined()
+    expect(becauseOf({ line: 1, endLine: 8 }, certificate({ trace: [RESET_QUOTE] }))).toEqual(["unanchored"])
+    // A snapped anchor is the line it snapped to, and nothing around it.
+    expect(resolveAnchor(index, { path: SESSION, line: 10, side: "RIGHT" })).toMatchObject({ anchor: { line: 8 } })
+    expect(becauseOf({ line: 10 }, certificate({ trace: [RESET_QUOTE] }))).toEqual(["unanchored"])
+    expect(becauseOf({ line: 10 }, certificate({ trace: [FLUSH_QUOTE] }))).toBe("certified")
+  })
+
+  test("on the anchor means its side and its file too; a LEFT quote anchors on a removed line", () => {
+    // Base line 7 is unchanged and inside a RIGHT anchor's line numbers: the side differs, so it is not on the anchor.
+    const baseClear = { path: SESSION, line: 7, side: "LEFT" as const, code: "export function clear(store) {" }
+    expect(becauseOf({ line: 6, endLine: 8 }, certificate({ trace: [baseClear] }))).toEqual(["unanchored"])
+    // Head line 1 of session.ts is unchanged and inside token.ts's anchor (1 to 2): another file.
+    const token = { path: "src/auth/token.ts", line: 1, endLine: 2 }
+    const sessionTop = { path: SESSION, line: 1, side: "RIGHT" as const, code: "export function current(store) {" }
+    expect(becauseOf(token, certificate({ trace: [sessionTop] }))).toEqual(["unanchored"])
+    expect(becauseOf(token, certificate({ trace: [NAME_QUOTE] }))).toBe("certified")
+    // A LEFT anchor: base line 4 is unchanged; the removed guard on base line 3 is a change.
+    const baseReturn = { path: SESSION, line: 4, side: "LEFT" as const, code: "  return session.user.id" }
+    expect(becauseOf({ side: "LEFT" }, certificate({ trace: [baseReturn] }))).toEqual(["unanchored"])
+    expect(becauseOf({ side: "LEFT" }, certificate({ trace: [GUARD_QUOTE] }))).toBe("certified")
+    expect(becauseOf({ line: 6, endLine: 8 }, certificate({ trace: [GUARD_QUOTE] }))).toBe("certified")
+  })
+
+  test("guards never anchor a trace, and an unmatched quote anchors only when its unread file is all that is missing", () => {
+    expect(becauseOf({}, certificate({ trace: [RESET_QUOTE], guards: [RETURN_QUOTE, FLUSH_QUOTE] }))).toEqual([
+      "unanchored",
+    ])
+    // An invented quote on a changed line does not hide that the rest is unchanged code.
+    expect(
+      becauseOf({}, certificate({ trace: [RESET_QUOTE, { ...RETURN_QUOTE, code: "  return session.id" }] })),
+    ).toEqual(["trace", "unanchored"])
+    // A quote on token.ts's added line whose file could not be read still anchors, so the read is all that is missing.
+    const ttl = { path: "src/auth/token.ts", line: 1, side: "RIGHT" as const, code: "export const ttl = 0" }
+    const cert = certificate({ trace: [RESET_QUOTE, ttl] })
+    expect(certifiedOf({}, cert, blobs({ "src/auth/token.ts": null }))).toEqual({
+      certified: false,
+      drop: "certificate-mismatch",
+      because: ["trace"],
+      blobUnreadable: true,
+    })
+    expect(certifiedOf({}, cert, blobs({ "src/auth/token.ts": { absent: true } }))).toEqual({
+      certified: false,
+      drop: "certificate-mismatch",
+      because: ["trace", "unanchored"],
+      blobUnreadable: false,
+    })
+    // Nor does a quote on that line that could match no file were it read: a lone `}` is not a read away from matching.
+    expect(
+      certifiedOf(
+        {},
+        certificate({ trace: [RESET_QUOTE, { ...ttl, code: "}" }] }),
+        blobs({ "src/auth/token.ts": null }),
+      ),
+    ).toEqual({
+      certified: false,
+      drop: "certificate-mismatch",
+      because: ["trace", "unanchored"],
+      blobUnreadable: false,
+    })
+  })
+
+  test("blobUnreadable holds only when a file the engine could not read is all that stands in the way (I-7)", () => {
+    const cert = certificate({ trace: [RETURN_QUOTE, STORE_QUOTE] })
+    const missing = blobs()
+    const head = new Map(missing.head)
+    head.delete("src/auth/store.ts")
+    for (const source of [blobs({ "src/auth/store.ts": null }), { head, base: missing.base }])
+      expect(certifiedOf({}, cert, source)).toMatchObject({ because: ["trace"], blobUnreadable: true })
+    // A file the tree lacks is a plain mismatch, as is a path that could leave the repository, which is never read.
+    expect(certifiedOf({}, cert, blobs({ "src/auth/store.ts": { absent: true } }))).toMatchObject({
+      because: ["trace"],
+      blobUnreadable: false,
+    })
+    const source = recorded()
+    const escaping = certificate({ trace: [RETURN_QUOTE, { ...STORE_QUOTE, path: "src/../../etc/passwd" }] })
+    expect(certified(finding({ id: "c1" }), escaping, { anchors, blobs: source.blobs })).toMatchObject({
+      because: ["trace"],
+      blobUnreadable: false,
+    })
+    expect(source.asked()).toEqual({ head: [SESSION], base: [] })
+    // Another reason, or another quote that read and did not match, means the read is not all that is missing.
+    const unread = blobs({ "src/auth/store.ts": null })
+    expect(certifiedOf({}, { ...cert, reach: "assumed" }, unread)).toMatchObject({
+      because: ["trace", "reach"],
+      blobUnreadable: false,
+    })
+    const invented = { ...RETURN_QUOTE, code: "  return session.id" }
+    expect(certifiedOf({}, { ...cert, trace: [...cert.trace!, invented] }, unread)).toMatchObject({
+      because: ["trace"],
+      blobUnreadable: false,
+    })
+    // So does a quote on a file the engine could not read that could match no file were it read: a lone `}` (no letter
+    // or digit), a quote of whitespace only, or one before the first line. A model cannot turn a mismatch into an
+    // incomplete review by quoting punctuation in a file the engine did not read.
+    for (const quote of [
+      { ...STORE_QUOTE, line: 3, code: "}" },
+      { ...STORE_QUOTE, code: " \n  " },
+      { ...STORE_QUOTE, line: 0 },
+    ])
+      expect(certifiedOf({}, certificate({ trace: [RETURN_QUOTE, quote] }), unread)).toEqual({
+        certified: false,
+        drop: "certificate-mismatch",
+        because: ["trace"],
+        blobUnreadable: false,
+      })
+  })
+
+  test("guards never veto, and only the first MAX_FINDING_QUOTES are read", () => {
+    const guards = [
+      { ...RESET_QUOTE, code: "  store.clear()" },
+      STORE_QUOTE,
+      { ...RESET_QUOTE, path: "src/auth/missing.ts" },
+      { ...RESET_QUOTE, path: "../secret.ts" },
+      RESET_QUOTE,
+    ]
+    expect(certifiedOf({}, certificate({ guards }), blobs({ "src/auth/store.ts": null }))).toEqual({
+      certified: true,
+      trace: [RETURN_QUOTE],
+      guards: [RESET_QUOTE],
+      reach: "caller-shown",
+    })
+    const late = [...Array.from({ length: MAX_FINDING_QUOTES }, () => ({ ...RESET_QUOTE, line: 1 })), STORE_QUOTE]
+    const source = recorded()
+    expect(
+      certified(finding({ id: "c1" }), certificate({ guards: late }), { anchors, blobs: source.blobs }),
+    ).toMatchObject({ certified: true, guards: [] })
+    expect(source.asked()).toEqual({ head: [SESSION], base: [] })
+    expect(certificateBlobRequests([finding({ id: "c1" })], [certificate({ guards: late })], anchors)).toEqual({
+      head: [SESSION],
+      base: [],
+    })
+  })
+
+  test("a quote with path '' is the finding's file, for the check and for the requests", () => {
+    const cert = certificate({ trace: [{ ...RETURN_QUOTE, path: "" }], guards: [{ ...STORE_QUOTE, path: "" }] })
+    expect(certifiedOf({ path: "./src/auth/session.ts" }, cert)).toEqual({
+      certified: true,
+      trace: [RETURN_QUOTE],
+      guards: [],
+      reach: "caller-shown",
+    })
+    expect(certificateBlobRequests([finding({ id: "c1", path: "./src/auth/session.ts" })], [cert], anchors)).toEqual({
+      head: [SESSION],
+      base: [],
+    })
+    // Through the decoder, which keeps path "" for a quote with none.
+    const decoded = decodeVerifyCertificates({
+      results: [
+        {
+          id: "c1",
+          verdict: "confirmed",
+          reason: "r",
+          trace: [{ line: 3, code: "  return session.user.id" }],
+          reach: "entry-point",
+        },
+      ],
+    })![0]
+    expect(becauseOf({}, decoded)).toBe("certified")
+  })
+})
+
+describe("certificateBlobRequests (VS-44a)", () => {
+  test("names, once each and sorted, exactly what certified() reads for each finding with a certificate of its id", () => {
+    const entries = [
+      finding({ id: "c1" }),
+      finding({ id: "c2" }),
+      finding({ id: "c3" }),
+      finding({ id: "c4" }),
+      finding({ id: "c5", path: "src/auth/token.ts", line: 1 }),
+    ]
+    const certificates = [
+      certificate({
+        trace: [RETURN_QUOTE, { path: "src/auth/token.ts", line: 1, side: "LEFT", code: "export const ttl = 60" }],
+        guards: [STORE_QUOTE, { ...STORE_QUOTE, path: "src/../../etc/passwd" }],
+      }),
+      // Nothing is read for a verdict other than confirmed, for an unusable trace, or for an id with no finding.
+      certificate({ id: "c2", verdict: "rejected", trace: [{ ...STORE_QUOTE, path: "src/auth/rejected.ts" }] }),
+      certificate({ id: "c3", verdict: "unsure", trace: [{ ...STORE_QUOTE, path: "src/auth/unsure.ts" }] }),
+      certificate({ id: "c4", trace: Array.from({ length: MAX_TRACE_QUOTES + 1 }, () => STORE_QUOTE) }),
+      certificate({ id: "c9", trace: [{ ...STORE_QUOTE, path: "src/auth/orphan.ts" }] }),
+      certificate({ id: "c5", trace: [{ ...NAME_QUOTE, path: "" }] }),
+    ]
+    expect(certificateBlobRequests(entries, certificates, anchors)).toEqual({
+      head: [SESSION, "src/auth/store.ts", "src/auth/token.ts"],
+      base: ["src/auth/old-token.ts"],
+    })
+    for (const entry of entries)
+      for (const cert of certificates.filter((item) => item.id === entry.id)) {
+        const source = recorded()
+        certified(entry, cert, { anchors, blobs: source.blobs })
+        expect(source.asked()).toEqual(certificateBlobRequests([entry], [cert], anchors))
+      }
+    expect(certificateBlobRequests([], certificates, anchors)).toEqual({ head: [], base: [] })
+  })
+})
+
+// certified() over generated findings, certificates and blobs: what it certifies is a confirmed certificate of the
+// finding whose whole trace matches, touches the change or the anchor, and is reached; its outcome never depends on the
+// guards; and it reads exactly what certificateBlobRequests names. Where a quote is read and where it anchors are
+// written out by hand from the diff above, not worked out through blobKey, touched or resolveAnchor, so a misreading
+// that the checker shares with those helpers still fails here.
+describe("certified: properties (VS-44a)", () => {
+  // Each place a finding sits, with the positions (side, read path, line) its anchor covers: a line in a hunk is its
+  // own anchor, a range inside one hunk keeps its whole span, a range across hunks only its last line, a line past a
+  // hunk snaps to the hunk's nearest line, and a file outside the diff has no anchor.
+  const places: { at: Pick<Finding, "path" | "line" | "endLine" | "side">; anchor: string[] }[] = [
+    { at: { path: SESSION, line: 3, side: "RIGHT" }, anchor: [`RIGHT ${SESSION} 3`] },
+    { at: { path: SESSION, line: 7, side: "RIGHT" }, anchor: [`RIGHT ${SESSION} 7`] },
+    {
+      at: { path: SESSION, line: 6, endLine: 8, side: "RIGHT" },
+      anchor: [`RIGHT ${SESSION} 6`, `RIGHT ${SESSION} 7`, `RIGHT ${SESSION} 8`],
+    },
+    { at: { path: SESSION, line: 1, endLine: 8, side: "RIGHT" }, anchor: [`RIGHT ${SESSION} 8`] },
+    { at: { path: SESSION, line: 10, side: "RIGHT" }, anchor: [`RIGHT ${SESSION} 8`] },
+    { at: { path: SESSION, line: 3, side: "LEFT" }, anchor: [`LEFT ${SESSION} 3`] },
+    { at: { path: "./src/auth/session.ts", line: 8, side: "RIGHT" }, anchor: [`RIGHT ${SESSION} 8`] },
+    {
+      at: { path: "src/auth/token.ts", line: 1, endLine: 2, side: "RIGHT" },
+      anchor: ["RIGHT src/auth/token.ts 1", "RIGHT src/auth/token.ts 2"],
+    },
+    { at: { path: "src/auth/store.ts", line: 2, side: "RIGHT" }, anchor: [] },
+  ]
+  // The positions the change touched: session.ts's head lines 2 and 3 sit on either side of the removed guard (base
+  // line 3) and head line 8 was added; token.ts's head line 1 replaced base line 1, which is read at old-token.ts.
+  const CHANGED = new Set([
+    `RIGHT ${SESSION} 2`,
+    `RIGHT ${SESSION} 3`,
+    `RIGHT ${SESSION} 8`,
+    "RIGHT src/auth/token.ts 1",
+    `LEFT ${SESSION} 3`,
+    "LEFT src/auth/old-token.ts 1",
+  ])
+  // Every quote is one line, so a quote's position is its line.
+  const pool: Quote[] = [
+    RETURN_QUOTE,
+    GUARD_QUOTE,
+    FLUSH_QUOTE,
+    RESET_QUOTE,
+    CLEAR_QUOTE,
+    STORE_QUOTE,
+    NAME_QUOTE,
+    { ...RESET_QUOTE, path: "" },
+    { path: SESSION, line: 7, side: "LEFT", code: "export function clear(store) {" },
+    { path: "src/auth/token.ts", line: 1, side: "LEFT", code: "export const ttl = 60" },
+    { path: "src/auth/token.ts", line: 1, side: "RIGHT", code: "export const ttl = 0" },
+    { path: SESSION, line: 3, side: "RIGHT", code: "  return session.id" },
+    { path: SESSION, line: 4, side: "RIGHT", code: "}" },
+    // No letter or digit, on a file the engine may not have read (outside the diff, and on a changed line): never a
+    // read away from matching, so neither marks the read as all that is missing, nor anchors a trace.
+    { path: "src/auth/store.ts", line: 3, side: "RIGHT", code: "}" },
+    { path: "src/auth/token.ts", line: 1, side: "RIGHT", code: "}" },
+    { path: "src/auth/missing.ts", line: 1, side: "RIGHT", code: "x" },
+    { path: "../secret.ts", line: 1, side: "RIGHT", code: "x" },
+  ]
+
+  function random(seed: number) {
+    let state = seed >>> 0
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0
+      let value = state
+      value = Math.imul(value ^ (value >>> 15), value | 1)
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  function generate(seed: number) {
+    const next = random(seed)
+    const pick = <T>(list: readonly T[]) => list[Math.floor(next() * list.length)]
+    const place = pick(places)
+    const entry = finding({ id: "c1", ...place.at })
+    const cert: VerifyCertificate = {
+      id: next() < 0.1 ? "c2" : "c1",
+      verdict: pick(["confirmed", "confirmed", "confirmed", "confirmed", "rejected", "unsure"] as const),
+      reason: "r",
+      ...(next() < 0.1 ? {} : { trace: Array.from({ length: Math.floor(next() * 8) }, () => pick(pool)) }),
+      ...(next() < 0.15 ? { traceUnreadable: true as const } : {}),
+      guards: Array.from({ length: Math.floor(next() * 9) }, () => pick(pool)),
+      ...(next() < 0.8 ? { reach: pick(["caller-shown", "entry-point", "entry-point", "assumed"] as const) } : {}),
+    }
+    const store = pick([STORE_HEAD, STORE_HEAD, null, undefined])
+    const token = pick([TOKEN_HEAD, TOKEN_HEAD, null])
+    const absent = next() < 0.5
+    const head = new Map<string, StrictBlob>([
+      [SESSION, SESSION_HEAD],
+      ["src/auth/token.ts", token],
+      ...(store === undefined ? [] : [["src/auth/store.ts", store] as const]),
+      ...(absent ? [["src/auth/missing.ts", { absent: true }] as const] : []),
+    ])
+    const base = new Map<string, StrictBlob>([
+      [SESSION, SESSION_BASE],
+      ["src/auth/old-token.ts", TOKEN_BASE],
+    ])
+    return { entry, anchor: new Set(place.anchor), cert, blobs: { head, base } }
+  }
+
+  test("over 400 generated cases", () => {
+    expect(pool.every((quote) => !quote.code.includes("\n"))).toBe(true)
+    const seen = new Set<string>()
+    const text = (blob: StrictBlob | undefined) => (typeof blob === "string" ? blob : null)
+    // A quote matches the file at the path it was read from, as S4 reads it.
+    const matches = (quote: Quote, source: StrictInput["blobs"]) =>
+      quoteMatches(quote, { head: text(source.head.get(quote.path)), base: text(source.base.get(quote.path)) })
+    // Where the fixture reads a quote: the finding's file when it names none, without a leading "./", and the renamed
+    // token.ts at its old path on the base side.
+    const read = (quote: Quote, entry: Finding) => {
+      const path = (quote.path || entry.path).replace(/^\.\//, "")
+      return { ...quote, path: quote.side === "LEFT" && path === "src/auth/token.ts" ? "src/auth/old-token.ts" : path }
+    }
+    const position = (quote: Quote) => `${quote.side} ${quote.path} ${quote.line}`
+    // Its file could not be read: null or missing from the map, at a path that could not leave the repository.
+    const unread = (quote: Quote, source: StrictInput["blobs"]) => {
+      const blob = (quote.side === "RIGHT" ? source.head : source.base).get(quote.path)
+      return !ESCAPING_PATH.test(quote.path) && (blob === null || blob === undefined)
+    }
+    // Only the read is missing: its file could not be read, and it has a letter or digit, so it could match.
+    const pending = (quote: Quote, source: StrictInput["blobs"]) =>
+      unread(quote, source) && /[\p{L}\p{N}]/u.test(quote.code)
+    for (const seed of Array.from({ length: 400 }, (_, value) => value + 1)) {
+      const generated = generate(seed)
+      const entry = generated.entry
+      const cert = generated.cert
+      const source = recorded(generated.blobs)
+      const result = certified(entry, cert, { anchors, blobs: source.blobs })
+      // A quote anchors when it touches the change or lies on the finding's anchor.
+      const anchoring = (quote: Quote) => CHANGED.has(position(quote)) || generated.anchor.has(position(quote))
+      // It reads exactly what certificateBlobRequests names for the pair.
+      expect(source.asked()).toEqual(certificateBlobRequests([entry], [cert], anchors))
+      // certified, drop, because and blobUnreadable never depend on the guards: their order, or whether there are any.
+      const outcome = (check: ReturnType<typeof certified>) =>
+        check.certified ? { certified: true, trace: check.trace, reach: check.reach } : check
+      for (const guards of [cert.guards.toReversed(), []])
+        expect(outcome(certified(entry, { ...cert, guards }, { anchors, blobs: generated.blobs }))).toEqual(
+          outcome(result),
+        )
+      if (result.certified) {
+        seen.add("certified")
+        expect(cert).toMatchObject({ id: entry.id, verdict: "confirmed", reach: result.reach })
+        expect(["caller-shown", "entry-point"]).toContain(result.reach)
+        // The whole trace, at the paths it was read from, every quote matching, and one of them anchoring.
+        expect(result.trace).toEqual(cert.trace!.map((quote) => read(quote, entry)))
+        expect(result.trace.length).toBeLessThanOrEqual(MAX_TRACE_QUOTES)
+        expect(result.trace.every((quote) => matches(quote, generated.blobs))).toBe(true)
+        expect(result.trace.some(anchoring)).toBe(true)
+        // The guards are the matched ones among the first MAX_FINDING_QUOTES, in input order.
+        expect(result.guards).toEqual(
+          cert.guards
+            .slice(0, MAX_FINDING_QUOTES)
+            .map((quote) => read(quote, entry))
+            .filter((quote) => matches(quote, generated.blobs)),
+        )
+        if (result.guards.length) seen.add("guards")
+        continue
+      }
+      if (!("because" in result)) {
+        seen.add(result.drop)
+        expect(cert.id).toBe(entry.id)
+        expect(result.drop).toBe(cert.verdict === "rejected" ? "unverified" : "verdict-unsure")
+        continue
+      }
+      seen.add(result.blobUnreadable ? "blob-unreadable" : "mismatch")
+      for (const reason of result.because) seen.add(reason)
+      expect(result.because.length).toBeGreaterThan(0)
+      // In CERTIFICATE_MISMATCHES order, each once; "id" alone ends the check.
+      expect(result.because).toEqual(CERTIFICATE_MISMATCHES.filter((reason) => result.because.includes(reason)))
+      if (cert.id !== entry.id) {
+        expect(result).toEqual({
+          certified: false,
+          drop: "certificate-mismatch",
+          because: ["id"],
+          blobUnreadable: false,
+        })
+        continue
+      }
+      expect(cert.verdict).toBe("confirmed")
+      const usable = cert.trace !== undefined && cert.trace.length >= 1 && cert.trace.length <= MAX_TRACE_QUOTES
+      const trace = usable ? cert.trace!.map((quote) => read(quote, entry)) : []
+      const unmatched = trace.filter((quote) => !matches(quote, generated.blobs))
+      expect(result.because.includes("no-trace") || result.because.includes("trace-unreadable")).toBe(!usable)
+      expect(result.because.includes("trace-unreadable")).toBe(!usable && cert.traceUnreadable === true)
+      expect(result.because.includes("reach")).toBe(cert.reach !== "caller-shown" && cert.reach !== "entry-point")
+      expect(result.because.includes("trace")).toBe(unmatched.length > 0)
+      // Anchoring is read over the quotes that matched, and those for which only the read is missing.
+      expect(result.because.includes("unanchored")).toBe(
+        usable &&
+          !trace.some(
+            (quote) => (matches(quote, generated.blobs) || pending(quote, generated.blobs)) && anchoring(quote),
+          ),
+      )
+      // The trace is all that failed, and only the read is missing for every quote that did not match.
+      expect(result.blobUnreadable).toBe(
+        result.because.length === 1 &&
+          result.because[0] === "trace" &&
+          unmatched.every((quote) => pending(quote, generated.blobs)),
+      )
+      if (unmatched.some((quote) => unread(quote, generated.blobs) && !pending(quote, generated.blobs)))
+        seen.add("unmatchable-unread")
+    }
+    expect([...seen].toSorted()).toEqual(
+      [
+        "certified",
+        "guards",
+        "unverified",
+        "verdict-unsure",
+        "mismatch",
+        "blob-unreadable",
+        "unmatchable-unread",
+        ...CERTIFICATE_MISMATCHES,
+      ].toSorted(),
+    )
   })
 })

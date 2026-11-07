@@ -4,6 +4,8 @@
 
 import {
   CATEGORIES,
+  CERTIFICATE_REACH,
+  CERTIFICATE_VERDICTS,
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
   SEVERITIES,
@@ -20,6 +22,7 @@ import {
   type RuleCitation,
   type RuleSource,
   type Severity,
+  type VerifyCertificate,
 } from "./types"
 
 export const MAX_TITLE_CHARS = 100
@@ -41,6 +44,9 @@ export const MAX_QUOTE_LINES = 20
 export const MAX_QUOTE_CHARS = 2_000
 // VS-43's structured rule quote (decodeRuleCitation): a longer one is dropped, never cut, as a code quote is.
 export const MAX_RULE_QUOTE_CHARS = 1_000
+// VS-44's certificate trace: 1 to this many quotes from the trigger to the failure, kept whole or not at all
+// (decodeVerifyCertificates), as many as a finding may quote. Its guards are capped as a finding's quotes are.
+export const MAX_TRACE_QUOTES = MAX_FINDING_QUOTES
 // A quote path that could leave the repository: a `..` segment, a backslash or a drive. decodeQuote drops such a quote,
 // and guardrail.ts never asks for or reads its file, for findings built without the decoder too.
 export const ESCAPING_PATH = /(^|\/)\.\.(\/|$)|\\|^[A-Za-z]:/
@@ -134,9 +140,10 @@ export const VERIFY_JSON_SCHEMA = {
 // The keys the strict schemas depend on. Each later key widens this and adds its field or enum value only when set, so
 // the `guardrail: "strict"` schemas, and the digest they enter, stay as they are while it is off: VS-42 with scopeGate
 // (the result schema's `pre-existing` drop now; the report schema's `scope` field with VS-42 wiring), VS-43 with
-// ruleCheck (the structured rule) and VS-44 with verifyEvidence (its certificate schema). Without `guardrail: "strict"`
-// every later key is ignored, as the guardrail ignores it.
-export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail" | "scopeGate">>
+// ruleCheck (the structured rule) and VS-44 with verifyEvidence (its certificate schema, verifyCertJsonSchema, now; its
+// drops and the result's certificate field with VS-44 wiring). Without `guardrail: "strict"` every later key is
+// ignored, as the guardrail ignores it.
+export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail" | "scopeGate" | "verifyEvidence">>
 
 // The report schema under `guardrail: "strict"` (VS-27a), or undefined when it is off: the legacy report schema with a
 // finding's `failure`, `quotes` and `patch` added. A finding's `required` list is the legacy one, because conservative
@@ -196,7 +203,8 @@ export function strictReportJsonSchema(keys: StrictSchemaKeys) {
 // to a model; VS-27c checks the JSON outcome against it. A lane deviation from the contract's STRICT_RESULT_JSON_SCHEMA
 // constant (the round-two amendment names only the report schema): later keys add StrictDrop values (VS-42's
 // `pre-existing`, VS-44's `certificate-mismatch` and `verdict-unsure`) and fields, each only under its key, so a strict
-// review validates against the schema built for its own keys.
+// review validates against the schema built for its own keys. VS-44's drops and its finding's certificate field join
+// with VS-44 wiring, so until then this schema is the same whatever verifyEvidence says.
 export function strictResultJsonSchema(keys: StrictSchemaKeys) {
   if (keys.guardrail !== "strict") return undefined
   return {
@@ -271,6 +279,57 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
       fixUnchecked: { type: "integer", minimum: 0 },
     },
     required: ["version", "head", "complete", "findings", "dropped", "fixUnchecked"],
+  }
+}
+
+// The verify schema under `guardrail: "strict"` with `verifyEvidence: "certificate"` (VS-44), or undefined otherwise: the
+// legacy verify schema with `unsure` as a verdict, and each result's certificate (`trace`, `guards`, `noGuards` and
+// `reach`) added. The round-two amendment's builder form of the addendum's VERIFY_CERT_JSON_SCHEMA, built from a deep
+// copy as strictReportJsonSchema is. Its `required` list is the legacy one: fixed claims are answered in the same
+// results and a rejected verdict needs no trace, so certified() enforces the rest. The caps are in the descriptions,
+// not in minItems or maxItems, so a provider sees only the keywords the legacy schemas already send; the decoder and
+// certified() enforce them. The text is untuned (tuning waits for the held-out freeze, I-13). It enters promptsDigest
+// only under both keys, and no runner sends it before VS-44 wiring (with VS-27c's blind candidate).
+export function verifyCertJsonSchema(keys: StrictSchemaKeys) {
+  if (keys.guardrail !== "strict" || keys.verifyEvidence !== "certificate") return undefined
+  const legacy = structuredClone(VERIFY_JSON_SCHEMA)
+  const result = legacy.properties.results.items
+  return {
+    ...legacy,
+    properties: {
+      ...legacy.properties,
+      results: {
+        ...legacy.properties.results,
+        items: {
+          ...result,
+          properties: {
+            ...result.properties,
+            verdict: { ...result.properties.verdict, enum: [...CERTIFICATE_VERDICTS] },
+            trace: {
+              type: "array",
+              description: `Required with confirmed: 1 to ${MAX_TRACE_QUOTES} quotes of the code from the trigger to the failure, in that order, each copied exactly.`,
+              items: quoteSchema(),
+            },
+            guards: {
+              type: "array",
+              description: `Up to ${MAX_FINDING_QUOTES} quotes of the checks on that path that could stop the failure, each copied exactly.`,
+              items: quoteSchema(),
+            },
+            noGuards: {
+              type: "string",
+              maxLength: MAX_FAILURE_TEXT_CHARS,
+              description: "When guards is empty: where you looked for a guard, in one sentence.",
+            },
+            reach: {
+              type: "string",
+              enum: [...CERTIFICATE_REACH],
+              description:
+                "How the failing path is reached: caller-shown when the trace quotes a caller that reaches it, entry-point when the code is itself an entry point, assumed otherwise.",
+            },
+          },
+        },
+      },
+    },
   }
 }
 
@@ -398,25 +457,7 @@ export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): Model
 }
 
 export function decodeVerify(input: unknown): VerifyResult[] | undefined {
-  const value =
-    typeof input === "string"
-      ? extractJson(input, (candidate) => {
-          // Only results that name a finding and a verdict count, so unrelated JSON cannot read as "no findings
-          // confirmed".
-          const entries = isRecord(candidate) ? candidate.results : candidate
-          return (
-            Array.isArray(entries) &&
-            entries.some(
-              (entry) => isRecord(entry) && !!text(entry.id) && /^(confirm|reject)/.test(lower(entry.verdict)),
-            )
-          )
-        })
-      : input
-  const entries = Array.isArray(value)
-    ? value
-    : isRecord(value) && Array.isArray(value.results)
-      ? value.results
-      : undefined
+  const entries = verifyEntries(input, /^(confirm|reject)/)
   if (!entries) return undefined
   return entries.flatMap((entry: unknown) => {
     if (!isRecord(entry)) return []
@@ -426,6 +467,95 @@ export function decodeVerify(input: unknown): VerifyResult[] | undefined {
     if (!id || !verdict) return []
     return [{ id, verdict, reason: oneLine(text(entry.reason)) } as VerifyResult]
   })
+}
+
+// The results of a verify answer, or undefined when it has none: the answer when it is a list, its `results` when that
+// is one, and in text the first JSON value holding such a list in which some result names a finding and a verdict that
+// `verdicts` (a pattern without the g flag) accepts, so unrelated JSON cannot read as "no findings confirmed".
+// decodeVerify and decodeVerifyCertificates share it and differ only in the verdicts they accept.
+function verifyEntries(input: unknown, verdicts: RegExp): unknown[] | undefined {
+  const value =
+    typeof input === "string"
+      ? extractJson(input, (candidate) => {
+          const entries = isRecord(candidate) ? candidate.results : candidate
+          return (
+            Array.isArray(entries) &&
+            entries.some((entry) => isRecord(entry) && !!text(entry.id) && verdicts.test(lower(entry.verdict)))
+          )
+        })
+      : input
+  if (Array.isArray(value)) return value
+  return isRecord(value) && Array.isArray(value.results) ? value.results : undefined
+}
+
+// A verify answer under verifyCertJsonSchema (VS-44), in decodeVerify's shape, so that VS-44 wiring can pass it as the
+// verify pass's decoder whenever verifyCertJsonSchema(keys) is defined; nothing calls it before then, and decodeVerify
+// reads every answer as it did (the two share verifyEntries). A result needs an id and a verdict read by how it starts
+// ("confirm", "reject" or "unsure"); any other verdict drops the result, so its id stays unanswered and still fails
+// closed (`verdict-unreadable`). Its trace is read as strictly as a finding's quotes are (decodeQuote), and kept whole
+// or not at all: an array of 1 to MAX_TRACE_QUOTES entries that all decode. A quote with a bad line, an escaping path,
+// or no code or code over a cap, more than MAX_TRACE_QUOTES entries, or a trace that is not a list (one quote object,
+// or a non-blank text) leaves the trace out and marks it traceUnreadable; it is never cut, since a part of a trace is
+// not a path from the trigger to the failure. An absent or null trace, an empty list or a blank text is no trace, and
+// is not marked. A quote with no path keeps path "", which certified() reads as the finding's file; the decoder does
+// not know that file, so such a quote of a Markdown file loses a fence around it.
+// Guards are the first MAX_FINDING_QUOTES that decode among the first MAX_QUOTES_READ entries, as a finding's quotes
+// are. `noGuards` is one line of at most MAX_FAILURE_TEXT_CHARS code points, dropped when longer, and `reach` is read
+// in any case, with spaces or underscores for hyphens; anything else leaves it out, which certified() reads as
+// "assumed". Results with the same id are all kept: VS-44 wiring decides what conflicting ones mean.
+export function decodeVerifyCertificates(input: unknown): VerifyCertificate[] | undefined {
+  const entries = verifyEntries(input, /^(confirm|reject|unsure)/)
+  if (!entries) return undefined
+  return entries.flatMap((entry: unknown): VerifyCertificate[] => {
+    if (!isRecord(entry)) return []
+    const id = text(entry.id)
+    const said = lower(entry.verdict)
+    const verdict = CERTIFICATE_VERDICT_PREFIXES.find((item) => said.startsWith(item.prefix))?.verdict
+    if (!id || !verdict) return []
+    const noGuards = oneLine(text(entry.noGuards))
+    const reach = CERTIFICATE_REACH.find((name) => name === lower(entry.reach).replace(/[\s_]+/g, "-"))
+    return [
+      {
+        id,
+        verdict,
+        reason: oneLine(text(entry.reason)),
+        ...decodeTrace(entry.trace),
+        guards: list(entry.guards)
+          .slice(0, MAX_QUOTES_READ)
+          .flatMap((item) => {
+            const quote = decodeQuote(item, "")
+            return quote ? [quote] : []
+          })
+          .slice(0, MAX_FINDING_QUOTES),
+        ...(noGuards && Array.from(noGuards).length <= MAX_FAILURE_TEXT_CHARS ? { noGuards } : {}),
+        ...(reach ? { reach } : {}),
+      },
+    ]
+  })
+}
+
+const CERTIFICATE_VERDICT_PREFIXES = [
+  { prefix: "confirm", verdict: "confirmed" },
+  { prefix: "reject", verdict: "rejected" },
+  { prefix: "unsure", verdict: "unsure" },
+] as const
+
+// A certificate's trace, whole or not at all: kept when it is 1 to MAX_TRACE_QUOTES entries that all decode. Absent,
+// null, an empty list or a blank text is no trace; anything else is marked unreadable, a non-empty list it cannot keep
+// and a value that is not a list alike (one quote object, or a text such as "src/a.ts:3"), so a format failure is
+// counted apart from a missing trace.
+function decodeTrace(input: unknown): Pick<VerifyCertificate, "trace" | "traceUnreadable"> {
+  if (input === undefined || input === null || (typeof input === "string" && input.trim() === "")) return {}
+  if (!Array.isArray(input)) return { traceUnreadable: true }
+  if (input.length === 0) return {}
+  const trace =
+    input.length > MAX_TRACE_QUOTES
+      ? []
+      : input.flatMap((entry) => {
+          const quote = decodeQuote(entry, "")
+          return quote ? [quote] : []
+        })
+  return trace.length === input.length ? { trace } : { traceUnreadable: true }
 }
 
 // Why decodeRuleCitation refused a citation: not an object (the legacy quoted text, among others), a source it cannot

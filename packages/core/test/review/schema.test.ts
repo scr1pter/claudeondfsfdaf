@@ -4,6 +4,7 @@ import {
   decodeReport,
   decodeRuleCitation,
   decodeVerify,
+  decodeVerifyCertificates,
   extractJson,
   MAX_FAILURE_TEXT_CHARS,
   MAX_FINDING_QUOTES,
@@ -14,13 +15,17 @@ import {
   MAX_RULE_QUOTE_CHARS,
   MAX_SUGGESTION_CHARS,
   MAX_TITLE_CHARS,
+  MAX_TRACE_QUOTES,
   REVIEW_REPORT_JSON_SCHEMA,
   strictReportJsonSchema,
   strictResultJsonSchema,
   VERIFY_JSON_SCHEMA,
+  verifyCertJsonSchema,
 } from "@vectordevai/core/review/schema"
 import {
   CATEGORIES,
+  CERTIFICATE_REACH,
+  CERTIFICATE_VERDICTS,
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
   FINDING_SCOPES,
@@ -1057,5 +1062,238 @@ describe("decodeRuleCitation (VS-43a)", () => {
         quote,
       )
     }
+  })
+})
+
+// VS-44a: the certificate verify schema and its decoder. Nothing sends the schema or calls the decoder before VS-44
+// wiring, with VS-27c.
+describe("the certificate verify schema (VS-44a)", () => {
+  const CERT = { guardrail: "strict", verifyEvidence: "certificate" } as const
+
+  test("exists only under guardrail: strict with verifyEvidence: certificate", () => {
+    for (const keys of [
+      {},
+      STRICT,
+      { verifyEvidence: "certificate" as const },
+      { guardrail: "off" as const, verifyEvidence: "certificate" as const },
+      { guardrail: "strict" as const, verifyEvidence: "off" as const },
+      { guardrail: "strict" as const, scopeGate: "introduced" as const },
+    ])
+      expect(verifyCertJsonSchema(keys)).toBeUndefined()
+    expect(verifyCertJsonSchema(CERT)).toBeDefined()
+    expect(verifyCertJsonSchema({ ...CERT, scopeGate: "introduced" })).toEqual(verifyCertJsonSchema(CERT))
+    expect([...CERTIFICATE_VERDICTS]).toEqual(["confirmed", "rejected", "unsure"])
+    expect([...CERTIFICATE_REACH]).toEqual(["caller-shown", "entry-point", "assumed"])
+    expect(MAX_TRACE_QUOTES).toBe(6)
+  })
+
+  test("is the legacy verify schema with unsure and a certificate added to each result", () => {
+    const cert = verifyCertJsonSchema(CERT)!
+    const legacy = VERIFY_JSON_SCHEMA.properties.results.items
+    const result = cert.properties.results.items
+    expect(Object.keys(result.properties)).toEqual([
+      ...Object.keys(legacy.properties),
+      "trace",
+      "guards",
+      "noGuards",
+      "reach",
+    ])
+    expect(result.properties.verdict).toEqual({ ...legacy.properties.verdict, enum: [...CERTIFICATE_VERDICTS] })
+    expect({
+      ...cert,
+      properties: { ...cert.properties, results: VERIFY_JSON_SCHEMA.properties.results },
+    }).toEqual(VERIFY_JSON_SCHEMA)
+    // Fixed claims share the results, and a rejected verdict needs no trace: certified() enforces the rest.
+    expect(result.required).toEqual(legacy.required)
+    expect({ ...result, properties: legacy.properties }).toEqual({ ...legacy, properties: legacy.properties })
+    for (const name of ["trace", "guards"] as const) {
+      expect(result.properties[name].type).toBe("array")
+      expect(result.properties[name].items).toEqual(
+        strictReportJsonSchema(STRICT)!.properties.findings.items.properties.quotes.items,
+      )
+    }
+    expect(result.properties.trace.description).toContain(`1 to ${MAX_TRACE_QUOTES} quotes`)
+    expect(result.properties.guards.description).toContain(`Up to ${MAX_FINDING_QUOTES} quotes`)
+    expect(result.properties.noGuards).toMatchObject({ type: "string", maxLength: MAX_FAILURE_TEXT_CHARS })
+    expect(result.properties.reach).toMatchObject({ type: "string", enum: [...CERTIFICATE_REACH] })
+  })
+
+  test("shares no object with the legacy schema or another call, and sends no keyword the legacy schemas lack", () => {
+    const cert = verifyCertJsonSchema(CERT)!
+    // The legacy enum never holds "unsure", so a shared array would show it there.
+    cert.properties.results.items.properties.verdict.enum.push("unsure")
+    cert.properties.results.items.required.push("trace")
+    cert.properties.results.items.properties.trace.items.required.push("extra")
+    expect(VERIFY_JSON_SCHEMA.properties.results.items.properties.verdict.enum).toEqual(["confirmed", "rejected"])
+    expect(VERIFY_JSON_SCHEMA.properties.results.items.required).toEqual(["id", "verdict", "reason"])
+    expect(verifyCertJsonSchema(CERT)).not.toEqual(cert)
+    expect(verifyCertJsonSchema(CERT)).not.toBe(verifyCertJsonSchema(CERT))
+    const fresh = verifyCertJsonSchema(CERT)!.properties.results.items.properties
+    expect(fresh.trace.items).not.toBe(fresh.guards.items)
+    // It goes to providers in a forced tool call, so it sends only keywords the legacy schemas already send.
+    const legacy = new Set([...keywords(VERIFY_JSON_SCHEMA), ...keywords(REVIEW_REPORT_JSON_SCHEMA)])
+    expect(keywords(verifyCertJsonSchema(CERT)).filter((key) => !legacy.has(key))).toEqual([])
+    expect(keywords(verifyCertJsonSchema(CERT))).not.toContain("maxItems")
+    expect(keywords(verifyCertJsonSchema(CERT))).not.toContain("minItems")
+  })
+
+  test("a certificate answer conforms, a legacy answer still does, and a malformed one does not", () => {
+    const schema = verifyCertJsonSchema(CERT)!
+    const quote = { path: "src/a.ts", line: 3, side: "RIGHT", code: "x" }
+    const answer = (result: Record<string, unknown>) => ({
+      results: [{ id: "a", verdict: "confirmed", reason: "r", ...result }],
+    })
+    expect(violations(schema, answer({}))).toEqual([])
+    expect(violations(schema, answer({ verdict: "unsure" }))).toEqual([])
+    expect(
+      violations(schema, answer({ trace: [quote], guards: [], noGuards: "Read the caller.", reach: "caller-shown" })),
+    ).toEqual([])
+    expect(violations(VERIFY_JSON_SCHEMA, answer({ verdict: "unsure" }))).toEqual([
+      "$.results[0].verdict is not in its enum",
+    ])
+    expect(violations(schema, answer({ reach: "probably" }))).toEqual(["$.results[0].reach is not in its enum"])
+    expect(violations(schema, answer({ trace: [{ ...quote, line: 0 }] }))).toEqual([
+      "$.results[0].trace[0].line is under its minimum",
+    ])
+    expect(violations(schema, answer({ noGuards: "n".repeat(MAX_FAILURE_TEXT_CHARS + 1) }))).toEqual([
+      "$.results[0].noGuards is too long",
+    ])
+  })
+})
+
+describe("decodeVerifyCertificates (VS-44a)", () => {
+  const quote = (line: number, code = `line ${line}`) => ({ path: "src/a.ts", line, side: "RIGHT", code })
+  const decoded = (line: number, code = `line ${line}`) => ({ path: "src/a.ts", line, side: "RIGHT" as const, code })
+  const one = (result: Record<string, unknown>) =>
+    decodeVerifyCertificates({ results: [{ id: "a", verdict: "confirmed", reason: "r", ...result }] })?.[0]
+
+  test("reads a certificate, and leaves decodeVerify as it was", () => {
+    const answer = {
+      results: [
+        {
+          id: "a",
+          verdict: "Confirmed.",
+          reason: " The caller\n passes null. ",
+          trace: [quote(3), { ...quote(9), side: "left" }],
+          guards: [quote(5)],
+          noGuards: "  ignored  when guards are given ",
+          reach: "Caller shown",
+        },
+        { id: "b", verdict: "reject", reason: "Not reachable." },
+        { id: "c", verdict: "UNSURE", reason: "Could not tell." },
+        { id: "d", verdict: "maybe", reason: "?" },
+        { verdict: "confirmed" },
+      ],
+    }
+    expect(decodeVerifyCertificates(answer)).toEqual([
+      {
+        id: "a",
+        verdict: "confirmed",
+        reason: "The caller passes null.",
+        trace: [decoded(3), { ...decoded(9), side: "LEFT" }],
+        guards: [decoded(5)],
+        noGuards: "ignored when guards are given",
+        reach: "caller-shown",
+      },
+      { id: "b", verdict: "rejected", reason: "Not reachable.", guards: [] },
+      { id: "c", verdict: "unsure", reason: "Could not tell.", guards: [] },
+    ])
+    // decodeVerify reads the same answer as it always has: unsure drops, so its id stays unanswered.
+    expect(decodeVerify(answer)).toEqual([
+      { id: "a", verdict: "confirmed", reason: "The caller passes null." },
+      { id: "b", verdict: "rejected", reason: "Not reachable." },
+    ])
+  })
+
+  test("accepts a bare array or text, and returns undefined when there are no results", () => {
+    expect(decodeVerifyCertificates([{ id: "a", verdict: "unsure", reason: "r" }])).toEqual([
+      { id: "a", verdict: "unsure", reason: "r", guards: [] },
+    ])
+    expect(
+      decodeVerifyCertificates(
+        '```json\n{"path":"src/a.ts"}\n```\nThen: {"results":[{"id":"a","verdict":"unsure","reason":"r"}]} done.',
+      ),
+    ).toEqual([{ id: "a", verdict: "unsure", reason: "r", guards: [] }])
+    // The two decoders differ only in the verdicts they accept: text whose only results are unsure is no answer to
+    // decodeVerify.
+    expect(decodeVerify('{"results":[{"id":"a","verdict":"unsure","reason":"r"}]}')).toBeUndefined()
+    expect(decodeVerifyCertificates('{"results":[{"id":"a","verdict":"unsure","reason":"r"}]}')).toHaveLength(1)
+    expect(decodeVerifyCertificates('Files I read: {"results":["src/a.ts"]}')).toBeUndefined()
+    expect(decodeVerifyCertificates({ summary: "no results" })).toBeUndefined()
+    expect(decodeVerifyCertificates("nothing")).toBeUndefined()
+    expect(decodeVerifyCertificates({ results: [] })).toEqual([])
+    // Results with the same id are all kept: what conflicting ones mean is VS-44 wiring's to decide.
+    expect(
+      decodeVerifyCertificates([
+        { id: "a", verdict: "confirmed", reason: "r" },
+        { id: "a", verdict: "rejected", reason: "r" },
+      ])?.map((entry) => entry.verdict),
+    ).toEqual(["confirmed", "rejected"])
+  })
+
+  test("keeps a trace whole or not at all, and marks one it could not keep", () => {
+    const six = Array.from({ length: MAX_TRACE_QUOTES }, (_, index) => quote(index + 1))
+    expect(one({ trace: six })?.trace).toEqual(six.map((entry) => decoded(entry.line)))
+    const dropped = [
+      [...six, quote(7)],
+      [quote(1), { ...quote(2), line: 0 }],
+      [quote(1), { ...quote(2), line: "line 2" }],
+      [quote(1), { ...quote(2), path: "../secret.ts" }],
+      [quote(1), { ...quote(2), code: "" }],
+      [quote(1), { ...quote(2), code: "x".repeat(MAX_QUOTE_CHARS + 1) }],
+      [quote(1), { ...quote(2), code: Array.from({ length: MAX_QUOTE_LINES + 1 }, () => "x").join("\n") }],
+      [quote(1), "src/a.ts:2"],
+    ]
+    // A trace that is not a list is a format failure too: one quote object instead of a list, or a text.
+    for (const trace of [...dropped, quote(1), "src/a.ts:3", "none", 3, false]) {
+      const certificate = one({ trace })
+      expect(certificate).not.toHaveProperty("trace")
+      expect(certificate?.traceUnreadable).toBe(true)
+    }
+    // No trace, a null one, an empty list or a blank text is no trace, and is not marked.
+    for (const trace of [undefined, null, [], "", " \n "]) {
+      const certificate = one({ trace })
+      expect(certificate).not.toHaveProperty("trace")
+      expect(certificate).not.toHaveProperty("traceUnreadable")
+    }
+  })
+
+  test("a quote with no path keeps path '', for certified() to read as the finding's file", () => {
+    const { path: _, ...pathless } = quote(4)
+    expect(one({ trace: [pathless], guards: [{ ...pathless, path: "  " }] })).toMatchObject({
+      trace: [{ ...decoded(4), path: "" }],
+      guards: [{ ...decoded(4), path: "" }],
+    })
+    // A line given as text is read as decodeQuote reads it, and the line moves past empty lines the cleaning strips.
+    expect(one({ trace: [{ ...quote(4), line: "L4", code: "\n\nline 6" }] })?.trace).toEqual([decoded(6)])
+  })
+
+  test("keeps the first guards that decode, at most MAX_FINDING_QUOTES of the first MAX_QUOTES_READ", () => {
+    const bad = { ...quote(1), line: 0 }
+    const guards = [bad, ...Array.from({ length: MAX_FINDING_QUOTES + 2 }, (_, index) => quote(index + 1))]
+    expect(one({ guards })?.guards).toEqual(
+      Array.from({ length: MAX_FINDING_QUOTES }, (_, index) => decoded(index + 1)),
+    )
+    const late = [...Array.from({ length: MAX_QUOTES_READ }, () => bad), quote(1)]
+    expect(one({ guards: late })?.guards).toEqual([])
+    // A bad guard never drops the trace or the certificate.
+    expect(one({ trace: [quote(1)], guards: [bad] })).toMatchObject({ trace: [decoded(1)], guards: [] })
+    expect(one({ guards: "none" })?.guards).toEqual([])
+  })
+
+  test("noGuards is one line, dropped rather than cut when too long; reach is read leniently or left out", () => {
+    expect(one({ noGuards: " Looked in\n the caller. " })?.noGuards).toBe("Looked in the caller.")
+    expect(one({ noGuards: "é".repeat(MAX_FAILURE_TEXT_CHARS) })?.noGuards).toHaveLength(MAX_FAILURE_TEXT_CHARS)
+    expect(one({ noGuards: "n".repeat(MAX_FAILURE_TEXT_CHARS + 1) })).not.toHaveProperty("noGuards")
+    expect(one({ noGuards: "   " })).not.toHaveProperty("noGuards")
+    expect(one({ noGuards: 4 })).not.toHaveProperty("noGuards")
+    for (const [said, reach] of [
+      ["caller-shown", "caller-shown"],
+      ["Entry Point", "entry-point"],
+      ["entry_point", "entry-point"],
+      [" ASSUMED ", "assumed"],
+    ] as const)
+      expect(one({ reach: said })?.reach).toBe(reach)
+    for (const said of ["callers", "shown", "", 3, undefined]) expect(one({ reach: said })).not.toHaveProperty("reach")
   })
 })

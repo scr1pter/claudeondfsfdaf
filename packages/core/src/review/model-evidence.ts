@@ -27,7 +27,13 @@ import {
   type PromptInput,
   type VerifyPromptInput,
 } from "./prompt"
-import { REVIEW_REPORT_JSON_SCHEMA, strictReportJsonSchema, strictResultJsonSchema, VERIFY_JSON_SCHEMA } from "./schema"
+import {
+  REVIEW_REPORT_JSON_SCHEMA,
+  strictReportJsonSchema,
+  strictResultJsonSchema,
+  VERIFY_JSON_SCHEMA,
+  verifyCertJsonSchema,
+} from "./schema"
 import {
   OPTIONAL_REVIEW_DEFAULT_OF,
   UNAPPLIED_REVIEW_KEYS,
@@ -47,7 +53,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "c8568097f8a427b4"
+export const REVIEW_PIPELINE_SOURCES = "e8054845bd8f2858"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -59,7 +65,8 @@ export const MAX_CERTIFICATE_DAYS = 90
 // `maxInputTokens` is a budget. VS-25's `impact` is one (the slice is context the model reviews with), counted from
 // VS-25b wiring on, and then only as "graph". VS-27's `guardrail` is one (it selects what is posted), counted from VS-27c
 // on, and then only as "strict". VS-42's `scopeGate` is one (S9 drops what would be posted), counted from VS-42 wiring
-// on, and then only as "introduced" under `guardrail: "strict"`.
+// on, and then only as "introduced" under `guardrail: "strict"`. VS-44's `verifyEvidence` is one (S1's certificate check
+// drops what would be posted), counted from VS-44 wiring on, and then only as "certificate" under `guardrail: "strict"`.
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -75,6 +82,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "impact",
   "guardrail",
   "scopeGate",
+  "verifyEvidence",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -391,19 +399,25 @@ const prompts = new Map<string, string>()
 // does (canonicalPrompts). Memoised per set of prompt keys; with none set it is the digest it has always been. The
 // strict schemas (VS-27a) come last, and only under `guardrail: "strict"`, so the digest of every other set of keys
 // stays as it was. VS-42's `scopeGate: "introduced"` changes them (the result schema's `pre-existing` drop) only under
-// strict, so it joins the memo key only there.
-export function promptsDigest(keys: Partial<Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate">> = {}): string {
+// strict, so it joins the memo key only there. VS-44's `verifyEvidence: "certificate"` adds the certificate verify schema
+// (verifyCertJsonSchema) after them, also only under strict.
+export function promptsDigest(
+  keys: Partial<Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate" | "verifyEvidence">> = {},
+): string {
   const strict = keys.guardrail === "strict"
   const key = [
     keys.impact === "graph" ? "impact:graph" : "",
     strict ? "guardrail:strict" : "",
     strict && keys.scopeGate === "introduced" ? "scopeGate:introduced" : "",
+    strict && keys.verifyEvidence === "certificate" ? "verifyEvidence:certificate" : "",
   ]
     .filter(Boolean)
     .join(",")
   const cached = prompts.get(key)
   if (cached) return cached
-  const schemas = [strictReportJsonSchema(keys), strictResultJsonSchema(keys)].filter((schema) => schema !== undefined)
+  const schemas = [strictReportJsonSchema(keys), strictResultJsonSchema(keys), verifyCertJsonSchema(keys)].filter(
+    (schema) => schema !== undefined,
+  )
   const digest = fnv1a64(
     JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA, ...schemas]),
   )
@@ -439,7 +453,7 @@ export function evidenceScope(input: {
     adapter: input.adapter,
     pipeline: REVIEW_PIPELINE_REVISION,
     // The impact block and the strict schemas enter the prompts only once a runner applies their key (it leaves
-    // UNAPPLIED_REVIEW_KEYS), and VS-42's schema change only once both its key and strict are applied.
+    // UNAPPLIED_REVIEW_KEYS), and VS-42's and VS-44's schema changes only once both their key and strict are applied.
     prompts: promptsDigest({
       ...(input.config.impact === "graph" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "impact")
         ? { impact: "graph" as const }
@@ -451,6 +465,11 @@ export function evidenceScope(input: {
       input.config.scopeGate === "introduced" &&
       !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail" || key === "scopeGate")
         ? { scopeGate: "introduced" as const }
+        : {}),
+      ...(input.config.guardrail === "strict" &&
+      input.config.verifyEvidence === "certificate" &&
+      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail" || key === "verifyEvidence")
+        ? { verifyEvidence: "certificate" as const }
         : {}),
     }),
     policy: policyDigest(input.config),

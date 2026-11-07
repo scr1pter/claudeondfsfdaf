@@ -991,6 +991,74 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-44a: the same for `verifyEvidence`. A base review.json that sets it, with or without strict, is replayed and
+  // recorded without it (and without the guardrail), keeping the parser's warnings. The verify pass is asked with the
+  // legacy verify schema and its answer read by the legacy decoder, so a certificate sent anyway changes nothing, and the
+  // scope claims neither the policy nor the certificate schema.
+  it.instance(
+    "replays a base review.json that sets VS-44's verifyEvidence without it, verifying as before",
+    () =>
+      Effect.gen(function* () {
+        const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
+        const UNAPPLIED =
+          '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
+        const IGNORED =
+          '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
+        for (const [settings, warnings] of [
+          [{ guardrail: "strict", verifyEvidence: "certificate" }, [STRICT, UNAPPLIED]],
+          [{ verifyEvidence: "certificate" }, [IGNORED]],
+        ] as const) {
+          const { directory, llm, base, head } = yield* checkout({
+            base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify(settings) },
+            head: { "src/list.ts": LIST_HEAD },
+            price: PRICE,
+          })
+          const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+          const [bugID] = Review.normalizeFindings([listBug], "review", anchors).map((item) => item.id)
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([listBug])))
+          // A certificate that certified() would refuse (an invented trace, an assumed reach) is not read.
+          yield* llm.pushMatch(
+            VERIFY,
+            reply().tool("StructuredOutput", {
+              results: [
+                {
+                  id: bugID,
+                  verdict: "confirmed",
+                  reason: "Reproduced.",
+                  trace: [{ path: "src/list.ts", line: 1, side: "RIGHT", code: "invented()" }],
+                  reach: "assumed",
+                },
+              ],
+            }),
+          )
+          const artifact = yield* ReviewEval.replay({
+            case: replayCase(directory, base, head),
+            model: MODEL,
+            config: { maxCostUsd: 2, minConfidence: 0.5 },
+            posting: ReviewEval.recordingPosting(),
+            check: recordingCheck().check,
+          })
+          for (const key of ["guardrail", "verifyEvidence"])
+            expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          expect(artifact.config.warnings).toEqual([...warnings])
+          expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
+          expect(artifact.scope.prompts).toBe(promptsDigest())
+          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" }))
+          // The verify request carries the legacy verify schema, with no certificate field and no unsure verdict. The
+          // fake provider is shared across the loop, so this case's request is the last one.
+          const body = JSON.stringify((yield* llm.hits).filter(VERIFY).at(-1)!.body)
+          expect(body).toContain('"confirmed","rejected"')
+          for (const field of ['"trace"', '"guards"', '"noGuards"', '"reach"', '"unsure"'])
+            expect(body).not.toContain(field)
+          const placed = artifact.outcome?.selection.inline ?? []
+          expect(placed.map((finding) => [finding.title, finding.verified])).toEqual([[listBug.title, true]])
+          expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+        }
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
   it.instance(
     "a variant on the shared verify policy gets the policy's default unless the base's review.json sets verify",
     () =>
@@ -1125,6 +1193,15 @@ describe("ReviewEval.replay", () => {
         )
         expect(yield* refused({ config: { guardrail: "strict", scopeGate: "off" } })).toContain(
           "config sets guardrail, scopeGate, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate)",
+        )
+        // Nor VS-44's verifyEvidence, which VS-44 wiring applies, alone or beside the guardrail and VS-42's key.
+        expect(yield* refused({ config: { verifyEvidence: "certificate" } })).toContain(
+          "config sets verifyEvidence, which no runner applies yet (VS-44 wiring), so the artifact would record a setting the run did not have.",
+        )
+        expect(
+          yield* refused({ config: { guardrail: "strict", scopeGate: "introduced", verifyEvidence: "off" } }),
+        ).toContain(
+          "config sets guardrail, scopeGate, verifyEvidence, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate; VS-44 wiring for verifyEvidence)",
         )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(

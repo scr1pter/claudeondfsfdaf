@@ -83,7 +83,7 @@ export interface FailureInfo {
   impact: string // what breaks when it does
 }
 // Code a finding rests on, copied out of a file: the head file on the RIGHT side, the base file on the LEFT side (code
-// the change removed). The one quote type: VS-44's verify trace reuses it.
+// the change removed). The one quote type: VS-44's verify trace and guards reuse it (VerifyCertificate).
 export interface Quote {
   path: string
   line: number // the quote's first line
@@ -113,6 +113,36 @@ export interface RuleCitation {
   quote: string
   lines?: { start: number; end: number }
 }
+// VS-44's verify certificate (addendum A): the verifier's verdict on one finding, with the code that shows it. Produced
+// only under `verifyEvidence: "certificate"` with `guardrail: "strict"`, by schema.ts decodeVerifyCertificates, and
+// checked by guardrail.ts certified(); nothing produces or checks one before VS-44 wiring (with VS-27c).
+export const CERTIFICATE_VERDICTS = ["confirmed", "rejected", "unsure"] as const
+export type CertificateVerdict = (typeof CERTIFICATE_VERDICTS)[number]
+// How the failing path is reached, as the verifier says. Nothing checks the label, so it can only veto (I-2): "assumed"
+// never certifies a finding, and the other two only let one through.
+export const CERTIFICATE_REACH = ["caller-shown", "entry-point", "assumed"] as const
+export type CertificateReach = (typeof CERTIFICATE_REACH)[number]
+export interface VerifyCertificate {
+  id: string
+  verdict: CertificateVerdict
+  reason: string
+  // 1 to 6 quotes from the trigger to the failure, kept whole or not at all. A quote with path "" is the finding's file.
+  trace?: Quote[]
+  // Set by the decoder when the model sent a trace it could not keep (a quote that did not decode, more than 6, or a
+  // value that is not a list and not blank), so a format failure is counted apart from a missing trace. Read only when
+  // `trace` is absent.
+  traceUnreadable?: true
+  guards: Quote[] // the checks on the path that could stop the failure; they never veto a certificate
+  noGuards?: string // where the verifier looked for a guard, when it found none
+  reach?: CertificateReach // absent when it could not be read, which certified() reads as "assumed"
+}
+// What certified() leaves to attach to a certified finding's StrictFinding [GP3]: its trace and the guards that
+// matched, at the paths they were read from, and its reach. No StrictFinding carries it before VS-44 wiring.
+export interface CertificateEvidence {
+  trace: Quote[]
+  guards: Quote[]
+  reach: Exclude<CertificateReach, "assumed">
+}
 // "unchecked": no committable suggestion and no patch that applies, so the fix is shown as a plain diff block (S6).
 export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
 // Why strictSelect dropped a candidate, in the order its rules are checked (S1 to S5, S9, then S6 to S8). The
@@ -124,6 +154,8 @@ export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
 // none (schema.ts), so it reads as `out-of-scope`. VS-42 added `pre-existing` (S9, the introduced-by-change check): it
 // is checked after S5 and before S6, so a finding it drops never has its patch applied or parsed, is produced only
 // under `guardrail: "strict"` with `scopeGate: "introduced"`, and joins the result schema's enum only under that key.
+// VS-44's `verdict-unsure` and `certificate-mismatch` (S1's certificate check) join after `verdict-unreadable` with VS-44
+// wiring, not before: no rule produces them yet (guardrail.ts CertificateDrop).
 export const STRICT_DROPS = [
   "unverified",
   "verdict-unreadable",
@@ -391,6 +423,14 @@ export interface ReviewConfig {
   // digest stay as they were. No environment variable reads it. Parsed, and read by no runner until VS-42 wiring
   // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "introduced" is not applied.
   scopeGate?: "off" | "introduced"
+  // VS-44's opt-in (Q18). Under "certificate", the verifier answers with a certificate (schema.ts
+  // verifyCertJsonSchema), and the strict guardrail counts a confirmed finding as verified only when certified() holds:
+  // its trace matches the code, touches the change or the anchor, and its reach is not assumed. It acts inside
+  // strictSelect, so it is effective only with `guardrail: "strict"`; set without it, it is ignored with a parser note.
+  // Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its
+  // digest stay as they were. No environment variable reads it. Parsed, and read by no runner until VS-44 wiring
+  // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "certificate" is not applied.
+  verifyEvidence?: "off" | "certificate"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
@@ -465,6 +505,7 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   impact: "grep",
   guardrail: "off",
   scopeGate: "off",
+  verifyEvidence: "off",
 } as const satisfies Partial<ReviewConfig>
 
 // The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
@@ -472,14 +513,15 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
-// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c or VS-42 wiring
-// takes a key off this list when a runner applies it.
+// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42 or VS-44
+// wiring takes a key off this list when a runner applies it.
 export const UNAPPLIED_REVIEW_KEYS = [
   "trivial",
   "maxInputTokens",
   "impact",
   "guardrail",
   "scopeGate",
+  "verifyEvidence",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:
