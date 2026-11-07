@@ -7,7 +7,7 @@
 // reported as no value with its counts.
 
 import { fnv1a64 } from "./fingerprint"
-import { SEVERITIES, type ReviewConfig } from "./types"
+import { SEVERITIES, type ReviewConfig, type ReviewOutcome } from "./types"
 
 export interface EvalExpectation {
   id: string
@@ -215,6 +215,40 @@ export interface EvalFinding {
   anchored?: boolean // posted on a diff line rather than only in the summary; absent when that is not known
 }
 
+// VS-49 (addendum A): where a proposed finding's evidence falls. "diff": a line the change's diff shows; "slice": a
+// block the run's impact slice shows (VS-25b); "read": a file the pass read itself.
+export const UTILISATION_PLACES = ["diff", "slice", "read"] as const
+export type UtilisationPlace = (typeof UTILISATION_PLACES)[number]
+
+// VS-49's slice utilisation of one engine replay, taken from its passes' session events at zero tokens: what each pass
+// called and read, how much of the slice it used, and where its findings' evidence falls. Nothing writes it before the
+// VS-49 wiring observer, and script/vectorscope-eval/replay.ts utilisationProblems checks a record against the rest of
+// its artifact. Paths are as the artifact's tool records name them, and compare as that check spells them
+// (checkoutPath: "/" separators, "." and ".." resolved, no leading "./").
+export interface SliceUtilisation {
+  // The slice's own locations (ImpactSlice.locations) the passes were measured against, "path:line" each once, every
+  // one also in the artifact's context.locations, which quotes the related-code call sites too. Empty when no slice was
+  // built (no tier1) or the slice was empty.
+  slice: string[]
+  passes: PassUtilisation[]
+}
+
+export interface PassUtilisation {
+  pass: ReviewOutcome["specialists"][number]["name"]
+  lens?: string // a "lens" pass's class (VS-28), which every lens entry has and no other entry has
+  tools: Record<string, number> // the pass's tool calls by tool name, whatever their status; names with none left out
+  // The distinct paths the pass read: inside when a slice location names the path, outside when none does. They hold
+  // at least every completed read-tool call's filePath; a read through another tool may add more.
+  reads: { inside: string[]; outside: string[] }
+  sliceGreps: number // tool calls that searched for a name the slice already shows
+  // Each finding the pass proposed, by findingKey, once (only review, security and lens passes propose findings):
+  // where its evidence falls, distinct and in UTILISATION_PLACES order, and whether that was worked out from legacy
+  // "path:line" evidence strings (ModelFinding.evidence) rather than quotes.
+  findings: { key: string; places: UtilisationPlace[]; approximate: boolean }[]
+  received?: string[] // a lens pass only: the context.locations its prompt showed it
+  cited?: string[] // a lens pass only: the locations its findings' evidence names
+}
+
 // One review of one case by one pipeline variant and model, as saved.
 export interface EvalRun {
   variant: string // the pipeline, such as "engine" or "single-prompt"
@@ -243,6 +277,8 @@ export interface EvalRun {
   tokens?: { input: number; output: number; cacheRead?: number; cacheWrite?: number }
   violations: string[] // trust or consent checks the run broke
   startedAt?: string
+  // VS-49: from an engine replay whose record bears out its own artifact. Absent unless measured; nothing scores it.
+  utilisation?: SliceUtilisation
 }
 
 export type PlanEntry = Pick<EvalRun, "variant" | "model" | "case" | "repetition">

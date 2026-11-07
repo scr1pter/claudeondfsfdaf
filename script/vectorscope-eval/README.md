@@ -542,6 +542,24 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     top-k). The scopes and outbound signatures themselves are code text, so
     the record leaves them out. Once VS-25b wiring builds the slice in
     `Review.run`, `context.locations` also gains the slice's locations.
+  - `utilisation`, typed for VS-49's slice utilisation (core `eval.ts`
+    `SliceUtilisation`) and absent until the VS-49 wiring observer fills it
+    from the passes' session events, at zero tokens. It enters no digest.
+    `slice` holds the slice's own locations (`ImpactSlice.locations`, each
+    also in `context.locations`, which quotes the related-code call sites
+    too), and is empty without `tier1` or when the slice is empty. Each
+    `passes` entry names a pass the outcome ran (a lens pass by its `lens`)
+    with `tools` (its tool calls by name, whatever their status, so each
+    pass's `StructuredOutput` answer counts), `reads` (`inside` when a slice
+    location names the path, `outside` otherwise; they hold at least every
+    completed read-tool call), `sliceGreps`, `findings` (each proposed
+    finding by `findingKey`, with its `places` among `diff`, `slice` and
+    `read`, and whether the placement is `approximate`, worked out from
+    legacy `path:line` evidence strings), and, on a lens, `received` and
+    `cited`. `replay.ts`'s `utilisationProblems` checks a record against the
+    rest of its artifact, comparing paths in one spelling (`/` separators,
+    `.` and `..` resolved), and leaves the observer's own rules to the
+    observer.
 - The attempt record comes from `Review.run`'s optional `observe` hook. It is
   off unless a caller sets it, and a test shows the same review sends the same
   requests and returns the same outcome with it off, on, or throwing.
@@ -1081,7 +1099,12 @@ How it works:
   (`variant.applied: false`) is left out and listed, so its case shows as
   missing; a desktop artifact's paid attempts read as unaccounted, since no
   paid desktop replay is wired. A projection record with a
-  `projectionProblems` problem is listed and left out.
+  `projectionProblems` problem is listed and left out. An engine artifact's
+  slice utilisation record (VS-49) that `utilisationProblems` does not pass
+  is listed, which like every listed problem keeps the report from a release
+  decision, and left out of its run, which is otherwise kept as it is; one it
+  passes is carried onto the run as `utilisation`. Nothing in the report
+  reads it yet: its summary waits for VS-49 wiring.
 
   Failed, unsent and missing runs stay in the denominators: replay artifacts
   plan every case of their split, so a lost artifact shows as missing. A rate

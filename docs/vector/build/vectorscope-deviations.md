@@ -13265,3 +13265,442 @@ committed.
     `--agent-prs`; the listing ignoring the cap; one gradient cycle for
     every severity; and the escape cycle over every reviewed PR. 25 were
     caught; `core.quotePath` on survived, for the reason in item 8.
+
+## 2026-11-07 · VS-49a Slice-utilisation artifact fields (eval)
+
+Addendum A §2, VS-49, in the Now window of §4 ("VS-49 (artifact fields)").
+Built at `0a125a0b` on `vectorscope-engine`. Addendum A's packages are
+proposals pending Q18, so this is the Now part only: the replay artifact's
+`utilisation` field, its shape in core, the replay validation that checks a
+record against the rest of its artifact, and the report reader that carries a
+valid record onto the run. Nothing writes the field: the run observer and the
+`explore` variant are the runner-wiring part (§4, "VS-49 (observer,
+variant)"). No key, prompt text, registry entry, digest input or runner
+changed. `run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`,
+`posting.ts`, core `types.ts`, `config.ts`, `model-evidence.ts`,
+`eval-report.ts`, `impact.ts`, `desktop.ts`, `certify.ts`, `ci.ts`, every
+`REVIEW_PIPELINE_FILES` file, and the @vector-owned `workflow.ts`,
+`command.ts`, `github.*`, `github-*.ts` and `vectorscope.astro` are
+untouched. It implements the VS-49a plan as corrected by its critique: both
+major points and every minor point were taken, one sub-point of point 5 in a
+different form (decision (e)). Nothing is committed.
+
+- **What landed.**
+  - **Core `eval.ts`:** `UTILISATION_PLACES` (`diff`, `slice`, `read`) and
+    `UtilisationPlace`; `SliceUtilisation` (`slice`, the slice's own
+    `ImpactSlice.locations`, and `passes`) and `PassUtilisation` (`pass`,
+    typed as `ReviewOutcome["specialists"][number]["name"]`, `lens?`,
+    `tools`, `reads.inside` and `reads.outside`, `sliceGreps`, `findings`
+    with `key`, `places` and `approximate`, and a lens's `received?` and
+    `cited?`); `EvalRun.utilisation?`. The only runtime addition is the
+    constant. The file imports `ReviewOutcome` as a type from `./types`.
+  - **Engine `review/eval.ts`, types only:** `ReplayArtifact.utilisation?:
+    SliceUtilisation` after `shrink`, with its comment. No runtime line
+    changed, so every artifact is byte-identical.
+  - **`replay.ts`:** `utilisationProblems(record: unknown)`, with private
+    helpers `entryUtilisationProblems`, `placementProblems`,
+    `passUseProblems`, `recordedToolUse`, `toolCounts`, `tally`,
+    `countsText`, `byPass`, `passKey`, `keyedFinding`, `entryName`,
+    `shown`, `checkoutPath`, `locationPath`, `isStrings`, `isList` and
+    `listOf`. It reads the record as untrusted JSON through `field<T>`,
+    never throws, returns `[]` when the artifact has no `utilisation`, and
+    otherwise lists every problem, each starting "its slice utilisation"
+    (or "its outcome's", for a proposed finding that has no key). Values
+    the record supplies appear in a problem as `shown` spells them (JSON,
+    cut to 200 characters), and are compared in full. What it checks:
+    - each entry names a pass `outcome.specialists` ran, matched by `name`
+      and `lens`; a `lens` pass has a non-empty lens and no other pass has
+      one; no (pass, lens) appears twice;
+    - `tools` are positive whole numbers by name. Summed over a pass's
+      entries, they equal that pass's `artifact.tools` records by tool name,
+      whatever their status, so a pass with recorded calls has an entry.
+      Records without a pass belong to no pass;
+    - `reads.inside` and `reads.outside` are string lists, each read once and
+      never in both. Over a pass's entries they hold the `filePath` of every
+      completed read-tool call it made, a lower bound;
+    - `slice` lists distinct locations, each in `context.locations`, and is
+      empty unless `tier1` is an object. An inside read is a path that a `slice`
+      location names. A `slice` place, or `sliceGreps` above 0, needs a
+      non-empty `slice`. `sliceGreps` is a whole number from 0 up to the
+      entry's total tool calls;
+    - every proposed finding (`outcome.report.findings`) has a
+      `findingKey`, and by it appears in some entry. A key appears at most once per entry and must
+      be a proposed one. Only `review`, `security` and `lens` entries place
+      findings. Places are distinct and in `UTILISATION_PLACES` order. A
+      `read` place needs a read, and `approximate: true` needs a proposed
+      finding of that key with a non-empty legacy `evidence` list;
+    - `received` and `cited` appear only on lens entries, as distinct
+      strings. What a lens received is in `context.locations`, and it cites
+      only when it places a finding.
+  - **`report.ts`:** `loadOutputs` lists each engine artifact's
+    `utilisationProblems` beside its variant and pair problems.
+    `fromArtifact` carries `utilisation` onto the run only when the record
+    has no problem. Otherwise the run is kept unchanged without it, and the
+    listed problem keeps the report from a release decision (decision (f)).
+    The `reselectRun` comment now says the copy carries no utilisation.
+  - **Docs:** the `utilisation` bullet in the README's artifact list, and a
+    sentence in its report section.
+  - **Tests:**
+    - `replay.test.ts`: 9 new tests in "slice utilisation records (VS-49)";
+    - `report.test.ts`: 3 new tests in "slice utilisation (VS-49)";
+    - engine `eval.test.ts`: 1 new test over the scripted fixture replay.
+
+    No existing test changed. In engine `eval.test.ts`, an existing comment
+    said `replay.ts` is something "engine tests do not import". It now reads
+    "which this test does not call", because the file imports
+    `utilisationProblems`, as `vectorscope-replay.test.ts` already imports
+    `projectionProblems`.
+- **Critique points.**
+  1. **Inside the slice needs the slice's own list (major), taken.** The
+     record carries `slice`, the `ImpactSlice.locations` it was measured
+     against. `ImpactRecord` (`tier1`) leaves `locations` out, and
+     `context.locations` puts the related-code call sites first, so neither
+     can tell a slice read from a related-code read. `slice` must be a
+     subset of `context.locations` and is empty without `tier1`. An inside
+     path must be named by `slice`; a test reads a quoted related-code site
+     as inside and is refused. A `slice` place and slice greps need a
+     non-empty `slice`, so an abstaining slice (tier1 present, slice empty)
+     allows neither. `tier1.tiers.shown` is no longer consulted: its ranges
+     and `base:` definitions are not the location vocabulary.
+  2. **The eval-report summary (major), taken.** Core `eval-report.ts` is
+     untouched: there is no `Utilisation` type, `utilisationOf`,
+     `renderUtilisation`, proportion or interval. Every choice the summary
+     would make waits for VS-49 wiring and the D7 pilot to define the
+     metric: proposed or matched findings, `gate.countNits`, the
+     slice-present denominator, and `crossFile` as a case flag. A test shows
+     that the same replay with and without a valid record gives
+     byte-identical report JSON and text.
+  3. **Path spelling, taken.** `checkoutPath` is `posix.normalize` after
+     turning `\` into `/`, applied on both sides of the read-set comparison,
+     to the duplicate check and to the inside-path lookup. A path that
+     climbs out of the checkout keeps its leading `..`, and an absolute path
+     stays absolute. Tests cover `./src/list.ts` on either side,
+     `src\list.ts` and `src/slice/../slice/dep.ts`, and refuse the same file
+     listed twice under two spellings. The observer may record paths as
+     typed or normalised; both pass.
+  4. **Lens and pass identity, taken.** Each (pass, lens) is matched against
+     `outcome.specialists[].name` and `.lens`. A made-up lens or a `repro`
+     entry is refused. `verify` (and `judge`, `repro`) may not place
+     findings, and `received` must be in `context.locations`.
+  5. **Observer rules the validator should not pin, taken (one sub-point in
+     another form):**
+     - `cited ⊆ received` is dropped; a test cites a location found by
+       reading;
+     - reads are a lower bound, not an equality, so reads through allowed
+       `git show` bash calls can be added;
+     - `sliceGreps` is bounded by the entry's total tool calls, not
+       `tools.grep`, so bash greps can count;
+     - `approximate` is checked one way only (decision (d)).
+
+     The `/^.+:\d+$/` pattern is gone, but ranges in `received` are still
+     refused, because `received` must be in `context.locations` (point 4),
+     which holds `path:line` only. Accepting ranges would need
+     `context.locations` to carry them, which is VS-25b and VS-37 wiring's
+     call (decision (e)).
+  6. **Untrusted tool names, taken.** Both sides count in a `Map` (`tally`).
+     A test counts tools named `constructor` and `__proto__`, the latter an
+     own key through `JSON.parse`, and a mutation that counts into a plain
+     object is caught.
+  7. **The engine test, taken.** It first asserts the replay's real tool
+     records: review `read` (`src/list.ts`) and `StructuredOutput`,
+     security `StructuredOutput`, verify `StructuredOutput`. It then names
+     all three keys explicitly (`findingKey(listBug)`, `listFalse`,
+     `authBug`) against the outcome's findings, and only then writes the
+     record. Verify gets an entry with its one call and no findings.
+  8. **Wording, taken.** The places are named `UTILISATION_PLACES`, not to
+     be confused with `EVIDENCE_POLICY_KEYS`. `approximate` is defined per
+     key over every proposed finding with that key, so `mergeReports`
+     duplicates are covered and tested. The reselection is described as a
+     choice: the copy is its own `+reselect-strict` group with the same
+     proposed findings, and it carries no record because the record
+     describes passes the copy did not run again. The engine test is called
+     the scripted fixture replay. "Done when" is listed as unmet below.
+- **Decisions.**
+  - **(a) Now part only.** Deferred to wiring: the observer, the `explore`
+    key, the nudge sentence and `engine:explore-slice`. No registry entry is
+    added, as in VS-34a, VS-42a and VS-35a.
+  - **(b) The shape lives in core `eval.ts`** (I-11: core cannot import the
+    engine). `pass` is typed with core's own `ReviewOutcome` specialist
+    name, which is the engine's `Pass`. The plan's engine-side `& { pass:
+    Pass }` narrowing is therefore not needed, and both sides share one
+    type.
+  - **(c) Replay validation over `projectionProblems`.** The projection's
+    canned model reads nothing, and `ProjectionRecord` has no tool records
+    or outcome to check against. `ProjectionRecord.utilisation`, copied in
+    `projectionOf` and checked by `projectionProblems`, waits for wiring.
+  - **(d) Pinned now, because they follow from the artifact:**
+    - every tool part counts, whatever its status;
+    - completed read calls are a lower bound on reads;
+    - every proposed finding is placed, by key, on a pass that proposes;
+    - slice fields are empty without a slice, and a slice needs `tier1`;
+    - an inside path is a path the record's own slice names;
+    - `approximate` needs a finding of that key with legacy evidence
+      strings, so a finding with no evidence at all is never approximate.
+
+    **Left to the observer, provisional until it lands:**
+    - the evidence-placement rule (diff lines, slice windows, how legacy
+      strings are parsed);
+    - whether a finding with both quotes and strings is approximate;
+    - which greps name slice names;
+    - which non-read-tool reads count;
+    - line-range precision for inside reads (read offset and limit are
+      already recorded);
+    - whether a lens must record `received` and `cited`.
+  - **(e) Locations stay `path:line`.** `slice`, `received` and the
+    lookups use `context.locations`' vocabulary, so a record joins with the
+    artifact and the labels offline. Range-precise utilisation, against
+    VS-37's `tiers.shown`, would extend both `context.locations` and this
+    check at wiring.
+  - **(f) An invalid record is listed and left out of its run; the run is
+    kept.** The field is measurement only, so status, findings, spend and
+    the plan do not change, unlike a desktop variant that never reached its
+    runner, which is left out entirely. Being listed, it keeps the report
+    from a release decision, as every loading problem does (core
+    `eval-report.ts` `ReportInput.problems`). That is fail-closed on purpose:
+    a record that contradicts its own artifact's tool records or findings
+    means the artifact was edited or the observer is wrong, and neither
+    should carry a release. A test shows the release reason. Nothing writes
+    the field today, so no report changes.
+  - **(g) `PROPOSING` is `review`, `security`, `lens`.** codium's `judge`
+    and VS-30's `repro` propose no findings today. If codium's judge
+    proposes findings when it merges, the list changes with it.
+  - **(h) No digest entry.** "Out of digests unless the variant is on" is
+    for wiring: `explore` enters `policyDigest` only when non-default, and
+    the nudge enters `promptsDigest` only under that key. Nothing enters
+    `EVIDENCE_POLICY_KEYS` or `EvidenceScope` now.
+  - **(i) `certify.ts` is unchanged.** It re-checks each candidate
+    artifact's variant and pair, which decide what a certificate covers. It
+    does not re-check `utilisation`, because a record never changes that
+    coverage. A report that listed an invalid record is already not
+    release-eligible (decision (f)), and `certify.ts` needs
+    `release.eligible`.
+  - **(j) Desktop: a documented difference** (§1a, `variant.applied:
+    false`). `DesktopArtifact` has no `utilisation`, and `desktop.ts` and
+    `fromDesktopArtifact` are unchanged.
+- **§0.3 items.**
+  1. Key: none in Now.
+  2. Parity: no runner changed, and the 34 engine replay tests pass with
+     the artifact unchanged.
+  3. Evidence: no key and no pinned file. `REVIEW_PIPELINE_SOURCES` stays
+     `124e47864a16fea4`, `REVIEW_PIPELINE_REVISION` stays 1, and
+     `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`;
+     `model-evidence.test.ts` passes unchanged.
+  4. The variant is deferred.
+  5. Desktop: a documented difference.
+  6. This entry.
+- **Owner questions: none decided.** Q18, Q13, Q3 and Q9 stay open, and
+  every part reads the same under either answer: nothing writes the field,
+  and nothing reads it beyond validation.
+- **Deferred.**
+  - **Runner-wiring:**
+    - the observer in `ReviewEval.replay` step 8 (engine `eval.ts`, the tool
+      recording at about 925-1000), built from session tool parts, the
+      `ImpactSlice` (its `locations` as `slice`) and findings' evidence and
+      quotes. It may hoist `recordedToolUse` and `checkoutPath` to core so
+      that the observer and the validator share one rule;
+    - lens `received` and `cited`, after VS-28 wiring;
+    - `ProjectionRecord.utilisation`, copied in `projectionOf` and checked
+      by `projectionProblems`;
+    - the report summary from critique point 2, counted only over runs whose
+      record shows a non-empty slice, respecting `gate.countNits`, with no
+      proportion or interval until the D7 pilot defines the metric;
+    - the `explore` key: its config parse, `EVIDENCE_POLICY_KEYS` and
+      `UNAPPLIED_REVIEW_KEYS` entries, the nudge, the variant, D3 parity,
+      and the digest-stability test with the variant off.
+  - **Measured or later:**
+    - both kill rules (the D7 pilot, VS-36's stages, Q3);
+    - prompt tuning, after the held-out freeze (I-13);
+    - the symbol-tool reconsideration.
+  - **"Done when" is unmet:** no projection or pilot artifact carries the
+    fields until the observer and `ProjectionRecord.utilisation` land.
+  - **Not verified here:**
+    - No real slice-built artifact exists, since `tier1` is absent until
+      VS-25b wiring. The validator ran on synthetic artifacts and on the
+      scripted fixture replay's real tool records and findings.
+    - On Windows, beyond `\` separators: drive letters, case-insensitive
+      paths, and absolute paths outside the checkout.
+    - Nothing was sent to a model, no paid run started, no workflow was
+      dispatched, and no dependency changed.
+- **Evidence.** Each test file ran alone through the lock with `--timeout
+  30000` and `GITHUB_ACTIONS=false`, with `TMPDIR` and the XDG roots under
+  `/tmp/vector-vectorscope/vs49a/`. The changed eval tests ran from
+  `script/vectorscope-eval` and again from `packages/script` (as `test.yml`
+  runs them), with the same counts.
+
+  | File | HEAD | After |
+  | --- | --- | --- |
+  | `replay.test.ts` | 38 | 47 |
+  | `report.test.ts` | 38 | 41 |
+  | `certify.test.ts`, `ci.test.ts` | 7, 35 | 7, 35 |
+  | `judge.test.ts` (not run at HEAD; `judge.ts` reads outputs through `report.ts`) | - | 8 |
+  | engine `test/review/eval.test.ts` | 33 | 34 |
+  | engine `test/review/vectorscope-replay.test.ts` | 18 | 18 |
+  | core `eval.test.ts`, `eval-report.test.ts` | 55, 28 | 55, 28 |
+  | core `model-evidence.test.ts` (pin unchanged) | 30 | 30 |
+
+  All pass.
+  - **Typecheck.** `bun typecheck` passes in `packages/core`,
+    `packages/engine` and `packages/script`, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` passes from
+    `packages/engine`. The full root typecheck was not run, because nothing
+    is pushed.
+  - **Format and lint.** prettier `--check` passes on the seven code files
+    and the README. oxlint reports 0 errors and 62 warnings on the seven
+    files. Only one warning falls on a line this package touched: the
+    existing `(entry.value as ReplayArtifact).variant` cast in `loadOutputs`,
+    which the formatter moved into the new list. This log is append-only
+    and, like its earlier entries, is not run through prettier.
+  - **Mutation check.** Nineteen mutations, each applied alone, its test
+    file run through the lock, and the file restored and compared with
+    `cmp`. All were caught:
+    - in `replay.ts`, against `replay.test.ts`:
+      - the tool-count compare dropped;
+      - errored reads counted;
+      - the read-set compare dropped;
+      - the tier1 requirement for a slice dropped;
+      - the inside-path slice check dropped;
+      - the slice-grep and slice-place needs-a-slice rules each dropped;
+      - the slice-in-context check dropped;
+      - the approximate rule dropped;
+      - the every-proposed-finding rule dropped;
+      - findings allowed on verify;
+      - the (pass, lens) match dropped;
+      - an unquoted received location accepted;
+      - tools counted as an object's keys;
+      - raw recorded paths compared;
+    - in `report.ts`, against `report.test.ts`:
+      - `fromArtifact` keeping an invalid record;
+      - `loadOutputs` leaving the record's problems out;
+      - `reselectRun` copying `utilisation`;
+    - in engine `eval.ts`, against the engine VS-49 test: the replay
+      writing a record.
+  - **Merge prediction.** From each merge base, no touched file (the seven
+    code files, the README and this log) changes on `origin/codium`
+    (`5a079cbd`), `origin/self-evolving` (`f062bcce`),
+    `origin/vector-at-mention` (`0b68e8f6`) or `origin/main` (`4299d743`).
+    `git merge-tree --write-tree --name-only HEAD <branch>` lists no
+    touched file for any of them. `vector-at-mention` merges clean, and the
+    conflicts it reports for `codium` and `self-evolving` already exist at
+    HEAD.
+- **Review findings, round one** (six findings, none blocking; all fixed,
+  none declined). They were fixed before any commit, so the text above
+  describes the fixed code. Nothing under `packages/` changed in this round
+  apart from three expected messages in the engine test, so
+  `REVIEW_PIPELINE_SOURCES` stays `124e47864a16fea4`.
+  1. The release check did not prove that the record blocks the release.
+     The test filtered the problems to its directory, and the invalid
+     record's case label, `unborne`, added two plan problems of its own
+     ("reviews unborne, which no case labels" and "is not in the plan").
+     Either of those also produces the "problem(s) are listed" reason. The
+     invalid record is now the labelled case's second repetition, which the
+     plan allows, so `loaded.problems` and the saved report's `problems`
+     are exactly the two utilisation problems. The plain directory's saved
+     report lists no problem, and its release reasons lack "problem(s) are
+     listed". Both remedies the finding offered were taken.
+  2. `Array.isArray` narrowed `unknown` to `any[]`. A new `isList` guard
+     narrows to `unknown[]`. `listOf` uses it, the `passes` shape check
+     uses it, and the outcome's specialists and findings and the
+     artifact's tool records are read through `listOf`. The `isList`
+     guard does the job of the finding's suggested `listOf(entries)`
+     without a second variable for the same list.
+  3. `tier1: null` counted as a slice. A slice now needs `tier1` to be a
+     non-null, non-list object. The slice test refuses `undefined`,
+     `null`, `[]`, `"x"` and `1`.
+  4. A proposed finding that has no key was skipped silently. While a
+     record is present, `keyedFinding` returns `undefined` for such a
+     finding (no string path and title, no numeric line, or a non-numeric
+     endLine), and each one is listed as "its outcome's proposed finding N
+     has no path, title and line (or a non-numeric endLine) to key it by,
+     so its slice utilisation cannot place it". The finding wrote one
+     generic message; this one names the finding's position. Tests: an
+     outcome with a string `endLine` and a finding with no path, and the
+     hand-edited outcome's two findings.
+  5. Quadratic checks. Every check is now linear apart from sorting tool
+     names for display:
+     - repeated entries are found with `Map.groupBy` over `passKey` (pass
+       and lens as JSON);
+     - repeated placements with `tally`;
+     - `context.proposed` is a Map from each key to whether any finding of
+       that key has legacy strings;
+     - the outcome's specialists are a Set of `passKey`;
+     - entries and tool records are grouped by pass once (`byPass`), so
+       `passUseProblems` and `recordedToolUse` no longer filter per pass.
+
+     On a synthetic artifact with n entries, n tool records and n findings
+     (scratch script, one run each), the check took:
+
+     | n | before | after |
+     | --- | --- | --- |
+     | 2,000 | 1,779 ms | 66 ms |
+     | 8,000 | 27,796 ms | 171 ms |
+     | 32,000 | - | 709 ms |
+
+     `Map.groupBy` replaced a `reduce` into a Map, which needed explicit
+     type arguments that oxlint flags as unnecessary.
+  6. Raw record strings in problem text. A new `shown` helper prints them:
+     `JSON.stringify`, cut to 200 characters with "...", and `String()`
+     only for what JSON cannot spell. It covers slice and received
+     locations, inside and missing read paths, placement keys and places,
+     pass and lens names, tool names and the slice-grep value. Entries are
+     now named `entry "review"` or `entry "lens" ("auth")`. Per-pass
+     messages read "the tool calls of pass "review"", and the unplaced
+     keys are quoted too. Values are still compared in full. The tool
+     counts are compared as Maps, not as their shown text, and repeated
+     entries by `passKey`, not by shown name, so two values cut to the same
+     text stay two. A test covers a forged newline, a 500-character
+     location, two 301-character pass names, and two tool names that
+     differ after the cut.
+     - The same change fixes a fail-open the finding did not name. A
+       hand-edited value with an own `toString` that is not a function made
+       `String()` throw: as a recorded tool name, as an entry's pass in the
+       proposing check, or as `sliceGreps` in a problem. That broke "listed,
+       never thrown on" and would have stopped `report.ts` loading. These
+       values now go through `typeof` checks or `shown`, and a test covers
+       all three.
+     - Not fixed, because it is outside VS-49a: `passProblems` in the same
+       file (`projectionProblems`, from an earlier package) still calls
+       `String()` on a projection's pass, status and counts, and prints
+       them unquoted.
+  - Re-run after the fixes, each file alone through the lock with
+    `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and the XDG
+    roots under `/tmp/vector-vectorscope/vs49a-fix/`:
+    - from `script/vectorscope-eval`: `replay.test.ts` 47,
+      `report.test.ts` 41, `judge.test.ts` 8, `certify.test.ts` 7,
+      `ci.test.ts` 35;
+    - from `packages/script`: `replay.test.ts` 47 and `report.test.ts` 41;
+    - engine: `test/review/eval.test.ts` 34 and
+      `test/review/vectorscope-replay.test.ts` 18.
+
+    All pass. `bun typecheck` passes in `packages/engine` and
+    `packages/script`, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` passes from
+    `packages/engine`. prettier `--check` is clean on the four changed code
+    files. oxlint shows no warning in the utilisation block of `replay.ts`;
+    the file's 12 warnings are the existing casts and the `field<T>` type
+    parameter.
+  - **Mutation check, round one.** Twenty-one mutations, each applied alone,
+    its test file run through the lock, and the file restored and compared
+    with `cmp`. All were caught.
+    - New rules, against `replay.test.ts`:
+      - tier1 checked only for `undefined`;
+      - keyless proposed findings not listed;
+      - record strings shown raw;
+      - shown values not cut;
+      - tool counts compared as shown text;
+      - repeated entries keyed by shown name;
+      - repeated entries not listed;
+      - entries without a pass grouped as one pass;
+      - `String()` for a recorded tool name, the proposing check and the
+        slice-grep value, one mutation each.
+    - Earlier rules, rechecked after the rewrite:
+      - the (pass, lens) match dropped;
+      - the every-proposed-finding rule dropped;
+      - the approximate rule dropped;
+      - findings allowed on verify;
+      - the tool-count compare dropped;
+      - an unproposed placement accepted;
+      - a repeated placement accepted;
+      - recorded tools ignored;
+      - the first legacy flag of a key winning over a later one.
+    - Against `report.test.ts`: `loadOutputs` leaving the record's problems
+      out.

@@ -8,6 +8,7 @@ import {
   runKey,
   type EvalRun,
   type Judgement,
+  type SliceUtilisation,
 } from "../../packages/core/src/review/eval"
 import { DEFAULT_REVIEW_CONFIG, type ModelFinding } from "../../packages/core/src/review/types"
 import { buildReport, DEFAULT_GATE } from "../../packages/core/src/review/eval-report"
@@ -1554,5 +1555,86 @@ describe("severity calibration (VS-45)", () => {
       duplicates: 1,
       unjudged: 0,
     })
+  })
+})
+
+// VS-49: a replay's slice utilisation record is measurement only. report.ts carries one that bears out its artifact onto
+// the run, lists and leaves out one that does not, and changes nothing else about the run or the report.
+describe("slice utilisation (VS-49)", () => {
+  const keys = fromArtifact(artifact(), seed, []).proposed.map((finding) => finding.key)
+  const nothingRead = { inside: [], outside: [] }
+  const record: SliceUtilisation = {
+    slice: [],
+    passes: [
+      {
+        pass: "review",
+        tools: {},
+        reads: nothingRead,
+        sliceGreps: 0,
+        findings: keys.map((key) => ({ key, places: ["diff"], approximate: false })),
+      },
+    ],
+  }
+  // A slice that no tier1 record and no quoted location bears out.
+  const unborne = { ...record, slice: ["src/elsewhere.py:10"] }
+
+  test("a record that bears out its artifact is carried onto the run, which is otherwise the same", () => {
+    const plain = fromArtifact(artifact(), seed, [])
+    expect("utilisation" in plain).toBe(false)
+    expect(fromArtifact(artifact({ utilisation: record }), seed, [])).toEqual({ ...plain, utilisation: record })
+    const left = fromArtifact(artifact({ utilisation: unborne }), seed, [])
+    expect("utilisation" in left).toBe(false)
+    expect(left).toEqual(plain)
+  })
+
+  test("report.ts lists a record that does not bear out its artifact, keeps the run, and reports the same", async () => {
+    const dir = join(root, "utilisation")
+    mkdirSync(dir)
+    writeFileSync(join(dir, "measured.json"), JSON.stringify(artifact({ utilisation: record })))
+    // The same labelled case's second repetition, so the plan lists no problem of its own.
+    writeFileSync(join(dir, "unborne.json"), JSON.stringify(artifact({ repetition: 2, utilisation: unborne })))
+    const loaded = await loadOutputs({ paths: [dir] })
+    // The invalid record's are the only problems, so they are what keeps the report from a release decision below.
+    expect(loaded.problems).toEqual([
+      `${join(dir, "unborne.json")}: its slice utilisation's slice names "src/elsewhere.py:10", which its context does not quote`,
+      `${join(dir, "unborne.json")}: its slice utilisation names a slice, but its artifact records no tier1 slice`,
+    ])
+    const runs = loaded.runs.filter((run) => run.case === bug.id)
+    expect(runs.find((run) => run.repetition === 1)?.utilisation).toEqual(record)
+    const kept = runs.find((run) => run.repetition === 2)
+    expect(kept?.status).toBe("completed")
+    expect(kept && "utilisation" in kept).toBe(false)
+    // Like every listed problem, it keeps the report from a release decision.
+    const out = join(root, "utilisation-report.json")
+    expect((await main(["--outputs", dir, "--out", out])).code).toBe(0)
+    const saved = await Bun.file(out).json()
+    expect(saved.problems).toEqual(loaded.problems)
+    expect(saved.decision.release.reasons.join(" ")).toContain("input or judging problem(s) are listed in the report")
+
+    // Nothing in the report reads the record: the same replay with and without it reports byte for byte the same.
+    const plainDir = join(root, "utilisation-plain")
+    const measuredDir = join(root, "utilisation-measured")
+    mkdirSync(plainDir)
+    mkdirSync(measuredDir)
+    writeFileSync(join(plainDir, "one.json"), JSON.stringify(artifact()))
+    writeFileSync(join(measuredDir, "one.json"), JSON.stringify(artifact({ utilisation: record })))
+    const plainOut = join(root, "utilisation-plain.json")
+    const measuredOut = join(root, "utilisation-measured.json")
+    const plain = await main(["--outputs", plainDir, "--out", plainOut])
+    const measured = await main(["--outputs", measuredDir, "--out", measuredOut])
+    expect(measured.code).toBe(0)
+    expect(measured.stdout.replace(measuredOut, plainOut)).toBe(plain.stdout)
+    expect(await Bun.file(measuredOut).text()).toBe(await Bun.file(plainOut).text())
+    // Without the invalid record, the same report lists no problem and gives no such reason.
+    const plainSaved = await Bun.file(plainOut).json()
+    expect(plainSaved.problems).toEqual([])
+    expect(plainSaved.decision.release.reasons.join(" ")).not.toContain("problem(s) are listed")
+  })
+
+  test("a strict re-selection's copy carries no slice utilisation", () => {
+    const value = artifact({ utilisation: record })
+    const run = fromArtifact(value, seed, [])
+    expect(run.utilisation).toEqual(record)
+    expect("utilisation" in reselectRun(value, run).run).toBe(false)
   })
 })

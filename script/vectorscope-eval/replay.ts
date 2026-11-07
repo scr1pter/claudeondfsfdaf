@@ -1,17 +1,24 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto"
 import { existsSync, statSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { join, posix, resolve } from "node:path"
 import { parseArgs } from "node:util"
-import { VARIANT_NAME } from "../../packages/core/src/review/eval"
+import {
+  findingKey,
+  UTILISATION_PLACES,
+  VARIANT_NAME,
+  type PassUtilisation,
+  type SliceUtilisation,
+} from "../../packages/core/src/review/eval"
 import type { ProjectedRun } from "../../packages/core/src/review/eval-report"
-import type { ReviewConfig } from "../../packages/core/src/review/types"
+import type { ModelFinding, ReviewConfig, ReviewOutcome } from "../../packages/core/src/review/types"
 import type {
   AttemptRecord,
   ModelRecord,
   ProjectedPass,
   ProjectedRequest,
   ProjectionRecord,
+  ReplayArtifact,
   ReplayCase,
   ReplayVariant,
   VariantRecord,
@@ -319,6 +326,376 @@ export function pairProblems(record: unknown): string[] {
         ]
       : []),
   ]
+}
+
+// The passes that propose findings: the two reviewers and VS-28's lenses. verify rules on their findings, and judge
+// (codium's) and repro (VS-30) propose none.
+const PROPOSING: readonly string[] = ["review", "security", "lens"]
+
+// Why an engine replay's slice utilisation (VS-49, ReplayArtifact.utilisation) does not bear out the rest of its
+// artifact, if it does not; a replay without one has none. Nothing writes the record before the VS-49 wiring observer,
+// so this checks only what follows from the artifact itself, and leaves the observer's own rules to it: where evidence
+// falls, which greps name slice names, which reads other than the read tool's count, and when a placement is
+// approximate. What it checks:
+// - each entry names a pass its outcome ran, a "lens" pass by its lens, once;
+// - a pass's tool calls by name, summed over its entries, are its artifact's tool records, whatever their status, so a
+//   pass with recorded calls has an entry;
+// - a pass's reads hold the filePath of every completed read-tool call it made, each read listed once, inside or
+//   outside;
+// - the slice is in the artifact's context.locations, and is empty without a tier1 record. An inside read is a path a
+//   slice location names, a "slice" place or a slice grep needs a slice, and the greps are at most the entry's tool
+//   calls;
+// - every proposed finding (outcome.report.findings) has a findingKey, and is placed by it, once per entry and only on
+//   a pass that proposes findings, its places distinct and in UTILISATION_PLACES order. A "read" place needs a read,
+//   and an approximate one needs a finding of that key with legacy evidence strings;
+// - only a lens entry has received and cited locations. What it received is in context.locations, and it cites only
+//   when it places a finding.
+// Paths compare as checkoutPath spells them. A record is untrusted JSON, read field by field, so a hand-edited one is
+// listed, never thrown on; the values it supplies enter a problem as shown spells them, and repeats and passes are
+// grouped and counted in Maps, so a large one is checked in about linear time.
+export function utilisationProblems(record: unknown): string[] {
+  const utilisation = field<ReplayArtifact>(record, "utilisation")
+  if (utilisation === undefined) return []
+  const slice = field<SliceUtilisation>(utilisation, "slice")
+  const entries = field<SliceUtilisation>(utilisation, "passes")
+  if (!isStrings(slice) || !isList(entries))
+    return ["its slice utilisation is not a record of the slice's locations and a list of passes"]
+  const located = field<ReplayArtifact["context"]>(field<ReplayArtifact>(record, "context"), "locations")
+  const tier1 = field<ReplayArtifact>(record, "tier1")
+  const outcome = field<ReplayArtifact>(record, "outcome")
+  const proposals = listOf(field<ReviewOutcome["report"]>(field<ReviewOutcome>(outcome, "report"), "findings")).map(
+    keyedFinding,
+  )
+  const context = {
+    quoted: new Set(isStrings(located) ? located : []),
+    slice: new Set(slice.map((location) => checkoutPath(locationPath(location)))),
+    sliced: slice.length > 0,
+    ran: new Set(
+      listOf(field<ReviewOutcome>(outcome, "specialists")).flatMap(
+        (specialist) => passKey(field<Specialist>(specialist, "name"), field<Specialist>(specialist, "lens")) ?? [],
+      ),
+    ),
+    proposed: proposals.reduce(
+      (keys, finding) => (finding ? keys.set(finding.key, keys.get(finding.key) === true || finding.legacy) : keys),
+      new Map<string, boolean>(),
+    ),
+  }
+  const named = entries.map((entry, index) => ({
+    entry,
+    name: entryName(entry, index),
+    key: passKey(field<PassUtilisation>(entry, "pass"), field<PassUtilisation>(entry, "lens")),
+  }))
+  const own = byPass(entries)
+  const recorded = byPass(listOf(field<ReplayArtifact>(record, "tools")))
+  const placed = new Set(
+    entries.flatMap((entry) =>
+      listOf(field<PassUtilisation>(entry, "findings")).map((item) => field<Placement>(item, "key")),
+    ),
+  )
+  const unplaced = [...context.proposed.keys()].filter((key) => !placed.has(key))
+  return [
+    ...(new Set(slice).size === slice.length ? [] : ["its slice utilisation names a slice location twice"]),
+    ...slice
+      .filter((location) => !context.quoted.has(location))
+      .map((location) => `its slice utilisation's slice names ${shown(location)}, which its context does not quote`),
+    // A tier1 record is an object; a hand-edited null or list stands for no built slice.
+    ...(context.sliced && !(typeof tier1 === "object" && tier1 !== null && !Array.isArray(tier1))
+      ? ["its slice utilisation names a slice, but its artifact records no tier1 slice"]
+      : []),
+    ...named.flatMap((item) => entryUtilisationProblems(item.entry, item.name, context)),
+    // By passKey, in full: two entries whose names are shown alike may still be two passes.
+    ...[...Map.groupBy(named, (item) => item.key)].flatMap(([key, group]) =>
+      key !== undefined && group.length > 1 ? [`its slice utilisation lists ${group[0].name} twice`] : [],
+    ),
+    ...[...new Set([...own.keys(), ...recorded.keys()])].flatMap((pass) =>
+      pass === undefined ? [] : passUseProblems(pass, own.get(pass) ?? [], recorded.get(pass) ?? []),
+    ),
+    ...proposals.flatMap((finding, index) =>
+      finding
+        ? []
+        : [
+            `its outcome's proposed finding ${index + 1} has no path, title and line (or a non-numeric endLine) to key it by, so its slice utilisation cannot place it`,
+          ],
+    ),
+    ...(unplaced.length
+      ? [`its slice utilisation does not place the proposed finding(s) ${unplaced.map(shown).join(", ")}`]
+      : []),
+  ]
+}
+
+type Placement = PassUtilisation["findings"][number]
+type Specialist = ReviewOutcome["specialists"][number]
+type ToolRecord = ReplayArtifact["tools"][number]
+type UtilisationContext = {
+  quoted: ReadonlySet<string> // the artifact's context.locations
+  slice: ReadonlySet<string> // the paths its slice's locations name, as checkoutPath spells them
+  sliced: boolean // the record names a slice
+  ran: ReadonlySet<string> // the outcome's specialists, as passKey spells them
+  proposed: ReadonlyMap<string, boolean> // each proposed findingKey, and whether a finding of it has legacy strings
+}
+
+// One entry's own problems: its pass, its counts and reads against the slice, its placements and a lens's locations.
+function entryUtilisationProblems(entry: unknown, name: string, context: UtilisationContext): string[] {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+    return [`its slice utilisation's ${name} is not an object`]
+  const pass = field<PassUtilisation>(entry, "pass")
+  const lens = field<PassUtilisation>(entry, "lens")
+  const key = passKey(pass, lens)
+  const counts = toolCounts(field<PassUtilisation>(entry, "tools"))
+  const reads = field<PassUtilisation>(entry, "reads")
+  const inside = field<PassUtilisation["reads"]>(reads, "inside")
+  const outside = field<PassUtilisation["reads"]>(reads, "outside")
+  const read = isStrings(inside) && isStrings(outside) ? [...inside, ...outside].map(checkoutPath) : undefined
+  const calls = [...(counts?.values() ?? [])].reduce((total, count) => total + count, 0)
+  const greps = field<PassUtilisation>(entry, "sliceGreps")
+  const findings = field<PassUtilisation>(entry, "findings")
+  const keys = listOf(findings).flatMap((item) => {
+    const placement = field<Placement>(item, "key")
+    return typeof placement === "string" ? [placement] : []
+  })
+  const received = field<PassUtilisation>(entry, "received")
+  const cited = field<PassUtilisation>(entry, "cited")
+  return [
+    ...(key !== undefined && context.ran.has(key)
+      ? []
+      : [`its slice utilisation's ${name} names no pass its outcome ran`]),
+    ...(pass === "lens" && !(typeof lens === "string" && lens !== "")
+      ? [`its slice utilisation's ${name} is a lens pass with no lens`]
+      : []),
+    ...(pass !== "lens" && lens !== undefined
+      ? [`its slice utilisation's ${name} names a lens, but is no lens pass`]
+      : []),
+    ...(counts
+      ? []
+      : [`its slice utilisation's ${name} does not count its tool calls by name in positive whole numbers`]),
+    ...(read ? [] : [`its slice utilisation's ${name} does not list its reads inside and outside the slice`]),
+    ...(read && new Set(read).size !== read.length
+      ? [`its slice utilisation's ${name} lists a read twice, or both inside and outside the slice`]
+      : []),
+    ...(isStrings(inside) ? inside : [])
+      .filter((path) => !context.slice.has(checkoutPath(path)))
+      .map(
+        (path) =>
+          `its slice utilisation's ${name} reads ${shown(path)} as inside the slice, but no slice location names it`,
+      ),
+    ...(typeof greps === "number" && Number.isInteger(greps) && greps >= 0 && greps <= calls
+      ? []
+      : [
+          `its slice utilisation's ${name} counts ${shown(greps)} slice greps, not a whole number from 0 to its ${calls} tool calls`,
+        ]),
+    ...(typeof greps === "number" && greps > 0 && !context.sliced
+      ? [`its slice utilisation's ${name} counts greps for slice names, but it names no slice`]
+      : []),
+    ...(Array.isArray(findings) ? [] : [`its slice utilisation's ${name} does not list its findings`]),
+    ...(listOf(findings).length && !(typeof pass === "string" && PROPOSING.includes(pass))
+      ? [`its slice utilisation's ${name} places findings, but that pass proposes none`]
+      : []),
+    ...listOf(findings).flatMap((item) => placementProblems(item, name, read ?? [], context)),
+    ...[...tally(keys.map((placement) => [placement, 1] as const))]
+      .filter(([, count]) => count > 1)
+      .map(([placement]) => `its slice utilisation's ${name} places ${shown(placement)} twice`),
+    ...(pass !== "lens" && (received !== undefined || cited !== undefined)
+      ? [`its slice utilisation's ${name} lists received or cited locations, which only a lens pass has`]
+      : []),
+    ...(received === undefined || (isStrings(received) && new Set(received).size === received.length)
+      ? []
+      : [`its slice utilisation's ${name} does not list what it received as distinct locations`]),
+    ...(isStrings(received) ? received : [])
+      .filter((location) => !context.quoted.has(location))
+      .map(
+        (location) => `its slice utilisation's ${name} received ${shown(location)}, which its context does not quote`,
+      ),
+    ...(cited === undefined || (isStrings(cited) && new Set(cited).size === cited.length)
+      ? []
+      : [`its slice utilisation's ${name} does not list what it cited as distinct locations`]),
+    ...(isStrings(cited) && cited.length > 0 && listOf(findings).length === 0
+      ? [`its slice utilisation's ${name} cites locations, but places no finding`]
+      : []),
+  ]
+}
+
+// One placed finding's problems: a proposed finding's key, places in order, and only what the record can bear out.
+function placementProblems(item: unknown, name: string, read: readonly string[], context: UtilisationContext) {
+  const key = field<Placement>(item, "key")
+  const places = field<Placement>(item, "places")
+  const approximate = field<Placement>(item, "approximate")
+  if (typeof key !== "string" || !isStrings(places) || typeof approximate !== "boolean")
+    return [
+      `its slice utilisation's ${name} places a finding without a key, a list of places and whether it is approximate`,
+    ]
+  const legacy = context.proposed.get(key)
+  const ordered = UTILISATION_PLACES.filter((place) => places.includes(place))
+  return [
+    ...(legacy === undefined
+      ? [`its slice utilisation's ${name} places ${shown(key)}, which is no finding its outcome proposed`]
+      : []),
+    ...(places.length === ordered.length && ordered.every((place, index) => places[index] === place)
+      ? []
+      : [
+          `its slice utilisation's ${name} places ${shown(key)} at ${places.map(shown).join(", ") || "nothing"}, not distinct places in the order ${UTILISATION_PLACES.join(", ")}`,
+        ]),
+    ...(places.includes("read") && !read.length
+      ? [`its slice utilisation's ${name} places ${shown(key)} in a file it read, but lists no read`]
+      : []),
+    ...(places.includes("slice") && !context.sliced
+      ? [`its slice utilisation's ${name} places ${shown(key)} in the slice, but it names no slice`]
+      : []),
+    ...(approximate && legacy === false
+      ? [
+          `its slice utilisation's ${name} calls the placement of ${shown(key)} approximate, but no finding of that key has legacy evidence strings`,
+        ]
+      : []),
+  ]
+}
+
+// One pass's problems across its entries: its tool calls by name are its recorded ones, and its reads hold every
+// completed read call it made.
+function passUseProblems(pass: string, entries: readonly unknown[], records: readonly unknown[]): string[] {
+  const recorded = recordedToolUse(records)
+  const summed = tally(
+    entries.flatMap((entry) => [...(toolCounts(field<PassUtilisation>(entry, "tools"))?.entries() ?? [])]),
+  )
+  const read = new Set(
+    entries.flatMap((entry) => {
+      const reads = field<PassUtilisation>(entry, "reads")
+      return [field<PassUtilisation["reads"]>(reads, "inside"), field<PassUtilisation["reads"]>(reads, "outside")]
+        .flatMap(listOf)
+        .flatMap((path) => (typeof path === "string" ? [checkoutPath(path)] : []))
+    }),
+  )
+  const missing = [...recorded.read].filter((path) => !read.has(path))
+  return [
+    ...(summed.size === recorded.kinds.size && [...summed].every(([tool, count]) => recorded.kinds.get(tool) === count)
+      ? []
+      : [
+          `its slice utilisation counts the tool calls of pass ${shown(pass)} as ${countsText(summed)}, not the ${countsText(recorded.kinds)} its artifact records`,
+        ]),
+    ...(missing.length
+      ? [
+          `its slice utilisation's reads for pass ${shown(pass)} leave out ${missing.map(shown).join(", ")}, which its completed read calls read`,
+        ]
+      : []),
+  ]
+}
+
+// The tool calls an artifact records for one pass: how many of each tool, whatever their status, and the filePath of
+// each completed read call, as checkoutPath spells it.
+function recordedToolUse(records: readonly unknown[]) {
+  const kinds = tally(
+    records.map((item) => {
+      const tool = field<ToolRecord>(item, "tool")
+      // String() would throw on a hand-edited object whose own toString is not a function.
+      return [typeof tool === "string" ? tool : shown(tool), 1] as const
+    }),
+  )
+  const read = records.flatMap((item) => {
+    const filePath = field<ToolRecord["input"]>(field<ToolRecord>(item, "input"), "filePath")
+    return field<ToolRecord>(item, "tool") === "read" &&
+      field<ToolRecord>(item, "status") === "completed" &&
+      typeof filePath === "string"
+      ? [checkoutPath(filePath)]
+      : []
+  })
+  return { kinds, read: new Set(read) }
+}
+
+// An entry's tool calls by name, or undefined when they are not positive whole numbers by name.
+function toolCounts(tools: unknown) {
+  if (typeof tools !== "object" || tools === null || Array.isArray(tools)) return undefined
+  const named = Object.entries(tools)
+  const counts = named.flatMap(([tool, count]) =>
+    typeof count === "number" && Number.isInteger(count) && count > 0 ? [[tool, count] as const] : [],
+  )
+  return counts.length === named.length ? new Map(counts) : undefined
+}
+
+// Counts summed by name, in a Map, since the names are untrusted and an object's keys would meet its prototype.
+function tally(counts: readonly (readonly [string, number])[]) {
+  return counts.reduce((sum, [name, count]) => sum.set(name, (sum.get(name) ?? 0) + count), new Map<string, number>())
+}
+
+function countsText(counts: ReadonlyMap<string, number>) {
+  return (
+    [...counts]
+      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([tool, count]) => `${shown(tool)} ${count}`)
+      .join(", ") || "no call"
+  )
+}
+
+// Items by their pass name, in first-seen order, so each pass's entries and tool records are found once. Items with no
+// pass name group under undefined, which is no pass.
+function byPass(items: readonly unknown[]) {
+  return Map.groupBy(items, (item) => {
+    const pass = field<PassUtilisation>(item, "pass")
+    return typeof pass === "string" ? pass : undefined
+  })
+}
+
+// A pass and its lens as one string to compare, untruncated, or undefined without a pass name. No lens and a null one
+// differ.
+function passKey(pass: unknown, lens: unknown) {
+  if (typeof pass !== "string") return undefined
+  return JSON.stringify(lens === undefined ? [pass] : [pass, lens])
+}
+
+// A proposed finding's findingKey, and whether it carries legacy "path:line" evidence strings; undefined when its
+// fields cannot make a key.
+function keyedFinding(finding: unknown) {
+  const path = field<ModelFinding>(finding, "path")
+  const line = field<ModelFinding>(finding, "line")
+  const endLine = field<ModelFinding>(finding, "endLine")
+  const title = field<ModelFinding>(finding, "title")
+  const evidence = field<ModelFinding>(finding, "evidence")
+  if (typeof path !== "string" || typeof line !== "number" || typeof title !== "string") return undefined
+  if (endLine !== undefined && typeof endLine !== "number") return undefined
+  return {
+    key: findingKey({ path, line, title, ...(endLine === undefined ? {} : { endLine }) }),
+    legacy: isStrings(evidence) && evidence.length > 0,
+  }
+}
+
+// How the report names an entry: by its pass, and its lens if it has one, as shown spells them, or by its place in the
+// list.
+function entryName(entry: unknown, index: number) {
+  const pass = field<PassUtilisation>(entry, "pass")
+  const lens = field<PassUtilisation>(entry, "lens")
+  if (typeof pass !== "string") return `entry ${index + 1}`
+  return lens === undefined ? `entry ${shown(pass)}` : `entry ${shown(pass)} (${shown(lens)})`
+}
+
+// A value a record supplies, as a problem shows it: JSON, so a newline or a quote in it cannot pass for report text,
+// cut to 200 characters, so a long one cannot bloat the report. Compare values untruncated, never as shown.
+function shown(value: unknown) {
+  const text = JSON.stringify(value) ?? String(value)
+  return text.length > 200 ? `${text.slice(0, 200)}...` : text
+}
+
+// A recorded path in one spelling, so a read compares with a read and with a slice location however it was typed: "/"
+// separators, "." and ".." segments resolved, no leading "./". relativeInput (engine review/eval.ts) makes only absolute
+// paths under the checkout relative, so "./src/x.ts" or "src\x.ts" reach the artifact as the model typed them. A path
+// that leaves the checkout keeps its leading "..", and an absolute one stays absolute.
+function checkoutPath(value: string) {
+  return posix.normalize(value.replaceAll("\\", "/"))
+}
+
+// The path of a "path:line" location.
+function locationPath(location: string) {
+  const at = location.lastIndexOf(":")
+  return at < 0 ? location : location.slice(0, at)
+}
+
+function isStrings(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+}
+
+// Array.isArray, narrowing an unknown to unknown[] rather than any[].
+function isList(value: unknown): value is unknown[] {
+  return Array.isArray(value)
+}
+
+function listOf(value: unknown): unknown[] {
+  return isList(value) ? value : []
 }
 
 // The runner a replayVariant name runs on.

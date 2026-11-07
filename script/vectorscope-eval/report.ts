@@ -54,6 +54,7 @@ import {
   replayVariant,
   pairProblems,
   resolveVariant,
+  utilisationProblems,
   variantProblems,
 } from "./replay"
 
@@ -271,11 +272,14 @@ export async function loadOutputs(input: {
       ...invalid.map((problem) => `manifest ${manifestPath}: ${problem}`),
       ...(replayed && reports.length ? ["run.ts reports and replay artifacts are reported together"] : []),
       // A variant record the registry does not bear out names a run it may not be, as does a variant made by its
-      // models whose record does not show the pair (VS-29a).
+      // models whose record does not show the pair (VS-29a). A slice utilisation record that does not bear out its
+      // artifact (VS-49) is listed and left out of the run, which keeps everything else.
       ...artifacts.flatMap((entry) =>
-        [...variantProblems("engine", (entry.value as ReplayArtifact).variant), ...pairProblems(entry.value)].map(
-          (problem) => `${entry.file}: ${problem}`,
-        ),
+        [
+          ...variantProblems("engine", (entry.value as ReplayArtifact).variant),
+          ...pairProblems(entry.value),
+          ...utilisationProblems(entry.value),
+        ].map((problem) => `${entry.file}: ${problem}`),
       ),
       ...desktops.flatMap((entry) =>
         [...variantProblems("desktop", (entry.value as DesktopArtifact).variant), ...pairProblems(entry.value)].map(
@@ -329,7 +333,8 @@ export async function loadOutputs(input: {
 // those recorded as `verified: false` as rejected ones, since a recorded false is a verdict that was read): exact for a
 // run whose verify pass finished. A triage pass leaves its unconfirmed findings out of the artifact altogether, so a
 // nonzero `unconfirmed` drop marks the run incomplete as `verdicts-unrecorded`. The copy carries no spend, tokens,
-// attempts or timing: re-selection spends nothing, and the original's spend is counted once.
+// attempts or timing: re-selection spends nothing, and the original's spend is counted once. It carries no slice
+// utilisation (VS-49) either, by choice: that record describes the passes, which the copy did not run again.
 export const RESELECT_SUFFIX = "+reselect-strict"
 
 export interface StrictReselection {
@@ -617,7 +622,8 @@ export function fromRunReport(report: RunReport, fixtures: readonly Fixture[]) {
 // records), on a dataset case. The reviewers' findings are what was proposed; the line comments and the findings the
 // summary lists are what would be posted, when those writes got through the posting check. Its spend is its attempts'
 // settlements, with unsettled or incomplete ones kept at their estimates, and its paid attempts are accounted for only
-// when the eval ledger's journal admitted the replay.
+// when the eval ledger's journal admitted the replay. Its slice utilisation (VS-49) is carried only when it bears out
+// the artifact (utilisationProblems); it is measurement, so it changes nothing else about the run.
 export function fromArtifact(
   artifact: ReplayArtifact,
   manifest: Manifest | undefined,
@@ -722,6 +728,9 @@ export function fromArtifact(
             : []),
         ]
       : [],
+    ...(artifact.utilisation !== undefined && utilisationProblems(artifact).length === 0
+      ? { utilisation: artifact.utilisation }
+      : {}),
   }
 }
 

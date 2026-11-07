@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
 import { parseReviewConfig } from "../../packages/core/src/review/config"
-import { VARIANT_KEYS, VARIANT_NAME } from "../../packages/core/src/review/eval"
+import { findingKey, VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "../../packages/core/src/review/eval"
 import { evidenceScope } from "../../packages/core/src/review/model-evidence"
 import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import { DEFAULT_REVIEW_CONFIG } from "../../packages/core/src/review/types"
@@ -37,6 +37,7 @@ import {
   triagePairProblem,
   unreplayable,
   unreplayableCases,
+  utilisationProblems,
   variantAdapter,
   variantNames,
   variantProblems,
@@ -1230,5 +1231,417 @@ describe("the entry point's variants and the pilot's limits", () => {
     expect(
       pilotProblems({ limits: { ...limits, totalUsd: 50 }, repeat: 1, split: "development", spentUsd: 0 }),
     ).toEqual([])
+  })
+})
+
+// VS-49's slice utilisation record, over synthetic artifacts: nothing writes one before the VS-49 wiring observer, so
+// these check that a record bears out the artifact it sits in, never what the observer would measure.
+describe("slice utilisation records (VS-49)", () => {
+  const listBug = {
+    path: "src/list.ts",
+    line: 3,
+    title: "last() reads past the end",
+    evidence: ["src/list.ts:3", "src/slice/dep.ts:20"],
+  }
+  const listNit = { path: "src/list.ts", line: 5, endLine: 6, title: "Rename the helper" }
+  const authBug = {
+    path: "src/auth/session.ts",
+    line: 2,
+    title: "token() is not verified",
+    quotes: [{ path: "", line: 2, side: "RIGHT", code: "return input" }],
+  }
+  const [bugKey, nitKey, authKey] = [listBug, listNit, authBug].map((finding) => findingKey(finding))
+  // The related-code call sites first, then the slice's own locations after them, as context.locations quotes them.
+  const SLICE = ["src/slice/dep.ts:20", "src/slice/other.ts:4"]
+  const LOCATIONS = ["src/use.ts:8", "src/caller.ts:12", ...SLICE]
+  const nothingRead = { inside: [], outside: [] }
+  const WHOLE: SliceUtilisation = {
+    slice: SLICE,
+    passes: [
+      {
+        pass: "review",
+        // Every call counts, the errored read too.
+        tools: { read: 3, grep: 1, StructuredOutput: 1 },
+        reads: { inside: ["src/slice/dep.ts"], outside: ["src/list.ts"] },
+        sliceGreps: 1,
+        findings: [
+          { key: bugKey, places: ["diff", "slice"], approximate: true },
+          { key: nitKey, places: ["diff"], approximate: false },
+        ],
+      },
+      {
+        pass: "security",
+        tools: { StructuredOutput: 1 },
+        reads: nothingRead,
+        sliceGreps: 0,
+        findings: [{ key: authKey, places: ["diff"], approximate: false }],
+      },
+      { pass: "verify", tools: {}, reads: nothingRead, sliceGreps: 0, findings: [] },
+      {
+        pass: "lens",
+        lens: "auth",
+        tools: { read: 1 },
+        reads: { inside: [], outside: ["src/auth/session.ts"] },
+        sliceGreps: 0,
+        findings: [{ key: authKey, places: ["diff", "read"], approximate: false }],
+        // A related-code site is a location it received too; it may cite one it found by reading.
+        received: ["src/use.ts:8", "src/slice/dep.ts:20"],
+        cited: ["src/auth/session.ts:2"],
+      },
+    ],
+  }
+  const TOOLS = [
+    { pass: "review", tool: "read", status: "completed", input: { filePath: "src/list.ts" } },
+    { pass: "review", tool: "read", status: "completed", input: { filePath: "src/slice/dep.ts" } },
+    { pass: "review", tool: "read", status: "error", input: { filePath: "src/missing.ts" } },
+    { pass: "review", tool: "grep", status: "completed", input: { pattern: "lastItem" } },
+    { pass: "review", tool: "StructuredOutput", status: "completed", input: {} },
+    { pass: "security", tool: "StructuredOutput", status: "completed", input: {} },
+    { pass: "lens", tool: "read", status: "completed", input: { filePath: "src/auth/session.ts" } },
+    // A call no pass is named for belongs to none.
+    { tool: "read", status: "completed", input: { filePath: "src/unattributed.ts" } },
+  ]
+  const SPECIALISTS = [
+    { name: "review", status: "ok", steps: 3 },
+    { name: "security", status: "ok", steps: 1 },
+    { name: "verify", status: "ok", steps: 1 },
+    { name: "lens", lens: "auth", status: "ok", steps: 2 },
+  ]
+  // An engine replay artifact as far as the check reads it, with a tier1 record standing for a built slice.
+  function measured(utilisation: unknown, overrides: Record<string, unknown> = {}) {
+    return {
+      version: 1,
+      adapter: "engine",
+      label: "case",
+      context: { digest: "c", related: 2, history: 0, instructions: false, headFiles: 2, locations: LOCATIONS },
+      tier1: { tokens: 120, ms: 40, stages: { candidates: 3, gated: 2, confirmed: 2, packed: 2 } },
+      tools: TOOLS,
+      outcome: { report: { findings: [listBug, listNit, authBug] }, specialists: SPECIALISTS },
+      utilisation,
+      ...overrides,
+    }
+  }
+  const label = (entry: { pass: string; lens?: string }) => (entry.lens ? `${entry.pass} (${entry.lens})` : entry.pass)
+  // The whole record with the named entry changed, or left out when `change` is undefined.
+  function edited(name: string, change?: Record<string, unknown>, record = WHOLE) {
+    return {
+      ...record,
+      passes: record.passes.flatMap((entry) =>
+        label(entry) !== name ? [entry] : change === undefined ? [] : [{ ...entry, ...change }],
+      ),
+    }
+  }
+
+  test("a replay without one has no problem, and a record that bears out its artifact has none", () => {
+    expect(utilisationProblems(measured(undefined))).toEqual([])
+    for (const value of [undefined, null, "x", 1, []]) expect(utilisationProblems(value)).toEqual([])
+    expect(utilisationProblems(measured(WHOLE))).toEqual([])
+    // A run with no slice: no tier1, an empty slice, nothing read inside it and no slice grep or place.
+    const sliceless = {
+      slice: [],
+      passes: [
+        { ...WHOLE.passes[0], reads: { inside: [], outside: ["src/list.ts", "src/slice/dep.ts"] }, sliceGreps: 0 },
+        ...WHOLE.passes.slice(1),
+      ].map((entry) => ({
+        ...entry,
+        findings: entry.findings.map((item) => ({ ...item, places: item.places.filter((place) => place !== "slice") })),
+      })),
+    }
+    expect(utilisationProblems(measured(sliceless, { tier1: undefined }))).toEqual([])
+    // A built slice that came out empty (an abstention) is measured the same way.
+    expect(utilisationProblems(measured(sliceless))).toEqual([])
+  })
+
+  test("counts every tool call of a pass by name, whatever its status, and a pass with calls needs an entry", () => {
+    // Leaving the errored read out is a miscount.
+    expect(
+      utilisationProblems(measured(edited("review", { tools: { read: 2, grep: 1, StructuredOutput: 1 } }))),
+    ).toEqual([
+      `its slice utilisation counts the tool calls of pass "review" as "StructuredOutput" 1, "grep" 1, "read" 2, not the "StructuredOutput" 1, "grep" 1, "read" 3 its artifact records`,
+    ])
+    // A pass with recorded calls and no entry miscounts them as none.
+    expect(utilisationProblems(measured(edited("security")))).toEqual([
+      `its slice utilisation counts the tool calls of pass "security" as no call, not the "StructuredOutput" 1 its artifact records`,
+    ])
+    // A record of a call the artifact never made.
+    expect(utilisationProblems(measured(edited("verify", { tools: { read: 1 } })))).toEqual([
+      `its slice utilisation counts the tool calls of pass "verify" as "read" 1, not the no call its artifact records`,
+    ])
+    // Several lens entries share the "lens" pass's recorded calls.
+    const lenses = {
+      ...WHOLE,
+      passes: [
+        ...WHOLE.passes,
+        { pass: "lens" as const, lens: "injection", tools: {}, reads: nothingRead, sliceGreps: 0, findings: [] },
+      ],
+    }
+    const twoLenses = {
+      outcome: { ...measured(WHOLE).outcome, specialists: [...SPECIALISTS, { name: "lens", lens: "injection" }] },
+    }
+    expect(utilisationProblems(measured(lenses, twoLenses))).toEqual([])
+    expect(
+      utilisationProblems(measured(edited("lens (injection)", { tools: { read: 1 } }, lenses), twoLenses)),
+    ).toEqual([
+      `its slice utilisation counts the tool calls of pass "lens" as "read" 2, not the "read" 1 its artifact records`,
+    ])
+    // Counts are positive whole numbers by name.
+    for (const tools of [{ read: 0 }, { read: 1.5 }, { read: "3" }, [3], null])
+      expect(utilisationProblems(measured(edited("lens (auth)", { tools })))).toContain(
+        `its slice utilisation's entry "lens" ("auth") does not count its tool calls by name in positive whole numbers`,
+      )
+  })
+
+  test("counts tool names that an object's prototype also has", () => {
+    const tools = [
+      ...TOOLS,
+      { pass: "verify", tool: "constructor", status: "completed", input: {} },
+      { pass: "verify", tool: "__proto__", status: "completed", input: {} },
+    ]
+    // JSON.parse makes "__proto__" an own key, as reading a saved artifact does.
+    const counted = JSON.parse('{"constructor": 1, "__proto__": 1}')
+    expect(utilisationProblems(measured(edited("verify", { tools: counted }), { tools }))).toEqual([])
+    expect(utilisationProblems(measured(edited("verify", { tools: { constructor: 2 } }), { tools }))).toEqual([
+      `its slice utilisation counts the tool calls of pass "verify" as "constructor" 2, not the "__proto__" 1, "constructor" 1 its artifact records`,
+    ])
+  })
+
+  test("reads hold every completed read call of the pass, one spelling per path, each once", () => {
+    const reads = (inside: string[], outside: string[]) =>
+      utilisationProblems(measured(edited("review", { reads: { inside, outside } })))
+    // However the model typed a path, it is one path.
+    expect(reads(["./src/slice/dep.ts"], ["src\\list.ts"])).toEqual([])
+    expect(reads(["src/slice/../slice/dep.ts"], ["./src/list.ts"])).toEqual([])
+    // A recorded read typed with "./" is the same read.
+    const typed: unknown = JSON.parse(JSON.stringify(TOOLS).replace('"src/list.ts"', '"./src/list.ts"'))
+    expect(utilisationProblems(measured(WHOLE, { tools: typed }))).toEqual([])
+    // Reads are a lower bound: one through another tool, or of an errored read's file, may be added.
+    expect(reads(["src/slice/dep.ts"], ["src/list.ts", "src/missing.ts", "src/via-bash.ts"])).toEqual([])
+    // A completed read left out is not.
+    expect(reads(["src/slice/dep.ts"], [])).toEqual([
+      `its slice utilisation's reads for pass "review" leave out "src/list.ts", which its completed read calls read`,
+    ])
+    // Each read once, never both inside and outside.
+    expect(reads(["src/slice/dep.ts"], ["src/list.ts", "./src/list.ts"])).toEqual([
+      `its slice utilisation's entry "review" lists a read twice, or both inside and outside the slice`,
+    ])
+    expect(reads(["src/slice/dep.ts"], ["src/list.ts", "src/slice/dep.ts"])).toEqual([
+      `its slice utilisation's entry "review" lists a read twice, or both inside and outside the slice`,
+    ])
+  })
+
+  test("the slice is the record's own: quoted in the context, empty without tier1, and the only home of an inside read", () => {
+    expect(utilisationProblems(measured({ ...WHOLE, slice: [...SLICE, "src/elsewhere.ts:1"] }))).toEqual([
+      `its slice utilisation's slice names "src/elsewhere.ts:1", which its context does not quote`,
+    ])
+    expect(utilisationProblems(measured({ ...WHOLE, slice: [...SLICE, SLICE[0]] }))).toEqual([
+      "its slice utilisation names a slice location twice",
+    ])
+    // A tier1 record is an object: a hand-edited null, list or string stands for none.
+    for (const tier1 of [undefined, null, [], "x", 1])
+      expect(utilisationProblems(measured(WHOLE, { tier1 }))).toEqual([
+        "its slice utilisation names a slice, but its artifact records no tier1 slice",
+      ])
+    // A related-code call site is quoted in the context but is not the slice's, so a read of it is outside.
+    expect(
+      utilisationProblems(
+        measured(edited("review", { reads: { inside: ["src/slice/dep.ts", "src/use.ts"], outside: ["src/list.ts"] } })),
+      ),
+    ).toEqual([
+      `its slice utilisation's entry "review" reads "src/use.ts" as inside the slice, but no slice location names it`,
+    ])
+    // With no slice, nothing is inside it, no grep names its names and no evidence falls in it.
+    expect(utilisationProblems(measured({ ...WHOLE, slice: [] }))).toEqual([
+      `its slice utilisation's entry "review" reads "src/slice/dep.ts" as inside the slice, but no slice location names it`,
+      `its slice utilisation's entry "review" counts greps for slice names, but it names no slice`,
+      `its slice utilisation's entry "review" places "${bugKey}" in the slice, but it names no slice`,
+    ])
+    // Slice greps are tool calls of the entry.
+    for (const sliceGreps of [6, -1, 1.5, "1"])
+      expect(utilisationProblems(measured(edited("review", { sliceGreps })))).toContain(
+        `its slice utilisation's entry "review" counts ${JSON.stringify(sliceGreps)} slice greps, not a whole number from 0 to its 5 tool calls`,
+      )
+  })
+
+  test("places every proposed finding by key, once per entry, only on a pass that proposes findings", () => {
+    const review = WHOLE.passes[0]
+    const findings = (items: unknown[]) => utilisationProblems(measured(edited("review", { findings: items })))
+    expect(findings(review.findings.slice(0, 1))).toEqual([
+      `its slice utilisation does not place the proposed finding(s) "${nitKey}"`,
+    ])
+    expect(findings([...review.findings, { key: "000000000000", places: [], approximate: false }])).toEqual([
+      `its slice utilisation's entry "review" places "000000000000", which is no finding its outcome proposed`,
+    ])
+    expect(findings([...review.findings, review.findings[1]])).toEqual([
+      `its slice utilisation's entry "review" places "${nitKey}" twice`,
+    ])
+    expect(
+      utilisationProblems(
+        measured(edited("verify", { findings: [{ key: bugKey, places: ["diff"], approximate: false }] })),
+      ),
+    ).toEqual([`its slice utilisation's entry "verify" places findings, but that pass proposes none`])
+    // Places are distinct, known and in order.
+    for (const places of [["slice", "diff"], ["diff", "diff"], ["elsewhere"]])
+      expect(findings([review.findings[0], { key: nitKey, places, approximate: false }])).toEqual([
+        `its slice utilisation's entry "review" places "${nitKey}" at ${places.map((place) => JSON.stringify(place)).join(", ")}, not distinct places in the order diff, slice, read`,
+      ])
+    // Evidence in a read file needs a read.
+    expect(
+      utilisationProblems(
+        measured(edited("security", { findings: [{ key: authKey, places: ["read"], approximate: false }] })),
+      ),
+    ).toEqual([`its slice utilisation's entry "security" places "${authKey}" in a file it read, but lists no read`])
+    // Approximate is a placement worked out from legacy evidence strings: a finding of that key must carry some. A
+    // finding with no evidence at all is not approximate, and whether one with strings is stays the observer's call.
+    expect(findings([review.findings[0], { key: nitKey, places: ["diff"], approximate: true }])).toEqual([
+      `its slice utilisation's entry "review" calls the placement of "${nitKey}" approximate, but no finding of that key has legacy evidence strings`,
+    ])
+    expect(findings([{ ...review.findings[0], approximate: false }, review.findings[1]])).toEqual([])
+    const quoted = edited("security", { findings: [{ key: authKey, places: ["diff"], approximate: true }] })
+    expect(utilisationProblems(measured(quoted))).toEqual([
+      `its slice utilisation's entry "security" calls the placement of "${authKey}" approximate, but no finding of that key has legacy evidence strings`,
+    ])
+    // Two proposed findings may share a key (review's and security's reports are merged): either one's strings count.
+    const merged = {
+      report: { findings: [listBug, listNit, authBug, { ...authBug, evidence: ["src/auth/session.ts:2"] }] },
+    }
+    expect(utilisationProblems(measured(quoted, { outcome: { ...merged, specialists: SPECIALISTS } }))).toEqual([])
+    // A proposed finding with no key cannot be placed, so it is listed rather than passed over.
+    const unkeyed = {
+      report: { findings: [listBug, { ...listNit, endLine: "6" }, authBug, { title: "No path", line: 1 }] },
+      specialists: SPECIALISTS,
+    }
+    expect(utilisationProblems(measured(WHOLE, { outcome: unkeyed }))).toEqual([
+      `its slice utilisation's entry "review" places "${nitKey}", which is no finding its outcome proposed`,
+      "its outcome's proposed finding 2 has no path, title and line (or a non-numeric endLine) to key it by, so its slice utilisation cannot place it",
+      "its outcome's proposed finding 4 has no path, title and line (or a non-numeric endLine) to key it by, so its slice utilisation cannot place it",
+    ])
+  })
+
+  test("an entry names a pass its outcome ran, a lens by its lens, and only a lens has received and cited locations", () => {
+    const lens = WHOLE.passes[3]
+    expect(utilisationProblems(measured(edited("lens (auth)", { lens: "injection" })))).toEqual([
+      `its slice utilisation's entry "lens" ("injection") names no pass its outcome ran`,
+    ])
+    expect(utilisationProblems(measured(edited("lens (auth)", { lens: undefined })))).toEqual([
+      `its slice utilisation's entry "lens" names no pass its outcome ran`,
+      `its slice utilisation's entry "lens" is a lens pass with no lens`,
+    ])
+    expect(utilisationProblems(measured(edited("review", { lens: "auth" })))).toEqual([
+      `its slice utilisation's entry "review" ("auth") names no pass its outcome ran`,
+      `its slice utilisation's entry "review" ("auth") names a lens, but is no lens pass`,
+    ])
+    expect(utilisationProblems(measured({ ...WHOLE, passes: [...WHOLE.passes, lens] }))).toEqual([
+      `its slice utilisation lists entry "lens" ("auth") twice`,
+      `its slice utilisation counts the tool calls of pass "lens" as "read" 2, not the "read" 1 its artifact records`,
+    ])
+    expect(
+      utilisationProblems(measured({ ...WHOLE, passes: [...WHOLE.passes, { ...WHOLE.passes[2], pass: "repro" }] })),
+    ).toEqual([`its slice utilisation's entry "repro" names no pass its outcome ran`])
+    expect(utilisationProblems(measured(edited("review", { received: [], cited: [] })))).toEqual([
+      `its slice utilisation's entry "review" lists received or cited locations, which only a lens pass has`,
+    ])
+    expect(utilisationProblems(measured(edited("lens (auth)", { received: ["src/nowhere.ts:1"] })))).toEqual([
+      `its slice utilisation's entry "lens" ("auth") received "src/nowhere.ts:1", which its context does not quote`,
+    ])
+    expect(utilisationProblems(measured(edited("lens (auth)", { received: [SLICE[0], SLICE[0]] })))).toEqual([
+      `its slice utilisation's entry "lens" ("auth") does not list what it received as distinct locations`,
+    ])
+    expect(utilisationProblems(measured(edited("lens (auth)", { cited: "src/auth/session.ts:2" })))).toEqual([
+      `its slice utilisation's entry "lens" ("auth") does not list what it cited as distinct locations`,
+    ])
+    // A lens that places no finding cites nothing; security's places the finding instead.
+    expect(utilisationProblems(measured(edited("lens (auth)", { findings: [] })))).toEqual([
+      `its slice utilisation's entry "lens" ("auth") cites locations, but places no finding`,
+    ])
+    // Received and cited are optional.
+    expect(utilisationProblems(measured(edited("lens (auth)", { received: undefined, cited: undefined })))).toEqual([])
+  })
+
+  test("a hand-edited record is listed, never thrown on", () => {
+    const shape = ["its slice utilisation is not a record of the slice's locations and a list of passes"]
+    for (const utilisation of [null, "x", 1, [], {}, { slice: [1], passes: [] }, { slice: [], passes: {} }])
+      expect(utilisationProblems(measured(utilisation))).toEqual(shape)
+    expect(utilisationProblems(measured({ slice: [], passes: [null, 3, "review"] }))).toEqual([
+      "its slice utilisation's entry 1 is not an object",
+      "its slice utilisation's entry 2 is not an object",
+      "its slice utilisation's entry 3 is not an object",
+      `its slice utilisation counts the tool calls of pass "review" as no call, not the "StructuredOutput" 1, "grep" 1, "read" 3 its artifact records`,
+      `its slice utilisation's reads for pass "review" leave out "src/list.ts", "src/slice/dep.ts", which its completed read calls read`,
+      `its slice utilisation counts the tool calls of pass "security" as no call, not the "StructuredOutput" 1 its artifact records`,
+      `its slice utilisation counts the tool calls of pass "lens" as no call, not the "read" 1 its artifact records`,
+      `its slice utilisation's reads for pass "lens" leave out "src/auth/session.ts", which its completed read calls read`,
+      `its slice utilisation does not place the proposed finding(s) "${bugKey}", "${nitKey}", "${authKey}"`,
+    ])
+    const broken = { pass: "verify", tools: {}, reads: "none", sliceGreps: 0, findings: [null, { key: 5 }] }
+    expect(utilisationProblems(measured(edited("verify", broken)))).toEqual([
+      `its slice utilisation's entry "verify" does not list its reads inside and outside the slice`,
+      `its slice utilisation's entry "verify" places findings, but that pass proposes none`,
+      `its slice utilisation's entry "verify" places a finding without a key, a list of places and whether it is approximate`,
+      `its slice utilisation's entry "verify" places a finding without a key, a list of places and whether it is approximate`,
+    ])
+    // An artifact whose other fields are not what the engine writes: nothing ran and nothing was proposed.
+    const odd = { context: null, tools: "x", outcome: { report: { findings: [{ path: 1, title: null }, "x"] } } }
+    expect(() => utilisationProblems(measured(WHOLE, odd))).not.toThrow()
+    expect(utilisationProblems(measured(WHOLE, odd))).toContain(
+      `its slice utilisation's slice names "src/slice/dep.ts:20", which its context does not quote`,
+    )
+    expect(utilisationProblems(measured(WHOLE, odd))).toContain(
+      `its slice utilisation's entry "review" names no pass its outcome ran`,
+    )
+    expect(utilisationProblems(measured(WHOLE, odd))).toContain(
+      "its outcome's proposed finding 2 has no path, title and line (or a non-numeric endLine) to key it by, so its slice utilisation cannot place it",
+    )
+    // A value String() cannot convert, an own toString that is no function, is shown, never converted.
+    const opaque: unknown = JSON.parse('{"toString": 1}')
+    const opaqueTools = [...TOOLS, { pass: "verify", tool: opaque, status: "completed", input: {} }]
+    expect(utilisationProblems(measured(edited("verify", { sliceGreps: opaque }), { tools: opaqueTools }))).toEqual([
+      `its slice utilisation's entry "verify" counts {"toString":1} slice greps, not a whole number from 0 to its 0 tool calls`,
+      `its slice utilisation counts the tool calls of pass "verify" as no call, not the ${JSON.stringify('{"toString":1}')} 1 its artifact records`,
+    ])
+    const opaquePass = {
+      pass: opaque,
+      tools: {},
+      reads: nothingRead,
+      sliceGreps: 0,
+      findings: [WHOLE.passes[0].findings[1]],
+    }
+    expect(utilisationProblems(measured({ ...WHOLE, passes: [...WHOLE.passes, opaquePass] }))).toEqual([
+      "its slice utilisation's entry 5 names no pass its outcome ran",
+      "its slice utilisation's entry 5 places findings, but that pass proposes none",
+    ])
+  })
+
+  test("shows what a record supplies quoted and cut short, and compares it in full", () => {
+    // A newline cannot start a report line of its own, and a long value is cut to 200 characters.
+    const forged = "src/x.ts:1\n- every check passed"
+    const long = `src/${"a".repeat(500)}.ts:1`
+    const problems = utilisationProblems(measured({ ...WHOLE, slice: [...SLICE, forged, long] }))
+    expect(problems).toEqual([
+      `its slice utilisation's slice names ${JSON.stringify(forged)}, which its context does not quote`,
+      `its slice utilisation's slice names ${JSON.stringify(long).slice(0, 200)}..., which its context does not quote`,
+    ])
+    expect(problems.filter((problem) => problem.includes("\n") || problem.length > 300)).toEqual([])
+    // Two pass names cut to the same text are still two passes, not one listed twice.
+    const prefix = "p".repeat(300)
+    const shownPass = `${JSON.stringify(prefix).slice(0, 200)}...`
+    const extra = ["1", "2"].map((end) => ({
+      pass: `${prefix}${end}`,
+      tools: {},
+      reads: nothingRead,
+      sliceGreps: 0,
+      findings: [],
+    }))
+    expect(utilisationProblems(measured({ ...WHOLE, passes: [...WHOLE.passes, ...extra] }))).toEqual([
+      `its slice utilisation's entry ${shownPass} names no pass its outcome ran`,
+      `its slice utilisation's entry ${shownPass} names no pass its outcome ran`,
+    ])
+    // Tool names that differ past the cut are counted apart.
+    const named = [...TOOLS, { pass: "verify", tool: `${prefix}a`, status: "completed", input: {} }]
+    const tool = `${JSON.stringify(`${prefix}a`).slice(0, 200)}...`
+    expect(utilisationProblems(measured(edited("verify", { tools: { [`${prefix}b`]: 1 } }), { tools: named }))).toEqual(
+      [
+        `its slice utilisation counts the tool calls of pass "verify" as ${tool} 1, not the ${tool} 1 its artifact records`,
+      ],
+    )
   })
 })

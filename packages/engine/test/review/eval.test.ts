@@ -24,6 +24,7 @@ import {
   type ReviewOutcome,
 } from "@vectordevai/core/review/types"
 import { estimateDispatch } from "@vectordevai/core/review/dispatch"
+import { findingKey, type SliceUtilisation } from "@vectordevai/core/review/eval"
 import { evidenceScope, policyDigest, promptsDigest } from "@vectordevai/core/review/model-evidence"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -75,6 +76,7 @@ import { testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { CATALOG, catalogModel, engineConfig, projectionModel } from "../../script/vectorscope-replay"
+import { utilisationProblems } from "../../../../script/vectorscope-eval/replay"
 
 // ReviewEval.replay against the fake LLM over real git checkouts: the production review pipeline end to end, with
 // GitHub's writes going to a recording adapter. Requests are matched by the prompt they answer, since the review and
@@ -552,6 +554,123 @@ describe("ReviewEval.replay", () => {
           input: { filePath: "src/list.ts" },
         })
         expect(artifact.runtime.platform).toBe(process.platform)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-49: nothing writes a slice utilisation record before its wiring observer, so a replay has none. One written by
+  // hand from this scripted fixture replay's own tool records and findings bears the artifact out, which pins what the
+  // observer will be checked against: every tool part of a pass, StructuredOutput answers included, and the read's
+  // filePath as the artifact records it.
+  it.instance(
+    "writes no slice utilisation, and a record of the replay's own tool calls and findings bears it out (VS-49)",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, "src/auth/session.ts": AUTH_BASE },
+          head: { "src/list.ts": LIST_HEAD, "src/auth/session.ts": AUTH_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const [bugID, falseID] = Review.normalizeFindings([listBug, listFalse], "review", anchors).map(
+          (item) => item.id,
+        )
+        const [authID] = Review.normalizeFindings([authBug], "security", anchors).map((item) => item.id)
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("read", { filePath: path.join(directory, "src/list.ts") })
+            .usage({ input: 1_000, output: 10 }),
+        )
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", report([listBug, listFalse]))
+            .usage({ input: 1_200, output: 40 }),
+        )
+        yield* llm.pushMatch(
+          SECURITY,
+          reply()
+            .tool("StructuredOutput", report([authBug], ""))
+            .usage({ input: 900, output: 30 }),
+        )
+        yield* llm.pushMatch(
+          VERIFY,
+          reply()
+            .tool("StructuredOutput", {
+              results: [
+                { id: bugID, verdict: "confirmed", reason: "Reproduced with a one-item array." },
+                { id: falseID, verdict: "rejected", reason: "Not a defect." },
+                { id: authID, verdict: "confirmed", reason: "verify() is no longer called." },
+              ],
+            })
+            .usage({ input: 2_000, output: 20 }),
+        )
+
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+
+        expect("utilisation" in artifact).toBe(false)
+        expect(utilisationProblems(artifact)).toEqual([])
+        // What the record is checked against: each pass's tool calls, its StructuredOutput answer among them, and the
+        // read's path made relative to the checkout.
+        expect(
+          artifact.tools
+            .map((item) => [item.pass, item.tool, item.status, item.input.filePath ?? "-"])
+            .toSorted((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1)),
+        ).toEqual([
+          ["review", "StructuredOutput", "completed", "-"],
+          ["review", "read", "completed", "src/list.ts"],
+          ["security", "StructuredOutput", "completed", "-"],
+          ["verify", "StructuredOutput", "completed", "-"],
+        ])
+        // Every finding the two reviewers proposed, the one verify rejected included.
+        expect((artifact.outcome?.report.findings ?? []).map((finding) => findingKey(finding)).toSorted()).toEqual(
+          [findingKey(listBug), findingKey(listFalse), findingKey(authBug)].toSorted(),
+        )
+        const nothingRead = { inside: [], outside: [] }
+        const record = {
+          slice: [],
+          passes: [
+            {
+              pass: "review",
+              tools: { read: 1, StructuredOutput: 1 },
+              reads: { inside: [], outside: ["src/list.ts"] },
+              sliceGreps: 0,
+              findings: [
+                { key: findingKey(listBug), places: ["diff", "read"], approximate: false },
+                { key: findingKey(listFalse), places: ["diff"], approximate: false },
+              ],
+            },
+            {
+              pass: "security",
+              tools: { StructuredOutput: 1 },
+              reads: nothingRead,
+              sliceGreps: 0,
+              findings: [{ key: findingKey(authBug), places: ["diff"], approximate: false }],
+            },
+            { pass: "verify", tools: { StructuredOutput: 1 }, reads: nothingRead, sliceGreps: 0, findings: [] },
+          ],
+        } satisfies SliceUtilisation
+        expect(utilisationProblems({ ...artifact, utilisation: record })).toEqual([])
+        // Leaving the read out, or naming a slice this replay never built, does not bear it out.
+        const unread = record.passes.map((entry) =>
+          entry.pass === "review" ? { ...entry, reads: nothingRead } : entry,
+        )
+        expect(utilisationProblems({ ...artifact, utilisation: { ...record, passes: unread } })).toEqual([
+          `its slice utilisation's entry "review" places "${findingKey(listBug)}" in a file it read, but lists no read`,
+          `its slice utilisation's reads for pass "review" leave out "src/list.ts", which its completed read calls read`,
+        ])
+        expect(utilisationProblems({ ...artifact, utilisation: { ...record, slice: ["src/list.ts:3"] } })).toEqual([
+          `its slice utilisation's slice names "src/list.ts:3", which its context does not quote`,
+          "its slice utilisation names a slice, but its artifact records no tier1 slice",
+        ])
       }),
     GIT,
     TIMEOUT,
@@ -2019,7 +2138,7 @@ describe("ReviewEval.project", () => {
         // The failed request's body is recorded as the server received it, in the order the server received them.
         expect((yield* checked.llm.hits).filter(REVIEW).map((hit) => hit.text)).toEqual([failed.body, retried.body])
         expect([review.unsent, review.unadmitted, record.unattributed]).toEqual([0, 0, 0])
-        // What projectionProblems (script/vectorscope-eval/replay.ts, which engine tests do not import) reads: every
+        // What projectionProblems (script/vectorscope-eval/replay.ts, which this test does not call) reads: every
         // planned pass finished and sent requests whose bodies it counted, with a dollar estimate, and the egress log
         // saw connections, none outside.
         expect(record.passes.map((pass) => pass.pass).toSorted()).toEqual(["review", "verify"])

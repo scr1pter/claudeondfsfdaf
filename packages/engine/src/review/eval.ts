@@ -69,7 +69,7 @@ import {
   type PassEstimate,
   type Shrink,
 } from "@vectordevai/core/review/dispatch"
-import { VARIANT_KEYS, VARIANT_NAME } from "@vectordevai/core/review/eval"
+import { VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "@vectordevai/core/review/eval"
 import type { ImpactRecord } from "@vectordevai/core/review/impact"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import { estimateCostUsd, nextStepCostUsd, type ReviewPrice } from "@vectordevai/core/review/plan"
@@ -269,6 +269,12 @@ export interface ReplayArtifact {
   // wiring.
   dispatch?: DispatchEstimate
   shrink?: ShrinkStep[]
+  // VS-49's slice utilisation (core eval.ts SliceUtilisation), from the passes' session events at zero tokens: each
+  // pass's tool calls by name, the paths it read inside and outside the slice's own locations, its greps for names the
+  // slice shows, where each proposed finding's evidence falls, and each lens's received and cited locations. Absent
+  // until the VS-49 wiring observer fills it; its slice is empty without `tier1`. It enters no digest. The eval's
+  // replay.ts utilisationProblems checks it against the rest of the artifact.
+  utilisation?: SliceUtilisation
   attempts: AttemptRecord[]
   tools: { pass?: Pass; tool: string; status: string; input: Record<string, string | number | boolean> }[]
   outcome?: ReviewOutcome // absent when nothing was left to review and no model was asked
