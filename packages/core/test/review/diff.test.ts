@@ -6,6 +6,7 @@ import {
   applyPatch,
   budgetDiff,
   buildAnchorIndex,
+  endLineOf,
   focusHunks,
   focusOfFiles,
   fromGitHubFiles,
@@ -13,6 +14,7 @@ import {
   mapLine,
   matchPostImage,
   mergeFocus,
+  onChangedLine,
   parseUnifiedDiff,
   patchIdOf,
   renderAnnotated,
@@ -742,5 +744,36 @@ describe("applyFixPatch (VS-27b, S6)", () => {
       ok: false,
       reason: "unchanged",
     })
+  })
+})
+
+// S3, moved from guardrail.ts unchanged (VS-43a) so citation.ts can share it without importing the guardrail.
+describe("onChangedLine and endLineOf (S3)", () => {
+  const changes = parseUnifiedDiff(
+    "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,4 +1,5 @@\n one\n-two\n+TWO\n+three\n four\n five\n",
+  )
+  const index = buildAnchorIndex(changes)
+  const at = (finding: { line: number; endLine?: number; side?: "RIGHT" | "LEFT" }) => {
+    const resolved = resolveAnchor(index, { path: "a.ts", ...finding })
+    return resolved.ok && onChangedLine(changes, finding, resolved.anchor)
+  }
+
+  test("an anchor on added code, next to a deletion or on removed code counts; context and a snapped line do not", () => {
+    expect(at({ line: 2 })).toBe(true)
+    expect(at({ line: 3 })).toBe(true)
+    expect(at({ line: 2, endLine: 4 })).toBe(true)
+    // Line 1 sits next to the deletion.
+    expect(at({ line: 1 })).toBe(true)
+    expect(at({ line: 2, side: "LEFT" })).toBe(true)
+    expect(at({ line: 4 })).toBe(false)
+    expect(at({ line: 5 })).toBe(false)
+    // Line 7 is outside the hunk; resolveAnchor snaps it onto line 3, which is not the model's own line.
+    expect(resolveAnchor(index, { path: "a.ts", line: 7 })).toMatchObject({ ok: true, anchor: { line: 3 } })
+    expect(at({ line: 7 })).toBe(false)
+  })
+
+  test("endLineOf reads only a whole number after the first line", () => {
+    expect(endLineOf({ line: 3, endLine: 5 })).toBe(5)
+    for (const endLine of [undefined, 3, 2, 4.5, Number.NaN]) expect(endLineOf({ line: 3, endLine })).toBeUndefined()
   })
 })

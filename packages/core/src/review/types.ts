@@ -98,6 +98,21 @@ export type VerifiedBy = (typeof VERIFIED_BY)[number]
 // (I-2): "pre-existing" drops it under S9, and "introduced" or "exacerbated" never saves one S9's suspect check drops.
 export const FINDING_SCOPES = ["introduced", "exacerbated", "pre-existing"] as const
 export type FindingScope = (typeof FINDING_SCOPES)[number]
+// VS-43's structured rule citation (addendum A). `repository_instructions` and `review_rules` name the prompt's two
+// trusted blocks; `paths` names a ReviewConfig.paths entry by its 0-based index as parsed; `scoped` names a VS-48
+// nested instruction file, which nothing sends yet. `lines` is carried and never checked. Only schema.ts's
+// decodeRuleCitation builds one, and nothing calls it before VS-43 wiring, so ModelFinding gains no field now and
+// `rule` stays the quoted text.
+export type RuleSource =
+  | { kind: "repository_instructions" }
+  | { kind: "review_rules" }
+  | { kind: "paths"; index: number }
+  | { kind: "scoped"; path: string }
+export interface RuleCitation {
+  source: RuleSource
+  quote: string
+  lines?: { start: number; end: number }
+}
 // "unchecked": no committable suggestion and no patch that applies, so the fix is shown as a plain diff block (S6).
 export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
 // Why strictSelect dropped a candidate, in the order its rules are checked (S1 to S5, S9, then S6 to S8). The

@@ -17,6 +17,8 @@ import {
   type Quote,
   type ReviewConfig,
   type Risk,
+  type RuleCitation,
+  type RuleSource,
   type Severity,
 } from "./types"
 
@@ -37,6 +39,8 @@ export const MAX_FINDING_QUOTES = 6
 export const MAX_QUOTES_READ = MAX_FINDING_QUOTES * 4
 export const MAX_QUOTE_LINES = 20
 export const MAX_QUOTE_CHARS = 2_000
+// VS-43's structured rule quote (decodeRuleCitation): a longer one is dropped, never cut, as a code quote is.
+export const MAX_RULE_QUOTE_CHARS = 1_000
 // A quote path that could leave the repository: a `..` segment, a backslash or a drive. decodeQuote drops such a quote,
 // and guardrail.ts never asks for or reads its file, for findings built without the decoder too.
 export const ESCAPING_PATH = /(^|\/)\.\.(\/|$)|\\|^[A-Za-z]:/
@@ -422,6 +426,65 @@ export function decodeVerify(input: unknown): VerifyResult[] | undefined {
     if (!id || !verdict) return []
     return [{ id, verdict, reason: oneLine(text(entry.reason)) } as VerifyResult]
   })
+}
+
+// Why decodeRuleCitation refused a citation: not an object (the legacy quoted text, among others), a source it cannot
+// name, or a quote it cannot check. Kept apart, so a measurement can count format mismatches by kind.
+export type RuleCitationProblem = "not-structured" | "source" | "quote"
+
+// One structured rule citation (VS-43), as `{ citation } | { problem }`, the shape of privacy.ts's readZdrAttestation.
+// VS-43 wiring calls it under `ruleCheck: "strict"`; decodeReport and decodeFinding do not, so `rule` stays the quoted
+// text. The source is read leniently: `paths[i]` (0-based into the parsed ReviewConfig.paths) and `scoped:<path>` in
+// any case and spacing, and the two block names in any case, with their tag's angle brackets and slash, and with spaces
+// or hyphens for underscores. A file name ("AGENTS.md", ".vector/review.md") names no block, so it is a "source"
+// problem. A scoped path keeps its case, is trimmed and loses a leading "./" or "/", and is refused when it is empty,
+// holds a control character (a line break among them), or could leave the repository. The quote is text with CRLF
+// folded and the ends trimmed, holding a letter or a digit, of at most MAX_RULE_QUOTE_CHARS code points (as JSON
+// Schema's maxLength counts them); a longer one is refused, never cut. `lines` is a whole number of 1 or more, text
+// such as "L3-L7" or "3–7", or `{ start, end }`, with 1 <= start <= end; anything else drops it, and the citation still
+// decodes. Other keys are ignored.
+export function decodeRuleCitation(input: unknown): { citation: RuleCitation } | { problem: RuleCitationProblem } {
+  if (!isRecord(input)) return { problem: "not-structured" }
+  const source = ruleSource(input.source)
+  if (!source) return { problem: "source" }
+  const quote = typeof input.quote === "string" ? input.quote.replace(/\r\n?/g, "\n").trim() : ""
+  if (!/[\p{L}\p{N}]/u.test(quote) || Array.from(quote).length > MAX_RULE_QUOTE_CHARS) return { problem: "quote" }
+  const lines = ruleLines(input.lines)
+  return { citation: { source, quote, ...(lines ? { lines } : {}) } }
+}
+
+function ruleSource(input: unknown): RuleSource | undefined {
+  if (typeof input !== "string") return undefined
+  const said = input.trim()
+  const paths = said.match(/^paths\s*\[\s*(\d+)\s*\]$/i)
+  if (paths) return Number.isSafeInteger(Number(paths[1])) ? { kind: "paths", index: Number(paths[1]) } : undefined
+  const scoped = said.match(/^scoped\s*:(.*)$/is)
+  if (scoped) {
+    const path = cleanPath(scoped[1].trim())
+    return path && !/\p{Cc}/u.test(path) && !ESCAPING_PATH.test(path) ? { kind: "scoped", path } : undefined
+  }
+  const name = said
+    .toLowerCase()
+    .replace(/^<\/?|\/?>$/g, "")
+    .trim()
+    .replace(/[\s-]+/g, "_")
+  if (name === "repository_instructions" || name === "review_rules") return { kind: name }
+  return undefined
+}
+
+function ruleLines(input: unknown): RuleCitation["lines"] {
+  const range = typeof input === "string" ? input.match(/^\s*L?(\d+)\s*(?:[-–]\s*L?(\d+)\s*)?$/i) : null
+  const [start, end] =
+    typeof input === "number"
+      ? [input, input]
+      : range
+        ? [Number(range[1]), Number(range[2] ?? range[1])]
+        : isRecord(input)
+          ? [input.start, input.end]
+          : []
+  if (typeof start !== "number" || typeof end !== "number") return undefined
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) return undefined
+  return { start, end }
 }
 
 function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefined {

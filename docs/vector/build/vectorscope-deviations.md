@@ -8431,3 +8431,521 @@ above, they supersede it.
     they import changed beyond a comment in `types.ts` and the pin, which
     only core's `model-evidence` test reads. The full root typecheck was not
     run, since nothing is pushed.
+
+## 2026-11-07 · VS-43a Rule citation checker (pure)
+
+Addendum A §2 VS-43 (its Now part only), with the §1 `ruleCheck` row, §1a's
+VS-43 row, §3 VS-27 (`linkedRule`, "checked by VS-43") and §4's windows.
+Evidence: round-two REPORT [CF10] (a rubric that asks a finding to cite the
+smallest supporting rule range and never to raise a finding because a rule
+file exists), [GP6] (structured rules with id, glob scope and severity),
+[VT3] (path-scoped trusted rules exist; locally the engine's own loader, not
+VectorScope, reads AGENTS.md) and the report's final check, which corrected
+how `rulesForPaths` merges: one text for the whole change, a section
+included when any changed file matches it. Built at `977e3667`. The
+addendum's line citations at `7cadfcb8` were re-located on HEAD: the `rule`
+decode is at `schema.ts:453-454` (the schema field at `:89`), the render at
+`format.ts:319-323` (it always says "rule from .vector/review.md"),
+`MAX_TRUSTED_CHARS` at `prompt.ts:105` and `trusted()` at `:584-597`,
+`rulesForPaths` at `config.ts:504-515`; `review.ts:434-438` and `:448`,
+`run.ts:680-682`, `ai-review.ts:837-843`, `github.review.ts:677-695` and
+`context.ts:247-248` are unchanged. Now window only: pure core code that
+nothing calls. No key is parsed, and `run.ts`, `ai-review.ts`,
+`provider.ts`, `session/llm.ts`, `posting.ts`, `cli/cmd/review.ts`,
+`eval.ts`, `replay.ts`, `report.ts`, `format.ts`, `select.ts` and every
+@vector file are untouched. It implements the VS-43a plan as corrected by
+its critique: every point was taken except point 7's optional alternative
+input, declined in (c) with the reason. Nothing is committed (the lane
+brief).
+
+- **What landed.**
+  - **Core `review/types.ts`** (still import-free): `RuleSource`
+    (`repository_instructions`, `review_rules`, `paths` with a 0-based
+    `index`, `scoped` with a `path`) and `RuleCitation` (`source`, `quote`,
+    `lines?`), after the `FINDING_SCOPES` block. The comment says `lines` is
+    carried and never checked, only `decodeRuleCitation` builds one, and
+    `ModelFinding` gains no field, so `rule` stays the quoted text.
+  - **Core `review/schema.ts`**: `MAX_RULE_QUOTE_CHARS` (1,000),
+    `RuleCitationProblem` (`not-structured`, `source`, `quote`) and
+    `decodeRuleCitation(input)`, returning `{ citation } | { problem }`, the
+    shape of `readZdrAttestation`. Private `ruleSource` and `ruleLines`.
+    `decodeFinding`, `decodeReport` and every schema are unchanged.
+  - **Core `review/config.ts`**: `RulePart` (`global`; `section` with its
+    globs; `paths` with its `index` in the parsed list and its `glob`),
+    `ruleGlobMatches(path, glob)` (minimatch with `dot` and `matchBase`, as
+    before) and `rulePartsForPaths(rules, changedPaths, extra)`, built with
+    `flatMap`. `rulesForPaths` is now its parts' texts joined by blank lines,
+    with the same signature and output.
+  - **Core `review/prompt.ts`**: `MAX_TRUSTED_CHARS` is exported, with a
+    comment naming citation.ts. `trusted()` and all output are unchanged
+    (the addendum's named alternative).
+  - **Core `review/diff.ts` and `review/guardrail.ts`**: `onChangedLine` (S3)
+    and `endLineOf` moved from guardrail.ts into diff.ts, exported, with the
+    bodies unchanged; the comment names both callers. guardrail.ts imports
+    them and deletes its copies; no other line changed.
+  - **New core `review/citation.ts`**: `RulesSource`, `RULE_MISMATCHES`
+    (`source`, `clipped`, `head-added`, `misquote`, `scope`,
+    `scope-unknown`, `anchor`), `RuleCheck`, `TrustedLine`, `TrustedText`,
+    `TrustedPart`, `TrustedBlock`, `TrustedRules`, `trustedRules(input)` and
+    `ruleCited(finding, trusted)`. Pure and browser-safe; it imports
+    config.ts, diff.ts, prompt.ts and types, and never guardrail.ts or
+    select.ts.
+  - **Core `review/model-evidence.ts`**: `REVIEW_PIPELINE_SOURCES` moves from
+    `38231815cfde9eed` to `9d2557d711675fbd`, because citation.ts joined the
+    pinned files and `diff.ts`, `guardrail.ts` and `prompt.ts` changed.
+    `REVIEW_PIPELINE_REVISION` stays 1, and `EVIDENCE_POLICY_KEYS` is
+    unchanged: there is no key.
+  - **Tests**:
+    - new core `citation.test.ts`, 26 tests;
+    - core `schema.test.ts`, 47 → 54 (a `decodeRuleCitation` block);
+    - core `config.test.ts`, 53 → 55 (`rulePartsForPaths`,
+      `ruleGlobMatches`);
+    - core `diff.test.ts`, 50 → 52 (`onChangedLine` and `endLineOf`);
+    - core `model-evidence.test.ts`, 24 → 24: `REVIEW_PIPELINE_FILES` gains
+      citation.ts after guardrail.ts, and the comment says it is pinned from
+      the day it lands, as guardrail.ts is, because it will decide what a
+      review drops or strips.
+- **How `ruleCited` checks**, in order; the first failure is the reason:
+  1. **Source.** `repository_instructions` needs the instructions block;
+     `review_rules` the rules block, all of its parts; `paths[i]` the part
+     from `paths` entry `i` (or the block's one part when its parts are
+     unknown); `scoped:` always fails until VS-48. In a base-branch run, a
+     non-scoped source failure whose quote the change added is
+     `head-added`.
+  2. **Quote.** It must hold a letter or a digit, and cover one or more
+     whole trusted lines of one part it may cite, at least one of them a
+     rule line, in the text trusted() sent. Lines are compared after
+     trimming, collapsing whitespace and stripping heading marks, blockquote
+     marks and list markers, the same way on both sides. A heading, a fence,
+     a line inside a fenced example and a line with no letter or digit are
+     not rule lines. Otherwise: `clipped` when the quote is whole only past
+     the clip, or runs into a line the clip cut; then `head-added` in a
+     base-branch run when an added run of the diff holds it; then
+     `misquote`, which includes a quote across two parts.
+  3. **Scope.** A holding part whose scope is unknown gives `scope-unknown`
+     (fail closed). Otherwise one holding part must be unscoped (global,
+     instructions) or have a glob that `ruleGlobMatches` the finding's head
+     path (`lookupFile(...)?.file.path`), or the result is `scope`.
+  4. **Anchor.** `resolveAnchor` must succeed and `onChangedLine` hold (S3).
+  5. Otherwise `{ cited: true, rulesSource }`.
+- **Off by default (I-1, I-12).**
+  - **Nothing calls it.** No key exists. A grep over `packages/engine`,
+    `packages/app`, `packages/desktop` and `script` finds no import of
+    citation.ts, `decodeRuleCitation`, `rulePartsForPaths` or
+    `ruleGlobMatches`; `onChangedLine` and `endLineOf` appear only in core
+    diff.ts and guardrail.ts; `MAX_TRUSTED_CHARS` only in prompt.ts,
+    citation.ts and the test.
+  - **Unchanged behaviour.** `decodeReport` and the schemas are unchanged (a
+    test shows a structured `rule` object is still dropped by the legacy
+    decoder, and the quoted text still kept, with and without strict).
+    `rulesForPaths` is byte-identical: the existing test passes unchanged, a
+    new test checks the joined parts on several path sets, and a scratch
+    property check compared it with HEAD's body over 5,000 random rules,
+    paths and `paths` lists. `trusted()` is untouched, and the S3 move
+    changes no line of either body.
+  - **Digests** (printed before and after, all held): `promptsDigest()`
+    `5d59e9ee06077c23`; `{ impact: "graph" }` `74a2111826c226b1`;
+    `{ guardrail: "strict" }` `b98afb0e878dfe26`; with `impact: "graph"`
+    `3ba21b5bc883cd70`; `{ guardrail: "strict", scopeGate: "introduced" }`
+    `4aa712221043a3a7`; with `impact: "graph"` `8335adf9de513ee5`;
+    `policyDigest(DEFAULT_REVIEW_CONFIG)` `70512122f41ec160`.
+  - **Runner suites** pass with unchanged counts (table below).
+  - **§0.3 items 4 and 5.** The variant `engine:rule-strict` and the desktop
+    half wait for VS-43 wiring: no registry, README, `replay.test.ts` or
+    `ai-review.ts` change.
+- **Decisions.**
+  - (a) **No key and no `ModelFinding` field.** §4 puts VS-43's config parse
+    in the runner-wiring window (unlike VS-42a's decision (a), where §4 did
+    not), so `ruleCheck` is neither typed nor parsed, and no
+    `UNAPPLIED_REVIEW_KEYS` entry is added.
+  - (b) **The check runs against PromptInput's own texts**, clipped by the
+    exported constant, so it reads exactly what trusted() sent. Two tests
+    pin the cut against `buildReviewPrompt`: one in the instructions block,
+    one in a rules block whose untrimmed global text moves the cut. The
+    "…(truncated)" marker is not trusted text and is never matched.
+  - (c) **Scope comes from parts**, because the block is one text for the
+    whole change. Parts are used only when their texts, joined by blank
+    lines and trimmed, are the rules text trimmed (critique point 2, option
+    (a)); offsets are read inside the trimmed text, less what the trim
+    removed at the front. Otherwise the block is one part of unknown scope,
+    and every citation of it fails closed as `scope-unknown`. Critique point
+    7's optional alternative input (`{ rules: ReviewRules, changedPaths,
+    extra }`) was declined: the join check already refuses parts that do
+    not reproduce the text, and the alternative cannot help CI, where only
+    the rules string reaches `Review.run`.
+  - (d) **The reason order** is source, quote, scope, anchor. Scope comes
+    before the anchor so a wrong-scope citation on an unchanged line is
+    counted as a scope error, the rule claim being the subject. Within the
+    quote, `clipped` comes before `head-added`, since a quote that is in the
+    trusted text is not a head addition.
+  - (e) **`head-added`** applies only when the cited block's source is "base
+    branch", counts any run of consecutive added lines in the diff (matched
+    with the same whole-line rule), and only names why a citation failed.
+    It refines a not-found quote and, per critique point 5, a source
+    failure too: in the realistic attack the base has no AGENTS.md or
+    `.vector/review.md` and the PR adds them, which would otherwise read as
+    `source`. So both blocks always carry the source trusted() would render
+    for them, `"base branch"` when none is given, even when not sent; this
+    replaces the plan's optional blocks. `scoped:` stays `source` with no
+    refinement and records no source, since no block carries scoped files
+    yet.
+  - (f) **Quote matching is strict, a setting I-13 will measure** (critique
+    major point 1, taken). A quote must cover whole trusted lines, one of
+    them a rule line; it forgives whitespace and list or heading markers
+    only, and matches case and punctuation exactly. So a single word, a
+    fragment that flips a rule ("log access tokens" from "Never log access
+    tokens."), half of a line (one sentence of a two-sentence bullet), a
+    heading alone (`## path: src/billing/**`) and a fenced example line
+    alone (a "Bad:" example) are all `misquote`. This matches the prompt
+    clause the addendum plans ("its smallest supporting line range"). The
+    cost: a model that quotes one sentence of a longer line fails; a
+    sentence-level relaxation, Markdown emphasis and smart-quote forgiveness
+    wait for Phase A figures, and the strictness enters the kill criterion's
+    format-mismatch count. Matching uses `startsWith` at each line's start,
+    with no regular expression, so no character in a quote is special and
+    nothing can throw (critique point 4, its second option); a later
+    occurrence is found when the first is mid-line. A line the clip cut
+    through is not whole, so a quote ending on a half-cut word is `clipped`
+    (critique point 3). The plan's letter guard is kept: it decides the
+    reason only for a quote with no letter or digit that runs into the clip
+    (`misquote`, not `clipped`), and a test pins that.
+  - (g) **S3 moved to diff.ts.** guardrail.ts imports select.ts, and the
+    `rule-unverified` drop goes in select.ts, so citation.ts importing
+    guardrail.ts would make the cycle select → citation → guardrail →
+    select at wiring. `resolveAnchor` is untouched.
+  - (h) **The decoder lives in schema.ts**, beside the other decoders, so
+    schema.ts never imports citation.ts. It drops, never cuts: an empty
+    quote, one with no letter or digit, or one over 1,000 code points (as
+    JSON Schema's `maxLength` counts) is a `quote` problem. Source spelling
+    is lenient for the two block names (case, the tag's brackets and slash,
+    spaces or hyphens) and for `paths[i]` and `scoped:` (case, spacing).
+    File names (`AGENTS.md`, `.vector/review.md`, `review.json`) are
+    refused, though the posted label says "rule from .vector/review.md"
+    (critique point 8): the prompt clause added at wiring must name the
+    exact source tokens, and file-name aliases wait until measured (I-13).
+    The three problem kinds are already separate, so the kill criterion's
+    count can be split by kind. `paths[i]` is 0-based into the parsed
+    `ReviewConfig.paths`, a safe integer. A scoped path is trimmed before
+    `cleanPath`, keeps its case, and is refused when empty, holding a
+    control character (`\p{Cc}`, which covers line breaks and tabs), or
+    matching `ESCAPING_PATH` (critique point 6). `lines` is unchecked and
+    optional: a whole number, text such as `L3-L7` or `3–7`, or a
+    `{ start, end }` object (`RuleCitation`'s own shape for `lines`; the
+    plan named only the first two), with 1 ≤ start ≤ end, else silently
+    dropped.
+    Extra keys are ignored.
+  - (i) **`scoped:` fails `source` until VS-48** sends scoped files, which
+    then join as parts with their own globs.
+  - (j) **citation.ts is pinned** from the day it lands, as guardrail.ts
+    was. config.ts stays unpinned, as at HEAD; its change here is
+    byte-identical in output.
+  - (k) **No user-visible string** (D14): the reasons are codes, and nothing
+    renders them.
+  - (l) **Severity is out** [GP6]: no trusted rule carries a severity today,
+    and the check never raises or weights a finding.
+  - (m) **Shapes beyond the plan.** `TrustedPart.sent` and `full` are
+    `TrustedText` (normalised lines with offsets, rule and whole flags), not
+    plain normalised strings, because the whole-line rule needs line
+    boundaries. `RuleCheck.rulesSource` is recorded for every non-scoped
+    citation, the block's rendered source, even when the block was not
+    sent.
+- **Hand-offs to VS-43 wiring (runner-wiring window, Q13).**
+  - **Key and digests.** The `ruleCheck: off | strict` parse (no env), its
+    `OPTIONAL_REVIEW_DEFAULTS` and `UNAPPLIED` entries; `EVIDENCE_POLICY_KEYS`
+    counts it only as `"strict"`, once applied. The strict schema's `rule`
+    object and the prompt clauses enter `promptsDigest` only under the key.
+  - **Decoding.** `ModelFinding.citation`, set from `decodeRuleCitation`
+    under the key, with the problems counted by kind.
+  - **Drops.** `rule-unverified` in select.ts, and strip-and-count when the
+    rule was not the finding's only basis ("only basis" being style,
+    maintainability or docs). The counts go in `ReviewOutcome.notes`.
+  - **CI parts.** `github.review.ts` builds the rules string and hands
+    `Review.run` only that, and it is @vector-owned. Until parts reach
+    `Review.run`, strict `ruleCheck` in CI rejects every `review_rules` and
+    `paths[i]` citation as `scope-unknown`, global rules included. That
+    would likely trip the kill criterion ("format mismatches drop more than
+    2% of settled true positives") on the first ablation, so it bears on
+    Q13 and Q18: either CI waits for the @vector merge, `Review.run` gains
+    the parsed rules (`ReviewRules`, changed paths and `config.paths`), or
+    wiring derives parts from the block's own `## path:` headings when
+    re-rendering them reproduces the text exactly. The last is not built: a
+    `paths` entry's instructions may hold `## ` lines, so it needs its own
+    fail-closed test.
+  - **Local CLI.** It sends no `<repository_instructions>` block (VT3), so
+    `repository_instructions` citations fail `source` until wiring passes
+    the loader's text. The wiring should also pass `instructionsSource:
+    "working tree"` for a trusted local run even when it sends no
+    instructions, or a quote from a working-tree AGENTS.md the change added
+    reads as `head-added` (the default source is "base branch").
+  - **`paths[i]`.** The rules block shows no index, only `## path: <glob>`
+    headings: the prompt must render each entry's index, or the form is
+    dropped from the schema.
+  - **Owner (D14).** The posted label "rule from .vector/review.md"
+    (`format.ts:319-323`) misnames AGENTS.md and review.json rules.
+  - **`StrictResult.linkedRule`** (§3 VS-27) and its `ruleCited` check are
+    deferred to the VS-27 follow-up and VS-43 wiring; this package builds no
+    `StrictResult` field.
+  - **Remaining wiring.** The desktop half (`ai-review.ts:837-843`) with D3
+    parity tests in `run.test.ts` and `ai-review.test.ts`; the variant
+    `engine:rule-strict`; the VS-22a follow-up's head-added rule case; the
+    Phase A figures; VS-48's reuse of the checker for scoped files.
+- **Deferred verification.**
+  - The kill criterion and the three Phase A figures (share of findings with
+    a rule, share failing, settled precision of rule-cited findings) are
+    unmeasured: no model emits structured citations yet.
+  - The CI and desktop paths are not covered; the CI consequence above is
+    reasoned from the code, not run.
+  - The merge conflicts are only predicted.
+- **Owner questions.** None new. Q18 (whether VS-43 is approved) and Q13
+  stay open, and this package is neutral on them: nothing calls it.
+- **Predicted merge conflicts.** Read-only: `git merge-tree --write-tree
+  --name-only` at HEAD, then a three-way `git merge-file` of each touched
+  file that either branch changes, comparing the working tree with each
+  branch's merge base and tip.
+  - Of the touched files, `config.ts`, `prompt.ts` and `types.ts` change on
+    `origin/codium` (`5a079cbd`), and `types.ts` on `origin/self-evolving`
+    (`f062bcce`).
+  - `config.ts` and `prompt.ts`: no conflict with codium, at HEAD or with
+    VS-43a (its hunks are `FIELDS` and the judge prompt, far from `:105`
+    and `:504-515`).
+  - `types.ts`: 2 conflict hunks with codium and 1 with self-evolving, at
+    HEAD and with VS-43a alike, and identical (the VS-27a pass-name lines).
+    No new conflict hunk.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory. Counts are at HEAD → with VS-43a.
+
+  | File | HEAD | VS-43a |
+  |---|---|---|
+  | core `test/review/citation.test.ts` | (new) | 26 |
+  | core `test/review/schema.test.ts` | 47 | 54 |
+  | core `test/review/config.test.ts` | 53 | 55 |
+  | core `test/review/diff.test.ts` | 50 | 52 |
+  | core `test/review/guardrail.test.ts` | 44 | 44 |
+  | core `test/review/model-evidence.test.ts` | 24 | 24 |
+  | core `test/review/prompt.test.ts` | 36 | 36 |
+  | core `test/review/select.test.ts` | 45 | 45 |
+  | core `test/review/trivial.test.ts` | 44 | 44 |
+  | core `test/review/format.test.ts` | 51 | 51 |
+  | core `test/review/pipeline.test.ts` | not run | 2 |
+  | engine `test/review/run.test.ts` | 44 | 44 |
+  | engine `test/cli/github.review.test.ts` | 40 | 40 |
+  | engine `test/review/eval.test.ts` | 30 | 30 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 | 107 |
+  | eval `report.test.ts` (from `script/vectorscope-eval`) | 33 | 33 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 | 32 |
+
+  - **Run notes.** HEAD counts for citation's neighbours (schema, config,
+    diff, guardrail, model-evidence, prompt, select) and for the runner and
+    report suites were run at `977e3667` before any edit, the engine ones
+    with fresh XDG roots under `/tmp/vector-vectorscope/vs43a/xdg/`. Those
+    for trivial, format and replay are the VS-42a column of the VS-42a
+    entry, whose change is the HEAD commit.
+  - **Typecheck.** `bun typecheck` passes in core and engine; app and
+    desktop pass `bun typecheck --force`; the eval scripts pass `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - **Lint.** prettier is clean on every changed source and test file except
+    `prompt.ts`, whose one prettier difference (the `requirements` line, 449
+    at HEAD) predates this package and was left alone. oxlint reports 25 warnings in these files,
+    none on an added or changed line.
+  - **Mutation check.** 33 mutations, each applied alone and run against the
+    named test file (one of them against two files), with each file restored
+    byte for byte (checked by hash). All are caught; one survived the first
+    pass and is caught after a test was added:
+    - in `citation.ts`: the quote compared raw; no line-end boundary; no
+      line-start boundary; the full text used for the sent text; head-added
+      in a working-tree run; head-added removed; the source-failure
+      refinement removed; `scoped:` refined as head-added; scope ignoring
+      globs; the `paths` index off by one; unknown parts read as global; the
+      anchor check removed; the anchor checked before scope; the letter
+      guard removed; the default source "working tree"; the clip at
+      `MAX_TRUSTED_CHARS - 1`; the parts compared untrimmed; a cut line
+      read as whole; the `clipped` reason for a cut removed; fenced example
+      lines read as rules; headings read as rules; `scoped:` recording a
+      block source; and the trim lead ignored. The last survived at first:
+      line offsets come from each part's own slice, so the clip stayed
+      right, and only each later part's first two characters (its heading's
+      `##`) moved to the separator. The boundary test now also asserts that
+      the section's heading alone is a `misquote`;
+    - in `schema.ts`: a negative `paths` index; `..` accepted for `scoped:`;
+      control characters accepted; the scoped path not trimmed; a long quote
+      kept; start > end kept; the source read case-sensitively;
+    - in `config.ts`: a part missing its heading; the `paths` index shifted;
+    - in `diff.ts`: `onChangedLine` accepting a snapped line, caught by both
+      the diff and the citation tests.
+  - **Not run.** The full root typecheck was not run, since nothing is
+    pushed.
+  - **Not done.** Nothing was sent to a model; there was no paid run, no
+    workflow dispatched, nothing published and nothing committed; no
+    existing user-visible string changed (D14).
+  - **Commit (when the orchestrator asks).** `feat(review): VS-43a rule
+    citation checker`, staging the explicit paths, with the lane identity
+    and trailers.
+
+### 2026-11-07 · VS-43a review fixes
+
+Six review findings, two of them blocking. All six were fixed, two of them
+by the finding's own second option (noted below). Only core
+`review/citation.ts`, `test/review/citation.test.ts` and
+`review/model-evidence.ts` (the pin) changed, with this log. No runner,
+provider, LLM or posting file and no file @vector owns changed. Nothing is
+committed. Where these points differ from the entry above, they supersede it.
+
+- **Hard-wrapped lines are one line (blocking).** Taken. The probe's two
+  cases, "log access tokens." out of "- Never\n  log access tokens." and
+  "skip tests." out of "- Do not\n  skip tests.", are now `misquote`.
+  - **Folding.** `normalizedLines` is now `logicalLines`, which folds
+    physical lines into logical ones before any `TrustedText` is built. It
+    is used for the sent text, the full text, the added runs and the quote.
+  - **What continues a line.** A line continues the one before it when it is
+    not blank, outside a fence, and follows a paragraph or list item line. A
+    line that starts a block never continues. The finding names four such
+    starts: a list item, a heading, a fence and a deeper blockquote. Three
+    more are added, because Markdown starts a block there too and folding
+    them would fail rule lines closed:
+    - a thematic break or setext underline (`---`, `***`, `===`);
+    - a table row (a line starting with `|`);
+    - for numbered items, CommonMark's rule. `1.` always starts an item. Any
+      other number starts one only left of the text of the line it follows,
+      as a sibling (`2.` after `1. a`, or after its nested bullet). So
+      "- Keep retries at most\n  3. Never retry forever." stays one line,
+      and "Never retry forever." alone is a `misquote`.
+  - **Blockquotes.** A line at the same or a lower depth continues a
+    blockquote, the lower one being Markdown's lazy continuation.
+  - **Text.** Pieces are joined with single spaces. A continuation has only
+    its blockquote marks stripped, since it starts no list item or heading.
+  - **Flags.** A logical line is a rule line when its joined text holds a
+    letter or a digit, and is whole only when every physical line in it was
+    sent whole. A wrapped bullet whose later lines lie past the clip is not
+    whole.
+  - **The quote** is folded the same way, so a model may copy the wrap.
+  - **Tests.**
+    - The wrapped bullet is cited when quoted wrapped, on one line or with an
+      unindented continuation. Its continuation alone, and its first line
+      alone, are misquotes. The same holds for a wrapped paragraph and a
+      wrapped blockquote.
+    - A numbered continuation, and a line whose first physical line holds no
+      letter, are covered.
+    - A second test pins each block start: siblings, a nested bullet, a
+      nested `1.`, a lazy continuation, a heading, `***`, table rows and a
+      deeper blockquote.
+    - A wrapped bullet the clip cuts mid-item is `clipped`, whether the cut
+      is inside its second line or exactly where that line starts. Both cuts
+      are pinned against `buildReviewPrompt`.
+  - **One existing test changed.** The no-letter clip case now puts `----
+    more` after a blank line. Otherwise it would fold into the bullet above
+    it, and the test would no longer reach the letter guard at the clip.
+- **head-added only from files that can carry rules.** Taken as the first
+  option: `trusted.added` holds only the added runs of `RULE_FILES`. Those
+  are:
+  - `AGENTS.md` and `CLAUDE.md` at any depth, for VS-48's scoped files;
+  - `.vector/RULES.md`, which `baseInstructions` also reads into the
+    instructions block (the finding's list left it out);
+  - `REVIEW_RULES_PATHS` (`.vector/review.md`, `.vector/REVIEW.md`);
+  - `REVIEW_CONFIG_PATH` (`.vector/review.json`).
+
+  VS-48 adds its scoped paths when it lands. A quote of the change's own code
+  (`return eval(input)`, or README's `More words.`) is now `misquote`.
+  Tests cover a nested `CLAUDE.md`, `.vector/RULES.md`, `.vector/REVIEW.md`,
+  `docs/rules.md`, `NOTAGENTS.md`, and a wrapped rule added to `AGENTS.md`,
+  which is head-added only when quoted whole.
+- **Single-use helpers.** `inScope` is inlined at its one call site.
+  `normalizedQuote` is inlined too: the quote is now read by `logicalLines`,
+  with a comment. `candidatesOf` and `rulesParts` stay, as the finding
+  allows.
+- **Linear time (blocking).** Taken, and made stronger than the finding asks.
+  - **Why stronger.** The finding's bounded end search still costs one
+    comparison of up to 1,000 characters per line when every line holds the
+    quote but no span qualifies, such as headings or lines in a fence.
+  - **What `coverage` does now.** It builds, once per call, maps from line
+    start and line end to line index, and prefix counts of rule and example
+    lines. It finds occurrences with Knuth-Morris-Pratt (`occurs`), which is
+    linear in the text and the quote. Each occurrence is checked in constant
+    time, and the scan stops at the first that qualifies. `cut` is read from
+    the text's end, since only the last line sent can be cut. The
+    `trusted.added` `.some` already stopped at the first `whole`.
+  - **Measured** through the lock (`/tmp/vector-vectorscope/vs43a-fix/
+    bench.ts`, the review's case moved to `AGENTS.md`, since `x.md` is no
+    longer read). One check takes:
+
+    | Added lines | `- x`, quote `x` | `# x`, quote `x` | `# x`, a 997-character quote |
+    |---|---|---|---|
+    | 20,000 | 8.6 ms | 7.2 ms | 8.2 ms |
+    | 200,000 | 89 ms | 101 ms | 101 ms |
+
+    The review measured 451 ms at 20,000 lines and extrapolated about 45 s
+    at 200,000.
+  - **Tests.** A `cost` block parses 50,000 identical added lines in
+    `AGENTS.md` and wraps each added run's `lines` in a Proxy that counts
+    index reads. It throws past 8 reads a line, so a regression fails at
+    once instead of at the timeout. The test runs one-word quote `x` on rule
+    lines (stops at the first match, `head-added`) and on headings (every
+    occurrence tried, `misquote`). A new overlap case ("Retry. Retry."
+    across two lines, then whole on the second) pins the KMP border logic.
+- **review.json rules added by the change (hand-off).** Taken as the first
+  option, recorded here, and pinned by a test. Added lines are read as
+  Markdown, so a rule a change adds as a review.json `paths` string reads as
+  `misquote`, not `head-added`. The citation still fails, so I-2 holds. But
+  Phase A's head-added count misses JSON-sourced rules unless VS-43 wiring
+  also compares against the head review.json's parsed `paths` instructions
+  when review.json is in the diff.
+- **A quote may not run into a fenced example.** Taken as the first option,
+  with a test change.
+  - **The rule.** `TrustedLine` gains `example` (a fence, or a line in a
+    fenced block), and a span is whole only when it holds no example line.
+    "Prefer early returns.\n```ts\n// Bad", which the old test expected to
+    be cited, is now `misquote`. So are the rule plus its opening fence, and
+    an example's last line running out into the next bullet.
+  - **Still cited.** A heading with the line under it.
+  - **Hand-off.** A cited span is trusted rule lines only, equal to the
+    quote apart from whitespace and list, heading and blockquote markers. So
+    wiring may render either the quote or the span's trusted text; the
+    latter keeps the markers.
+- **Residual Markdown differences**, each failing closed or unchanged from
+  the entry above:
+  - a setext heading's text still counts as a rule line;
+  - indented code and a blockquoted fence are not examples;
+  - a table's later row without a leading `|` stands alone;
+  - a block that `logicalLines` folds but Markdown splits (an HTML block, say)
+    needs the whole folded line quoted.
+- **Off by default (I-1).** Nothing calls `citation.ts`. The only importers
+  are core's `citation.test.ts` and `model-evidence.test.ts` (the pin). The
+  prompt and policy digests read no file this round changed.
+- **Pin (I-12).** `REVIEW_PIPELINE_SOURCES` moves from `9d2557d711675fbd` to
+  `c8568097f8a427b4`, because `citation.ts` changed.
+  `REVIEW_PIPELINE_REVISION` stays 1.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from `packages/core`.
+  - **Counts.** core `citation.test.ts` 26 → 33; `model-evidence.test.ts`
+    24 → 24.
+  - **Typecheck.** `bun typecheck` passes in core.
+  - **Lint.** prettier is clean on both changed files, and oxlint reports 0
+    warnings. Three test lines over 120 columns remain, two string literals
+    and a test name that prettier leaves alone; all three predate this round.
+  - **Mutations.** 22 mutations were each applied alone to `citation.ts` and
+    run against `citation.test.ts`, and the file was restored byte for byte
+    (checked by hash). All 22 were caught:
+    - folding off;
+    - bullets continuing a line;
+    - `1.` continuing;
+    - a sibling number continuing;
+    - every number starting a block;
+    - no depth check;
+    - table rows continuing;
+    - thematic breaks continuing;
+    - the rule flag not recomputed;
+    - continuations stripped as first lines;
+    - sent lines always whole;
+    - examples allowed in a span;
+    - no rule line required;
+    - `cut` never reported;
+    - KMP resetting after a match;
+    - a zero border table;
+    - added runs from every file;
+    - rule file names matched only at the root;
+    - rule paths not matched;
+    - the quote not folded;
+    - the old quadratic end search (caught by the Proxy bound);
+    - scope ignoring globs.
+  - **Not run.** The engine and app runner suites were not re-run: nothing
+    they import changed. The full root typecheck was not run, since nothing
+    is pushed.

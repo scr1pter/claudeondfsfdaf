@@ -501,15 +501,59 @@ export function parseReviewRules(text: string): ReviewRules {
   }
 }
 
-// The rules for a change: the global section, every section whose globs match a changed file, and matching
-// `paths` entries from review.json. A glob without a slash matches the file name at any depth.
+// One part of the rules block rulesForPaths builds, with where it came from: the global text, a `.vector/review.md`
+// section, or the review.json `paths` entry at `index`, its position in the list as parsed.
+export type RulePart =
+  | { from: "global"; text: string }
+  | { from: "section"; globs: string[]; text: string }
+  | { from: "paths"; index: number; glob: string; text: string }
+
+// Whether a rule's glob covers a path. A glob without a slash matches the file name at any depth.
+export function ruleGlobMatches(path: string, glob: string): boolean {
+  return minimatch(path, glob, { dot: true, matchBase: true })
+}
+
+// The parts of the rules for a change, in order: the global text, every section whose globs match a changed file, and
+// matching `paths` entries from review.json. The block is one text for the whole change: a section is included when
+// any changed file matches it, so it reaches the model beside files it does not cover. That is why citation.ts reads a
+// rule's scope from these parts, not from the text.
+export function rulePartsForPaths(
+  rules: ReviewRules,
+  changedPaths: string[],
+  extra: ReviewConfig["paths"] = [],
+): RulePart[] {
+  const matches = (glob: string) => changedPaths.some((path) => ruleGlobMatches(path, glob))
+  return [
+    ...(rules.global ? [{ from: "global" as const, text: rules.global }] : []),
+    ...rules.sections.flatMap((section) =>
+      section.text && section.globs.some(matches)
+        ? [
+            {
+              from: "section" as const,
+              globs: section.globs,
+              text: `## path: ${section.globs.join(", ")}\n${section.text}`,
+            },
+          ]
+        : [],
+    ),
+    ...extra.flatMap((item, index) =>
+      item.instructions.trim() && matches(item.path)
+        ? [
+            {
+              from: "paths" as const,
+              index,
+              glob: item.path,
+              text: `## path: ${item.path}\n${item.instructions.trim()}`,
+            },
+          ]
+        : [],
+    ),
+  ]
+}
+
+// The rules for a change, as one text: rulePartsForPaths's parts joined by blank lines.
 export function rulesForPaths(rules: ReviewRules, changedPaths: string[], extra: ReviewConfig["paths"] = []): string {
-  const matches = (glob: string) => changedPaths.some((path) => minimatch(path, glob, { dot: true, matchBase: true }))
-  const parts: string[] = []
-  if (rules.global) parts.push(rules.global)
-  for (const section of rules.sections)
-    if (section.text && section.globs.some(matches)) parts.push(`## path: ${section.globs.join(", ")}\n${section.text}`)
-  for (const item of extra)
-    if (item.instructions.trim() && matches(item.path)) parts.push(`## path: ${item.path}\n${item.instructions.trim()}`)
-  return parts.join("\n\n")
+  return rulePartsForPaths(rules, changedPaths, extra)
+    .map((part) => part.text)
+    .join("\n\n")
 }

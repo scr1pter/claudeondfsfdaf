@@ -29,7 +29,9 @@ import {
   anchorText,
   applyFixPatch,
   buildAnchorIndex,
+  endLineOf,
   lookupFile,
+  onChangedLine,
   resolveAnchor,
   suggestionAllowed,
   touched,
@@ -463,18 +465,6 @@ function compare(a: string, b: string) {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
-// S3: the anchor is at the model's own lines (resolveAnchor may snap a line onto a nearby hunk, which does not count),
-// and on code the change touched. On the RIGHT side some line of it was added, or sits next to a deletion
-// (touched with no radius); the LEFT side holds only removed lines, so a LEFT anchor is on removed code.
-function onChangedLine(anchors: DiffFile[], finding: Pick<Finding, "line" | "endLine">, anchor: Anchor) {
-  if (anchor.line < finding.line || anchor.line > (endLineOf(finding) ?? finding.line)) return false
-  if (anchor.side === "LEFT") return true
-  const start = anchor.startLine ?? anchor.line
-  return Array.from({ length: anchor.line - start + 1 }, (_, offset) => start + offset).some((line) =>
-    touched(anchors, anchor.path, line, 0),
-  )
-}
-
 // What S9 reads beside a finding: the diff, and each base file's lines as lineReader gives them.
 type SuspectContext = { index: AnchorIndex; anchors: DiffFile[]; base: (path: string) => FileLines }
 
@@ -521,13 +511,6 @@ function unchangedSinceBase(quote: Quote, context: SuspectContext): boolean | "u
   const base = context.base(blobKey(context.index, quote.path, "LEFT").path)
   if (base === "unreadable") return "unchecked"
   return base !== "absent" && matchAt(base, { ...trimmed, side: "LEFT", line })
-}
-
-// A finding's last line, as resolveAnchor reads it: only a whole number after its first line.
-function endLineOf(finding: Pick<Finding, "line" | "endLine">) {
-  return finding.endLine !== undefined && Number.isInteger(finding.endLine) && finding.endLine > finding.line
-    ? finding.endLine
-    : undefined
 }
 
 // S5: present, and at most MAX_FAILURE_TEXT_CHARS characters as JSON Schema's maxLength counts them: code points, which

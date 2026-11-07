@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import {
   decodeReport,
+  decodeRuleCitation,
   decodeVerify,
   extractJson,
   MAX_FAILURE_TEXT_CHARS,
@@ -10,6 +11,7 @@ import {
   MAX_QUOTE_CHARS,
   MAX_QUOTE_LINES,
   MAX_REPORT_FINDINGS,
+  MAX_RULE_QUOTE_CHARS,
   MAX_SUGGESTION_CHARS,
   MAX_TITLE_CHARS,
   REVIEW_REPORT_JSON_SCHEMA,
@@ -899,6 +901,161 @@ describe("decodeReport under guardrail: strict (VS-27a)", () => {
       const finding = decodeReport({ summary: "s", findings: [{ ...base, severity: "critical" }] }, keys)?.findings[0]
       expect(finding?.severity).toBe("concern")
       expect(finding).not.toHaveProperty("severityUnreadable")
+    }
+  })
+})
+
+// VS-43a: the structured rule decoder, which no runner calls before VS-43 wiring. A problem is one of three kinds, so a
+// measurement can count format mismatches apart from wrong quotes.
+describe("decodeRuleCitation (VS-43a)", () => {
+  const quote = "Never log access tokens."
+  const source = (said: unknown) => {
+    const read = decodeRuleCitation({ source: said, quote })
+    return "citation" in read ? read.citation.source : read.problem
+  }
+
+  test("anything but an object is not structured, the legacy quoted text included", () => {
+    for (const input of [quote, null, undefined, [{ source: "review_rules", quote }], 3, true])
+      expect(decodeRuleCitation(input)).toEqual({ problem: "not-structured" })
+  })
+
+  test("reads the two block names leniently, and nothing else", () => {
+    for (const said of [
+      "review_rules",
+      "<review_rules>",
+      "</review_rules>",
+      "<review_rules/>",
+      " Review Rules ",
+      "review-rules",
+      "REVIEW_RULES",
+    ])
+      expect(source(said)).toEqual({ kind: "review_rules" })
+    for (const said of [
+      "repository_instructions",
+      "<repository_instructions>",
+      "Repository Instructions",
+      "repository-instructions",
+    ])
+      expect(source(said)).toEqual({ kind: "repository_instructions" })
+    // File names name no block: the prompt clause added with wiring must name the exact source tokens.
+    for (const said of [
+      "AGENTS.md",
+      ".vector/review.md",
+      "review.json",
+      "rules",
+      "instructions",
+      "review rules!",
+      "",
+      1,
+      null,
+      { kind: "review_rules" },
+    ])
+      expect(source(said)).toBe("source")
+  })
+
+  test("paths[i] is a 0-based index into ReviewConfig.paths, and only a whole one", () => {
+    expect(source("paths[0]")).toEqual({ kind: "paths", index: 0 })
+    expect(source(" PATHS [ 12 ] ")).toEqual({ kind: "paths", index: 12 })
+    expect(source("paths[007]")).toEqual({ kind: "paths", index: 7 })
+    for (const said of [
+      "paths[-1]",
+      "paths[1.5]",
+      "paths[]",
+      "paths[x]",
+      "paths 1",
+      "paths[1][2]",
+      "paths[99999999999999999999]",
+    ])
+      expect(source(said)).toBe("source")
+  })
+
+  test("a scoped path keeps its case and is trimmed; one that is empty, holds a control character or escapes is refused", () => {
+    expect(source("scoped:src/AGENTS.md")).toEqual({ kind: "scoped", path: "src/AGENTS.md" })
+    expect(source("Scoped : ./src/Api/AGENTS.md ")).toEqual({ kind: "scoped", path: "src/Api/AGENTS.md" })
+    expect(source("scoped: src/AGENTS.md \n")).toEqual({ kind: "scoped", path: "src/AGENTS.md" })
+    expect(source("scoped:/.github/instructions/api.instructions.md")).toEqual({
+      kind: "scoped",
+      path: ".github/instructions/api.instructions.md",
+    })
+    for (const said of [
+      "scoped:",
+      "scoped:   ",
+      "scoped: src/a\nb.md",
+      "scoped: src/a\tb.md",
+      "scoped: ../AGENTS.md",
+      "scoped: src/../../x",
+      "scoped: src\\AGENTS.md",
+      "scoped: C:/x",
+    ])
+      expect(source(said)).toBe("source")
+  })
+
+  test("a quote is trimmed text with CRLF folded, holding a letter or a digit, dropped rather than cut when too long", () => {
+    expect(decodeRuleCitation({ source: "review_rules", quote: "  - Never log\r\n  access tokens.\r\n" })).toEqual({
+      citation: { source: { kind: "review_rules" }, quote: "- Never log\n  access tokens." },
+    })
+    const longest = "é".repeat(MAX_RULE_QUOTE_CHARS)
+    expect(decodeRuleCitation({ source: "review_rules", quote: longest })).toEqual({
+      citation: { source: { kind: "review_rules" }, quote: longest },
+    })
+    for (const said of [longest + "é", "", "   ", "— … —", "---", 42, undefined, ["Never log access tokens."]])
+      expect(decodeRuleCitation({ source: "review_rules", quote: said })).toEqual({ problem: "quote" })
+    // The source is read first.
+    expect(decodeRuleCitation({ source: "AGENTS.md", quote: "" })).toEqual({ problem: "source" })
+  })
+
+  test("lines are optional and never block a citation: a bad range is dropped", () => {
+    const lines = (said: unknown) => {
+      const read = decodeRuleCitation({ source: "review_rules", quote, lines: said })
+      if (!("citation" in read)) throw new Error("expected a citation")
+      return read.citation.lines
+    }
+    expect(lines(4)).toEqual({ start: 4, end: 4 })
+    expect(lines("L3-L7")).toEqual({ start: 3, end: 7 })
+    expect(lines(" 3 – 7 ")).toEqual({ start: 3, end: 7 })
+    expect(lines("l5")).toEqual({ start: 5, end: 5 })
+    expect(lines("5-5")).toEqual({ start: 5, end: 5 })
+    expect(lines({ start: 2, end: 9 })).toEqual({ start: 2, end: 9 })
+    for (const said of [
+      undefined,
+      0,
+      -2,
+      2.5,
+      "7-3",
+      "0-4",
+      "L3-",
+      "3..7",
+      "lines 3-7",
+      { start: 4 },
+      { start: 5, end: 2 },
+      [3, 7],
+    ])
+      expect(lines(said)).toBeUndefined()
+  })
+
+  test("other keys are ignored, and decodeReport does not read a structured rule", () => {
+    expect(decodeRuleCitation({ source: "paths[1]", quote, severity: "blocking", extra: { a: 1 } })).toEqual({
+      citation: { source: { kind: "paths", index: 1 }, quote },
+    })
+    const finding = {
+      path: "src/a.ts",
+      line: 3,
+      severity: "concern",
+      category: "style",
+      title: "Logs a token",
+      body: "b",
+      confidence: 0.9,
+    }
+    for (const keys of [undefined, { guardrail: "strict" as const }]) {
+      const decoded = decodeReport(
+        { summary: "s", findings: [{ ...finding, rule: { source: "review_rules", quote } }] },
+        keys,
+      )
+      expect(decoded?.findings[0]).not.toHaveProperty("rule")
+      expect(decoded?.findings[0]).not.toHaveProperty("citation")
+      expect(decodeReport({ summary: "s", findings: [{ ...finding, rule: quote }] }, keys)?.findings[0]?.rule).toBe(
+        quote,
+      )
     }
   })
 })

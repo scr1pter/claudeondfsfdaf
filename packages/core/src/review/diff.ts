@@ -3,7 +3,7 @@
 
 import { fnv1a64 } from "./fingerprint"
 import { isBinaryPath } from "./ignore"
-import type { Anchor, AnchorFailure, FocusHunk, Side, Trust } from "./types"
+import type { Anchor, AnchorFailure, Finding, FocusHunk, Side, Trust } from "./types"
 
 export interface DiffLine {
   kind: "add" | "del" | "context"
@@ -497,6 +497,27 @@ export function touched(changes: DiffFile[], path: string, line: number, radius 
     }
   }
   return false
+}
+
+// S3, shared by guardrail.ts's strict guardrail and citation.ts's ruleCited (VS-43), which import it from here so that
+// neither imports the other: the anchor is at the model's own lines (resolveAnchor may snap a line onto a nearby hunk,
+// which does not count), and on code the change touched. On the RIGHT side some line of it was added, or sits next to a
+// deletion (touched with no radius); the LEFT side holds only removed lines, so a LEFT anchor is on removed code.
+export function onChangedLine(anchors: DiffFile[], finding: Pick<Finding, "line" | "endLine">, anchor: Anchor) {
+  if (anchor.line < finding.line || anchor.line > (endLineOf(finding) ?? finding.line)) return false
+  if (anchor.side === "LEFT") return true
+  const start = anchor.startLine ?? anchor.line
+  return Array.from({ length: anchor.line - start + 1 }, (_, offset) => start + offset).some((line) =>
+    touched(anchors, anchor.path, line, 0),
+  )
+}
+
+// A finding's last line, as resolveAnchor reads it: only a whole number after its first line. S3 reads it, and so does
+// guardrail.ts.
+export function endLineOf(finding: Pick<Finding, "line" | "endLine">) {
+  return finding.endLine !== undefined && Number.isInteger(finding.endLine) && finding.endLine > finding.line
+    ? finding.endLine
+    : undefined
 }
 
 // Like `git patch-id`: the same change at other line numbers, or re-indented, keeps its id.

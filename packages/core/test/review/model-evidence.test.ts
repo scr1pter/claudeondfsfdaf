@@ -36,8 +36,9 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // reaches them through the slice before VS-25b wiring, which adds them here when it makes them decide the slice. The
 // strict guardrail (VS-27b's guardrail.ts) is pinned from the day it lands, though no runner calls it before VS-27c: it
 // decides what a strict review posts, and its shared rule pass is the one report.ts's offline re-selection applies, so
-// a change to either moves this pin on purpose. verdict.ts and format.ts are left out: completeness decides wording and
-// the verdict, not what a review finds or posts.
+// a change to either moves this pin on purpose. So is the rule citation check (VS-43a's citation.ts), pinned from the
+// day it lands, as guardrail.ts is: it will decide what a review drops or strips. verdict.ts and format.ts are left
+// out: completeness decides wording and the verdict, not what a review finds or posts.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -52,6 +53,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/trivial.ts",
   "packages/core/src/review/dispatch.ts",
   "packages/core/src/review/guardrail.ts",
+  "packages/core/src/review/citation.ts",
   "packages/engine/src/review/parse.ts",
   "packages/core/src/review/impact.ts",
   "packages/engine/src/review/impact.ts",

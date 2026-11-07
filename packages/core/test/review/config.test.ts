@@ -5,6 +5,8 @@ import {
   parseReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
+  ruleGlobMatches,
+  rulePartsForPaths,
   rulesForPaths,
   SOURCED_REVIEW_KEYS,
 } from "@vectordevai/core/review/config"
@@ -721,6 +723,48 @@ describe("review.md rules", () => {
       global + "\n\n## path: src/api/**\nValidate input.",
     )
     expect(rulesForPaths(parseReviewRules(""), ["a.ts"])).toBe("")
+  })
+
+  // VS-43a: the same block as parts, each with where it came from, so citation.ts can read a rule's own scope.
+  test("rulePartsForPaths gives the parts rulesForPaths joins, with their globs and review.json index", () => {
+    const extra = [
+      { path: "docs/**", instructions: "Docs only." },
+      { path: "src/api/**", instructions: "  " },
+      { path: "src/**", instructions: " Validate input. " },
+    ]
+    const changed = ["src/billing/charge.ts", "src/a.spec.ts", "README.md"]
+    const parts = rulePartsForPaths(rules, changed, extra)
+    expect(parts).toEqual([
+      { from: "global", text: global },
+      {
+        from: "section",
+        globs: ["src/billing/**"],
+        text: "## path: src/billing/**\n- Money is integer cents. A float in this folder is blocking.",
+      },
+      {
+        from: "section",
+        globs: ["**/*.test.ts", "**/*.spec.ts"],
+        text: "## path: **/*.test.ts, **/*.spec.ts\n- Don't ask for assertion messages.\n\n```md\n## path: fenced/**\n- This heading is an example, not a section.\n```",
+      },
+      // Entry 0 matches no changed file and entry 1 has no instructions; the index is the entry's own position.
+      { from: "paths", index: 2, glob: "src/**", text: "## path: src/**\nValidate input." },
+    ])
+    expect(parts.map((part) => part.text).join("\n\n")).toBe(rulesForPaths(rules, changed, extra))
+    expect(rulePartsForPaths(parseReviewRules(""), ["a.ts"])).toEqual([])
+    for (const paths of [["README.md"], ["db/queries/q.sql"], [], ["src/billing/x.ts", "q.sql"]])
+      expect(
+        rulePartsForPaths(rules, paths, extra)
+          .map((part) => part.text)
+          .join("\n\n"),
+      ).toBe(rulesForPaths(rules, paths, extra))
+  })
+
+  test("ruleGlobMatches reads a glob as rulesForPaths does", () => {
+    expect(ruleGlobMatches("db/queries/q.sql", "*.sql")).toBe(true)
+    expect(ruleGlobMatches("src/billing/charge.ts", "src/billing/**")).toBe(true)
+    expect(ruleGlobMatches("src/.hidden/x.ts", "src/**")).toBe(true)
+    expect(ruleGlobMatches("README.md", "src/**")).toBe(false)
+    expect(ruleGlobMatches("lib/src/x.ts", "src/**")).toBe(false)
   })
 
   test("caps the file at 16 KB", () => {

@@ -102,7 +102,8 @@ const MAX_COMMENT_CHARS = 1_000
 const MAX_SYMBOLS = 10
 const MAX_HITS = 15
 const MAX_HISTORY_FILES = 10
-const MAX_TRUSTED_CHARS = 16_000
+// Exported for citation.ts (VS-43), which checks a cited rule against exactly the text trusted() sends.
+export const MAX_TRUSTED_CHARS = 16_000
 const MAX_TEAM_PATTERNS = 30
 const MAX_CHECKS = 20
 const MAX_CHECK_CHARS = 4_000
