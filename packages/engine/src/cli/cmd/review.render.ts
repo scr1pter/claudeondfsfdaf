@@ -227,7 +227,14 @@ function footer(outcome: ReviewOutcome): string {
 // when the review as a whole is priced.
 function passesLine(passes: ReviewPass[], cost: ReviewCost | undefined): string {
   const priced = cost?.kind === "priced"
-  const name = { review: "review", security: "security", verify: "double-check" } as const
+  const name = {
+    review: "review",
+    security: "security",
+    verify: "double-check",
+    judge: "panel judge",
+    lens: "lens",
+    repro: "reproducer",
+  } as const
   return `By pass: ${passes
     .map(
       (pass) =>

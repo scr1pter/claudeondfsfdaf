@@ -8,7 +8,7 @@ import {
   rulesForPaths,
   SOURCED_REVIEW_KEYS,
 } from "@vectordevai/core/review/config"
-import { DEFAULT_REVIEW_CONFIG, OPTIONAL_REVIEW_DEFAULTS } from "@vectordevai/core/review/types"
+import { DEFAULT_REVIEW_CONFIG, OPTIONAL_REVIEW_DEFAULTS, UNAPPLIED_REVIEW_KEYS } from "@vectordevai/core/review/types"
 
 describe("parseReviewConfig", () => {
   test("returns the defaults in new arrays", () => {
@@ -748,7 +748,12 @@ describe("VS-24's keys", () => {
       expect(Object.hasOwn(config, key)).toBe(false)
     }
     expect(warnings).toEqual([])
-    expect(OPTIONAL_REVIEW_DEFAULTS).toEqual({ trivial: "review", maxInputTokens: 0, impact: "grep" })
+    expect(OPTIONAL_REVIEW_DEFAULTS).toEqual({
+      trivial: "review",
+      maxInputTokens: 0,
+      impact: "grep",
+      guardrail: "off",
+    })
   })
 
   test("review.json sets them, and a value that would change a review says it is not applied", () => {
@@ -859,6 +864,65 @@ describe("VS-25b's impact key", () => {
   test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
     const text = JSON.stringify({ impact: "graph" })
     const env = { REVIEW_IMPACT: "grep" }
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, env, trigger: "auto" })).toEqual(
+      parseReviewConfig({ json: text, env, trigger: "auto" }),
+    )
+    expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
+      parseReviewConfig({ json: text, trigger: "desktop" }),
+    )
+  })
+})
+
+// VS-27a: `guardrail` is parsed, and no runner reads it before VS-27c. Unset, nothing changes (I-1); "strict" says it is
+// not applied yet. A plain key: every surface reads it from review.json and REVIEW_GUARDRAIL, as parseReviewConfig does.
+describe("VS-27's guardrail key", () => {
+  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
+
+  test("has no default entry, so the defaults and their digests stay as they were", () => {
+    const { config, warnings } = parseReviewConfig()
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "guardrail")).toBe(false)
+    expect(Object.hasOwn(config, "guardrail")).toBe(false)
+    expect(warnings).toEqual([])
+    expect(OPTIONAL_REVIEW_DEFAULTS.guardrail).toBe("off")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("guardrail")
+    expect(SOURCED_REVIEW_KEYS).not.toContain("guardrail")
+  })
+
+  test("review.json and REVIEW_GUARDRAIL set it; strict says it is not applied, off says nothing", () => {
+    expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict" }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
+      warnings: [STRICT],
+    })
+    expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "off" }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "off" },
+      warnings: [],
+    })
+    const env = parseReviewConfig({ json: JSON.stringify({ guardrail: "off" }), env: { REVIEW_GUARDRAIL: " Strict " } })
+    expect(env.config.guardrail).toBe("strict")
+    expect(env.warnings).toEqual([STRICT])
+    const lowered = parseReviewConfig({
+      json: JSON.stringify({ guardrail: "strict" }),
+      env: { REVIEW_GUARDRAIL: "off" },
+    })
+    expect(lowered).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "off" }, warnings: [] })
+  })
+
+  test("a bad value warns naming the value in use", () => {
+    expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "precise" }) })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [`${REVIEW_CONFIG_PATH}: "guardrail" must be "off", "strict"; using "off".`],
+    })
+    expect(parseReviewConfig({ json: JSON.stringify({ guardrail: true }) }).warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: "guardrail" must be "off", "strict"; using "off".`,
+    ])
+    expect(
+      parseReviewConfig({ json: JSON.stringify({ guardrail: "strict" }), env: { REVIEW_GUARDRAIL: "x" } }).warnings,
+    ).toEqual(['REVIEW_GUARDRAIL must be "off", "strict"; using "strict".', STRICT])
+  })
+
+  test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
+    const text = JSON.stringify({ guardrail: "strict" })
+    const env = { REVIEW_GUARDRAIL: "off" }
     expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, env, trigger: "auto" })).toEqual(
       parseReviewConfig({ json: text, env, trigger: "auto" }),
     )

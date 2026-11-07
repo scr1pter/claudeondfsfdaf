@@ -773,6 +773,15 @@ describe("VS-22a labels", () => {
     expect(problems(withDefect(synthetic(0), { failureClass: undefined }))).toEqual([])
   })
 
+  // VS-27a: the classes and mechanisms are core's own constants, and the trivial kinds a copy equal to core's.
+  test("the classes and mechanisms are core's, and the trivial kinds equal core's", async () => {
+    const types = await import("../../packages/core/src/review/types")
+    const trivial = await import("../../packages/core/src/review/trivial")
+    expect(FAILURE_CLASSES).toBe(types.FAILURE_CLASSES)
+    expect(MECHANISMS).toBe(types.FAILURE_MECHANISMS)
+    expect([...TRIVIAL_KINDS]).toEqual([...trivial.TRIVIAL_KINDS])
+  })
+
   test("the mechanism enum is the contract's FailureInfo mechanisms", () => {
     expect([...MECHANISMS]).toEqual(["logic", "concurrency", "regression", "resource", "access"])
     for (const mechanism of MECHANISMS) expect(problems(withDefect(synthetic(0), { mechanism }))).toEqual([])

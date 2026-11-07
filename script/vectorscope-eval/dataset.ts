@@ -4,6 +4,7 @@ import { existsSync } from "node:fs"
 import { devNull } from "node:os"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
+import { FAILURE_CLASSES, FAILURE_MECHANISMS } from "../../packages/core/src/review/types"
 
 // The real-change dataset behind VectorScope's eval. A manifest lists public bug-fix cases, clean controls, trivial
 // controls and adversarial (prompt-injection) cases, each pinned to immutable commits in a permissively licensed
@@ -50,17 +51,18 @@ export const EXCLUSION_REASONS = [
   "mixed-trivial",
 ] as const
 
-// VS-22a's labels. The five failure classes are the contract's (vectorscope-upgrade.md §1.2), which VS-27a adds to core
-// review/types.ts; a defect in none of them is "other". judging-rubric.md defines each one.
-export const FAILURE_CLASSES = ["crash", "data-corruption", "leak", "runaway-loop", "auth-bypass"] as const
+// VS-22a's labels. The five failure classes are the contract's (vectorscope-upgrade.md §1.2), from core review/types.ts
+// (VS-27a), an import-free file; a defect in none of them is "other". judging-rubric.md defines each one.
+export { FAILURE_CLASSES }
 export const DEFECT_CLASSES = [...FAILURE_CLASSES, "other"] as const
-// §1.2's FailureInfo.mechanism, so a strict finding's mechanism can later be compared with its label.
-export const MECHANISMS = ["logic", "concurrency", "regression", "resource", "access"] as const
+// §1.2's FailureInfo.mechanism, from the same file, so a strict finding's mechanism can be compared with its label.
+export const MECHANISMS = FAILURE_MECHANISMS
 // The readings of owner question Q4 that would move an "other" defect into a class: data exposure as a leak, and a
 // concurrency defect whose only effect is a wrong result. Marking them keeps either answer computable without
 // relabelling.
 export const PENDING_Q4 = ["data-exposure", "concurrency-wrong-result"] as const
-// §1.2's TrivialKind. A dependency bump is no kind while Q11 is open.
+// §1.2's TrivialKind. A dependency bump is no kind while Q11 is open. A copy of core trivial.ts's, which has runtime
+// imports; fixtures.test.ts checks the two are equal.
 export const TRIVIAL_KINDS = ["whitespace", "docs", "rename", "comment"] as const
 // The base commit's recorded public CI: its test check passed or failed, or no test run counts.
 export const CI_RESULTS = ["passed", "failed", "none"] as const

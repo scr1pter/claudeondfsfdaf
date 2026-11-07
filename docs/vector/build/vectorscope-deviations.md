@@ -6882,3 +6882,446 @@ Nothing is committed (the lane brief).
   - prettier is clean on core and engine `impact.ts` and both `impact.test.ts`
     files, and on the changed lines of `brain/code.ts`; oxlint reports
     nothing on a changed line.
+
+## 2026-11-07 · VS-27a Strict schema and import-free failure types
+
+Contract §1.2 (the `types.ts` block and "Types that change") and §4 VS-27a;
+addendum A §3 VS-27 and the round-two amendments in the lane brief (strict
+schemas as key-conditional builders; §1.2's `Quote` as the one quote type).
+Evidence: REPORT §4.4 item 3 (the guardrail fails closed), [landscape §4
+item 5] (deterministic validators on model output), round-two REPORT §2.2
+[GP3] (Greptile's output schema, severity defaulting to its lowest level).
+Built at `f7e1f8df`. VS-27 waits on Q15, so this is the Now window only: types,
+schemas, a strict decoder path and an off-by-default key that no runner reads.
+`run.ts`, `provider.ts`, `session/llm.ts`, `posting.ts`, `cli/cmd/review.ts`,
+`prompt.ts`, `select.ts`, `format.ts`, `diff.ts`, `replay.ts` (`VARIANTS`:
+`engine:guardrail-strict` stays pending VS-27c) and every @vector file
+(`workflow.ts`, `command.ts`, `cli/cmd/github.*`, `github-*.ts`,
+`vectorscope.astro`) are untouched. `ai-review.ts` and `review.render.ts` gain
+only label entries the widened pass-name union forces. It implements the VS-27a
+plan as corrected by its critique: every critique point was taken; where it
+offered two forms, the one taken is named (items 8, 11, 13 and 14 under
+"Critique points"). Nothing is committed (the lane brief).
+
+- **What landed.**
+  - **Core `review/types.ts`** (still import-free): `FAILURE_CLASSES` and
+    `FailureClass`, `FAILURE_MECHANISMS` and `FailureMechanism`, `FailureInfo`,
+    `Quote {path, line, side, code}` (the one quote type; VS-44's trace reuses
+    it), `VERIFIED_BY` and `VerifiedBy`, `STRICT_FIX_KINDS`, `STRICT_DROPS`
+    (the contract's ten, S1 to S8 order) and `StrictDrop`, `StrictFinding` and
+    `StrictResult`, in one block after `Finding`. `ModelFinding` gains
+    `failure?`, `quotes?` and `patch?`; `Finding` gains `verifiedBy?`
+    (`verified` stays a boolean). `ReviewOutcome.partial` gains `"privacy"` and
+    `"budget-estimate"`; `ReviewOutcome.specialists[].name` and
+    `ReviewPass.name` widen once to `"review" | "security" | "verify" | "judge"
+    | "lens" | "repro"` (codium's four first, in codium's order), each with
+    `lens?: string` on the next line; `ReviewOutcome` gains `strict?:
+    StrictResult` as its last field. `ReviewConfig` gains `guardrail?: "off" |
+    "strict"` after `impact?`; `OPTIONAL_REVIEW_DEFAULTS.guardrail` is `"off"`
+    and `UNAPPLIED_REVIEW_KEYS` gains `"guardrail"`.
+  - **Core `review/schema.ts`**: `MAX_FAILURE_TEXT_CHARS` (400, S5),
+    `MAX_FINDING_QUOTES` (6), `MAX_QUOTE_LINES` (20), `MAX_QUOTE_CHARS`
+    (2,000); `StrictSchemaKeys` (`Partial<Pick<ReviewConfig, "guardrail">>`,
+    which VS-42, VS-43 and VS-44 widen); `strictReportJsonSchema(keys)` and
+    `strictResultJsonSchema(keys)`, each `undefined` unless `keys.guardrail ===
+    "strict"`; `decodeReport(input, keys = {})`, whose strict path reads
+    `failure`, `quotes` and `patch` through private `decodeFailure`,
+    `decodeQuote` and `cleanCode`; the fence regex is now a private `FENCED`
+    shared by `cleanSuggestion` (behaviour unchanged) and `cleanCode`.
+    - The strict report schema is `REVIEW_REPORT_JSON_SCHEMA` deep-copied with
+      `structuredClone`, then rebuilt by spreads over the copy (never over the
+      constant), with a finding's properties gaining, in order, `failure`
+      (`class` and `mechanism` enums, `trigger` and `impact` at maxLength 400,
+      all four required inside it), `quotes` (an array of quote objects, all
+      four fields required, `line` an integer of at least 1, `side`
+      RIGHT/LEFT, `code` at maxLength 2,000) and `patch` (maxLength 8,000). The
+      finding's `required` list is the legacy one. The return type is inferred
+      exactly, and nothing returned shares an object with the constant or with
+      another call (tested by mutating one).
+    - The result schema has every `StrictResult` and `StrictFinding` field,
+      enums from the constants above, `quotes` at minItems 1 and maxItems 6,
+      `dropped[].count` at minimum 1 and `fixUnchecked` at minimum 0; every
+      field is required except `incomplete` and `endLine`.
+    - Strict decoding: a failure needs a record whose class and mechanism name
+      an enum value after lowercasing, trimming and turning spaces and
+      underscores into hyphens; `trigger` and `impact` are `oneLine`d and kept
+      whole, even empty, for S5. A quote needs a record; a line that is a safe
+      integer of 1 or more, or text matching `/^\s*L?\d+\s*$/i` (anything
+      else, such as `"-5"`, `"line -5"`, `"line 12"`, 15.4 or 0.6, drops the
+      quote; finding lines keep their lenient reading); a path, `cleanPath`ed
+      or the finding's when empty, with no `..` segment, backslash or drive
+      prefix; and non-empty code within 20 lines and 2,000 characters after
+      `cleanCode` (CRLF to LF, one enclosing fence removed unless the path is
+      a Markdown file, empty lines at the start and end stripped, every other
+      space kept). Its line moves down by the empty lines stripped from the
+      start, so it stays the code's first line. LEFT only when it says
+      "left". The first 6 quotes that decode among the first 24 entries
+      (`MAX_QUOTES_READ`) are kept. A patch goes through `cleanCode` with the
+      8,000-character cap and no line cap. Over a cap, code and patches are
+      dropped, never cut, and a text over its cap plus 64 characters is
+      dropped before the fence regex runs.
+  - **Core `review/model-evidence.ts`**: `EVIDENCE_POLICY_KEYS` gains
+    `"guardrail"` (counted from VS-27c on, and then only as `"strict"`).
+    `promptsDigest(keys)` takes `Partial<Pick<ReviewConfig, "impact" |
+    "guardrail">>`; its memo key joins `impact:graph` and `guardrail:strict`
+    (the default key stays `""`), and the strict schemas are appended after
+    `VERIFY_JSON_SCHEMA` only when defined. `evidenceScope` passes
+    `{ guardrail: "strict" }` only when the config says so and the key has left
+    `UNAPPLIED_REVIEW_KEYS`, as for `impact`. `canonicalPrompts` is unchanged
+    in signature and output; its comment says VS-27c adds the strict task text
+    there. `REVIEW_PIPELINE_SOURCES` `491223f3c097098f` → `511f0bffc7b5d314`
+    (only `ai-review.ts`'s `PASS_LABEL` moved among the pinned files);
+    `REVIEW_PIPELINE_REVISION` stays 1, because no runner produces the new
+    pass names and nothing found or posted changes.
+  - **Core `review/config.ts`**: `FIELDS.guardrail` (`oneOf(["off",
+    "strict"])`), `REVIEW_GUARDRAIL` in `ENV`, and an `UNAPPLIED.guardrail`
+    warning for `"strict"`: `"guardrail": "strict" is not applied yet: findings
+    are still selected and posted as before.` A plain key (contract §1.1:
+    existing sources), not source-tagged.
+  - **Core `review/verdict.ts`**: comment only. It now says the `partial` and
+    name values exist in `ReviewOutcome` since VS-27a and that its repeated
+    unions are redundant and harmless (decision i).
+  - **Engine `review/eval.ts`**: `WIRING.guardrail = "VS-27c"` (the `Record`
+    over `UNAPPLIED_REVIEW_KEYS` forces it) and the `ReplayInput.config`
+    comment.
+  - **Engine `cli/cmd/review.render.ts`** `passesLine` name map and **app
+    `ai-review.ts`** `PASS_LABEL`: `judge` ("panel judge" / "Panel judge",
+    codium's exact text), `lens` ("lens" / "Lens") and `repro` ("reproducer" /
+    "Reproducer"). Typecheck forced them; no runner produces these names.
+  - **`script/vectorscope-eval/dataset.ts`**: imports `FAILURE_CLASSES` and
+    `FAILURE_MECHANISMS` from core `review/types.ts` (import-free), re-exports
+    `FAILURE_CLASSES` and sets `MECHANISMS = FAILURE_MECHANISMS`. Values are
+    unchanged, so the schema stays `vectorscope-dataset/2`. `TRIVIAL_KINDS`
+    keeps its copy (core `trivial.ts` has runtime imports), now checked equal
+    to core's.
+  - **Tests**: core `schema.test.ts` (+21), `model-evidence.test.ts` (+2),
+    `config.test.ts` (+4 and the `OPTIONAL_REVIEW_DEFAULTS` equality); engine
+    `test/review/eval.test.ts` (+1, and a refusal case);
+    `script/vectorscope-eval/fixtures.test.ts` (+1).
+- **Off by default (I-1, I-12).**
+  - `guardrail` is optional and absent from `DEFAULT_REVIEW_CONFIG`; it is in
+    `UNAPPLIED_REVIEW_KEYS`, so `policyDigest` and `evidenceScope` read it as
+    absent; the engine replay drops it from the base `review.json` (keeping
+    the warning) and refuses it in `ReplayInput.config` ("(VS-27c)"); the
+    parser warns on `"strict"`.
+  - The strict schemas exist only for `keys.guardrail === "strict"`, and no
+    caller passes that. Every `decodeReport` call site (`run.ts:698`,
+    `ai-review.ts:1576`, `script/vectorscope-eval/run.ts:361`) still passes one
+    argument, so failure, quotes and patch are ignored exactly as before
+    (tested with and without `{}` and `{ guardrail: "off" }`, on objects and
+    text).
+  - Digests: `promptsDigest()` stays `5d59e9ee06077c23`; `{ impact: "graph" }`
+    stays `74a2111826c226b1`; `policyDigest(DEFAULT_REVIEW_CONFIG)` stays
+    `70512122f41ec160`. New, pinned as VS-27a's schema-only strict digests:
+    `{ guardrail: "strict" }` is `f04c185c5b415aaf` and `{ impact: "graph",
+    guardrail: "strict" }` is `9c87880d813f1e69`. VS-27c moves both on purpose
+    when the strict task text joins `canonicalPrompts`; VS-42, VS-43 and VS-44
+    must each leave them at whatever value is current when they land, with
+    their own keys off.
+  - The new union members and fields (`privacy`, `budget-estimate`, `judge`,
+    `lens`, `repro`, `lens?`, `strict`, `verifiedBy`, `failure`, `quotes`,
+    `patch`) are produced nowhere. The engine replay test with a base
+    `review.json` under `"strict"` checks that the request carries the legacy
+    schema (no `"failure"`, `"quotes"` or `"patch"` key) and that the placed
+    findings carry none of the strict fields and the outcome no `strict`.
+  - §0.3 item 4: the variant stays pending VS-27c. Item 5: no desktop half in
+    this package (types, schema and parse only); the desktop parses the key and
+    never reads it.
+- **Decisions.**
+  - (a) **The Strict types moved to `types.ts`** (a lane deviation from §1.2,
+    which puts `StrictFinding`, `StrictDrop` and `StrictResult` in
+    `guardrail.ts`): `ReviewOutcome.strict` needs them and `types.ts` stays
+    import-free. VS-27b's `guardrail.ts` imports them and adds `StrictInput` and
+    `strictSelect`. The enums are exported constants (`FAILURE_MECHANISMS`,
+    `VERIFIED_BY`, `STRICT_FIX_KINDS`, `STRICT_DROPS`) so the schemas and tests
+    derive from one list.
+  - (b) **Key-conditional builders.** The round-two amendment asks for the
+    strict report schema (and VS-44's certificate schema) as builders. It does
+    not name the result schema: `strictResultJsonSchema(keys)` replacing §4
+    VS-27a's `STRICT_RESULT_JSON_SCHEMA` constant is this lane's own deviation,
+    from §4 VS-27a and from VS-27c's Done line. Reason: VS-42 adds the
+    `pre-existing` drop and VS-44 `certificate-mismatch` and `verdict-unsure`,
+    and addendum §3 adds `StrictResult` fields; as a constant, each would move
+    the `guardrail: "strict"` digest with its own key off. Both builders return
+    `undefined` when off. **VS-27c's Done check becomes: the JSON validates
+    against `strictResultJsonSchema(keys)` for the run's keys.**
+  - (c) **`decodeReport` takes keys** (default `{}`), so the legacy path is
+    byte-identical and call sites keep one argument. Caps and the
+    drop-not-cut rule as above. A quote is a claim S4 checks at its exact
+    line, so its line is read strictly (the critique's second option, made
+    whole by review finding 2): only a safe integer of at least 1, or text
+    that is only one after an optional `L`. `"-5"`, `"L-5"` and `"line -5"`
+    read as 5, or 15.4 and 0.6 rounded to 15 and 1, would point it at another
+    line; they drop the quote. `"line 12"` is refused too, as the cost of one
+    plain rule (the schema asks for an integer). Finding lines keep their
+    lenient reading (tested).
+  - (d) **Severity.** GP3's rule (an unparseable severity is dropped, never
+    defaulted to the lowest level) is addendum §3's rule for precise mode
+    (VS-31), not for strict. Strict decoding keeps the legacy reading, so an
+    unreadable severity is `"concern"`: never read as blocking (tested), and
+    S2 will count it as `not-blocking`, the same drop as a model that chose
+    `concern`. That merges two causes kill-criteria analysis may want apart.
+    **Hand-off to VS-27b**: decide, before `STRICT_DROPS` is relied on, whether
+    strict decoding marks an unreadable severity (for example a decoder-side
+    flag) and whether it gets its own drop; a new drop moves the strict
+    digest.
+  - (e) `lens?` sits on both the specialists entry and `ReviewPass`, directly
+    after `name`, so each branch's edit stays in one hunk. Judge labels copy
+    codium's text. The new labels are unreachable until VS-28 or VS-30 wiring,
+    which may reword them (D14: no existing user-visible string changed; the
+    labels and the parser warning are new strings that appear only for a new
+    key or a pass that does not run yet).
+  - (f) `run.ts`'s `Name` and `Stop` are left to VS-23b, VS-24 wiring, VS-28
+    and VS-30: they are narrower than the outcome types and still assign.
+  - (g) **Latent wording gap**, unreachable until wiring: `notePartial`
+    (`format.ts:478-505`) would word `privacy` and `budget-estimate` as the
+    time-limit stop; the CLI `partialLine` (`review.render.ts:156-172`) as "a
+    reviewer could not finish"; and the GitHub job (`github.review.ts:913-917`,
+    @vector-owned) passes `outcome.partial` to `notePartial` and picks its
+    wording, which waits for the @vector merge. VS-23b and VS-24 wiring must add
+    their wording before a runner produces either value. No compile error
+    forces it: narrowing `notePartial`'s `reason` to exclude both values was
+    tried (review finding 5) and breaks `github.review.ts(917)`, which passes
+    `ReviewOutcome["partial"]` unnarrowed and is @vector's (and engine
+    `eval.ts(870)`), so `format.ts` stays untouched and this entry is the
+    gate. **Test items for VS-23b and VS-24 wiring**, before their runner
+    produces the value: a `format.test.ts` case that `notePartial({ reason:
+    "privacy" })` and `notePartial({ reason: "budget-estimate" })` say "Not
+    reviewed" (I-7) and never "time limit"; a `review.render.test.ts` case for
+    `partialLine` with each; and, once @vector has merged, a
+    `github.review.test.ts` case for the banner.
+  - (h) **Pass-name filters that would mishandle lens and repro**, hand-offs to
+    VS-28 and VS-30: `name !== "verify"` filters would count them as reviewers
+    (`github.review.ts:702`, @vector; `review.ts:450`; engine `eval.ts:830`;
+    `script/vectorscope-eval/report.ts:389`); `review.render.ts:159`'s
+    `partialLine` would name a failed lens "the lens reviewer" (codium already
+    adds `&& entry.name !== "judge"` there, which the merge resolution must
+    keep); `ai-review.ts:1101` (`run.name === "verify" ? model : first`) would
+    label a lens or repro pass with the triage model, though the contract runs
+    lenses on the review model.
+  - (i) `verdict.ts`'s structural unions are now redundant but harmless; its
+    comment says so, and VS-32 wiring may simplify them.
+  - (j) `schema.ts` stays outside `REVIEW_PIPELINE_FILES`, as VS-07 chose; its
+    default decoding is unchanged and tested. Suggest that VS-27c add it when
+    strict decoding reaches a runner.
+  - (k) `dataset.ts` imports the classes and mechanisms. This closes VS-22a's
+    deferred item (the VS-22a entry's "When VS-27a and VS-24 land") for all
+    three lists: the classes and mechanisms are core's own objects (`toBe`),
+    and `TRIVIAL_KINDS` is checked equal to core `trivial.ts`'s in
+    `fixtures.test.ts` (which runs from `packages/script` and imports it).
+  - (l) The strict report schema keeps the quote cap in its description, not
+    in `maxItems`, so it sends providers only keywords the legacy schema
+    already sends (a test pins the keyword set); the decoder enforces the cap.
+    The result schema, never sent to a model, keeps `minItems` and `maxItems`.
+- **Critique points** (all taken).
+  1. Merge prediction against `origin/self-evolving` as well as
+     `origin/codium`: taken (below).
+  2. The keyword test walks schema positions only (property names are not
+     keywords), allows `maximum`, and the legacy denylist test is unchanged.
+  3. The builder replacing `STRICT_RESULT_JSON_SCHEMA` is logged as this lane's
+     deviation, in the code comment and in (b).
+  4. The pin names VS-27a's schema-only strict digest, says VS-27c moves it,
+     and states the invariant for VS-42 to VS-44.
+  5. Clone once, then spreads over the clone: taken; the type is exact.
+  6. Stop rule for @vector files: no type error arose in any @vector file;
+     `github.review.ts:913-917` is in (g).
+  7. `review.render.ts:159` and `ai-review.ts:1101` are in (h), with codium's
+     judge exclusion noted.
+  8. `TRIVIAL_KINDS`: the equality assertion was added (first option).
+  9. Severity: (d) records that the rule is VS-31's and hands the decision to
+     VS-27b.
+  10. The import-free test uses an anchored statement regex plus `require(`
+      and dynamic `import(` checks, and asserts the prose "copied out of a
+      file" is present so the anchor is exercised.
+  11. `verdict.ts`'s comment was updated (first option) and (i) says so.
+  12. Path and patch hand-offs and the desktop identity check are in the
+      deferred list below.
+  13. Negative quote lines are refused (second option), and tested (c).
+  14. `maxItems`: taken in the second form, the cap moved into the
+      description (l); the per-provider check stays in deferred verification.
+- **Predicted merge conflicts** (read-only: `git merge-tree --write-tree
+  --name-only` at HEAD, then a three-way `git merge-file` per touched file
+  with each branch's merge base, HEAD or the working tree, and the branch tip;
+  the per-file method reproduces merge-tree's HEAD result exactly).
+  - At HEAD: `ai-review.ts` only, 5 hunks with `origin/codium` and 2 with
+    `origin/self-evolving`.
+  - With VS-27a, `origin/codium`: `types.ts` 2 hunks (the specialists `name`
+    line plus `lens?`, against codium's judge-only line; `ReviewPass.name` plus
+    `lens?`, against codium's `usageMissing?`, `costKind?` and judge line);
+    `ai-review.ts` 6 hunks (the new one holds only the `lens` and `repro`
+    `PASS_LABEL` lines; codium's identical `judge` line merges cleanly);
+    `review.render.ts` 1 hunk (the name map, next to the `priced` line both
+    branches rewrite). `schema.ts`, `model-evidence.ts`, `config.ts`, engine
+    `eval.ts`, `dataset.ts`, `verdict.ts` and the tests: none.
+  - With VS-27a, `origin/self-evolving` (which merges first, as the
+    runner-wiring gate): `types.ts` 1 hunk (`ReviewPass.name` plus `lens?`,
+    against its `usageMissing?` and `costKind?`); `ai-review.ts` still 2;
+    `review.render.ts` 1 (the name map and the `priced` line). Nothing else.
+  - Every resolution is to keep both sides' lines; this lane resolves none of
+    them (the branch owners do, §0.2).
+- **Owner questions, kept neutral.** Q3 and Q4: the class names are the
+  contract's; their definitions wait for VS-27c's prompt, and the
+  `PENDING_Q4` markers stay. Q17: `"unchecked"` is only a fix kind here;
+  whether such a fix is posted is VS-27b's and VS-27c's. Q13 and Q15: nothing
+  reaches a runner. Q18 to Q34: no addendum package is built here.
+- **Deferred.**
+  - From addendum §3 VS-27, the Greptile-derived `StrictResult` fields:
+    `linkedRule` (only after VS-43 fixes the structured rule shape),
+    `clarificationQuestion`, `securityIssue`, before and after snippets,
+    per-file notes; and `checked[]` (VS-47).
+  - VS-42's `scope` field (only under `scopeGate`) and its `pre-existing` drop;
+    VS-44's verify-certificate schema builder and its `certificate-mismatch`
+    and `verdict-unsure` drops.
+  - VS-27b: `guardrail.ts` (`StrictInput`, `strictSelect`, S1 to S8), the
+    `sameFinding` export, the `diff.ts` patch applier, format wording, and the
+    S1 to S8 tests, including the severity case (d) and the
+    impact-incompleteness test. Its S4 check and patch applier must still keep
+    every quote path inside the head or base tree-ish (the decoder now drops a
+    quote path with a `..` segment, a backslash or a drive prefix, but a
+    structural check is not containment: a symlink in the tree, for one) and
+    must ignore, or check against the finding's path, the model-written file
+    headers of a patch (I-8). S4 compares a quote's code with the file from
+    its `line` on, which the decoder keeps paired; it needs no line fix-up of
+    its own.
+  - Legacy `cleanSuggestion` (runner-reached, unchanged here) runs `FENCED` and
+    `/\s+$/` over the whole suggestion before its cap, and both backtrack
+    quadratically on a long run of backticks or line breaks (under bun,
+    `FENCED` took 57 ms on 8,064 backticks and 1,417 ms on 40,000). A
+    pre-check like `cleanCode`'s would drop a suggestion whose fence and
+    padding exceed the allowance, which is no longer byte-identical (I-1), so
+    it is left for a package allowed to move legacy output, or for a
+    semantics-preserving rewrite with a golden test.
+  - VS-27c: runner wiring; the strict task text in `canonicalPrompts` under
+    the key; the `--json` outcome; the variant flip; the desktop half;
+    artifact candidates; `report --reselect strict`; validation with
+    self-evolving's `json-schema-check.ts`; memoising the strict schema, or
+    changing `script/vectorscope-eval/desktop.ts:299`'s identity check
+    (`=== REVIEW_REPORT_JSON_SCHEMA`), because the builder returns a new object
+    on every call.
+  - The strict prompt's class definitions matching the rubric (VS-22a's item).
+- **Deferred verification.**
+  - The branch has no JSON Schema validator, so conformance is checked with a
+    small structural validator in `schema.test.ts` over the keywords these
+    schemas use.
+  - Whether providers accept the strict report schema in forced tool calls
+    (a nested `failure` object and `quotes` objects inside each finding item;
+    `maxLength` on new fields; no `maxItems` or `minItems`), and how models
+    answer it, needs VS-27c's fake-provider tests per provider family (the
+    OpenAI sanitizer, `sanitizeOpenAISchema` in engine
+    `provider/transform.ts:1553-1626`, rebuilds each schema from a subset of
+    keywords; Gemini, Moonshot and Anthropic tool input receive it as written)
+    and then a paid run (D7, Q9).
+  - The merge conflicts are only predicted.
+- **Evidence.** Each file alone through the lock, `--timeout 30000`, from its
+  package directory; counts at HEAD → with VS-27a.
+
+  | File | HEAD | VS-27a |
+  |---|---|---|
+  | core `test/review/schema.test.ts` | 24 | 45 (42 before the review findings) |
+  | core `test/review/model-evidence.test.ts` | 20 | 22 |
+  | core `test/review/config.test.ts` | 45 | 49 |
+  | core `test/review/verdict.test.ts` | 44 | 44 |
+  | core `test/review/select.test.ts` | | 43 |
+  | engine `test/review/run.test.ts` | 44 | 44 |
+  | engine `test/cli/github.review.test.ts` | 40 | 40 |
+  | engine `test/cli/review.render.test.ts` | 10 | 10 |
+  | engine `test/review/vectorscope-replay.test.ts` | 13 | 13 |
+  | engine `test/review/eval.test.ts` | 28 | 29 |
+  | engine `test/review/structured-output-review.test.ts` | | 3 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 | 107 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 | 32 |
+  | eval `fixtures.test.ts` (from `packages/script`) | 65 | 66 |
+
+  - `bun typecheck` passes in core and engine; the eval scripts pass `bun tsgo
+    -p ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+    App and desktop pass `bun typecheck --force`. Without `--force`, their
+    `tsgo -b` reported "up to date" after a core-only change (it compares only
+    the project's own inputs with its build info), so the app's missing
+    `PASS_LABEL` entries surfaced only when forced: a hint for every lane that
+    changes core types.
+  - prettier is clean on every changed file; oxlint reports no warning on any
+    added line (68 earlier warnings in these files are unchanged).
+  - **Mutation check.** 11 mutations, each applied alone, run against the
+    named test file and restored byte for byte; all caught: the report builder
+    returning a schema for `"off"` (schema test; the evidence test cannot see
+    it, since `{ guardrail: "off" }` shares the default memo key by design);
+    `"guardrail"` removed from `UNAPPLIED_REVIEW_KEYS` (config and evidence
+    tests); quotes read without strict (schema test, and the engine replay
+    test); an over-cap quote or patch cut instead of dropped; a `STRICT_DROPS`
+    entry removed; the memo key ignoring `guardrail`; `evidenceScope` applying
+    `guardrail` while unapplied; the negative-line rule removed; the legacy
+    schema used without a copy; `MECHANISMS` as a local copy (fixtures test).
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid run, no workflow dispatched, nothing
+    published, and no existing user-visible string changed (D14).
+
+- **Review findings, round one** (five findings, none blocking; four fixed
+  and one kept as a gate, all before any commit, so the text above already
+  describes the fixed code). Every fix is in `schema.ts`'s strict path,
+  which no runner reaches; the legacy decoder, `cleanSuggestion`, `FENCED`
+  and both schema builders are unchanged, so every digest stays as pinned
+  above.
+  1. A quote's line no longer pairs with its code after cleaning (`{line: 10,
+     code: "\n\tone"}` decoded to line 10 with code that is on line 11).
+     Fixed: `cleanCode` returns `{ value, skipped }`, `skipped` counting the
+     empty lines stripped from the start, and `decodeQuote` adds it to the
+     line. The fence part taken as suggested: a quote whose path is a
+     Markdown file (`md`, `mdx`, `markdown`, `mdown`, `mkd`, `mkdn`, `mdc`,
+     `qmd`, `rmd`, any case; the Markdown names in `trivial.ts`'s lists) keeps
+     its fence as file text, and elsewhere the fence is presentation, so the
+     line is the first line inside it. In a Markdown file, a quote the model
+     wrapped in a fence of its own now fails S4, where before a quote of a
+     real fenced block did; either way it fails closed, as a dropped quote.
+     Tested with `"\n\n\tone"` (line and code), CRLF,
+     a fence with an empty first line, `a.md.ts` and five Markdown paths.
+  2. The negative-line rule checked only a leading minus, so `"L-5"` and
+     `"line -5"` read as 5 and 15.4 and 0.6 rounded to 15 and 1. Fixed as
+     suggested: only a safe integer of at least 1, or text matching
+     `/^\s*L?\d+\s*$/i`; finding lines keep `integer()`. The bad-line loop
+     gains `"L-5"`, `"line -5"`, `"line 12"`, `"12.5"`, `"1e3"`, 0.6, 15.4, a
+     20-digit string and infinity; 15.4 is now refused, and two cases pin
+     that a finding still reads `"line -5"` as 5 and 15.4 as 15. Decision (c)
+     records the rule.
+  3. `FENCED` backtracks quadratically on a long run of backticks or tildes,
+     and the strict path ran it on every quote and patch, with every quote
+     entry decoded before the slice. Fixed: `cleanCode` drops a text longer
+     than its cap plus 64 characters (`FENCE_ALLOWANCE`) before the regex
+     runs, and `decodeFinding` reads only the first `MAX_QUOTES_READ` (24)
+     quote entries. The trailing `\n+$` strip, which backtracks the same way
+     on a long run of line breaks, became a split with `findIndex` and
+     `findLastIndex`. A quote whose fence and padding pass 64 characters is
+     now dropped even if its body fits. Measured with a scratch bench
+     (removed): a 200,000-backtick quote and patch decode in 0.4 ms; the
+     bounded worst case left is 150 ms for one finding of 59,054 characters
+     (a patch and 24 quotes of backticks at cap plus 64) and 1,218 ms for
+     eight of them (472,236 characters, about a whole model output), linear
+     in report size. Tests: the 200,000-character runs (backticks, tildes
+     and line breaks, in a code file and in Markdown) are dropped within
+     1 second, a fenced quote at its cap still loses its fence, and only the
+     first 24 entries are read. Taken in part: the optional `cleanSuggestion`
+     pre-check is not applied, because it would change which legacy
+     suggestions survive (I-1); it is a deferred item above.
+  4. `Quote.path` kept `../` segments and Windows forms. Fixed as suggested:
+     `decodeQuote` drops a quote whose path, after `cleanPath` and the
+     fallback to the finding's path, matches `/(^|\/)\.\.(\/|$)|\\|^[A-Za-z]:/`.
+     Tested with `../etc/passwd`, `a/../../b`, `..`, `src/..`, `/../x.ts`,
+     `./../x.ts`, a backslash, two drive forms and a finding path of
+     `../x.ts`, while `src/a..b.ts`, `..x/y.ts` and `src/.../z.ts` are kept.
+     A path such as `a:b.txt`, legal in git, is dropped too (fail closed).
+     The VS-27b containment check stays in the deferred list.
+  5. The widened `partial` union removed the compile error that would force
+     "Not reviewed" wording. Not narrowed, as the finding allows: narrowing
+     `notePartial`'s `reason` was tried and breaks `github.review.ts(917)`
+     (@vector-owned) and engine `eval.ts(870)`; `format.ts` was restored byte
+     for byte. Decision (g) stays the gate and now names the VS-23b and VS-24
+     test items.
+  - Re-run after the fixes, each alone through the lock: core
+    `test/review/schema.test.ts` (45) and `test/review/model-evidence.test.ts`
+    (22, digests unchanged). `bun typecheck` passes in core and engine.
+    prettier is clean on `schema.ts` and `schema.test.ts`, and oxlint reports
+    no warning in either. No other file changed, so the other suites were not
+    re-run.
+  - Mutation check of the fixes: six mutations, each applied alone against
+    `schema.test.ts` and restored byte for byte (checked by hash), all
+    caught: no line shift; the old lenient line rule; no path check; the
+    fence always stripped; no raw quote cap; no pre-check.

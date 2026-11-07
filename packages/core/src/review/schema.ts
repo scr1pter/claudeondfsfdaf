@@ -4,10 +4,18 @@
 
 import {
   CATEGORIES,
+  FAILURE_CLASSES,
+  FAILURE_MECHANISMS,
   SEVERITIES,
+  STRICT_DROPS,
+  STRICT_FIX_KINDS,
+  VERIFIED_BY,
   type Category,
+  type FailureInfo,
   type ModelFinding,
   type ModelReport,
+  type Quote,
+  type ReviewConfig,
   type Risk,
   type Severity,
 } from "./types"
@@ -21,6 +29,14 @@ export const MAX_SUMMARY_CHARS = 4_000
 // characters.
 export const MAX_SUGGESTION_CHARS = 8_000
 export const MAX_SUGGESTION_LINES = 80
+// VS-27a's strict fields. S5 bounds a failure's trigger and impact. The decoder keeps the first MAX_FINDING_QUOTES
+// quotes that decode among a finding's first MAX_QUOTES_READ entries, and drops, never cuts, a longer quote: a cut quote
+// could match the file where the whole one would not.
+export const MAX_FAILURE_TEXT_CHARS = 400
+export const MAX_FINDING_QUOTES = 6
+export const MAX_QUOTES_READ = MAX_FINDING_QUOTES * 4
+export const MAX_QUOTE_LINES = 20
+export const MAX_QUOTE_CHARS = 2_000
 
 const RISKS: Risk[] = ["low", "medium", "high"]
 
@@ -108,6 +124,163 @@ export const VERIFY_JSON_SCHEMA = {
   required: ["results"],
 }
 
+// The keys the strict schemas depend on. Each later key widens this and adds its field or enum value only when set, so
+// the `guardrail: "strict"` schemas, and the digest they enter, stay as they are while it is off: VS-42 with scopeGate
+// (the `scope` field), VS-43 with ruleCheck (the structured rule) and VS-44 with verifyEvidence (its certificate schema).
+export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail">>
+
+// The report schema under `guardrail: "strict"` (VS-27a), or undefined when it is off: the legacy report schema with a
+// finding's `failure`, `quotes` and `patch` added. A finding's `required` list is the legacy one, because conservative
+// JSON Schema cannot say "required when blocking": S2 and S5 drop a blocking finding without them. Built from a deep copy,
+// so nothing it returns shares an object with REVIEW_REPORT_JSON_SCHEMA. The quote cap is in the description, not in
+// maxItems, so a provider sees only the keywords the legacy schema already sends; the decoder enforces it.
+export function strictReportJsonSchema(keys: StrictSchemaKeys) {
+  if (keys.guardrail !== "strict") return undefined
+  const legacy = structuredClone(REVIEW_REPORT_JSON_SCHEMA)
+  const finding = legacy.properties.findings.items
+  return {
+    ...legacy,
+    properties: {
+      ...legacy.properties,
+      findings: {
+        ...legacy.properties.findings,
+        items: {
+          ...finding,
+          properties: {
+            ...finding.properties,
+            failure: {
+              type: "object",
+              description:
+                "Required on every blocking finding: the production failure it causes, in one of the five classes.",
+              properties: {
+                class: { type: "string", enum: [...FAILURE_CLASSES] },
+                mechanism: { type: "string", enum: [...FAILURE_MECHANISMS] },
+                trigger: {
+                  type: "string",
+                  maxLength: MAX_FAILURE_TEXT_CHARS,
+                  description: "The input or state that makes it fail.",
+                },
+                impact: { type: "string", maxLength: MAX_FAILURE_TEXT_CHARS, description: "What breaks when it does." },
+              },
+              required: ["class", "mechanism", "trigger", "impact"],
+            },
+            quotes: {
+              type: "array",
+              description: `Required on every blocking finding: up to ${MAX_FINDING_QUOTES} quotes of the code it rests on, each copied exactly.`,
+              items: quoteSchema(),
+            },
+            patch: {
+              type: "string",
+              maxLength: MAX_SUGGESTION_CHARS,
+              description: "A unified diff against head that fixes it, with at most 3 hunks.",
+            },
+          },
+        },
+      },
+    },
+  }
+}
+
+// The schema of the StrictResult a strict review reports (VS-27a), or undefined when `guardrail` is off. It is never sent
+// to a model; VS-27c checks the JSON outcome against it. A lane deviation from the contract's STRICT_RESULT_JSON_SCHEMA
+// constant (the round-two amendment names only the report schema): later keys add StrictDrop values (VS-42's
+// `pre-existing`, VS-44's `certificate-mismatch` and `verdict-unsure`) and fields, each only under its key, so a strict
+// review validates against the schema built for its own keys.
+export function strictResultJsonSchema(keys: StrictSchemaKeys) {
+  if (keys.guardrail !== "strict") return undefined
+  return {
+    type: "object",
+    properties: {
+      version: { type: "integer", enum: [1] },
+      head: { type: "string", description: "The head commit reviewed." },
+      complete: {
+        type: "boolean",
+        description: "False when a stage did not finish, coverage is partial or a verdict could not be read.",
+      },
+      incomplete: { type: "array", items: { type: "string" }, description: "Why it is incomplete, as reason codes." },
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            class: { type: "string", enum: [...FAILURE_CLASSES] },
+            mechanism: { type: "string", enum: [...FAILURE_MECHANISMS] },
+            path: { type: "string" },
+            line: { type: "integer", minimum: 1 },
+            endLine: { type: "integer", minimum: 1 },
+            side: { type: "string", enum: ["RIGHT", "LEFT"] },
+            title: { type: "string", maxLength: MAX_TITLE_CHARS },
+            trigger: { type: "string", maxLength: MAX_FAILURE_TEXT_CHARS },
+            impact: { type: "string", maxLength: MAX_FAILURE_TEXT_CHARS },
+            quotes: { type: "array", minItems: 1, maxItems: MAX_FINDING_QUOTES, items: quoteSchema() },
+            fix: {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: [...STRICT_FIX_KINDS] },
+                text: { type: "string", maxLength: MAX_SUGGESTION_CHARS },
+              },
+              required: ["kind", "text"],
+            },
+            verifiedBy: { type: "string", enum: [...VERIFIED_BY] },
+            verifier: { type: "string" },
+          },
+          required: [
+            "id",
+            "class",
+            "mechanism",
+            "path",
+            "line",
+            "side",
+            "title",
+            "trigger",
+            "impact",
+            "quotes",
+            "fix",
+            "verifiedBy",
+            "verifier",
+          ],
+        },
+      },
+      dropped: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            reason: { type: "string", enum: [...STRICT_DROPS] },
+            count: { type: "integer", minimum: 1 },
+          },
+          required: ["reason", "count"],
+        },
+      },
+      fixUnchecked: { type: "integer", minimum: 0 },
+    },
+    required: ["version", "head", "complete", "findings", "dropped", "fixUnchecked"],
+  }
+}
+
+// A fresh object on every call, so no two schemas share it.
+function quoteSchema() {
+  return {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Repository-relative path." },
+      line: { type: "integer", minimum: 1, description: "The quote's first line in that file." },
+      side: {
+        type: "string",
+        enum: ["RIGHT", "LEFT"],
+        description: "RIGHT quotes the head file; LEFT the base file, for code the change removed.",
+      },
+      code: {
+        type: "string",
+        maxLength: MAX_QUOTE_CHARS,
+        description: `The lines exactly as the file has them, at most ${MAX_QUOTE_LINES}.`,
+      },
+    },
+    required: ["path", "line", "side", "code"],
+  }
+}
+
 export interface VerifyResult {
   id: string
   verdict: "confirmed" | "rejected"
@@ -171,8 +344,9 @@ function balancedSpans(text: string) {
 
 // Accepts `info.structured`, or the text of the last message. A missing side becomes RIGHT, an unknown severity
 // concern and an unknown category bug; numbers given as strings are converted and every value is clamped.
-// Findings without a path or a title are dropped. Returns undefined when there is no report at all.
-export function decodeReport(input: unknown): ModelReport | undefined {
+// Findings without a path or a title are dropped. Returns undefined when there is no report at all. A finding's
+// strict fields (failure, quotes, patch) are read only under `guardrail: "strict"`; without it they are ignored.
+export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): ModelReport | undefined {
   const value =
     typeof input === "string"
       ? (extractJson(input, (candidate) => isRecord(candidate) && Array.isArray(candidate.findings)) ??
@@ -191,7 +365,7 @@ export function decodeReport(input: unknown): ModelReport | undefined {
     }),
     findings: list(value.findings)
       .flatMap((entry) => {
-        const finding = decodeFinding(entry)
+        const finding = decodeFinding(entry, keys.guardrail === "strict")
         return finding ? [finding] : []
       })
       .slice(0, MAX_REPORT_FINDINGS),
@@ -238,7 +412,7 @@ export function decodeVerify(input: unknown): VerifyResult[] | undefined {
   })
 }
 
-function decodeFinding(input: unknown): ModelFinding | undefined {
+function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefined {
   if (!isRecord(input)) return undefined
   const path = cleanPath(text(input.path))
   const title = oneLine(text(input.title)).slice(0, MAX_TITLE_CHARS)
@@ -267,8 +441,59 @@ function decodeFinding(input: unknown): ModelFinding | undefined {
   if (rule) finding.rule = rule
   const duplicateOf = text(input.duplicateOf)
   if (duplicateOf) finding.duplicateOf = duplicateOf
+  if (!strict) return finding
+  // An unreadable severity stays "concern" here as above, so strict mode never reads it as blocking: S2 drops it.
+  const failure = decodeFailure(input.failure)
+  if (failure) finding.failure = failure
+  const quotes = list(input.quotes)
+    .slice(0, MAX_QUOTES_READ)
+    .flatMap((entry) => {
+      const quote = decodeQuote(entry, path)
+      return quote ? [quote] : []
+    })
+    .slice(0, MAX_FINDING_QUOTES)
+  if (quotes.length) finding.quotes = quotes
+  const patch = cleanCode(input.patch, { maxChars: MAX_SUGGESTION_CHARS })?.value
+  if (patch !== undefined) finding.patch = patch
   return finding
 }
+
+// A failure needs a class and a mechanism the enums name, read in any case and with spaces or underscores for hyphens;
+// anything else is no failure, which S2 drops. Trigger and impact are kept whole, even empty, for S5 to judge.
+function decodeFailure(input: unknown): FailureInfo | undefined {
+  if (!isRecord(input)) return undefined
+  const token = (value: unknown) => lower(value).replace(/[\s_]+/g, "-")
+  const failureClass = FAILURE_CLASSES.find((name) => name === token(input.class))
+  const mechanism = FAILURE_MECHANISMS.find((name) => name === token(input.mechanism))
+  if (!failureClass || !mechanism) return undefined
+  return { class: failureClass, mechanism, trigger: oneLine(text(input.trigger)), impact: oneLine(text(input.impact)) }
+}
+
+// A quote is a claim S4 checks against the file at its exact line, so it is read strictly, unlike a finding. Its line
+// is a whole number of 1 or more, or text that is only one, after an optional L: "-5", "line -5", 15.4 or 0.6 drop the
+// quote rather than point it at another line. A quote with no path is the finding's file. A path that could leave the
+// repository (a `..` segment, a backslash or a drive) drops it; VS-27b's S4 still checks containment against the
+// tree-ish. Its code keeps its fence in a Markdown file, where a fence is file text, and its line moves past the empty
+// lines the cleaning strips from the start, so the line is still the first line of the code. One with no code or over
+// a cap is dropped.
+function decodeQuote(input: unknown, findingPath: string): Quote | undefined {
+  if (!isRecord(input)) return undefined
+  const said = typeof input.line === "string" ? input.line.match(/^\s*L?(\d+)\s*$/i)?.[1] : input.line
+  const line = typeof said === "string" ? Number(said) : said
+  if (typeof line !== "number" || !Number.isSafeInteger(line) || line < 1) return undefined
+  const path = cleanPath(text(input.path)) || findingPath
+  if (/(^|\/)\.\.(\/|$)|\\|^[A-Za-z]:/.test(path)) return undefined
+  const code = cleanCode(input.code, {
+    maxChars: MAX_QUOTE_CHARS,
+    maxLines: MAX_QUOTE_LINES,
+    keepFence: MARKDOWN.test(path),
+  })
+  if (!code) return undefined
+  return { path, line: line + code.skipped, side: lower(input.side) === "left" ? "LEFT" : "RIGHT", code: code.value }
+}
+
+// Files whose text holds fenced code blocks.
+const MARKDOWN = /\.(?:md|mdx|markdown|mdown|mkd|mkdn|mdc|qmd|rmd)$/i
 
 // Models that ignore the schema sometimes answer in percent; 1 < c <= 100 is read as a percentage. A missing
 // confidence becomes 0.5, which is below the default threshold, so an unrated finding is counted, not posted.
@@ -290,16 +515,40 @@ function cleanPath(path: string): string {
   return path.replace(/^(\.\/|\/)+/, "")
 }
 
+// One fence around a whole text, with its body.
+const FENCED = /^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n?\1\s*$/
+
 // The replacement text keeps its indentation. A fence around it and trailing blank lines are removed.
 function cleanSuggestion(input: unknown): string | undefined {
   if (typeof input !== "string") return undefined
   let value = input.replace(/\r\n?/g, "\n")
-  const fenced = value.match(/^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n?\1\s*$/)
+  const fenced = value.match(FENCED)
   if (fenced) value = fenced[2] ?? ""
   value = value.replace(/^\n+/, "").replace(/\s+$/, "")
   if (value.length > MAX_SUGGESTION_CHARS || value.split("\n").length > MAX_SUGGESTION_LINES) return undefined
   return value.trim() ? value : undefined
 }
+
+// Code copied from a file, or a patch: CRLF becomes LF, one fence around it is removed unless `keepFence`, and empty
+// lines at the start and end are stripped, keeping indentation and every other space, since a patch's context lines
+// need theirs. `skipped` counts the empty lines stripped from the start. Empty or over a cap, it is dropped, not cut.
+// A text longer than its cap plus FENCE_ALLOWANCE is dropped before FENCED runs, since FENCED backtracks quadratically
+// on a long run of backticks or tildes and only a fence or padding that long could bring it under the cap. The empty
+// lines go by splitting, not by `\n+$`, which backtracks the same way on a long run of line breaks.
+function cleanCode(input: unknown, limits: { maxChars: number; maxLines?: number; keepFence?: boolean }) {
+  if (typeof input !== "string") return undefined
+  const normalized = input.replace(/\r\n?/g, "\n")
+  if (normalized.length > limits.maxChars + FENCE_ALLOWANCE) return undefined
+  const lines = ((limits.keepFence ? undefined : normalized.match(FENCED)?.[2]) ?? normalized).split("\n")
+  const skipped = lines.findIndex((line) => line !== "")
+  const kept = lines.slice(skipped, lines.findLastIndex((line) => line !== "") + 1)
+  const value = kept.join("\n")
+  if (!value.trim() || value.length > limits.maxChars || kept.length > (limits.maxLines ?? Number.POSITIVE_INFINITY))
+    return undefined
+  return { value, skipped }
+}
+
+const FENCE_ALLOWANCE = 64
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)

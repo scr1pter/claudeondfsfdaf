@@ -34,6 +34,11 @@ export interface ModelFinding {
   evidence?: string[] // "path:line" references it read
   rule?: string // the quoted rule sentence
   duplicateOf?: string // id of an open earlier finding this repeats
+  // The strict report schema's fields (VS-27a). Only decodeReport under `guardrail: "strict"` reads them, and no runner
+  // asks for that before VS-27c, so legacy output never has them.
+  failure?: FailureInfo // asked for on every blocking finding; S2 and S5 enforce that, not the schema
+  quotes?: Quote[]
+  patch?: string // a unified diff against head
 }
 
 export interface ModelReport {
@@ -49,8 +54,78 @@ export interface Finding extends ModelFinding {
   side: Side
   source: "review" | "security"
   verified?: boolean
+  // Who confirmed it (VS-27a). `verified` stays a boolean, so every `verified === true` check keeps its meaning: a
+  // runtime confirmation sets both `verified: true` and `verifiedBy: "runtime"`. No runner sets it before VS-27c or VS-30.
+  verifiedBy?: VerifiedBy
   // Other places the same defect was reported in this run, as "path:line". Selection folds them into this finding.
   also?: string[]
+}
+
+// VS-27's strict guardrail (contract §1.2). Its types live here, not in guardrail.ts, because ReviewOutcome.strict
+// needs them and this file stays import-free; VS-27b's guardrail.ts adds StrictInput and strictSelect. Nothing produces
+// any of them before VS-27c.
+// The five production-breaking classes. Their definitions wait for VS-27c's prompt (owner questions Q3 and Q4).
+export const FAILURE_CLASSES = ["crash", "data-corruption", "leak", "runaway-loop", "auth-bypass"] as const
+export type FailureClass = (typeof FAILURE_CLASSES)[number]
+export const FAILURE_MECHANISMS = ["logic", "concurrency", "regression", "resource", "access"] as const
+export type FailureMechanism = (typeof FAILURE_MECHANISMS)[number]
+export interface FailureInfo {
+  class: FailureClass
+  mechanism: FailureMechanism
+  trigger: string // the input or state that makes it fail
+  impact: string // what breaks when it does
+}
+// Code a finding rests on, copied out of a file: the head file on the RIGHT side, the base file on the LEFT side (code
+// the change removed). The one quote type: VS-44's verify trace reuses it.
+export interface Quote {
+  path: string
+  line: number // the quote's first line
+  side: Side
+  code: string
+}
+export const VERIFIED_BY = ["model", "runtime"] as const
+export type VerifiedBy = (typeof VERIFIED_BY)[number]
+// "unchecked": no committable suggestion and no patch that applies, so the fix is shown as a plain diff block (S6).
+export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
+// Why strictSelect dropped a candidate, in the order of the rules S1 to S8. The contract's base list: a later package's
+// drop (VS-42, VS-44) joins this list with its package, and the result schema only under that package's key.
+export const STRICT_DROPS = [
+  "unverified",
+  "verdict-unreadable",
+  "out-of-scope",
+  "not-blocking",
+  "anchor",
+  "quote-mismatch",
+  "no-impact",
+  "no-fix",
+  "duplicate",
+  "cap",
+] as const
+export type StrictDrop = (typeof STRICT_DROPS)[number]
+export interface StrictFinding {
+  id: string
+  class: FailureClass
+  mechanism: FailureMechanism
+  path: string
+  line: number
+  endLine?: number
+  side: Side
+  title: string
+  trigger: string
+  impact: string
+  quotes: Quote[]
+  fix: { kind: (typeof STRICT_FIX_KINDS)[number]; text: string }
+  verifiedBy: VerifiedBy
+  verifier: string // the "provider/model" or the runtime check that confirmed it
+}
+export interface StrictResult {
+  version: 1
+  head: string
+  complete: boolean // false when a stage did not finish, coverage is partial or a verdict could not be read
+  incomplete?: string[] // reason codes, not text (D14); VS-27b defines them
+  findings: StrictFinding[]
+  dropped: { reason: StrictDrop; count: number }[] // only reasons with a count of 1 or more
+  fixUnchecked: number // findings kept with their fix shown as an unchecked diff (S6)
 }
 
 export type AnchorFailure = "file-not-in-diff" | "line-outside-diff" | "no-patch"
@@ -183,10 +258,13 @@ export interface ReviewOutcome {
   since?: string
   mode: "full" | "incremental" | "carry"
   forcePushed?: boolean
-  partial?: "budget" | "steps" | "timeout" | "model-error"
+  // "privacy" and "budget-estimate" are VS-23's and VS-24's zero-attempt stops, which no runner makes before VS-23b
+  // and VS-24 wiring.
+  partial?: "budget" | "steps" | "timeout" | "model-error" | "privacy" | "budget-estimate"
   unreviewed: string[]
   specialists: {
-    name: "review" | "security" | "verify"
+    name: "review" | "security" | "verify" | "judge" | "lens" | "repro" // judge: codium's; lens, repro: VS-28, VS-30
+    lens?: string // the single class a "lens" pass looked for (VS-28)
     status: "ok" | "failed" | "timeout" | "stopped" | "skipped"
     steps: number
     detail?: string
@@ -196,10 +274,13 @@ export interface ReviewOutcome {
   notes: string[] // deterministic summary notes (generated header, moved comments, superseded)
   // What each pass spent, from its session's recorded usage. Absent when no pass reported usage.
   passes?: ReviewPass[]
+  // The strict guardrail's result, set only under `guardrail: "strict"` (VS-27c).
+  strict?: StrictResult
 }
 
 export interface ReviewPass {
-  name: "review" | "security" | "verify"
+  name: "review" | "security" | "verify" | "judge" | "lens" | "repro" // as ReviewOutcome.specialists[].name
+  lens?: string // as ReviewOutcome.specialists[].lens
   model: string // "provider/model"
   costUsd?: number // absent when the pass's usage carried no price
   input: number // cache reads and writes included
@@ -258,6 +339,12 @@ export interface ReviewConfig {
   // config and its digest stay as they were. Parsed, and read by no runner until VS-25b wiring (UNAPPLIED_REVIEW_KEYS),
   // so the parser warns that "graph" is not applied.
   impact?: "grep" | "graph"
+  // VS-27's opt-in (D3, Q3, Q15). Under "strict", the strict guardrail (VS-27b's strictSelect) will keep only verified,
+  // blocking findings in the five failure classes, each anchored, quoted, with its impact and a fix, and report them as
+  // a StrictResult. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every
+  // config and its digest stay as they were. Parsed, and read by no runner until VS-27c (UNAPPLIED_REVIEW_KEYS), so the
+  // parser warns that "strict" is not applied.
+  guardrail?: "off" | "strict"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
@@ -330,6 +417,7 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   trivial: "review",
   maxInputTokens: 0,
   impact: "grep",
+  guardrail: "off",
 } as const satisfies Partial<ReviewConfig>
 
 // The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
@@ -337,12 +425,13 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
-// review did not run under, and the eval replay neither takes nor records them. VS-24 or VS-25b wiring takes a key off
-// this list when a runner applies it.
+// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b or VS-27c wiring takes a
+// key off this list when a runner applies it.
 export const UNAPPLIED_REVIEW_KEYS = [
   "trivial",
   "maxInputTokens",
   "impact",
+  "guardrail",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:

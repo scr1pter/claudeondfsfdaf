@@ -1844,6 +1844,9 @@ const PASS_LABEL: Record<ReviewPass["name"], string> = {
   review: "Review",
   security: "Security",
   verify: "Double-check",
+  judge: "Panel judge",
+  lens: "Lens",
+  repro: "Reproducer",
 }
 
 // The double-check chip, and its tooltip, which says why findings were dropped: a finding the review model did not

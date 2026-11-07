@@ -27,7 +27,7 @@ import {
   type PromptInput,
   type VerifyPromptInput,
 } from "./prompt"
-import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "./schema"
+import { REVIEW_REPORT_JSON_SCHEMA, strictReportJsonSchema, strictResultJsonSchema, VERIFY_JSON_SCHEMA } from "./schema"
 import {
   OPTIONAL_REVIEW_DEFAULT_OF,
   UNAPPLIED_REVIEW_KEYS,
@@ -47,7 +47,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "491223f3c097098f"
+export const REVIEW_PIPELINE_SOURCES = "511f0bffc7b5d314"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -57,7 +57,8 @@ export const MAX_CERTIFICATE_DAYS = 90
 // Budgets, time limits, ignores and skips bound or route a review but are not part of what it is evaluated on. VS-24's
 // `trivial` is one (a skipped change is not reviewed), counted from VS-24 wiring on (policyDigest); its
 // `maxInputTokens` is a budget. VS-25's `impact` is one (the slice is context the model reviews with), counted from
-// VS-25b wiring on, and then only as "graph".
+// VS-25b wiring on, and then only as "graph". VS-27's `guardrail` is one (it selects what is posted), counted from VS-27c
+// on, and then only as "strict".
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -71,6 +72,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "maxDiffChars",
   "trivial",
   "impact",
+  "guardrail",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -346,7 +348,8 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // changes), the verify prompt bare and with every input set, the finalizer and the owner's memory block. A section a key
 // enables is rendered only under that key (contract §0.3): under `impact: "graph"`, the review and security prompts
 // with every input set and VS-25b's slice are added, and then the same with VS-37a's slice packed in tiers, so the
-// default digest stays as it was. Which packing a run used is the eval's variant parameters, not this digest.
+// default digest stays as it was. Which packing a run used is the eval's variant parameters, not this digest. Under
+// `guardrail: "strict"`, promptsDigest adds VS-27a's strict schemas; VS-27c adds the strict task text here, under the key.
 export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact">> = {}): string[] {
   const impact =
     keys.impact === "graph"
@@ -383,12 +386,19 @@ export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact">> = {
 const prompts = new Map<string, string>()
 
 // A digest of the core review prompts and output schemas, built from fixed inputs so it changes only when their text
-// does (canonicalPrompts). Memoised per set of prompt keys; with none set it is the digest it has always been.
-export function promptsDigest(keys: Partial<Pick<ReviewConfig, "impact">> = {}): string {
-  const key = keys.impact === "graph" ? "impact:graph" : ""
+// does (canonicalPrompts). Memoised per set of prompt keys; with none set it is the digest it has always been. The
+// strict schemas (VS-27a) come last, and only under `guardrail: "strict"`, so the digest of every other set of keys
+// stays as it was.
+export function promptsDigest(keys: Partial<Pick<ReviewConfig, "impact" | "guardrail">> = {}): string {
+  const key = [keys.impact === "graph" ? "impact:graph" : "", keys.guardrail === "strict" ? "guardrail:strict" : ""]
+    .filter(Boolean)
+    .join(",")
   const cached = prompts.get(key)
   if (cached) return cached
-  const digest = fnv1a64(JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA]))
+  const strict = [strictReportJsonSchema(keys), strictResultJsonSchema(keys)].filter((schema) => schema !== undefined)
+  const digest = fnv1a64(
+    JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA, ...strict]),
+  )
   prompts.set(key, digest)
   return digest
 }
@@ -420,12 +430,16 @@ export function evidenceScope(input: {
   return {
     adapter: input.adapter,
     pipeline: REVIEW_PIPELINE_REVISION,
-    // The impact block enters the prompts only once a runner applies the key (it leaves UNAPPLIED_REVIEW_KEYS).
-    prompts: promptsDigest(
-      input.config.impact === "graph" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "impact")
-        ? { impact: "graph" }
-        : {},
-    ),
+    // The impact block and the strict schemas enter the prompts only once a runner applies their key (it leaves
+    // UNAPPLIED_REVIEW_KEYS).
+    prompts: promptsDigest({
+      ...(input.config.impact === "graph" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "impact")
+        ? { impact: "graph" as const }
+        : {}),
+      ...(input.config.guardrail === "strict" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail")
+        ? { guardrail: "strict" as const }
+        : {}),
+    }),
     policy: policyDigest(input.config),
     ...(input.triage ? { triage: input.triage } : {}),
     ...(input.route ? { route: input.route } : {}),

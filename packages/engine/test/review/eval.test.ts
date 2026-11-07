@@ -897,6 +897,58 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-27a: the same for `guardrail`. A base review.json under "strict" is replayed with the legacy report schema and
+  // decoding, as every runner still reviews: a finding's strict fields are ignored, and the scope claims neither the
+  // policy nor the strict schemas.
+  it.instance(
+    "replays a base review.json that sets VS-27's guardrail without it, keeping the parser's warning",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ guardrail: "strict" }) },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        const strict = {
+          ...listBug,
+          failure: {
+            class: "crash",
+            mechanism: "logic",
+            trigger: "An empty list.",
+            impact: "last() returns undefined.",
+          },
+          quotes: [{ path: "src/list.ts", line: 3, side: "RIGHT", code: "  return items[items.length]" }],
+          patch: "--- a/src/list.ts\n+++ b/src/list.ts",
+        }
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: [strict] }))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", minConfidence: 0.5 },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(Object.hasOwn(artifact.config.value, "guardrail")).toBe(false)
+        expect(artifact.config.warnings).toEqual([
+          '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
+        ])
+        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, guardrail: "strict" }))
+        expect(artifact.scope.prompts).toBe(promptsDigest())
+        expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict" }))
+        // The request carries the legacy report schema, and the strict fields of the answer are not read.
+        const body = JSON.stringify((yield* llm.hits).find(REVIEW)!.body)
+        expect(body).toContain('"duplicateOf"')
+        for (const field of ['"failure"', '"quotes"', '"patch"']) expect(body).not.toContain(field)
+        const placed = artifact.outcome?.selection.inline ?? []
+        expect(placed.map((finding) => finding.title)).toEqual([listBug.title])
+        for (const field of ["failure", "quotes", "patch", "verifiedBy"])
+          expect(placed.some((finding) => Object.hasOwn(finding, field))).toBe(false)
+        expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
   it.instance(
     "a variant on the shared verify policy gets the policy's default unless the base's review.json sets verify",
     () =>
@@ -1020,6 +1072,10 @@ describe("ReviewEval.replay", () => {
         )
         expect(yield* refused({ config: { trivial: "skip", impact: "grep" } })).toContain(
           "config sets trivial, impact, which no runner applies yet (VS-24 wiring for trivial; VS-25b wiring for impact)",
+        )
+        // Nor VS-27's guardrail, which VS-27c applies.
+        expect(yield* refused({ config: { guardrail: "strict" } })).toContain(
+          "config sets guardrail, which no runner applies yet (VS-27c), so the artifact would record a setting the run did not have.",
         )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(

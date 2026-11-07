@@ -9,6 +9,7 @@ import {
   canonicalPrompts,
   certificateProblems,
   certify,
+  EVIDENCE_POLICY_KEYS,
   evidenceScope,
   MAX_CERTIFICATE_DAYS,
   MODEL_EVIDENCE,
@@ -223,6 +224,27 @@ describe("scope", () => {
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
   })
 
+  // VS-27a: the strict report and result schemas render only under `guardrail: "strict"`, which no runner sets before
+  // VS-27c, so they enter the digest only under that key and every other digest holds.
+  test("the prompts digest covers the strict schemas under guardrail: strict only", () => {
+    expect(promptsDigest({ guardrail: "off" })).toBe(promptsDigest())
+    expect(promptsDigest({ guardrail: undefined })).toBe(promptsDigest())
+    expect(promptsDigest({ impact: "graph", guardrail: "off" })).toBe(promptsDigest({ impact: "graph" }))
+    const strict = promptsDigest({ guardrail: "strict" })
+    expect(strict).toBe(promptsDigest({ guardrail: "strict" }))
+    const both = promptsDigest({ impact: "graph", guardrail: "strict" })
+    expect(both).toBe(promptsDigest({ guardrail: "strict", impact: "graph" }))
+    expect(new Set([promptsDigest(), promptsDigest({ impact: "graph" }), strict, both]).size).toBe(4)
+    // The default and graph digests are unchanged by VS-27a.
+    expect(promptsDigest()).toBe("5d59e9ee06077c23")
+    expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
+    // VS-27a's schema-only strict digests, printed by VS-27a (built at f7e1f8df). VS-27c moves them on purpose when the strict task text
+    // joins canonicalPrompts under the key. VS-42, VS-43 and VS-44 must each leave them at whatever value is current
+    // when they land, with their own keys off: their fields join the strict schemas only under their keys.
+    expect(strict).toBe("f04c185c5b415aaf")
+    expect(both).toBe("9c87880d813f1e69")
+  })
+
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of
   // these files fails here until someone decides whether REVIEW_PIPELINE_REVISION goes up and updates the pin.
   test("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION", () => {
@@ -265,9 +287,11 @@ describe("scope", () => {
       { maxInputTokens: 200_000 },
       { trivial: "review" as const },
       { trivial: "skip" as const },
-      // VS-25's impact slice is applied by no runner yet either.
+      // VS-25's impact slice is applied by no runner yet either, nor VS-27's guardrail.
       { impact: "grep" as const },
       { impact: "graph" as const },
+      { guardrail: "off" as const },
+      { guardrail: "strict" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -305,6 +329,23 @@ describe("scope", () => {
     expect(evidenceScope({ adapter: "engine", config: graph })).toEqual(SCOPE)
     expect(evidenceScope({ adapter: "engine", config: graph }).prompts).toBe(promptsDigest())
     expect(policyDigest({ ...graph, nits: true })).not.toBe(policyDigest(graph))
+  })
+
+  // VS-27a: `guardrail` is a policy key (it selects what is posted) that no runner applies before VS-27c, so neither the
+  // policy digest nor the prompts digest of a scope moves with it yet. Once a runner applies it, only "strict" counts, in
+  // both.
+  test("the scope leaves out VS-27's guardrail until a runner applies it", () => {
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    expect(EVIDENCE_POLICY_KEYS).toContain("guardrail")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("guardrail")
+    for (const guardrail of ["strict", "off", undefined] as const)
+      expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail })).toBe(base)
+    const strict: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" }
+    expect(evidenceScope({ adapter: "engine", config: strict })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "desktop", config: { ...strict, impact: "graph" } })).toEqual(
+      evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+    )
+    expect(policyDigest({ ...strict, nits: true })).not.toBe(policyDigest(strict))
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

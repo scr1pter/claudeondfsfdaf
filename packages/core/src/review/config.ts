@@ -171,6 +171,7 @@ const FIELDS: Record<PlainKey, Field> = {
   modelEvidence: oneOf(["off", "warn"]),
   trivial: oneOf(["review", "skip"]),
   impact: oneOf(["grep", "graph"]),
+  guardrail: oneOf(["off", "strict"]),
   failOn: oneOf(["never", "blocking"]),
   ignore: strings,
   ignoreDefaults: bool,
@@ -210,6 +211,7 @@ const ENV: { name: string; key: PlainKey; kind: "number" | "text" }[] = [
   { name: "REVIEW_MODEL_EVIDENCE", key: "modelEvidence", kind: "text" },
   { name: "REVIEW_TRIVIAL", key: "trivial", kind: "text" },
   { name: "REVIEW_IMPACT", key: "impact", kind: "text" },
+  { name: "REVIEW_GUARDRAIL", key: "guardrail", kind: "text" },
   { name: "REVIEW_FAIL_ON", key: "failOn", kind: "text" },
   { name: "REVIEW_MAX_COST_USD", key: "maxCostUsd", kind: "number" },
   { name: "REVIEW_MAX_COST_USD_PER_PR", key: "maxCostUsdPerPr", kind: "number" },
@@ -235,6 +237,10 @@ const UNAPPLIED: Record<
   impact: {
     applies: (config) => config.impact === "graph",
     warning: '"impact": "graph" is not applied yet: related code still comes from git grep.',
+  },
+  guardrail: {
+    applies: (config) => config.guardrail === "strict",
+    warning: '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
   },
 }
 

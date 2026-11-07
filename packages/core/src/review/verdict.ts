@@ -27,12 +27,13 @@ export const REVIEW_VERDICTS = [
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number]
 
 // The parts of a ReviewOutcome the verdict reads; a ReviewOutcome is assignable as it is. The rest is ready for values
-// other packages add, each absent until its package lands:
-// - `partial` also takes VS-23's and VS-24's zero-attempt stops;
-// - `specialists[].name` also takes the contract's `lens` and `repro` and codium's `judge`;
+// other packages add, each absent until a runner produces it:
+// - `partial` also takes VS-23's and VS-24's zero-attempt stops, which ReviewOutcome has had since VS-27a;
+// - `specialists[].name` also takes the contract's `lens` and `repro` and codium's `judge`, likewise;
 // - `trivial` marks VS-24's zero-attempt trivial outcome from Review.run;
-// - `strict` is VS-27a's StrictResult;
+// - `strict` is VS-27a's StrictResult, which no runner sets before VS-27c;
 // - `held` is VS-34's held-back files.
+// The unions repeated below are redundant since VS-27a and harmless; VS-32 wiring may simplify them.
 export interface VerdictOutcome {
   partial?: NonNullable<ReviewOutcome["partial"]> | "privacy" | "budget-estimate"
   unreviewed: readonly string[]
