@@ -12759,3 +12759,509 @@ was taken, point 6 in a corrected form and point 3 in both of its forms
     wording each named in full; precision@blocking with unsettled findings
     left out; the monitor with them left out; adversarial cases in agreement;
     re-selected copies in agreement. All were caught.
+
+## 2026-11-07 · VS-46a Outcome ledger script (eval)
+
+Addendum A §2, VS-46, in the Now window of §4 ("VS-46 (script)"). Built at
+`766553f1` on `vectorscope-engine`. Addendum A's packages are proposals
+pending Q18, and Q30 (reading the owner's production markers and merged PRs,
+and assigning depth per PR) is open, so this is a script and its tests only:
+no runtime key (§1, "VS-45 and VS-46 are eval and report work with no runtime
+key"), no §1a row, zero review tokens, and nothing calls it from a runner. It
+has never been run against the owner's or any real repository, it read no
+production marker or merged PR, and no ledger data exists or is committed
+(I-13). Nothing under `packages/` changed: `run.ts`, `ai-review.ts`,
+`provider.ts`, `session/llm.ts`, `posting.ts`, core `types.ts`, `config.ts`,
+`model-evidence.ts`, `state.ts`, `team.ts`, `risk.ts`, `eval.ts`,
+`eval-report.ts`, `workflow.ts`, `command.ts`, `github.*`, `github-*.ts`,
+`vectorscope.astro` and `.github/workflows/*` are untouched. It implements
+the VS-46a plan as corrected by its critique: every one of the nineteen
+critique points was taken, point 4 in its second form (below). Nothing is
+committed.
+
+- **What landed.**
+  - **New `script/vectorscope-eval/seal.ts`** (critique point 5): `seal`,
+    `unseal`, `publicKey` (now exported), `Sealed`, `SEALED_SCHEMA`,
+    `PUBLIC_KEY_ENV` and `MIN_KEY_BITS`, moved out of `ci.ts` unchanged, plus
+    `OUTCOME_LEDGER_FILE` (`"outcomes-ledger.json"`). It imports
+    `node:crypto` only.
+  - **`ci.ts`:** imports and re-exports the moved names (its exported surface
+    is the same: `PUBLIC_KEY_ENV`, `SEALED_SCHEMA`, `seal`, `unseal`,
+    `Sealed`), and `unseal` refuses a bundle that holds
+    `OUTCOME_LEDGER_FILE`, writing nothing (the ledger's expiry is checked
+    only by `outcomes.ts open`). The plan's three `ci.ts` edits became this:
+    `publicKey` is exported from `seal.ts`, and the constant lives there, so
+    `outcomes.ts` never loads `ci.ts`.
+  - **New `script/vectorscope-eval/outcomes.ts`:** VS-46 design items 1, 2,
+    3 and 5. `findingOutcome`, `bulkResolved`, `agentStratum`,
+    `revertTargets`, `fixKind`, `matured`, `hashLogin`, `ghArgs`, `ghReader`,
+    `localGit`, `collect`, `ledgerProblem`, `outcomeReport`, `renderOutcomes`
+    and `main` (`collect` and `open`), with the ledger and report types and
+    constants (`LEDGER_DAYS` 180, `MATURITY_DAYS` 90, `LABEL_WINDOWS` 30 and
+    90, `MIN_SETTLED` 50, `MIN_PULLS` 50, `MIN_VOLUME` 200, `MIN_MATURED`
+    200, `CLOCK_SKEW_MS` five minutes, `MAX_API_CALLS` 4,000, `FIX_LABEL`,
+    `NOT_FIX_LABEL`, `WRITER_PERMISSIONS`, `READ_ONLY_GIT`, `THREADS_QUERY`,
+    `THREAD_COMMENTS_QUERY`). It reuses core `state.ts` (`findSticky`,
+    `readState`, `priorFromComment`, `priorFromState`, `mergePrior`,
+    `classifyPrior`, `parseDismissalMarker`, `encodeState`), `diff.ts`
+    (`fromGitHubFiles`, `parseUnifiedDiff`), `ignore.ts` (`classifyFiles`),
+    `risk.ts` (`riskFeatures`, `riskOf`, `FIX_SUBJECT`, `REVERT_SUBJECT`),
+    `team.ts` (`BULK_RESOLVE_THREADS`), `eval.ts` (`DEFAULT_SLACK`,
+    `proportion`, `severityGradient`), `eval-report.ts` (`spread`), and
+    `dataset.ts`'s `UNTRUSTED_GIT` and `untrustedGitEnv` (I-10): no second
+    store, isolation layer or code reader.
+  - **New `outcomes.test.ts`** (40 tests, 33 before the review round) and
+    one new `ci.test.ts` test.
+  - **`README.md`:** an "Outcome ledger (VS-46a)" section.
+  - CI needs no change: `test.yml` already runs every
+    `script/vectorscope-eval/*.test.ts` from `packages/script`, and
+    `typecheck.yml` checks the eval tsconfig, whose `*.ts` includes the new
+    files.
+- **Decisions.**
+  - **(a) Neutral on Q30.** The script is built and never run. It refuses to
+    start in GitHub Actions, has no default repository, and checks the
+    sealing key, the output directory and the agent record before its first
+    read (tested with a recording GitHub client and a recording git: 0 calls
+    for each of fifteen refusals). If Q30 is "no", nothing runs it; if
+    "yes", the owner runs `collect` on a nominated repository.
+  - **(b) Nine outcomes.** VS-46's seven, plus `dismissed-unattributed` (a
+    dismissed marker whose writer or author can no longer be found among its
+    signals; never counted as either) and `fixed-self-resolved` (decision
+    (c)). The first matching rule decides: outdated, fixed, dismissed, then
+    open (acknowledged by a reply the job would not read as a dismissal or a
+    positive reaction, compared case-insensitively because GraphQL spells
+    reactions as uppercase enums; open at merge otherwise).
+  - **(c) A confirmed fix needs a resolver who is neither a bot nor the PR
+    author** (critique point 1, taken). The job resolves the thread itself
+    when it marks a finding fixed (`github.review.ts`), so a bot resolver is
+    `fixed-model-only`; an author's resolve, which agent loops and self-only
+    engagement produce [FL9, G6-16, FL10], is `fixed-self-resolved` and is
+    never in the confirmed numerator. `LedgerFinding.resolver` records the
+    role (author, writer, other, bot). A User-type agent account that is not
+    the PR author and resolves threads still reads as a person: only the
+    trusted agent record catches it, so its PRs fall in the agent stratum
+    when the owner lists them.
+  - **(d) Attribution reuses the job's rules:** `parseDismissalMarker` when a
+    well-formed `vector-dismissal` marker exists (none is written before
+    VS-35's later window), else `classifyPrior` on the thread as it is now
+    with no `changes`, so only its dismissal rule can apply and a bot is
+    never a writer. Permission lookups mirror the job: the dismissal-signal
+    logins and resolvers only, cached, and any lookup error reads as not a
+    writer. Roles are read at collection time, not at dismissal time, so a
+    writer who has since left reads as `dismissed-unattributed` or `other`
+    (role drift, a known limit).
+  - **(e) Settled set and rates.** Settled: confirmed fix, acknowledged,
+    writer and author dismissals. The gradient is VS-45's `severityGradient`
+    over the confirmed-fix share of settled human-stratum findings, with its
+    flat-or-inverted flag as the flat-rate check [FL10, CF15]; a sensitivity
+    gradient counts every fix (self-resolved and model-only included) over
+    settled findings plus those (critique point 12). An acknowledgement may
+    be the author's own reply or reaction; `humanEngaged` separates it.
+  - **(f) Bulk is count-based** (GitHub's review-thread API gives no resolve
+    time, so `BULK_RESOLVE_MS` cannot apply): at least
+    `BULK_RESOLVE_THREADS` inline threads one non-bot actor resolved, with no
+    non-bot reply and no fix. Bulk findings are split out, never relabelled.
+  - **(g) Agent authorship comes only from the owner's trusted record**
+    (`--agent-prs`, `{repository, pulls}` for this repository, outside the
+    clone and this checkout). A Bot-type or `[bot]` author, commit author or
+    co-author trailer only moves a PR to `agent-signal`; no agent or product
+    is named. Precedence per finding: agent, then bulk, then the PR's
+    stratum. Findings are rebuilt only from the configured `--bot` logins'
+    comments (critique point 14): each `--bot` is normalised to its `[bot]`
+    form and compared exactly, case-insensitively, after `graphLogin`, so
+    another bot's thread, and a User account whose login equals the App's
+    slug, is never a finding or the sticky state (round one, finding 12).
+    The `[bot]` test is used for resolvers, engagement and strata. A deleted
+    ("ghost") account, which GraphQL names with an empty login, is nobody: it
+    neither engages nor acknowledges, and is never looked up.
+  - **(h) Label sources.** First-parent history of the base branch read
+    with read-only git; a fix's deleted lines blamed with `--first-parent`
+    at the fix's first parent, so each blamed commit is a base merge,
+    squash or rebased commit (critique point 10; the fixture's PR #3 is a
+    real `--no-ff` merge, and blame without `--first-parent` misses it);
+    commit-to-PR through the merged-PR listing's `merge_commit_sha`, with
+    `commits/{sha}/pulls` only for a first-parent commit in the window the
+    listing cannot match. A fix label (`FIX_LABEL`, which accepts bugfix and
+    bug-fix, unless `NOT_FIX_LABEL` matches: not a bug, invalid, won't fix,
+    duplicate, or a question mark), else `FIX_SUBJECT` on the fix PR's title
+    (or the commit subject without a PR). A revert is never a fix: its
+    subject or its PR's title matching `REVERT_SUBJECT` (for a merge commit
+    with a mapped PR, the PR's title only, because GitHub's merge subject
+    names the source branch), or a revert target found by `revertsOf`.
+    `revertsOf` reads the commit's own message and, for a first-parent
+    merge, the messages of the commits it brought in
+    (`git log --format=%H%x1f%B%x1e <sha>^1..<sha>`), so a `--no-ff` merge of a revert
+    PR, whose revert sits on the second parent under "Merge pull request #N
+    from ...", still reverts the PR it names; a brought-in revert of a commit
+    on the same branch reverts nothing on the base. Known undercounts: a fix
+    whose own subject or PR title mentions reverting ("fix: do not revert
+    the cache"), a merge commit with no mapped PR whose branch name does
+    (only its subject is there to read), a fix that only adds lines (no
+    deleted line to blame, as in SZZ), a brought-in revert of a commit that
+    is not on the first-parent history (no PR is mapped to it), and
+    whitespace or comment lines are not filtered.
+  - **(i) Windows.** 30 and 90 days for both labels. Matured means merged at
+    least 90 days before the clone's history ends
+    (`mergedAt <= observedUntil - 90 days`). `observedUntil`, recorded in the ledger, is
+    the newest committer time on the clone's first-parent history, capped
+    at `collectedAt`: a commit reaches the branch no earlier than its
+    committer time, so the clone holds everything that reached the branch
+    before then, and a clone fetched weeks before the run never reads a PR
+    whose window it has not seen as clean. In a quiet repository this is
+    conservative (PRs merged in the 90 days before its last commit are not
+    matured). Collection also refuses a clone whose base branch lacks the
+    merge commit of any PR GitHub lists as merged since `--since`, inside
+    the window or not, before any PR is read (round one, finding 2). A
+    PR reverted within 90 days is neither positive nor clean for the fix
+    label and gets no line counts or later-fixed flags [G2-9, RP1]; the
+    revert rate's denominator is every matured PR. Days are a first-parent
+    commit's committer time against GitHub's `merged_at`.
+  - **(j) Escapes.** Each fix-edited line of a matured, not-reverted,
+    reviewed PR is skipped (a path the default skip rules leave out, through
+    `classifyFiles`), unreviewed (`state.unreviewed`), flagged (a RIGHT-side
+    finding on its file within `DEFAULT_SLACK` lines of its anchor or of a
+    line its `also` names as the same defect) or escaped; `laterFixed` uses
+    the same lines. Blame names a file unquoted where git can
+    (`core.quotePath=false`), and a name git still quotes (a quote, a
+    backslash or a control character) is C-unquoted as `diff.ts`
+    `readQuoted` does, so a fix-edited line in a file with a non-ASCII name
+    is compared with the finding's GitHub path. Limits: an inline finding's
+    `also` lines are read from its comment and are lines of the commit it
+    was raised on, not of the merged head; a summary finding's are at the
+    last reviewed head.
+    `state.unreviewed` lists only the files the last partial run missed; the
+    repository's own ignore globs and `.gitattributes` are not read, so
+    escapes are overstated; blamed line numbers are in the blamed commit's
+    file, exact for squash merges and approximate where the base moved under
+    a merge; an inline finding's line is its thread's current line, or its
+    original line when GitHub marks it outdated.
+  - **(k) Logins** (critique point 4, taken in its second form). HMAC-SHA256
+    of the lowercased login under a random per-run key that is never stored,
+    first 16 hex characters. The ledger stores no login, title, body, path
+    or code, but it keeps the repository, PR numbers and finding ids, so
+    hashing hides logins in the file only: anyone with access to the
+    repository can recover the people from a PR number, and two ledgers can
+    be joined on PR numbers. The README says so; no claim that ledgers
+    cannot be joined is made. The first form (per-run ordinals, finding ids
+    dropped) was not taken: the merge and creation times the maturity,
+    windows and cycle time need, and the change sizes, would still identify
+    each PR through the API, so ordinals would hide nothing, and PR numbers
+    let the owner audit a label.
+  - **(l) Sealing and expiry** (critique point 8, taken). `collect` writes
+    only `<out>/vectorscope-outcomes.sealed.json`, sealed with `seal()`
+    under `PUBLIC_KEY_ENV`, with `collectedAt` and `expires` inside the
+    authenticated payload. `ledgerProblem` refuses another schema, a missing
+    date, a collection more than five minutes after now, an expiry at or
+    before collection, an expiry more than 180 days after collection, and
+    `now >= expires`, and then decodes every entry with an Effect Schema
+    (`LedgerEntries`: outcomes, strata, severities, categories, resolvers and
+    bands from their lists, finite non-negative numbers, parseable dates,
+    string repository and branch, a `merged` window) before `open` creates
+    anything. `open` reads its files and JSON through
+    `Schema.UnknownFromJsonString`, and an unreadable file, invalid JSON or
+    a key that does not open the bundle is a refusal with a message, never
+    an exception. `open` writes only `outcomes-report.md` unless
+    `--ledger` is given, prints the expiry and says to delete the files by
+    then; `ci.ts unseal` refuses a ledger. Directories are created 0700
+    and every file `collect` and `open` write is 0600, since the ledger and
+    the report keep PR numbers. Sealing gives confidentiality,
+    not authenticity: anyone with the public key can seal a payload, so the
+    bounds cap an edited payload's life but are a guard against keeping a
+    ledger too long, not a security control.
+  - **(m) Outputs and trusted input stay out of every work tree** (critique
+    point 3, taken). `--out` and `open`'s directory must be outside this
+    checkout and outside every git work tree (a directory at or above them
+    holding `.git`); `--out` must also be outside `--repo-dir` (the only
+    check that covers a bare clone, tested). `--agent-prs` must be outside
+    the clone and this checkout, whose files PR authors control (I-2). Every
+    one of these paths, and the checkout and clone it is compared with, has
+    the symbolic links in its existing part resolved first, so a link cannot
+    carry an output or the record into a work tree.
+  - **(n) Read-only access.** GitHub through `gh api` only: every REST call
+    is a GET (`--method GET`), under `/repos/<owner/name>` compared
+    case-insensitively, with no `..`, `.`, empty segment, `%2e`, whitespace,
+    `#`, backslash or gh placeholder (`{owner}`), and a query string of safe
+    characters (critique point 16). GraphQL: a document starting with
+    `query` and naming no mutation or subscription; strings go through `-f`,
+    safe integers through `-F` (which reads `@file` values). The thread
+    query copies the engine's shape (`reactors { nodes { __typename ... on
+    Actor { login } } }`, `pageInfo` on both connections, `fullDatabaseId`
+    only, with no Enterprise Server `databaseId` fallback), and a thread's
+    further comments use the engine's second query (critique point 6; the
+    fixtures use GraphQL's response shape and uppercase reaction enums).
+    Git through `localGit`: `rev-parse`, `config --get-regexp`, `log`,
+    `diff` and `blame` only, under `UNTRUSTED_GIT` and `untrustedGitEnv()`
+    with `GIT_NO_LAZY_FETCH=1`, `diff` with the engine's reviewed-diff
+    options (`--no-color --no-ext-diff --no-textconv --no-relative
+    --src-prefix=a/ --dst-prefix=b/`), `log` with `--no-show-signature
+    --no-ext-diff --no-textconv --no-color`, `blame` with `--no-textconv`
+    and `-c blame.ignoreRevsFile= -c core.quotePath=false`, and `--output`,
+    `--ext-diff`, `--textconv` and `--show-signature` refused before `--`
+    only, so a path a PR author named `-o` cannot stop a run (critique
+    point 2: a probe
+    here showed plain `git blame` and `git diff` both run a clone-local
+    textconv driver, and the sentinel test proves the control runs it and
+    `localGit` does not). A shallow clone and a partial clone (the impact
+    builder's `config --get-regexp` pattern) are refused before GitHub is
+    read (critique point 19).
+  - **(o) Caps and failures** (critique points 14 and 15, the paging part).
+    `per_page=100` everywhere; the merged-PR listing stops at 30 pages (a
+    problem), comments, reviews and files at 30 pages (files at 3,000),
+    commits at 250, threads at 20 pages and further thread comments at 50
+    pages per PR; each cut-short read marks the PR truncated with a problem.
+    At most 4,000 GitHub requests per run (below `gh`'s hourly REST limit),
+    enforced by the client itself, which refuses any read past the cap: a PR
+    is read only with at least 200 left (a cap refusal while reading it
+    truncates it), the listing stops at the cap with a problem, and
+    permission lookups or commit lookups the cap stops are problems too. A truncated PR is left
+    out of every rate. Any read error aborts, so no partial ledger is ever
+    written. Rate-limit waits are not implemented: a limit error aborts the
+    run.
+  - **(p) Per-PR fields** (critique points 7 and 9, taken). `rereviews` is
+    `max(state.reviews - 1, 0)` (the state counts completed reviews with a
+    cost; a carry run does not count), by count only: the state keeps a PR's
+    total spend, so the re-review share of spend is "not recorded".
+    `statePruned` flags a state at the 60-finding cap or within 512
+    characters of the 16,000-character limit, where `pruneState` may have
+    dropped summary findings, so their counts are a lower bound. The band
+    is `riskOf(riskFeatures(review, { changed }))` on the PR's files mapped
+    by `fromGitHubFiles` and split by `classifyFiles` with the default
+    config (no `.gitattributes`, no dependents, no history), and it is left
+    out when the file listing was cut short. PRs without a sticky state are
+    kept (`reviewed: false`) for bands and post-merge rates.
+  - **(q) Report rules** (critique point 13, taken). The volume population
+    is one, in the code, the README and the rendering: settled human-stratum
+    findings on non-truncated PRs merged in the 90 days before collection;
+    below 200 only the gradient, its sensitivity row, the split and the
+    counts are reported. A cell over settled findings needs `MIN_SETTLED`
+    (50), and a cell over PRs or reviews (escapes, bands, re-reviews) its
+    own `MIN_PULLS` (50); below it the value is null and the count and
+    Wilson interval stay, gradient shares included (the steps keep their own
+    intervals). The band check needs 200 matured PRs with a band; "overlap"
+    when the low and high bands' intervals for reverted-or-fixed within 90
+    days overlap, with the note that `riskOf` is then a size, reach and
+    sensitivity heuristic for that repository and history risk areas are
+    never enabled there. Every rate carries cycle time p50 and p90
+    (`spread`, type 7) over its own PRs: each gradient row (per severity,
+    over the PRs of the findings it counts), each resolution and band row,
+    and the human-presence, writer-dismissal, escape, later-fixed and
+    re-review lines; the split and the totals carry the overall line. The
+    rendering opens with "Internal measurement: no accuracy or
+    comparative claim (D12). Sealed; expires <date>."
+  - **(r) Labels come from writer-merged history only.** Commit messages,
+    fix PRs' labels and titles; PR-side text (bodies, comments) never sets a
+    label.
+  - **(s) A thread resolved after the job's last run stays as the marker
+    says.** An open marker whose thread a person resolved later reads as
+    `open-at-merge` with its resolver role recorded: the ledger never
+    re-applies the fix rule, which needs the code at the PR's final head
+    (often not in a squash-merged clone), so fixes made after the last run
+    are undercounted.
+- **Off by default (I-1, I-12, §0.3).** No runner, key, request, prompt,
+  schema or `ReviewConfig` field changed, so §0.3 items 1 to 5 do not apply;
+  item 6 is this entry. The script runs only when the owner invokes it, never
+  in CI. The only behaviour change to existing code is `ci.ts unseal`
+  refusing a bundle that holds `outcomes-ledger.json`, which nothing produces
+  today (the paid job seals `EVAL_OUT_DIR`'s reports, logs and
+  `ledger.jsonl`); `ci.test.ts`'s 34 existing tests pass unchanged.
+- **Pin, revision and rubric.** No `REVIEW_PIPELINE_FILES` file changed:
+  `REVIEW_PIPELINE_SOURCES` stays `124e47864a16fea4` (`model-evidence.test.ts`
+  passes unchanged, 30), `REVIEW_PIPELINE_REVISION` stays 1, and
+  `EVIDENCE_POLICY_KEYS`, `VARIANT_KEYS` and `RUBRIC_VERSION` are unchanged.
+- **Owner questions: none decided.** Q30, Q18, Q29 and Q3 stay open; every
+  part reads the same under either answer.
+- **Deferred.**
+  - **Item 4, proxy validation**, to VS-46b in the Now window: eval-harness
+    work over `report.ts`'s outputs and judged replays, which needs the fix
+    diffs from the mirrors; its Spearman of at least 0.5 over 6 cells and
+    4-of-5 ordering rule need D7 replays.
+  - **Item 6, history risk areas**: needs at least 200 matured PRs, a
+    separation-improvement statistic, and a change to `riskOf` for a
+    repository, which belongs to VS-39 wiring (runner-wiring window).
+  - **Item 7, depth assignment**, and its `EvidenceScope` record: runner
+    wiring and Q30. Only the static "no runner draws depth at random" test
+    landed (it reads `run.ts`, `plan.ts`, `risk.ts`, `config.ts` and
+    `ai-review.ts` as text).
+  - **The re-review share of spend**: VS-41 or VS-47 (per-review spend).
+  - **"Done when"**, a run on one owner repository producing the sealed
+    report: Q30.
+  - **Not verifiable here:** the real shapes of `gh` output
+    (`originalLine`, `reactionGroups`, `commits/{sha}/pulls` for squash and
+    rebase merges, permission responses), rate limits, performance
+    on long histories, and pooling several repositories (one ledger per
+    repository; pooling is not built).
+- **Evidence.** Each test file ran alone through the lock with `--timeout
+  30000` and `GITHUB_ACTIONS=false`, with `TMPDIR` and the XDG roots under
+  `/tmp/vector-vectorscope/vs46a/`. The eval tests ran from
+  `script/vectorscope-eval` (as its README runs them) and again from
+  `packages/script` (as `test.yml` runs them), with the same counts.
+
+  | File | HEAD | After |
+  | --- | --- | --- |
+  | `outcomes.test.ts` | new | 40 (33 before the review round) |
+  | `ci.test.ts` | 34 | 35 |
+  | `report.test.ts`, `replay.test.ts`, `certify.test.ts` | 38, 38, 7 | 38, 38, 7 |
+  | `fixtures.test.ts` | 103 | 103 |
+  | core `model-evidence.test.ts` (pin unchanged) | 30 | 30 |
+
+  All pass.
+  - **Typecheck.** `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`
+    from `packages/engine` and `bun typecheck` in `packages/script`: both
+    pass. No package changed, so no package typecheck beyond these applies.
+    The full root typecheck was not run: nothing is pushed.
+  - **Format.** prettier `--check` passes on `outcomes.ts`,
+    `outcomes.test.ts`, `seal.ts`, `ci.ts`, `ci.test.ts` and the README.
+    This log is append-only, as before.
+  - **Import graph** (critique point 5). The test follows every relative
+    import transitively with Bun's transpiler: 30 files, all under
+    `packages/core/src/`, `packages/schema/src/` or the four eval files
+    `outcomes.ts`, `seal.ts`, `dataset.ts` and `paths.ts`. `run.ts`,
+    `replay.ts`, `ci.ts`, `budget.ts`, `fixture.ts`, `desktop.ts`,
+    `judge.ts` and `report.ts` are unreachable; no reached file is a
+    provider, session, tool, MCP, Brain or LLM module or calls `fetch`; only
+    `outcomes.ts` (gh and git) and `dataset.ts` (git) start a process; bare
+    imports are `node:*`, `minimatch`, `effect` and `@vectordevai/schema/*`.
+    `dataset.ts` brings in core `config.ts`, whose `privacy.ts` loads the
+    free-model catalog and the local-mode policy; none of them sends
+    anything.
+  - **Mutation check.** Fifty-one mutations, each applied alone, its test
+    file run through the lock, and the file restored and compared (`cmp`,
+    and `git diff --stat` before and after the batch): a bot resolver read
+    as a person; the dismissal marker ignored; an author dismissal read as a
+    writer's; a dismissal-phrase reply read as acknowledged; the author
+    counted in `humanEngaged`; the bulk threshold at 4; an untrusted signal
+    promoted to agent; the trusted record overridden; maturity at 89 days;
+    maturity at `<`; reverted PRs counted clean in the report and in the
+    ledger's line counts; a revert subject accepted as a fix; blame on the
+    fix itself; blame without `--first-parent`; slack 0 for escapes and for
+    later fixes; `MIN_SETTLED` off by one in cells and in gradient shares;
+    the volume rule ignoring the 90-day window; the band rule at 199; a
+    case-sensitive `hashLogin`; `>` for `>=` in the expiry; the 180-day
+    bound unchecked; a future collection accepted; an unsealed ledger
+    written by `collect`; `--method GET` dropped; a mutation accepted;
+    `fetch` allowed in `localGit`; the `ci.ts` unseal guard removed; the key
+    checked after the reads; an author resolver counted as confirmed;
+    `--no-textconv` dropped from diff and from blame; `--out` allowed inside
+    the clone or inside a work tree; `--agent-prs` allowed inside the clone;
+    findings rebuilt from any `[bot]`; reactions compared case-sensitively;
+    bugfix labels missed; not-a-bug labels counted; a partial clone
+    accepted; thread-comment paging ignored; the call cap ignored; a merge
+    commit off the base accepted; `open` skipping the expiry check; `open`
+    writing the ledger by default; Actions not refused. All were caught.
+    `--out` inside the clone first survived, because the clone's own `.git`
+    trips the work-tree check too; a bare-clone case, which only the clone
+    check refuses, was added and catches it. Two mutations were first
+    written against unformatted text and were applied again to the
+    formatted file.
+  - **Merge prediction.** `git diff --name-only HEAD...origin/<branch>` over
+    `script/vectorscope-eval/` and this log is empty for
+    `origin/self-evolving` (`f062bcce`), `origin/codium` (`5a079cbd`),
+    `origin/vector-at-mention` (`0b68e8f6`) and `origin/main` (`4299d743`),
+    so it adds no conflict.
+  - Nothing was sent to a model, no `gh` was spawned (tests inject the
+    runner), no paid path ran, no workflow was dispatched, no dependency was
+    added, and no user-visible string changed (D14).
+
+- **Review findings, round one** (fifteen findings, three blocking; all
+  fixed, none declined). Fixed before any commit, so the text above already
+  describes the fixed code. Nothing under `packages/` changed in this round
+  either, so `REVIEW_PIPELINE_SOURCES` stays `124e47864a16fea4`.
+  1. (Blocking.) A revert merged from a branch was missed: the first-parent
+     merge's message names no target. Fixed with `revertsOf` (decision (h)),
+     used by both the revert labels and the fix skip, and `baseHistory`
+     reads each merge's brought-in messages with the read-only log. Test: a
+     fixture variant whose revert of #2 sits on a branch merged with
+     `--no-ff` under "Merge pull request #5 from acme/revert-2-add-auth",
+     PR #5 labelled bug and titled as no revert: #2 reads `revertedDays: 10`,
+     `fixes: []`, no lines and no `laterFixed`. A unit test covers an
+     in-branch revert, which reverts nothing on the base.
+  2. (Blocking.) A stale clone read later PRs as clean. Both remedies were
+     taken: `requireFetched` refuses, before any PR is read, a clone whose
+     base branch lacks a listed PR's merge commit (any PR merged since
+     `--since`, so the per-PR "merge commit not on the first-parent
+     history" truncation is gone: no window PR can reach it), and maturity
+     is measured to `observedUntil` (decision (i)), which also covers direct
+     pushes made after the fetch, which no listing shows. The reachability
+     check reads the full first-parent hash list, so a merge whose committer
+     time is before `--since` is still found. The fixture gained a README
+     edit five days ago so its history ends near collection. Tests: a
+     listed fix merged after `--until` and a window PR, both off the base,
+     refused after 2 GitHub calls; and a run 60 days after the history ends
+     keeps #6 unmatured.
+  3. Cycle time on every rate: implemented rather than reworded (decision
+     (q)). Test: per-severity, human-presence, escape and later-fixed cycles
+     over their own PRs, the gradient table's cycle column, and every
+     bullet line carrying "cycle p50 / p90".
+  4. A ghost login engaged and acknowledged. Fixed in `findingOutcome`
+     (resolver, replies and reactions) and in the permission lookups.
+     Tests: a unit case for each, and a ghost reply in the fixture that
+     leaves its finding `open-at-merge` and unengaged.
+  5. A merged fix PR whose branch name says "revert" was dropped. Fixed in
+     `fixKind` (decision (h)); the merge-commit-without-a-PR case stays a
+     listed undercount. Tests: the branch-name subject with the PR's title
+     and label, and a squash commit's own subject still counting.
+  6. `also` lines were ignored. Fixed (decision (j)); `Place` keeps the
+     anchor and its `also` lines. Test: a summary finding at line 1 naming
+     line 9, which #4 fixes, reads flagged and `laterFixed`.
+  7. Malformed inputs threw. Fixed (decision (l)); each case is a CLI test
+     with nothing written: invalid sealed JSON, a missing sealed file, a
+     missing key file, another owner's key, a file that is no key, invalid
+     ledger JSON, an entry with an unknown outcome and a ledger without
+     `merged`.
+  8. (Blocking.) Blame's C-quoted file names never matched. Fixed with
+     `core.quotePath=false` and `unquotedPath` (decision (j)). Test: #3
+     adds `src/café.ts` and `src/say "hi".ts` and #4 fixes a line next to a
+     finding in each: both read flagged, and `laterFixed` is set. The
+     mutation check shows the two defences overlap: with
+     `core.quotePath=true` the café line still matches, because
+     `unquotedPath` decodes git's octal quoting too; dropping the unquoting
+     is caught. Both are kept, as the finding asked.
+  9. Symbolic links past the output guards. Fixed with `realPath` (decision
+     (m)). Tests: `--out` through a link into a work tree and into the
+     clone, `--agent-prs` through a link into the clone, and `open` through
+     a link into a work tree, each refused with nothing written.
+  10. Default file modes. Fixed (decision (l)), the sealed file included.
+      Test: 0700 directories and 0600 files after `collect`, `open` and
+      `open --ledger`.
+  11. A planted file name after `--` stopped a run. Fixed (decision (n)).
+      Test: blame of files named `-o` and `--output=x` runs, and `-o`
+      before `--` is still refused.
+  12. A User account named like the App counted as the bot. Fixed
+      (decision (g)); `sameLogin` and the bare sticky candidate are gone.
+      Test: a User `vector-app` thread with a finding marker at the line #4
+      fixes stays out of the findings and line counts, with
+      `--bot vector-app` normalised in the CLI test.
+  13. Unvalidated entries. Fixed with `LedgerEntries` (decision (l)). Test:
+      thirteen malformed ledgers and a history ending after collection, all
+      refused.
+  14. The call cap depended on callers. Fixed (decision (o)): the client
+      refuses past the cap with `CallCapReached`, and a PR that meets it
+      while being read is truncated. Test: seven caps from 1 to 250, each
+      run sending at most its cap, the 1-call run reporting the listing
+      problem and the 205-call run reading only #1.
+  15. `--agent-prs` JSON threw. Fixed (decision (l)): "--agent-prs is not
+      valid JSON." and "names no readable file", both in the 0-call refusal
+      test.
+  - Re-run after the fixes, each file alone through the lock with
+    `--timeout 30000` and the scratch roots under
+    `/tmp/vector-vectorscope/vs46a-fix/`: `outcomes.test.ts` 40 (from
+    `script/vectorscope-eval` and from `packages/script`), `ci.test.ts` 35.
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine` and `bun typecheck` in `packages/script` pass.
+    prettier `--check` is clean on `outcomes.ts`, `outcomes.test.ts` and the
+    README; oxlint adds no new kind of warning (the casts it flags are the
+    file's existing `as Sealed` and `as OutcomeLedger` after validation).
+  - **Mutation check, round one.** Twenty-six mutations, each applied alone
+    to `outcomes.ts`, its test file run through the lock, and the file
+    restored (`cmp`): brought-in revert shas ignored; an in-branch revert
+    counted; the fix skip on the commit's own message only; the merge rule
+    in `fixKind` off; the stale-clone refusal off; maturity against `now`;
+    `core.quotePath` on; no unquoting; `also` lines ignored; a ghost as a
+    person, as an acknowledging reply, and looked up; the forbidden-option
+    check past `--`; `--bot` not normalised; `[bot]` stripped before the
+    comparison; the entry schema replaced by the old array check; a
+    history ending after collection accepted; default modes for `open`'s
+    directory, `--out` and files; lexical paths for `--out`, `open` and
+    `--agent-prs`; the listing ignoring the cap; one gradient cycle for
+    every severity; and the escape cycle over every reviewed PR. 25 were
+    caught; `core.quotePath` on survived, for the reason in item 8.

@@ -25,6 +25,7 @@ import {
 } from "./ci"
 import { loadManifest, SEED_MANIFEST, type Manifest } from "./dataset"
 import { outsideRepository, REPO_ROOT } from "./paths"
+import { OUTCOME_LEDGER_FILE } from "./seal"
 
 // The workflow's entry point and the workflow file itself. Nothing here sends a request or starts run.ts with a key:
 // the paid mode is exercised with a stand-in for the child process.
@@ -327,6 +328,18 @@ describe("modes", () => {
     expect(() => unseal(sealed, String(other))).toThrow()
     expect(() => unseal({ ...sealed, data: Buffer.from("x").toString("base64") }, OWNER.privateKey)).toThrow()
     expect(unseal(seal({ a: Buffer.from("b") }, OWNER.publicKey), OWNER.privateKey).a!.toString()).toBe("b")
+  })
+
+  test("unseal refuses an outcome ledger, whose expiry only outcomes.ts open checks, and writes nothing", async () => {
+    const file = join(root, "outcomes.sealed.json")
+    writeFileSync(file, JSON.stringify(seal({ [OUTCOME_LEDGER_FILE]: Buffer.from("{}") }, OWNER.publicKey)))
+    const keyFile = join(root, "owner-outcomes.pem")
+    writeFileSync(keyFile, OWNER.privateKey)
+    const opened = join(root, "opened-outcomes")
+    const errors: string[] = []
+    expect(await main("unseal", { stderr: (text) => void errors.push(text) }, [file, keyFile, opened])).toBe(1)
+    expect(errors.join("")).toContain("outcomes.ts open")
+    expect(existsSync(opened)).toBe(false)
   })
 
   test("seal writes nothing without the owner's key, and has nothing to do without outputs", async () => {

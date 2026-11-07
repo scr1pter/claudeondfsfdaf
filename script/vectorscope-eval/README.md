@@ -1215,6 +1215,100 @@ cd packages/core && bun test test/review/model-evidence.test.ts
 cd script/vectorscope-eval && bun test certify.test.ts
 ```
 
+## Outcome ledger (VS-46a)
+
+`outcomes.ts` reads what the review job already recorded on merged pull
+requests (the sticky state and the finding markers, through core
+`review/state.ts`) and what happened after the merge on the base branch, and
+seals the result to the owner's key. **The owner runs it only after Q30 is
+answered**, on one repository the owner nominates, with `gh` signed in and a
+full local clone. It has never been run against a real repository, and no
+ledger data is committed (I-13).
+
+```
+bun script/vectorscope-eval/outcomes.ts collect --repository <owner/name> --repo-dir <clone> --since <YYYY-MM-DD> \
+  --out <dir> [--until <YYYY-MM-DD>] [--branch <name>] [--bot <login>]... [--agent-prs <file>]
+bun script/vectorscope-eval/outcomes.ts open <sealed.json> <private-key.pem> <directory> [--ledger]
+```
+
+- **What it reads.** GitHub through `gh api` only: GET requests under
+  `/repos/<owner/name>` (the repository, the merged-PR listing, each PR's
+  comments, files, reviews and commits, collaborator permissions, and a
+  commit's PRs) and two fixed GraphQL queries (review threads and a thread's
+  further comments). Every GET is sent with `--method GET`, a path outside
+  the repository or with `..`, an encoded dot or a gh placeholder is refused,
+  and a document with a mutation or subscription is never sent. Git through
+  `rev-parse`, `config --get-regexp`, `log`, `diff` and `blame` only, without
+  the user's or system's config, hooks, fsmonitor, transports or lazy fetch,
+  and with textconv and external diff drivers off; a file name a PR author
+  chose (`-o`, say) is only ever a path. A shallow or partial clone is
+  refused before anything is read, and a stale one (its base branch lacks a
+  PR GitHub lists as merged since `--since`, inside the window or not) before
+  any PR is read: fetch the base branch first. Every read is capped (pages
+  per endpoint, and 4,000 GitHub requests per run, which the client refuses
+  past); a PR cut short is marked truncated and left out of every rate.
+- **What it never does.** No model call, no key of its own, no write to
+  GitHub or the clone, and nothing is sent to a model, tool, retrieval or
+  Brain. It refuses to start in GitHub Actions, whose logs are public, and
+  checks the sealing key (`VECTORSCOPE_EVAL_PUBLIC_KEY`, RSA of at least
+  3072 bits) before any read.
+- **What it keeps.** Per PR: its number, a hashed author, the stratum, review
+  counts and total spend from the state, cycle time, the risk band `riskOf`
+  gives the merged PR's reviewed files, and, when it was merged 90 days or
+  more before the clone's history ends (`observedUntil`: the newest commit on
+  the base branch, at most the collection time), the first revert (a direct
+  one, or a revert branch merged in) and follow-up fixes within 90 days with
+  the fix-edited lines (flagged by a finding within 3 lines of its line or of
+  a line it also names, escaped, left unreviewed or skipped). Per finding:
+  its id, severity, category, outcome,
+  stratum, whether someone other than the author and the bots engaged, the
+  resolver's role and a hashed dismisser. No login, title, body, path or code.
+  Logins are hashed with a random per-run key that is never stored, which
+  hides them in the file only: the PR numbers it keeps identify the people
+  involved to anyone who can read the repository, and two ledgers can be
+  joined on them.
+- **Outcomes.** A fix is confirmed only when its thread was resolved by
+  someone who is neither a bot nor the PR author; the author's own resolve is
+  `fixed-self-resolved` and the job's is `fixed-model-only`. Dismissals are
+  attributed by the job's own rule; one that can no longer be attributed is
+  `dismissed-unattributed`. PRs in the owner's `--agent-prs` record (kept
+  outside the clone and this checkout) are the agent stratum; a bot author or
+  co-author only splits a PR out, and five or more threads one person
+  resolved with no reply are split out as bulk. No outcome is relabelled.
+- **Sealing and expiry.** `collect` writes only
+  `<out>/vectorscope-outcomes.sealed.json`, sealed as the paid job's artifact
+  is, into a directory outside every git work tree (symbolic links resolved),
+  created for the owner alone (directories 0700, files 0600, as `open`
+  writes them too). The ledger expires 180
+  days after collection, a date inside the sealed payload. `open` refuses an
+  expired ledger, one dated in the future and one whose expiry is more than
+  180 days after its collection, an unreadable or malformed file or entry,
+  and a key that does not open it, writing nothing; it writes
+  `outcomes-report.md` (and the
+  ledger itself only with `--ledger`) and prints the expiry: delete the files
+  by then. `ci.ts unseal` refuses a ledger, because it does not check expiry.
+- **The report.** Internal (D12): it claims no accuracy and compares
+  nothing. Every rate is paired with cycle time over its own PRs. A rate
+  needs 50 settled findings (or 50 PRs or reviews); smaller cells show counts
+  and intervals. With fewer than 200 settled
+  human-stratum findings on PRs merged in the 90 days before collection, only
+  the severity gradient (VS-45's `severityGradient` over the confirmed-fix
+  share, with a sensitivity row counting every fix) is reported. The band
+  check needs 200 matured PRs with a band; overlapping low and high intervals
+  mean `riskOf` is documented as a size, reach and sensitivity heuristic for
+  that repository, and history risk areas are never enabled there.
+- **Deferred.** Proxy validation (VS-46b), history risk areas and the depth
+  assignment (runner wiring and Q30), and the re-review share of spend (the
+  state keeps only a PR's total). Run on a real repository only after Q30.
+
+The tests use a fake GitHub client and git repositories they build, and
+spawn no `gh`:
+
+```
+cd script/vectorscope-eval && bun test outcomes.test.ts
+cd script/vectorscope-eval && bun test ci.test.ts
+```
+
 ## Round-two research scripts
 
 `research/` holds the scripts behind round two's own measurements (the
