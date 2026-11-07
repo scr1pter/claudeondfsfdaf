@@ -949,6 +949,48 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-42a: the same for `scopeGate`. A base review.json that sets it, with or without strict, is replayed and recorded
+  // without it (and without the guardrail), keeping the parser's warnings, and the scope claims neither the policy nor
+  // the gated schemas.
+  it.instance(
+    "replays a base review.json that sets VS-42's scopeGate without it, keeping the parser's warnings",
+    () =>
+      Effect.gen(function* () {
+        const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
+        const UNAPPLIED =
+          '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
+        const IGNORED =
+          '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
+        for (const [settings, warnings] of [
+          [{ guardrail: "strict", scopeGate: "introduced" }, [STRICT, UNAPPLIED]],
+          [{ scopeGate: "introduced" }, [IGNORED]],
+        ] as const) {
+          const { directory, llm, base, head } = yield* checkout({
+            base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify(settings) },
+            head: { "src/list.ts": LIST_HEAD },
+            price: PRICE,
+          })
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: [listBug] }))
+          const artifact = yield* ReviewEval.replay({
+            case: replayCase(directory, base, head),
+            model: MODEL,
+            config: { maxCostUsd: 2, verify: "off", minConfidence: 0.5 },
+            posting: ReviewEval.recordingPosting(),
+            check: recordingCheck().check,
+          })
+          for (const key of ["guardrail", "scopeGate"]) expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          expect(artifact.config.warnings).toEqual([...warnings])
+          expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
+          expect(artifact.scope.prompts).toBe(promptsDigest())
+          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", scopeGate: "introduced" }))
+          expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual([listBug.title])
+          expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+        }
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
   it.instance(
     "a variant on the shared verify policy gets the policy's default unless the base's review.json sets verify",
     () =>
@@ -1076,6 +1118,13 @@ describe("ReviewEval.replay", () => {
         // Nor VS-27's guardrail, which VS-27c applies.
         expect(yield* refused({ config: { guardrail: "strict" } })).toContain(
           "config sets guardrail, which no runner applies yet (VS-27c), so the artifact would record a setting the run did not have.",
+        )
+        // Nor VS-42's scopeGate, which VS-42 wiring applies, alone or with the guardrail.
+        expect(yield* refused({ config: { scopeGate: "introduced" } })).toContain(
+          "config sets scopeGate, which no runner applies yet (VS-42 wiring), so the artifact would record a setting the run did not have.",
+        )
+        expect(yield* refused({ config: { guardrail: "strict", scopeGate: "off" } })).toContain(
+          "config sets guardrail, scopeGate, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate)",
         )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(

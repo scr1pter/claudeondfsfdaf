@@ -293,7 +293,9 @@ export async function loadOutputs(input: {
 // - S5 is left out;
 // - S6 from the recorded suggestion rule: a suggestion selection allowed is a suggestion, any other fix is unchecked;
 // - S7 by id or sameFinding, without the class clause and with no anchored code (the diff is not recorded);
-// - S8 at the artifact's maxComments.
+// - S8 at the artifact's maxComments;
+// - S9 (VS-42's introduced-by-change check, which strict runs only under `scopeGate: "introduced"`) is left out: the
+//   artifact records no base blobs, so no candidate carries its fact.
 // Only what the original posted is a candidate (inline when its review write went out, the rest when its summary did),
 // so every finding the copy posts has the original's judgement; the rest are counted as unposted. The artifact records
 // no per-id verify verdict, so S1's unreadable verdicts are worked out from the recorded verify rule (plan.ts
@@ -437,7 +439,7 @@ function reselectSource(reselections: readonly StrictReselection[]) {
   return [
     `strict re-selection of ${reselections.length} engine replay(s), offline`,
     "applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8",
-    "left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes)",
+    "left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), and S9 (no base blobs are recorded)",
     `kept ${sum((item) => item.kept.length)} of ${sum((item) => item.candidates)} posted finding(s), ${sum((item) => item.unposted)} selected but never posted left out`,
     `dropped: ${dropped.length ? dropped.join(", ") : "none"}`,
     `${sum((item) => item.fixUnchecked)} fix(es) unchecked`,

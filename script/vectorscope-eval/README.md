@@ -965,7 +965,9 @@ How it works:
   applies S1, S2's blocking half, S3 and S4 as the recorded anchors (a
   context-line anchor passes offline, which strict would refuse), S6 from the
   recorded suggestion rule, S7 by id or `sameFinding`, and S8 at the
-  artifact's `maxComments`; it leaves out S2's class half, S4's quotes and S5.
+  artifact's `maxComments`; it leaves out S2's class half, S4's quotes and S5,
+  and VS-42's S9 (`scopeGate: "introduced"`), since an artifact records no base
+  blobs.
   Only findings the original posted are candidates. Unreadable verdicts are
   worked out from the recorded verify rule (a finding recorded as verified,
   or as `verified: false`, had its verdict read); after a triage pass,

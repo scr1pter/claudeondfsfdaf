@@ -172,6 +172,7 @@ const FIELDS: Record<PlainKey, Field> = {
   trivial: oneOf(["review", "skip"]),
   impact: oneOf(["grep", "graph"]),
   guardrail: oneOf(["off", "strict"]),
+  scopeGate: oneOf(["off", "introduced"]),
   failOn: oneOf(["never", "blocking"]),
   ignore: strings,
   ignoreDefaults: bool,
@@ -241,6 +242,11 @@ const UNAPPLIED: Record<
   guardrail: {
     applies: (config) => config.guardrail === "strict",
     warning: '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
+  },
+  // Only under "strict": without it the key is ignored (settle's note), so it is never also "not applied".
+  scopeGate: {
+    applies: (config) => config.scopeGate === "introduced" && config.guardrail === "strict",
+    warning: '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.',
   },
 }
 
@@ -438,6 +444,11 @@ function settle(
     )
     config.verify = "all"
   }
+  // VS-42's check runs inside the strict guardrail, so without it the key does nothing. The value is kept as written.
+  if (config.scopeGate === "introduced" && config.guardrail !== "strict")
+    warnings.push(
+      '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.',
+    )
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),
   )

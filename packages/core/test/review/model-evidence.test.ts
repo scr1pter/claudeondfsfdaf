@@ -252,6 +252,31 @@ describe("scope", () => {
     expect(both).toBe("3ba21b5bc883cd70")
   })
 
+  // VS-42a: `scopeGate: "introduced"` adds the result schema's pre-existing drop, so it moves the digest only under
+  // `guardrail: "strict"`; with it off, or without strict, every digest holds (the engine:guardrail-strict digests
+  // included).
+  test("the prompts digest covers VS-42's scopeGate under guardrail: strict only", () => {
+    const strict = promptsDigest({ guardrail: "strict" })
+    const both = promptsDigest({ impact: "graph", guardrail: "strict" })
+    expect(promptsDigest({ guardrail: "strict", scopeGate: "off" })).toBe(strict)
+    expect(promptsDigest({ impact: "graph", guardrail: "strict", scopeGate: "off" })).toBe(both)
+    for (const keys of [
+      { scopeGate: "introduced" as const },
+      { guardrail: "off" as const, scopeGate: "introduced" as const },
+    ])
+      expect(promptsDigest(keys)).toBe(promptsDigest())
+    expect(promptsDigest({ impact: "graph", scopeGate: "introduced" })).toBe(promptsDigest({ impact: "graph" }))
+    const gated = promptsDigest({ guardrail: "strict", scopeGate: "introduced" })
+    const gatedGraph = promptsDigest({ impact: "graph", guardrail: "strict", scopeGate: "introduced" })
+    expect(new Set([promptsDigest(), promptsDigest({ impact: "graph" }), strict, both, gated, gatedGraph]).size).toBe(6)
+    // VS-42a held every earlier digest, and printed these (built at d268025c). VS-42 wiring moves them on purpose when
+    // the report schema's `scope` field and the prompt clause join under the key.
+    expect(strict).toBe("b98afb0e878dfe26")
+    expect(both).toBe("3ba21b5bc883cd70")
+    expect(gated).toBe("4aa712221043a3a7")
+    expect(gatedGraph).toBe("8335adf9de513ee5")
+  })
+
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of
   // these files fails here until someone decides whether REVIEW_PIPELINE_REVISION goes up and updates the pin.
   test("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION", () => {
@@ -299,6 +324,10 @@ describe("scope", () => {
       { impact: "graph" as const },
       { guardrail: "off" as const },
       { guardrail: "strict" as const },
+      // Nor VS-42's scopeGate, with or without strict.
+      { scopeGate: "off" as const },
+      { scopeGate: "introduced" as const },
+      { guardrail: "strict" as const, scopeGate: "introduced" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -353,6 +382,24 @@ describe("scope", () => {
       evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
     )
     expect(policyDigest({ ...strict, nits: true })).not.toBe(policyDigest(strict))
+  })
+
+  // VS-42a: `scopeGate` is a policy key (S9 drops what would be posted) that no runner applies before VS-42 wiring, so
+  // neither the policy digest nor the prompts digest of a scope moves with it yet. Once a runner applies it and the
+  // guardrail, the prompts digest counts it only as "introduced" under "strict".
+  test("the scope leaves out VS-42's scopeGate until a runner applies it", () => {
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    expect(EVIDENCE_POLICY_KEYS).toContain("scopeGate")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("scopeGate")
+    for (const scopeGate of ["introduced", "off", undefined] as const)
+      for (const guardrail of ["strict", "off", undefined] as const)
+        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, guardrail, scopeGate })).toBe(base)
+    const gated: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", scopeGate: "introduced" }
+    expect(evidenceScope({ adapter: "engine", config: gated })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "desktop", config: { ...gated, impact: "graph" } })).toEqual(
+      evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+    )
+    expect(policyDigest({ ...gated, nits: true })).not.toBe(policyDigest(gated))
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

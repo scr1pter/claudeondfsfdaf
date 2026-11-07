@@ -21,6 +21,7 @@ import {
   CATEGORIES,
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
+  FINDING_SCOPES,
   SEVERITIES,
   STRICT_DROPS,
   STRICT_FIX_KINDS,
@@ -391,7 +392,14 @@ const STRICT_RESULT: Required<StrictResult> = {
 
 describe("the strict schemas (VS-27a)", () => {
   test("exist only under guardrail: strict", () => {
-    for (const keys of [{}, { guardrail: "off" as const }, { guardrail: undefined }]) {
+    // VS-42's scopeGate is ignored without strict, by the schemas as by the guardrail.
+    for (const keys of [
+      {},
+      { guardrail: "off" as const },
+      { guardrail: undefined },
+      { scopeGate: "introduced" as const },
+      { guardrail: "off" as const, scopeGate: "introduced" as const },
+    ]) {
       expect(strictReportJsonSchema(keys)).toBeUndefined()
       expect(strictResultJsonSchema(keys)).toBeUndefined()
     }
@@ -404,7 +412,8 @@ describe("the strict schemas (VS-27a)", () => {
     expect([...FAILURE_MECHANISMS]).toEqual(["logic", "concurrency", "regression", "resource", "access"])
     expect([...VERIFIED_BY]).toEqual(["model", "runtime"])
     expect([...STRICT_FIX_KINDS]).toEqual(["suggestion", "patch", "unchecked"])
-    // VS-27b added severity-unreadable and checks S2's severity half before its class half.
+    // VS-27b added severity-unreadable and checks S2's severity half before its class half. VS-42 added pre-existing,
+    // checked after S5 and before S6.
     expect([...STRICT_DROPS]).toEqual([
       "unverified",
       "verdict-unreadable",
@@ -414,6 +423,7 @@ describe("the strict schemas (VS-27a)", () => {
       "anchor",
       "quote-mismatch",
       "no-impact",
+      "pre-existing",
       "no-fix",
       "duplicate",
       "cap",
@@ -504,7 +514,10 @@ describe("the strict schemas (VS-27a)", () => {
     expect(finding.properties.verifiedBy.enum).toEqual([...VERIFIED_BY])
     expect(finding.properties.title.maxLength).toBe(MAX_TITLE_CHARS)
     expect(finding.properties.quotes).toMatchObject({ minItems: 1, maxItems: MAX_FINDING_QUOTES })
-    expect(result.properties.dropped.items.properties.reason.enum).toEqual([...STRICT_DROPS])
+    // VS-42's pre-existing joins the enum only under scopeGate (below).
+    expect(result.properties.dropped.items.properties.reason.enum).toEqual(
+      STRICT_DROPS.filter((reason) => reason !== "pre-existing"),
+    )
     expect(result.properties.dropped.items.properties.count.minimum).toBe(1)
     expect(result.properties.fixUnchecked.minimum).toBe(0)
   })
@@ -547,6 +560,48 @@ describe("the strict schemas (VS-27a)", () => {
     expect(broken({}, { verifiedBy: "human" })).toEqual(["$.findings[0].verifiedBy is not in its enum"])
     const { verifier: _, ...unverified } = STRICT_FINDING
     expect(violations(schema, { ...STRICT_RESULT, findings: [unverified] })).toEqual(["$.findings[0] lacks verifier"])
+  })
+
+  // VS-42a: under scopeGate "introduced" the result schema's drop enum gains pre-existing, and nothing else changes; the
+  // report schema's `scope` field and its decoding wait for VS-42 wiring, with VS-27c.
+  test("VS-42's scopeGate adds only the pre-existing drop, and changes neither the report schema nor the decoder", () => {
+    const GATE = { guardrail: "strict", scopeGate: "introduced" } as const
+    const gated = strictResultJsonSchema(GATE)!
+    const plain = strictResultJsonSchema(STRICT)!
+    expect(gated.properties.dropped.items.properties.reason.enum).toEqual([...STRICT_DROPS])
+    expect({
+      ...gated,
+      properties: {
+        ...gated.properties,
+        dropped: plain.properties.dropped,
+      },
+    }).toEqual(plain)
+    expect(strictResultJsonSchema({ guardrail: "strict", scopeGate: "off" })).toEqual(plain)
+    expect(strictReportJsonSchema(GATE)).toEqual(strictReportJsonSchema(STRICT))
+    const dropped = { ...STRICT_RESULT, dropped: [{ reason: "pre-existing", count: 1 }] }
+    expect(violations(gated, dropped)).toEqual([])
+    expect(violations(plain, dropped)).toEqual(["$.dropped[0].reason is not in its enum"])
+    expect([...FINDING_SCOPES]).toEqual(["introduced", "exacerbated", "pre-existing"])
+    // A model's scope label is not read before VS-42 wiring, under any keys.
+    const report = {
+      summary: "s",
+      findings: [
+        {
+          path: "src/a.ts",
+          line: 3,
+          severity: "blocking",
+          category: "bug",
+          title: "Null read",
+          body: "b",
+          confidence: 0.9,
+          scope: "pre-existing",
+        },
+      ],
+    }
+    const decoded = decodeReport(report, GATE)!
+    expect(decoded).toEqual(decodeReport(report, STRICT)!)
+    expect(Object.hasOwn(decoded.findings[0], "scope")).toBe(false)
+    expect(Object.hasOwn(decodeReport(report)!.findings[0], "scope")).toBe(false)
   })
 
   test("a strict finding conforms to the strict report schema, and a legacy one still does", () => {

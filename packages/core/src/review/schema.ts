@@ -129,14 +129,18 @@ export const VERIFY_JSON_SCHEMA = {
 
 // The keys the strict schemas depend on. Each later key widens this and adds its field or enum value only when set, so
 // the `guardrail: "strict"` schemas, and the digest they enter, stay as they are while it is off: VS-42 with scopeGate
-// (the `scope` field), VS-43 with ruleCheck (the structured rule) and VS-44 with verifyEvidence (its certificate schema).
-export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail">>
+// (the result schema's `pre-existing` drop now; the report schema's `scope` field with VS-42 wiring), VS-43 with
+// ruleCheck (the structured rule) and VS-44 with verifyEvidence (its certificate schema). Without `guardrail: "strict"`
+// every later key is ignored, as the guardrail ignores it.
+export type StrictSchemaKeys = Partial<Pick<ReviewConfig, "guardrail" | "scopeGate">>
 
 // The report schema under `guardrail: "strict"` (VS-27a), or undefined when it is off: the legacy report schema with a
 // finding's `failure`, `quotes` and `patch` added. A finding's `required` list is the legacy one, because conservative
 // JSON Schema cannot say "required when blocking": S2 and S5 drop a blocking finding without them. Built from a deep copy,
 // so nothing it returns shares an object with REVIEW_REPORT_JSON_SCHEMA. The quote cap is in the description, not in
-// maxItems, so a provider sees only the keywords the legacy schema already sends; the decoder enforces it.
+// maxItems, so a provider sees only the keywords the legacy schema already sends; the decoder enforces it. VS-42's
+// `scope` field joins it only with VS-42 wiring (with VS-27c), under `scopeGate: "introduced"`; until then this schema,
+// and decodeReport, are the same whatever scopeGate says.
 export function strictReportJsonSchema(keys: StrictSchemaKeys) {
   if (keys.guardrail !== "strict") return undefined
   const legacy = structuredClone(REVIEW_REPORT_JSON_SCHEMA)
@@ -250,7 +254,11 @@ export function strictResultJsonSchema(keys: StrictSchemaKeys) {
         items: {
           type: "object",
           properties: {
-            reason: { type: "string", enum: [...STRICT_DROPS] },
+            // VS-42's `pre-existing` only under `scopeGate: "introduced"`, the one key that produces it.
+            reason: {
+              type: "string",
+              enum: STRICT_DROPS.filter((reason) => reason !== "pre-existing" || keys.scopeGate === "introduced"),
+            },
             count: { type: "integer", minimum: 1 },
           },
           required: ["reason", "count"],

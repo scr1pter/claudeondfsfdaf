@@ -13,6 +13,12 @@
 //   removed, at the model's own lines (a line snapped onto a nearby hunk does not count).
 // - S4: at least one quote is its file's text at its line, apart from whitespace (quoteMatches).
 // - S5: its trigger and impact are present, each at most 400 characters.
+// - S9 (VS-42), only under `guardrail: "strict"` with `scopeGate: "introduced"` (scopeGateApplies), checked after S5
+//   and before S6: the model does not label it pre-existing, and preExistingSuspect does not hold, so some code it
+//   quotes was touched by the change or differs from the base. It relies on the quotes alone: an anchor on an added
+//   line whose quotes are all unchanged code is a suspect, even when the new line is what misuses the old code. A
+//   finding S9 cannot check, because a base it needs could not be read, is kept and counted (StrictPass
+//   preExistingUnchecked).
 // - S6: it has a fix text. A committable suggestion under the existing rules is kept as one, and a patch of at most 3
 //   hunks that applies to head at its own positions, and leaves a parseable file parsing, as a patch; any other fix is
 //   kept as an unchecked plain diff, counted in fixUnchecked (C-14, Q17).
@@ -33,6 +39,7 @@ import {
 import { normalizeCode } from "./fingerprint"
 import { ESCAPING_PATH, MAX_FAILURE_TEXT_CHARS, MAX_SUGGESTION_CHARS } from "./schema"
 import { gap, MAX_INLINE, NEAR, sameFinding } from "./select"
+import { otherSide } from "./trivial"
 import {
   STRICT_DROPS,
   type Anchor,
@@ -58,7 +65,9 @@ export type StrictIncomplete = Exclude<UnfinishedCause, "strict-incomplete"> | "
 
 // One file as the engine read it at one commit: its text, `{ absent: true }` when that commit's tree has no such file,
 // or null when it could not be read. A path left out of the map reads as null, so a read the engine forgot fails
-// closed: a quote on it marks the result incomplete instead of reading as a plain mismatch.
+// closed: a quote on it marks the result incomplete instead of reading as a plain mismatch. S9's base reads are the
+// exception: S9 only ever drops, so a base it cannot read leaves the finding kept, never incomplete, and counted as
+// unchecked (StrictPass.preExistingUnchecked).
 export type StrictBlob = string | null | { absent: true }
 
 export interface StrictBlobs {
@@ -70,7 +79,10 @@ export interface StrictInput {
   head: string // the head commit, StrictResult.head
   anchors: DiffFile[] // the anchoring diff, as SelectInput.anchors
   blobs: StrictBlobs
-  config: Pick<ReviewConfig, "maxComments" | "suggestions">
+  // S6 reads `suggestions`, S8 `maxComments`, and S9 runs only when `guardrail` is "strict" and `scopeGate` is
+  // "introduced" (scopeGateApplies). VS-27c passes the review's whole ReviewConfig here and to strictBlobRequests: a
+  // config without both keys leaves S9 out, and a base S9 cannot read keeps its finding, so neither shows as a drop.
+  config: Pick<ReviewConfig, "maxComments" | "suggestions" | "guardrail" | "scopeGate">
   trust: Trust
   verifier: string // the "provider/model" of the verify pass
   // The ids sent to verify that came back with no readable verdict (plan.ts's verifyUnanswered). Required, so a caller
@@ -85,20 +97,30 @@ export interface StrictInput {
   parses?: (path: string, text: string) => boolean | undefined
 }
 
-// The head and base paths strictSelect reads for these findings, as the keys StrictBlobs must hold: each quote's file
-// on its own side, and the head file of each finding with a patch on a file in the diff (S3 drops any other before S6
-// reads it). Paths resolve as strictSelect resolves them (a diff path at head, a renamed file's old path at base, a
-// path outside the diff as written), so VS-27c, VS-42 and VS-44 ask for the same keys. A path that could leave the
-// repository (schema.ts ESCAPING_PATH) is never named, for findings built without decodeReport too; strictSelect reads
-// it as a file the tree lacks. Containment against the tree-ish stays the engine's (I-8).
+// The head and base paths strictSelect reads for these findings under `config`, as the keys StrictBlobs must hold: each
+// quote's file on its own side, and the head file of each finding with a patch on a file in the diff (S3 drops any
+// other before S6 reads it). Under scopeGateApplies, S9 also reads each head quote's file at base, unless the change
+// added or deleted that file (touched holds on every line of it, so it is never a suspect). Paths resolve as
+// strictSelect resolves them (a diff path at head, a renamed file's old path at base, a path outside the diff as
+// written), so VS-27c, VS-42 and VS-44 ask for the same keys. `config` is required so that VS-27c cannot leave out the
+// keys S9 needs: it passes the review's whole ReviewConfig, as to strictSelect. A path that could leave the repository
+// (schema.ts ESCAPING_PATH) is never named, for findings built without decodeReport too; strictSelect reads it as a
+// file the tree lacks. Containment against the tree-ish stays the engine's (I-8).
 export function strictBlobRequests(
   findings: readonly Finding[],
   anchors: DiffFile[],
+  config: Pick<ReviewConfig, "guardrail" | "scopeGate">,
 ): { head: string[]; base: string[] } {
   const index = buildAnchorIndex(anchors)
+  const gate = scopeGateApplies(config)
   const wanted = findings
     .flatMap((finding) => [
-      ...(finding.quotes ?? []).map((quote) => blobKey(index, quote.path, quote.side)),
+      ...(finding.quotes ?? []).flatMap((quote) => {
+        const own = blobKey(index, quote.path, quote.side)
+        if (!gate || quote.side !== "RIGHT") return [own]
+        const status = lookupFile(index, quote.path)?.file.status
+        return status === "added" || status === "deleted" ? [own] : [own, blobKey(index, quote.path, "LEFT")]
+      }),
       ...(finding.patch !== undefined && lookupFile(index, finding.path)
         ? [blobKey(index, finding.path, "RIGHT")]
         : []),
@@ -107,6 +129,45 @@ export function strictBlobRequests(
   const keys = (side: Side) =>
     [...new Set(wanted.filter((entry) => entry.side === side).map((entry) => entry.path))].toSorted()
   return { head: keys("RIGHT"), base: keys("LEFT") }
+}
+
+// Whether S9 runs: only under `guardrail: "strict"` with `scopeGate: "introduced"`. Set without strict, the key is
+// ignored (config.ts gives the note), since S9 reads the quotes only the strict schema asks for.
+export function scopeGateApplies(config: Pick<ReviewConfig, "guardrail" | "scopeGate">): boolean {
+  return config.guardrail === "strict" && config.scopeGate === "introduced"
+}
+
+// S9's suspect check (VS-42): whether a finding looks like a defect that was already there at the base. All of these
+// hold:
+// - its anchor resolves at its own lines, on the RIGHT side and on a changed line (S3); a LEFT anchor is exempt;
+// - the anchor's lines hold a line the change added (a modified line is an added one): an anchor S3 accepts only
+//   because it sits next to a deletion is a deletion defect, which is exempt;
+// - S4 matched at least one of its quotes, and every matched quote is head code: a matched base quote is removed code,
+//   so the finding rests on the deletion and is exempt;
+// - no line a matched quote spans touches a change (an added line, or one next to a deletion: diff.ts touched with no
+//   radius, the ranges its changedSpans holds), and each is the base file's text at the base line its first line maps
+//   to (trivial.ts otherSide; the same line for a file outside the diff), as S4's matcher reads it (quoteMatches), at
+//   the base path a rename gives (DiffFile.oldPath).
+// Only the quotes S4 matched count, so an invented quote never saves a finding and never exempts one (I-2). A base that
+// is unreadable, missing or absent, or a head line the change added, never makes a finding a suspect. Paths resolve as
+// strictSelect resolves them, files are read as strictSelect reads them (lineReader), and `head` and `base` are keyed
+// as strictBlobRequests names them.
+export function preExistingSuspect(
+  finding: Pick<Finding, "path" | "line" | "endLine" | "side" | "quotes">,
+  head: ReadonlyMap<string, StrictBlob>,
+  base: ReadonlyMap<string, StrictBlob>,
+  files: DiffFile[],
+): boolean {
+  const index = buildAnchorIndex(files)
+  const read = lineReader({ head, base })
+  const resolved = resolveAnchor(index, finding)
+  const matched = (finding.quotes ?? []).flatMap((quote) => {
+    const own = { ...quote, path: blobKey(index, quote.path, quote.side).path }
+    const file = read(quote.side, own.path)
+    return Array.isArray(file) && matchAt(file, own) ? [own] : []
+  })
+  const context = { index, anchors: files, base: (path: string) => read("LEFT", path) }
+  return suspect(finding, resolved.ok ? resolved.anchor : undefined, matched, context) === true
 }
 
 // S4's matcher, exported for VS-42's preExistingSuspect and VS-44's certified() (I-10): whether a quote's code is the
@@ -118,26 +179,19 @@ export function strictBlobRequests(
 // indentation and spacing never matter, including spacing present on one side only. Nothing else is forgiven. A quote
 // with no letter or digit (a lone `}` or `);`) matches nothing: it matches almost any file, so it is no evidence the
 // model read the code. It is positional: to ask whether head code also appears in base (VS-42), map its line to the
-// base first (diff.ts mapLine) and pass a LEFT quote at that line.
+// base first (trivial.ts otherSide, as preExistingSuspect does; diff.ts mapLine maps base to head) and pass a LEFT
+// quote at that line.
 export function quoteMatches(quote: Quote, text: { head?: string | null; base?: string | null }): boolean {
   const file = quote.side === "LEFT" ? text.base : text.head
   return typeof file === "string" && matchAt(file.split(LINE_BREAK), quote)
 }
 
-export function strictSelect(findings: readonly Finding[], input: StrictInput): StrictResult {
+// The facts strictSelect's rule pass reads about each finding, worked out from the diff and the blobs (report.ts works
+// out its own from a replay artifact). Exported so that a caller can run strictRules itself and read what the pass
+// counts beyond the result: StrictPass.preExistingUnchecked, which no result field carries before VS-42 wiring.
+export function strictCandidates(findings: readonly Finding[], input: StrictInput): StrictCandidate[] {
   const index = buildAnchorIndex(input.anchors)
-  const lines = new Map<string, readonly string[] | "absent" | "unreadable">()
-  const read = (side: Side, path: string) => {
-    const key = `${side}\n${path}`
-    const cached = lines.get(key)
-    if (cached !== undefined) return cached
-    const blob = ESCAPING_PATH.test(path)
-      ? { absent: true }
-      : ((side === "RIGHT" ? input.blobs.head : input.blobs.base).get(path) ?? null)
-    const value = typeof blob === "string" ? blob.split(LINE_BREAK) : blob === null ? "unreadable" : "absent"
-    lines.set(key, value)
-    return value
-  }
+  const read = lineReader(input.blobs)
   // The parse check; one that throws reads as "threw", which leaves that patch unchecked.
   const parse = (path: string, text: string) => {
     if (!input.parses) return undefined
@@ -166,7 +220,10 @@ export function strictSelect(findings: readonly Finding[], input: StrictInput): 
     const after = parse(path, applied.text)
     return after !== false && after !== "threw"
   }
-  const candidates = findings.map((original): StrictCandidate => {
+  const gate = scopeGateApplies(input.config)
+  // S9 reads each base through the cache S4 reads quotes through, so a base file is split once per run.
+  const context = { index, anchors: input.anchors, base: (path: string) => read("LEFT", path) }
+  return findings.map((original): StrictCandidate => {
     const finding = { ...original, path: lookupFile(index, original.path)?.file.path ?? original.path }
     const resolved = resolveAnchor(index, finding)
     const anchor = resolved.ok ? resolved.anchor : undefined
@@ -174,16 +231,19 @@ export function strictSelect(findings: readonly Finding[], input: StrictInput): 
       const key = blobKey(index, quote.path, quote.side)
       return { quote: { ...quote, path: key.path }, file: read(quote.side, key.path) }
     })
+    const matched = quotes.flatMap((entry) =>
+      Array.isArray(entry.file) && matchAt(entry.file, entry.quote) ? [entry.quote] : [],
+    )
     return {
       finding,
       scoped: finding.failure !== undefined,
       anchored: anchor !== undefined && onChangedLine(input.anchors, finding, anchor),
-      quotes: {
-        matched: quotes.flatMap((entry) =>
-          Array.isArray(entry.file) && matchAt(entry.file, entry.quote) ? [entry.quote] : [],
-        ),
-        unreadable: quotes.some((entry) => entry.file === "unreadable"),
-      },
+      quotes: { matched, unreadable: quotes.some((entry) => entry.file === "unreadable") },
+      ...(gate
+        ? {
+            preExisting: () => finding.scope === "pre-existing" || suspect(finding, anchor, matched, context),
+          }
+        : {}),
       impact: finding.failure !== undefined && bounded(finding.failure.trigger) && bounded(finding.failure.impact),
       fix: () => {
         const suggestion = fixText(finding.suggestion)
@@ -208,7 +268,13 @@ export function strictSelect(findings: readonly Finding[], input: StrictInput): 
       ...(finding.failure ? { failureClass: finding.failure.class } : {}),
     }
   })
-  const pass = strictRules(candidates, { maxComments: input.config.maxComments, unanswered: input.unanswered })
+}
+
+export function strictSelect(findings: readonly Finding[], input: StrictInput): StrictResult {
+  const pass = strictRules(strictCandidates(findings, input), {
+    maxComments: input.config.maxComments,
+    unanswered: input.unanswered,
+  })
   const kept = pass.kept.flatMap((entry): StrictFinding[] => {
     const failure = entry.finding.failure
     if (!failure || !entry.quotes) return []
@@ -247,14 +313,18 @@ export function strictSelect(findings: readonly Finding[], input: StrictInput): 
 
 // What the rule pass reads about one candidate, worked out by its caller: strictSelect from the diff and the blobs, and
 // report.ts's offline re-selection from a replay artifact's records. A rule whose fact is absent is left out, since
-// legacy output has no failure block and no quotes.
+// legacy output has no failure block and no quotes, and a replay artifact records no base blobs for S9.
 export interface StrictCandidate {
   finding: Finding // S1, S2's severity half, S7 and S8 read it directly
   scoped?: boolean // S2's class half: a failure block in one of the five classes
   anchored: boolean // S3
   quotes?: { matched: Quote[]; unreadable: boolean } // S4: the quotes that match, and whether a file was unreadable
   impact?: boolean // S5
-  // S6, read only once S1 to S5 hold, since checking a patch applies it and may parse the file.
+  // S9, read only once S1 to S5 hold, since it may read base files: true drops the finding as pre-existing (the model's
+  // label, or preExistingSuspect), and "unchecked" keeps it because a base the check needed could not be read, which
+  // the pass counts. strictCandidates sets it only under scopeGateApplies.
+  preExisting?: () => boolean | "unchecked"
+  // S6, read only once S1 to S5 and S9 hold, since checking a patch applies it and may parse the file.
   fix: () => StrictFinding["fix"] | undefined
   code: string // sameFinding's anchored code, normalized; "" when unknown
   failureClass?: FailureClass // S7's class clause; absent leaves it out
@@ -266,9 +336,13 @@ export interface StrictPass {
   // S1 and S4 met something they could not read. `verdict` also holds when an unanswered id has no candidate that
   // confirms it, so a verdict lost with a finding the caller left out still reads as unread (I-7).
   unreadable: { verdict: boolean; blob: boolean }
+  // Kept findings S9 could not check, because a base it needed was null or missing from the map: S9 only ever drops,
+  // so it keeps them, and this count says so (I-7). Counted among the kept, after S8, as fixUnchecked is, and 0 when no
+  // candidate carries S9's fact. No result field carries it before VS-42 wiring puts it in ReviewOutcome.notes.
+  preExistingUnchecked: number
 }
 
-// The rules S1 to S8 over facts worked out beforehand, shared by strictSelect and report.ts's offline re-selection so
+// The rules S1 to S9 over facts worked out beforehand, shared by strictSelect and report.ts's offline re-selection so
 // both apply the same order, the same dedup and the same cap. Candidates are taken strongest first (a runtime
 // confirmation, then confidence, then path, line, id, title and the whole finding, so the result never depends on input
 // order), each dropped at the first rule it fails, and S7 compares a candidate only with those already kept.
@@ -282,7 +356,7 @@ export function strictRules(
   const judged = candidates.toSorted(stronger).reduce(
     (state: { accepted: Accepted[]; drops: Judged[] }, candidate) => {
       const verdict = judge(candidate, { unanswered, accepted: state.accepted, code: codeOf })
-      if ("fix" in verdict) return { ...state, accepted: [...state.accepted, { candidate, fix: verdict.fix }] }
+      if ("fix" in verdict) return { ...state, accepted: [...state.accepted, { candidate, ...verdict }] }
       return { ...state, drops: [...state.drops, verdict] }
     },
     { accepted: [], drops: [] },
@@ -308,6 +382,7 @@ export function strictRules(
         drops.some((entry) => entry.unreadable === "verdict") || input.unanswered.some((id) => !confirmed.has(id)),
       blob: drops.some((entry) => entry.unreadable === "blob"),
     },
+    preExistingUnchecked: judged.accepted.slice(0, cap).filter((entry) => entry.unchecked).length,
   }
 }
 
@@ -327,13 +402,13 @@ export function strictIncomplete(
 }
 
 type Judged = { drop: StrictDrop; unreadable?: "verdict" | "blob" }
-type Accepted = { candidate: StrictCandidate; fix: StrictFinding["fix"] }
+type Accepted = { candidate: StrictCandidate; fix: StrictFinding["fix"]; unchecked: boolean }
 
-// S1 to S7 for one candidate: the first rule it fails, or its fix.
+// S1 to S5, S9, S6 and S7 for one candidate: the first rule it fails, or its fix and whether S9 could not check it.
 function judge(
   candidate: StrictCandidate,
   context: { unanswered: ReadonlySet<string>; accepted: readonly Accepted[]; code: (finding: Finding) => string },
-): Judged | { fix: StrictFinding["fix"] } {
+): Judged | Omit<Accepted, "candidate"> {
   const finding = candidate.finding
   if (finding.verified !== true)
     return context.unanswered.has(finding.id)
@@ -346,11 +421,13 @@ function judge(
   if (candidate.quotes && !candidate.quotes.matched.length)
     return { drop: "quote-mismatch", ...(candidate.quotes.unreadable ? { unreadable: "blob" as const } : {}) }
   if (candidate.impact === false) return { drop: "no-impact" }
+  const preExisting = candidate.preExisting?.()
+  if (preExisting === true) return { drop: "pre-existing" }
   const fix = candidate.fix()
   if (!fix) return { drop: "no-fix" }
   if (context.accepted.some((entry) => duplicates(entry.candidate, candidate, context.code)))
     return { drop: "duplicate" }
-  return { fix }
+  return { fix, unchecked: preExisting === "unchecked" }
 }
 
 // S7: the same id, the same finding as selection reads it (sameFinding), or the same class on the same path and side
@@ -389,13 +466,61 @@ function compare(a: string, b: string) {
 // S3: the anchor is at the model's own lines (resolveAnchor may snap a line onto a nearby hunk, which does not count),
 // and on code the change touched. On the RIGHT side some line of it was added, or sits next to a deletion
 // (touched with no radius); the LEFT side holds only removed lines, so a LEFT anchor is on removed code.
-function onChangedLine(anchors: DiffFile[], finding: Finding, anchor: Anchor) {
+function onChangedLine(anchors: DiffFile[], finding: Pick<Finding, "line" | "endLine">, anchor: Anchor) {
   if (anchor.line < finding.line || anchor.line > (endLineOf(finding) ?? finding.line)) return false
   if (anchor.side === "LEFT") return true
   const start = anchor.startLine ?? anchor.line
   return Array.from({ length: anchor.line - start + 1 }, (_, offset) => start + offset).some((line) =>
     touched(anchors, anchor.path, line, 0),
   )
+}
+
+// What S9 reads beside a finding: the diff, and each base file's lines as lineReader gives them.
+type SuspectContext = { index: AnchorIndex; anchors: DiffFile[]; base: (path: string) => FileLines }
+
+// S9's suspect check on a finding already resolved: its anchor, if any, and the quotes S4 matched (preExistingSuspect
+// lists the conditions). "unchecked" when only a base that could not be read stands between it and a suspect: every
+// other condition holds, and no matched quote is known to differ from the base.
+function suspect(
+  finding: Pick<Finding, "line" | "endLine">,
+  anchor: Anchor | undefined,
+  matched: readonly Quote[],
+  context: SuspectContext,
+) {
+  if (!anchor || anchor.side !== "RIGHT" || !onChangedLine(context.anchors, finding, anchor)) return false
+  if (!addedIn(context.index, anchor)) return false
+  if (!matched.length || matched.some((quote) => quote.side !== "RIGHT")) return false
+  const checks = matched.map((quote) => unchangedSinceBase(quote, context))
+  if (checks.includes(false)) return false
+  return checks.includes("unchecked") ? "unchecked" : true
+}
+
+// Whether the anchor's lines hold one the change added.
+function addedIn(index: AnchorIndex, anchor: Anchor) {
+  const start = anchor.startLine ?? anchor.line
+  return (lookupFile(index, anchor.path)?.file.hunks ?? []).some((hunk) =>
+    hunk.lines.some(
+      (line) =>
+        line.kind === "add" && line.newLine !== undefined && line.newLine >= start && line.newLine <= anchor.line,
+    ),
+  )
+}
+
+// One matched head quote, for S9: true when no line it spans touches a change and its code is the base text at the
+// base line its first line maps to, read at the base path; "unchecked" when that base is null or missing from the map.
+// A head line with no base line (the change added it) is a change, and a base the tree lacks holds no old code.
+function unchangedSinceBase(quote: Quote, context: SuspectContext): boolean | "unchecked" {
+  const trimmed = trimQuote(quote)
+  if (!trimmed) return false
+  const span = trimmed.code.split(LINE_BREAK).length
+  const lines = Array.from({ length: span }, (_, offset) => trimmed.line + offset)
+  if (lines.some((line) => touched(context.anchors, quote.path, line, 0))) return false
+  const file = lookupFile(context.index, quote.path)?.file
+  const line = file ? otherSide(file, "RIGHT")(trimmed.line) : trimmed.line
+  if (line === undefined) return false
+  const base = context.base(blobKey(context.index, quote.path, "LEFT").path)
+  if (base === "unreadable") return "unchecked"
+  return base !== "absent" && matchAt(base, { ...trimmed, side: "LEFT", line })
 }
 
 // A finding's last line, as resolveAnchor reads it: only a whole number after its first line.
@@ -424,17 +549,49 @@ function blobKey(index: AnchorIndex, path: string, side: Side) {
   return { side, path: side === "RIGHT" ? file.path : (file.oldPath ?? file.path) }
 }
 
+// One file's lines on one side, as strictCandidates and preExistingSuspect read it.
+type FileLines = readonly string[] | "absent" | "unreadable"
+
+// Reads files as S4 and S9 read them, splitting each side's file once: its lines, "absent" when that commit's tree
+// lacks it or its path could leave the repository (never read), and "unreadable" when it is null or missing from the
+// map.
+function lineReader(blobs: StrictBlobs) {
+  const lines = new Map<string, FileLines>()
+  return (side: Side, path: string) => {
+    const key = `${side}\n${path}`
+    const cached = lines.get(key)
+    if (cached !== undefined) return cached
+    const blob = ESCAPING_PATH.test(path)
+      ? { absent: true }
+      : ((side === "RIGHT" ? blobs.head : blobs.base).get(path) ?? null)
+    const value = typeof blob === "string" ? blob.split(LINE_BREAK) : blob === null ? "unreadable" : "absent"
+    lines.set(key, value)
+    return value
+  }
+}
+
 const LINE_BREAK = /\r\n?|\n/
 
+// quoteMatches over a file already split into lines.
 function matchAt(lines: readonly string[], quote: Quote) {
+  const trimmed = trimQuote(quote)
+  if (!trimmed || !Number.isSafeInteger(quote.line) || quote.line < 1) return false
+  const code = trimmed.code.split(LINE_BREAK)
+  const wanted = bare(code)
+  const start = trimmed.line - 1
+  const end = start + code.length
+  if (end > lines.length) return false
+  return /[\p{L}\p{N}]/u.test(wanted) && bare(lines.slice(start, end)) === wanted
+}
+
+// S4's trimming rule, shared by S9 to find the head lines a quote spans: the quote without the whitespace-only lines at
+// its start and end, its line moved past those at the start, or undefined when no other line is left.
+function trimQuote(quote: Quote): Quote | undefined {
   const code = quote.code.split(LINE_BREAK)
   const first = code.findIndex((line) => line.trim() !== "")
+  if (first < 0) return undefined
   const last = code.findLastIndex((line) => line.trim() !== "")
-  const wanted = bare(code.slice(first, last + 1))
-  const start = quote.line - 1 + first
-  const end = start + last - first + 1
-  if (first < 0 || !Number.isSafeInteger(quote.line) || quote.line < 1 || end > lines.length) return false
-  return /[\p{L}\p{N}]/u.test(wanted) && bare(lines.slice(start, end)) === wanted
+  return { ...quote, line: quote.line + first, code: code.slice(first, last + 1).join("\n") }
 }
 
 // S4's comparison form: every line with all its whitespace removed, blank lines dropped.

@@ -7829,3 +7829,605 @@ name exactly (points 6 and 7 under "Critique points"). Nothing is committed
     round; oxlint reports no warning on a changed line. Neither
     `origin/codium` nor `origin/self-evolving` touches a file this round
     changed beyond those listed under the predicted conflicts.
+
+## 2026-11-07 · VS-42a Introduced-by-change check (pure)
+
+Addendum A §2 VS-42 (its Now part only), with the §1 `scopeGate` row, §1a's
+VS-42 row, §3 VS-27 ("S9 joins only after its gate"; the `scope` field enters
+the strict schema only under the key) and §4's windows. Evidence: round-two
+REPORT [G6-13] (ReviewBench labels 173 of 2,623 true positives `pre-existing`
+and 59 `exacerbated-by-pr`, and still counts them as true) and [CF10] (a
+rubric that forbids flagging pre-existing bugs); `judging-rubric.md:39`
+(unchanged) scores "not a defect in this change" as a false alarm. Built at
+`d268025c`. Now window only: pure core code that no runner calls, an
+off-by-default key that config.ts parses and no runner reads, and eval-script
+work. `run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`, `posting.ts`,
+`prompt.ts`, `cli/cmd/review.ts`, `diff.ts`, `select.ts`, `format.ts`,
+`verdict.ts`, `replay.ts` and every @vector file are untouched. It implements
+the VS-42a plan as corrected by its critique. Every critique point was
+taken; for point 5 the critique's named alternative was taken, with the reason
+given in (h). Nothing is committed (the lane brief).
+
+- **What landed.**
+  - **Core `review/types.ts`** (still import-free):
+    - `FINDING_SCOPES` (`introduced`, `exacerbated`, `pre-existing`) and
+      `FindingScope`, after `VERIFIED_BY`, with their mapping onto
+      ReviewBench's scope axis;
+    - `ModelFinding.scope?: FindingScope`, a type only: no decoder sets it;
+    - `STRICT_DROPS` gains `pre-existing` between `no-impact` and `no-fix`.
+      The comment says S9 is checked after S5 and before S6, is produced
+      only under `guardrail: "strict"` with `scopeGate: "introduced"`, and
+      joins the result schema only under that key;
+    - `ReviewConfig.scopeGate?: "off" | "introduced"` after `guardrail`;
+    - `OPTIONAL_REVIEW_DEFAULTS.scopeGate: "off"`, and `scopeGate` in
+      `UNAPPLIED_REVIEW_KEYS` after `guardrail`.
+  - **Core `review/config.ts`**:
+    - `FIELDS.scopeGate = oneOf(["off", "introduced"])`, with no `ENV`
+      entry;
+    - `UNAPPLIED.scopeGate`, which applies only to `"introduced"` under
+      `guardrail: "strict"`: `"scopeGate": "introduced" is not applied yet:
+      defects that already existed at the base are not dropped.`;
+    - in `settle`, after the triageModel rule and before the not-applied
+      warnings, a permanent note for `"introduced"` without strict:
+      `"scopeGate": "introduced" is ignored without "guardrail": "strict":
+      the introduced-by-change check runs only inside the strict
+      guardrail.` The value is not mutated, and the two warnings never
+      appear together.
+  - **Core `review/trivial.ts`**: `otherSide(file, from)` is exported, with
+    one comment line saying guardrail.ts's S9 reuses it (I-10). Its
+    behaviour is unchanged.
+  - **Core `review/guardrail.ts`**:
+    - the header lists S9 between S5 and S6 and says it relies on the quotes
+      alone (decision (n));
+    - `scopeGateApplies(config)`;
+    - `preExistingSuspect(finding, head, base, files)`, the addendum's
+      signature;
+    - `StrictInput.config` widens to `Pick<ReviewConfig, "maxComments" |
+      "suggestions" | "guardrail" | "scopeGate">`, the last two optional;
+    - `strictBlobRequests(findings, anchors, config)`, whose config is now
+      required. Under the gate it names each head quote's base key, except
+      for files the change added or deleted. Without the gate its output is
+      identical;
+    - `StrictCandidate.preExisting?: () => boolean`, read by the rule pass
+      after S5. `strictSelect` sets it only under the gate;
+    - `judge`'s S9 line, `if (candidate.preExisting?.() === true) return {
+      drop: "pre-existing" }`, sits between `no-impact` and the fix;
+    - private `suspect`, `addedIn`, `unchangedSinceBase` and `textOf` (a
+      blob's text, null for an escaping path, as strictSelect reads it), and
+      `trimQuote`, S4's trimming rule, which `matchAt` now calls. The
+      comparison stays in `matchAt`; behaviour is unchanged, and every
+      existing `quoteMatches` and S4 test passes unchanged;
+    - `onChangedLine` takes `Pick<Finding, "line" | "endLine">`, a type-only
+      change;
+    - comment fixes: the `StrictBlob` comment is qualified (decision (i)),
+      the `StrictInput.config` and `strictBlobRequests` comments say VS-27c
+      passes the whole ReviewConfig to both, and the `quoteMatches` comment
+      now says to map a head line to base with `trivial.ts otherSide`, not
+      `diff.ts mapLine` (mapLine maps base to head).
+  - **Core `review/schema.ts`**:
+    - `StrictSchemaKeys` is `Partial<Pick<ReviewConfig, "guardrail" |
+      "scopeGate">>`;
+    - the result schema's drop enum is `STRICT_DROPS` without
+      `pre-existing`, unless `scopeGate` is `"introduced"`. The builders
+      already return undefined without strict;
+    - `strictReportJsonSchema` and `decodeReport` are unchanged. Their
+      comments say the `scope` field waits for VS-42 wiring.
+  - **Core `review/model-evidence.ts`**:
+    - `EVIDENCE_POLICY_KEYS` gains `scopeGate` after `guardrail`;
+    - `promptsDigest`'s keys widen to include `scopeGate`, and its memo key
+      gains `scopeGate:introduced` only under strict. A local was renamed
+      from `strict` to `schemas`, since `strict` is now the boolean;
+    - `evidenceScope` passes `scopeGate: "introduced"` only when both keys
+      are set and neither is in `UNAPPLIED_REVIEW_KEYS`;
+    - `REVIEW_PIPELINE_SOURCES` moves from `bb8972b4baf9cd62` to
+      `8e2a3d79e36f8607`, because `guardrail.ts` and `trivial.ts` changed.
+      `REVIEW_PIPELINE_REVISION` stays 1.
+  - **Engine `review/eval.ts`** (the eval replay, not a runner):
+    `WIRING.scopeGate = "VS-42 wiring"`, and the `ReplayInput.config`
+    comment names VS-42's scopeGate. The `UNAPPLIED` drop in the replay and
+    step 0b's refusal are generic.
+  - **`script/vectorscope-eval/report.ts`**: the `--reselect strict`
+    sources line and header comment list S9 as left out ("no base blobs are
+    recorded"). The README's re-selection paragraph says the same.
+  - **Tests**:
+    - core `guardrail.test.ts`, 30 → 44: an S9 describe block with 12
+      tests, a gated `strictBlobRequests` test, and an agreement test. The
+      property test gains a gate dimension; its draws are taken last, so the
+      ungated cases are the same as at HEAD. Under the gate, `satisfies`
+      also checks S9 and the result is validated against the schema built
+      for its keys;
+    - core `schema.test.ts`, 46 → 47;
+    - core `config.test.ts`, 49 → 53;
+    - core `model-evidence.test.ts`, 22 → 24;
+    - engine `eval.test.ts`, 29 → 30 (the replay test, and two refusals
+      added to the existing refusal test);
+    - eval `report.test.ts`: the sources-line expectation changed on
+      purpose, with the count unchanged at 33;
+    - four existing `strictBlobRequests` calls now pass `{}`, a mechanical
+      change of signature; no assertion changed.
+- **Off by default (I-1, I-12).**
+  - **Key.**
+    - `scopeGate` is optional, absent from `DEFAULT_REVIEW_CONFIG` and in
+      `UNAPPLIED_REVIEW_KEYS`, and no environment variable reads it;
+    - the parser warns that it is not applied with strict, and that it is
+      ignored without strict;
+    - the replay drops it from the base `review.json` and refuses it in
+      `ReplayInput.config` (both tested);
+    - strictSelect runs S9 only under both keys;
+    - no decoder sets `scope`.
+  - **Parity.**
+    - No runner imports `guardrail.ts`.
+    - The runner suites pass with unchanged counts: engine `run.test.ts` 44,
+      `cli/github.review.test.ts` 40, and app `ai-review.test.ts` 107.
+    - Every existing guardrail, schema and report test passes unchanged,
+      except the deliberate `STRICT_DROPS` list, the enum assertion, the
+      sources line and the `strictBlobRequests` call signature.
+  - **Digests** (printed before and after):
+    - held: `promptsDigest()` `5d59e9ee06077c23`, `{ impact: "graph" }`
+      `74a2111826c226b1`, `{ guardrail: "strict" }` `b98afb0e878dfe26`,
+      `{ impact: "graph", guardrail: "strict" }` `3ba21b5bc883cd70`;
+    - `{ scopeGate: "introduced" }` alone and `{ guardrail: "strict",
+      scopeGate: "off" }` give the digests above;
+    - new, schema-only and pinned: `{ guardrail: "strict", scopeGate:
+      "introduced" }` `4aa712221043a3a7`, and with `impact: "graph"`
+      `8335adf9de513ee5`. VS-42 wiring moves them on purpose;
+    - `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`, with
+      `scopeGate` set or not, with or without strict;
+    - no evidence scope can carry the new digests while either key is
+      unapplied.
+  - **§0.3 item 4.** `engine:scope-introduced` is deferred to VS-42 wiring,
+    as VS-34a deferred its variant: no registry, README or `replay.test.ts`
+    change.
+  - **§0.3 item 5.** A documented difference: S9 is pure core and reaches
+    the desktop with VS-27's desktop guardrail; until then the desktop half
+    records `variant.applied: false`.
+- **Decisions.**
+  - (a) **The key is parsed now.**
+    - Allowances: the lane brief allows "ReviewConfig type and config
+      parsing additions that are off by default"; VS-42's own tests ask that
+      "the key set without `guardrail: strict` has no effect, and emits the
+      note"; and §1 says "a test asserts that". VS-27a's `guardrail` is the
+      precedent.
+    - §4 lists "config parse" in the runner-wiring window for VS-35 and
+      VS-43, but not for VS-42, whose Now entry is "`preExistingSuspect` and
+      the strict drop". So parsing it now is a deliberate reading, not an
+      oversight.
+    - It is a plain key with no environment variable (§1's Env column says
+      "none").
+    - The ignored note is permanent: it survives wiring and excludes the
+      not-applied warning. The value is not mutated, so the replay and
+      `policyDigest` see what was written.
+  - (b) **One gate predicate.** `scopeGateApplies` gates `strictSelect` and
+    `strictBlobRequests`. The schema enum and `promptsDigest` apply the same
+    two-key rule inline: schema.ts cannot import guardrail.ts, which imports
+    it, and model-evidence.ts keeps its prompt keys inline beside the
+    others.
+  - (c) **S9 after S5 and before S6.** This is critique point 3, taken; the
+    plan had put S9 after S6. The addendum names no position.
+    - S5, S9 and S6 each filter one candidate at a time, so the kept set is
+      the same wherever S9 sits between S5 and S7. The kill criterion,
+      measured as the difference in kept sets with the gate on and off, does
+      not depend on the position.
+    - Before S6, a suspect never has its patch applied or parsed, which can
+      be the slowest check (tested with a parse spy).
+    - Before S7, a dropped suspect never hides an introduced duplicate, and
+      is never counted as a duplicate itself (tested both ways).
+    - The cost of this order: a suspect with no fix counts as
+      `pre-existing`, not `no-fix`.
+  - (d) **Only matched quotes count (I-2).** An unmatched quote on a changed
+    line never saves a finding, and an unmatched base quote never exempts
+    one (both tested).
+  - (e) **Deletion defects are exempt**, following S3's anchor kinds:
+    - a LEFT anchor;
+    - a RIGHT anchor whose range holds no added line, which S3 accepts only
+      because it sits next to a deletion;
+    - a finding with a matched LEFT quote, since that is removed code.
+
+    A modified line counts as added. The model's `pre-existing` label still
+    drops an exempt finding (I-2: labels only drop).
+  - (f) **`touched` with radius 0** stands in for exporting `changedSpans`
+    (the addendum's named alternative), and it gives the same ranges. So
+    `diff.ts` is untouched.
+  - (g) **"Unchanged in the base after `normalizeCode`"** is read
+    positionally:
+    - The trimmed quote's first line maps to base through `otherSide(file,
+      "RIGHT")`; the line is the same for a file outside the diff. The base
+      is read at `blobKey(..., "LEFT")`, the old path for a rename.
+    - The comparison is `quoteMatches` itself, called with a LEFT quote at
+      that line (critique point 4, taken). S4 inside `strictSelect` still
+      uses the cached-lines `matchAt`, which is `quoteMatches`'s body. The
+      shared trimming moved into `trimQuote` rather than splitting
+      `matchAt`.
+    - S4's form drops all whitespace (VS-27b's `git -w` reading), so it is
+      a little more forgiving than `normalizeCode`, which collapses inner
+      runs to one space. S9 may therefore call a quote unchanged that
+      `normalizeCode` would call changed, such as one whose string literal
+      differs only in inner spacing. The owner's answer to VS-27b's
+      whitespace question applies to both.
+    - Cost: `quoteMatches` splits the base file on each call. That is
+      bounded, because S9 runs only under the gate, only on candidates that
+      passed S1 to S5, and only on untouched head quotes.
+  - (h) **`otherSide` stays in `trivial.ts`** (critique point 5's named
+    alternative, taken).
+    - Its bisection helper `lastAtOrBelow` is shared with trivial.ts's
+      `stringCover`. A move into `diff.ts` beside `mapLine` would either
+      duplicate the search or make `diff.ts` export a generic helper back to
+      `trivial.ts`.
+    - Either way, two pinned functions would be rewritten with no change in
+      behaviour, and `diff.ts`, which no branch in the merge prediction
+      touches, would move.
+    - It is still a single mapper (I-10). Moving it beside `mapLine` is a
+      clean-up for a package that has to touch `diff.ts` anyway.
+  - (i) **An unreadable base never demotes a finding.** A base that is
+    null, `{ absent: true }` or missing from the map, or a head line the
+    change added, never makes a finding a suspect. It never marks the result
+    incomplete either: S9 only ever drops, so a finding it cannot check is
+    kept and nothing is lost (I-7 holds). The `StrictBlob` comment now says
+    S9's base reads are the exception to "a read the engine forgot fails
+    closed".
+  - (j) **`ModelFinding.scope` is typed now and decoded by nothing.** So the
+    model half of S9 is reachable only from callers that build findings
+    themselves (tests and eval scripts). The alternative, leaving out the
+    label branch until the decoder exists, would make the wiring add both
+    halves at once; the label branch is one tested line.
+  - (k) **The result schema's enum is keyed on `scopeGate`.** The report
+    schema and the decoder are unchanged under the key (tested), and the
+    `scope` field joins with VS-42 wiring. This follows VS-27a decision (b).
+  - (l) **Fail-open at the wiring boundary** (critique major point 2, option
+    (a)).
+    - The `strictBlobRequests` config is a required parameter. TypeScript
+      cannot also require the two keys inside it, because they are optional
+      in `ReviewConfig`.
+    - Both doc comments say VS-27c passes the review's whole ReviewConfig to
+      both calls.
+    - A gated test records every map read and checks that each base S9 reads
+      is named only under the gate.
+    - Base keys are skipped for added and deleted files: `touched` holds on
+      every line of them, so they are never suspects (critique point 10).
+  - (m) **`StrictCandidate.preExisting`** (true drops the finding) replaces
+    the plan's `introduced?: boolean`, whose name claimed more than it
+    meant: it was true for exacerbated and unlabelled findings (critique
+    point 10). It is lazy, as `fix` is, because it may read base files.
+    report.ts's `reselectRun` does not set it, so its output is
+    byte-identical.
+  - (n) **S9's main false-drop class, accepted by design** (critique major
+    point 1).
+    - S9 relies on the quotes alone; the anchor's added line is not
+      evidence.
+    - So a finding anchored on an added line whose matched quotes are all
+      unchanged code is dropped as `pre-existing` even when the defect is
+      introduced. The unchanged code may be context in the same file, or an
+      unchanged file outside the diff. Examples: a new `store.flush()` that
+      misuses the old `store.reset()`, or a new call site broken by an
+      unchanged callee in `store.ts`.
+    - This fits the addendum's literal rule: every RIGHT quote unchanged,
+      and none touching a change.
+    - The fixture is named for it ("a finding on an added line that quotes
+      only unchanged code is a suspect, even when the new line is the
+      defect"), and the header comment says so.
+    - Introduced findings are 2,391 of ReviewBench's 2,623 true positives
+      (91.2%, [G6-13]), so this class is where the 2% kill threshold is most
+      at risk.
+      The hand-off and the deferred verification below are widened to match.
+  - (o) **The report names what it skips.** The `--reselect strict` sources
+    line lists S9 as left out (critique point 7, taken). It is an eval
+    script, not a runner, and the expectation changed on purpose.
+  - (p) **The variant is deferred** (§0.3 item 4 above).
+  - (q) **A runtime confirmation is not exempt from S9**, because whether a
+    runtime check can tell an old defect from a new one is VS-30's question.
+  - (r) **The "not in this change" annotation tag is deferred.** It changes
+    the settled-verdict vocabulary (core `eval.ts` `Verdict`, `judge.ts`,
+    the rubric) and may need `RUBRIC_VERSION` 2 (VS-45, Q29). So it belongs
+    with the VS-22a follow-up's scope label.
+  - (s) **New strings only** (D14). The two warnings are new strings for a
+    new key. A `review.json` that already set `scopeGate` now gets them
+    instead of "unknown key".
+- **Critique points.**
+  1. (Major) False drops: decision (n), the widened hand-off, the deferred
+     verification split, and the renamed fixture.
+  2. (Major) Fail-open: (l) and (i). The parity test and a count of findings
+     S9 could not check are handed off below.
+  3. S9's position: moved before S6, per (c). The mutation tests cover "S9
+     after S6", "S9 after S7" and "S9 before S5".
+  4. `quoteMatches`: (g).
+  5. `otherSide`'s home: (h). The correction to VS-27b's hand-off is below.
+  6. Engine replay coverage: a replay of a base `review.json` with `{
+     guardrail: "strict", scopeGate: "introduced" }` and with `{ scopeGate:
+     "introduced" }` alone. It asserts that neither key is in
+     `artifact.config.value`, that the warnings are `[guardrail not
+     applied, scopeGate not applied]` and `[scopeGate ignored]`, that
+     `scope.policy` and `scope.prompts` are the defaults, and that the
+     selection is the legacy one.
+  7. The report's sources line: (o).
+  8. Schema cases: `{ scopeGate: "introduced" }` and `{ guardrail: "off",
+     scopeGate: "introduced" }` joined the loop that expects undefined.
+  9. The window reading: (a).
+  10. Accuracy:
+      - the candidate fact is named `preExisting`, per (m);
+      - added files get no base keys, per (l);
+      - one scratch path, `/tmp/vector-vectorscope/vs42a/`;
+      - the agreement test is worded "preExistingSuspect agrees with
+        strictSelect's pre-existing drops on unlabelled findings". Over 150
+        generated seeds, a lone unlabelled finding drops as `pre-existing`
+        exactly when it is a suspect and S1 to S5 kept it. Every other
+        finding has the fate it has with the gate off.
+- **Correction to the VS-27b entry** (this log is append-only). Two
+  statements there are wrong:
+  - Its hand-off "VS-42 needs `quoteMatches` positionally: map a head line
+    to base with `mapLine` first" names the wrong mapper. `diff.ts mapLine`
+    maps base to head; head to base is `trivial.ts otherSide(file,
+    "RIGHT")`. The `quoteMatches` doc comment is corrected in this package.
+  - Its "Deferred" list names a `changedSpans` export for VS-42. None was
+    needed, per (f).
+- **Hand-offs to VS-42 wiring, with VS-27c.**
+  - **The report schema's `scope` field**, required on blocking findings,
+    with its decoder over `FINDING_SCOPES`. It enters `promptsDigest` only
+    under the key.
+  - **The prompt clause** under the key:
+    - "do not report bugs that exist at the merge-base unless this change
+      makes them reachable or worse";
+    - every blocking finding, introduced ones included, must quote at least
+      one changed line, or S9 drops it (decision (n));
+    - an exacerbated finding must quote the changed line that makes the old
+      defect reachable or worse.
+  - **Notes, not the summary.** The `pre-existing` count goes in
+    `ReviewOutcome.notes` and is not moved into the summary: the rubric
+    counts summary listings as posted. The count of findings S9 could not
+    check, because their base was unreadable, goes there too, so the
+    measurement is honest (I-7).
+  - **Owner sign-off** on the empty-result wording when S9 empties a
+    complete result, beside VS-27b's wording question.
+  - **`policyDigest`** must count `scopeGate` only under strict. Today it
+    reads an unapplied key as absent; once the key leaves the list, a plain
+    non-default value would count even without strict.
+  - **Blob reads.** Pass the review's whole ReviewConfig to both
+    `strictBlobRequests` and `strictSelect`. The engine reads the base keys
+    `strictBlobRequests` names through the base tree-ish, with containment
+    (I-8). A VS-27c parity test must show that, under both keys, S9 reads
+    every base key it named and the engine supplied each one.
+  - **D3 parity tests**, the variant `engine:scope-introduced` (baseline
+    `engine:guardrail-strict`) and the desktop half.
+  - **Artifacts** that record the candidates and the blobs seen, base
+    included, so `report.ts` can re-select with S9 (the sources line then
+    moves S9 from "left out" to "applied") and the zero-spend pre-check can
+    run on the first settled artifacts.
+  - **VS-44's trace quotes** join conditions (c) to (e) of
+    `preExistingSuspect`.
+  - **VS-30's question**: whether a runtime confirmation can separate an
+    old defect from a new one (decision (q)).
+  - **VS-21's external comparisons** must state that S9 drops findings
+    ReviewBench counts as true.
+  - **The "not in this change" annotation tag**, with the VS-22a follow-up's
+    scope label (decision (r)).
+- **Owner questions, kept neutral.** None new. Q18 (whether VS-42 is
+  approved), Q13, Q3, Q4, Q17 and Q29 stay open. Where `pre-existing` sits
+  in `STRICT_DROPS`, between `no-impact` and `no-fix`, is the lane's reading
+  (decision (c)); it sits beside VS-27b's reorder question for the owner.
+- **Predicted merge conflicts.** This was read-only: `git merge-tree
+  --write-tree --name-only` at HEAD, then a three-way `git merge-file` of
+  each touched file that either branch changes, comparing the working tree
+  with each branch's merge base and tip.
+  - Of the touched files, only `config.ts` (on `origin/codium`, `5a079cbd`)
+    and `types.ts` (on both codium and `origin/self-evolving`, `f062bcce`)
+    change on those branches.
+  - `config.ts`: no conflict, as at HEAD.
+  - `types.ts`: 2 conflict hunks with codium and 1 with self-evolving. They
+    are identical to the hunks at HEAD (the VS-27a pass-name lines), and
+    none holds a VS-42a line.
+- **Deferred.**
+  - The `scope` report-schema field and its decoder; the prompt clause; the
+    notes counts; the variant and its parity tests; the engine's base reads;
+    the desktop half. All wait for VS-42 wiring, with VS-27c (runner-wiring
+    window, Q13).
+  - The "not in this change" annotation tag, per (r).
+  - Moving `otherSide` beside `mapLine`, per (h).
+  - Re-selecting artifacts with S9.
+- **Deferred verification.**
+  - **The kill criterion is unmeasured.** No settled artifacts exist, so the
+    criterion (drop at most 2% of settled true positives, and remove at
+    least 20% of the false alarms annotators tagged "not in this change")
+    cannot be measured. When the zero-spend pre-check runs, it must report
+    S9's drops of settled true positives split into same-file context and
+    `crossFile` (VS-22a's label), because decision (n)'s class is where the
+    2% threshold is most at risk.
+  - No model emits `scope`.
+  - The engine's base reads are untested, because nothing reads them yet.
+  - The desktop is not covered.
+  - The merge conflicts are only predicted.
+  - The `scopeGate` branch of `evidenceScope` cannot be observed until both
+    keys leave `UNAPPLIED_REVIEW_KEYS` (see the mutation check).
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory. Counts are at HEAD → with VS-42a.
+
+  | File | HEAD | VS-42a |
+  |---|---|---|
+  | core `test/review/guardrail.test.ts` | 30 | 44 |
+  | core `test/review/schema.test.ts` | 46 | 47 |
+  | core `test/review/config.test.ts` | 49 | 53 |
+  | core `test/review/model-evidence.test.ts` | 22 | 24 |
+  | core `test/review/trivial.test.ts` | 44 | 44 |
+  | core `test/review/diff.test.ts` | 50 | 50 |
+  | core `test/review/select.test.ts` | 45 | 45 |
+  | core `test/review/format.test.ts` | 51 | 51 |
+  | core `test/review/verdict.test.ts` | 45 | 45 |
+  | engine `test/review/eval.test.ts` | 29 | 30 |
+  | engine `test/review/run.test.ts` | 44 | 44 |
+  | engine `test/cli/github.review.test.ts` | 40 | 40 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 | 107 |
+  | eval `report.test.ts` (from `script/vectorscope-eval`) | 33 | 33 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 | 32 |
+
+  - **Run notes.** The engine suites ran with fresh XDG roots under the
+    scratch folder. HEAD counts for guardrail, schema, config,
+    model-evidence, trivial, report and replay were run at `d268025c` before
+    any edit. Those for diff, select, format, verdict and the runner suites
+    are the VS-27b column of the VS-27b entry, whose change is the HEAD
+    commit `d268025c`; VS-42a's runs give the same counts.
+  - **Typecheck.** `bun typecheck` passes in core and engine; app and
+    desktop pass `bun typecheck --force`; the eval scripts pass `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - **Lint.** prettier is clean on every changed source and test file, on
+    the eval README and on `report.ts` and its test. oxlint reports no
+    warning on an added or changed line. One unnecessary non-null assertion
+    in a new schema test was removed; the 57 warnings that remain in these
+    files are all on lines this package did not touch.
+  - **Mutation check.** 23 mutations, each applied alone, were run against
+    the named test file, and each file was restored byte for byte (checked
+    by hash). 22 were caught:
+    - in `guardrail.ts`: `scopeGateApplies` ignoring guardrail; the label
+      ignored; all quotes instead of the matched ones; `touched` radius 1;
+      identity base mapping; the base read at the head path for a rename;
+      an unreadable base demoting; the LEFT-quote exemption removed;
+      `addedIn` removed; S9 after S6; S9 after S7; S9 before S5; no RIGHT
+      base keys in the requests; base keys asked for added files;
+      `trimQuote` losing the leading-line move;
+    - in `schema.ts`: the enum always including `pre-existing`, caught by
+      both the schema and the guardrail tests;
+    - in `config.ts`: the ignored note missing; the note inverted; the
+      not-applied warning without strict;
+    - in `model-evidence.ts`: the memo key missing `scopeGate`;
+    - in `report.ts`: the sources line dropping S9;
+    - in engine `eval.ts`: `WIRING` naming the wrong package.
+
+    One survived, and it is equivalent by construction. It made
+    `evidenceScope` pass `scopeGate` while the key is unapplied. While
+    `guardrail` is unapplied, `evidenceScope` never passes strict, and
+    `promptsDigest` ignores `scopeGate` without strict, so no output can
+    change.
+  - **Not run.** The full root typecheck was not run, since nothing is
+    pushed.
+  - **Not done.** Nothing was sent to a model; there was no paid run, no
+    workflow dispatched and nothing published; and no existing user-visible
+    string changed (D14).
+
+### 2026-11-07 · VS-42a review fixes
+
+Six review findings, none blocking. Five were fixed. The sixth
+(`report.ts`) needed no change, as the finding itself allows, and the reason
+is given below. Core `review/guardrail.ts`, `review/types.ts` (a comment
+only), `review/model-evidence.ts` (the pin) and `test/review/guardrail.test.ts`
+changed. No runner, provider, LLM or posting file and no file @vector owns
+changed. Nothing is committed. Where these points differ from the entry
+above, they supersede it.
+
+- **Comment width.** The `STRICT_DROPS` comment in `types.ts` is reflowed to
+  120 columns, with the wording unchanged. Two other added comment lines were
+  over 120 and are reflowed the same way: the second condition in
+  `preExistingSuspect`'s comment, and the S9 fixture comment in
+  `guardrail.test.ts`. The test names that remain over 120 are strings,
+  which prettier leaves alone, as at HEAD.
+- **`addedIn` without non-null assertions.** Taken as suggested: `line.kind
+  === "add" && line.newLine !== undefined && line.newLine >= start &&
+  line.newLine <= anchor.line`.
+- **`strictBlobRequests` looks a quote's file up once.** Taken as the first
+  option. The file status is now read only under the gate and only for a
+  RIGHT quote; any other quote returns its own key first. The keys named are
+  unchanged.
+- **S9 reads the cached base lines.** Taken, with one shared cache.
+  - strictSelect's per-run split cache (its `read` closure) is now the
+    module function `lineReader(blobs)`, with the same results: lines,
+    `"absent"`, or `"unreadable"`.
+  - `strictCandidates` (below) uses it for S4's quotes and S9's bases, so a
+    base file is split once per run. `preExistingSuspect` builds its own
+    per-call reader, so it reads exactly as strictSelect does.
+  - `unchangedSinceBase` calls `matchAt` on the cached lines.
+  - `textOf` is removed. `quoteMatches` stays exported for VS-44 and the
+    tests, but nothing in `guardrail.ts` calls it now.
+  - This supersedes the "Cost" bullet of decision (g) and the `textOf`
+    mention under "What landed".
+- **A count of findings S9 could not check (I-7).** Taken now, though the
+  finding marks it optional until wiring.
+  - **Count.** `StrictPass.preExistingUnchecked` counts the kept findings
+    that S9 could not check because a base it needed was null or missing
+    from the map. It is counted among the kept, after S8, as `fixUnchecked`
+    is, and it is 0 when no candidate carries S9's fact (S9 off, or
+    `report.ts`).
+  - **The fact is three-valued.** `StrictCandidate.preExisting` returns
+    `true` (drop), `false` (keep), or `"unchecked"` (keep and count).
+    `suspect` returns `"unchecked"` only when every other condition holds
+    and no matched quote is known to differ from its base. A quote on a
+    changed line, or one that differs from a base S9 did read, decides the
+    finding whatever the other quotes' bases are. A base the tree lacks
+    (`{ absent: true }`) counts as checked: it holds no old code. So
+    `suspect` now checks every matched quote (a `map`) rather than stopping
+    at the first that fails; every base it reads is still one that
+    `strictBlobRequests` named.
+  - **Where the count can be read.** The count is not in `StrictResult` or
+    its schema; it joins them with VS-42 wiring. For a caller to read it
+    without a result field, strictSelect's candidate building is now the
+    exported `strictCandidates(findings, input)`, and strictSelect is
+    `strictRules(strictCandidates(...))` followed by the same result
+    assembly. Its output is unchanged.
+  - **`preExistingSuspect` still returns a boolean.** It is true only for a
+    suspect, so a caller can never read `"unchecked"` as truthy.
+  - **Tests.**
+    - The I-7 test now asserts the count for each kind of base. A null or
+      missing base gives 1 and an absent one gives 0; S9 off gives 0.
+    - A quote on a changed line, or one that differs from a read base,
+      gives 0 beside an unreadable one.
+    - A drop gives 0, whether by the suspect check or by the label.
+    - Two unchecked findings give 2, and 1 under `maxComments: 1`.
+  - **The parity test.** The 400-case property test now runs the pass a
+    second time over recording maps. It asserts that every head and base key
+    read was named by `strictBlobRequests` under the same config, gated or
+    not.
+  - **The count oracle.** In the same test, the count equals the kept
+    findings that a supplied store.ts base would have made suspects.
+  - **Generator change.** The generator gains one draw, taken last, so the
+    ungated cases are unchanged. In half the gated cases store.ts's base is
+    missing and every finding also quotes that file. The property's `seen`
+    list gains `pre-existing-unchecked`, which 4 kept findings reach over
+    the 400 cases.
+  - **Still a hand-off.** The VS-27c engine test, that S9 reads every base
+    key it named and the engine supplied each one, stays with VS-42 wiring,
+    as does carrying the count into `ReviewOutcome.notes`. VS-27c either
+    adds it to `StrictResult` under the key, or calls `strictCandidates`
+    and `strictRules` once and assembles the result. Either way the rules
+    run only once.
+- **`report.ts`'s S9 clause: no change** (decision (o) stands).
+  - The clause states a fact about the re-selection itself: no base blobs
+    are recorded, so S9 cannot run offline. That holds for every artifact,
+    whatever its config.
+  - Emitting it only when a replay's config or variant names `scopeGate`
+    would test for something that cannot happen before wiring. The replay
+    drops the key from the base `review.json` and refuses it in
+    `ReplayInput.config`, and no variant names it. So the clause would never
+    appear, and the report would stop saying what it leaves out.
+  - The report is an eval script, not a runner, so I-1 does not apply to
+    it, and the changed expectation in `report.test.ts` is deliberate.
+- **Off by default (I-1).** With the keys unset, nothing changes.
+  - strictSelect's output is the same: every existing guardrail test passes
+    with its assertions unchanged, apart from the extended I-7 and property
+    tests.
+  - The ungated generated cases are the same as before.
+  - No runner imports `guardrail.ts`.
+- **Pin (I-12).** `REVIEW_PIPELINE_SOURCES` moves from `8e2a3d79e36f8607` to
+  `38231815cfde9eed`, because `guardrail.ts` changed.
+  `REVIEW_PIPELINE_REVISION` stays 1.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory.
+  - **Counts, all unchanged by this round:**
+    - core `guardrail.test.ts` 44;
+    - `schema.test.ts` 47;
+    - `config.test.ts` 53;
+    - `trivial.test.ts` 44;
+    - `model-evidence.test.ts` 24;
+    - eval `report.test.ts` 33 (from `script/vectorscope-eval`).
+  - **Typecheck.** `bun typecheck` passes in core. The eval scripts pass
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`, run from
+    `packages/engine`.
+  - **Lint.** prettier is clean on the three changed source and test files.
+    oxlint reports 0 warnings on them.
+  - **Mutations.** Six mutations were each applied alone and run against
+    `guardrail.test.ts`, and the file was restored byte for byte (checked
+    by hash). All six were caught:
+    - an unreadable base not counted;
+    - an absent base counted;
+    - a decided quote ignored;
+    - the count taken before the cap;
+    - "unchecked" dropping the finding;
+    - `judge` losing the flag.
+  - **Not run.** The engine and app runner suites were not re-run: nothing
+    they import changed beyond a comment in `types.ts` and the pin, which
+    only core's `model-evidence` test reads. The full root typecheck was not
+    run, since nothing is pushed.

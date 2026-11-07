@@ -753,6 +753,7 @@ describe("VS-24's keys", () => {
       maxInputTokens: 0,
       impact: "grep",
       guardrail: "off",
+      scopeGate: "off",
     })
   })
 
@@ -929,5 +930,74 @@ describe("VS-27's guardrail key", () => {
     expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
       parseReviewConfig({ json: text, trigger: "desktop" }),
     )
+  })
+})
+
+// VS-42a: `scopeGate` is parsed, and no runner reads it before VS-42 wiring. It acts inside the strict guardrail, so it
+// is effective only with `guardrail: "strict"`: with it, the value says it is not applied yet; without it, it is ignored
+// with a note, and the two warnings never appear together. A plain key with no environment variable.
+describe("VS-42's scopeGate key", () => {
+  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
+  const UNAPPLIED =
+    '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
+  const IGNORED =
+    '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
+
+  test("has no default entry, so the defaults and their digests stay as they were", () => {
+    const { config, warnings } = parseReviewConfig()
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "scopeGate")).toBe(false)
+    expect(Object.hasOwn(config, "scopeGate")).toBe(false)
+    expect(warnings).toEqual([])
+    expect(OPTIONAL_REVIEW_DEFAULTS.scopeGate).toBe("off")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("scopeGate")
+    expect(SOURCED_REVIEW_KEYS).not.toContain("scopeGate")
+  })
+
+  test("under strict it says it is not applied; without strict it is ignored with a note, its value kept", () => {
+    const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
+    expect(json({ guardrail: "strict", scopeGate: "introduced" })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", scopeGate: "introduced" },
+      warnings: [STRICT, UNAPPLIED],
+    })
+    for (const value of [{ scopeGate: "introduced" }, { guardrail: "off", scopeGate: "introduced" }] as const)
+      expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
+    expect(json({ scopeGate: "off" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, scopeGate: "off" }, warnings: [] })
+    expect(json({ guardrail: "strict", scopeGate: "off" }).warnings).toEqual([STRICT])
+    // REVIEW_GUARDRAIL decides which warning a review.json scopeGate gets.
+    expect(
+      parseReviewConfig({ json: JSON.stringify({ scopeGate: "introduced" }), env: { REVIEW_GUARDRAIL: "strict" } })
+        .warnings,
+    ).toEqual([STRICT, UNAPPLIED])
+    expect(
+      parseReviewConfig({
+        json: JSON.stringify({ guardrail: "strict", scopeGate: "introduced" }),
+        env: { REVIEW_GUARDRAIL: "off" },
+      }).warnings,
+    ).toEqual([IGNORED])
+  })
+
+  test("no environment variable sets it, and a bad value warns naming the value in use", () => {
+    expect(parseReviewConfig({ env: { REVIEW_SCOPE_GATE: "introduced", REVIEW_SCOPEGATE: "introduced" } })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [],
+    })
+    expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict", scopeGate: "on" }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
+      warnings: [`${REVIEW_CONFIG_PATH}: "scopeGate" must be "off", "introduced"; using "off".`, STRICT],
+    })
+  })
+
+  test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
+    for (const text of [
+      JSON.stringify({ scopeGate: "introduced" }),
+      JSON.stringify({ guardrail: "strict", scopeGate: "introduced" }),
+    ]) {
+      expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, trigger: "auto" })).toEqual(
+        parseReviewConfig({ json: text, trigger: "auto" }),
+      )
+      expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
+        parseReviewConfig({ json: text, trigger: "desktop" }),
+      )
+    }
   })
 })

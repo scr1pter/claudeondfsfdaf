@@ -11,8 +11,12 @@ import {
 import { normalizeCode } from "@vectordevai/core/review/fingerprint"
 import {
   MAX_FIX_HUNKS,
+  preExistingSuspect,
   quoteMatches,
+  scopeGateApplies,
   strictBlobRequests,
+  strictCandidates,
+  strictRules,
   strictSelect,
   type StrictBlob,
   type StrictInput,
@@ -22,6 +26,7 @@ import { decodeReport, MAX_FAILURE_TEXT_CHARS, strictResultJsonSchema } from "@v
 import { gap, MAX_INLINE, NEAR, sameFinding } from "@vectordevai/core/review/select"
 import {
   FAILURE_CLASSES,
+  FINDING_SCOPES,
   STRICT_DROPS,
   STRICT_FIX_KINDS,
   type FailureInfo,
@@ -668,7 +673,7 @@ describe("strictSelect: deletion-only defects", () => {
     })
     const result = run([entry])
     expect(result.findings[0].quotes).toEqual([{ ...ttl, path: "src/auth/old-token.ts" }])
-    expect(strictBlobRequests([entry], anchors)).toEqual({
+    expect(strictBlobRequests([entry], anchors, {})).toEqual({
       head: ["src/auth/token.ts"],
       base: ["src/auth/old-token.ts"],
     })
@@ -774,6 +779,304 @@ describe("strictSelect: completeness", () => {
   })
 })
 
+// VS-42a's S9, the introduced-by-change check, over the same change. Head line 7 (`store.reset()`) is unchanged, at
+// base line 8 since the first hunk removed a line; head line 8 (`store.flush()`) is added; token.ts's line 2 is
+// unchanged since old-token.ts. store.ts is outside the diff, here with a base equal to its head.
+const GATE = { maxComments: 10, suggestions: true, guardrail: "strict", scopeGate: "introduced" } as const
+const RESET_QUOTE: Quote = { path: SESSION, line: 7, side: "RIGHT", code: "  store.reset()" }
+const STORE_QUOTE: Quote = { path: "src/auth/store.ts", line: 2, side: "RIGHT", code: "  return store.value" }
+const NAME_QUOTE: Quote = { path: "src/auth/token.ts", line: 2, side: "RIGHT", code: 'export const name = "token"' }
+const GATED_BLOBS = blobs({}, { "src/auth/store.ts": STORE_HEAD })
+
+function gated(overrides: Partial<StrictInput> = {}): Partial<StrictInput> {
+  return { config: GATE, blobs: GATED_BLOBS, ...overrides }
+}
+
+// A finding on the added flush line.
+function onFlush(overrides: Partial<Finding> = {}) {
+  return finding({ line: 8, title: "Flush runs after the store was reset", quotes: [FLUSH_QUOTE], ...overrides })
+}
+
+function suspectOf(entry: Finding, source: StrictInput["blobs"] = GATED_BLOBS, files = anchors) {
+  return preExistingSuspect(entry, source.head, source.base, files)
+}
+
+// What strictSelect's rule pass counts beyond the result: the kept findings S9 could not check.
+function uncheckedOf(findings: Finding[], overrides: Partial<StrictInput> = {}) {
+  const options = input(overrides)
+  return strictRules(strictCandidates(findings, options), {
+    maxComments: options.config.maxComments,
+    unanswered: options.unanswered,
+  }).preExistingUnchecked
+}
+
+describe("S9: the introduced-by-change check (VS-42a)", () => {
+  test("introduced: a finding that quotes the line the change added is kept", () => {
+    for (const scope of [undefined, "introduced", "exacerbated"] as const) {
+      const entry = onFlush(scope ? { scope } : {})
+      expect(fate(entry, gated())).toBe("kept")
+      expect(suspectOf(entry)).toBe(false)
+    }
+  })
+
+  // The false-drop class S9 accepts by design: it rests on the quotes alone, so the anchor's added line is no evidence.
+  // The new flush() may be what misuses the old reset(), or a new call site may break on an unchanged callee, and the
+  // finding still drops unless it quotes a changed line. VS-42 wiring's prompt asks every blocking finding to.
+  test("a finding on an added line that quotes only unchanged code is a suspect, even when the new line is the defect", () => {
+    const sameFile = onFlush({ quotes: [RESET_QUOTE] })
+    expect(fate(sameFile)).toBe("kept")
+    expect(fate(sameFile, gated())).toBe("pre-existing")
+    expect(suspectOf(sameFile)).toBe(true)
+    // An unchanged file outside the diff, read at base as written.
+    const crossFile = onFlush({ quotes: [STORE_QUOTE] })
+    expect(fate(crossFile, gated())).toBe("pre-existing")
+    expect(suspectOf(crossFile)).toBe(true)
+    // Code that differs from the base is not old code, wherever the diff says it is unchanged.
+    const moved = blobs({}, { "src/auth/store.ts": "export function read(store) {\n  return store.cached\n}\n" })
+    expect(fate(crossFile, gated({ blobs: moved }))).toBe("kept")
+    expect(suspectOf(crossFile, moved)).toBe(false)
+    const edited = blobs({}, { [SESSION]: SESSION_BASE.replace("  store.reset()", "  store.clear()") })
+    expect(fate(sameFile, gated({ blobs: edited }))).toBe("kept")
+    // The base line is the mapped one: head line 7 is base line 8, and base line 7 holds other code.
+    expect(SESSION_BASE.split("\n")[7]).toBe("  store.reset()")
+    expect(SESSION_HEAD.split("\n")[6]).toBe("  store.reset()")
+    // A quote one line from an added line is not on it.
+    expect(touched(anchors, SESSION, 7, 0)).toBe(false)
+    expect(touched(anchors, SESSION, 7, 1)).toBe(true)
+  })
+
+  test("exacerbated: an old latent bug the change makes reachable is kept when a quote is on the changed line", () => {
+    const reachable = onFlush({ scope: "exacerbated", quotes: [RESET_QUOTE, FLUSH_QUOTE] })
+    expect(fate(reachable, gated())).toBe("kept")
+    expect(suspectOf(reachable)).toBe(false)
+    const span = onFlush({ quotes: [{ ...RESET_QUOTE, code: "  store.reset()\n  store.flush()" }] })
+    expect(fate(span, gated())).toBe("kept")
+    // The label alone never saves a suspect (I-2).
+    for (const scope of ["exacerbated", "introduced"] as const)
+      expect(fate(onFlush({ scope, quotes: [RESET_QUOTE] }), gated())).toBe("pre-existing")
+  })
+
+  test("the model's pre-existing label drops a finding the suspect check would keep, under the gate only (I-2)", () => {
+    const labelled = onFlush({ scope: "pre-existing" })
+    expect(suspectOf(labelled)).toBe(false)
+    expect(fate(labelled, gated())).toBe("pre-existing")
+    expect(fate(labelled)).toBe("kept")
+    expect(fate(labelled, { config: { ...GATE, guardrail: "off" } })).toBe("kept")
+    // Even on a deletion defect, which the suspect check exempts.
+    const removed = finding({
+      side: "LEFT",
+      quotes: [GUARD_QUOTE],
+      suggestion: undefined,
+      patch: GUARD_PATCH,
+      scope: "pre-existing",
+    })
+    expect(fate(removed, gated())).toBe("pre-existing")
+  })
+
+  test("a renamed file's base is read at its old path", () => {
+    const entry = finding({
+      path: "src/auth/token.ts",
+      line: 1,
+      title: "Token never expires",
+      quotes: [NAME_QUOTE],
+      suggestion: undefined,
+      patch: "x",
+    })
+    expect(touched(anchors, "src/auth/token.ts", 2, 0)).toBe(false)
+    expect(fate(entry)).toBe("kept")
+    expect(fate(entry, gated())).toBe("pre-existing")
+    expect(suspectOf(entry)).toBe(true)
+    expect(strictBlobRequests([entry], anchors, GATE)).toEqual({
+      head: ["src/auth/token.ts"],
+      base: ["src/auth/old-token.ts"],
+    })
+    // A base keyed at the head path is not the renamed file's base, so S9 cannot check it and keeps the finding.
+    const atHeadPath = { head: GATED_BLOBS.head, base: new Map([["src/auth/token.ts", TOKEN_BASE]]) }
+    expect(fate(entry, gated({ blobs: atHeadPath }))).toBe("kept")
+    expect(suspectOf(entry, atHeadPath)).toBe(false)
+  })
+
+  test("deletion defects are exempt: a LEFT anchor, an anchor only next to a deletion, and a matched base quote", () => {
+    const left = finding({ side: "LEFT", quotes: [GUARD_QUOTE], suggestion: undefined, patch: GUARD_PATCH })
+    expect(fate(left, gated())).toBe("kept")
+    expect(suspectOf(left)).toBe(false)
+    // Head line 3 sits next to the removed guard and holds no added line: S3 accepts it as a deletion defect.
+    const beside = finding({ quotes: [STORE_QUOTE] })
+    expect(fate(beside, gated())).toBe("kept")
+    expect(suspectOf(beside)).toBe(false)
+    // A base quote that matches is removed code, so the finding rests on the deletion.
+    const withGuard = onFlush({ quotes: [RESET_QUOTE, GUARD_QUOTE] })
+    expect(fate(withGuard, gated())).toBe("kept")
+    expect(suspectOf(withGuard)).toBe(false)
+  })
+
+  test("only the quotes S4 matched count: an invented quote never saves a finding nor exempts one (I-2)", () => {
+    const invented = onFlush({ quotes: [RESET_QUOTE, { ...FLUSH_QUOTE, code: "  store.flush(true)" }] })
+    expect(fate(invented, gated())).toBe("pre-existing")
+    expect(suspectOf(invented)).toBe(true)
+    const inventedBase = onFlush({ quotes: [RESET_QUOTE, { ...GUARD_QUOTE, code: "  if (!user) return undefined" }] })
+    expect(fate(inventedBase, gated())).toBe("pre-existing")
+    // Kept quotes are the matched ones, as before.
+    expect(run([onFlush({ quotes: [{ ...RESET_QUOTE, line: 1 }, FLUSH_QUOTE] })], gated()).findings[0].quotes).toEqual([
+      FLUSH_QUOTE,
+    ])
+  })
+
+  test("a base S9 cannot read keeps the finding, never marks the result incomplete, and is counted (I-7)", () => {
+    const entry = onFlush({ quotes: [RESET_QUOTE] })
+    const without = new Map([...GATED_BLOBS.base].filter(([key]) => key !== SESSION))
+    // A base the tree lacks holds no old code, so S9 checked the finding; a null or missing one leaves it unchecked.
+    for (const [base, unchecked] of [
+      [blobs({}, { [SESSION]: null }).base, 1],
+      [blobs({}, { [SESSION]: { absent: true } }).base, 0],
+      [without, 1],
+    ] as const) {
+      const source = { head: GATED_BLOBS.head, base }
+      expect(run([entry], gated({ blobs: source }))).toMatchObject({
+        complete: true,
+        findings: [{ id: entry.id }],
+        dropped: [],
+      })
+      expect(suspectOf(entry, source)).toBe(false)
+      expect(uncheckedOf([entry], gated({ blobs: source }))).toBe(unchecked)
+      // With S9 off, no candidate carries its fact, so nothing is counted.
+      expect(uncheckedOf([entry], { blobs: source })).toBe(0)
+    }
+    // store.ts with no base in the map at all.
+    const store = onFlush({ quotes: [STORE_QUOTE] })
+    expect(run([store], { config: GATE })).toMatchObject({ complete: true, dropped: [] })
+    expect(uncheckedOf([store], { config: GATE })).toBe(1)
+    // A checked quote that differs from its base, or one on a changed line, decides the finding whatever the other
+    // quote's base: it is not a suspect, and not unchecked.
+    const both = onFlush({ quotes: [STORE_QUOTE, RESET_QUOTE] })
+    expect(uncheckedOf([both], { config: GATE })).toBe(1)
+    const edited = blobs({}, { [SESSION]: SESSION_BASE.replace("  store.reset()", "  store.clear()") })
+    expect(uncheckedOf([both], { config: GATE, blobs: edited })).toBe(0)
+    expect(uncheckedOf([onFlush({ quotes: [STORE_QUOTE, FLUSH_QUOTE] })], { config: GATE })).toBe(0)
+    // Neither is a finding S9 dropped: by the suspect check with its base read, or by the model's label.
+    expect(uncheckedOf([entry], gated())).toBe(0)
+    expect(uncheckedOf([{ ...store, scope: "pre-existing" }], { config: GATE })).toBe(0)
+    // Counted among the kept, after S8, as fixUnchecked is.
+    const leak = onFlush({
+      quotes: [STORE_QUOTE],
+      title: "Flush leaks the handle",
+      failure: { ...FAILURE, class: "leak" },
+      suggestion: "  store.flush().close()",
+    })
+    expect(uncheckedOf([store, leak], { config: GATE })).toBe(2)
+    expect(uncheckedOf([store, leak], { config: { ...GATE, maxComments: 1 } })).toBe(1)
+  })
+
+  test("a file the change added is never a suspect, and its base is never asked for", () => {
+    const added = [
+      ...anchors,
+      ...parseUnifiedDiff(
+        [
+          "diff --git a/src/auth/fresh.ts b/src/auth/fresh.ts",
+          "new file mode 100644",
+          "--- /dev/null",
+          "+++ b/src/auth/fresh.ts",
+          "@@ -0,0 +1,2 @@",
+          "+export const a = 1",
+          "+export const b = 2",
+          "",
+        ].join("\n"),
+      ),
+    ]
+    const entry = finding({
+      path: "src/auth/fresh.ts",
+      line: 1,
+      quotes: [{ path: "src/auth/fresh.ts", line: 2, side: "RIGHT", code: "export const b = 2" }],
+      suggestion: undefined,
+      patch: "x",
+    })
+    const source = blobs({ "src/auth/fresh.ts": "export const a = 1\nexport const b = 2\n" }, {})
+    expect(suspectOf(entry, source, added)).toBe(false)
+    expect(strictBlobRequests([entry], added, GATE)).toEqual({ head: ["src/auth/fresh.ts"], base: [] })
+    expect(fate(entry, { anchors: added, config: GATE, blobs: source })).toBe("kept")
+  })
+
+  test("S9 is checked after S5 and before S6: a suspect's patch is never applied or parsed, and it hides no duplicate", () => {
+    const suspect = { quotes: [RESET_QUOTE] }
+    expect(fate(onFlush({ ...suspect, failure: { ...FAILURE, impact: "" } }), gated())).toBe("no-impact")
+    expect(fate(onFlush({ ...suspect, suggestion: undefined }), gated())).toBe("pre-existing")
+    const calls: string[] = []
+    const parses = (path: string) => {
+      calls.push(path)
+      return true
+    }
+    const patched = onFlush({ ...suspect, suggestion: undefined, patch: GUARD_PATCH })
+    expect(run([patched], gated({ parses })).dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(calls).toEqual([])
+    run([patched], { blobs: GATED_BLOBS, parses })
+    expect(calls.length).toBeGreaterThan(0)
+    // The same class within 3 lines: a weaker suspect is counted as pre-existing, not as a duplicate.
+    const strong = onFlush({ confidence: 0.95 })
+    const weak = onFlush({ ...suspect, confidence: 0.8, title: "Reset discards pending writes" })
+    expect(run([strong, weak]).dropped).toEqual([{ reason: "duplicate", count: 1 }])
+    expect(run([strong, weak], gated())).toMatchObject({
+      findings: [{ id: strong.id }],
+      dropped: [{ reason: "pre-existing", count: 1 }],
+    })
+    // A stronger suspect never hides the introduced finding beside it.
+    const loud = onFlush({ ...suspect, confidence: 0.99, title: "Reset discards pending writes" })
+    expect(run([loud, strong], gated())).toMatchObject({
+      findings: [{ id: strong.id }],
+      dropped: [{ reason: "pre-existing", count: 1 }],
+    })
+    // Listed in rule order.
+    expect(
+      run(
+        [
+          onFlush({ ...suspect, suggestion: undefined }),
+          onFlush({ suggestion: undefined }),
+          onFlush({ failure: { ...FAILURE, trigger: "" } }),
+        ],
+        gated(),
+      ).dropped,
+    ).toEqual([
+      { reason: "no-impact", count: 1 },
+      { reason: "pre-existing", count: 1 },
+      { reason: "no-fix", count: 1 },
+    ])
+  })
+
+  test("set without guardrail: strict, or with scopeGate off, S9 does nothing", () => {
+    const entries = [
+      onFlush({ quotes: [RESET_QUOTE] }),
+      onFlush({
+        scope: "pre-existing",
+        title: "Flush leaks the handle",
+        failure: { ...FAILURE, class: "leak" },
+        suggestion: "  store.flush().close()",
+      }),
+    ]
+    const off = run(entries, { blobs: GATED_BLOBS })
+    expect(off.dropped).toEqual([])
+    for (const config of [
+      { maxComments: 10, suggestions: true, scopeGate: "introduced" as const },
+      { maxComments: 10, suggestions: true, guardrail: "off" as const, scopeGate: "introduced" as const },
+      { maxComments: 10, suggestions: true, guardrail: "strict" as const },
+      { maxComments: 10, suggestions: true, guardrail: "strict" as const, scopeGate: "off" as const },
+    ]) {
+      expect(run(entries, { config, blobs: GATED_BLOBS })).toEqual(off)
+      expect(scopeGateApplies(config)).toBe(false)
+      expect(strictBlobRequests(entries, anchors, config)).toEqual(strictBlobRequests(entries, anchors, {}))
+    }
+    expect(scopeGateApplies(GATE)).toBe(true)
+    expect(scopeGateApplies({})).toBe(false)
+  })
+
+  test("a pre-existing drop conforms to the result schema built for its keys, and only to that one", () => {
+    const result = run([onFlush({ quotes: [RESET_QUOTE] })], gated())
+    expect(result.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+    expect(violations(strictResultJsonSchema(GATE)!, result)).toEqual([])
+    expect(violations(strictResultJsonSchema({ guardrail: "strict" })!, result)).toEqual([
+      "$.dropped[0].reason is not in its enum",
+    ])
+  })
+})
+
 describe("quoteMatches (S4's matcher)", () => {
   const head = "  if (a)   {\r\n\treturn  b\r\n\r\n  }\r\nend\n"
   test("matches the file's lines at the quote's line, apart from whitespace", () => {
@@ -833,7 +1136,7 @@ describe("strictBlobRequests", () => {
       }),
       finding({ path: "b/src/auth/token.ts", quotes: [{ ...GUARD_QUOTE, path: "src/auth/token.ts" }], patch: "x" }),
     ]
-    expect(strictBlobRequests(entries, anchors)).toEqual({
+    expect(strictBlobRequests(entries, anchors, {})).toEqual({
       head: ["./src/auth/store.ts", SESSION, "src/auth/token.ts"],
       base: ["src/auth/old-token.ts", SESSION],
     })
@@ -841,11 +1144,57 @@ describe("strictBlobRequests", () => {
     const head = new Recording(source.head)
     const base = new Recording(source.base)
     strictSelect(entries, input({ blobs: { head, base } }))
-    const asked = strictBlobRequests(entries, anchors)
+    const asked = strictBlobRequests(entries, anchors, {})
     expect(head.asked.size).toBeGreaterThan(0)
     expect(base.asked.size).toBeGreaterThan(0)
     expect([...head.asked].every((key) => asked.head.includes(key))).toBe(true)
     expect([...base.asked].every((key) => asked.base.includes(key))).toBe(true)
+  })
+
+  // VS-42a: under the gate, S9 reads each head quote's file at base too, so the engine must be asked for it; VS-27c
+  // passes the same config to both calls.
+  test("under scopeGate, also names each head quote's base file, and every one S9 reads", () => {
+    const entries = [
+      onFlush({ quotes: [RESET_QUOTE, STORE_QUOTE, GUARD_QUOTE, { ...NAME_QUOTE, path: "src/auth/old-token.ts" }] }),
+      onFlush({
+        quotes: [
+          { ...STORE_QUOTE, path: "src/../../etc/passwd" },
+          { ...RESET_QUOTE, path: "./src/x.ts" },
+        ],
+      }),
+    ]
+    expect(strictBlobRequests(entries, anchors, {})).toEqual({
+      head: ["./src/x.ts", SESSION, "src/auth/store.ts", "src/auth/token.ts"],
+      base: [SESSION],
+    })
+    expect(strictBlobRequests(entries, anchors, GATE)).toEqual({
+      head: ["./src/x.ts", SESSION, "src/auth/store.ts", "src/auth/token.ts"],
+      base: ["./src/x.ts", "src/auth/old-token.ts", SESSION, "src/auth/store.ts"],
+    })
+    const reads = (findings: Finding[]) => {
+      const head = new Recording(GATED_BLOBS.head)
+      const base = new Recording(GATED_BLOBS.base)
+      strictSelect(findings, input({ config: GATE, blobs: { head, base } }))
+      return { head: [...head.asked].toSorted(), base: [...base.asked].toSorted() }
+    }
+    // Each suspect alone, so every base S9 reads is read before any rule could stop early.
+    for (const quote of [RESET_QUOTE, STORE_QUOTE]) {
+      const entry = onFlush({ quotes: [quote] })
+      const asked = strictBlobRequests([entry], anchors, GATE)
+      const read = reads([entry])
+      expect(read.base.length).toBeGreaterThan(0)
+      expect(read.base.every((key) => asked.base.includes(key))).toBe(true)
+      expect(read.head.every((key) => asked.head.includes(key))).toBe(true)
+      expect(read.base.every((key) => strictBlobRequests([entry], anchors, {}).base.includes(key))).toBe(false)
+    }
+    const renamed = finding({
+      path: "src/auth/token.ts",
+      line: 1,
+      quotes: [NAME_QUOTE],
+      suggestion: undefined,
+      patch: "x",
+    })
+    expect(reads([renamed]).base).toEqual(["src/auth/old-token.ts"])
   })
 
   test("asks for no patch head outside the diff and no path that could leave the repository", () => {
@@ -860,7 +1209,7 @@ describe("strictBlobRequests", () => {
       }),
       finding({ path: "src/../../x", quotes: [{ ...GUARD_QUOTE, path: "src/../../x" }], patch: GUARD_PATCH }),
     ]
-    expect(strictBlobRequests(entries, anchors)).toEqual({ head: [SESSION], base: [] })
+    expect(strictBlobRequests(entries, anchors, {})).toEqual({ head: [SESSION], base: [] })
     // strictSelect reads such a path as a file the tree lacks: a plain mismatch, never read and never incomplete.
     const source = blobs()
     const head = new Recording(source.head)
@@ -876,8 +1225,9 @@ describe("strictBlobRequests", () => {
   })
 })
 
-// Every finding kept satisfies S1 to S5, S7 and S8, and S6 in one of its forms, over generated candidates; the result
-// conforms to the result schema and does not depend on input order.
+// Every finding kept satisfies S1 to S5, S7 and S8, S6 in one of its forms, and S9 under the gate, over generated
+// candidates; the result conforms to the result schema built for its keys and does not depend on input order, and
+// every file the pass reads was named by strictBlobRequests under the same config.
 describe("strictSelect: properties", () => {
   const places: Pick<Finding, "path" | "line" | "endLine" | "side">[] = [
     { path: SESSION, line: 3, side: "RIGHT" },
@@ -964,40 +1314,60 @@ describe("strictSelect: properties", () => {
       trust: pick(["trusted", "untrusted"] as const),
       unanswered: next() < 0.3 ? ["a1", "a2"] : [],
       parses: next() < 0.5 ? (_path: string, text: string) => !text.includes("session.id") : undefined,
+      // VS-42a, drawn last so the cases above stay as they were: half the cases run S9, their findings labelled.
+      gate: next() < 0.5,
+      scopes: Array.from({ length: count }, () => pick([undefined, undefined, ...FINDING_SCOPES])),
+      // Drawn after the scopes, so the cases above stay as they were: some gated cases lack store.ts's base.
+      storeBase: next() < 0.5,
     }
   }
 
   test("every kept finding satisfies the rules, over 400 generated cases", () => {
-    const schema = strictResultJsonSchema({ guardrail: "strict" })!
     const index = buildAnchorIndex(anchors)
-    const source = blobs()
-    const text = (side: Quote["side"], path: string) => {
-      const blob = (side === "LEFT" ? source.base : source.head).get(path)
-      return typeof blob === "string" ? blob : null
-    }
     // What the generated cases exercised, so the property cannot pass by keeping nothing.
     const seen = new Set<string>()
     for (const seed of Array.from({ length: 400 }, (_, value) => value + 1)) {
       const generated = generate(seed)
+      const gate = generated.gate
+      const schema = strictResultJsonSchema(gate ? GATE : { guardrail: "strict" })!
+      const source = gate && generated.storeBase ? GATED_BLOBS : blobs()
+      const text = (side: Quote["side"], path: string) => {
+        const blob = (side === "LEFT" ? source.base : source.head).get(path)
+        return typeof blob === "string" ? blob : null
+      }
+      // A gated case without store.ts's base quotes that file in every finding, so S9 meets a base it cannot read.
+      const findings = gate
+        ? generated.findings.map((entry, position) => {
+            const scope = generated.scopes[position]
+            const quoted = generated.storeBase ? entry : { ...entry, quotes: [...(entry.quotes ?? []), STORE_QUOTE] }
+            return scope ? { ...quoted, scope } : quoted
+          })
+        : generated.findings
       const options = input({
-        config: { maxComments: generated.maxComments, suggestions: generated.suggestions },
+        config: {
+          maxComments: generated.maxComments,
+          suggestions: generated.suggestions,
+          ...(gate ? { guardrail: "strict" as const, scopeGate: "introduced" as const } : {}),
+        },
+        blobs: source,
         trust: generated.trust,
         unanswered: generated.unanswered,
         ...(generated.parses ? { parses: generated.parses } : {}),
       })
-      const result = strictSelect(generated.findings, options)
+      const result = strictSelect(findings, options)
       for (const entry of result.dropped) seen.add(entry.reason)
       for (const entry of result.findings) seen.add(entry.fix.kind)
       if (!result.complete) seen.add("incomplete")
       expect(violations(schema, result)).toEqual([])
       expect(result.findings.length + result.dropped.reduce((total, entry) => total + entry.count, 0)).toBe(
-        generated.findings.length,
+        findings.length,
       )
+      if (!gate) expect(result.dropped.map((entry) => entry.reason)).not.toContain("pre-existing")
       expect(result.fixUnchecked).toBe(result.findings.filter((entry) => entry.fix.kind === "unchecked").length)
       // S8.
       expect(result.findings.length).toBeLessThanOrEqual(Math.min(MAX_INLINE, generated.maxComments))
       const origins = result.findings.map((kept) => {
-        const origin = generated.findings.find(
+        const origin = findings.find(
           (entry) =>
             entry.id === kept.id &&
             entry.line === kept.line &&
@@ -1027,8 +1397,27 @@ describe("strictSelect: properties", () => {
           expect(near && a.failure?.class === b.failure?.class).toBe(false)
         }
       // The result does not depend on the input order.
-      expect(strictSelect(generated.findings.toReversed(), options)).toEqual(result)
-      expect(strictSelect([...generated.findings.slice(1), ...generated.findings.slice(0, 1)], options)).toEqual(result)
+      expect(strictSelect(findings.toReversed(), options)).toEqual(result)
+      expect(strictSelect([...findings.slice(1), ...findings.slice(0, 1)], options)).toEqual(result)
+      // The same pass over recorded reads: every file it reads was named by strictBlobRequests under the same config,
+      // so the engine is asked for each one (VS-27c), and S9's unchecked count is the kept findings that store.ts's
+      // base, when it is missing, would have made suspects.
+      const head = new Recording(source.head)
+      const base = new Recording(source.base)
+      const pass = strictRules(strictCandidates(findings, { ...options, blobs: { head, base } }), {
+        maxComments: options.config.maxComments,
+        unanswered: options.unanswered,
+      })
+      expect(pass.kept.map((entry) => entry.finding.id)).toEqual(result.findings.map((entry) => entry.id))
+      const asked = strictBlobRequests(findings, anchors, options.config)
+      expect([...head.asked].filter((key) => !asked.head.includes(key))).toEqual([])
+      expect([...base.asked].filter((key) => !asked.base.includes(key))).toEqual([])
+      expect(pass.preExistingUnchecked).toBe(
+        gate
+          ? origins.filter((origin) => preExistingSuspect(origin, source.head, GATED_BLOBS.base, anchors)).length
+          : 0,
+      )
+      if (pass.preExistingUnchecked) seen.add("pre-existing-unchecked")
 
       function satisfies(origin: Finding, kept: StrictFinding) {
         const resolved = resolveAnchor(index, origin)
@@ -1073,10 +1462,36 @@ describe("strictSelect: properties", () => {
           Array.from(kept.trigger).length <= MAX_FAILURE_TEXT_CHARS &&
           Array.from(kept.impact).length <= MAX_FAILURE_TEXT_CHARS &&
           // S6
-          fixed
+          fixed &&
+          // S9
+          !(gate && (origin.scope === "pre-existing" || preExistingSuspect(origin, source.head, source.base, anchors)))
         )
       }
     }
-    expect([...seen].toSorted()).toEqual([...STRICT_DROPS, "incomplete", ...STRICT_FIX_KINDS].toSorted())
+    expect([...seen].toSorted()).toEqual(
+      [...STRICT_DROPS, "incomplete", ...STRICT_FIX_KINDS, "pre-existing-unchecked"].toSorted(),
+    )
+  })
+
+  // S9 drops an unlabelled finding exactly when preExistingSuspect holds and S1 to S5 kept it; every other finding has
+  // the fate it has with the gate off.
+  test("preExistingSuspect agrees with strictSelect's pre-existing drops on unlabelled findings", () => {
+    const lone = (entry: Finding, config: StrictInput["config"]) => {
+      const result = strictSelect([entry], input({ config, blobs: GATED_BLOBS }))
+      return result.findings.length ? "kept" : result.dropped[0].reason
+    }
+    const fates = Array.from({ length: 150 }, (_, seed) => generate(seed + 1).findings)
+      .flat()
+      .map((entry) => ({
+        off: lone(entry, { maxComments: 10, suggestions: true }),
+        on: lone(entry, GATE),
+        suspect: preExistingSuspect(entry, GATED_BLOBS.head, GATED_BLOBS.base, anchors),
+      }))
+    for (const fate of fates)
+      expect(fate.on).toBe(fate.suspect && (fate.off === "kept" || fate.off === "no-fix") ? "pre-existing" : fate.off)
+    expect(fates.some((fate) => fate.on === "pre-existing")).toBe(true)
+    expect(fates.some((fate) => fate.on === "kept")).toBe(true)
+    // Suspects that an earlier rule drops keep that rule's reason.
+    expect(fates.some((fate) => fate.suspect && fate.on !== "pre-existing")).toBe(true)
   })
 })

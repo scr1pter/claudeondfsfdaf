@@ -47,7 +47,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "bb8972b4baf9cd62"
+export const REVIEW_PIPELINE_SOURCES = "38231815cfde9eed"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -58,7 +58,8 @@ export const MAX_CERTIFICATE_DAYS = 90
 // `trivial` is one (a skipped change is not reviewed), counted from VS-24 wiring on (policyDigest); its
 // `maxInputTokens` is a budget. VS-25's `impact` is one (the slice is context the model reviews with), counted from
 // VS-25b wiring on, and then only as "graph". VS-27's `guardrail` is one (it selects what is posted), counted from VS-27c
-// on, and then only as "strict".
+// on, and then only as "strict". VS-42's `scopeGate` is one (S9 drops what would be posted), counted from VS-42 wiring
+// on, and then only as "introduced" under `guardrail: "strict"`.
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -73,6 +74,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "trivial",
   "impact",
   "guardrail",
+  "scopeGate",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -388,16 +390,22 @@ const prompts = new Map<string, string>()
 // A digest of the core review prompts and output schemas, built from fixed inputs so it changes only when their text
 // does (canonicalPrompts). Memoised per set of prompt keys; with none set it is the digest it has always been. The
 // strict schemas (VS-27a) come last, and only under `guardrail: "strict"`, so the digest of every other set of keys
-// stays as it was.
-export function promptsDigest(keys: Partial<Pick<ReviewConfig, "impact" | "guardrail">> = {}): string {
-  const key = [keys.impact === "graph" ? "impact:graph" : "", keys.guardrail === "strict" ? "guardrail:strict" : ""]
+// stays as it was. VS-42's `scopeGate: "introduced"` changes them (the result schema's `pre-existing` drop) only under
+// strict, so it joins the memo key only there.
+export function promptsDigest(keys: Partial<Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate">> = {}): string {
+  const strict = keys.guardrail === "strict"
+  const key = [
+    keys.impact === "graph" ? "impact:graph" : "",
+    strict ? "guardrail:strict" : "",
+    strict && keys.scopeGate === "introduced" ? "scopeGate:introduced" : "",
+  ]
     .filter(Boolean)
     .join(",")
   const cached = prompts.get(key)
   if (cached) return cached
-  const strict = [strictReportJsonSchema(keys), strictResultJsonSchema(keys)].filter((schema) => schema !== undefined)
+  const schemas = [strictReportJsonSchema(keys), strictResultJsonSchema(keys)].filter((schema) => schema !== undefined)
   const digest = fnv1a64(
-    JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA, ...strict]),
+    JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA, ...schemas]),
   )
   prompts.set(key, digest)
   return digest
@@ -431,13 +439,18 @@ export function evidenceScope(input: {
     adapter: input.adapter,
     pipeline: REVIEW_PIPELINE_REVISION,
     // The impact block and the strict schemas enter the prompts only once a runner applies their key (it leaves
-    // UNAPPLIED_REVIEW_KEYS).
+    // UNAPPLIED_REVIEW_KEYS), and VS-42's schema change only once both its key and strict are applied.
     prompts: promptsDigest({
       ...(input.config.impact === "graph" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "impact")
         ? { impact: "graph" as const }
         : {}),
       ...(input.config.guardrail === "strict" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail")
         ? { guardrail: "strict" as const }
+        : {}),
+      ...(input.config.guardrail === "strict" &&
+      input.config.scopeGate === "introduced" &&
+      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail" || key === "scopeGate")
+        ? { scopeGate: "introduced" as const }
         : {}),
     }),
     policy: policyDigest(input.config),

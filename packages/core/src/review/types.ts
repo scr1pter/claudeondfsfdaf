@@ -43,6 +43,9 @@ export interface ModelFinding {
   // the round-two amendment). `severity` then reads "concern" as on the legacy path, and S2 drops the finding as
   // `severity-unreadable`, never as a choice of the model's.
   severityUnreadable?: boolean
+  // The model's scope label (VS-42): S9 drops a finding labelled "pre-existing" under `scopeGate: "introduced"`. No
+  // decoder sets it before VS-42 wiring (with VS-27c), so only callers that build findings themselves can reach it.
+  scope?: FindingScope
 }
 
 export interface ModelReport {
@@ -89,15 +92,23 @@ export interface Quote {
 }
 export const VERIFIED_BY = ["model", "runtime"] as const
 export type VerifiedBy = (typeof VERIFIED_BY)[number]
+// VS-42's model label: whether the change introduced the defect, made an older one reachable or worse, or left it as it
+// was at the base. It maps onto ReviewBench's scope axis (introduced to introduced-by-pr, exacerbated to
+// exacerbated-by-pr, pre-existing to pre-existing; its `unrelated` has no model value). A label can only drop a finding
+// (I-2): "pre-existing" drops it under S9, and "introduced" or "exacerbated" never saves one S9's suspect check drops.
+export const FINDING_SCOPES = ["introduced", "exacerbated", "pre-existing"] as const
+export type FindingScope = (typeof FINDING_SCOPES)[number]
 // "unchecked": no committable suggestion and no patch that applies, so the fix is shown as a plain diff block (S6).
 export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
-// Why strictSelect dropped a candidate, in the order its rules S1 to S8 are checked. The contract's base list: a later
-// package's drop (VS-42, VS-44) joins this list with its package, and the result schema only under that package's key.
-// VS-27b added `severity-unreadable` (the round-two amendment, addendum §3 VS-27, [GP3]) and checks S2's severity half
-// before its class half: an unreadable severity, then a severity other than blocking, then no class of the five. The
-// strict prompt asks for a failure block only on blocking findings, so a concern without one is `not-blocking`, not
-// `out-of-scope`. A failure block whose class is valid but whose mechanism is not decodes as none (schema.ts), so it
-// reads as `out-of-scope`.
+// Why strictSelect dropped a candidate, in the order its rules are checked (S1 to S5, S9, then S6 to S8). The
+// contract's base list: a later package's drop (VS-42, VS-44) joins this list with its package, and the result schema
+// only under that package's key. VS-27b added `severity-unreadable` (the round-two amendment, addendum §3 VS-27, [GP3])
+// and checks S2's severity half before its class half: an unreadable severity, then a severity other than blocking,
+// then no class of the five. The strict prompt asks for a failure block only on blocking findings, so a concern without
+// one is `not-blocking`, not `out-of-scope`. A failure block whose class is valid but whose mechanism is not decodes as
+// none (schema.ts), so it reads as `out-of-scope`. VS-42 added `pre-existing` (S9, the introduced-by-change check): it
+// is checked after S5 and before S6, so a finding it drops never has its patch applied or parsed, is produced only
+// under `guardrail: "strict"` with `scopeGate: "introduced"`, and joins the result schema's enum only under that key.
 export const STRICT_DROPS = [
   "unverified",
   "verdict-unreadable",
@@ -107,6 +118,7 @@ export const STRICT_DROPS = [
   "anchor",
   "quote-mismatch",
   "no-impact",
+  "pre-existing",
   "no-fix",
   "duplicate",
   "cap",
@@ -357,6 +369,13 @@ export interface ReviewConfig {
   // config and its digest stay as they were. Parsed, and read by no runner until VS-27c (UNAPPLIED_REVIEW_KEYS), so the
   // parser warns that "strict" is not applied.
   guardrail?: "off" | "strict"
+  // VS-42's opt-in (Q18). Under "introduced", the strict guardrail drops a finding the model labels pre-existing, or
+  // whose quoted code is all unchanged since the base (S9, guardrail.ts preExistingSuspect). It acts inside
+  // strictSelect, so it is effective only with `guardrail: "strict"`; set without it, it is ignored with a parser note.
+  // Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its
+  // digest stay as they were. No environment variable reads it. Parsed, and read by no runner until VS-42 wiring
+  // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "introduced" is not applied.
+  scopeGate?: "off" | "introduced"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
@@ -430,6 +449,7 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   maxInputTokens: 0,
   impact: "grep",
   guardrail: "off",
+  scopeGate: "off",
 } as const satisfies Partial<ReviewConfig>
 
 // The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
@@ -437,13 +457,14 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
-// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b or VS-27c wiring takes a
-// key off this list when a runner applies it.
+// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c or VS-42 wiring
+// takes a key off this list when a runner applies it.
 export const UNAPPLIED_REVIEW_KEYS = [
   "trivial",
   "maxInputTokens",
   "impact",
   "guardrail",
+  "scopeGate",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:

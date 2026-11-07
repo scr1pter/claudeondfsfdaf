@@ -1239,7 +1239,7 @@ describe("--reselect strict (VS-27b)", () => {
       { from: runKey(run), to: runKey(loaded.runs[1]), reselection: reselectRun(value, run).reselection },
     ])
     expect(loaded.sources.reselect).toBe(
-      "strict re-selection of 1 engine replay(s), offline; applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8; left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes); kept 2 of 3 posted finding(s), 0 selected but never posted left out; dropped: unverified 1; 1 fix(es) unchecked; 0 run(s) incomplete; copies carry no spend, tokens or timing",
+      "strict re-selection of 1 engine replay(s), offline; applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8; left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), and S9 (no base blobs are recorded); kept 2 of 3 posted finding(s), 0 selected but never posted left out; dropped: unverified 1; 1 fix(es) unchecked; 0 run(s) incomplete; copies carry no spend, tokens or timing",
     )
     const out = join(root, "reselect-report.json")
     const result = await main(["--outputs", dir, "--judgements", judgements, "--reselect", "strict", "--out", out])

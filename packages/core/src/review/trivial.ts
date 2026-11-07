@@ -915,8 +915,8 @@ function sameStructure(file: DiffFile, comments: Sides<CommentIndex>) {
 
 // Where a line of one side is on the other, or undefined when the change removed it from there: mapLine (diff.ts) in
 // either direction, with the hunk found by bisection and its lines read from a map, so mapping every commented line of
-// a file with many hunks stays near linear.
-function otherSide(file: DiffFile, from: Side): (line: number) => number | undefined {
+// a file with many hunks stays near linear. Exported for guardrail.ts's S9, which maps head lines to base (I-10).
+export function otherSide(file: DiffFile, from: Side): (line: number) => number | undefined {
   // A side with no lines names the line before the change, so its first line is start + 1.
   const span = (start: number, count: number) => ({
     first: count === 0 ? start + 1 : start,
