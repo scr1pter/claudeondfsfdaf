@@ -26,6 +26,7 @@ import type {
   Selection,
   Severity,
   SkippedFile,
+  StrictResult,
   Trust,
 } from "./types"
 
@@ -641,6 +642,9 @@ export interface SummaryInput {
   mode: ReviewOutcome["mode"]
   report?: Pick<ModelReport, "summary" | "files">
   selection?: Selection
+  // The strict guardrail's result (VS-27b's wording), set only under `guardrail: "strict"`; nothing sets it before
+  // VS-27c. With it, an empty result never reads as "No issues found".
+  strict?: Pick<StrictResult, "complete" | "findings" | "dropped">
   files?: { path: string; additions: number; deletions: number }[] // the reviewed files, with their counts
   skipped?: SkippedFile[]
   banners?: string[] // quoted under the heading, such as notePartial
@@ -706,7 +710,7 @@ function render(input: SummaryInput, limits: Limits): string {
   const summary = input.report?.summary.trim()
   if (summary) lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
   if (selection) {
-    lines.push(countLine(selection), "")
+    lines.push(countLine(selection, input.strict), "")
     const since = sinceLine(input, selection)
     if (since) lines.push(since, "")
   }
@@ -731,7 +735,7 @@ function render(input: SummaryInput, limits: Limits): string {
   return lines.join("\n")
 }
 
-function countLine(selection: Selection): string {
+function countLine(selection: Selection, strict?: SummaryInput["strict"]): string {
   const onLines = [
     ...selection.inline,
     ...selection.overflow,
@@ -744,8 +748,25 @@ function countLine(selection: Selection): string {
   const parts: string[] = []
   if (blocking) parts.push(`${blocking} blocking`)
   if (concerns) parts.push(`${concerns} ${concerns === 1 ? "concern" : "concerns"}`)
+  if (strict) return strictCountLine(strict, parts, below)
   if (!parts.length) return `**No issues found** on the changed lines${below || "."}`
   return `**${parts.join(" · ")}** on the changed lines${below}`
+}
+
+// Under the strict guardrail an empty result says whether the review finished (contract VS-27b): "No verified
+// production-breaking issues" only when it is complete and nothing was cut by the comment limit, the limit when that
+// is all that emptied it, and "Review incomplete" otherwise, never a clean result. It reads the strict result alone, so
+// a selection the runner has not composed with it yet cannot make an empty strict result read otherwise. A non-empty
+// one is counted as the selection counts it, or, when the selection has nothing on lines, as its blocking findings.
+function strictCountLine(strict: NonNullable<SummaryInput["strict"]>, parts: string[], below: string): string {
+  if (strict.findings.length)
+    return `**${parts.length ? parts.join(" · ") : `${strict.findings.length} blocking`}** on the changed lines${below}`
+  if (!strict.complete)
+    return `**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read${below || "."}`
+  const capped = strict.dropped.find((entry) => entry.reason === "cap")?.count ?? 0
+  if (capped)
+    return `**No findings posted** on the changed lines: the comment limit left out ${formatCount(capped)} verified ${capped === 1 ? "finding" : "findings"}${below || "."}`
+  return `**No verified production-breaking issues** on the changed lines${below || "."}`
 }
 
 function sinceLine(input: SummaryInput, selection: Selection): string | undefined {

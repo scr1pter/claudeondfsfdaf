@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { RUBRIC_VERSION, runKey, type EvalRun, type Judgement } from "../../packages/core/src/review/eval"
-import type { ModelFinding } from "../../packages/core/src/review/types"
+import { DEFAULT_REVIEW_CONFIG, type ModelFinding } from "../../packages/core/src/review/types"
 import { DEFAULT_GATE } from "../../packages/core/src/review/eval-report"
 import type { ProjectionRecord, ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger } from "./budget"
@@ -23,6 +23,8 @@ import {
   loadOutputs,
   main,
   manifestCase,
+  RESELECT_SUFFIX,
+  reselectRun,
 } from "./report"
 
 // The offline report over saved outputs: a run.ts report built with a real ledger, and replay artifacts shaped as the
@@ -32,6 +34,8 @@ const root = mkdtempSync(join(tmpdir(), "vectorscope-report-"))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 const MODEL = "vendor/reviewer"
+// A replay records its whole parsed config; the default one, for the tests that read it.
+const DEFAULT_CONFIG_VALUE = { ...DEFAULT_REVIEW_CONFIG }
 const fixtures = await Promise.all((await listFixtures()).map(loadFixture))
 const seed = (await loadManifest()) as Manifest
 const bug = seed.cases.find((item) => item.split === "development" && item.kind === "bug")!
@@ -1049,5 +1053,250 @@ describe("VS-21c outputs", () => {
       labels: { ...control.labels, trivialKind: "docs" as const },
     }
     expect(manifestCase(trivial)).toMatchObject({ kind: "control", trivialKind: "docs", defects: [] })
+  })
+})
+
+// VS-27b: the strict guardrail's rules re-applied offline to what a saved engine replay posted.
+describe("--reselect strict (VS-27b)", () => {
+  const base = artifact()
+  const original = base.outcome!.selection
+  // The replay's inline finding with a committable fix, a blocking one it listed over the cap, and its concern.
+  const inline = { ...original.inline[0], suggestion: "    value = value or []" }
+  const overflow = {
+    ...inline,
+    id: "c3",
+    line: inline.line + 40,
+    title: "Second call site has the same default",
+    suggestionAllowed: undefined,
+  }
+  const strict = (overrides: Record<string, unknown> = {}, outcome: Record<string, unknown> = {}) =>
+    artifact(
+      { config: { digest: "d", warnings: [], value: { ...DEFAULT_CONFIG_VALUE } }, ...overrides },
+      { selection: { ...original, inline: [inline], overflow: [overflow] }, ...outcome },
+    )
+  const reselect = (value: ReplayArtifact) => reselectRun(value, fromArtifact(value, seed, []))
+
+  test("keeps what strict would post of what the replay posted, as its own run carrying no spend", () => {
+    const value = strict()
+    const run = fromArtifact(value, seed, [])
+    const result = reselectRun(value, run)
+    expect(result.reselection).toEqual({
+      kept: [inline, overflow],
+      candidates: 3,
+      unposted: 0,
+      complete: true,
+      dropped: [{ reason: "unverified", count: 1 }],
+      fixUnchecked: 1,
+    })
+    expect(result.run).toEqual({
+      variant: `engine${RESELECT_SUFFIX}`,
+      model: run.model,
+      models: run.models,
+      case: run.case,
+      repetition: 1,
+      trust: "untrusted",
+      status: "completed",
+      proposed: run.proposed,
+      posted: [evalFinding(inline, true), evalFinding(overflow, true)],
+      spend: { uncertainUsd: 0, usageMissing: false, admitted: true },
+      violations: [],
+    })
+    // A re-selected finding has the key its original posting had, so it is scored on the same verdict.
+    expect(result.run.posted.map((finding) => finding.key)).toEqual(
+      run.posted.filter((finding) => finding.title !== "Unrelated concern").map((finding) => finding.key),
+    )
+    expect(RESELECT_SUFFIX).toBe("+reselect-strict")
+  })
+
+  test("only what the replay posted is a candidate, so every re-selected finding was judged", () => {
+    // The summary write never went out: the overflow and the concern were never posted.
+    const review = reselect(strict({ posted: [base.posted[0]] }))
+    expect(review.reselection).toMatchObject({ kept: [inline], candidates: 1, unposted: 2 })
+    // The review write never went out: the line comment was never posted.
+    const summary = reselect(strict({ posted: [base.posted[1]] }))
+    expect(summary.reselection).toMatchObject({ kept: [overflow], candidates: 2, unposted: 1 })
+    expect(summary.reselection.kept[0]).toBe(overflow)
+    // A run whose every reviewer failed posted nothing.
+    const failed = reselect(
+      strict({}, { specialists: [{ name: "review", status: "failed", steps: 0, detail: "model error" }] }),
+    )
+    expect(failed.run).toMatchObject({ status: "failed", posted: [] })
+    expect(failed.reselection).toMatchObject({ candidates: 0, unposted: 3, complete: false })
+  })
+
+  test("the rules it applies: S1, S2's blocking half, the recorded anchor and fix rule, S7 and S8", () => {
+    const outside = { ...overflow, id: "d4", reason: "line-outside-diff", title: "Off the diff" }
+    const fixless = { ...overflow, id: "e5", line: inline.line + 80, title: "No fix given", suggestion: undefined }
+    const twin = { ...overflow, line: overflow.line + 1, title: "Second call site has the same default value" }
+    const result = reselect(
+      strict(
+        {},
+        { selection: { ...original, inline: [inline], overflow: [overflow, fixless, twin], outsideDiff: [outside] } },
+      ),
+    )
+    expect(result.reselection.dropped).toEqual([
+      { reason: "unverified", count: 1 },
+      { reason: "anchor", count: 1 },
+      { reason: "no-fix", count: 1 },
+      { reason: "duplicate", count: 1 },
+    ])
+    // A suggestion selection allowed is committable; one it never placed is unchecked.
+    expect(result.reselection.fixUnchecked).toBe(1)
+    const capped = reselect(
+      strict({ config: { digest: "d", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, maxComments: 1 } } }),
+    )
+    expect(capped.reselection).toMatchObject({
+      kept: [inline],
+      dropped: [
+        { reason: "unverified", count: 1 },
+        { reason: "cap", count: 1 },
+      ],
+    })
+  })
+
+  test("a verdict the replay cannot show was read leaves the run incomplete", () => {
+    // Without a triage model the verify pass re-checks blocking findings, so an unverified blocking one had no verdict.
+    const untriaged = { models: { review: base.models.review } }
+    const unread = { ...overflow, verified: undefined }
+    const result = reselect(strict(untriaged, { selection: { ...original, inline: [inline], overflow: [unread] } }))
+    expect(result.reselection).toMatchObject({
+      complete: false,
+      incomplete: ["verdict-unreadable"],
+      dropped: [
+        { reason: "unverified", count: 1 },
+        { reason: "verdict-unreadable", count: 1 },
+      ],
+    })
+    // A finding recorded as verified: false had its verdict read (a policy that keeps a rejected finding): not unread.
+    const rejected = reselect(
+      strict(untriaged, { selection: { ...original, inline: [inline], overflow: [{ ...overflow, verified: false }] } }),
+    )
+    // The concern, and the rejected one.
+    expect(rejected.reselection).toMatchObject({ complete: true, dropped: [{ reason: "unverified", count: 2 }] })
+    expect(rejected.reselection).not.toHaveProperty("incomplete")
+    // With verify off, or no verify pass, nothing was sent to it.
+    const off = {
+      ...untriaged,
+      config: { digest: "d", warnings: [], value: { ...DEFAULT_CONFIG_VALUE, verify: "off" } },
+    }
+    expect(
+      reselect(strict(off, { selection: { ...original, inline: [inline], overflow: [unread] } })).reselection.complete,
+    ).toBe(true)
+    // After a triage pass the review model's unconfirmed findings are not in the artifact at all.
+    const triaged = reselect(
+      strict({}, { selection: { ...original, inline: [inline], dropped: [{ reason: "unconfirmed", count: 2 }] } }),
+    )
+    expect(triaged.reselection).toMatchObject({ complete: false, incomplete: ["verdicts-unrecorded"] })
+    // Coverage reads as strict reads it, and a replay with nothing reviewed has no reviewer.
+    expect(reselect(strict({}, { partial: "timeout" })).reselection.incomplete).toEqual(["timeout"])
+    const empty = reselect(artifact({ outcome: undefined, attempts: [] }))
+    expect(empty.reselection).toMatchObject({ kept: [], candidates: 0, complete: false, incomplete: ["no-reviewer"] })
+  })
+
+  test("report.ts --reselect strict scores both groups on the same verdicts, and the gate decides on neither copy", async () => {
+    const dir = join(root, "reselect")
+    mkdirSync(dir)
+    const value = strict()
+    writeFileSync(join(dir, "one.json"), JSON.stringify(value))
+    const run = fromArtifact(value, seed, [])
+    const verdicts: Record<string, Judgement["passes"][number]["verdict"]> = {
+      [inline.title]: { kind: "match", defect: bug.labels.defects[0].id },
+      [overflow.title]: { kind: "false-alarm" },
+      "Unrelated concern": { kind: "false-alarm" },
+    }
+    const judgements = join(root, "reselect-judgements.json")
+    writeFileSync(
+      judgements,
+      JSON.stringify({
+        schema: JUDGEMENTS_SCHEMA,
+        seed: "s",
+        judgements: [...run.proposed, ...run.posted]
+          .filter((finding, position, all) => all.findIndex((other) => other.key === finding.key) === position)
+          .map((finding) => ({
+            run: runKey(run),
+            finding: finding.key,
+            passes: [
+              {
+                judge: "human:annotator",
+                rubric: RUBRIC_VERSION,
+                verdict: verdicts[finding.title] ?? { kind: "false-alarm" },
+              },
+              {
+                judge: "model:vendor/judge",
+                rubric: RUBRIC_VERSION,
+                verdict: verdicts[finding.title] ?? { kind: "false-alarm" },
+              },
+            ],
+          })),
+        calls: [],
+      }),
+    )
+    const loaded = await loadOutputs({ paths: [dir], reselect: "strict" })
+    expect(loaded.runs.map((entry) => entry.variant)).toEqual(["engine", "engine+reselect-strict"])
+    const development = seed.cases.filter((item) => item.split === "development").length
+    expect(loaded.plan.filter((entry) => entry.variant === "engine+reselect-strict")).toHaveLength(development)
+    expect(loaded.reselected).toEqual([
+      { from: runKey(run), to: runKey(loaded.runs[1]), reselection: reselectRun(value, run).reselection },
+    ])
+    expect(loaded.sources.reselect).toBe(
+      "strict re-selection of 1 engine replay(s), offline; applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8; left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes); kept 2 of 3 posted finding(s), 0 selected but never posted left out; dropped: unverified 1; 1 fix(es) unchecked; 0 run(s) incomplete; copies carry no spend, tokens or timing",
+    )
+    const out = join(root, "reselect-report.json")
+    const result = await main(["--outputs", dir, "--judgements", judgements, "--reselect", "strict", "--out", out])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("## engine · vendor/reviewer-large")
+    expect(result.stdout).toContain("## engine+reselect-strict · vendor/reviewer-large")
+    const saved = await Bun.file(out).json()
+    const precision = (variant: string) =>
+      saved.groups.find((group: { variant: string }) => group.variant === variant).stages.posted.precision
+    expect(precision("engine")).toMatchObject({ count: 1, total: 3 })
+    expect(precision("engine+reselect-strict")).toMatchObject({ count: 1, total: 2 })
+    // Two groups and no --candidate: the gate is not evaluated.
+    expect(saved.decision).toBeUndefined()
+    expect(saved.problems).toContain("name the candidate variant and model to evaluate the gate")
+    expect(result.stdout).toContain("Not evaluated: no candidate.")
+    // The gate still decides on the replay itself, and the copy adds no unaccounted run: the replay's paid attempts
+    // were never admitted, and counted once.
+    const gated = await main(["--outputs", dir, "--reselect", "strict", "--candidate", "engine=vendor/reviewer-large"])
+    expect(gated.code).toBe(0)
+    expect(gated.stdout).toContain("| maxUnaccountedAttempts | 0 | 1 |")
+    // Neither flag takes a re-selection, with or without --reselect.
+    for (const flag of ["--candidate", "--baseline"])
+      for (const extra of [[], ["--reselect", "strict"]]) {
+        const refused = await main(["--outputs", dir, ...extra, flag, "engine+reselect-strict=vendor/reviewer-large"])
+        expect(refused.code).toBe(2)
+        expect(refused.stderr).toContain(
+          `${flag}: engine+reselect-strict is an offline re-selection of saved output, not a pipeline that ran`,
+        )
+      }
+    const bad = await main(["--outputs", dir, "--reselect", "loose"])
+    expect(bad.code).toBe(2)
+    expect(bad.stderr).toContain("--reselect takes strict.")
+  })
+
+  test("without --reselect nothing changes; with it and no engine replay, it says so", async () => {
+    const dir = join(root, "reselect-none")
+    mkdirSync(dir)
+    writeFileSync(join(dir, "one.json"), JSON.stringify(strict()))
+    const plain = await loadOutputs({ paths: [dir] })
+    expect(plain).not.toHaveProperty("reselected")
+    expect(plain.sources).not.toHaveProperty("reselect")
+    expect(plain.runs.map((entry) => entry.variant)).toEqual(["engine"])
+    const asked = await loadOutputs({ paths: [dir], reselect: "strict" })
+    expect({
+      ...asked,
+      runs: asked.runs.slice(0, 1),
+      plan: asked.plan.filter((entry) => !entry.variant.endsWith(RESELECT_SUFFIX)),
+      reselected: undefined,
+      sources: { ...asked.sources, reselect: undefined },
+    }).toEqual({
+      ...plain,
+      reselected: undefined,
+      sources: { ...plain.sources, reselect: undefined },
+    })
+    const reports = await loadOutputs({ paths: [savedRun.dir], reselect: "strict" })
+    expect(reports.reselected).toEqual([])
+    expect(reports.problems).toContain("--reselect strict found no engine replay artifact, so nothing was re-selected")
+    expect(reports.sources).not.toHaveProperty("reselect")
   })
 })

@@ -879,6 +879,7 @@ bun script/vectorscope-eval/judge.ts disputes --outputs <dir> --judgements <file
 bun script/vectorscope-eval/judge.ts adjudicate --outputs <dir> --judgements <file> --worksheet <sheet> --by human:owner --date <day>
 bun script/vectorscope-eval/report.ts --outputs <dir> --judgements <file> --candidate <variant>=<model> --baseline <variant>=<model>
 bun script/vectorscope-eval/report.ts --print-gate          # the approved D2 gate as JSON
+bun script/vectorscope-eval/report.ts --outputs <dir> --judgements <file> --reselect strict   # VS-27b, offline
 ```
 
 How it works:
@@ -954,6 +955,25 @@ How it works:
   nothing, whose precision is n/a with its counts, end-to-end recall 0 and
   false alarms 0. Runs that shared one ledger journal are counted once in the
   report's ledger line, and `--ledger` gives that journal directly.
+
+- **Offline strict re-selection (VS-27b).** With `--reselect strict`,
+  `report.ts` re-applies the strict guardrail's rule pass (core
+  `guardrail.ts`) to what each saved engine replay posted, at no cost, and
+  reports each as its own group, `<variant>+reselect-strict`,
+  scored on the original's settled verdicts, so the precision change shows
+  side by side. Legacy output has no failure block and no quotes, so it
+  applies S1, S2's blocking half, S3 and S4 as the recorded anchors (a
+  context-line anchor passes offline, which strict would refuse), S6 from the
+  recorded suggestion rule, S7 by id or `sameFinding`, and S8 at the
+  artifact's `maxComments`; it leaves out S2's class half, S4's quotes and S5.
+  Only findings the original posted are candidates. Unreadable verdicts are
+  worked out from the recorded verify rule (a finding recorded as verified,
+  or as `verified: false`, had its verdict read); after a triage pass,
+  unconfirmed findings are missing from the artifact, so the run reads
+  incomplete (`verdicts-unrecorded`). A copy carries no spend, tokens or timing, and the
+  gate never decides on or compares with one: `--candidate` and `--baseline`
+  refuse it, and with two groups and no `--candidate` the gate is not
+  evaluated. Desktop artifacts are not re-selected yet.
 
 - **The gate.** The default gate is D2 as the owner approved it:
   - no trust or consent check failed

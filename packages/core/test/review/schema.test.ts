@@ -28,6 +28,7 @@ import {
   type StrictFinding,
   type StrictResult,
 } from "@vectordevai/core/review/types"
+import { isRecord, violations } from "./fixtures/json-schema"
 
 // Every key used anywhere in a schema, at any depth.
 function keys(value: unknown): string[] {
@@ -361,57 +362,6 @@ function keywords(schema: unknown): string[] {
   ])
 }
 
-// Checks a value against the JSON Schema keywords the review schemas use. A test aid: the branch has no JSON Schema
-// validator, so this checks conformance structurally, as the deviations entry says.
-function violations(schema: Record<string, unknown>, value: unknown, at = "$"): string[] {
-  const kind = Array.isArray(value)
-    ? "array"
-    : value === null
-      ? "null"
-      : Number.isInteger(value)
-        ? "integer"
-        : typeof value
-  if (schema.type !== kind && !(schema.type === "number" && kind === "integer"))
-    return [`${at} is not ${String(schema.type)}`]
-  const number = typeof value === "number" ? value : undefined
-  const string = typeof value === "string" ? value : undefined
-  const list = Array.isArray(value) ? value : undefined
-  const record = isRecord(value) ? value : undefined
-  const properties = isRecord(schema.properties) ? schema.properties : {}
-  const items = isRecord(schema.items) ? schema.items : undefined
-  const required = Array.isArray(schema.required) ? schema.required : []
-  return [
-    ...[
-      Array.isArray(schema.enum) && !schema.enum.includes(value) ? "is not in its enum" : "",
-      typeof schema.minimum === "number" && number !== undefined && number < schema.minimum
-        ? "is under its minimum"
-        : "",
-      typeof schema.maximum === "number" && number !== undefined && number > schema.maximum
-        ? "is over its maximum"
-        : "",
-      typeof schema.maxLength === "number" && string !== undefined && string.length > schema.maxLength
-        ? "is too long"
-        : "",
-      typeof schema.minItems === "number" && list && list.length < schema.minItems ? "has too few items" : "",
-      typeof schema.maxItems === "number" && list && list.length > schema.maxItems ? "has too many items" : "",
-      ...required.map((key) =>
-        record && typeof key === "string" && !Object.hasOwn(record, key) ? `lacks ${key}` : "",
-      ),
-    ]
-      .filter(Boolean)
-      .map((problem) => `${at} ${problem}`),
-    ...Object.entries(record ?? {}).flatMap(([key, inner]) => {
-      const nested = properties[key]
-      return isRecord(nested) ? violations(nested, inner, `${at}.${key}`) : []
-    }),
-    ...(list && items ? list.flatMap((inner, index) => violations(items, inner, `${at}[${index}]`)) : []),
-  ]
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-}
-
 // Every field set, so a field added to the type without the schema, or the other way round, fails below.
 const STRICT_FINDING: Required<StrictFinding> = {
   id: "3f9a1c07be21",
@@ -454,11 +404,13 @@ describe("the strict schemas (VS-27a)", () => {
     expect([...FAILURE_MECHANISMS]).toEqual(["logic", "concurrency", "regression", "resource", "access"])
     expect([...VERIFIED_BY]).toEqual(["model", "runtime"])
     expect([...STRICT_FIX_KINDS]).toEqual(["suggestion", "patch", "unchecked"])
+    // VS-27b added severity-unreadable and checks S2's severity half before its class half.
     expect([...STRICT_DROPS]).toEqual([
       "unverified",
       "verdict-unreadable",
-      "out-of-scope",
+      "severity-unreadable",
       "not-blocking",
+      "out-of-scope",
       "anchor",
       "quote-mismatch",
       "no-impact",
@@ -868,11 +820,30 @@ describe("decodeReport under guardrail: strict (VS-27a)", () => {
   })
 
   // GP3 (addendum §3, for precise mode): an unreadable severity is never read as the lowest level, nor as blocking.
-  // Strict decoding keeps the legacy reading, "concern", which S2 counts as not-blocking; VS-27b decides whether strict
-  // mode marks it apart.
-  test("an unreadable severity stays concern, never blocking", () => {
-    for (const severity of ["critical", "", undefined, "BLOCKING!"])
-      expect(decode({ severity, failure, quotes: [quote] })?.severity).toBe("concern")
-    expect(decode({ severity: " Blocking " })?.severity).toBe("blocking")
+  // Strict decoding keeps the legacy reading, "concern", and marks it (VS-27b, the round-two amendment), so S2 drops it
+  // with its own count instead of as a concern the model chose.
+  test("an unreadable severity stays concern, never blocking, and is marked", () => {
+    for (const severity of ["critical", "", undefined, "BLOCKING!", 3]) {
+      const finding = decode({ severity, failure, quotes: [quote] })
+      expect(finding?.severity).toBe("concern")
+      expect(finding?.severityUnreadable).toBe(true)
+    }
+    for (const [severity, read] of [
+      [" Blocking ", "blocking"],
+      ["concern", "concern"],
+      ["NIT", "nit"],
+    ] as const) {
+      const finding = decode({ severity })
+      expect(finding?.severity).toBe(read)
+      expect(finding).not.toHaveProperty("severityUnreadable")
+    }
+  })
+
+  test("the legacy decoder never marks a severity", () => {
+    for (const keys of [undefined, {}, { guardrail: "off" as const }]) {
+      const finding = decodeReport({ summary: "s", findings: [{ ...base, severity: "critical" }] }, keys)?.findings[0]
+      expect(finding?.severity).toBe("concern")
+      expect(finding).not.toHaveProperty("severityUnreadable")
+    }
   })
 })

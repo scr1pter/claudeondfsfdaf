@@ -37,6 +37,9 @@ export const MAX_FINDING_QUOTES = 6
 export const MAX_QUOTES_READ = MAX_FINDING_QUOTES * 4
 export const MAX_QUOTE_LINES = 20
 export const MAX_QUOTE_CHARS = 2_000
+// A quote path that could leave the repository: a `..` segment, a backslash or a drive. decodeQuote drops such a quote,
+// and guardrail.ts never asks for or reads its file, for findings built without the decoder too.
+export const ESCAPING_PATH = /(^|\/)\.\.(\/|$)|\\|^[A-Za-z]:/
 
 const RISKS: Risk[] = ["low", "medium", "high"]
 
@@ -345,7 +348,8 @@ function balancedSpans(text: string) {
 // Accepts `info.structured`, or the text of the last message. A missing side becomes RIGHT, an unknown severity
 // concern and an unknown category bug; numbers given as strings are converted and every value is clamped.
 // Findings without a path or a title are dropped. Returns undefined when there is no report at all. A finding's
-// strict fields (failure, quotes, patch) are read only under `guardrail: "strict"`; without it they are ignored.
+// strict fields (failure, quotes, patch) are read only under `guardrail: "strict"`; without it they are ignored. Under
+// strict, an unknown severity is also marked severityUnreadable (VS-27b).
 export function decodeReport(input: unknown, keys: StrictSchemaKeys = {}): ModelReport | undefined {
   const value =
     typeof input === "string"
@@ -419,11 +423,12 @@ function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefine
   if (!path || !title) return undefined
   // A finding with no usable line keeps line 1, so it is anchored or listed rather than lost.
   const line = Math.max(1, integer(input.line) ?? 1)
+  const severity = SEVERITIES.find((value: Severity) => value === lower(input.severity))
   const finding: ModelFinding = {
     path,
     line,
     side: lower(input.side) === "left" ? "LEFT" : "RIGHT",
-    severity: SEVERITIES.find((severity: Severity) => severity === lower(input.severity)) ?? "concern",
+    severity: severity ?? "concern",
     category: CATEGORIES.find((category: Category) => category === lower(input.category)) ?? "bug",
     title,
     body: text(input.body),
@@ -442,7 +447,9 @@ function decodeFinding(input: unknown, strict: boolean): ModelFinding | undefine
   const duplicateOf = text(input.duplicateOf)
   if (duplicateOf) finding.duplicateOf = duplicateOf
   if (!strict) return finding
-  // An unreadable severity stays "concern" here as above, so strict mode never reads it as blocking: S2 drops it.
+  // An unreadable severity stays "concern" as above, so strict mode never reads it as blocking, and is marked, so S2
+  // drops it as `severity-unreadable` rather than as a concern the model chose (VS-27b, [GP3]).
+  if (!severity) finding.severityUnreadable = true
   const failure = decodeFailure(input.failure)
   if (failure) finding.failure = failure
   const quotes = list(input.quotes)
@@ -482,7 +489,7 @@ function decodeQuote(input: unknown, findingPath: string): Quote | undefined {
   const line = typeof said === "string" ? Number(said) : said
   if (typeof line !== "number" || !Number.isSafeInteger(line) || line < 1) return undefined
   const path = cleanPath(text(input.path)) || findingPath
-  if (/(^|\/)\.\.(\/|$)|\\|^[A-Za-z]:/.test(path)) return undefined
+  if (ESCAPING_PATH.test(path)) return undefined
   const code = cleanCode(input.code, {
     maxChars: MAX_QUOTE_CHARS,
     maxLines: MAX_QUOTE_LINES,

@@ -6,7 +6,8 @@
 // severity as blocking, a skip reason or failure stage as not reviewed, and a stored verdict as a missing one. An input
 // whose shape is wrong (a missing list, an unknown kind) throws, and the caller reads that as a failure.
 //
-// Pure and browser-safe (its imports are types only), and nothing calls it yet. After the vector-at-mention merge, and
+// Pure and browser-safe (its imports are types only), and no runner calls it yet; guardrail.ts (VS-27b) reads its
+// unfinished causes for strict completeness. After the vector-at-mention merge, and
 // only under failOn "blocking-or-incomplete", the GitHub job stores the verdict in ReviewState, writes it to
 // $GITHUB_OUTPUT and exits 1 on not-reviewed, incomplete and blocking. It closes unfinished reviews only: it does not
 // hold against a same-repository author who edits the workflow, and a job the workflow's `if:` skips never reaches it.
@@ -48,6 +49,10 @@ export interface VerdictOutcome {
   held?: readonly Pick<HeldFile, "status">[]
 }
 
+// What a run covered, without what it found: the parts of a VerdictOutcome that unfinishedCauses reads apart from the
+// strict flag. guardrail.ts takes it as StrictInput.coverage.
+export type VerdictCoverage = Omit<VerdictOutcome, "selection" | "trivial" | "strict">
+
 // The selection lists a verdict counts: those the job's failOn "blocking" check reads, plus nits.
 export type VerdictList = "inline" | "overflow" | "outsideDiff" | "elsewhere" | "nits" | "stillOpen"
 
@@ -77,6 +82,13 @@ export type VerdictCause =
   | "review-error"
   | "failure-unknown"
   | "skip-unknown"
+  | UnfinishedCause
+  | "blocking"
+  | "findings"
+
+// The causes unfinishedCauses returns.
+export type UnfinishedCause =
+  | NonNullable<VerdictOutcome["partial"]>
   | "unreviewed"
   | "size-limit"
   | "skipped-unknown"
@@ -84,8 +96,6 @@ export type VerdictCause =
   | "strict-incomplete"
   | "specialist"
   | "no-reviewer"
-  | "blocking"
-  | "findings"
 
 // Codes, not text (D14): format.ts words them when the job is wired.
 export type VerdictNote = "held-back-deletion" | "review-full"
@@ -159,7 +169,7 @@ const SKIP_VERDICTS: Record<Exclude<VerdictSkip, StoredSkip>, "not-reviewed" | "
 // What a skipped file leaves unfinished, or null when skipping it is part of a complete review. Exhaustive, so a new
 // SkippedFile reason (VS-34 wiring's `held-back`) fails typecheck here until it is classified; until then, a file that
 // arrives with it at runtime reads as `skipped-unknown`.
-const SKIPPED_FILE_CAUSES: Record<SkippedFile["reason"], VerdictCause | null> = {
+const SKIPPED_FILE_CAUSES: Record<SkippedFile["reason"], UnfinishedCause | null> = {
   ignored: null,
   lockfile: null,
   generated: null,
@@ -197,8 +207,9 @@ function storedVerdict(reason: StoredSkip, stored: ReviewVerdict | undefined): V
   }
 }
 
-// Every reason the run is unfinished, in a fixed order.
-function unfinishedCauses(outcome: VerdictOutcome): VerdictCause[] {
+// Every reason the run is unfinished, in a fixed order. guardrail.ts reads the same causes for StrictResult.complete
+// (VS-27b), so strict completeness and VS-32's verdict cannot disagree about what finished.
+export function unfinishedCauses(outcome: VerdictCoverage & Pick<VerdictOutcome, "strict">): UnfinishedCause[] {
   return [
     ...(outcome.partial ? [outcome.partial] : []),
     ...(outcome.unreviewed.length ? ["unreviewed" as const] : []),

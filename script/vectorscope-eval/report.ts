@@ -6,6 +6,7 @@ import { join, relative, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import {
   findingKey,
+  runKey,
   type EvalCase,
   type EvalFinding,
   type EvalRun,
@@ -13,6 +14,13 @@ import {
   type PlanEntry,
 } from "../../packages/core/src/review/eval"
 import type { JudgeCall } from "../../packages/core/src/review/eval-judge"
+import {
+  strictIncomplete,
+  strictRules,
+  type StrictCandidate,
+  type StrictIncomplete,
+} from "../../packages/core/src/review/guardrail"
+import { verifyCandidates, verifyUnanswered } from "../../packages/core/src/review/plan"
 import {
   buildReport,
   DEFAULT_GATE,
@@ -22,7 +30,13 @@ import {
   type Group,
   type ProjectedRun,
 } from "../../packages/core/src/review/eval-report"
-import type { Finding, ModelFinding } from "../../packages/core/src/review/types"
+import {
+  DEFAULT_REVIEW_CONFIG,
+  STRICT_DROPS,
+  type Finding,
+  type ModelFinding,
+  type StrictResult,
+} from "../../packages/core/src/review/types"
 import type { ProjectionRecord, ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger, readJournal, type Entry, type Summary } from "./budget"
 import { caseView, manifestProblems, SEED_MANIFEST, SPLITS, type Case, type Manifest } from "./dataset"
@@ -76,6 +90,8 @@ export interface Outputs {
   ledger?: { open: number; spentUsd: number; uncertainUsd: number; overshootUsd: number; halted?: string }
   projected: ProjectedRun[]
   problems: string[]
+  // Under --reselect strict only: each engine replay run and its offline strict re-selection, as runKeys.
+  reselected?: { from: string; to: string; reselection: StrictReselection }[]
 }
 
 // Every saved output under the given paths, as runs with the cases they review and the plan of runs that should exist.
@@ -88,6 +104,7 @@ export async function loadOutputs(input: {
   manifest?: string
   split?: string
   ledger?: string
+  reselect?: "strict"
 }): Promise<Outputs> {
   const files = input.paths.flatMap((path) => jsonFiles(resolve(path)))
   const values = await Promise.all(
@@ -115,6 +132,15 @@ export async function loadOutputs(input: {
   const manifest = manifestValue !== undefined && !invalid.length ? (manifestValue as Manifest) : undefined
   const split = input.split ?? "development"
   const engineRuns = artifacts.map((entry) => fromArtifact(entry.value as ReplayArtifact, manifest, journal))
+  const reselected =
+    input.reselect === "strict"
+      ? artifacts.flatMap((entry, position) =>
+          isArtifact(entry.value)
+            ? [{ from: engineRuns[position], ...reselectRun(entry.value, engineRuns[position]) }]
+            : [],
+        )
+      : undefined
+  const engineGroups = new Set(engineRuns.map((run) => `${run.variant}\n${run.model}`))
   const desktopRuns = desktops.map((entry) => ({
     entry,
     run: fromDesktopArtifact(entry.value as DesktopArtifact, manifest),
@@ -157,8 +183,17 @@ export async function loadOutputs(input: {
     : ledgerSummaries(reports.map((entry) => entry.value as RunReport))
   return {
     cases: [...fixtures.map(fixtureCase), ...(manifest ? manifest.cases.map(manifestCase) : [])],
-    runs: [...fromReports.flatMap((entry) => entry.runs), ...replays],
-    plan: [...fromReports.flatMap((entry) => entry.plan), ...replayPlan],
+    runs: [...fromReports.flatMap((entry) => entry.runs), ...replays, ...(reselected ?? []).map((entry) => entry.run)],
+    plan: [
+      ...fromReports.flatMap((entry) => entry.plan),
+      ...replayPlan,
+      // An engine group's re-selection plans the same cases, so a case its replay lacks is missing from both.
+      ...(reselected
+        ? replayPlan
+            .filter((entry) => engineGroups.has(`${entry.variant}\n${entry.model}`))
+            .map((entry) => ({ ...entry, variant: entry.variant + RESELECT_SUFFIX }))
+        : []),
+    ],
     split: replayed ? split : "fixtures",
     frozen: !reports.length && !!manifest?.freeze,
     sources: {
@@ -187,6 +222,7 @@ export async function loadOutputs(input: {
             ].join(", "),
           }
         : {}),
+      ...(reselected?.length ? { reselect: reselectSource(reselected.map((entry) => entry.reselection)) } : {}),
     },
     ...(summaries.length
       ? {
@@ -230,8 +266,184 @@ export async function loadOutputs(input: {
             ],
       ),
       ...checked.flatMap((item) => item.problems.map((problem) => `${item.entry.file}: ${problem}`)),
+      ...(reselected && !reselected.length
+        ? ["--reselect strict found no engine replay artifact, so nothing was re-selected"]
+        : []),
     ],
+    ...(reselected
+      ? {
+          reselected: reselected.map((entry) => ({
+            from: runKey(entry.from),
+            to: runKey(entry.run),
+            reselection: entry.reselection,
+          })),
+        }
+      : {}),
   }
+}
+
+// --reselect strict (VS-27b): the strict guardrail's rule pass (core guardrail.ts strictRules) over what a saved engine
+// replay posted, offline and at no cost, so a report shows how precision would change. A re-selected run is its own
+// group, `<variant>+reselect-strict` ("+" is outside VARIANT_NAME, so it never names a registry variant), scored on
+// the original's judgements. Legacy output has no failure block and no quotes, so the rules are:
+// - S1 as strictSelect: verified, and a verdict the replay cannot show was read (below) is `verdict-unreadable`;
+// - S2's blocking half (an unreadable or non-blocking severity); its class half is left out;
+// - S3 and S4 are the recorded anchors: a finding selection placed (inline, overflow, elsewhere, nits) is anchored and
+//   one outside the diff is not. A context-line anchor passes offline, which strict would refuse: a stated limit;
+// - S5 is left out;
+// - S6 from the recorded suggestion rule: a suggestion selection allowed is a suggestion, any other fix is unchecked;
+// - S7 by id or sameFinding, without the class clause and with no anchored code (the diff is not recorded);
+// - S8 at the artifact's maxComments.
+// Only what the original posted is a candidate (inline when its review write went out, the rest when its summary did),
+// so every finding the copy posts has the original's judgement; the rest are counted as unposted. The artifact records
+// no per-id verify verdict, so S1's unreadable verdicts are worked out from the recorded verify rule (plan.ts
+// verifyCandidates and verifyUnanswered over the selection, its findings recorded as verified as confirmed verdicts and
+// those recorded as `verified: false` as rejected ones, since a recorded false is a verdict that was read): exact for a
+// run whose verify pass finished. A triage pass leaves its unconfirmed findings out of the artifact altogether, so a
+// nonzero `unconfirmed` drop marks the run incomplete as `verdicts-unrecorded`. The copy carries no spend, tokens,
+// attempts or timing: re-selection spends nothing, and the original's spend is counted once.
+export const RESELECT_SUFFIX = "+reselect-strict"
+
+export interface StrictReselection {
+  kept: Finding[] // in strength order, as the copy posts them
+  candidates: number // the original's posted findings that were re-selected
+  unposted: number // findings the original selected but never posted, left out: no judgement can exist for them
+  complete: boolean
+  incomplete?: (StrictIncomplete | "verdicts-unrecorded")[]
+  dropped: StrictResult["dropped"]
+  fixUnchecked: number
+}
+
+export function reselectRun(artifact: ReplayArtifact, run: EvalRun): { run: EvalRun; reselection: StrictReselection } {
+  const outcome = artifact.outcome
+  const selection = outcome?.selection
+  const posted = postedParts(artifact, run.status === "failed")
+  const records = selection
+    ? [
+        ...selection.inline.map((finding) => ({
+          finding,
+          anchored: true,
+          suggestion: finding.suggestionAllowed,
+          posted: posted.review,
+        })),
+        ...[...selection.overflow, ...selection.elsewhere, ...selection.nits].map((finding) => ({
+          finding,
+          anchored: true,
+          suggestion: false,
+          posted: posted.summary,
+        })),
+        ...selection.outsideDiff.map((finding) => ({
+          finding,
+          anchored: false,
+          suggestion: false,
+          posted: posted.summary,
+        })),
+      ]
+    : []
+  const config = { ...DEFAULT_REVIEW_CONFIG, ...artifact.config.value }
+  const pool = records.map((record) => record.finding)
+  const triaged = artifact.models.triage !== undefined
+  const verdicts = new Map(
+    pool.flatMap((finding) =>
+      finding.verified === undefined ? [] : [[finding.id, finding.verified ? "confirmed" : "rejected"] as const],
+    ),
+  )
+  const unanswered = outcome?.specialists.some((entry) => entry.name === "verify")
+    ? verifyUnanswered(
+        verifyCandidates(
+          pool,
+          {
+            verify: config.verify,
+            policy: config.verifyPolicy,
+            minConfidence: config.minConfidence,
+            trust: artifact.trust,
+            triaged,
+          },
+          "engine",
+        ),
+        verdicts,
+        triaged,
+      ).map((finding) => finding.id)
+    : []
+  const candidates = records.filter((record) => record.posted)
+  const pass = strictRules(
+    candidates.map(
+      (record): StrictCandidate => ({
+        finding: record.finding,
+        anchored: record.anchored,
+        fix: () => {
+          const text = [record.finding.patch, record.finding.suggestion].find((value) => value?.trim())
+          if (text === undefined) return undefined
+          const committable = record.suggestion && text === record.finding.suggestion
+          return { kind: committable ? "suggestion" : "unchecked", text }
+        },
+        code: "",
+      }),
+    ),
+    { maxComments: config.maxComments, unanswered },
+  )
+  const unconfirmed = selection?.dropped.find((entry) => entry.reason === "unconfirmed")?.count ?? 0
+  const incomplete = [
+    ...strictIncomplete(
+      {
+        ...(outcome?.partial ? { partial: outcome.partial } : {}),
+        unreviewed: outcome?.unreviewed ?? [],
+        skipped: outcome?.skipped ?? [],
+        specialists: outcome?.specialists ?? [],
+      },
+      pass.unreadable,
+    ),
+    ...(triaged && unconfirmed > 0 ? ["verdicts-unrecorded" as const] : []),
+  ]
+  const kept = pass.kept.map((entry) => entry.finding)
+  const copy: EvalRun = {
+    variant: run.variant + RESELECT_SUFFIX,
+    model: run.model,
+    ...(run.models ? { models: run.models } : {}),
+    case: run.case,
+    repetition: run.repetition,
+    trust: run.trust,
+    status: run.status,
+    ...(run.detail ? { detail: run.detail } : {}),
+    proposed: run.proposed,
+    posted: kept.map((finding) => evalFinding(finding, true)),
+    ...(run.stop ? { stop: run.stop } : {}),
+    spend: { uncertainUsd: 0, usageMissing: false, admitted: true },
+    violations: run.violations,
+    ...(run.startedAt ? { startedAt: run.startedAt } : {}),
+  }
+  return {
+    run: copy,
+    reselection: {
+      kept,
+      candidates: candidates.length,
+      unposted: records.length - candidates.length,
+      complete: incomplete.length === 0,
+      ...(incomplete.length ? { incomplete } : {}),
+      dropped: pass.dropped,
+      fixUnchecked: pass.kept.filter((entry) => entry.fix.kind === "unchecked").length,
+    },
+  }
+}
+
+// The sources line for --reselect strict: the rules applied and left out, and what they did across the runs.
+function reselectSource(reselections: readonly StrictReselection[]) {
+  const sum = (count: (item: StrictReselection) => number) =>
+    reselections.reduce((total, item) => total + count(item), 0)
+  const dropped = STRICT_DROPS.flatMap((reason) => {
+    const count = sum((item) => item.dropped.find((entry) => entry.reason === reason)?.count ?? 0)
+    return count ? [`${reason} ${count}`] : []
+  })
+  return [
+    `strict re-selection of ${reselections.length} engine replay(s), offline`,
+    "applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8",
+    "left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes)",
+    `kept ${sum((item) => item.kept.length)} of ${sum((item) => item.candidates)} posted finding(s), ${sum((item) => item.unposted)} selected but never posted left out`,
+    `dropped: ${dropped.length ? dropped.join(", ") : "none"}`,
+    `${sum((item) => item.fixUnchecked)} fix(es) unchecked`,
+    `${reselections.filter((item) => !item.complete).length} run(s) incomplete`,
+    "copies carry no spend, tokens or timing",
+  ].join("; ")
 }
 
 // One summary per budget journal the reports were charged to. Runs that share a journal (every model of one CI run)
@@ -409,12 +621,11 @@ export function fromArtifact(
           ].join(", ")
         : undefined
   const selection = outcome?.selection
-  const reviewPosted = artifact.posted.some((write) => write.write === "createReview")
-  const summaryPosted = !failed && artifact.posted.some((write) => write.write === "createIssueComment")
+  const writes = postedParts(artifact, failed)
   const posted = selection
     ? [
-        ...(reviewPosted ? selection.inline.map((finding) => evalFinding(finding, true)) : []),
-        ...(summaryPosted
+        ...(writes.review ? selection.inline.map((finding) => evalFinding(finding, true)) : []),
+        ...(writes.summary
           ? [...selection.overflow, ...selection.outsideDiff, ...selection.elsewhere, ...selection.nits].map(
               (finding) => evalFinding(finding, false),
             )
@@ -446,7 +657,7 @@ export function fromArtifact(
     status,
     ...(detail ? { detail } : {}),
     proposed: (outcome?.report.findings ?? []).map((finding) => evalFinding(finding)),
-    posted: failed ? [] : posted,
+    posted,
     ...(outcome ? { ms: outcome.durationMs } : {}),
     attempts: artifact.attempts.filter((attempt) => attempt.admitted).length,
     ...(outcome?.partial ? { stop: outcome.partial } : {}),
@@ -483,6 +694,15 @@ export function fromArtifact(
             : []),
         ]
       : [],
+  }
+}
+
+// What a replay's writes carried: its line comments when the review write went out, and the findings its summary lists
+// when the summary did. A run whose every reviewer failed posts neither.
+function postedParts(artifact: ReplayArtifact, failed: boolean) {
+  return {
+    review: !failed && artifact.posted.some((write) => write.write === "createReview"),
+    summary: !failed && artifact.posted.some((write) => write.write === "createIssueComment"),
   }
 }
 
@@ -707,6 +927,9 @@ Re-scores saved eval outputs against settled judgements and evaluates the releas
   --ledger <path>          Eval ledger journal, which shows what each replay was admitted for; its summary is the
                            report's ledger line, instead of the journals the run.ts reports carry
   --empty-control          Add the empty-finding control: every planned case reviewed with no finding, for free
+  --reselect strict        Also re-select what each engine replay posted under the strict guardrail's rules (VS-27b),
+                           offline, as its own group <variant>+reselect-strict scored on the same judgements; the gate
+                           never decides on or compares with such a group
   --title <text>           Report title
   --out <path>             Also write the JSON report there; it must be outside the repository
   --print-gate             Print the default gate (the owner's approved D2) as JSON, to review or copy, and exit
@@ -724,6 +947,7 @@ const OPTIONS = {
   ledger: { type: "string" },
   title: { type: "string" },
   out: { type: "string" },
+  reselect: { type: "string" },
   "empty-control": { type: "boolean" },
   "print-gate": { type: "boolean" },
   help: { type: "boolean" },
@@ -742,6 +966,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   if (!outputs.length) return usage("Give at least one --outputs path.")
   const split = text("split")
   if (split !== undefined && !SPLITS.includes(split as (typeof SPLITS)[number])) return usage(`Unknown split ${split}.`)
+  const reselect = text("reselect")
+  if (values.reselect !== undefined && reselect !== "strict") return usage("--reselect takes strict.")
   const candidate = group("candidate", text("candidate"))
   const baseline = group("baseline", text("baseline"))
   if (typeof candidate === "string") return usage(candidate)
@@ -763,8 +989,14 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
     ...(text("manifest") ? { manifest: text("manifest")! } : {}),
     ...(split ? { split } : {}),
     ...(text("ledger") ? { ledger: text("ledger")! } : {}),
+    ...(reselect === "strict" ? { reselect } : {}),
   })
   const judgements = text("judgements") ? await readJudgements(resolve(text("judgements")!)) : undefined
+  // A re-selected run is scored on its original's settled verdicts, with no judge call of its own.
+  const judged = (judgements?.judgements ?? []).flatMap((item) => [
+    item,
+    ...(loaded.reselected ?? []).flatMap((pair) => (pair.from === item.run ? [{ ...item, run: pair.to }] : [])),
+  ])
   const empty = values["empty-control"] === true ? emptyControl(loaded.plan, loaded.runs) : undefined
   const report = buildReport(
     {
@@ -782,7 +1014,7 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       cases: loaded.cases,
       plan: [...loaded.plan, ...(empty?.plan ?? [])],
       runs: [...loaded.runs, ...(empty?.runs ?? [])],
-      judgements: judgements?.judgements ?? [],
+      judgements: judged,
       ...(candidate ? { candidate } : {}),
       ...(baseline ? { baseline } : {}),
       judging: judgements?.calls ?? [],
@@ -816,6 +1048,8 @@ function group(flag: string, value: string | undefined): Group | undefined | str
   if (at < 1 || at === value.length - 1) return `--${flag} takes <variant>=<model>.`
   const variant = value.slice(0, at)
   const model = value.slice(at + 1)
+  if (variant.endsWith(RESELECT_SUFFIX))
+    return `--${flag}: ${variant} is an offline re-selection of saved output, not a pipeline that ran, so the gate never decides on it or compares with it; its metrics are in its group's table.`
   if (UNREGISTERED.includes(variant)) return { variant, model }
   const resolved = resolveVariant(variant)
   if (!resolved.ok) return `--${flag}: ${resolved.detail}`

@@ -43,6 +43,7 @@ import type {
   ReviewCost,
   ReviewState,
   Selection,
+  StrictFinding,
 } from "@vectordevai/core/review/types"
 
 // Golden bodies live in fixtures/format-<name>.golden.txt. Run with UPDATE_GOLDEN=1 to rewrite them, then read
@@ -426,6 +427,89 @@ describe("the desktop form with line comments", () => {
     expect(body).not.toContain("**Blocking** · `src/auth/refresh.ts:52` · Refresh can restore a session after logout")
     expect(body).toContain("## Vectorscope review")
     expect(body).not.toContain("vector-review:")
+  })
+})
+
+// VS-27b: the count line under the strict guardrail. Nothing sets `strict` before VS-27c, and without it every body is
+// byte-identical (the goldens above).
+describe("the count line under the strict guardrail", () => {
+  const base: SummaryInput = { head: HEAD, baseRef: "main", mode: "full", selection: selection(), state: STATE }
+  const strict = (value: SummaryInput["strict"], overrides: Partial<SummaryInput> = {}) =>
+    buildSummaryBody({ ...base, ...overrides, strict: value })
+  const empty = { complete: true, findings: [], dropped: [] }
+  const nit = { selection: selection({ nits: [finding({ severity: "nit" })] }) }
+  const kept: StrictFinding = {
+    id: "3f9a1c07be21",
+    class: "crash",
+    mechanism: "logic",
+    path: "src/auth/refresh.ts",
+    line: 52,
+    side: "RIGHT",
+    title: "Refresh can restore a session after logout",
+    trigger: "Logging out mid-refresh.",
+    impact: "The session comes back.",
+    quotes: [{ path: "src/auth/refresh.ts", line: 52, side: "RIGHT", code: "await this.store.write(next)" }],
+    fix: { kind: "suggestion", text: "x" },
+    verifiedBy: "model",
+    verifier: "anthropic/claude-sonnet-4-5",
+  }
+
+  test("without a strict result the body is unchanged", () => {
+    expect(buildSummaryBody({ ...FULL, strict: undefined })).toBe(buildSummaryBody(FULL))
+    expect(buildSummaryBody(base)).toContain("**No issues found** on the changed lines.")
+  })
+
+  test("an empty, complete result is no verified production-breaking issue, never 'No issues found'", () => {
+    const body = strict(empty)
+    expect(body).toContain("**No verified production-breaking issues** on the changed lines.")
+    expect(body).not.toContain("No issues found")
+    expect(strict(empty, nit)).toContain(
+      "**No verified production-breaking issues** on the changed lines · 1 nit below",
+    )
+  })
+
+  test("an empty, incomplete result says so and never reads as clean", () => {
+    for (const result of [
+      { ...empty, complete: false },
+      { ...empty, complete: false, dropped: [{ reason: "cap" as const, count: 2 }] },
+    ]) {
+      const body = strict(result)
+      expect(body).toContain(
+        "**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read.",
+      )
+      expect(body).not.toMatch(/No issues found|No verified|clean/i)
+    }
+    expect(strict({ ...empty, complete: false }, nit)).toContain(
+      "**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read · 1 nit below",
+    )
+  })
+
+  test("a complete result emptied by the comment limit says the limit left findings out", () => {
+    expect(strict({ ...empty, dropped: [{ reason: "cap", count: 2 }] })).toContain(
+      "**No findings posted** on the changed lines: the comment limit left out 2 verified findings.",
+    )
+    const one = strict({
+      ...empty,
+      dropped: [
+        { reason: "unverified", count: 4 },
+        { reason: "cap", count: 1 },
+      ],
+    })
+    expect(one).toContain("**No findings posted** on the changed lines: the comment limit left out 1 verified finding.")
+    expect(one).not.toContain("No verified")
+  })
+
+  test("the strict result alone decides an empty line; a non-empty one is counted", () => {
+    // A selection the runner has not composed with the strict result yet cannot make an empty one read otherwise.
+    expect(strict(empty, { selection: selection({ inline: [blocking] }) })).toContain(
+      "**No verified production-breaking issues** on the changed lines.",
+    )
+    expect(strict({ ...empty, findings: [kept] }, { selection: selection({ inline: [blocking] }) })).toContain(
+      "**1 blocking** on the changed lines",
+    )
+    expect(strict({ ...empty, complete: false, findings: [kept, { ...kept, id: "b" }] })).toContain(
+      "**2 blocking** on the changed lines",
+    )
   })
 })
 

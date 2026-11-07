@@ -33,7 +33,11 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // (engine util/tree-sitter.ts) is left out on purpose: it decides nothing a review finds, and pinning it would tie shell
 // changes to the review pin. So, for now, are the slice's shared readers, BrainCode and BrainGraph (core brain/code.ts
 // and graph.ts, which also rank the desktop's files) and the changedSymbols fallback (review/symbols.ts): no runner
-// reaches them through the slice before VS-25b wiring, which adds them here when it makes them decide the slice.
+// reaches them through the slice before VS-25b wiring, which adds them here when it makes them decide the slice. The
+// strict guardrail (VS-27b's guardrail.ts) is pinned from the day it lands, though no runner calls it before VS-27c: it
+// decides what a strict review posts, and its shared rule pass is the one report.ts's offline re-selection applies, so
+// a change to either moves this pin on purpose. verdict.ts and format.ts are left out: completeness decides wording and
+// the verdict, not what a review finds or posts.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -47,6 +51,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/holdback.ts",
   "packages/core/src/review/trivial.ts",
   "packages/core/src/review/dispatch.ts",
+  "packages/core/src/review/guardrail.ts",
   "packages/engine/src/review/parse.ts",
   "packages/core/src/review/impact.ts",
   "packages/engine/src/review/impact.ts",
@@ -238,11 +243,13 @@ describe("scope", () => {
     // The default and graph digests are unchanged by VS-27a.
     expect(promptsDigest()).toBe("5d59e9ee06077c23")
     expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
-    // VS-27a's schema-only strict digests, printed by VS-27a (built at f7e1f8df). VS-27c moves them on purpose when the strict task text
-    // joins canonicalPrompts under the key. VS-42, VS-43 and VS-44 must each leave them at whatever value is current
-    // when they land, with their own keys off: their fields join the strict schemas only under their keys.
-    expect(strict).toBe("f04c185c5b415aaf")
-    expect(both).toBe("9c87880d813f1e69")
+    // The schema-only strict digests. VS-27a printed f04c185c5b415aaf and 9c87880d813f1e69 (built at f7e1f8df); VS-27b
+    // moved them, because the result schema's drop enum follows STRICT_DROPS, which gained severity-unreadable and
+    // checks S2's severity half first (built at 12950f7c). VS-27c moves them on purpose when the strict task text joins
+    // canonicalPrompts under the key. VS-42, VS-43 and VS-44 must each leave them at whatever value is current when
+    // they land, with their own keys off: their fields join the strict schemas only under their keys.
+    expect(strict).toBe("b98afb0e878dfe26")
+    expect(both).toBe("3ba21b5bc883cd70")
   })
 
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of

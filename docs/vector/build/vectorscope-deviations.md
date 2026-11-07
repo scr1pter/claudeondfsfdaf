@@ -7325,3 +7325,507 @@ offered two forms, the one taken is named (items 8, 11, 13 and 14 under
     `schema.test.ts` and restored byte for byte (checked by hash), all
     caught: no line shift; the old lenient line rule; no path check; the
     fence always stripped; no raw quote cap; no pre-check.
+
+## 2026-11-07 · VS-27b Strict guardrail strictSelect (pure)
+
+Contract §1.2 (`guardrail.ts`) and §4 VS-27b; addendum A's opening rules, §1,
+§1a, §3 VS-27 and §4 windows, and the round-two amendments in the lane brief
+(export S4's matcher as a pure function over supplied text; take blob text as
+input so I-8 reads stay in the engine; drop an unparseable severity under
+strict with its own counted reason). Evidence: REPORT §4.4 item 3 (the
+guardrail fails closed), round-two REPORT §2.2 [GP3] (severity defaulting to
+its lowest level), Kodus issue #1937 (unreadable verdicts kept by default),
+contract C-14 (cross-file fixes). Built at `12950f7c`. Now window only: pure
+core code that no runner calls, export keywords, a format branch nothing sets,
+and eval-script work. `run.ts`, `ai-review.ts`, `provider.ts`,
+`session/llm.ts`, `posting.ts`, `cli/cmd/review.ts`, `prompt.ts`, `config.ts`,
+`replay.ts` (`engine:guardrail-strict` stays pending VS-27c) and every @vector
+file are untouched. It implements the VS-27b plan as corrected by its
+critique; every critique point was taken, two in a form the critique did not
+name exactly (points 6 and 7 under "Critique points"). Nothing is committed
+(the lane brief).
+
+- **What landed.**
+  - **New core `review/guardrail.ts`** (pure, browser-safe, no I/O):
+    `MAX_FIX_HUNKS` (3); `StrictIncomplete` (verdict.ts's unfinished causes
+    except `strict-incomplete`, then `verdict-unreadable` and
+    `blob-unreadable`); `StrictBlob` (`string | null | { absent: true }`) and
+    `StrictBlobs` (head and base maps); `StrictInput` (`head`, `anchors`,
+    `blobs`, `config: {maxComments, suggestions}`, `trust`, `verifier`,
+    `unanswered` (required), `coverage: VerdictCoverage`, optional
+    `parses(path, text)`); `strictBlobRequests(findings, anchors)` (the exact
+    head and base keys strictSelect reads); `quoteMatches(quote, {head,
+    base})` (S4's matcher); `strictSelect(findings, input): StrictResult`;
+    and the shared rule pass, `StrictCandidate`, `StrictPass`,
+    `strictRules(candidates, {maxComments, unanswered})` and
+    `strictIncomplete(coverage, unreadable)`, which report.ts's offline
+    re-selection reuses. It imports schema.ts's `ESCAPING_PATH`.
+  - **Core `review/diff.ts`**: `FixPatchFailure` and `applyFixPatch(headText,
+    patch, {path, maxHunks})`, with private `FIX_PREAMBLE`, `pairedHeader` and
+    `wellCounted`. Checks, in order: one non-binary file with a hunk (more
+    than one is `several-files`); before the first hunk only git header lines
+    (`diff --git`, `index`, paired `---`/`+++`, new or deleted file mode,
+    similarity or dissimilarity index, rename and copy lines), every line from
+    the first hunk on part of a hunk (trailing blank lines allowed), and each
+    hunk filling its header's counts with its new start equal to its old start
+    plus the earlier hunks' offset, else `malformed`; bare hunks or headers
+    naming `options.path` as a file modified in place, else `other-file`;
+    at most `maxHunks` hunks, else `hunks`; `applyPatch` at exact positions,
+    else `context`; a change, else `unchanged`. No runner calls it.
+  - **Core `review/types.ts`** (still import-free): `ModelFinding` gains
+    `severityUnreadable?: boolean`; `STRICT_DROPS` gains
+    `severity-unreadable` and checks S2's severity half first: `unverified`,
+    `verdict-unreadable`, `severity-unreadable`, `not-blocking`,
+    `out-of-scope`, `anchor`, `quote-mismatch`, `no-impact`, `no-fix`,
+    `duplicate`, `cap`; comments on both and on `StrictResult.incomplete`.
+  - **Core `review/schema.ts`**: under `guardrail: "strict"` only,
+    `decodeFinding` marks a severity that names none of `SEVERITIES`
+    `severityUnreadable: true` (it still reads `"concern"`); the legacy path
+    is byte-identical (the severity is computed once and placed in the same
+    key position). `decodeQuote`'s path check became the exported
+    `ESCAPING_PATH` (same regex), which guardrail.ts reuses (I-10).
+  - **Core `review/verdict.ts`**: `VerdictCoverage` (`VerdictOutcome` without
+    `selection`, `trivial` and `strict`), `UnfinishedCause` (the union
+    `unfinishedCauses` returns, now named inside `VerdictCause`), and
+    `unfinishedCauses` exported, typed over `VerdictCoverage &
+    Pick<VerdictOutcome, "strict">`; header and comments updated. Behaviour
+    unchanged.
+  - **Core `review/select.ts`**: `NEAR`, `MAX_INLINE`, `sameFinding` and `gap`
+    exported with comments. Behaviour unchanged.
+  - **Core `review/format.ts`**: `SummaryInput.strict?: Pick<StrictResult,
+    "complete" | "findings" | "dropped">` after `selection?`;
+    `countLine(selection, strict?)` hands a present strict result to a new
+    `strictCountLine`. Without it the text is byte-identical.
+  - **Core `review/model-evidence.ts`**: `REVIEW_PIPELINE_SOURCES`
+    `511f0bffc7b5d314` → `bb8972b4baf9cd62` (`a2d105ab6c0f59f5` before the
+    review fixes). No logic change.
+  - **`script/vectorscope-eval/report.ts`**: `RESELECT_SUFFIX`
+    (`"+reselect-strict"`), `StrictReselection`, `reselectRun(artifact,
+    run)`, `loadOutputs({ reselect: "strict" })` (copies, plan entries,
+    `reselected` and a `sources.reselect` line), `--reselect strict` in
+    `main` and `USAGE`, `group()` refusing a re-selected name; a private
+    `postedParts` now shared by `fromArtifact` (same output) and
+    `reselectRun`. **README**: the command and an "Offline strict
+    re-selection (VS-27b)" paragraph.
+  - **Tests**: new core `test/review/guardrail.test.ts` (30) and
+    `test/review/fixtures/json-schema.ts` (the structural validator moved out
+    of `schema.test.ts`, now counting `maxLength` in code points as JSON
+    Schema does); core `diff.test.ts` (+5), `select.test.ts` (+2),
+    `format.test.ts` (+5, in a new describe block after "the desktop form
+    with line comments", away from `capBody`), `schema.test.ts` (+1, the
+    severity cases and the drop order), `verdict.test.ts` (+1),
+    `model-evidence.test.ts` (pins); eval `report.test.ts` (+6). The
+    review fixes added three guardrail tests and cases to existing ones.
+- **Off by default (I-1, I-12).**
+  - No new key. `guardrail` stays in `UNAPPLIED_REVIEW_KEYS` and in
+    `EVIDENCE_POLICY_KEYS`; no runner imports `guardrail.ts` or
+    `applyFixPatch`; `select.ts` and `verdict.ts` gained export keywords and
+    types only; the legacy decoder never marks a severity (tested with
+    `undefined`, `{}` and `{ guardrail: "off" }`); `buildSummaryBody` without
+    `strict` is byte-identical (the goldens, and a `strict: undefined` case);
+    `report.ts` without `--reselect` returns no `reselected` and no
+    `sources.reselect` (tested), and `fromArtifact` is unchanged (its tests
+    pass as before).
+  - Digests: `promptsDigest()` stays `5d59e9ee06077c23`, `{ impact: "graph" }`
+    `74a2111826c226b1`, `policyDigest(DEFAULT_REVIEW_CONFIG)`
+    `70512122f41ec160`. The schema-only strict pins move, because the result
+    schema's drop enum follows `STRICT_DROPS` (the VS-27a hand-off d):
+    `{ guardrail: "strict" }` `f04c185c5b415aaf` → `b98afb0e878dfe26`, and
+    `{ impact: "graph", guardrail: "strict" }` `9c87880d813f1e69` →
+    `3ba21b5bc883cd70`. No evidence scope can carry either while the key is
+    unapplied.
+  - `REVIEW_PIPELINE_FILES` gains `guardrail.ts`; `REVIEW_PIPELINE_REVISION`
+    stays 1, because nothing a runner finds or posts changes. The pin comment
+    says why `guardrail.ts` is pinned before any runner calls it (it decides
+    what a strict review posts, and its rule pass is the one the offline
+    re-selection applies) and why `verdict.ts` and `format.ts` stay out
+    (completeness decides wording and the verdict, not what is found or
+    posted).
+  - §0.3 item 4: `engine:guardrail-strict` stays pending VS-27c. Item 5: no
+    desktop half in a pure package; desktop artifacts are not re-selected.
+- **Decisions.**
+  - (a) **Severity.** The round-two amendment drops an unparseable severity
+    under strict with its own count: the decoder marks it
+    (`severityUnreadable`, strict only) and S2 drops it as
+    `severity-unreadable`. S2's severity half is checked before its class
+    half (the critique's major point 1): the strict prompt asks for a failure
+    block only on blocking findings and `decodeFailure` returns none unless
+    class and mechanism both decode, so in the contract's order every
+    ordinary concern would read `out-of-scope`. This reorders the contract's
+    §1.2 `StrictDrop` list, a lane deviation; the strict digests move in this
+    package anyway. **Known mislabel**: a failure block with a valid class and
+    an unrecognised mechanism decodes as none and reads `out-of-scope`;
+    counting it apart needs a decoder marker and another drop value, left to
+    a package that measures how often it happens (tested as is).
+  - (b) **Completeness** reuses verdict.ts's `unfinishedCauses` through the
+    new export (I-10), so strict completeness and VS-32's verdict read the
+    same coverage; `StrictIncomplete` is narrowed to what it can return
+    (`UnfinishedCause` without `strict-incomplete`, which this result is).
+  - (c) **Blobs fail closed** (critique point 4). A key the engine left out
+    reads as null, unreadable; "not in that tree" must be said explicitly as
+    `{ absent: true }`; `strictBlobRequests` names every key strictSelect
+    reads (tested by recording every map read). `blob-unreadable` is a lane
+    code: an unreadable file that leaves a finding without a matching quote
+    marks the result incomplete (I-7). An unreadable file another quote makes
+    up for, or on a finding an earlier rule dropped, changes nothing. An
+    unreadable head file for a patch leaves the fix unchecked and the result
+    complete: the finding is kept, so nothing is lost. `unanswered` is
+    required (`[]` for none), so leaving it out cannot turn unreadable
+    verdicts into plain `unverified` ones, and any id in it that no finding
+    in the list confirms marks the result incomplete, whether or not its
+    finding was handed in (review fix 1).
+  - (d) **S3** refuses a line resolveAnchor snapped onto a nearby hunk (the
+    anchor must lie in the model's own `line..endLine`) and a RIGHT anchor
+    whose lines are only context: some line must be added or sit next to a
+    deletion (`touched` with no radius). A LEFT anchor is on removed code by
+    construction (the left map holds only removed lines). `changedSpans`
+    stays private for VS-42.
+  - (e) **S4** first leaves out whitespace-only lines at the quote's start
+    and end, its line moving past those at the start, then compares its n
+    remaining lines with the file's lines from that line on, which must lie
+    inside the file, with all whitespace removed from every line on both
+    sides (as `patchIdOf` compares lines) and blank lines dropped, so CRLF,
+    indentation and spacing on one side only never matter (review fixes 2
+    and 3). A quote with no letter or digit (`}`, `);`) matches nothing
+    (review fix 4). A RIGHT quote reads head, a LEFT quote base; a diff path
+    reads its own path at head and a renamed file's old path at base; a
+    path outside the diff is read as written (a cross-file quote counts),
+    and a path `ESCAPING_PATH` matches is read as a file the tree lacks,
+    without a map read (review fix 5). Kept quotes are the matching ones,
+    each with the path it was read at.
+  - (f) **Patches** apply at exact positions, with no offset or fuzz; model
+    headers never choose the file (I-8); each hunk must fill its header's
+    counts and its new start must follow from its old start (critique point
+    3), so text labelled `patch` is one `git apply` reads as checked. A patch
+    naming another file is kept as an unchecked fix (C-14). **Known limit**:
+    a hunk whose last line is an empty context line the decoder's
+    `cleanCode` stripped is under-filled, so `malformed`, so unchecked (fail
+    closed); a mode change is malformed. Checking a cross-file patch against
+    the other file waits for VS-27c, once the engine reads that blob.
+  - (g) **The parse check** rejects a patch only when `parses(path, head)` is
+    true and `parses(path, patched)` is false; head is parsed once per path.
+    A language that is not parseable (undefined) or a head that already fails
+    is not checked. A callback that throws on either text leaves that one
+    patch unchecked; the rest of the selection, and completeness, are as
+    they were (review fix 6).
+  - (h) **Strength order**: a runtime confirmation, then confidence, then
+    path, line, id, title and the finding's JSON, a total order, so the
+    result never depends on input order (critique point 11; tested on
+    reversed and rotated inputs). S7 compares a candidate only with findings
+    already kept, so a stronger finding a later rule dropped never hides a
+    weaker one. **Known difference**: a same-id finding far away is dropped
+    as a duplicate without the `also` location `selectFindings` folds in;
+    VS-27c composes the two.
+  - (i) `NEAR`, `MAX_INLINE` and `gap` are exported beside `sameFinding`, a
+    small widening of the contract's "export sameFinding", so S7's three
+    lines and S8's clamp measure as selection does.
+  - (j) **Wording** (critique point 9), only when a strict result is
+    present, keyed on the strict result alone: empty and complete with no
+    `cap` drop is "**No verified production-breaking issues** on the changed
+    lines."; empty and complete with a `cap` drop is "**No findings posted**
+    on the changed lines: the comment limit left out N verified findings."
+    (`maxComments: 0` is complete, so it does not read as incomplete);
+    empty and incomplete is "**Review incomplete**: a stage did not finish,
+    coverage is partial or a verdict could not be read." It never says clean
+    and does not reuse VS-34's `held-back`. The ` · N nits below` suffix
+    replaces the final full stop, as on the legacy line. A non-empty result
+    is counted from the selection, or as N blocking when the selection has
+    nothing on lines. New strings under the key only (D14, as VS-27a). The
+    "**No findings posted**" line is a third empty-result wording beyond the
+    contract's two; it is **not decided here** and waits for the owner's
+    sign-off before VS-27c wires it (Owner questions below).
+  - (k) **Offline re-selection** (contract VS-27c's measurable goal, built
+    here as eval work; the contract's literal rule set is "S1 and S3–S8").
+    It keeps S2's blocking half, because severity is readable in legacy
+    output, so the re-selected set is what strict would post. It leaves out
+    S2's class half and S5 (no failure block) and S4's quotes. S3 and S4 are
+    the recorded anchors (inline, overflow, elsewhere and nits anchored,
+    outside-diff not); a context-line anchor passes offline, a stated limit.
+    S6 comes from the recorded `suggestionAllowed`, so an overflow suggestion
+    reads unchecked. S7 is by id or `sameFinding` with no anchored code and no
+    class clause; S8 at the artifact's `maxComments` (config keys the artifact
+    lacks read as `DEFAULT_REVIEW_CONFIG`). Only what the original posted is
+    a candidate (critique point 7): inline when the review write went out,
+    the rest when the summary did, none when every reviewer failed, so every
+    re-selected finding carries the original's judgement; the rest are
+    counted as `unposted`. A refused artifact is not emptied wholesale (the
+    plan's rule): its writes already show what got through. Unreadable
+    verdicts (critique point 5) are worked out from the recorded verify rule,
+    plan.ts's `verifyCandidates` and `verifyUnanswered` over the selection
+    with its verified findings as the confirmed verdicts and its findings
+    recorded as `verified: false` as rejected ones (a recorded false is a
+    verdict that was read; review fix 7), when a verify pass ran; that is
+    exact for a run whose verify pass finished. Completeness reads the rule
+    pass's own `unreadable`, as strictSelect does, so both paths agree. A triage pass
+    leaves unconfirmed findings out of the artifact, so a nonzero
+    `unconfirmed` drop marks the run incomplete as `verdicts-unrecorded`, a
+    re-selection-only code. A copy keeps the original's status, detail,
+    stop, proposed findings and violations, and carries no spend, tokens,
+    attempts or timing (critique point 13): it is admitted and costs $0, so
+    the unaccounted count sees the original once (tested with an unadmitted
+    paid artifact); the group's tokens line counts copies as having reported
+    none. The gate never decides on or compares with a copy (critique point
+    6): `--candidate` and `--baseline` both refuse a `+reselect-strict` name,
+    with or without `--reselect`. The critique asked to keep `--baseline`
+    usable; the flag stays usable for every real group, but a re-selection
+    as the baseline would hand the candidate's recall criterion a
+    lower-recall comparison it did not earn, so it is refused too; the two
+    groups sit side by side in the group tables. With `--reselect` and no
+    `--candidate` there are two groups, so the gate is not evaluated (tested).
+    Judgements are copied from the original run key to the copy's; no judge
+    call is duplicated.
+  - (l) A runtime confirmation's `verifier` is `"runtime"` until VS-30 widens
+    the input; `verifiedBy` defaults to `"model"`.
+  - (m) A fix's text is the suggestion when the existing rules make it
+    committable (`suggestionAllowed` with `verified: true`, since S1 kept
+    only verified findings, so an untrusted verified suggestion stays a
+    suggestion), else the patch when it applies, else `patch ?? suggestion`
+    unchecked. A fix that is empty or over `MAX_SUGGESTION_CHARS` is no fix,
+    so the result always validates against `strictResultJsonSchema`.
+- **Critique points** (all taken).
+  1. S2 precedence: (a); tests for a concern without a failure block and
+     `"critical"` without one, through the strict decoder too.
+  2. S6 untrusted: an untrusted verified finding keeps its suggestion; the
+     unchecked cases are suggestions off, LEFT, a moved range and repeated
+     neighbours.
+  3. Recount and new start: (f); tests for an under-filled hunk, a wrong new
+     start and an offset second hunk.
+  4. Fail-open defaults: (c), both forms combined (a request helper and an
+     explicit absent value).
+  5. Offline unreadable verdicts: (k), with tests.
+  6. The gate: (k), refused in both flags (the reason is in (k)).
+  7. Posted sets: (k), with blocked-summary and blocked-review tests.
+  8. Preamble: git extended header lines reach `other-file`; mode changes,
+     a lone `---`, `diff --vector` and prose are `malformed`; the `/dev/null`
+     and mode-line forms are both tested.
+  9. Wording: (j).
+  10. The validator moved to `test/review/fixtures/json-schema.ts`.
+  11. The impact test passes an outcome-like object with Tier 1 and impact
+      incompleteness as `coverage` and keeps `complete` true, with a
+      `@ts-expect-error` that `VerdictCoverage` has no impact field; the
+      total tiebreak is (h); the property test also asserts that every drop
+      reason, every fix kind and an incomplete result occur over its 400
+      seeds, so it cannot pass by keeping nothing.
+  12. Only the shared rule pass is in `guardrail.ts`; the record adapter
+      (`reselectRun`, `StrictReselection`) is in `report.ts`; the pin comment
+      says the rule pass is pinned on purpose.
+  13. Spend: (k).
+  14. Merge prediction covers `format.test.ts` and every other touched file
+      (below).
+  15. (a) S7 measures with select.ts's `gap`; (b) `StrictIncomplete`
+      narrowed; (c) the verdict.ts header updated; (d) the `also` difference
+      is in (h).
+  16. Hand-offs: added below.
+  17. prettier and oxlint ran through the lock. The first prettier run was
+      from the worktree root on five core files, later runs from the package
+      directories. prettier reformatted lines this package did not touch in
+      `select.test.ts`, which was not prettier-clean at HEAD, so that file
+      was restored and only the new block re-added, checked clean on its own.
+- **Hand-offs to VS-27c.**
+  - Call strictSelect after placement in `Review.run`, with `coverage` from
+    the outcome and `unanswered` from plan.ts's `verifyUnanswered` (I-10),
+    not a new computation. Pass every unanswered id, even for findings the
+    composition with `selectFindings` leaves out: strictSelect reads such an
+    id as an unread verdict (I-7).
+  - strictSelect ignores `minConfidence` and the posting cap per PR; decide
+    how it composes with `selectFindings` (which runs first, which ids and
+    `also` places survive).
+  - `INJECTION_TITLE` warnings are dropped under strict (out of scope or not
+    blocking), so VS-27c must still surface them.
+  - Read the blobs `strictBlobRequests` names through the head and base
+    tree-ish, with the symlink containment test, and pass `{ absent: true }`
+    for a path the tree lacks.
+  - The parse callback: pre-compute with `applyFixPatch` and the engine
+    parser (VS-25a); the desktop has no parse check until VS-10. It should
+    return undefined on a time limit or grammar failure rather than throw; a
+    throw is caught and leaves that patch unchecked.
+  - Owner sign-off before wiring: the third empty-result wording ("**No
+    findings posted** ... the comment limit left out N verified findings",
+    decision (j)) and the reordered `STRICT_DROPS` (decision (a)). If the
+    owner keeps the contract's two wordings only, the cap-emptied case
+    becomes incomplete with a `cap` reason and reuses "Review incomplete".
+  - Render an unchecked fix (model text: a patch or a suggestion) through
+    `sanitizeModelMarkdown` and `fenceFor`'s escaping, as a plain diff block
+    (I-2).
+  - VS-42 needs `quoteMatches` positionally: map a head line to base with
+    `mapLine` first, then pass a LEFT quote (the doc comment says so).
+  - Artifacts record the candidates and blobs seen before the guardrail, so
+    a later re-selection can run the full rule set; the CLI `--json` outcome;
+    the variant flip.
+- **Owner questions, kept neutral.** Q3 and Q4: class names only, no
+  definitions. Q17: an unchecked fix is kept and marked (`fix.kind`,
+  `fixUnchecked`), so a later posting filter can serve either answer. Q13 and
+  Q15: nothing is wired. Q18 to Q34: no addendum package is built here.
+  **For the owner's sign-off with Q13 and Q17** (new, not decided by this
+  lane):
+  - The wording "**No findings posted** on the changed lines: the comment
+    limit left out N verified findings." is a third empty-result string the
+    contract does not list (D14). It exists so a `maxComments: 0` or capped
+    run never claims "No verified production-breaking issues". Nothing sets
+    `strict` before VS-27c, so nothing shows it.
+  - `STRICT_DROPS` order differs from contract §1.2's `StrictDrop` list:
+    `severity-unreadable` was added (the round-two amendment), and
+    `not-blocking` now comes before `out-of-scope` (decision (a)). The
+    contract text was not edited; VS-27c, VS-42 and VS-44 should build on
+    the order in `types.ts`, or the owner restores the contract's order
+    (the strict-only digests move either way; no evidence scope carries
+    them while the key is unapplied).
+  - S4's "apart from whitespace" is read as git's `-w`: whitespace present
+    on one side only is ignored too (review fix 3). The stricter reading
+    (inner runs as one space) is a one-line change if the owner prefers it.
+- **Predicted merge conflicts** (read-only: `git merge-tree --write-tree
+  --name-only` at HEAD, then a three-way `git merge-file` of each touched file
+  either branch changes, the working tree against each branch's merge base
+  and tip).
+  - Of the touched files, only `format.ts`, `types.ts` and `format.test.ts`
+    change on `origin/codium` (`5a079cbd`) or `origin/self-evolving`
+    (`f062bcce`).
+  - `format.ts` and `format.test.ts`: no conflict with either, as at HEAD.
+  - `types.ts`: 2 conflict hunks with codium and 1 with self-evolving, the
+    same VS-27a hunks as at HEAD (the pass-name lines); none holds a VS-27b
+    line.
+- **Deferred.**
+  - VS-42: S9, `preExistingSuspect`, the `pre-existing` drop, the
+    `changedSpans` export and the `scope` field.
+  - VS-44: `certified()`, the certificate schema, the `certificate-mismatch`
+    and `verdict-unsure` drops.
+  - VS-43: `ruleCited` and `linkedRule`. VS-47: `checked[]`.
+  - The evidence-attachment fields (VS-44, VS-30).
+  - The addendum §3 Greptile fields: `clarificationQuestion`,
+    `securityIssue`, before and after snippets, per-file notes.
+  - Counting a failure block with an unrecognised mechanism apart from
+    `out-of-scope` (a).
+  - Desktop artifact re-selection; offset- or fuzz-tolerant patch
+    application; checking a cross-file patch against its own file.
+- **Deferred verification.**
+  - No saved replay artifacts exist (I-13), so the precision change is
+    unmeasured until settled artifacts exist.
+  - The parse check runs only against a fake callback.
+  - The merge conflicts are only predicted.
+  - No provider sees anything; nothing reaches a runner.
+- **Evidence.** Each file alone through the lock, `--timeout 30000`, from its
+  package directory; counts at HEAD → with VS-27b.
+
+  | File | HEAD | VS-27b |
+  |---|---|---|
+  | core `test/review/guardrail.test.ts` | | 30 (27 before the review fixes) |
+  | core `test/review/diff.test.ts` | 45 | 50 |
+  | core `test/review/select.test.ts` | 43 | 45 |
+  | core `test/review/format.test.ts` | 46 | 51 |
+  | core `test/review/schema.test.ts` | 45 | 46 |
+  | core `test/review/verdict.test.ts` | 44 | 45 |
+  | core `test/review/model-evidence.test.ts` | 22 | 22 |
+  | core `test/review/config.test.ts` | 49 | 49 |
+  | engine `test/review/run.test.ts` | 44 | 44 |
+  | engine `test/review/eval.test.ts` | 29 | 29 |
+  | engine `test/cli/github.review.test.ts` | 40 | 40 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 | 107 |
+  | eval `report.test.ts` (from `script/vectorscope-eval`) | 27 | 33 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 | 32 |
+
+  - `bun typecheck` passes in core and engine; app and desktop pass `bun
+    typecheck --force`; the eval scripts pass `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - prettier is clean on every changed source and test file and on the eval
+    README. `select.test.ts` and this log were not prettier-clean at HEAD, so
+    in `select.test.ts` only the new block was checked (clean), and this entry
+    keeps the earlier entries' layout. oxlint reports no warning on any added
+    or changed line; 53 warnings remain in these files, all on lines this
+    package did not touch.
+  - **Mutation check.** 29 mutations, each applied alone, run against the
+    named test file and restored byte for byte (checked by hash); all caught.
+    guardrail.ts: S1 keeping an unanswered finding; `severityUnreadable`
+    ignored; S2's class half before its severity half; S3 accepting snapped
+    anchors; S3 accepting context anchors (radius 5); `quoteMatches` ignoring
+    the side; S4's span not exact; S5's bound off by one; S5 counting UTF-16
+    units; `MAX_FIX_HUNKS` 4; the parse check inverted; S7's class clause
+    removed; S8's clamp removed; `unanswered` ignored in completeness; a
+    missing blob key read as absent; strength order ignoring a runtime
+    confirmation. diff.ts: `applyFixPatch` ignoring the header path, ignoring
+    leftover lines, skipping the recount, taking a lone `---` header.
+    format.ts: the wordings swapped; the cap wording dropped. schema.ts: the
+    legacy decoder marking a severity. report.ts: the copy reusing the
+    original run key; unposted findings as candidates; the copy keeping the
+    spend; `unanswered` ignored; `verdicts-unrecorded` dropped; `group()`
+    taking a re-selected name. After the review fixes, 14 more, the same
+    way, all caught: completeness ignoring an unanswered id outside the
+    list; S4 keeping whitespace-only edge lines; leading ones not moving the
+    line; the span not bounded by the file; a punctuation-only quote
+    matching; one-sided whitespace counting; `strictBlobRequests` keeping
+    escaping paths, and asking for a patch head outside the diff;
+    strictSelect reading an escaping path; a parse throw propagating; a
+    throw on head, and on the patched file, passing the patch; report.ts
+    reading `verified: false` as unread, and ignoring `unanswered`.
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid run, no workflow dispatched, nothing
+    published, and no existing user-visible string changed (D14).
+- **Review findings, round one** (twelve findings, two blocking, the two
+  blocking ones the same defect; one non-blocking pair, the wording,
+  overlaps too). All were
+  taken or flagged; none is declined. Fixed before any commit, so the text
+  above already describes the fixed code. Everything stays strict-only or
+  eval-only: no runner imports `guardrail.ts`; `ESCAPING_PATH` is the same
+  regex `decodeQuote` ran inline, so the legacy and strict decoders are
+  byte-identical and every digest except `REVIEW_PIPELINE_SOURCES` stays as
+  pinned above.
+  1. (Blocking, twice.) Completeness counted an unread verdict only when the
+     unanswered id's finding was in `findings`, so `strictSelect([],
+     {unanswered: ["ghost"]})` read complete and worded "No verified
+     production-breaking issues" (I-7). Fixed in the shared rule pass, so
+     strictSelect and the offline re-selection agree: `strictRules`'
+     `unreadable.verdict` also holds when an unanswered id has no candidate
+     that confirms it. report.ts now reads `pass.unreadable` instead of its
+     own `unanswered.length > 0` (the same value there). Tests: `[]` and a
+     list with another verified finding, both `["verdict-unreadable"]`, the
+     body worded "Review incomplete", and a confirmed finding still winning
+     over the list.
+  2. A quote ending in `\n` or a whitespace-only line never matched (its
+     span counted a line `normalizeCode` drops). Fixed as suggested:
+     whitespace-only lines at both ends are left out, the line moving past
+     those at the start. Tests: trailing `\n`, `\n  `, `\n  \n\t`, a
+     leading whitespace line, and a leading one that moves the quote onto
+     the wrong line.
+  3. "Apart from whitespace" read stricter than the contract (`if(a){`
+     failed against `if (a) {`). Fixed: all whitespace removed per line, as
+     `patchIdOf` does; the test that pinned the stricter reading now pins
+     the match. Listed for the owner (Owner questions).
+  4. A punctuation-only quote (`}`, `);`) matched almost anywhere. Fixed: a
+     quote needs a letter or digit (Unicode `\p{L}\p{N}`, a superset of
+     `diff.ts`'s ASCII test, so a quote of non-ASCII identifiers still
+     counts). VS-42 and VS-44 inherit the rule through `quoteMatches`.
+  5. `strictBlobRequests` asked for a patch's head outside the diff and
+     passed model paths unchecked. Fixed: a patch head only for a diff file
+     (S3 drops any other first), and no key `ESCAPING_PATH` matches, now
+     exported from `schema.ts` and reused by `decodeQuote` (I-10).
+     strictSelect reads such a path as `{ absent: true }` without touching
+     the map, as the decoder drops such a quote: a plain mismatch, never
+     incomplete. Containment against the tree-ish stays the engine's (I-8).
+  6. A throwing `parses` failed the whole selection. Fixed: a throw on head
+     or on the patched text leaves that patch unchecked; the doc comment and
+     the hand-off say the callback should return, not throw. Test: both
+     throw sites, with a second finding's suggestion kept as before.
+  7. Offline S1 read a `verified: false` finding as unanswered. Fixed: a
+     recorded false is a rejected verdict in the map `verifyUnanswered`
+     reads; README and comment updated. Test: a rejected-but-kept finding
+     drops as `unverified` and the run stays complete.
+  8. `strictRules`' `for` loop pushing into two arrays. Rewritten as
+     `toSorted(stronger).reduce(...)` returning `{ accepted, drops }`; S7
+     reads the accepted list so far from the accumulator.
+  9. The third empty-result wording ("No findings posted ..."). Kept, as
+     both findings allow, and flagged for the owner's sign-off with Q13 and
+     Q17 (decision (j), Owner questions, Hand-offs). The alternative (a
+     `cap` incompleteness reusing "Review incomplete") is named there.
+  10. The `STRICT_DROPS` reorder. No code change; flagged for the owner and
+      VS-27c, VS-42 and VS-44 (Owner questions). The contract's §1.2 list is
+      not edited by this lane.
+  - Re-run after the fixes, each file alone through the lock with
+    `--timeout 30000` from its package directory: core `guardrail.test.ts`
+    30, `schema.test.ts` 46, `select.test.ts` 45, `format.test.ts` 51,
+    `diff.test.ts` 50, `verdict.test.ts` 45, `model-evidence.test.ts` 22;
+    eval `report.test.ts` 33 (from `script/vectorscope-eval`). `bun
+    typecheck` passes in core and engine, and the eval scripts pass `bun
+    tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`. prettier is clean on every file changed in this
+    round; oxlint reports no warning on a changed line. Neither
+    `origin/codium` nor `origin/self-evolving` touches a file this round
+    changed beyond those listed under the predicted conflicts.

@@ -39,6 +39,10 @@ export interface ModelFinding {
   failure?: FailureInfo // asked for on every blocking finding; S2 and S5 enforce that, not the schema
   quotes?: Quote[]
   patch?: string // a unified diff against head
+  // Set only by decodeReport under `guardrail: "strict"` when the model's severity names none of SEVERITIES (VS-27b,
+  // the round-two amendment). `severity` then reads "concern" as on the legacy path, and S2 drops the finding as
+  // `severity-unreadable`, never as a choice of the model's.
+  severityUnreadable?: boolean
 }
 
 export interface ModelReport {
@@ -87,13 +91,19 @@ export const VERIFIED_BY = ["model", "runtime"] as const
 export type VerifiedBy = (typeof VERIFIED_BY)[number]
 // "unchecked": no committable suggestion and no patch that applies, so the fix is shown as a plain diff block (S6).
 export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
-// Why strictSelect dropped a candidate, in the order of the rules S1 to S8. The contract's base list: a later package's
-// drop (VS-42, VS-44) joins this list with its package, and the result schema only under that package's key.
+// Why strictSelect dropped a candidate, in the order its rules S1 to S8 are checked. The contract's base list: a later
+// package's drop (VS-42, VS-44) joins this list with its package, and the result schema only under that package's key.
+// VS-27b added `severity-unreadable` (the round-two amendment, addendum §3 VS-27, [GP3]) and checks S2's severity half
+// before its class half: an unreadable severity, then a severity other than blocking, then no class of the five. The
+// strict prompt asks for a failure block only on blocking findings, so a concern without one is `not-blocking`, not
+// `out-of-scope`. A failure block whose class is valid but whose mechanism is not decodes as none (schema.ts), so it
+// reads as `out-of-scope`.
 export const STRICT_DROPS = [
   "unverified",
   "verdict-unreadable",
-  "out-of-scope",
+  "severity-unreadable",
   "not-blocking",
+  "out-of-scope",
   "anchor",
   "quote-mismatch",
   "no-impact",
@@ -122,7 +132,9 @@ export interface StrictResult {
   version: 1
   head: string
   complete: boolean // false when a stage did not finish, coverage is partial or a verdict could not be read
-  incomplete?: string[] // reason codes, not text (D14); VS-27b defines them
+  // Reason codes, not text (D14): guardrail.ts's StrictIncomplete, which are verdict.ts's unfinished causes followed by
+  // `verdict-unreadable` and `blob-unreadable`.
+  incomplete?: string[]
   findings: StrictFinding[]
   dropped: { reason: StrictDrop; count: number }[] // only reasons with a count of 1 or more
   fixUnchecked: number // findings kept with their fix shown as an unchecked diff (S6)

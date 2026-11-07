@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import {
   anchorText,
+  applyFixPatch,
   applyPatch,
   budgetDiff,
   buildAnchorIndex,
@@ -599,5 +600,147 @@ describe("budgetDiff and renderPatch", () => {
     )
     expect(picked.inline.map((item) => item.path)).toEqual(["src/list.ts", "src/one.txt"])
     expect(picked.notInlined.map((item) => item.path)).toEqual(["src/added.ts"])
+  })
+})
+
+describe("applyFixPatch (VS-27b, S6)", () => {
+  // src/load.ts at head: 8 lines and a final newline.
+  const head = [
+    "function load(user) {",
+    "  const id = user.id",
+    "  return fetch(id)",
+    "}",
+    "",
+    "function save(user) {",
+    "  write(user)",
+    "}",
+    "",
+  ].join("\n")
+  const at = (lines: string[]) => lines.join("\n")
+  const hunk = ["@@ -2,2 +2,2 @@", "-  const id = user.id", "+  const id = user?.id", "   return fetch(id)"]
+  const fixed = head.replace("  const id = user.id", "  const id = user?.id")
+  const apply = (patch: string, maxHunks = 3) => applyFixPatch(head, patch, { path: "src/load.ts", maxHunks })
+  const git = (...lines: string[]) => ["diff --git a/src/load.ts b/src/load.ts", ...lines]
+
+  test("applies bare hunks, or hunks under headers naming the finding's file", () => {
+    expect(apply(at(hunk))).toEqual({ ok: true, text: fixed, hunks: 1 })
+    expect(
+      apply(at([...git("index 1111111..2222222 100644", "--- a/src/load.ts", "+++ b/src/load.ts"), ...hunk])),
+    ).toEqual({ ok: true, text: fixed, hunks: 1 })
+    expect(apply(at(["--- src/load.ts", "+++ src/load.ts", ...hunk]))).toEqual({ ok: true, text: fixed, hunks: 1 })
+    // Blank lines after the last hunk, and an empty context line whose leading space was trimmed, are fine.
+    expect(apply(at([...hunk, "", ""]))).toEqual({ ok: true, text: fixed, hunks: 1 })
+    expect(apply(at(["@@ -4,3 +4,3 @@", " }", "", "-function save(user) {", "+function save(user: User) {"]))).toEqual({
+      ok: true,
+      text: head.replace("function save(user) {", "function save(user: User) {"),
+      hunks: 1,
+    })
+    // A CRLF file keeps its line endings.
+    expect(applyFixPatch(head.replaceAll("\n", "\r\n"), at(hunk), { path: "src/load.ts", maxHunks: 3 })).toEqual({
+      ok: true,
+      text: fixed.replaceAll("\n", "\r\n"),
+      hunks: 1,
+    })
+  })
+
+  test("pure insertions and deletions, and later hunks offset by earlier ones", () => {
+    expect(apply(at(["@@ -3,0 +4,1 @@", "+  log(id)"]))).toEqual({
+      ok: true,
+      text: head.replace("  return fetch(id)\n", "  return fetch(id)\n  log(id)\n"),
+      hunks: 1,
+    })
+    expect(apply(at(["@@ -3,1 +2,0 @@", "-  return fetch(id)"]))).toEqual({
+      ok: true,
+      text: head.replace("  return fetch(id)\n", ""),
+      hunks: 1,
+    })
+    const insert = ["@@ -2,1 +2,2 @@", "   const id = user.id", "+  check(id)"]
+    const later = (start: string) => [start, "-  write(user)", "+  write(check(user))"]
+    expect(apply(at([...insert, ...later("@@ -7,1 +8,1 @@")]))).toEqual({
+      ok: true,
+      text: head.replace("user.id\n", "user.id\n  check(id)\n").replace("  write(user)", "  write(check(user))"),
+      hunks: 2,
+    })
+    // The second hunk's new start ignores the line the first one added.
+    expect(apply(at([...insert, ...later("@@ -7,1 +7,1 @@")]))).toEqual({ ok: false, reason: "malformed" })
+  })
+
+  test("a patch is malformed unless every line belongs to a well-counted hunk", () => {
+    for (const patch of [
+      "",
+      "no hunk here",
+      at([...hunk, "garbage after the hunk"]),
+      at([
+        "@@ -2,1 +2,1 @@",
+        "-  const id = user.id",
+        "+  const id = user?.id",
+        "junk",
+        "@@ -7 +7 @@",
+        "-  write(user)",
+        "+  write(u)",
+      ]),
+      // A header that promises more lines than follow, and one whose new start does not follow from its old start.
+      at(["@@ -2,3 +2,3 @@", "-  const id = user.id", "+  const id = user?.id", "   return fetch(id)"]),
+      at(["@@ -2,2 +5,2 @@", ...hunk.slice(1)]),
+      // A lone file header the parser never reads, a mode change, a header this applier does not take, a prose line.
+      at(["--- a/src/other.ts", ...hunk]),
+      at([...git("old mode 100644", "new mode 100755", "--- a/src/load.ts", "+++ b/src/load.ts"), ...hunk]),
+      at(["diff --vector a/src/load.ts b/src/load.ts", ...hunk]),
+      at(["Here is the fix:", ...hunk]),
+      at(["Binary files a/src/load.ts and b/src/load.ts differ"]),
+    ])
+      expect(apply(patch)).toEqual({ ok: false, reason: "malformed" })
+  })
+
+  test("headers never choose the file: another path, a new, deleted or renamed file is other-file", () => {
+    for (const preamble of [
+      ["--- a/src/other.ts", "+++ b/src/other.ts"],
+      ["diff --git a/src/other.ts b/src/other.ts"],
+      ["--- /dev/null", "+++ b/src/load.ts"],
+      ["--- a/src/load.ts", "+++ /dev/null"],
+      git("new file mode 100644", "--- a/src/load.ts", "+++ b/src/load.ts"),
+      git("deleted file mode 100644", "--- a/src/load.ts", "+++ b/src/load.ts"),
+      [
+        "diff --git a/src/old.ts b/src/load.ts",
+        "similarity index 90%",
+        "rename from src/old.ts",
+        "rename to src/load.ts",
+      ],
+      ["--- a/src/old.ts", "+++ b/src/load.ts"],
+    ])
+      expect(apply(at([...preamble, ...hunk]))).toEqual({ ok: false, reason: "other-file" })
+    expect(
+      apply(
+        at(["--- a/src/load.ts", "+++ b/src/load.ts", ...hunk, "--- a/src/other.ts", "+++ b/src/other.ts", ...hunk]),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "several-files",
+    })
+  })
+
+  test("at most maxHunks hunks, at their exact positions, and a change", () => {
+    const four = at(
+      [1, 3, 6, 8].flatMap((line) => [
+        `@@ -${line},1 +${line},1 @@`,
+        `-${head.split("\n")[line - 1]}`,
+        `+${head.split("\n")[line - 1]} // fixed`,
+      ]),
+    )
+    expect(apply(four)).toEqual({ ok: false, reason: "hunks" })
+    expect(apply(four, 4)).toMatchObject({ ok: true, hunks: 4 })
+    // A context line that differs, or the right lines at another position: no offset, no fuzz.
+    expect(
+      apply(at(["@@ -2,2 +2,2 @@", "-  const id = user.id", "+  const id = user?.id", "   return fetch(user)"])),
+    ).toEqual({
+      ok: false,
+      reason: "context",
+    })
+    expect(apply(at(["@@ -3,2 +3,2 @@", ...hunk.slice(1)]))).toEqual({ ok: false, reason: "context" })
+    expect(apply(at(["@@ -40,1 +40,1 @@", "-  write(user)", "+  write(u)"]))).toEqual({ ok: false, reason: "context" })
+    expect(apply(at(["@@ -7,1 +7,1 @@", "-  write(user)", "+  write(user)"]))).toEqual({
+      ok: false,
+      reason: "unchanged",
+    })
   })
 })

@@ -14,6 +14,7 @@ import {
 import {
   REVIEW_VERDICTS,
   reviewVerdict,
+  unfinishedCauses,
   type ReviewVerdict,
   type VerdictInput,
   type VerdictOutcome,
@@ -743,6 +744,29 @@ describe("an unfinished review never reads as a pass", () => {
         passes: 0,
       })
     }
+  })
+})
+
+// VS-27b exports unfinishedCauses so guardrail.ts reads the same causes for StrictResult.complete: whenever the verdict
+// is incomplete for an unfinished run, its causes are unfinishedCauses's, in the same order.
+describe("unfinishedCauses, which the strict guardrail shares", () => {
+  test("gives reviewVerdict's incomplete causes, and none for a finished run", () => {
+    expect(unfinishedCauses(outcome())).toEqual([])
+    const cases: Partial<ReviewOutcome>[] = [
+      { partial: "timeout" },
+      { unreviewed: ["src/a.ts"] },
+      { skipped: [{ path: "big.ts", reason: "size-limit" }] },
+      { specialists: [{ name: "review", status: "failed", steps: 1 }] },
+      { specialists: [{ name: "verify", status: "ok", steps: 1 }] },
+      { strict: { version: 1, head: HEAD, complete: false, findings: [], dropped: [], fixUnchecked: 0 } },
+      { partial: "steps", unreviewed: ["src/a.ts"], specialists: [{ name: "security", status: "timeout", steps: 2 }] },
+    ]
+    for (const overrides of cases) {
+      const value = outcome(overrides)
+      expect(unfinishedCauses(value).length).toBeGreaterThan(0)
+      expect(judge(value)).toEqual(verdict("incomplete", unfinishedCauses(value)))
+    }
+    expect(unfinishedCauses(outcome({ partial: "steps", unreviewed: ["a"] }))).toEqual(["steps", "unreviewed"])
   })
 })
 
