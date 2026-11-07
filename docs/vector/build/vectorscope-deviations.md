@@ -11323,3 +11323,551 @@ same-lab deferral and the test counts). Nothing is committed.
 - **Not done.** Nothing was sent to a model; there was no paid run, no
   workflow dispatched, nothing published and nothing committed; no MCP
   access changed and no user-visible string changed (D14).
+
+## 2026-11-07 · VS-35a Guarded team memory helpers (pure)
+
+Addendum A §2 VS-35, the Now part of §4: pure core helpers that
+`prompt.ts` and `select.ts` do not call, with pure tests on synthetic
+markers. Built at `7a1634e2`. VS-35 is a proposal pending Q18 and Q24, so
+nothing calls the new code and no key exists for it. `run.ts`,
+`ai-review.ts`, `provider.ts`, `session/llm.ts`, `posting.ts`, `prompt.ts`,
+`select.ts`, `types.ts`, `config.ts`, `format.ts`, `workflow.ts`,
+`command.ts`, `github.*`, `github-*.ts` and `vectorscope.astro` are
+untouched. It implements the VS-35a plan as corrected by its critique:
+all eleven critique points were taken, one of them (the regression list)
+in a corrected form (below). Nothing is committed.
+
+- **What landed.**
+  - **New core `review/team.ts`** (pinned; see Evidence scope). Its one
+    runtime import is `fingerprint.ts` (`normalizeTitle`,
+    `titleSimilarity`); its type imports are `TeamPattern` from
+    `prompt.ts` and `Finding` and `ReviewConfig` from `types.ts`. Pure and
+    browser-safe. Exports:
+    - constants, each pinned by a test: `TEAM_SIMILARITY` 0.5,
+      `TEAM_WRITERS` 2, `TEAM_WINDOW_DAYS` 90, `TEAM_MIN_WINDOW_DAYS` 1,
+      `TEAM_MAX_WINDOW_DAYS` 365, `TEAM_CLOCK_SKEW_MS` 300 000,
+      `BULK_RESOLVE_THREADS` 5, `BULK_RESOLVE_MS` 60 000, `BOT_PUSH_MS`
+      120 000;
+    - `DISMISSAL_BY` (`w`, `a`), `DISMISSAL_WHY` (`fp`, `wontfix`,
+      `thumbs`, `resolved`, `cmd`), their types, and `DismissalMarker
+      { by, why, hash }`. The tokens are the addendum's, kept as they are
+      so the later writer needs no mapping;
+    - `TEAM_EXCLUSIONS` (`unmarked`, `author`, `own`, `undated`,
+      `outside-window`, `bot-push`, `bulk-resolve`, `security`), whose
+      order is the precedence, and `TeamExclusion`;
+    - `TeamDismissal { pattern, marker?, pr, at?, replied?, codeChanged? }`
+      and `GuardedTeamInput { now, windowDays?, botPushes?, own?, max? }`;
+    - `GuardedTeamMemory { patterns, excluded }`, carrying an unexported
+      symbol key that only `guardedMemory` sets (critique 2, below);
+    - `guardedMemory(dismissals, input)`, `teamDir(path)`,
+      `sameTeamPattern(a, b)`, `isDismissalMarker(value)`,
+      `neverSuppress(finding, config)` and
+      `teamDemotion(finding, memory, config)`.
+  - **An additive block in core `review/state.ts`**, after `teamPatterns`
+    and before "The next state" divider, plus one import after the
+    `./select` line:
+    - `parseDismissalMarker(body)`: the last `vector-dismissal` marker
+      that starts after the comment's own (last) finding marker;
+    - `GuardedComment { path, body, pr, at?, replied?, codeChanged? }`;
+    - `guardedTeamPatterns(comments, input)`: the body-level analogue of
+      `teamPatterns` under guarded rules. As there, a comment without a
+      dismissed finding marker or without title words is skipped. Every
+      other one becomes a `TeamDismissal`, marked or not, so the
+      exclusion counts see it.
+
+    No existing line of `state.ts` changed (`git diff --numstat`: 64
+    added, 0 removed). `FINDING_MARKER`, `parseFindingMarker`,
+    `setFindingStatus` and `teamPatterns` are byte-identical.
+  - **New core `test/review/team.test.ts`** (44 tests), one new test in
+    `test/review/config.test.ts`, and the pin in
+    `test/review/model-evidence.test.ts`.
+- **Placement.** `state.ts` imports `select.ts` at runtime (`namedLines`),
+  and at wiring `select.ts` will import the demotion rule. So the rules
+  cannot live in a module that imports `state.ts`, or the wiring would
+  close the cycle select → team → state → select. Every rule and
+  threshold is in `team.ts`, which `select.ts` and `prompt.ts` can import
+  at wiring. `state.ts` holds only the body reader, beside the markers it
+  reads. `teamPatterns` is not refactored onto `teamDir`: it is the legacy
+  reader (I-1), and codium and vector-at-mention edit `state.ts`. So
+  `teamDir` repeats its two lines, and a test holds the two equal.
+- **Read side only.**
+  - The parser fixes the addendum's grammar exactly:
+    `<!-- vector-dismissal by=w|a why=fp|wontfix|thumbs|resolved|cmd h=<hash> -->`,
+    with no `v1` token, exactly those three fields in that order, single
+    spaces, and a hash of 12 to 64 lowercase hex characters.
+  - Only the text after the comment's own (last) finding marker is read.
+    In it, the last `<!--`, optional whitespace and `vector-dismissal` (in
+    any case) starts the candidate, and its first `-->` ends it; the
+    candidate must then match the strict grammar. A malformed candidate
+    (other spacing or case, a `>` inside, no `-->`, a field more or less)
+    reads as none and never falls back to an earlier marker, so the
+    dismissal counts as `unmarked`. The parse is linear in the body's
+    length. Model text sits before the finding marker and is escaped, so
+    the position rule is defence in depth.
+  - The field split is in `state.ts`, but the role, reason and hash rules
+    are in `team.ts`'s `isDismissalMarker`, which `guardedMemory` also
+    applies to records built directly (from JSON in a later dataset case),
+    so the grammar is pinned and fails closed on both paths. This differs
+    from the plan, which put the hex rule in the `state.ts` regex.
+  - Nothing writes a marker. No writer, HMAC or salt exists. The later
+    writer must append the marker after the finding marker;
+    `setFindingStatus` keeps a marker there (tested), and legacy readers
+    (`parseFindingMarker`, `teamPatterns`) ignore it (tested).
+  - **Grammar changes are deliberate** (critique 7). Any later field, such
+    as a time the writer adds, changes `parseDismissalMarker` and is made
+    together with the writer. Readers from before that change read such
+    markers as unmarked, which is safe but drops them from team memory.
+- **Rule decisions.**
+  - **Exclusion precedence and counts.** Each dismissal is counted once,
+    under the first reason in `TEAM_EXCLUSIONS` order, and `excluded`
+    lists every reason with a non-zero count, kept for shadow mode
+    (feedback note §7.4). The counts are taken over every input
+    dismissal before the pattern walk, so `max` never shortens them
+    (critique 8; tested with 40 author dismissals and `max: 1`).
+  - **Writer support.** A pattern is kept when dismissals like it come
+    from at least 2 distinct writer hashes (`by=w`), where "like it" is
+    the same category, the exact same directory and title similarity of
+    at least 0.5. The exact directory is the narrowest reading of "same
+    directory or package". Support counts every counted dismissal, also
+    those past `max`. Each key (`category dir words`) is kept once, as in
+    `teamPatterns`, newest first, at most `max` (30), and a NaN `max`
+    keeps no pattern.
+  - **`at` is the dismissing action's own time** (critique 1): the
+    reaction's createdAt, the dismissing reply's createdAt, or the thread's
+    resolve event. It is never the comment's created_at or updated_at.
+    Vector rewrites the marker of every dismissal it finds in one run
+    within seconds (`github.review.ts:843-861`), and that run usually
+    follows a push, so with updated_at an ordinary writer's day of
+    dismissals would look like a bulk resolve, and every dismissal written
+    after a bot-triggered run would fall inside the bot-push window. The
+    plan's "comment updated_at" option is dropped. The later job must
+    supply event times, or the writer must write them into the marker (a
+    grammar change, above). The doc comments on `TeamDismissal.at` and
+    `GuardedComment.at` say so, and so does the test header.
+  - **The window** (critique 5). A dismissal counts when `now − window ≤
+    at ≤ now + 5 min`, both ends inclusive. A window that is not a number
+    from 1 to 365 days (NaN, ±Infinity, 0, 0.5, negative, 366) counts
+    nothing, and so does a `now` that is not finite. 1 to 365 covers
+    Copilot's 7 to 180. A future `at` is allowed only within a 5-minute
+    clock skew (the job's clock against GitHub's event times); beyond it,
+    the dismissal is `outside-window`. Without the bound, a far-future
+    time, which a forged marker time field could carry once one exists,
+    would stay in the window forever. A missing or non-finite `at` is
+    `undated`. The window is swept only as a function parameter; the
+    eval-only parameter path is the VS-21a follow-up (§1).
+  - **Bot pushes.** Symmetric at ±2 minutes on the same pull request, the
+    stricter reading of "within 2 minutes of a push". A bot push whose
+    time is not a number excludes every dismissal on its pull request
+    (fail closed).
+  - **Bulk resolves** (critique 6). At least 5 `why=resolved` dismissals by
+    one hash within a span of at most 60 s, among those with no reply
+    from someone else and no code change. Unknown `replied` or
+    `codeChanged` reads as none. The scan runs over every dated record
+    with a `resolved` marker, whatever else excludes it, grouped by hash
+    only, across pull requests and roles, and every member of a batch is
+    marked. So a batch that straddles the 90-day edge marks its in-window
+    members `bulk-resolve` (tested), and an author's resolves still make
+    a writer's resolves in the same burst a batch (tested). `replied`
+    means a reply by someone other than the dismissing actor: an agent
+    that posts "Done" on each thread before resolving it does not escape
+    the rule (FL9, G6-16). Thumbs-downs and commands are never batched,
+    as the addendum names threads resolved.
+  - **Security dismissals are excluded.** A pattern in category security
+    can match only security findings, and if it sat in the review pass's
+    `<team_dismissed>` block the prompt could demote one. Excluding it
+    makes "category security skips the prompt rule" structural, a
+    stricter reading than the addendum's.
+  - **Fail closed on JSON-built records.** A marker whose role, reason or
+    hash the grammar does not allow (including a numeric hash) reads as
+    `unmarked`.
+  - **neverSuppress** returns true for any of:
+    - category security, or source security (the security pass gets an
+      empty block at wiring, so its findings are exempt too);
+    - a severity other than concern or nit (blocking, or a value outside
+      `SEVERITIES` from a hand-built or JSON-cast finding);
+    - `severityUnreadable === true` (critique 4): `decodeReport` turns an
+      unknown severity into "concern" and, under strict, sets
+      `severityUnreadable` (`schema.ts:419-423, 653`), so a decoded
+      finding never carries the unknown string itself;
+    - `guardrail: "strict"` with `failure` present (any `FailureClass`);
+    - a `crash` or `data-corruption` failure under any guardrail. The
+      decoder keeps `failure` only under strict (`schema.ts`), so outside
+      strict this holds only for a hand-built finding; it only over-keeps,
+      and it does not touch the leak scope Q4 asks about;
+    - crash or data-loss wording in the title or the body.
+  - **The wording list** (critique 3), case-insensitive, on word
+    boundaries, a decision Q24 may revise: crash(es, ed, ing);
+    panic(s, ked, king); segfault(s); segmentation fault(s); data loss,
+    data-loss; lose, loses, losing, lost, drop, drops, dropped, dropping,
+    delete, deletes, deleted, deleting, discard, discards, discarded,
+    discarding, wipe, wipes, wiped, wiping, erase, erases, erased or
+    erasing, then up to two words, then data, write(s), record(s), row(s),
+    update(s), change(s), database(s) or settings (so "lost update" and
+    "Discards unsaved changes" match); data, then an optional is, are,
+    was, were, gets, got, will be, can be, may be, might be, could be or
+    would be, then lost, wiped, erased, destroyed, corrupted, overwritten,
+    truncated, dropped, deleted or discarded; corrupt(s, ed, ing, ion); truncate(s, d),
+    truncating, truncation; overwrite(s), overwrote, overwritten,
+    overwriting; uncaught or unhandled (promise) exception(s),
+    rejection(s) or error(s); null or nil pointer(s) or dereference(s);
+    dereference(s, d), dereferencing a null or nil; out of memory (with
+    spaces or hyphens); OOM; stack overflow(s). The plan's near-miss "lost
+    update" is now a positive case, since a lost update is the textbook
+    concurrent data-loss defect. Pinned near misses: crashpad, panicle,
+    lossless, "Dropdown rows", "CSS overflow", zoom, "lost focus",
+    "Delete the unused import", "Deleted file is still imported", "Discard
+    the return value explicitly", "Wipe the mock between tests", "Erase the
+    debug border", "Delete this comment". Over-matching only keeps a
+    finding visible; it also means a nit such as "Drop the unrelated
+    changes" can no longer be demoted by team memory.
+  - **Demotion on one guarded pattern.** `teamDemotion` returns the first
+    pattern that matches a finding (same category, the finding's own
+    directory, similarity at least 0.5), or none when `neverSuppress`
+    holds. One pattern is enough, because the writer gate is in
+    `guardedMemory`; legacy `teamPenalty` needs two.
+  - **The title asymmetry is kept on purpose** (critique 11).
+    `normalizeTitle` keeps up to 8 tokens (`TITLE_TOKENS`) and a pattern
+    keeps at most 6 marker words (`MARKER_WORDS`), so an identical 8-token
+    title scores 0.75, not 1, and is still demoted. This matches
+    `teamPenalty`, and a test pins both.
+  - **Only guarded memory demotes** (critique 2). `teamDemotion` takes a
+    `GuardedTeamMemory`, not a `TeamPattern[]`. The memory carries a key
+    under an unexported symbol, so a legacy `TeamPattern[]` (the
+    unfiltered, author-made patterns the job passes as
+    `context.teamDismissed` today) or a look-alike object fails to
+    typecheck (`@ts-expect-error` tests). At runtime a copy decoded from
+    JSON loses the key and demotes nothing (tested). Without this, guarded
+    mode at wiring could apply the one-pattern demotion to legacy patterns
+    before the job can switch to `guardedTeamPatterns`, which is weaker
+    than legacy's two-pattern gate and the reverse of VS-35's intent
+    (FL1).
+- **Deferred to their consumers:**
+  - the model-only `fixed` exclusion. Its consumers are the positive
+    labels (Brain proposals after VS-11, VS-46's ledger), and `st=f`
+    carries no provenance yet;
+  - "Vector's own comments", read as Vector's own actions (for example its
+    own thread resolution, which counts today when the bot login is a
+    writer). The rule is `GuardedTeamInput.own`; its hashes come from the
+    job with the salt, later.
+- **§0.3 items:**
+  1. key: none in Now;
+  2. parity: nothing calls the new code, and the existing suites pass
+     unchanged;
+  3. evidence: no key, so `EVIDENCE_POLICY_KEYS`, `EvidenceScope`,
+     `policyDigest` and `promptsDigest` are unchanged; the pin moved for
+     `team.ts`;
+  4. variant: `engine:team-guarded` is deferred to wiring, as VS-34a and
+     VS-42a did, with no registry change;
+  5. desktop: a documented difference. Team memory is GitHub-only, and
+     `ai-review.ts` has no `teamDismissed`, so `variant.applied: false`;
+  6. this entry.
+- **Evidence scope and pin.** `team.ts` joins `REVIEW_PIPELINE_FILES`,
+  pinned from the day it lands, as `guardrail.ts`, `citation.ts`,
+  `risk.ts` and `runtime.ts` were: once wired it decides which findings
+  `select.ts` demotes and which dismissals become team memory.
+  `REVIEW_PIPELINE_SOURCES` moves from `dd477fd3a04e6efb` to
+  `124e47864a16fea4` (`f30b8850fdc69552` before the review fixes), and
+  `REVIEW_PIPELINE_REVISION` stays 1.
+  - **Why the reader stays unpinned** (critique 10). `parseDismissalMarker`
+    and `guardedTeamPatterns` do decide which dismissals count as marked,
+    and the mutation check treats them as load-bearing. They stay
+    unpinned because pinning `state.ts` would tie codium's and
+    vector-at-mention's edits to this pin, not because they only parse.
+    The reader (or `state.ts`) joins `REVIEW_PIPELINE_FILES` when the job
+    first calls `guardedTeamPatterns`, following the BrainCode precedent
+    (VS-25b wiring). The pin comment says so.
+- **Owner questions: none decided.** Q13, Q18 and Q24 stay open. Q3 and Q4
+  do not matter here: strict reads only whether `failure` is present.
+- **Deferred to runner-wiring:**
+  - the `teamMemory: legacy | guarded` key and its parse, with no env.
+    Until then the new config test pins that `teamMemory` warns as an
+    unknown key on every surface and that no `REVIEW_TEAM_MEMORY`
+    variable is read;
+  - an `EVIDENCE_POLICY_KEYS` entry that enters `policyDigest` only under
+    "guarded", and a `promptsDigest` entry only under the key;
+  - **until the job calls `guardedTeamPatterns`, guarded mode sends an
+    empty team block and runs no demotion**, never legacy patterns
+    (critique 2). The GitHub job cannot switch before vector-at-mention,
+    since `github.review.ts` belongs to @vector;
+  - the `prompt.ts` guarded line ("report a matching finding at most as a
+    concern and name the pattern"), which must carry the never-suppress
+    set, or "at most as a concern" would demote blocking findings;
+  - the empty security block, and whether the lens passes (concurrency,
+    resource, access, data-integrity), which share `build()` and so get
+    the block today (`prompt.ts:520-530`), get it under guarded; access is
+    recommended empty;
+  - the `select.ts` demotion replacing `teamPenalty` (`select.ts:115-122,
+    224-233`) under guarded, with `TEAM_SIMILARITY` imported from
+    `team.ts`;
+  - `DropReason` `team-dismissed` in `types.ts` and `DROP_ORDER`, recorded
+    for drops and demotions; the count in `--json` and in replay
+    artifacts;
+  - D3 parity tests in `run.test.ts` and `ai-review.test.ts`;
+  - the variant.
+- **Deferred to after vector-at-mention, with the salt secret:**
+  - the marker writer, and HMAC(login) keyed by the repository secret, at
+    least 12 hex;
+  - role passing (`by=w` for a writer who is not the PR author) from
+    `classifyPrior` and `github.review.ts`;
+  - `TeamPattern` writer hashes;
+  - **checking every marker hash against the repository's real writers.**
+    `guardedMemory` trusts `h=` as written, and anyone who can edit
+    Vector's review comments (on GitHub, any collaborator with write
+    access) can add well-formed markers with invented 12-hex hashes, so
+    one person would count as two or more writers. Before it calls
+    `guardedTeamPatterns`, the job must compare every marker hash with
+    HMAC(login) for the repository's actual writers and drop a hash that
+    matches none, counting that dismissal as `unmarked`. At wiring, a
+    `GuardedTeamInput.writers` hash allow-list that `guardedMemory`
+    requires would make the check structural;
+  - the job supplying `pr`, `at` (the dismissing action's event time, as
+    above, or a marker field the writer adds), `replied` (by someone other
+    than the actor), `codeChanged`, bot pushes and own hashes;
+  - switching `github.review.ts:316-327` (and `:674`) to
+    `guardedTeamPatterns`;
+  - the marker round-trip and collision tests, the byte-identical body
+    parity test, and the 10-case criterion.
+- **Deferred to after VS-11:** Brain proposals (at least 3 writer
+  dismissals from at least 2 people, owner-activated).
+- **Deferred to the VS-22a follow-up:** fixtures (a) to (c) as dataset
+  cases (schema `vectorscope-dataset/3`, `ReplayCase` comments and
+  threads). The dataset is still at `/2`. The pure versions of (a) to (c)
+  are in `team.test.ts`.
+- **Deferred verification:**
+  - no real marker exists, so guarded memory is empty on today's comments
+    (tested), and the done criterion and the kill criteria cannot be
+    measured;
+  - no replay artifacts exist (I-13);
+  - the job's metadata (event times, replies, code changes, bot pushes)
+    cannot be checked before the later window.
+- **Merge prediction** (read-only: `git merge-tree --write-tree
+  --name-only` at HEAD, then a three-way `git merge-file` of the working
+  tree's `state.ts` against each branch's merge base and tip):
+  - of the touched files only `state.ts` changes on any branch. It changes
+    on `origin/codium` (`5a079cbd`), on `origin/self-evolving`
+    (`f062bcce`, which carries the same `state.ts` hunks as codium; the
+    plan named only codium and vector-at-mention) and on
+    `origin/vector-at-mention` (`0b68e8f6`);
+  - codium and self-evolving insert an import after the `./command` line
+    and edit from `NextStateInput` on; vector-at-mention edits
+    `ClassifyContext`, `classifyPrior` and `dismissReply`, all above
+    `teamPatterns`. The new import has 3 unchanged lines above it, and the
+    block sits between those hunks;
+  - `git merge-file`: 0 conflicts for each branch, at HEAD and with
+    VS-35a. `merge-tree` at HEAD lists 21 conflicting files for codium,
+    10 for self-evolving and 0 for vector-at-mention, none of them a
+    touched file. No new conflict hunk;
+  - `model-evidence.ts`, `config.test.ts` and `model-evidence.test.ts` are
+    untouched by all three branches, and none has `team.ts` or
+    `team.test.ts`.
+- **Critique point 9, the regression list, taken in a corrected form.**
+  The critique named `github.route.test.ts` as the suite covering
+  `github.handler.ts`, but that file does not import it;
+  `test/cli/github.run-routing.test.ts` does. That suite ran, and so did
+  `test/cli/github.review-api.test.ts` (`parseReviewMarker`) and
+  `test/cli/review.test.ts` (`cmd/review.ts` imports `state.ts` too).
+- **Evidence.** Each file ran alone through the lock with `--timeout
+  30000`, from its package directory, with `GITHUB_ACTIONS=false` and
+  `TMPDIR` and XDG roots under `/tmp/vector-vectorscope/vs35a/`. Counts are
+  at HEAD → with VS-35a, the final row after the last edit:
+
+  | Where | File | HEAD | VS-35a |
+  |---|---|---|---|
+  | core | `test/review/team.test.ts` | (new) | 44 |
+  | core | `test/review/config.test.ts` | 72 | 73 |
+  | core | `test/review/model-evidence.test.ts` | 30 | 30 (pin moved) |
+  | core | `test/review/state.test.ts` | 42 | 42 |
+  | core | `test/review/select.test.ts` | 45 | 45 |
+  | core | `test/review/prompt.test.ts` | 47 | 47 |
+  | core | `test/review/format.test.ts` | 51 | 51 |
+  | core | `test/review/github-payload.test.ts` | 8 | 8 |
+  | core | `test/review/pipeline.test.ts` | 2 | 2 |
+  | engine | `test/cli/github.review.test.ts` | 40 | 40 |
+  | engine | `test/cli/github.review-api.test.ts` | 3 | 3 |
+  | engine | `test/cli/github.run-routing.test.ts` | 17 | 17 |
+  | engine | `test/cli/review.test.ts` | 24 | 24 |
+  | engine | `test/review/eval.test.ts` | 33 | 33 |
+  | engine | `test/review/run.test.ts` | 44 | 44 |
+  | app | `src/features/pull-requests/ai-review.test.ts` (bunfig preloads happydom) | 107 | 107 |
+
+  - **Digests.** `promptsDigest` `5d59e9ee06077c23` and `policyDigest`
+    `70512122f41ec160` for the default config, on the engine and desktop
+    scopes, are the same at HEAD and with VS-35a. Only
+    `REVIEW_PIPELINE_SOURCES` moved.
+  - **Typecheck.** `bun typecheck` passes in core, engine, app and
+    desktop, and so does the eval scripts' `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - **Lint.** prettier passes on every changed file except one line of
+    `state.ts` that is unchanged from HEAD (the `followLines` ternary,
+    which prettier would reflow at HEAD too) and is left byte-identical.
+    The new block is prettier-clean. oxlint with
+    `--report-unused-disable-directives` reports nothing on `team.ts`,
+    `team.test.ts`, `state.ts` and `config.test.ts`. `team.ts` has no
+    disable comment: the runtime key check reads `!memory[GUARDED]`. The
+    18 warnings oxlint lists in
+    `model-evidence.ts` and its test are on lines this package did not
+    change.
+  - **Mutation check.** Forty-seven mutations, each applied alone, with
+    `team.test.ts` run through the lock and the file restored byte for
+    byte (`cmp`) after each (`/tmp/vector-vectorscope/vs35a/mut/`). All
+    were caught:
+    - provenance: `by=a` counted; markers counted instead of distinct
+      hashes; `TEAM_WRITERS` 1; `own` ignored; the grammar check skipped in
+      `guardedMemory`; the `typeof hash` check dropped;
+    - scope: the directory ignored in `sameTeamPattern`;
+      `TEAM_SIMILARITY` 0.4 (the drift test against `teamPenalty`);
+    - window: `>=` to `>` at the edge; the 1-to-365 bounds dropped; the
+      future skew unbounded;
+    - bulk: threshold 6; the span's `<=` to `<`; replied threads batched;
+      changed threads batched; thumbs batched as resolves; batches grouped
+      across hashes; the scan limited to in-window records (the straddle
+      test);
+    - bot push: one-sided; a NaN push time failing open; any pull request;
+    - security and never-suppress: the security exclusion dropped; the
+      source-security clause dropped; the strict clause ignoring
+      `guardrail`; the strict clause dropped; the crash token removed;
+      "update" dropped from the lose rule; the word boundary dropped on
+      panic; the body not checked; an unknown severity read as concern;
+      the `severityUnreadable` clause dropped;
+    - output: `teamDemotion` needing 2 patterns; `teamDemotion` skipping
+      `neverSuppress`; the runtime key check dropped; the precedence of
+      author and undated swapped; output aliasing the input pattern; a
+      NaN `max` uncapped; `excluded` counted only up to `max`; zero counts
+      kept; the key dedupe dropped;
+    - parser: the first dismissal marker taken instead of the last; the
+      position rule dropped; a malformed last marker falling back to an
+      earlier well-shaped one; 11-hex hashes accepted; uppercase hex
+      accepted; extra fields accepted; the first finding marker taken as
+      the comment's own;
+    - at typecheck: making the memory's key optional leaves the
+      look-alike `@ts-expect-error` unused (TS2578), so a structural
+      `{ patterns, excluded }` would be accepted.
+
+    The first round found one equivalent mutant: an explicit
+    `Number.isFinite(now)` clause in the window check, which the
+    inclusive comparisons already make redundant for any finite `at`
+    (NaN fails both ends, +Infinity the first, −Infinity the second). It
+    was removed; the non-finite `now` test still pins the behaviour.
+    After the review fixes (below), "the strict clause ignoring
+    `guardrail`" is no longer caught, on purpose: the assertion that
+    caught it locked in a state the decoder never produces.
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no user-visible string
+    changed (D14).
+
+### 2026-11-07 · VS-35a review fixes
+
+Seven review findings, none blocking. All seven were fixed, one of them
+(the failure classes) with its optional part too. Only `team.ts`,
+`state.ts`'s new block, `team.test.ts`, the pin in `model-evidence.ts` and
+this log changed; `state.ts` still changes no existing line. No runner,
+prompt, select, config or type file and no file @vector owns changed, and
+no key or revision moved. The entry above is updated in place where its
+facts changed (the numstat, the test counts, the parser rule, the
+never-suppress list, the wording list and its near misses, the pin, the
+deferred list, the lint note and the mutation note). Nothing is
+committed.
+
+- **Data-loss verbs missing from the wording list** (`team.ts:185`).
+  Fixed. The active-verb rule now also takes delete, deletes, deleted,
+  deleting, discard(s, ed, ing), wipe(s, d), wiping, erase(s, d) and
+  erasing, and the passive `data … ` rule also takes deleted and
+  discarded. Three of the finding's own phrases have none of the old
+  objects ("Discards unsaved changes", "Wipes the database on retry",
+  "erases the user's settings"), so the object list also gained
+  change(s), database(s) and settings. It is shared with lose and drop,
+  so "loses unsaved changes" matches too; the price is that a nit such as
+  "Drop the unrelated changes" is now never demoted, which the
+  over-matching rule accepts. The wording test gained ten phrases, the
+  finding's five among them, and the near-miss test six ("Delete the
+  unused import", "Deleted file is still imported", "Discard the return
+  value explicitly", "Wipe the mock between tests", "Erase the debug
+  border", "Delete this comment"), so each new verb needs a data object
+  after it.
+- **The parser's comment promised more than its regex did**
+  (`state.ts:357`). Fixed in code, not by narrowing the comment. The parse
+  now reads only the text after the finding marker, takes the last
+  `<!--\s*vector-dismissal\b` there (case-insensitive, as
+  `escapeVectorMarkers` is) as the candidate's start and its first `-->`
+  as its end, and matches the candidate against the strict anchored
+  grammar. So a last candidate with no space before `-->`, a `>` inside,
+  no space after `<!--`, another case, or no `-->` at all reads as none
+  instead of falling back to an earlier valid marker. The malformed-marker
+  test gained those six shapes, each alone and after a valid marker, and a
+  new test pins that only the text after the finding marker is read and
+  that a candidate's first `-->` ends it.
+- **Nothing checked that `pr`, `replied` and `codeChanged` reach
+  `guardedMemory`** (`team.test.ts:627`). Fixed. The test helper now
+  passes `codeChanged`. A new `guardedTeamPatterns` test (1) puts a bot
+  push on pull request 1 and expects a `bot-push` exclusion for exactly
+  its two comments, with pull request 2's two writers still making the
+  pattern, and (2) runs six resolves by one hash within 10 s, which are a
+  batch of six, and the same six with one replied and one changed thread,
+  which are no batch. Six, not the suggested five: with five, one replied
+  and another changed thread leave three candidates, and dropping either
+  field alone leaves four, still under the threshold, so neither
+  mutation would be caught. With six, dropping either makes five.
+- **The oxlint disable comment** (`team.ts:172`). Fixed:
+  `if (!memory[GUARDED]) return undefined`, and the disable comment is
+  gone. The loops in `guardedMemory` (its early break on `max`) and
+  `bulkMembers` stay.
+- **A test asserted that a crash failure is demoted outside strict**
+  (`team.test.ts:543`). Fixed, with the optional part. The assertion is
+  gone, and `neverSuppress` now returns true for a `crash` or
+  `data-corruption` failure under any guardrail; it only over-keeps, and
+  the leak scope (Q4) is untouched. The `teamDemotion` test now asserts a
+  `leak` failure is kept under strict and a `crash` failure under off. The
+  `neverSuppress` test's two assertions that a `leak` failure is demotable
+  under off and with no guardrail were removed for the same reason; that
+  test now checks every `FAILURE_CLASSES` entry under strict, and a new
+  test checks crash and data-corruption under off and with no guardrail,
+  with a comment that the decoder keeps `failure` only under strict.
+- **Invented hashes would count as writers** (deviation log, the later
+  window). Recorded: the "Deferred to after vector-at-mention" list now
+  says the job must check every marker hash against HMAC(login) for the
+  repository's actual writers, and count a hash that matches none as
+  `unmarked`, before it calls `guardedTeamPatterns`, with the
+  `GuardedTeamInput.writers` allow-list as the structural form at wiring.
+  Nothing is built for it now: no writer list or salt exists in the Now
+  window.
+- **Quadratic marker scan** (`state.ts:357`). Fixed by the same rewrite:
+  only the text after the finding marker is scanned, the start pattern
+  begins with a literal, the end is an `indexOf`, and the strict match is
+  anchored, so the parse is linear. The suggested bounded pattern
+  (`[^>]{0,160}?`) was not taken: it would skip an over-long last
+  candidate and read an earlier marker, which the previous finding rules
+  out. Measured with `/tmp/vector-vectorscope/vs35a/bench/parse.ts`
+  (mean of 10 runs, through the lock): on a body with 64 KiB of
+  `<!-- vector-dismissal ` after the finding marker, the old regex took
+  55.46 ms and the new parser 0.81 ms; with the run before the finding
+  marker, 0.07 ms and 0.12 ms. The new test pins the result on such a
+  run, with no timing assertion.
+- **Evidence.** Each file ran alone through the lock with `--timeout
+  30000`, from its package directory, with `GITHUB_ACTIONS=false` and
+  `TMPDIR` and XDG roots under `/tmp/vector-vectorscope/vs35a/`:
+  core `team.test.ts` 44 (was 41), `model-evidence.test.ts` 30 (pin
+  moved to `124e47864a16fea4`), `state.test.ts` 42, `select.test.ts` 45,
+  `prompt.test.ts` 47, `config.test.ts` 73; engine
+  `test/cli/github.review.test.ts` 40, `github.review-api.test.ts` 3,
+  `github.run-routing.test.ts` 17, `test/cli/review.test.ts` 24. All
+  pass.
+  - **Typecheck.** `bun typecheck` passes in core and engine. App and
+    desktop were not rerun: no exported name or type changed.
+  - **Lint.** prettier passes on `team.ts` and `team.test.ts`; on
+    `state.ts` it flags only the unchanged `followLines` line, as before.
+    oxlint with `--report-unused-disable-directives` reports nothing on
+    `team.ts`, `team.test.ts` and `state.ts`.
+  - **Mutation check.** Twelve mutations, each applied alone, with
+    `team.test.ts` run through the lock and the file restored and compared
+    byte for byte after each (`/tmp/vector-vectorscope/vs35a/mut2/`). All
+    were caught: `replied`, `codeChanged` or `pr` dropped from
+    `guardedTeamPatterns`; the new verbs dropped; the new objects
+    dropped; the passive deleted and discarded dropped; the object list
+    widened to any word; the failure-class clause dropped; the start
+    pattern case-sensitive; the start needing exactly one space; the first
+    candidate taken instead of the last; the whole body read instead of
+    the text after the finding marker.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no user-visible string
+    changed (D14).

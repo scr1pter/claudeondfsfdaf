@@ -40,8 +40,12 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // day it lands, as guardrail.ts is: it will decide what a review drops or strips. So is the change-risk band (VS-28c's
 // risk.ts), pinned from the day it lands: once wired it decides which passes run under `depth: "auto"`. So is the
 // runtime evidence contract (VS-30c's runtime.ts), pinned from the day it lands: once the VS-30 executor runs it,
-// runtimeVerdict decides which findings are verified at runtime. verdict.ts and format.ts are left out: completeness
-// decides wording and the verdict, not what a review finds or posts.
+// runtimeVerdict decides which findings are verified at runtime. So are guarded team memory's rules (VS-35a's team.ts),
+// pinned from the day they land: once wired they decide which findings select.ts demotes and which dismissals become
+// team memory. Their body reader in state.ts (parseDismissalMarker, guardedTeamPatterns) decides which dismissals
+// count as marked, but stays unpinned for now: pinning state.ts would tie this pin to codium's and vector-at-mention's
+// edits there. It joins here when the job first calls guardedTeamPatterns, as BrainCode joins with VS-25b wiring.
+// verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -59,6 +63,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/guardrail.ts",
   "packages/core/src/review/citation.ts",
   "packages/core/src/review/runtime.ts",
+  "packages/core/src/review/team.ts",
   "packages/engine/src/review/parse.ts",
   "packages/core/src/review/impact.ts",
   "packages/engine/src/review/impact.ts",

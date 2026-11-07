@@ -306,6 +306,22 @@ describe("parseReviewConfig", () => {
     expect(kept.warnings).toEqual(['REVIEW_FAIL_ON must be "never", "blocking"; using "blocking".'])
     expect(mergeReviewConfig({ surface: "github", json: { at: "base", text: json } })).toEqual(fromJson)
   })
+
+  // VS-35a: guarded team memory's rules land uncalled (team.ts); the key and its parse wait for runner-wiring. Until
+  // then it is an unknown key on every surface, it has no environment variable, and no config or digest changes.
+  test("VS-35: teamMemory is not a key before the wiring", () => {
+    const json = '{"teamMemory":"guarded"}'
+    const env = { REVIEW_TEAM_MEMORY: "guarded", REVIEW_TEAMMEMORY: "guarded" }
+    const parsed = parseReviewConfig({ json, env })
+    expect(parsed).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [`${REVIEW_CONFIG_PATH}: unknown key "teamMemory" is ignored.`],
+    })
+    expect(Object.hasOwn(parsed.config, "teamMemory")).toBe(false)
+    expect(parseReviewConfig({ env })).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
+    for (const surface of ["local", "github"] as const)
+      expect(mergeReviewConfig({ surface, json: { at: "base", text: json }, env })).toEqual(parsed)
+  })
 })
 
 describe("mergeReviewConfig", () => {
