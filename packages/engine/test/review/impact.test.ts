@@ -21,6 +21,10 @@ import { testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Git.node])))
 const GENEROUS = 60_000
+// The partial clone tests that build a 700-file repository take about 8 s on a Windows runner. When a runner's disk
+// slows partway through a shard they take three or four times that (run 42398611869: 22 s for one, past 30 s for
+// another), so they get a limit of their own. A hang still fails.
+const LARGE_REPOSITORY = 120_000
 const posix = process.platform === "win32" ? it.live.skip : it.live
 
 const scopedTmpdir = (options?: Parameters<typeof tmpdir>[0]) =>
@@ -825,36 +829,40 @@ describe("partial clones", () => {
         // The base side of the change was never fetched, so it was not read.
         expect(changed.missing).toEqual(["base:src/util.ts"])
       }),
+    LARGE_REPOSITORY,
   )
 
-  it.live("a blobless clone with nothing checked out reads nothing it lacks; lazy fetching stays off", () =>
-    Effect.gen(function* () {
-      const root = (yield* scopedTmpdir({ git: true })).path
-      const { base, head } = yield* source(root)
-      const dir = path.join(root, "..", `${path.basename(root)}-blobless`)
-      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
-      yield* clone(root, dir, "--filter=blob:none", "--no-checkout")
-      const files = yield* ReviewSource.prDiff({ directory: root, mergeBase: base, head })
-      const before = yield* missing(dir, head)
-      const { slice, changed } = yield* build({ directory: dir, base, head, files })
-      expect(slice.incomplete).toEqual(["partial-clone"])
-      expect(slice.unsearched).toBe(before)
-      expect(slice.stages.candidates).toBe(0)
-      expect(changed.missing).toEqual(["base:src/util.ts", "src/util.ts"])
-      expect(yield* missing(dir, head)).toBe(before)
-      // parseChanged and importLines list what the clone lacks first, and never read it.
-      const parsed = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files })
-      expect(parsed.missing).toEqual(["base:src/util.ts", "src/util.ts"])
-      expect((yield* ReviewImpact.importLines({ directory: dir, head, paths: ["src/a.ts"] })).has("src/a.ts")).toBe(
-        false,
-      )
-      expect(yield* missing(dir, head)).toBe(before)
-      // The backstop: told nothing is missing and asked to read a missing blob, git refuses rather than fetch it.
-      const direct = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files, missing: () => false })
-      expect(direct.text("src/util.ts", "RIGHT")).toBeUndefined()
-      expect(direct.missing).toEqual([])
-      expect(yield* missing(dir, head)).toBe(before)
-    }),
+  it.live(
+    "a blobless clone with nothing checked out reads nothing it lacks; lazy fetching stays off",
+    () =>
+      Effect.gen(function* () {
+        const root = (yield* scopedTmpdir({ git: true })).path
+        const { base, head } = yield* source(root)
+        const dir = path.join(root, "..", `${path.basename(root)}-blobless`)
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
+        yield* clone(root, dir, "--filter=blob:none", "--no-checkout")
+        const files = yield* ReviewSource.prDiff({ directory: root, mergeBase: base, head })
+        const before = yield* missing(dir, head)
+        const { slice, changed } = yield* build({ directory: dir, base, head, files })
+        expect(slice.incomplete).toEqual(["partial-clone"])
+        expect(slice.unsearched).toBe(before)
+        expect(slice.stages.candidates).toBe(0)
+        expect(changed.missing).toEqual(["base:src/util.ts", "src/util.ts"])
+        expect(yield* missing(dir, head)).toBe(before)
+        // parseChanged and importLines list what the clone lacks first, and never read it.
+        const parsed = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files })
+        expect(parsed.missing).toEqual(["base:src/util.ts", "src/util.ts"])
+        expect((yield* ReviewImpact.importLines({ directory: dir, head, paths: ["src/a.ts"] })).has("src/a.ts")).toBe(
+          false,
+        )
+        expect(yield* missing(dir, head)).toBe(before)
+        // The backstop: told nothing is missing and asked to read a missing blob, git refuses rather than fetch it.
+        const direct = yield* ReviewImpact.parseChanged({ directory: dir, base, head, files, missing: () => false })
+        expect(direct.text("src/util.ts", "RIGHT")).toBeUndefined()
+        expect(direct.missing).toEqual([])
+        expect(yield* missing(dir, head)).toBe(before)
+      }),
+    LARGE_REPOSITORY,
   )
 
   it.live("files with the same content are each searched: presence is by object, not by the path git lists first", () =>
@@ -921,24 +929,27 @@ describe("partial clones", () => {
     }),
   )
 
-  it.live("a treeless clone is not read at all", () =>
-    Effect.gen(function* () {
-      const root = (yield* scopedTmpdir({ git: true })).path
-      const { base, head } = yield* source(root)
-      const dir = path.join(root, "..", `${path.basename(root)}-treeless`)
-      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
-      yield* clone(root, dir, "--filter=tree:0", "--no-checkout")
-      const files = yield* ReviewSource.prDiff({ directory: root, mergeBase: base, head })
-      const trees = yield* missing(dir, head, "--filter=blob:none")
-      expect(trees).toBeGreaterThan(0)
-      const { slice } = yield* build({ directory: dir, base, head, files })
-      expect(slice).toMatchObject({
-        incomplete: ["partial-clone"],
-        clone: { partial: true },
-        changed: [],
-        dependents: [],
-      })
-      expect(yield* missing(dir, head, "--filter=blob:none")).toBe(trees)
-    }),
+  it.live(
+    "a treeless clone is not read at all",
+    () =>
+      Effect.gen(function* () {
+        const root = (yield* scopedTmpdir({ git: true })).path
+        const { base, head } = yield* source(root)
+        const dir = path.join(root, "..", `${path.basename(root)}-treeless`)
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
+        yield* clone(root, dir, "--filter=tree:0", "--no-checkout")
+        const files = yield* ReviewSource.prDiff({ directory: root, mergeBase: base, head })
+        const trees = yield* missing(dir, head, "--filter=blob:none")
+        expect(trees).toBeGreaterThan(0)
+        const { slice } = yield* build({ directory: dir, base, head, files })
+        expect(slice).toMatchObject({
+          incomplete: ["partial-clone"],
+          clone: { partial: true },
+          changed: [],
+          dependents: [],
+        })
+        expect(yield* missing(dir, head, "--filter=blob:none")).toBe(trees)
+      }),
+    LARGE_REPOSITORY,
   )
 })
