@@ -1055,3 +1055,163 @@ describe("the workflow", () => {
     expect(plan!.env).not.toHaveProperty("EVAL_OUT_DIR")
   })
 })
+
+// VS-21e: models and triage_model take cache prices, for the plan's notes and the D6 check alone. run.ts and the replay
+// entry point are always handed the two-field price.
+describe("cache-aware price strings (VS-21e)", () => {
+  const REPLAY = { ...DRY, EVAL_PIPELINE: "replay" }
+  const dirs = { EVAL_MIRRORS_DIR: join(root, "mirrors-21e"), EVAL_WORK_DIR: join(root, "work-21e") }
+  const FOUR = { ...DRY, EVAL_MODELS: "anthropic/claude-sonnet-4.5=3:15:0.3:3.75, openai/gpt-5-mini=0.25:2:0.025" }
+  const PAIR = {
+    ...REPLAY,
+    EVAL_VARIANTS: "engine,engine:cross-family",
+    EVAL_TRIAGE_MODEL: "google/gemini-2.5-pro=1.25:10",
+  }
+  const PAIR_FOUR = {
+    ...PAIR,
+    EVAL_MODELS: FOUR.EVAL_MODELS,
+    EVAL_TRIAGE_MODEL: "google/gemini-2.5-pro=1.25:10:0.31:1.625",
+  }
+  const where = { mirrors: "/runner/tmp/mirrors", work: "/runner/tmp/work" }
+  const NOTE =
+    "anthropic/claude-sonnet-4.5: cache read $0.3 and cache write $3.75 per million tokens are for projections and reports only; estimates, admission and settlement use $3 input and $15 output, uncached."
+
+  test("models and triage_model take two to four price fields, and no argument array changes", () => {
+    expect(inputs(FOUR).models).toEqual([
+      {
+        id: "anthropic/claude-sonnet-4.5",
+        price: { input: 3, output: 15 },
+        projectionPrice: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      },
+      {
+        id: "openai/gpt-5-mini",
+        price: { input: 0.25, output: 2 },
+        projectionPrice: { input: 0.25, output: 2, cacheRead: 0.025 },
+      },
+    ])
+    for (const model of inputs(DRY).models) expect(model).not.toHaveProperty("projectionPrice")
+    expect(inputs(PAIR_FOUR).triageModel).toEqual({
+      id: "google/gemini-2.5-pro",
+      price: { input: 1.25, output: 10 },
+      projectionPrice: { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 1.625 },
+    })
+    expect(inputs(PAIR).triageModel).toEqual({ id: "google/gemini-2.5-pro", price: { input: 1.25, output: 10 } })
+    for (const index of [0, 1]) {
+      expect(runArgs(inputs(FOUR), index)).toEqual(runArgs(inputs(DRY), index))
+      expect(runArgs(inputs({ ...FOUR, ...PAID, EVAL_MODELS: FOUR.EVAL_MODELS }), index, "/runner/out")).toEqual(
+        runArgs(inputs(PAID), index, "/runner/out"),
+      )
+      expect(replayArgs(inputs(PAIR_FOUR), index, where)).toEqual(replayArgs(inputs(PAIR), index, where))
+      expect(replayArgs(inputs(PAIR_FOUR), index, where, { outDir: "/runner/out", send: false })).toEqual(
+        replayArgs(inputs(PAIR), index, where, { outDir: "/runner/out", send: false }),
+      )
+      expect(runArgs(inputs(FOUR), index)[3]).toMatch(/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/)
+    }
+  })
+
+  test("malformed cache fields are refused with the models and triage_model messages, each on one line", () => {
+    for (const bad of ["a/b=1:1:", "a/b=1:1:x", "a/b=1:1:1:1:1", "a/b=1:1:-1", "a/b=1:1::1", "a/b=1:1:1:1\n::x"]) {
+      const found = problems({ ...DRY, EVAL_MODELS: bad })
+      expect(found).toEqual([
+        `models entry ${JSON.stringify(bad)} must be model=input:output, with USD per million tokens, such as anthropic/claude-sonnet-4.5=3:15`,
+      ])
+      const triage = problems({ ...PAIR, EVAL_TRIAGE_MODEL: bad })
+      expect(triage).toEqual([
+        `triage_model ${JSON.stringify(bad)} must be model=input:output, with USD per million tokens, such as openai/gpt-5=1.25:10, or empty for none`,
+      ])
+      for (const line of [...found, ...triage]) expect(line.split("\n")).toHaveLength(1)
+    }
+  })
+
+  test("plan notes which prices are projection only and checks each against D6, and a two-field plan neither", async () => {
+    const plan = async (env: Record<string, string>, name: string) => {
+      const out: string[] = []
+      const summary = join(root, `plan-21e-${name}.md`)
+      expect(
+        await main("plan", {
+          env: { ...env, EVAL_FIXTURES: "order-search-sql", GITHUB_STEP_SUMMARY: summary },
+          stdout: (text) => void out.push(text),
+          spawn: () => {
+            throw new Error("plan must not start a process")
+          },
+        }),
+      ).toBe(0)
+      return { text: out.join(""), summary: readFileSync(summary, "utf8") }
+    }
+    const four = await plan(FOUR, "four")
+    expect(four.text).toContain(NOTE)
+    expect(four.summary).toContain(NOTE)
+    expect(four.text).toContain("openai/gpt-5-mini: cache read $0.025 per million tokens is for projections")
+    expect(four.text).not.toContain("Price check")
+    const off = await plan({ ...DRY, EVAL_MODELS: "anthropic/claude-sonnet-4.5=3:15:0.2" }, "off")
+    expect(off.text).toContain(
+      "Price check (D6): anthropic/claude-sonnet-4.5 is given at $3 input, $15 output, $0.2 cache read, but its list price read 2026-11-07 is",
+    )
+    const two = await plan(DRY, "two")
+    expect(two.text).not.toContain("per million tokens are for projections")
+    expect(two.text).not.toContain("is for projections")
+    expect(two.text).not.toContain("Price check")
+    // A two-field price that differs from its list price prints one D6 line, by design (item 6), and no cache note.
+    const twoOff = await plan(
+      { ...DRY, EVAL_MODELS: "anthropic/claude-sonnet-4.5=3:16, openai/gpt-5-mini=0.25:2" },
+      "two-off",
+    )
+    const d6 = twoOff.text.split("\n").filter((line) => line.startsWith("Price check (D6): "))
+    expect(d6).toHaveLength(1)
+    expect(d6[0]).toStartWith(
+      "Price check (D6): anthropic/claude-sonnet-4.5 is given at $3 input, $16 output, but its list price read 2026-11-07 is $3 input, $15 output, $0.3 cache read, $3.75 cache write (",
+    )
+    expect(twoOff.text).not.toContain("is for projections")
+    expect(twoOff.summary).toContain("Price check (D6): anthropic/claude-sonnet-4.5 is given at $3 input, $16 output")
+    // The estimates are the two-field plan's, line for line.
+    expect(
+      four.text
+        .replace(`${NOTE}\n`, "")
+        .replace(/openai\/gpt-5-mini: cache read[^\n]*\n/, "")
+        .replace("\n\nAll", "\nAll"),
+    ).toBe(two.text)
+  })
+
+  test("a replay plan says the catalog's cache rates are used, warns on a list-price mismatch, and hands two fields", async () => {
+    const started: string[][] = []
+    const out: string[] = []
+    const summary = join(root, "replay-plan-21e.md")
+    expect(
+      await main("plan", {
+        env: {
+          ...PAIR_FOUR,
+          ...dirs,
+          EVAL_MODELS: "anthropic/claude-sonnet-4.5=3:16:0.3",
+          GITHUB_STEP_SUMMARY: summary,
+        },
+        spawn: (argv) => {
+          started.push(argv)
+          return { stdout: Promise.resolve(""), exited: Promise.resolve(0), kill: () => {} }
+        },
+        stdout: (text) => void out.push(text),
+        stderr: () => {},
+      }),
+    ).toBe(0)
+    const text = out.join("")
+    expect(text).toContain(
+      "anthropic/claude-sonnet-4.5: replay projections take cache rates from the committed catalog; the cache prices given are not used.",
+    )
+    expect(text).toContain(
+      "google/gemini-2.5-pro: replay projections take cache rates from the committed catalog; the cache prices given are not used.",
+    )
+    expect(text).toContain("Price check (D6): anthropic/claude-sonnet-4.5 is given at $3 input, $16 output")
+    expect(readFileSync(summary, "utf8")).toContain("### Prices")
+    expect(started.map((argv) => argv.slice(2, 6))).toEqual([
+      ["--model", "anthropic/claude-sonnet-4.5=3:16", "--triage-model", "google/gemini-2.5-pro=1.25:10"],
+    ])
+    const plain: string[] = []
+    await main("plan", {
+      env: { ...REPLAY, ...dirs },
+      spawn: () => ({ stdout: Promise.resolve(""), exited: Promise.resolve(0), kill: () => {} }),
+      stdout: (line) => void plain.push(line),
+      stderr: () => {},
+    })
+    expect(plain.join("")).not.toContain("committed catalog")
+    expect(plain.join("")).not.toContain("Price check")
+  })
+})

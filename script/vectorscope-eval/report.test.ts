@@ -12,6 +12,7 @@ import {
 } from "../../packages/core/src/review/eval"
 import { DEFAULT_REVIEW_CONFIG, type ModelFinding } from "../../packages/core/src/review/types"
 import { buildReport, DEFAULT_GATE } from "../../packages/core/src/review/eval-report"
+import { estimateCostUsd } from "../../packages/core/src/review/plan"
 import type { ProjectionRecord, ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger } from "./budget"
 import { loadManifest, type Manifest } from "./dataset"
@@ -1636,5 +1637,146 @@ describe("slice utilisation (VS-49)", () => {
     const run = fromArtifact(value, seed, [])
     expect(run.utilisation).toEqual(record)
     expect("utilisation" in reselectRun(value, run).run).toBe(false)
+  })
+})
+
+// VS-21e: --cost-split and --severity-repeats add their sections and change nothing else.
+describe("cost split and repetitions (VS-21e)", () => {
+  const REVIEW = "vectorscope-projection/vendor/reviewer-large"
+  const PAID = "openrouter/vendor/reviewer-large"
+  const PRICE = { input: 3, output: 15, cacheRead: 0.3 }
+  const variant = { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } }
+
+  function outputs(name: string, reasoning: boolean) {
+    const dir = join(root, `cost-split-${name}`)
+    mkdirSync(dir)
+    const request = { seq: 1, phase: "turn", estimateUsd: 0.1, digest: "d", chars: 4, tokens: 2, body: "body" }
+    const pass = (label: "review" | "verify", promptTokens: number) => ({
+      pass: label,
+      model: REVIEW,
+      maxSteps: 20,
+      status: "ok",
+      digest: "p",
+      chars: 4,
+      requests: [request],
+      promptTokens,
+      usd: estimateCostUsd({ promptTokens, maxSteps: 20, price: PRICE }),
+      unsent: 0,
+      unadmitted: 0,
+    })
+    const record = {
+      version: 1,
+      kind: "projection",
+      label: bug.id,
+      repetition: 1,
+      source: { base: bug.candidate.base, head: bug.candidate.head, mergeBase: bug.candidate.base, vector: "abc123" },
+      variant,
+      models: { review: { id: REVIEW, context: 1, costKind: "priced", price: PRICE } },
+      files: { reviewed: [labelled.path], skipped: [] },
+      cap: { maxCostUsd: 0.75, over: [] },
+      passes: [pass("review", 2000), pass("verify", 1500)],
+      unattributed: 0,
+      egress: { attempts: 2, outside: 0 },
+    } as unknown as ProjectionRecord
+    writeFileSync(join(dir, "case.projection.json"), JSON.stringify(record))
+    const recorded = (label: string, cacheRead: number, cacheWrite: number, extra = {}) => ({
+      pass: label,
+      model: PAID,
+      digest: "p",
+      chars: 4,
+      cacheRead,
+      cacheWrite,
+      ...extra,
+    })
+    writeFileSync(
+      join(dir, "paid.json"),
+      JSON.stringify(
+        artifact(
+          {
+            variant,
+            models: { review: { id: PAID, context: 1, costKind: "priced", price: { input: 3, output: 15 } } },
+            passes: [recorded("review", 1000, 200, reasoning ? { reasoning: 40 } : {}), recorded("verify", 0, 0)],
+          },
+          {
+            passes: [
+              { name: "review", model: PAID, costUsd: 0.02, input: 5000, output: 500, cacheRead: 1000 },
+              { name: "verify", model: PAID, input: 1500, output: 100, cacheRead: 0 },
+            ],
+          },
+        ),
+      ),
+    )
+    return dir
+  }
+
+  test("--cost-split adds the projected and settled tables, and removing them gives the report without it", async () => {
+    const dir = outputs("plain", true)
+    const out = join(root, "cost-split-plain.json")
+    const plain = await main(["--outputs", dir, "--out", out])
+    const flagged = await main(["--outputs", dir, "--cost-split"])
+    expect([plain.code, flagged.code]).toEqual([0, 0])
+    const lines = flagged.stdout.split("\n")
+    const projected = lines.indexOf(
+      "Projected cost by pass and token kind (VS-21e), each pass's cached and uncached figures side by side:",
+    )
+    const projectedEnd = lines.findIndex((line) => line.startsWith("Cached is estimateCostUsd's low band"))
+    const settled = lines.indexOf("## Settled cost by pass and token kind")
+    const settledEnd = lines.findIndex((line) => line.startsWith("Tokens as each pass's session reported them"))
+    expect([projected, projectedEnd, settled, settledEnd].every((index) => index > 0)).toBe(true)
+    const kept = lines.filter(
+      (_, index) =>
+        !(index >= projected - 1 && index <= projectedEnd) && !(index >= settled - 1 && index <= settledEnd),
+    )
+    expect(kept.join("\n")).toBe(plain.stdout.replace(`\nJSON report: ${out}\n`, ""))
+    const saved: unknown = await Bun.file(out).json()
+    expect(saved).not.toHaveProperty("costs")
+    expect(saved).not.toHaveProperty("severityRepeats")
+    // Each projected pass's cached and uncached rows side by side, and the review pass's settled row by kind at the
+    // snapshot, cache reads and writes at the input rate it lists for them, beside the $0.02 it reported.
+    const rows = lines.filter((line) => line.startsWith(`| ${variant.name} · `))
+    const split = rows.filter((line) => line.includes(REVIEW) && / \| (?:un)?cached \| /.test(line))
+    expect(split.map((line) => line.split(" | ").slice(1, 3).join(" "))).toEqual([
+      "review cached",
+      "review uncached",
+      "verify cached",
+      "verify uncached",
+      "all passes cached",
+      "all passes uncached",
+    ])
+    expect(rows).toContain(
+      `| ${variant.name} · ${PAID} | review | 1 | 3800 ($0.0114) | 1000 ($0.0030) | 200 ($0.0006) | 500 ($0.0075) | $0.0225 | $0.0200 | 40 |`,
+    )
+    expect(rows).toContain(
+      `| ${variant.name} · ${PAID} | verify | 1 | 1500 ($0.0045) | 0 ($0.0000) | 0 ($0.0000) | 100 ($0.0015) | $0.0060 | n/a | n/a |`,
+    )
+    expect(rows).toContain(
+      `| ${variant.name} · ${PAID} | all passes | 1 | 5300 ($0.0159) | 1000 ($0.0030) | 200 ($0.0006) | 600 ($0.0090) | $0.0285 | n/a | 40 |`,
+    )
+  })
+
+  test("settled reasoning reads n/a when no artifact recorded any", async () => {
+    const result = await main(["--outputs", outputs("unreasoned", false), "--cost-split"])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain(`| ${variant.name} · ${PAID} | review | 1 | 3800 ($0.0114) |`)
+    expect(result.stdout).toContain("| $0.0225 | $0.0200 | n/a |")
+    expect(result.stdout).not.toContain("| 40 |")
+  })
+
+  test("--severity-repeats adds high-severity recall per repetition, and nothing without it", async () => {
+    const dir = outputs("repeats", true)
+    const plain = await main(["--outputs", dir])
+    const flagged = await main(["--outputs", dir, "--severity-repeats"])
+    expect(flagged.code).toBe(0)
+    expect(flagged.stdout).toContain("## High-severity recall by repetition")
+    expect(flagged.stdout).toContain(`| ${variant.name} · ${PAID} | #1 `)
+    expect(plain.stdout).not.toContain("## High-severity recall by repetition")
+    const loaded = await loadOutputs({ paths: [dir] })
+    expect(loaded).not.toHaveProperty("costs")
+    expect((await loadOutputs({ paths: [dir], costSplit: true })).costs?.map((entry) => entry.basis)).toEqual([
+      "projected",
+      "projected",
+      "settled",
+      "settled",
+    ])
   })
 })

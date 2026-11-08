@@ -9,7 +9,10 @@ import {
   Ledger,
   LedgerError,
   limitProblems,
+  LIST_PRICES,
+  listPriceWarnings,
   parsePrice,
+  parsePriceFields,
   readJournal,
   type Entry,
   type Limits,
@@ -377,5 +380,92 @@ describe("the journal", () => {
     const third = Ledger.open({ limits: LIMITS, journal })
     expect(third.summary().spentUsd).toBeCloseTo(0.75)
     third.close()
+  })
+})
+
+// VS-21e: a price string may carry cache prices, which go into a projection-only price that estimates, admission and
+// settlement never read; and D6's dated list prices check a price string, warning and never refusing.
+describe("price strings and the D6 table", () => {
+  test("two fields give exactly parsePrice's price and nothing else", () => {
+    for (const text of ["3:15", " 1.25:10 ", "0:0", "3.000:15.5"]) {
+      const parsed = parsePriceFields(text)
+      expect(parsed).toEqual({ price: parsePrice(text)! })
+      expect(Object.keys(parsed!)).toEqual(["price"])
+      expect(Object.keys(parsed!.price)).toEqual(["input", "output"])
+    }
+  })
+
+  test("three and four fields add a projection-only price, and the budget's price stays two fields", () => {
+    expect(parsePriceFields("3:15:0.3")).toEqual({
+      price: { input: 3, output: 15 },
+      projection: { input: 3, output: 15, cacheRead: 0.3 },
+    })
+    expect(parsePriceFields("3:15:0.3:3.75")).toEqual({
+      price: { input: 3, output: 15 },
+      projection: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    })
+    const two = parsePriceFields("3:15")!
+    const four = parsePriceFields("3:15:0.3:3.75")!
+    expect(Object.keys(four.price)).toEqual(["input", "output"])
+    expect(four.price).toEqual(two.price)
+    // The estimate a reservation is made from reads only the budget's price, so it cannot move.
+    for (const chars of [0, 1, 20_001])
+      expect(estimateUsd({ chars, maxTokens: 16_000, price: four.price })).toBe(
+        estimateUsd({ chars, maxTokens: 16_000, price: two.price }),
+      )
+  })
+
+  test("five fields, a sign, an empty field or a non-number is refused, and parsePrice still takes two fields", () => {
+    for (const text of [
+      "3:15:0.3:3.75:1",
+      "-3:15",
+      "3:15:-0.3",
+      "3:15:0.3:-1",
+      "3:15:",
+      "3::0.3",
+      ":15",
+      "3:15:x",
+      "3:15:0.3:3.75:",
+      "3:15:+0.3",
+      "",
+    ])
+      expect(parsePriceFields(text)).toBeUndefined()
+    expect(parsePrice("3:15:0.3")).toBeUndefined()
+    expect(parsePrice("3:15:0.3:3.75")).toBeUndefined()
+  })
+
+  test("the D6 table warns on a field that differs from the list price, and only then", () => {
+    const sonnet = "anthropic/claude-sonnet-4.5"
+    expect(listPriceWarnings(sonnet, { input: 3, output: 15 })).toEqual([])
+    expect(listPriceWarnings(sonnet, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 })).toEqual([])
+    expect(listPriceWarnings(sonnet, { input: 3, output: 15, cacheRead: 0.3 })).toEqual([])
+    const read = listPriceWarnings(sonnet, { input: 3, output: 15, cacheRead: 0.2 })
+    expect(read).toHaveLength(1)
+    expect(read[0]).toStartWith(`Price check (D6): ${sonnet} is given at $3 input, $15 output, $0.2 cache read, but`)
+    expect(read[0]).toContain(
+      "its list price read 2026-11-07 is $3 input, $15 output, $0.3 cache read, $3.75 cache write",
+    )
+    expect(listPriceWarnings(sonnet, { input: 2, output: 15 })).toHaveLength(1)
+    expect(listPriceWarnings(sonnet, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 })).toHaveLength(1)
+    // A model the table does not list gets no check: neither of the examples' other models has a list price read.
+    expect(listPriceWarnings("openai/gpt-5", { input: 99, output: 99 })).toEqual([])
+    expect(listPriceWarnings("anthropic/claude-haiku-4.5", { input: 99, output: 99 })).toEqual([])
+    // The mechanism over a synthetic table: a model listed without cache rates warns on a given cache rate.
+    const table = [{ model: "vendor/synthetic", input: 1, output: 2, read: "2026-01-01", source: "a test" }]
+    expect(listPriceWarnings("vendor/synthetic", { input: 1, output: 2 }, table)).toEqual([])
+    expect(listPriceWarnings("vendor/synthetic", { input: 1, output: 2, cacheRead: 0.1 }, table)).toHaveLength(1)
+    expect(listPriceWarnings("vendor/synthetic", { input: 1, output: 3 }, table)[0]).toContain(
+      "read 2026-01-01 is $1 input, $2 output (a test)",
+    )
+  })
+
+  test("the table holds dated, sourced entries with unique models, and none for a model Q35 has not chosen", () => {
+    expect(LIST_PRICES.map((entry) => entry.model)).toEqual(["anthropic/claude-sonnet-4.5"])
+    expect(new Set(LIST_PRICES.map((entry) => entry.model)).size).toBe(LIST_PRICES.length)
+    for (const entry of LIST_PRICES) {
+      expect(entry.read).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(entry.source.length).toBeGreaterThan(0)
+      expect(entry.input > 0 && entry.output > 0).toBe(true)
+    }
   })
 })

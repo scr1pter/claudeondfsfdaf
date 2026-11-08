@@ -404,3 +404,112 @@ describe("with a budget", () => {
     expect(saved.runs.map((run: { status: string }) => run.status)).toEqual(["scored", "not-sent"])
   })
 })
+
+// VS-21e: a four-field --price carries cache prices for the report alone. Every reservation, estimate and ticket is the
+// two-field run's.
+describe("a cache-aware --price", () => {
+  // Usage with cached prompt tokens and no reported cost, so every ticket settles from tokens at the price.
+  const cached = {
+    status: 200,
+    body: {
+      choices: [{ message: { content: report }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 3000, completion_tokens: 200, prompt_tokens_details: { cached_tokens: 2000 } },
+    },
+  }
+  // A journal entry without the fields that differ between any two runs: its time, and the open entry's id.
+  const stable = (entry: Entry) =>
+    Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "at" && key !== "id"))
+  const withPrice = (price: string, files: { ledger: string; out: string }) =>
+    budgetArgs(5, 1, files).map((arg) => (arg === `${PRICE.input}:${PRICE.output}` ? price : arg))
+
+  test("leaves every reservation, estimate and ticket amount as the two-field run has them", async () => {
+    const go = async (price: string) => {
+      const files = paths()
+      const fake = fakeFetch(files.ledger, [cached])
+      const io = capture()
+      const code = await main(withPrice(price, files), {
+        ...io.deps,
+        fetch: fake.fetch,
+        env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
+      })
+      expect(code).toBe(0)
+      return { journal: journal(files.ledger), saved: JSON.parse(readFileSync(files.out, "utf8")), io, fake }
+    }
+    const two = await go("3:15")
+    const four = await go("3:15:0.3:3.75")
+    expect(four.journal.map(stable)).toEqual(two.journal.map(stable))
+    expect(four.saved.price).toEqual(two.saved.price)
+    expect(Object.keys(four.saved.price)).toEqual(["input", "output"])
+    expect(four.saved.estimate).toEqual(two.saved.estimate)
+    expect(four.saved.budget).toEqual(two.saved.budget)
+    expect(four.fake.calls.map((call) => call.body)).toEqual(two.fake.calls.map((call) => call.body))
+    // Each ticket settled at the two-field token price, with the cached tokens counted as input.
+    const settled = four.journal.flatMap((entry) => (entry.type === "settle" ? [entry] : []))
+    expect(settled).toHaveLength(2)
+    for (const entry of settled) {
+      expect(entry.basis).toBe("tokens")
+      expect(entry.costUsd).toBe((3000 * PRICE.input + 200 * PRICE.output) / 1_000_000)
+    }
+    // Only the four-field run's report holds the projection-only price, and its text the cache-aware line.
+    expect(two.saved.projectionPrice).toBeUndefined()
+    expect(four.saved.projectionPrice).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 })
+    const cachedUsd = (2 * ((1000 * 3 + 2000 * 0.3 + 200 * 15) / 1_000_000)).toFixed(4)
+    expect(four.io.out.join("")).toContain(
+      `At the cache-aware price (projection only, never charged): $${cachedUsd} for the reported tokens of 2 run(s), 4.0k of them read from the cache. Cache writes are not reported here and are priced as input.`,
+    )
+    expect(two.io.out.join("")).not.toContain("cache-aware")
+    expect(four.io.err.join("")).toContain(
+      `${MODEL}: cache read $0.3 and cache write $3.75 per million tokens are for projections and reports only; estimates, admission and settlement use $3 input and $15 output, uncached.`,
+    )
+    expect(two.io.err.join("")).not.toContain("per million tokens are for projections")
+  })
+
+  test("a dry run prints the two-field output and the note, and nothing else", async () => {
+    const dry = async (price: string) => {
+      const io = capture()
+      const argv = ["--model", MODEL, "--price", price, "--max-tokens", "1000", "--fixture", FIXTURES.join(",")]
+      expect(await main(argv, { ...io.deps, fetch: fakeFetch(undefined, [ok(0.01)]).fetch, env: {} })).toBe(0)
+      return io.out.join("")
+    }
+    const two = await dry("3:15")
+    const four = await dry("3:15:0.3:3.75")
+    const note = `${MODEL}: cache read $0.3 and cache write $3.75 per million tokens are for projections and reports only; estimates, admission and settlement use $3 input and $15 output, uncached.\n`
+    expect(four).toBe(two.replace("These are estimates; reported usage can exceed them.\n", (line) => line + note))
+    expect(await dry("3:15:0.3")).toContain(`${MODEL}: cache read $0.3 per million tokens is for projections`)
+  })
+
+  test("five fields, or a negative or empty cache price, exit 2 with the --price message", async () => {
+    for (const price of ["3:15:0.3:3.75:1", "3:15:-0.3", "3:15:0.3:", "3:15::3.75"]) {
+      const io = capture()
+      expect(
+        await main(["--model", MODEL, "--price", price, "--max-tokens", "1000"], {
+          ...io.deps,
+          fetch: fakeFetch(undefined, [ok(0.01)]).fetch,
+        }),
+      ).toBe(2)
+      expect(io.err.join("")).toStartWith("--price must be USD per million input and output tokens, such as 3:15.")
+    }
+  })
+
+  test("a price that differs from D6's list price warns beside the estimate, and refuses nothing", async () => {
+    const io = capture()
+    const argv = [
+      "--model",
+      "anthropic/claude-sonnet-4.5",
+      "--price",
+      "3:15:0.2",
+      "--max-tokens",
+      "1000",
+      "--fixture",
+      FIXTURES.join(","),
+    ]
+    expect(await main(argv, { ...io.deps, fetch: fakeFetch(undefined, [ok(0.01)]).fetch, env: {} })).toBe(0)
+    expect(io.out.join("")).toContain(
+      "Price check (D6): anthropic/claude-sonnet-4.5 is given at $3 input, $15 output, $0.2 cache read, but its list price read 2026-11-07 is $3 input, $15 output, $0.3 cache read, $3.75 cache write",
+    )
+    const plain = capture()
+    argv[3] = "3:15"
+    expect(await main(argv, { ...plain.deps, fetch: fakeFetch(undefined, [ok(0.01)]).fetch, env: {} })).toBe(0)
+    expect(plain.out.join("")).not.toContain("Price check")
+  })
+})

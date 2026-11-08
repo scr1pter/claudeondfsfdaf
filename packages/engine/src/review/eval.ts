@@ -174,6 +174,9 @@ export interface ModelRecord {
 export type AttemptRecord = Omit<Attempt, "type"> & {
   seq: number
   settled?: Omit<Settle, "type" | "pass" | "phase"> // absent when an admitted attempt never settled
+  // VS-21e: the reasoning tokens of the provider call this attempt admitted, from its session's step record; absent when
+  // the provider reported none or the step cannot be told apart (step 8). Recording only.
+  reasoning?: number
 }
 
 export type PostedRecord =
@@ -264,6 +267,7 @@ export interface ReplayArtifact {
     ms?: number
     cacheRead?: number
     cacheWrite?: number
+    reasoning?: number // VS-21e: the reasoning tokens measureCost counts; absent when the provider reported none
   }[]
   // VS-24's first pre-dispatch estimate, before any shrink, then its shrink steps, in order. Both absent until VS-24
   // wiring.
@@ -957,6 +961,39 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
       ),
   )
   const start = Math.min(...recorded.flatMap((session) => session.messages.map((message) => message.info.time.created)))
+  // VS-21e: each admitted attempt's reasoning tokens, from the step its provider call finished. An attempt settles with
+  // the provider's own counts, cache reads and writes inside input and reasoning inside output, and its step records
+  // getUsage's split of the same counts, so an attempt matches the steps of its session whose parts add back up to its
+  // counts. Retries settle in the same assistant message, so steps are matched by count, not by message. Attempts and
+  // steps with the same counts pair in seq and step order when there are as many of each; otherwise none of them gets a
+  // value, so no attempt is credited with another's tokens. A value of 0 is never written.
+  const reasoning = new Map(
+    recorded.flatMap((session, index) => {
+      const steps = session.messages.flatMap((message) =>
+        message.info.role === "assistant" && !message.info.forked
+          ? message.parts.flatMap((part) => (part.type === "step-finish" ? [part.tokens] : []))
+          : [],
+      )
+      const tried = attempts.flatMap((attempt) =>
+        attempt.admitted && attempt.sessionID === outcome.sessions[index] && attempt.settled?.tokens
+          ? [{ seq: attempt.seq, key: `${attempt.settled.tokens.input}:${attempt.settled.tokens.output}` }]
+          : [],
+      )
+      const keyed = steps.map((tokens) => ({
+        key: `${tokens.input + tokens.cache.read + tokens.cache.write}:${tokens.output + tokens.reasoning}`,
+        reasoning: tokens.reasoning,
+      }))
+      return [...new Set(tried.map((attempt) => attempt.key))].flatMap((key) => {
+        const mine = tried.filter((attempt) => attempt.key === key)
+        const theirs = keyed.filter((step) => step.key === key)
+        if (mine.length !== theirs.length) return []
+        return mine.flatMap((attempt, at) => {
+          const value = theirs[at]?.reasoning ?? 0
+          return value > 0 ? [[attempt.seq, value] as const] : []
+        })
+      })
+    }),
+  )
 
   const artifact: ReplayArtifact = {
     ...common,
@@ -986,7 +1023,10 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
           ]
         : [],
     ),
-    attempts,
+    attempts: attempts.map((attempt) => {
+      const value = reasoning.get(attempt.seq)
+      return value === undefined ? attempt : { ...attempt, reasoning: value }
+    }),
     tools,
     outcome,
     placed: selection.inline.map((finding) => ({
@@ -1209,7 +1249,7 @@ function variantProblem(input: ReplayInput) {
 
 // A pass's wall time and cache use, from the messages of every session it had: `startMs` after `start` (the first
 // message of any pass), `ms` from its first message created to its last one completed, and the cache reads and writes
-// measureCost counts, as Review.run's ReviewPass does.
+// measureCost counts, as Review.run's ReviewPass does, and its reasoning tokens when the provider reported any (VS-21e).
 function passUsage(messages: readonly SessionV1.WithParts[], start: number) {
   if (!messages.length) return {}
   const first = Math.min(...messages.map((message) => message.info.time.created))
@@ -1224,7 +1264,13 @@ function passUsage(messages: readonly SessionV1.WithParts[], start: number) {
   return {
     startMs: first - start,
     ms: last - first,
-    ...(cost ? { cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite } : {}),
+    ...(cost
+      ? {
+          cacheRead: cost.cacheRead,
+          cacheWrite: cost.cacheWrite,
+          ...(cost.reasoning > 0 ? { reasoning: cost.reasoning } : {}),
+        }
+      : {}),
   }
 }
 

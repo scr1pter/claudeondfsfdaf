@@ -7,6 +7,12 @@
 // the strict egress guard and checks where every model's requests would go, and the entry point fails a run whose
 // guard saw a connection off this computer. The paid branch never loads either. A change here changes what a dry
 // projection records, so review it as eval code.
+//
+// VS-21e's opt-in scenario, "suggestion-untrusted" (the entry point's --scenario), adds one finding to the review
+// pass's answer: a nit carrying a suggestion, on the first added line of the first file that has one, else the first
+// changed line. Run on an untrusted case under `verify: "all"`, engine:shared-verify then sends it to verify (an
+// untrusted suggestion, plan.ts verifyCandidates) and the frozen engine rule does not, so the shared policy has exactly
+// one more verify candidate. Without the scenario the answers are exactly the default ones.
 
 import { Effect } from "effect"
 import type { DiffFile } from "@vectordevai/core/review/diff"
@@ -22,7 +28,11 @@ const PASSES = [
   ["review", "You are Vector's code reviewer"],
 ] as const
 
-export function projectionFindings(files: readonly DiffFile[]) {
+// The canned scenarios a projection can opt into (VS-21e); the entry point's --scenario takes these names.
+export type ProjectionScenario = "suggestion-untrusted"
+export const PROJECTION_SCENARIOS: readonly ProjectionScenario[] = ["suggestion-untrusted"]
+
+export function projectionFindings(files: readonly DiffFile[], scenario?: ProjectionScenario) {
   const review = files.flatMap((file) => {
     const at = firstChange(file)
     return at ? [finding(file.path, at, "bug", `Projected finding in ${file.path}`)] : []
@@ -31,12 +41,27 @@ export function projectionFindings(files: readonly DiffFile[]) {
   const at = sensitive && firstChange(sensitive)
   const security =
     sensitive && at ? [finding(sensitive.path, at, "security", `Projected security finding in ${sensitive.path}`)] : []
-  return { review, security }
+  if (scenario !== "suggestion-untrusted") return { review, security }
+  const suggested =
+    files.find((file) => firstChange(file)?.side === "RIGHT") ?? files.find((file) => firstChange(file) !== undefined)
+  const where = suggested && firstChange(suggested)
+  if (!suggested || !where) return { review, security }
+  return {
+    review: [
+      ...review,
+      {
+        ...finding(suggested.path, where, "style", `Projected suggestion in ${suggested.path}`),
+        severity: "nit" as const,
+        suggestion: "// projected suggestion",
+      },
+    ],
+    security,
+  }
 }
 
 // The answer to each request: the pass comes from the session's first user message, which is its prompt.
-export function projectionReplies(input: { files: readonly DiffFile[] }) {
-  const found = projectionFindings(input.files)
+export function projectionReplies(input: { files: readonly DiffFile[]; scenario?: ProjectionScenario }) {
+  const found = projectionFindings(input.files, input.scenario)
   return (hit: Hit) => {
     const prompt = firstUserText(hit.body)
     const pass = PASSES.find(([, opening]) => prompt.includes(opening))?.[0]

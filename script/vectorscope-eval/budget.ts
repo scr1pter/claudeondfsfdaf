@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, truncateSync, writeSync } from "node:fs"
+import type { ReviewPrice } from "../../packages/core/src/review/plan"
 
 // The eval's budget ledger (VectorScope plan, VS-03; Phase 0 "Budget, privacy and release gate"). One coordinator
 // admits every paid provider or judge attempt, retries included, against an owner-set total budget and a per-case
@@ -221,6 +222,77 @@ export function estimateUsd(input: { chars: number; maxTokens: number; price: Pr
   return (
     (Math.ceil(input.chars / CHARS_PER_TOKEN) * input.price.input + input.maxTokens * input.price.output) / 1_000_000
   )
+}
+
+// VS-21e: a price string of two to four fields, "input:output[:cacheRead[:cacheWrite]]", such as "3:15:0.3:3.75".
+// `price` is exactly what parsePrice makes of the first two fields, and it is the only price estimates, admission and
+// settlement read. Cache fields go into `projection`, a projection-only price that only projection and report code
+// reads, so a cache rate can never lower a reservation, an admission check or a ticket (I-5, D5). Two fields give no
+// `projection`; five fields, a sign or an empty field give undefined.
+export function parsePriceFields(text: string): { price: Price; projection?: ReviewPrice } | undefined {
+  const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)(?::(\d+(?:\.\d+)?)(?::(\d+(?:\.\d+)?))?)?$/.exec(text.trim())
+  const price = match ? parsePrice(`${match[1]}:${match[2]}`) : undefined
+  if (!match || !price) return undefined
+  if (match[3] === undefined) return { price }
+  return {
+    price,
+    projection: {
+      input: price.input,
+      output: price.output,
+      cacheRead: Number(match[3]),
+      ...(match[4] === undefined ? {} : { cacheWrite: Number(match[4]) }),
+    },
+  }
+}
+
+// One row of D6's price sanity table: a model's list price as read from its vendor, and when and where it was read.
+export interface ListPrice extends ReviewPrice {
+  model: string
+  read: string // YYYY-MM-DD
+  source: string
+}
+
+// D6's price sanity table (VS-21e, T3-7). It is a check, never a price source: estimates use the price given, replays
+// the committed catalog's, and a mismatch only warns. The entries for the models the owner picks under Q35 are added
+// once the owner answers. Until then it holds the eval examples' review model alone: openai/gpt-5, the triage example,
+// is left out because no vendor price was read for it (OpenAI's pages were unreachable, REPORT-3 §7.1), and checking it
+// against the catalog it came from would prove nothing.
+export const LIST_PRICES: readonly ListPrice[] = [
+  {
+    model: "anthropic/claude-sonnet-4.5",
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 3.75,
+    read: "2026-11-07",
+    source:
+      "Anthropic's pricing page, 5-minute cache write, as REPORT-3 §7.1 records it; deprecated, and retiring on Anthropic-operated platforms on 2026-11-30 (Q35)",
+  },
+]
+
+// A warning when a price differs from its model's list price, in each field the price gives (input and output always,
+// a cache rate only when given); none for a model the table does not list. It never refuses.
+export function listPriceWarnings(
+  model: string,
+  price: ReviewPrice,
+  table: readonly ListPrice[] = LIST_PRICES,
+): string[] {
+  const listed = table.find((entry) => entry.model === model)
+  if (!listed) return []
+  const given = (["input", "output", "cacheRead", "cacheWrite"] as const).filter((name) => price[name] !== undefined)
+  if (given.every((name) => price[name] === listed[name])) return []
+  return [
+    `Price check (D6): ${model} is given at ${priceText(price)}, but its list price read ${listed.read} is ${priceText(listed)} (${listed.source}). Check the price string, or the committed catalog it came from.`,
+  ]
+}
+
+function priceText(price: ReviewPrice) {
+  return [
+    `$${price.input} input`,
+    `$${price.output} output`,
+    ...(price.cacheRead === undefined ? [] : [`$${price.cacheRead} cache read`]),
+    ...(price.cacheWrite === undefined ? [] : [`$${price.cacheWrite} cache write`]),
+  ].join(", ")
 }
 
 export class Ledger {

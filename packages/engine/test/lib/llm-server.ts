@@ -4,8 +4,9 @@ import { Deferred, Effect, Layer, Context, Option, Schema, Stream } from "effect
 import * as HttpServer from "effect/unstable/http/HttpServer"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 
-// cached: prompt tokens the provider served from its cache, sent only when set.
-export type Usage = { input: number; output: number; cached?: number }
+// cached: prompt tokens the provider served from its cache, sent only when set. reasoning: the output tokens that were
+// reasoning, inside `output` as providers count them, sent only when set (VS-21e).
+export type Usage = { input: number; output: number; cached?: number; reasoning?: number }
 
 type Line = Record<string, unknown>
 
@@ -69,6 +70,7 @@ function tokens(input?: Usage) {
     completion_tokens: input.output,
     total_tokens: input.input + input.output,
     ...(input.cached !== undefined ? { prompt_tokens_details: { cached_tokens: input.cached } } : {}),
+    ...(input.reasoning !== undefined ? { completion_tokens_details: { reasoning_tokens: input.reasoning } } : {}),
   }
 }
 
@@ -164,7 +166,7 @@ function responseCompleted(input: { seq: number; usage?: Usage }) {
         input_tokens: input.usage?.input ?? 0,
         input_tokens_details: { cached_tokens: input.usage?.cached ?? null },
         output_tokens: input.usage?.output ?? 0,
-        output_tokens_details: { reasoning_tokens: null },
+        output_tokens_details: { reasoning_tokens: input.usage?.reasoning ?? null },
       },
     },
   }

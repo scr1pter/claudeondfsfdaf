@@ -50,6 +50,18 @@ let every estimate through.
 | `--dry-run`               | Never send, even with a budget. Needs no key                                                 |
 | `--list`                  | Print the fixtures and their planted bugs                                                    |
 
+**Cache prices (VS-21e).** `--price` also takes `<in>:<out>:<read>[:<write>]`,
+such as `3:15:0.3:3.75`, with cache read and cache write prices in USD per
+million tokens. They are projection-only: estimates, admission, the ledger and
+settlement read the first two fields alone, exactly as for `3:15`, so a cache
+price can never lower a reservation or a ticket (I-5). A dry estimate says so
+in one line, the JSON report keeps them as `projectionPrice`, and a paid run's
+report adds one line that prices the reported tokens with the provider's cached
+prompt tokens at the cache-read rate (projection only, never charged; cache
+writes are not reported there and are priced as input). A fixture request is a
+single request with no cache breakpoint, so `run.ts` models no caching itself.
+Five fields, a sign or an empty field are refused with the `--price` message.
+
 The API key is read from the environment and only ever sent as the
 `Authorization` header. It is never printed; provider errors that quote it are
 redacted.
@@ -173,6 +185,9 @@ judge call, retries included, before it is sent:
   tokens but no cost, the tokens are priced at `--price`. An attempt with no
   usable usage (an HTTP error, a timeout, a cancelled request in flight) keeps
   its whole reservation as uncertain spend. Missing usage is never zero.
+- **Cache prices (VS-21e).** A four-field `--price` or `models` entry changes
+  none of this: its cache fields go into a separate projection-only price that
+  only projection and report code reads.
 - **Stopping.** New work stops when a model has no price that bounds an
   estimate, when reported usage cannot be read, when a settled cost overshoots
   its reservation, or when the run is cancelled (Ctrl-C, or the workflow being
@@ -211,6 +226,14 @@ needs every amount typed in.
 | `pipeline`        | `smoke` (default): the fixtures through `run.ts`; `replay`: the dataset through the engine |
 | `variants`        | Replay only: registry names, or empty for `engine,engine:shared-verify`                    |
 | `triage_model`    | Replay dry runs only: the `model=input:output` first pass of `engine:cross-family`         |
+
+A `models` or `triage_model` entry may add cache prices,
+`model=input:output:cacheRead[:cacheWrite]` (VS-21e). `ci.ts` hands `run.ts` and
+the replay entry point only `input:output`, so every estimate and argument
+array is the two-field one. A smoke plan says which cache prices are
+projection-only; a replay plan says that the entry point takes its cache rates
+from the committed catalog, so the ones given are not used. Both run the D6
+price check below.
 
 The inputs reach `ci.ts` as environment variables and are validated there; no
 input is written into a shell command, and `run.ts` is started with an argument
@@ -304,6 +327,22 @@ it. `max_tokens` applies to the smoke pipeline only.
   `triage_model` is refused as dry only, whatever its models, so it is never
   first asked for a triage model. It never reaches another variant.
 
+### Price check (D6, VS-21e)
+
+`LIST_PRICES` in `budget.ts` is a dated table of vendor list prices that
+`run.ts`, `ci.ts plan` and the replay entry point's `--cost-split` check a price
+against. It warns, one line per model, when a field given (input and output
+always, a cache rate only when given) differs from the list price, and it never
+refuses: it is a check, not a price source. It holds one entry,
+`anthropic/claude-sonnet-4.5` at $3 input, $15 output, $0.30 cache read and
+$3.75 cache write (5-minute), read 2026-11-07 from Anthropic's pricing page as
+round three's report records it. Sonnet 4.5 is deprecated and retires on
+Anthropic-operated platforms on 2026-11-30. `openai/gpt-5`, the triage example,
+is left out because no vendor price was read for it, and checking it against
+the catalog it came from would prove nothing. The entries for the models the
+owner chooses for D6 (Q35) are added once the owner answers; until then the
+example price strings stay on Sonnet 4.5.
+
 ### Owner setup (D7)
 
 Only the owner can do this, and no paid run is possible until it is done:
@@ -325,6 +364,16 @@ Only the owner can do this, and no paid run is possible until it is done:
    Add the public key's PEM text as the environment **variable** (not a
    secret) `VECTORSCOPE_EVAL_PUBLIC_KEY`. Keep the private key off GitHub and
    out of the repository; without it the sealed reports cannot be opened.
+5. In the OpenRouter workspace that holds the eval key, under Routing,
+   disallow every service tier but the default, and leave the workspace
+   default at `default`: a request for a disallowed tier then fails with a 403
+   instead of being billed at a priority rate. Use no preset that sets a tier.
+   Never use OpenRouter's Batch API: it cannot run when the account's privacy
+   settings require ZDR, and it keeps data for 30 days. Credit purchases carry
+   a 5.5% fee ($0.80 minimum), so a credit-funded key's effective price is the
+   list price × 1.055; the estimates and the ledger use list prices. Pinning
+   `service_tier: "default"` on each request is runner-wiring R2 and is not
+   built (VS-21e).
 
 If the environment does not exist, GitHub creates an unprotected one the first
 time a paid run asks for it; that environment has no secret, so the run fails
@@ -943,6 +992,29 @@ calls it, for `ci.ts` with `PIPELINE=replay` (VS-21c).
   case with reviewed files, and its variant record's `variantProblems`.
   `cap.over` is never a problem.
 
+- **Cost by pass and token kind (VS-21e).** `report.ts --cost-split` and the
+  entry point's `--cost-split` split each pass's `estimateCostUsd` bands by
+  token kind (core `eval-report.ts` `projectionSplit`, which calls
+  `estimateCostUsd` with every other rate at 0, so the kinds add up to each
+  band exactly) and show them side by side. **Cached** is the low band: S = 5,
+  or `maxSteps` if fewer, R = 2,000, and (S−1)·P read at the cache-read rate
+  when the price lists one. **Uncached** is the high band: S = `maxSteps`,
+  R = 4,000, nothing read from the cache. The bands also differ in steps and
+  growth, so their gap is not a caching saving. Neither models cache writes
+  (the low band prices them as input), so that column reads "not modelled".
+  The figures are estimates, not spend. A dry projection runs no lens today
+  (lenses come from trusted settings only), and a record names no lens, so
+  lens passes would share one row, `lens`.
+- **The canned scenario (VS-21e).** The entry point's `--scenario
+suggestion-untrusted` adds one nit carrying a suggestion to the canned
+  review's answer, on the first added line of the first file that has one, and
+  runs every variant under `verify: "all"`. On an untrusted case
+  `engine:shared-verify` then sends it to verify and `engine` does not, so the
+  shared policy has exactly one more verify candidate, and each case line ends
+  with `, K verify candidate(s)`. It is dry only and writes no record (`--out`
+  is refused), so a canned scenario is never joined with paid runs. The default
+  replies are unchanged.
+
 ```
 cd packages/engine && bun test --timeout 30000 test/review/eval.test.ts
 cd packages/engine && bun test --timeout 30000 test/review/run.test.ts
@@ -978,6 +1050,11 @@ cd packages/engine && bun script/vectorscope-replay.ts --model anthropic/claude-
 - **Flags** are checked strictly: an unknown option, a missing value, a stray
   argument, a malformed manifest or a value given to a switch
   (`--dry-run=true`) is refused with exit 2 before anything is created.
+- **`--cost-split` and `--scenario`** (VS-21e, under Projection above) are
+  for dry runs only: a run that would send with either is refused. Under
+  `--cost-split` the entry point also runs the D6 price check on the
+  catalog prices it booted with. `--model` and `--triage-model` stay at two
+  price fields; their cache rates come from the catalog.
 - **The send rules** (`replayMode`), all of which must hold, or nothing is
   sent and nothing is created: a budget; input and output prices above zero;
   `GITHUB_ACTIONS=true`, `VECTORSCOPE_EVAL_ENVIRONMENT=vectorscope-eval` and
@@ -1131,6 +1208,22 @@ How it works:
   nothing, whose precision is n/a with its counts, end-to-end recall 0 and
   false alarms 0. Runs that shared one ledger journal are counted once in the
   report's ledger line, and `--ledger` gives that journal directly.
+
+- **Cost split and repetitions (VS-21e).** `--cost-split` adds the projected
+  table (under Projection above) to the projections, and a "Settled cost by
+  pass and token kind" table: each paid replay pass's tokens as its sessions
+  reported them (input apart from its cache reads and writes, output with its
+  reasoning), priced at the run's price snapshot (cache rates at the input
+  rate when the snapshot lists none), beside the cost the pass reported and
+  its reasoning tokens when the provider reported any. Desktop artifacts and
+  `run.ts` reports have no per-pass usage, so they add no settled rows.
+  `--severity-repeats` adds high-severity recall per repetition and model pair,
+  by the high-severity breakdown's rule: the mean of the repetitions, with no
+  interval, and the pooled figure, with its interval. A pair is the models a
+  run recorded, not their labs (I-10). A missing run counts against its
+  group's one recorded pair; when the group recorded several pairs or none,
+  its missing runs share a row of their own, marked missing. Without either
+  flag the report and its JSON are byte for byte what they were.
 
 - **Offline strict re-selection (VS-27b).** With `--reselect strict`,
   `report.ts` re-applies the strict guardrail's rule pass (core

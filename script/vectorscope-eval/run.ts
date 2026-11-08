@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { DEFAULT_SLACK, scoreReview, totalScores, type ReviewScore } from "../../packages/core/src/review/eval"
 import { buildReviewPrompt } from "../../packages/core/src/review/prompt"
+import type { ReviewPrice } from "../../packages/core/src/review/plan"
 import { decodeReport, REVIEW_REPORT_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import type { ModelReport } from "../../packages/core/src/review/types"
 import {
@@ -14,8 +15,9 @@ import {
   Ledger,
   LedgerError,
   limitProblems,
+  listPriceWarnings,
   money,
-  parsePrice,
+  parsePriceFields,
   type Limits,
   type Price,
   type Refusal,
@@ -65,7 +67,8 @@ hosted endpoint is the paid eval, which runs only from .github/workflows/vectors
   --repeat <n>              Run each fixture n times, 1-20 (default 1)
   --budget-usd <usd>        Total budget; sends requests. A tenth is held in reserve
   --case-budget-usd <usd>   Bound for one case: one fixture reviewed once, its retry included (needed with a budget)
-  --price <in>:<out>        USD per million input and output tokens, for estimates (needed with a budget, both above 0)
+  --price <in>:<out>        USD per million input and output tokens, for estimates (needed with a budget, both above 0);
+                            :<read>[:<write>] after them adds cache prices for the report alone, never for an estimate
   --max-tokens <n>          max_tokens for each request (needed with a budget; otherwise the provider's default)
   --ledger <path>           Budget journal outside the repository, shared by runs with the same budget
   --base-url <url>          OpenAI-compatible chat completions URL (default ${DEFAULT_BASE_URL})
@@ -176,6 +179,14 @@ export async function main(argv: string[], deps: Deps = {}): Promise<number> {
   }
   const prompts = promptsFor(fixtures)
   const sending = flags.budgetUsd !== undefined && !flags.dryRun
+  // VS-21e: what a cache-aware --price adds, and the D6 check of the price against its list price, beside the estimate.
+  const notes =
+    flags.model && flags.price
+      ? [
+          ...(flags.projectionPrice ? [cachePriceNote(flags.model, flags.projectionPrice)] : []),
+          ...listPriceWarnings(flags.model, flags.projectionPrice ?? flags.price),
+        ]
+      : []
   if (!sending) {
     out(dryRunReport(prompts) + "\n")
     if (flags.model && flags.price && flags.maxTokens)
@@ -185,7 +196,8 @@ export async function main(argv: string[], deps: Deps = {}): Promise<number> {
             estimateCases(prompts, { ...flags, model: flags.model, price: flags.price, maxTokens: flags.maxTokens }),
             flags.limits,
           ) +
-          "\n",
+          "\n" +
+          notes.map((line) => `${line}\n`).join(""),
       )
     if (!flags.dryRun && flags.model)
       out(
@@ -242,7 +254,7 @@ export async function main(argv: string[], deps: Deps = {}): Promise<number> {
   const startedAt = new Date().toISOString()
   const runs: Run[] = []
   try {
-    err(estimateReport(estimate, run.limits) + "\n\n")
+    err(estimateReport(estimate, run.limits) + "\n\n" + (notes.length ? `${notes.join("\n")}\n\n` : ""))
     err(`Reviewing ${prompts.length} fixture(s) x ${run.repeat} with ${run.model}\n`)
     for (const entry of prompts)
       for (const attempt of Array.from({ length: run.repeat }, (_, index) => index + 1)) {
@@ -271,6 +283,7 @@ export async function main(argv: string[], deps: Deps = {}): Promise<number> {
       countNits: run.countNits,
       repeat: run.repeat,
       price: run.price,
+      ...(run.projectionPrice ? { projectionPrice: run.projectionPrice } : {}),
       maxTokens: run.maxTokens,
       estimate,
       totals: totalScores(scored(runs).map((item) => item.score)),
@@ -282,6 +295,15 @@ export async function main(argv: string[], deps: Deps = {}): Promise<number> {
     out(`\nJSON report: ${run.out}\n`)
   }
   return runs.some((item) => item.status !== "scored") || budget.halted || budget.cancelled ? 1 : 0
+}
+
+// VS-21e: the line that says what a cache-aware --price's cache rates are for, and what they are not.
+export function cachePriceNote(model: string, price: ReviewPrice) {
+  const rates = [
+    ...(price.cacheRead === undefined ? [] : [`cache read $${price.cacheRead}`]),
+    ...(price.cacheWrite === undefined ? [] : [`cache write $${price.cacheWrite}`]),
+  ]
+  return `${model}: ${rates.join(" and ")} per million tokens ${rates.length > 1 ? "are" : "is"} for projections and reports only; estimates, admission and settlement use $${price.input} input and $${price.output} output, uncached.`
 }
 
 // Each fixture's review prompt, built from its label-free view.
@@ -562,6 +584,21 @@ function renderReport(runs: Run[], prompts: { fixture: Fixture }[], flags: Flags
       ? `cost $${sum(known).toFixed(4)}`
       : `cost unknown (${known.length}/${sent.length} runs reported one${known.length ? `, $${sum(known).toFixed(4)} between them` : ""})`,
   ].join(" · ")
+  // VS-21e: the reported tokens at the cache-aware --price, the provider's cached prompt tokens at its cache-read rate.
+  // Never charged: the ledger settled every request at the two-field price.
+  const projection = flags.projectionPrice
+  const priced = projection
+    ? sent.flatMap((run) => {
+        if (run.usage?.input === undefined || run.usage.output === undefined) return []
+        const cached = Math.min(Math.max(run.usage.cached ?? 0, 0), run.usage.input)
+        const usd =
+          ((run.usage.input - cached) * projection.input +
+            cached * (projection.cacheRead ?? projection.input) +
+            run.usage.output * projection.output) /
+          1_000_000
+        return [{ cached, usd }]
+      })
+    : []
   const notes = runs.flatMap((run) => {
     if (run.status === "error") return [`  ${label(run, flags.repeat)}: error: ${run.detail}`]
     if (run.status === "not-sent") return [`  ${label(run, flags.repeat)}: ${outcome(run)}`]
@@ -586,6 +623,11 @@ function renderReport(runs: Run[], prompts: { fixture: Fixture }[], flags: Flags
     "",
     `Totals over ${done.length} scored run(s)${errors ? `, ${errors} error(s) left out` : ""}${unsent ? `, ${unsent} not sent within the budget` : ""}: ${headline}`,
     spend,
+    ...(priced.length
+      ? [
+          `At the cache-aware price (projection only, never charged): $${sum(priced.map((usage) => usage.usd)).toFixed(4)} for the reported tokens of ${priced.length} run(s), ${compact(sum(priced.map((usage) => usage.cached)))} of them read from the cache. Cache writes are not reported here and are priced as input.`,
+        ]
+      : []),
     ...(notes.length
       ? ["", `Misses, false alarms${unsent ? ", errors and cases not sent" : " and errors"}:`, ...notes]
       : []),
@@ -609,6 +651,9 @@ function parseFlags(argv: string[]) {
   const out = text("out")
   const ledger = text("ledger")
   const amount = (name: keyof typeof OPTIONS) => (text(name) === undefined ? undefined : Number(text(name)))
+  // VS-21e: estimates, admission and settlement read the first two fields alone; cache fields, when given, are the
+  // projection-only price the report reads.
+  const priced = text("price") === undefined ? undefined : parsePriceFields(text("price")!)
   const flags = {
     model: text("model"),
     fixture: text("fixture"),
@@ -620,7 +665,8 @@ function parseFlags(argv: string[]) {
     maxTokens: text("max-tokens") === undefined ? undefined : Number(text("max-tokens")),
     budgetUsd: amount("budget-usd"),
     caseBudgetUsd: amount("case-budget-usd"),
-    price: text("price") === undefined ? undefined : parsePrice(text("price")!),
+    price: priced?.price,
+    ...(priced?.projection ? { projectionPrice: priced.projection } : {}),
     timeout: Number(text("timeout") ?? 300),
     out: out === undefined ? undefined : resolve(out),
     ledger: ledger === undefined ? undefined : resolve(ledger),

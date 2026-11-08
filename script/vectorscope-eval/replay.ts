@@ -10,7 +10,7 @@ import {
   type PassUtilisation,
   type SliceUtilisation,
 } from "../../packages/core/src/review/eval"
-import type { ProjectedRun } from "../../packages/core/src/review/eval-report"
+import { projectionSplit, type PassCost, type ProjectedRun } from "../../packages/core/src/review/eval-report"
 import type { ModelFinding, ReviewConfig, ReviewOutcome } from "../../packages/core/src/review/types"
 import type {
   AttemptRecord,
@@ -835,6 +835,34 @@ export function projectedRun(record: ProjectionRecord): ProjectedRun {
     over: record.cap.over.length,
     outside: record.egress.outside,
   }
+}
+
+// VS-21e: a projection record's passes by token kind, under projectedRun's variant, model, case and repetition: each
+// pass's two estimateCostUsd bands split as the report shows them (projectionSplit), at the price snapshot of the
+// pass's own model. A pass with no first request or no price has no estimate and is left out. Lens passes have no lens
+// in the record, so they share the name "lens". Read only a record projectionProblems passes. projectionProblems does
+// not check the fields read here, which the unflagged report never reads, so a pass whose prompt tokens, steps or rates
+// are not finite numbers of 0 or more is left out too, rather than read as $NaN (I-8).
+export function projectedPassCosts(record: ProjectionRecord): PassCost[] {
+  const variant = replayVariant("engine", record.variant)
+  const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
+  return record.passes.flatMap((pass) => {
+    const price = [record.models.review, record.models.triage].find((model) => model?.id === pass.model)?.price
+    if (pass.promptTokens === undefined || !price) return []
+    if (![pass.promptTokens, pass.maxSteps, price.input, price.output].every(amount)) return []
+    if (![price.cacheRead, price.cacheWrite].every((rate) => rate === undefined || amount(rate))) return []
+    return [
+      {
+        variant,
+        model: record.models.review.id,
+        case: record.label,
+        repetition: record.repetition,
+        pass: pass.pass,
+        basis: "projected" as const,
+        ...projectionSplit({ promptTokens: pass.promptTokens, maxSteps: pass.maxSteps, price }),
+      },
+    ]
+  })
 }
 
 // Why a projection record (VS-21b, ReviewEval.project) does not show what every pass of its case would send, if it

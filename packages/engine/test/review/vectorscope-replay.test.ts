@@ -13,10 +13,12 @@ import {
   PROJECTION_PROVIDER,
   providerKeys,
   replayMode,
+  SCENARIOS,
   type ReplayFlags,
 } from "../../script/vectorscope-replay"
 import { gitEnv, type Manifest } from "../../../../script/vectorscope-eval/dataset"
 import { projectedRun, projectionProblems } from "../../../../script/vectorscope-eval/replay"
+import type { ProjectionRecord } from "../../src/review/eval"
 
 // VS-21c's entry point (packages/engine/script/vectorscope-replay.ts). Its send decision is tested as a pure function
 // only: no test here, or anywhere, runs its paid branch. The dry branch runs as a subprocess against a synthetic mirror,
@@ -628,6 +630,169 @@ describe("a dry run, as a subprocess", () => {
       expect(failed.stdout).toContain("0 off this computer")
     },
     120_000,
+  )
+})
+
+// VS-21e: --cost-split and --scenario, two dry-only flags that are absent unless given.
+describe("the cost split and the canned scenario (VS-21e)", () => {
+  test("are parsed when given and absent when not, and refuse what would mix a scenario with real records", async () => {
+    expect(flags(base)).not.toHaveProperty("costSplit")
+    expect(flags(base)).not.toHaveProperty("scenario")
+    expect(flags([...base, "--cost-split"]).costSplit).toBe(true)
+    expect(flags([...base, "--scenario", "suggestion-untrusted"]).scenario).toBe("suggestion-untrusted")
+    expect(parseReplayArgs([...base, "--scenario", "nits"])).toBe(
+      '--scenario must be suggestion-untrusted, not "nits".',
+    )
+    expect(parseReplayArgs([...base, "--scenario"])).toBe("Missing value for --scenario")
+    expect(parseReplayArgs([...base, "--scenario", "suggestion-untrusted", "--out", path.join(root, "o")])).toBe(
+      "--scenario writes no record: leave out --out, so a canned scenario's projection is never read as a real one.",
+    )
+    for (const value of ["x", "true", ""])
+      expect(parseReplayArgs([...base, `--cost-split=${value}`])).toBe("--cost-split takes no value")
+    // The entry point names the canned model's scenarios so that it can refuse one before any engine module loads; the
+    // fixture is loaded here, after every in-process test above, to check that the two lists agree.
+    const { PROJECTION_SCENARIOS } = await import("../fixture/projection")
+    expect([...SCENARIOS]).toEqual([...PROJECTION_SCENARIOS])
+  })
+
+  test("are dry only: a run that would send with either is refused, and --dry-run keeps it dry", () => {
+    const dryOnly = "--cost-split and --scenario are for dry runs only"
+    expect(replayMode(flags([...base, ...sending, "--cost-split"]), PROTECTED)).toEqual({
+      refused: expect.stringContaining(dryOnly),
+    })
+    expect(
+      replayMode(
+        flags([...base, ...budget, "--ledger", path.join(root, "l.jsonl"), "--scenario", "suggestion-untrusted"]),
+        PROTECTED,
+      ),
+    ).toEqual({ refused: expect.stringContaining(dryOnly) })
+    expect(replayMode(flags([...base, ...sending, "--cost-split", "--dry-run"]), PROTECTED)).toEqual({ mode: "dry" })
+    expect(replayMode(flags([...base, "--cost-split", "--scenario", "suggestion-untrusted"]), PROTECTED)).toEqual({
+      mode: "dry",
+    })
+    // Without them a run that would send is decided as before.
+    expect(replayMode(flags([...base, ...sending]), PROTECTED)).toEqual({ mode: "paid" })
+  })
+
+  test("leave --model and --triage-model at two price fields, with their messages as they were", () => {
+    expect(parseReplayArgs(["--model", `${MODEL}=3:15:0.3:3.75`, ...base.slice(2)])).toBe(
+      "--model must be <id>=<in>:<out>, with USD per million input and output tokens, such as anthropic/claude-sonnet-4.5=3:15.",
+    )
+    expect(
+      parseReplayArgs([...base, "--variant", "engine:cross-family", "--triage-model", `${TRIAGE_MODEL}=1.25:10:0.125`]),
+    ).toBe(
+      "--triage-model must be <id>=<in>:<out>, with USD per million input and output tokens, such as openai/gpt-5=1.25:10.",
+    )
+  })
+})
+
+describe("a dry run with the cost split and the scenario, as a subprocess (VS-21e)", () => {
+  const mirrorDir = path.join(root, "mirrors-21e", "pallets", "werkzeug")
+  const commits = buildMirror(mirrorDir)
+  const seed = JSON.parse(readFileSync(SEED, "utf8")) as Manifest
+  const item = seed.cases.find((entry) => entry.id === "pallets-werkzeug-1")!
+  const manifest = path.join(root, "manifest-21e.json")
+  writeFileSync(
+    manifest,
+    JSON.stringify({
+      ...seed,
+      cases: [{ ...item, candidate: { ...item.candidate, base: commits.base, head: commits.head } }],
+      exclusions: [],
+    }),
+  )
+  const run = (name: string, extra: string[]) => {
+    const home = path.join(root, `home-21e-${name}`)
+    const temp = path.join(root, `tmp-21e-${name}`)
+    mkdirSync(home, { recursive: true })
+    mkdirSync(temp, { recursive: true })
+    const child = Bun.spawnSync(
+      [
+        process.execPath,
+        path.join("script", "vectorscope-replay.ts"),
+        "--model",
+        `${MODEL}=${PRICE}`,
+        "--manifest",
+        manifest,
+        "--mirrors",
+        path.join(root, "mirrors-21e"),
+        "--work",
+        path.join(root, `work-21e-${name}`),
+        "--variant",
+        "engine",
+        "--variant",
+        "engine:shared-verify",
+        ...extra,
+      ],
+      {
+        cwd: ENGINE,
+        env: { PATH: process.env.PATH ?? "", HOME: home, TMPDIR: temp, ...PROTECTED },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    return { code: child.exitCode, stdout: child.stdout.toString(), stderr: child.stderr.toString() }
+  }
+
+  posix(
+    "shows N and N+1 verify candidates, the cached and uncached split, and leaves the unflagged lines as they were",
+    async () => {
+      const flagged = run("a", ["--scenario", "suggestion-untrusted", "--cost-split"])
+      expect(flagged.stderr).toBe("")
+      expect(flagged.code).toBe(0)
+      const lines = flagged.stdout.split("\n")
+      const count = (variant: string) =>
+        Number(
+          /, (\d+) verify candidate\(s\)$/.exec(
+            lines.find((line) => line.startsWith(`pallets-werkzeug-1  ${variant}  projected, `)) ?? "",
+          )?.[1],
+        )
+      expect(count("engine")).toBeGreaterThan(0)
+      expect(count("engine:shared-verify")).toBe(count("engine") + 1)
+      expect(flagged.stdout).toContain("Scenario suggestion-untrusted (VS-21e)")
+      for (const variant of ["engine", "engine:shared-verify"])
+        for (const pass of ["review", "verify", "all passes"])
+          for (const band of ["cached", "uncached"])
+            expect(
+              lines.some((line) =>
+                line.startsWith(`| ${variant} · ${PROJECTION_PROVIDER}/${MODEL} | ${pass} | ${band} |`),
+              ),
+            ).toBe(true)
+      expect(flagged.stdout).toContain("the gap between them is not a caching saving")
+      // The catalog's Sonnet 4.5 prices are its list prices, so the D6 check prints nothing.
+      expect(flagged.stdout).not.toContain("Price check")
+      expect(flagged.stdout).toMatch(/connection attempts, 0 off this computer\./)
+      expect(flagged.stdout).not.toContain(DUMMY_KEY)
+      expect(readdirSync(path.join(root, "work-21e-a"))).toEqual([])
+
+      // Without either flag the case lines and the table are as they were: no count, no split.
+      const out = path.join(root, "out-21e-b")
+      const plain = run("b", ["--out", out])
+      expect(plain.code).toBe(0)
+      for (const variant of ["engine", "engine:shared-verify"])
+        expect(plain.stdout.split("\n").find((line) => line.startsWith(`pallets-werkzeug-1  ${variant}  `))).toMatch(
+          new RegExp(`^pallets-werkzeug-1 {2}${variant} {2}projected, \\d+ request\\(s\\)$`),
+        )
+      expect(plain.stdout).not.toContain("verify candidate")
+      expect(plain.stdout).not.toContain("Projected cost by pass")
+      expect(plain.stdout).not.toContain("Scenario")
+      // Nor does the scenario reach the unflagged bodies: its records' verify passes were asked about the same
+      // candidates under both variants, engine's flagged count. The bodies themselves name the work directory, the
+      // platform and today's date, so no digest of them is pinned here (the deviation log, VS-21e).
+      const { firstUserText } = await import("../fixture/projection")
+      const records = readdirSync(out).map(
+        (name) => JSON.parse(readFileSync(path.join(out, name), "utf8")) as ProjectionRecord,
+      )
+      const asked = (variant: string) => {
+        const body = records
+          .find((record) => projectedRun(record).variant === variant)
+          ?.passes.find((pass) => pass.pass === "verify")?.requests[0]?.body
+        return body ? [...firstUserText(JSON.parse(body)).matchAll(/<untrusted_candidate id="/g)].length : undefined
+      }
+      expect(records).toHaveLength(2)
+      expect(asked("engine")).toBe(count("engine"))
+      expect(asked("engine:shared-verify")).toBe(count("engine"))
+    },
+    240_000,
   )
 })
 

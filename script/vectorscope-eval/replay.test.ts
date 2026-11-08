@@ -5,7 +5,9 @@ import { basename, dirname, join } from "node:path"
 import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
 import { parseReviewConfig } from "../../packages/core/src/review/config"
 import { findingKey, VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "../../packages/core/src/review/eval"
+import { TOKEN_KINDS } from "../../packages/core/src/review/eval-report"
 import { evidenceScope } from "../../packages/core/src/review/model-evidence"
+import { estimateCostUsd } from "../../packages/core/src/review/plan"
 import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import { DEFAULT_REVIEW_CONFIG } from "../../packages/core/src/review/types"
 import { Ledger, type Limits } from "./budget"
@@ -27,6 +29,7 @@ import {
   pilotProblems,
   pilotRemaining,
   prepareCheckout,
+  projectedPassCosts,
   projectedRun,
   projectionProblems,
   replayBudget,
@@ -1116,6 +1119,80 @@ describe("projection records (VS-21b)", () => {
     expect(projected.usd.low).toBeCloseTo(0.03)
     expect(projected.usd.high).toBeCloseTo(0.15)
     expect(projectedRun(record()).variant).toBe("engine")
+  })
+
+  // VS-21e: what report.ts and the entry point's --cost-split read of a record, each pass at its own model's price.
+  test("projected pass costs split each priced pass's bands by kind, adding up to the pass and to the run", () => {
+    const price = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+    const triagePrice = { input: 1.25, output: 10, cacheRead: 0.125 }
+    const triage = { id: "lmstudio/triage-model", context: 100_000, costKind: "priced" as const, price: triagePrice }
+    const banded = (name: ProjectedPass["pass"], model: string, promptTokens: number, maxSteps: number) =>
+      pass(name, {
+        model,
+        maxSteps,
+        promptTokens,
+        usd: estimateCostUsd({ promptTokens, maxSteps, price: model === triage.id ? triagePrice : price }),
+      })
+    const { promptTokens: _promptTokens, usd: _usd, ...unpriced } = pass("lens")
+    const priced = record({
+      variant: { name: "engine:cross-family", keys: {}, models: "triage-pair" },
+      models: { review: { ...record().models.review, price }, triage },
+      passes: [
+        banded("review", triage.id, 5000, 15),
+        banded("security", triage.id, 4200, 10),
+        banded("verify", "lmstudio/test-model", 3100, 10),
+        unpriced,
+      ],
+    })
+    const costs = projectedPassCosts(priced)
+    expect(costs.map((entry) => [entry.variant, entry.model, entry.case, entry.repetition, entry.pass])).toEqual([
+      ["engine:cross-family", "lmstudio/test-model", "case", 1, "review"],
+      ["engine:cross-family", "lmstudio/test-model", "case", 1, "security"],
+      ["engine:cross-family", "lmstudio/test-model", "case", 1, "verify"],
+    ])
+    const total = (kinds: Record<(typeof TOKEN_KINDS)[number], number>) =>
+      TOKEN_KINDS.reduce((sum, kind) => sum + kinds[kind], 0)
+    for (const [index, entry] of costs.entries()) {
+      if (entry.basis !== "projected") throw new Error("expected a projected pass")
+      const usd = priced.passes[index].usd!
+      expect(total(entry.cached)).toBe(usd.low)
+      expect(total(entry.uncached)).toBe(usd.high)
+    }
+    const run = projectedRun(priced)
+    expect(costs.reduce((sum, entry) => sum + (entry.basis === "projected" ? total(entry.cached) : 0), 0)).toBeCloseTo(
+      run.usd.low,
+      12,
+    )
+    expect(
+      costs.reduce((sum, entry) => sum + (entry.basis === "projected" ? total(entry.uncached) : 0), 0),
+    ).toBeCloseTo(run.usd.high, 12)
+    // The triage model's passes read its cache rate; verify reads the review model's.
+    const [review, , verify] = costs
+    if (review?.basis !== "projected" || verify?.basis !== "projected") throw new Error("expected projected passes")
+    expect(review.cached.cacheRead).toBeCloseTo((4 * 5000 * 0.125) / 1_000_000, 15)
+    expect(verify.cached.cacheRead).toBeCloseTo((4 * 3100 * 0.3) / 1_000_000, 15)
+    // A pass whose model has no price snapshot in the record has no estimate, and so no split.
+    expect(projectedPassCosts(record({ passes: [pass("review", { model: "lmstudio/other-model" })] }))).toEqual([])
+    // A hand-edited record whose steps, prompt tokens or rates are not finite numbers of 0 or more passes
+    // projectionProblems, which reads none of them, but has no split, rather than a $NaN one.
+    const edited = (changes: Record<string, unknown>, rates: Record<string, unknown> = {}) =>
+      record({
+        models: { review: { ...record().models.review, price: { ...price, ...rates } } },
+        passes: [{ ...banded("verify", "lmstudio/test-model", 3100, 10), ...changes }],
+      } as unknown as Partial<ProjectionRecord>)
+    expect(projectedPassCosts(edited({}))).toHaveLength(1)
+    for (const malformed of [
+      edited({ maxSteps: "10" }),
+      edited({ promptTokens: Number.NaN }),
+      edited({ promptTokens: -1 }),
+      edited({}, { input: "3" }),
+      edited({}, { output: Number.POSITIVE_INFINITY }),
+      edited({}, { cacheRead: null }),
+      edited({}, { cacheWrite: -0.5 }),
+    ]) {
+      expect(projectionProblems(malformed)).toEqual([])
+      expect(projectedPassCosts(malformed)).toEqual([])
+    }
   })
 
   // VS-29a: a cross-family projection records the pair, the review model first, and the report reads both.

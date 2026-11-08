@@ -3,12 +3,14 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { devNull } from "node:os"
 import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 import { VARIANT_NAME } from "../../packages/core/src/review/eval"
+import type { ReviewPrice } from "../../packages/core/src/review/plan"
 import {
   defaultLimits,
   formatSummary,
   Ledger,
   LedgerError,
   limitProblems,
+  listPriceWarnings,
   money,
   type Limits,
   type Price,
@@ -18,6 +20,7 @@ import { fixtureProblems, listFixtures, loadFixture } from "./fixture"
 import { outsideRepository, REPO_ROOT } from "./paths"
 import { PILOT, pilotProblems, pilotRemaining, replayBudget, triagePairProblem, variantRecord } from "./replay"
 import {
+  cachePriceNote,
   DEFAULT_BASE_URL,
   estimateCases,
   estimateReport,
@@ -73,17 +76,28 @@ export const JOURNAL = "ledger.jsonl"
 export const SEALED = "vectorscope-eval.sealed.json"
 const MAX_TOKENS = 200_000
 const RUN = join(import.meta.dir, "run.ts")
-const MODEL = /^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})=(\d{1,6}(?:\.\d{1,6})?):(\d{1,6}(?:\.\d{1,6})?)$/
+// model=input:output, optionally followed by :cacheRead and :cacheWrite (VS-21e), each USD per million tokens.
+const MODEL =
+  /^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})=(\d{1,6}(?:\.\d{1,6})?):(\d{1,6}(?:\.\d{1,6})?)(?::(\d{1,6}(?:\.\d{1,6})?)(?::(\d{1,6}(?:\.\d{1,6})?))?)?$/
 const AMOUNT = /^\d{1,6}(?:\.\d{1,4})?$/
 const FIXTURES = /^[a-z0-9-]+(?:,[a-z0-9-]+)*$/
 
 export type Mode = (typeof MODES)[number]
 export type Pipeline = (typeof PIPELINES)[number]
 
+// A model and its price. `projectionPrice`, set only when the entry gave cache prices (VS-21e), is the projection-only
+// price: run.ts and the replay entry point are always handed the two-field `price`, which is all their estimates,
+// admission and settlement read.
+export interface PricedModel {
+  id: string
+  price: Price
+  projectionPrice?: ReviewPrice
+}
+
 export interface Inputs {
   mode: Mode
   pipeline: Pipeline
-  models: { id: string; price: Price }[]
+  models: PricedModel[]
   limits?: Limits
   maxTokens: number // the smoke pipeline's output limit; a replay runs under the engine's own
   repeat: number
@@ -92,7 +106,7 @@ export interface Inputs {
   pilotSpentUsd?: number // replay only: what the pilot's earlier dispatches settled; absent when none was given
   // Replay dry runs only: the first pass the variants made by their models pair each model with (VS-29a); absent when
   // none was given.
-  triageModel?: { id: string; price: Price }
+  triageModel?: PricedModel
 }
 
 type Env = Record<string, string | undefined>
@@ -117,7 +131,7 @@ export function parseInputs(env: Env): { inputs: Inputs } | { problems: string[]
       )
       return []
     }
-    return [{ id: match[1]!, price: { input: Number(match[2]), output: Number(match[3]) } }]
+    return [pricedModel(match)]
   })
   const ids = models.map((model) => model.id)
   const repeated = ids.filter((id, index) => ids.indexOf(id) !== index)
@@ -214,9 +228,7 @@ export function parseInputs(env: Env): { inputs: Inputs } | { problems: string[]
   // outright, whatever its models, so it is never asked for a triage model that would then be refused as dry only.
   const triageText = env.EVAL_TRIAGE_MODEL?.trim() ?? ""
   const triageMatch = MODEL.exec(triageText)
-  const triageModel = triageMatch
-    ? { id: triageMatch[1], price: { input: Number(triageMatch[2]), output: Number(triageMatch[3]) } }
-    : undefined
+  const triageModel = triageMatch ? pricedModel(triageMatch) : undefined
   if (triageText && !triageMatch)
     problems.push(
       `triage_model ${JSON.stringify(triageText)} must be model=input:output, with USD per million tokens, such as openai/gpt-5=1.25:10, or empty for none`,
@@ -258,6 +270,35 @@ export function parseInputs(env: Env): { inputs: Inputs } | { problems: string[]
       ...(triageModel ? { triageModel } : {}),
     },
   }
+}
+
+// A models or triage_model entry MODEL matched: its two-field price, and the projection-only price when it gave cache
+// prices.
+function pricedModel(match: RegExpExecArray): PricedModel {
+  const price = { input: Number(match[2]), output: Number(match[3]) }
+  return {
+    id: match[1],
+    price,
+    ...(match[4] === undefined
+      ? {}
+      : {
+          projectionPrice: {
+            ...price,
+            cacheRead: Number(match[4]),
+            ...(match[5] === undefined ? {} : { cacheWrite: Number(match[5]) }),
+          },
+        }),
+  }
+}
+
+// What a model's prices add to a plan or a replay plan (VS-21e): the plan's note on the cache prices it gave, and the D6
+// check of each price against its list price. Nothing for a two-field price at its list price, or for a model the
+// table does not list.
+function priceNotes(models: readonly PricedModel[], note: (id: string, price: ReviewPrice) => string) {
+  return models.flatMap((model) => [
+    ...(model.projectionPrice ? [note(model.id, model.projectionPrice)] : []),
+    ...listPriceWarnings(model.id, model.projectionPrice ?? model.price),
+  ])
 }
 
 // The registry names among these that are variants made by their models (VS-29a), which take the triage model.
@@ -460,10 +501,12 @@ async function plan(
   const once = estimates.reduce((total, item) => total + item.onceUsd, 0)
   const worst = estimates.reduce((total, item) => total + item.worstUsd, 0)
   const admissible = inputs.limits ? inputs.limits.totalUsd - inputs.limits.reserveUsd : undefined
+  const notes = priceNotes(inputs.models, cachePriceNote)
   const text = [
     `Mode ${inputs.mode}. ${fixtures.length} fixture(s) x ${inputs.repeat} for each of ${inputs.models.length} model(s).`,
     "",
     ...estimates.flatMap((estimate) => [estimateReport(estimate, inputs.limits), ""]),
+    ...(notes.length ? [...notes, ""] : []),
     `All models: at most $${money(once)} with each case asked once, $${money(worst)} at worst.`,
     admissible === undefined
       ? "No budget was given, so a paid run could not start."
@@ -500,6 +543,17 @@ async function planReplay(
   if (invalid.length) {
     io.err(`The seed manifest is not valid:\n${invalid.map((line) => `  ${line}`).join("\n")}\n`)
     return 1
+  }
+  // VS-21e: the entry point is handed each two-field price and prices projections with the committed catalog's cache
+  // rates, so a cache price given here is not used; the D6 check still reads it.
+  const notes = priceNotes(
+    [...inputs.models, ...(inputs.triageModel ? [inputs.triageModel] : [])],
+    (id) =>
+      `${id}: replay projections take cache rates from the committed catalog; the cache prices given are not used.`,
+  )
+  if (notes.length) {
+    io.out(`${notes.join("\n")}\n`)
+    io.summary(block("Prices", notes.join("\n")))
   }
   const codes = []
   for (const [index, model] of inputs.models.entries()) {

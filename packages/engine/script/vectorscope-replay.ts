@@ -26,6 +26,10 @@
 // (test/fixture/projection) from the test tree on purpose (the deviation log, 2026-11-06 VS-21c): its safety rests on
 // the strict guard, ReviewEval.project's own refusals and the egress count below, never on them, and the paid branch
 // never loads them.
+//
+// VS-21e adds two dry-only flags, each off unless given: --cost-split adds each pass's projected cost by token kind,
+// cached and uncached side by side, with the D6 check of the catalog prices; --scenario suggestion-untrusted runs the
+// canned model's opt-in scenario under `verify: "all"` and writes no record. Without them a dry run is as it was.
 
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -34,12 +38,14 @@ import { parseArgs } from "node:util"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
 import type { ProjectionRecord, ReplayArtifact, VariantRecord } from "@/review/eval"
 import type { ResolvedModel } from "@/review/model"
+import type { ProjectionScenario } from "../test/fixture/projection"
 import {
   defaultLimits,
   formatSummary,
   Ledger,
   LedgerError,
   limitProblems,
+  listPriceWarnings,
   parsePrice,
   type Limits,
   type Price,
@@ -62,6 +68,7 @@ import {
   PILOT,
   pilotProblems,
   prepareCheckout,
+  projectedPassCosts,
   projectedRun,
   projectionProblems,
   replayPlan,
@@ -77,6 +84,9 @@ export const PAID_PROVIDER = "openrouter"
 // The committed model catalog both branches boot with (VECTOR_MODELS_PATH), so the price the engine reserves with is
 // the one the operator typed and the catalog holds, and nothing is fetched.
 export const CATALOG = join(REPO_ROOT, "packages", "web", "public", "models", "api.json")
+// VS-21e: the canned model's opt-in scenarios (test/fixture/projection.ts PROJECTION_SCENARIOS), named here so that a
+// refusal is decided before any of it loads.
+export const SCENARIOS = ["suggestion-untrusted"] as const satisfies readonly ProjectionScenario[]
 
 export const USAGE = `Usage (from packages/engine): bun script/vectorscope-replay.ts --model <id>=<in>:<out> --mirrors <dir> --work <dir> [options]
 
@@ -103,6 +113,10 @@ it projects each case against a canned model on this computer, under the strict 
   --out <dir>              Where each projection record or replay artifact is written, outside the repository
                            (needed to send)
   --dry-run                Never send, even with a budget
+  --cost-split             A dry run only: add each pass's projected cost by token kind, cached and uncached side by
+                           side, and check the catalog's prices against D6's dated list prices (VS-21e)
+  --scenario <name>        A dry run only, writing no record: run the canned model's ${SCENARIOS.join(", ")}
+                           scenario, an untrusted case's nit with a suggestion under verify: all (VS-21e)
   --help                   Print this message
 
 It sends only with a budget, prices above zero, --ledger and --out, the development split and one repetition, in the
@@ -124,6 +138,8 @@ export interface ReplayFlags {
   ledger?: string
   out?: string
   dryRun: boolean
+  costSplit?: true // VS-21e, dry runs only
+  scenario?: ProjectionScenario // VS-21e, dry runs only, with no --out
 }
 
 const OPTIONS = {
@@ -140,6 +156,8 @@ const OPTIONS = {
   ledger: { type: "string" },
   out: { type: "string" },
   "dry-run": { type: "boolean" },
+  "cost-split": { type: "boolean" },
+  scenario: { type: "string" },
   help: { type: "boolean" },
 } as const
 
@@ -160,7 +178,7 @@ export function parseReplayArgs(argv: readonly string[]): ReplayFlags | string {
   )
   if (valued.length)
     return `${valued.map((name) => `--${name}`).join(" and ")} take${valued.length > 1 ? "" : "s"} no value`
-  const text = (name: Exclude<keyof typeof OPTIONS, "variant" | "dry-run" | "help">) => {
+  const text = (name: Exclude<keyof typeof OPTIONS, "variant" | "dry-run" | "cost-split" | "help">) => {
     const value = values[name]
     return typeof value === "string" ? value : undefined
   }
@@ -209,6 +227,13 @@ export function parseReplayArgs(argv: readonly string[]): ReplayFlags | string {
   if (ledger !== undefined && !outsideRepository(ledger))
     return `--ledger must be outside the repository (${REPO_ROOT}).`
   if (out !== undefined && !outsideRepository(out)) return `--out must be outside the repository (${REPO_ROOT}).`
+  // VS-21e: a canned scenario is a dry run's demonstration, so its records are never written beside real projections,
+  // where report.ts would join them with paid runs for the estimate error.
+  const scenario = text("scenario")
+  if (scenario !== undefined && !SCENARIOS.some((name) => name === scenario))
+    return `--scenario must be ${SCENARIOS.join(" or ")}, not ${JSON.stringify(scenario)}.`
+  if (scenario !== undefined && out !== undefined)
+    return "--scenario writes no record: leave out --out, so a canned scenario's projection is never read as a real one."
 
   const asked = named.length ? named : ["engine"]
   const twice = asked.filter((entry, index) => asked.indexOf(entry) !== index)
@@ -244,6 +269,8 @@ export function parseReplayArgs(argv: readonly string[]): ReplayFlags | string {
     ...(ledger ? { ledger } : {}),
     ...(out ? { out } : {}),
     dryRun: values["dry-run"] === true,
+    ...(values["cost-split"] === true ? { costSplit: true as const } : {}),
+    ...(scenario === "suggestion-untrusted" ? { scenario } : {}),
   }
 }
 
@@ -258,6 +285,9 @@ export function replayMode(flags: ReplayFlags, env: Readonly<Record<string, stri
   if (!flags.limits || flags.dryRun) return { mode: "dry" }
   const price = flags.model.price
   const refusals = [
+    ...(flags.costSplit || flags.scenario
+      ? ["--cost-split and --scenario are for dry runs only: they project, and never shape what a paid replay sends."]
+      : []),
     ...(flags.triage || flags.variants.some((variant) => variant.record?.models === "triage-pair")
       ? [
           "A paid cross-family replay is not wired: engine:cross-family and --triage-model run dry only, until the owner chooses the pair (Q5) and funds its ablation (Q9).",
@@ -595,9 +625,9 @@ async function projectDry(run: Run): Promise<number> {
   const { InstanceRef } = await import("@/effect/instance-ref")
   const { ReviewEval } = await import("@/review/eval")
   const { ReviewSource } = await import("@/review/source")
-  const { projectionGroups, renderProjections } = await import("@vectordevai/core/review/eval-report")
+  const { costSplit, projectionGroups, renderProjections } = await import("@vectordevai/core/review/eval-report")
   const { TestLLMServer } = await import("../test/lib/llm-server")
-  const { projectionReplies, received } = await import("../test/fixture/projection")
+  const { firstUserText, projectionReplies, received } = await import("../test/fixture/projection")
   const flags = run.flags
   const cap = flags.limits?.caseUsd ?? PILOT.caseUsd
   // A variant's models, the review model first: a variant made by its models (VS-29a) adds the triage model, and every
@@ -632,12 +662,13 @@ async function projectDry(run: Run): Promise<number> {
             const triage = paired ? yield* projectionModel(paired) : undefined
             const files = yield* ReviewSource.prDiff({ directory, mergeBase: item.case.base, head: item.case.head })
             yield* llm.reset
-            yield* llm.respond(projectionReplies({ files }))
+            yield* llm.respond(projectionReplies({ files, ...(flags.scenario ? { scenario: flags.scenario } : {}) }))
             return yield* ReviewEval.project({
               case: { ...item.case, directory },
               model,
               ...(triage ? { triage } : {}),
-              config: { maxCostUsd: cap },
+              // VS-21e: the scenario's two variants differ only under verify: all (core plan.ts verifyCandidates).
+              config: { maxCostUsd: cap, ...(flags.scenario ? { verify: "all" as const } : {}) },
               ...(variant.record ? { variant: variant.record } : {}),
               server: llm.url,
               received: received(llm),
@@ -680,6 +711,32 @@ async function projectDry(run: Run): Promise<number> {
   )
   const attempts = guard.attempts()
   const outside = attempts.filter((attempt) => !attempt.allowed || !LocalPolicy.loopback(attempt.host)).length
+  // VS-21e, under --cost-split or --scenario only: how many candidates each case's verify pass was asked about, read
+  // from its first request's decoded prompt (fixed claims are not candidates); 0 when no verify request was sent, and
+  // n/a when that body is not a JSON object, so the run still reaches its summary and egress lines.
+  const counted = flags.costSplit !== undefined || flags.scenario !== undefined
+  const candidates = (record: ProjectionRecord | undefined) => {
+    const body = record?.passes.find((pass) => pass.pass === "verify")?.requests[0]?.body
+    if (!body) return 0
+    const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(
+      body,
+    )
+    if (Option.isNone(decoded)) return "n/a"
+    return [...firstUserText(decoded.value).matchAll(/<untrusted_candidate id="/g)].length
+  }
+  // The D6 check of the catalog prices the projections were priced with, under --cost-split only.
+  const catalogPrice = (entry: CatalogEntry) => ({
+    input: entry.cost.input,
+    output: entry.cost.output,
+    ...(entry.cost.cache_read === undefined ? {} : { cacheRead: entry.cost.cache_read }),
+    ...(entry.cost.cache_write === undefined ? {} : { cacheWrite: entry.cost.cache_write }),
+  })
+  const warnings = flags.costSplit
+    ? [
+        ...listPriceWarnings(flags.model.id, catalogPrice(run.entry)),
+        ...(run.triage ? listPriceWarnings(run.triage.id, catalogPrice(run.triage.entry)) : []),
+      ]
+    : []
   run.io.out(
     [
       `Dry projection of ${run.planned.length} case(s) x ${flags.variants.length} variant(s) on ${flags.model.id}${
@@ -690,17 +747,32 @@ async function projectDry(run: Run): Promise<number> {
               .join(", ")} (the pair's labs unchecked until codium's labOf merges)`
           : ""
       }, repetition 1 only: the canned model answers the same way every time.`,
+      ...(flags.scenario
+        ? [
+            `Scenario ${flags.scenario} (VS-21e): each case's canned review adds a nit with a suggestion, every variant runs under verify: all, and no record is written. Under engine:shared-verify an untrusted case's verify pass gets one more candidate than under engine.`,
+          ]
+        : []),
       ...checked.map(
         (result) =>
           `${result.item.id}  ${result.variant.name}  ${
             result.line ??
             (result.problems.length
               ? `problems: ${result.problems.join("; ")}`
-              : `projected, ${requestsOf(result.record)} request(s)`)
+              : `projected, ${requestsOf(result.record)} request(s)${counted ? `, ${candidates(result.record)} verify candidate(s)` : ""}`)
           }`,
       ),
       "",
-      ...renderProjections(projectionGroups(projected)),
+      ...renderProjections(
+        projectionGroups(projected),
+        flags.costSplit
+          ? costSplit(
+              checked.flatMap((result) =>
+                result.record && !result.problems.length ? projectedPassCosts(result.record) : [],
+              ),
+            )
+          : undefined,
+      ),
+      ...(warnings.length ? ["", ...warnings] : []),
       "",
       `Dry run: nothing was sent. The strict egress guard logged ${attempts.length} connection attempts, ${outside} off this computer.`,
       "",

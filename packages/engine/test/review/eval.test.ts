@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer } from "effect"
@@ -66,10 +67,12 @@ import { ReviewSource } from "../../src/review/source"
 import { TestInstance, trustWorkspace } from "../fixture/fixture"
 import {
   firstUserText,
+  PROJECTION_SCENARIOS,
   projectionFindings,
   projectionReplies,
   projectionVerdicts,
   received,
+  type ProjectionScenario,
 } from "../fixture/projection"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import { testEffect } from "../lib/effect"
@@ -2411,4 +2414,364 @@ describe("ReviewEval.project", () => {
     ]
     for (const [reason, input] of refused) expect(ReviewEval.routeRefusal(input)).toContain(reason)
   })
+})
+
+// VS-21e: the canned model's opt-in scenario, and reasoning tokens per attempt and per pass. The default replies and
+// every artifact without reasoning are as they were.
+describe("cost fidelity (VS-21e)", () => {
+  // How many candidates a projection's verify pass was asked about: its first request's decoded prompt, where each is
+  // an <untrusted_candidate> block (a fixed claim is not a candidate), as the entry point counts them.
+  const candidates = (record: ReviewEval.ProjectionRecord) => {
+    const body = record.passes.find((pass) => pass.pass === "verify")?.requests[0]?.body
+    return body ? [...firstUserText(JSON.parse(body)).matchAll(/<untrusted_candidate id="/g)].length : 0
+  }
+  // The GitHub review job's isolation, as isolated() sets it, with the fake provider's model at PRICE: a projection
+  // prices every pass, and the model's price snapshot must be its provider's.
+  const priced = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+    isolated(
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const provider = testProviderConfig(llm.url)
+        provider.provider.lmstudio.models["test-model"].cost = PRICE
+        process.env.VECTOR_CONFIG_CONTENT = JSON.stringify({
+          ...provider,
+          lsp: false,
+          formatter: false,
+          snapshot: false,
+        })
+        return yield* body
+      }),
+    )
+  const untrusted = Effect.gen(function* () {
+    const checked = yield* checkout({
+      base: { "src/list.ts": LIST_BASE, "src/auth/session.ts": AUTH_BASE },
+      head: { "src/list.ts": LIST_HEAD, "src/auth/session.ts": AUTH_HEAD },
+      untrusted: true,
+    })
+    const anchors = yield* ReviewSource.prDiff({
+      directory: checked.directory,
+      mergeBase: checked.base,
+      head: checked.head,
+    })
+    return { ...checked, anchors }
+  })
+  const projectUntrusted = (
+    checked: {
+      directory: string
+      base: string
+      head: string
+      llm: TestLLMServer["Service"]
+      anchors: Parameters<typeof projectionReplies>[0]["files"]
+    },
+    options: { scenario?: ProjectionScenario; verify?: "all"; shared?: boolean },
+  ) =>
+    Effect.gen(function* () {
+      yield* checked.llm.reset
+      yield* checked.llm.respond(
+        projectionReplies({ files: checked.anchors, ...(options.scenario ? { scenario: options.scenario } : {}) }),
+      )
+      return yield* ReviewEval.project({
+        case: replayCase(checked.directory, checked.base, checked.head, { trust: "untrusted" }),
+        model: MODEL,
+        config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd, ...(options.verify ? { verify: options.verify } : {}) },
+        ...(options.shared ? { variant: SHARED } : {}),
+        server: checked.llm.url,
+        received: received(checked.llm),
+        egress: guard.attempts,
+      })
+    })
+
+  test("the canned model's default replies are byte for byte the replies it gave before VS-21e", () => {
+    const files = parseUnifiedDiff(
+      [
+        "diff --git a/src/app.ts b/src/app.ts",
+        "--- a/src/app.ts",
+        "+++ b/src/app.ts",
+        "@@ -1,2 +1,3 @@",
+        " const a = 1",
+        "+const b = 2",
+        " export { a }",
+        "diff --git a/src/auth/session.ts b/src/auth/session.ts",
+        "--- a/src/auth/session.ts",
+        "+++ b/src/auth/session.ts",
+        "@@ -1,3 +1,2 @@",
+        " export function token(input: string) {",
+        "-  return verify(input)",
+        " }",
+        "",
+      ].join("\n"),
+    )
+    const hit = (prompt: string) => {
+      const body = {
+        messages: [
+          { role: "system", content: "system" },
+          { role: "user", content: prompt },
+        ],
+      }
+      return { url: new URL("http://127.0.0.1:1/v1/chat/completions"), body, text: JSON.stringify(body) }
+    }
+    const prompts = {
+      review: "You are Vector's code reviewer. Review the change.",
+      security: "You are Vector's security reviewer. Review the change.",
+      verify:
+        'You are checking candidate findings. <untrusted_candidate id="c-1">one</untrusted_candidate> <untrusted_fixed_claim id="f-1">two</untrusted_fixed_claim>',
+      other: "Generate a title for this conversation",
+    }
+    const digests = (replies: ReturnType<typeof projectionReplies>) =>
+      Object.fromEntries(
+        Object.entries(prompts).map(([name, prompt]) => {
+          const answer = replies(hit(prompt))
+          return [name, answer ? createHash("sha256").update(JSON.stringify(answer.item())).digest("hex") : null]
+        }),
+      )
+    // Captured at 26d3e756, before VS-21e.
+    expect(digests(projectionReplies({ files }))).toEqual({
+      review: "c9060129187fdd178ae35800719ca727712f2794474a1f116c74bacfd19654d2",
+      security: "a9e0bde03b53522f0c582539babbf5c4ccc990789845142a1b9de6e9913e8c95",
+      verify: "c072df834c7717506df298e1f0bc052799922d15bf211ff074453726d80a38e2",
+      other: null,
+    })
+    // The scenario changes the review answer alone: one nit with a suggestion, on the first added line.
+    const scenario = digests(projectionReplies({ files, scenario: "suggestion-untrusted" }))
+    expect(scenario.review).not.toBe("c9060129187fdd178ae35800719ca727712f2794474a1f116c74bacfd19654d2")
+    expect([scenario.security, scenario.verify, scenario.other]).toEqual([
+      "a9e0bde03b53522f0c582539babbf5c4ccc990789845142a1b9de6e9913e8c95",
+      "c072df834c7717506df298e1f0bc052799922d15bf211ff074453726d80a38e2",
+      null,
+    ])
+    const found = projectionFindings(files, "suggestion-untrusted")
+    expect(found.security).toEqual(projectionFindings(files).security)
+    expect(found.review.slice(0, -1)).toEqual(projectionFindings(files).review)
+    expect(found.review.at(-1)).toMatchObject({
+      path: "src/app.ts",
+      line: 2,
+      side: "RIGHT",
+      severity: "nit",
+      suggestion: "// projected suggestion",
+    })
+    // A first file with a deleted line only: the nit goes on the first file with an added line.
+    expect(projectionFindings(files.toReversed(), "suggestion-untrusted").review.at(-1)).toMatchObject({
+      path: "src/app.ts",
+      side: "RIGHT",
+    })
+    expect(PROJECTION_SCENARIOS).toEqual(["suggestion-untrusted"])
+  })
+
+  it.instance(
+    "under the scenario an untrusted case's shared verify policy has exactly one more verify candidate than engine",
+    () =>
+      priced(
+        Effect.gen(function* () {
+          const checked = yield* untrusted
+          const engine = yield* projectUntrusted(checked, { scenario: "suggestion-untrusted", verify: "all" })
+          const shared = yield* projectUntrusted(checked, {
+            scenario: "suggestion-untrusted",
+            verify: "all",
+            shared: true,
+          })
+          for (const record of [engine, shared]) {
+            expect(record.trust).toBe("untrusted")
+            expect(record.egress.outside).toBe(0)
+            expect(record.passes.every((pass) => pass.status === "ok")).toBe(true)
+          }
+          // Two review findings and a security one, all blocking; the scenario's nit carries a suggestion, which only
+          // the shared policy sends at verify: all.
+          expect(candidates(engine)).toBe(3)
+          expect(candidates(shared)).toBe(4)
+        }),
+      ),
+    GIT,
+    60_000,
+  )
+
+  it.instance(
+    "under the default replies the two policies send the same candidates, at verify: all and at the default config",
+    () =>
+      priced(
+        Effect.gen(function* () {
+          const checked = yield* untrusted
+          const counts: number[][] = []
+          for (const options of [{ verify: "all" as const }, {}])
+            counts.push([
+              candidates(yield* projectUntrusted(checked, options)),
+              candidates(yield* projectUntrusted(checked, { ...options, shared: true })),
+            ])
+          expect(counts).toEqual([
+            [3, 3],
+            [3, 3],
+          ])
+        }),
+      ),
+    GIT,
+    60_000,
+  )
+
+  it.instance(
+    "records each attempt's and each pass's reasoning tokens, and none where the provider reported none",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, "src/auth/session.ts": AUTH_BASE },
+          head: { "src/list.ts": LIST_HEAD, "src/auth/session.ts": AUTH_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const [bugID] = Review.normalizeFindings([listBug], "review", anchors).map((item) => item.id)
+        const [authID] = Review.normalizeFindings([authBug], "security", anchors).map((item) => item.id)
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", report([listBug]))
+            .usage({ input: 1_200, output: 50, reasoning: 40 }),
+        )
+        yield* llm.pushMatch(
+          SECURITY,
+          reply()
+            .tool("StructuredOutput", report([authBug], ""))
+            .usage({ input: 900, output: 30 }),
+        )
+        yield* llm.pushMatch(
+          VERIFY,
+          reply()
+            .tool("StructuredOutput", {
+              results: [
+                { id: bugID, verdict: "confirmed", reason: "Reproduced." },
+                { id: authID, verdict: "confirmed", reason: "verify() is no longer called." },
+              ],
+            })
+            .usage({ input: 2_000, output: 20, reasoning: 7 }),
+        )
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        const admitted = artifact.attempts.filter((attempt) => attempt.admitted)
+        expect(admitted).toHaveLength(3)
+        expect(Object.fromEntries(admitted.map((attempt) => [attempt.pass, attempt.reasoning ?? null]))).toEqual({
+          review: 40,
+          security: null,
+          verify: 7,
+        })
+        expect(admitted.find((attempt) => attempt.pass === "security")).not.toHaveProperty("reasoning")
+        // An attempt's settled tokens stay the provider's own counts, reasoning inside output.
+        expect(admitted.find((attempt) => attempt.pass === "review")?.settled?.tokens).toEqual({
+          input: 1_200,
+          output: 50,
+        })
+        const passes = new Map(artifact.passes.map((pass) => [pass.pass, pass]))
+        expect(passes.get("review")?.reasoning).toBe(40)
+        expect(passes.get("verify")?.reasoning).toBe(7)
+        expect(passes.get("security")).not.toHaveProperty("reasoning")
+        expect(artifact.outcome?.cost?.reasoning).toBe(47)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "leaves a retried attempt's failed request without a value, and gives the retry its own",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const [bugID] = Review.normalizeFindings([listBug], "review", anchors).map((item) => item.id)
+        // A server error, which the review's session retries in the same assistant message.
+        yield* llm.pushMatch(REVIEW, httpError(500, { error: { message: "temporary failure" } }))
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", report([listBug]))
+            .usage({ input: 1_200, output: 50, reasoning: 40 }),
+        )
+        yield* llm.pushMatch(
+          VERIFY,
+          reply()
+            .tool("StructuredOutput", { results: [{ id: bugID, verdict: "confirmed", reason: "Reproduced." }] })
+            .usage({ input: 2_000, output: 20 }),
+        )
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        const review = artifact.attempts.filter((attempt) => attempt.pass === "review" && attempt.admitted)
+        expect(review).toHaveLength(2)
+        expect(review[0]?.settled?.tokens).toBeUndefined()
+        expect(review[0]).not.toHaveProperty("reasoning")
+        expect(review[1]?.reasoning).toBe(40)
+        expect(artifact.passes.find((pass) => pass.pass === "review")?.reasoning).toBe(40)
+        expect(artifact.attempts.filter((attempt) => attempt.reasoning !== undefined)).toHaveLength(1)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "gives no attempt a value its step's counts do not add back up to, and keeps the pass's count",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        // More reasoning than output: the step records no output beside its 9 reasoning tokens, so its parts add up to
+        // 9 output tokens where the attempt settled 5, and the attempt is left without a value.
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", report([])).usage({ input: 1_000, output: 5, reasoning: 9 }),
+        )
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        const review = artifact.attempts.filter((attempt) => attempt.pass === "review" && attempt.admitted)
+        expect(review.length).toBeGreaterThan(0)
+        expect(review[0]?.settled?.tokens).toEqual({ input: 1_000, output: 5 })
+        expect(review.every((attempt) => attempt.reasoning === undefined)).toBe(true)
+        expect(artifact.passes.find((pass) => pass.pass === "review")?.reasoning).toBe(9)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the canned model's replies leave no reasoning key in any attempt or pass",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, "src/auth/session.ts": AUTH_BASE },
+          head: { "src/list.ts": LIST_HEAD, "src/auth/session.ts": AUTH_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        yield* llm.respond(projectionReplies({ files: anchors }))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+        for (const attempt of artifact.attempts) expect(attempt).not.toHaveProperty("reasoning")
+        expect(artifact.passes.length).toBeGreaterThan(0)
+        for (const pass of artifact.passes) expect(pass).not.toHaveProperty("reasoning")
+        expect(artifact.outcome?.cost?.reasoning).toBe(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
 })

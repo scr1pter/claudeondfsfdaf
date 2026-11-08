@@ -31,6 +31,7 @@ import {
   renderReport,
   type GateConfig,
   type Group,
+  type PassCost,
   type ProjectedRun,
 } from "../../packages/core/src/review/eval-report"
 import {
@@ -47,6 +48,7 @@ import type { DesktopArtifact } from "./desktop"
 import { listFixtures, loadFixture, type Fixture } from "./fixture"
 import { outsideRepository, REPO_ROOT } from "./paths"
 import {
+  projectedPassCosts,
   projectedRun,
   projectionProblems,
   replayCaseKey,
@@ -118,6 +120,8 @@ export interface Outputs {
   problems: string[]
   // Under --reselect strict only: each engine replay run and its offline strict re-selection, as runKeys.
   reselected?: { from: string; to: string; reselection: StrictReselection }[]
+  // Under --cost-split only (VS-21e): each projected pass's bands and each paid replay pass's reported tokens, by kind.
+  costs?: PassCost[]
 }
 
 // Every saved output under the given paths, as runs with the cases they review and the plan of runs that should exist.
@@ -131,6 +135,7 @@ export async function loadOutputs(input: {
   split?: string
   ledger?: string
   reselect?: "strict"
+  costSplit?: true
 }): Promise<Outputs> {
   const files = input.paths.flatMap((path) => jsonFiles(resolve(path)))
   const values = await Promise.all(
@@ -307,6 +312,18 @@ export async function loadOutputs(input: {
             to: runKey(entry.run),
             reselection: entry.reselection,
           })),
+        }
+      : {}),
+    ...(input.costSplit
+      ? {
+          costs: [
+            ...checked.flatMap((item) =>
+              item.problems.length ? [] : projectedPassCosts(item.entry.value as ProjectionRecord),
+            ),
+            ...artifacts.flatMap((entry, position) =>
+              settledCosts(entry.value as ReplayArtifact, engineRuns[position]),
+            ),
+          ],
         }
       : {}),
   }
@@ -734,6 +751,48 @@ export function fromArtifact(
   }
 }
 
+// VS-21e: a paid replay's passes by token kind, from what each pass's sessions reported (ReviewOutcome.passes) and the
+// artifact's record of each pass's cache writes and reasoning tokens. Input is the pass's prompt tokens less its cache
+// reads and writes, and output keeps its reasoning. Each kind is priced at the price snapshot of the pass's model, cache
+// reads and writes at the input rate where the snapshot lists none, beside the cost the pass reported. A lens pass takes
+// the artifact's cache writes and reasoning only when it is the only lens pass, since neither record names its lens:
+// otherwise its cache writes stay inside its input. An artifact with no passes gives none.
+function settledCosts(artifact: ReplayArtifact, run: EvalRun): PassCost[] {
+  return (artifact.outcome?.passes ?? []).map((pass) => {
+    const recorded = artifact.passes.filter((entry) => entry.pass === pass.name)
+    const own = recorded.length === 1 ? recorded[0] : undefined
+    const cacheWrite = own?.cacheWrite ?? 0
+    const tokens = {
+      input: Math.max(0, pass.input - pass.cacheRead - cacheWrite),
+      cacheRead: pass.cacheRead,
+      cacheWrite,
+      output: pass.output,
+    }
+    const price = [artifact.models.review, artifact.models.triage].find((model) => model?.id === pass.model)?.price
+    return {
+      variant: run.variant,
+      model: run.model,
+      case: run.case,
+      repetition: run.repetition,
+      pass: pass.name === "lens" && pass.lens ? `lens:${pass.lens}` : pass.name,
+      basis: "settled" as const,
+      tokens,
+      ...(price
+        ? {
+            usd: {
+              input: (tokens.input * price.input) / 1_000_000,
+              cacheRead: (tokens.cacheRead * (price.cacheRead ?? price.input)) / 1_000_000,
+              cacheWrite: (tokens.cacheWrite * (price.cacheWrite ?? price.input)) / 1_000_000,
+              output: (tokens.output * price.output) / 1_000_000,
+            },
+          }
+        : {}),
+      ...(pass.costUsd === undefined ? {} : { reportedUsd: pass.costUsd }),
+      ...(own?.reasoning === undefined ? {} : { reasoning: own.reasoning }),
+    }
+  })
+}
+
 // What a replay's writes carried: its line comments when the review write went out, and the findings its summary lists
 // when the summary did. A run whose every reviewer failed posts neither.
 function postedParts(artifact: ReplayArtifact, failed: boolean) {
@@ -973,6 +1032,9 @@ Re-scores saved eval outputs against settled judgements and evaluates the releas
   --proposal importance    Score judgements made under the proposed importance rubric (judge.ts --proposal importance,
                            judging-rubric-importance.md, VS-45, pending Q29) and add its importance metrics; the
                            judgement file must be that proposal's, and the report is never a release decision
+  --cost-split             Add each pass's cost by token kind (VS-21e): the projections' cached and uncached bands side
+                           by side, and what each paid replay's passes reported, at its price snapshot
+  --severity-repeats       Add high-severity recall per repetition and model pair (VS-21e)
   --title <text>           Report title
   --out <path>             Also write the JSON report there; it must be outside the repository
   --print-gate             Print the default gate (the owner's approved D2) as JSON, to review or copy, and exit
@@ -993,6 +1055,8 @@ const OPTIONS = {
   reselect: { type: "string" },
   proposal: { type: "string" },
   "empty-control": { type: "boolean" },
+  "cost-split": { type: "boolean" },
+  "severity-repeats": { type: "boolean" },
   "print-gate": { type: "boolean" },
   help: { type: "boolean" },
 } as const
@@ -1000,8 +1064,12 @@ const OPTIONS = {
 export async function main(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const parsed = parseArgs({ args: argv, options: OPTIONS, strict: false, allowPositionals: true })
   const values = parsed.values
-  const text = (name: Exclude<keyof typeof OPTIONS, "outputs" | "help" | "print-gate" | "empty-control">) =>
-    typeof values[name] === "string" ? values[name] : undefined
+  const text = (
+    name: Exclude<
+      keyof typeof OPTIONS,
+      "outputs" | "help" | "print-gate" | "empty-control" | "cost-split" | "severity-repeats"
+    >,
+  ) => (typeof values[name] === "string" ? values[name] : undefined)
   const outputs = (Array.isArray(values.outputs) ? values.outputs : []).filter((value) => typeof value === "string")
   const unknown = Object.keys(values).filter((name) => !Object.hasOwn(OPTIONS, name))
   if (unknown.length || parsed.positionals.length) return usage(`Unknown option or argument.`)
@@ -1047,6 +1115,7 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
     ...(split ? { split } : {}),
     ...(text("ledger") ? { ledger: text("ledger")! } : {}),
     ...(reselect === "strict" ? { reselect } : {}),
+    ...(values["cost-split"] === true ? { costSplit: true as const } : {}),
   })
   const judgementsPath = text("judgements") ? resolve(text("judgements")!) : undefined
   const judgements = judgementsPath ? await readJudgements(judgementsPath) : undefined
@@ -1082,6 +1151,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       projected: loaded.projected,
       problems: loaded.problems,
       ...(proposal ? { proposal } : {}),
+      ...(loaded.costs ? { costs: loaded.costs } : {}),
+      ...(values["severity-repeats"] === true ? { severityRepeats: true } : {}),
     },
     gate,
   )

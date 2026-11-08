@@ -14650,3 +14650,642 @@ tests and typechecks (Evidence) before the commit.
   - Turbo's cache hashing (decision (h)).
   - Windows CI, until it is dispatched.
   - No paid run, no model request, no workflow dispatch.
+
+## 2026-11-08 · VS-21e Eval cost fidelity (eval)
+
+Addendum B §1.2, Now window: projection-only cache prices, a cost split by pass
+and token kind with the cached and uncached bands side by side, reasoning
+tokens per attempt and per pass, an opt-in canned scenario, high-severity
+recall per repetition, the D6 price check and the README owner setup. Built at
+`26d3e756` on a clean tree, equal to `origin/vectorscope`. VS-21e is a proposal
+pending Q45 (a), off by default, with no new review key; every new input is a
+flag or an optional field that is absent unless given. No runner file changes
+(engine `review/run.ts`, app `ai-review.ts`). The build committed nothing: it
+left the changes in the working tree, and the orchestrator's commit gate
+committed them as one commit (Evidence notes). It implements the
+WP-2 plan as corrected by its critique: fourteen of its fifteen points were
+taken and one in part (below, "Critique decisions").
+
+Two lane-note corrections, recorded and not edited elsewhere: the head was
+`26d3e756`, not `41a64e5e` (WP-0's docs commit `7a2aaf4f`, VS-33b `ac801dd3`
+and an engine task-tool limit `26d3e756` came after it), and
+`REVIEW_PIPELINE_SOURCES` was `dfeeef20fd190c79` (since VS-33b), not
+`66cc83db55a87db9`. Addendum B's citations of `vectorscope-replay.ts`
+(306-329 and 452-466) are right at HEAD: they include the comments the addendum
+quotes, so no slip is recorded there.
+
+- **What landed.**
+  - **`script/vectorscope-eval/budget.ts`** (additions only; `Price`,
+    `priceProblems`, `parsePrice`, `estimateUsd`, `Ledger` and every other HEAD
+    line are unchanged).
+    - `parsePriceFields(text)` returns `{ price, projection? }` or undefined.
+      Two to four fields, `input:output[:cacheRead[:cacheWrite]]`.
+      `price` is `parsePrice` of the first two fields, so a two-field string
+      gives the identical object and nothing else; `projection` is present only
+      with three or four fields. Five fields, a sign or an empty field give
+      undefined.
+    - `ListPrice` and `LIST_PRICES`, D6's dated table: one entry,
+      `anthropic/claude-sonnet-4.5` at 3 / 15 / 0.30 / 3.75, read 2026-11-07
+      (Anthropic's pricing page, 5-minute write, as REPORT-3 §7.1 records it;
+      deprecated, retiring on Anthropic-operated platforms on 2026-11-30).
+    - `listPriceWarnings(model, price, table = LIST_PRICES): string[]`: one
+      line when a field the price gives (input and output always, a cache rate
+      only when given) differs from the list price; nothing for a model the
+      table does not list. It never refuses.
+  - **`script/vectorscope-eval/run.ts`**. `--price` is parsed with
+    `parsePriceFields`: `flags.price` is its two-field `price`, and
+    `flags.projectionPrice` its `projection`, set only when given. New export
+    `cachePriceNote(model, price)`. The dry estimate and the sending path's
+    estimate print the note (with a projection price) and the D6 lines (only on
+    a mismatch). The JSON report adds `projectionPrice` after `price`, only
+    when given. The paid report adds one line, "At the cache-aware price
+    (projection only, never charged): $X for the reported tokens of N run(s),
+    K of them read from the cache. Cache writes are not reported here and are
+    priced as input." `attempt`, `charge`, `estimateCases`, `estimateReport`,
+    `requestBodies` and every refusal message are unchanged; the USAGE row for
+    `--price` gains one continuation line.
+  - **`script/vectorscope-eval/ci.ts`**. `MODEL` takes two to four price
+    fields; new `PricedModel` (`id`, `price`, optional `projectionPrice`) for
+    `Inputs.models` and `Inputs.triageModel`, built by `pricedModel(match)`.
+    The models and triage_model refusal messages are unchanged. `plan()`
+    prints the cache note for each model with cache prices and the D6 lines,
+    only when there are any. `planReplay()` prints, before the children run,
+    "<id>: replay projections take cache rates from the committed catalog; the
+    cache prices given are not used." for each entry with cache prices, and the
+    D6 lines, with a "Prices" step-summary block, only when there are any.
+    `runArgs`, `replayArgs` and `paid` are unchanged, so they always hand on
+    `input:output`.
+  - **Core `packages/core/src/review/eval-report.ts`** (not in the pin).
+    - `TOKEN_KINDS`, `TokenKind`, `ByKind`, `ALL_PASSES`, `PassCost`
+      (projected: `cached` and `uncached` by kind; settled: `tokens`, optional
+      `usd`, `reportedUsd`, `reasoning`), `CostRow` and `RepeatedRecall`.
+    - `projectionSplit({ promptTokens, maxSteps, price })`: each kind is
+      `estimateCostUsd` itself with every other rate at 0, keeping a 0
+      cache-read rate while the price lists one, so the kinds add up to each
+      band exactly and no `plan.ts` line changes. `cached` is the low band and
+      `uncached` the high band; `cacheWrite` is 0 in both.
+    - `costSplit(passes)`: rows by variant and model in first-appearance order,
+      then basis, each pass's cached and uncached rows side by side, then an
+      `ALL_PASSES` row; `runs` counts case and repetition pairs; a settled
+      row's `usd` is absent when a run had no price snapshot and its
+      `reportedUsd` when a pass reported no cost; reasoning sums the passes
+      that reported any.
+    - `renderProjections(groups, costs?)`: without a split it returns exactly
+      the HEAD lines. With one it adds "Projected cost by pass and token kind
+      (VS-21e) ...", a table with the columns variant and model, pass, band,
+      runs, input, cache read, cache write, output, total, mean per run and
+      share of the band, whose cache-write cell reads "not modelled", and one
+      line that
+      defines both bands and says their gap is not a caching saving.
+    - `ReportInput.costs?` and `ReportInput.severityRepeats?`; `Report.costs?`
+      and `Report.severityRepeats?`, each added only when its input is given.
+      `repeatedRecall` (below `Entry`) groups each group's entries by the run's
+      recorded `models` (or `[model]`) and by repetition, with `recallOf` over
+      the defects labelled blocking, as `breakdowns.highSeverity` does; `mean`
+      averages the non-null point estimates, `pooled` is every repetition
+      together. A missing run counts against its group's pair when the
+      group's runs recorded one; when they recorded several or none, the
+      group's missing runs share a row of their own, marked `missing`, whose
+      pair is the planned model (review round one, finding 1).
+    - `renderReport` passes `report.costs` to `renderProjections` and adds
+      "## Settled cost by pass and token kind" and "## High-severity recall by
+      repetition" after the projections and before the blocking drops, each
+      only when present.
+  - **`script/vectorscope-eval/replay.ts`**: `projectedPassCosts(record)`,
+    after `projectedRun`: each pass with a first request and a price snapshot
+    for its own model, split by `projectionSplit`, under `projectedRun`'s
+    variant, model, case and repetition.
+  - **`script/vectorscope-eval/report.ts`**: `--cost-split` and
+    `--severity-repeats` (both booleans read as `=== true`, as
+    `--empty-control` is), with two USAGE lines. `loadOutputs({ costSplit })`
+    fills `Outputs.costs` with the projected rows and, from each engine replay
+    artifact, the settled rows of `settledCosts(artifact, run)` (decision j).
+    `main` passes `costs` and `severityRepeats` to `buildReport` only under
+    the flags.
+  - **Engine `packages/engine/src/review/eval.ts`** (artifact recording only).
+    `AttemptRecord.reasoning?` and `ReplayArtifact.passes[].reasoning?`.
+    `passUsage` adds the pass's `measureCost` reasoning when above 0. Step 8
+    pairs each admitted attempt with its session's step-finish parts
+    (decision i) and writes `reasoning` on the attempts it pairs, never 0.
+    `projectionOf` copies no attempt field, so projection records are
+    unchanged.
+  - **Engine `packages/engine/test/lib/llm-server.ts`**: `Usage.reasoning?`,
+    sent as `completion_tokens_details.reasoning_tokens` (chat completions)
+    and `output_tokens_details.reasoning_tokens` (responses) only when set;
+    unset, both bodies are as before.
+  - **Engine `packages/engine/test/fixture/projection.ts`**:
+    `ProjectionScenario`, `PROJECTION_SCENARIOS` (`["suggestion-untrusted"]`),
+    `projectionFindings(files, scenario?)` and `projectionReplies(input)`,
+    whose input takes an optional `scenario`. Under the scenario the review
+    answer alone gains one nit (category `style`, confidence 0.9, with the
+    suggestion `// projected suggestion`) on the first file with an added
+    line, else the first file
+    with any changed line. Without it the answers are the HEAD ones.
+  - **Engine `packages/engine/script/vectorscope-replay.ts`**:
+    `SCENARIOS` (`satisfies readonly ProjectionScenario[]`, a type-only import,
+    so the load-order rule holds), `--cost-split` and `--scenario <name>` with
+    USAGE lines, `ReplayFlags.costSplit?` and `scenario?`. `parseReplayArgs`
+    refuses an unknown scenario and `--scenario` with `--out`; `replayMode`
+    refuses either flag when the run would send. `projectDry`, under the
+    scenario only, answers with the scenario and runs every variant under
+    `verify: "all"`, with a header line; under either flag each case line ends
+    with `, K verify candidate(s)` (the `<untrusted_candidate id=` blocks of
+    the verify pass's first decoded prompt, 0 with no verify request); under
+    `--cost-split` it renders the split and the D6 lines for the catalog
+    entries it booted with. `--model` and `--triage-model` stay two-field.
+  - **`script/vectorscope-eval/README.md`**: cache prices under the flag
+    table, Budget, and the inputs table; a "Price check (D6, VS-21e)" section;
+    Owner setup step 5 (item 7); the cost split and the scenario under
+    Projection and the entry point's flags; `--cost-split` and
+    `--severity-repeats` under the report. Additions only.
+- **Tests.** One test file at a time, from its package directory, through
+  `/home/user/.tools/vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
+  TMPDIR and XDG roots under `/tmp/vector-vectorscope/wp2/env/`. Every
+  existing test in the eight touched test files passes unchanged: their
+  diffs remove 0 lines (1,333 added).
+  - Core `eval-report.test.ts`, describe "cost fidelity (VS-21e)", 8 tests:
+    `projectionSplit`'s kinds equal `estimateCostUsd`'s bands with `toBe` over
+    prompt sizes 0, 1, 1,234 and 100k, maxSteps 1, 3, 5 and 30, and four price
+    shapes, with cache write 0, no uncached cache read and cached ≤ uncached;
+    `costSplit` row order, a run with no security pass, two groups, pass rows
+    against the all-passes row with `toBeCloseTo(…, 12)`, and settled rows
+    (no snapshot, summed reasoning); the HEAD golden lines of
+    `renderProjections`; the side-by-side rows and the band definitions;
+    per-repetition recall (1/1, 1/3 and a missing repetition at 0/1: mean
+    44.4%, pooled 2/5, equal to `breakdowns.highSeverity`); a second pair in
+    one group, whose missing repetition gets a row of its own; a cross-family
+    group with one missing run, whose one row pools 2/5 as
+    `breakdowns.highSeverity` does (review round one); and the HEAD sha256 of `renderReport` and of the report JSON on
+    a fixed input, with no `costs` or `severityRepeats` key.
+  - `budget.test.ts`, describe "price strings and the D6 table", 5 tests.
+  - `run.test.ts`, describe "a cache-aware --price", 4 tests: the two-field
+    and four-field budgeted runs (a fake fetch whose usage has 2,000 cached
+    prompt tokens and no cost) have equal journals with `at` and `id` left
+    out, equal `price`, `estimate`, `budget` and request bodies, every ticket
+    settled at the two-field token price, and only the four-field report has
+    `projectionPrice` and the cache-aware line; the dry run's output is the
+    two-field output plus the note; five fields, a negative or an empty cache
+    field exit 2 with the unchanged `--price` message; a D6 warning.
+  - `ci.test.ts`, describe "cache-aware price strings (VS-21e)", 4 tests,
+    including `runArgs` and `replayArgs` equal for two and four fields, triage
+    included, and one D6 line for a two-field price off its list price (review
+    round one).
+  - `replay.test.ts`: 1 test inside "projection records (VS-21b)", which
+    since review round one also gives no rows for seven malformed records that
+    pass `projectionProblems`.
+  - `report.test.ts`, describe "cost split and repetitions (VS-21e)", 3 tests:
+    removing the two new tables from the `--cost-split` output gives the
+    unflagged output exactly, the unflagged JSON has no `costs`, the settled
+    review row reads 3,800 input ($0.0114), 1,000 cache read ($0.0030), 200
+    cache write ($0.0006) and 500 output ($0.0075), $0.0225 at the snapshot
+    against $0.0200 reported, and 40 reasoning tokens; reasoning reads n/a
+    when no artifact
+    recorded any, and `--severity-repeats` wiring.
+  - Engine `eval.test.ts`, describe "cost fidelity (VS-21e)", 7 tests: the
+    HEAD sha256 of the default replies' `.item()` for review, security and
+    verify hits (and the scenario changing the review answer alone); on an
+    untrusted checkout under `verify: "all"` with the scenario,
+    `engine:shared-verify` has 4 verify candidates and `engine` 3; with the
+    default replies both have 3, at `verify: "all"` and at the default config;
+    reasoning 40 (review) and 7 (verify) per attempt and per pass, none for
+    security, `outcome.cost.reasoning` 47; a 500 retried in the same session:
+    the failed attempt has no settled tokens and no value, the retry 40; a
+    reply whose reasoning (9) exceeds its output (5): no attempt value, the
+    pass keeps 9; and no `reasoning` key anywhere under the canned model.
+  - Engine `vectorscope-replay.test.ts`: describes "the cost split and the
+    canned scenario (VS-21e)", 3 tests, and "a dry run with the cost split and
+    the scenario, as a subprocess (VS-21e)", 1 POSIX test with a 240,000 ms
+    limit (two subprocess runs, as the pair test beside it has): the case
+    lines show N and N + 1 candidates, every pass has cached and uncached rows,
+    no D6 line for Sonnet 4.5's catalog price, 0 off this computer, no dummy
+    key, and the unflagged run's case lines end at `projected, N request(s)`,
+    with no count, split or scenario line. Since review round one the
+    unflagged run writes its records with `--out`, and both variants' verify
+    passes there were asked about engine's flagged count of candidates.
+- **Decisions.**
+  - **(a) Four files beyond the task's list**, each additive and absent when
+    unset:
+    - engine `src/review/eval.ts`: item 3 needs the session's tokens, which
+      only the replay harness reads (`ReviewEval.replay`, step 8). It is eval
+      code, not a runner, and not in `REVIEW_PIPELINE_FILES`. Byte identity:
+      the reasoning fields are written only when a provider reports reasoning
+      above 0, which the canned model never does (test "no reasoning key").
+    - engine `test/lib/llm-server.ts`: the fixture session must report
+      reasoning tokens. Unset, both bodies are as before.
+    - `script/vectorscope-eval/replay.ts` (`projectedPassCosts`): item 2's
+      projected rows are read from projection records, as `projectedRun` reads
+      them. Nothing calls it without a flag.
+    - `script/vectorscope-eval/report.ts` (`--cost-split`,
+      `--severity-repeats`): item 2 names "the VS-21c report" and item 5 builds
+      on its `breakdowns.highSeverity`. Without the flags its output and JSON
+      are byte-identical (report test, and the HEAD-against-after `cmp`).
+  - **(b) ci.ts hands on two fields only.** `runArgs` and `replayArgs` are the
+    HEAD functions. ci.ts reads a cache price for the plan's note and the D6
+    check alone; `run.ts --price` takes four fields only when called directly.
+  - **(c) run.ts models no caching.** A fixture request is one request with no
+    cache breakpoint. The cache price appears in a note, in `projectionPrice`
+    and in one report line, never in an estimate, the Ledger or `charge`.
+  - **(d) Cached is the low band, uncached the high band**, as §1.2 says. They
+    also differ in steps (5 against `maxSteps`) and growth (2,000 against
+    4,000), so cached ≤ uncached is a property of the bands at catalog-shaped
+    prices, and Phase A's $0.27 against $7.20 is mostly steps. The table says
+    so, and its cache-write cell reads "not modelled".
+  - **(e) The split reuses `estimateCostUsd`**, so each kind is the band's own
+    term and the per-pass kinds add up bit for bit; no `plan.ts` line changes.
+  - **(f) A family pair is the recorded model pair** (`EvalRun.models`, or
+    `[model]`; a missing run takes its group's one recorded pair, or else a
+    row of its own marked `missing`, review round one). No lab classifier:
+    that is codium's `labOf` (I-10), so grouping by lab waits for VS-29b.
+  - **(g) `--scenario` is dry only and writes no record.** It refuses `--out`,
+    so report.ts never joins a canned scenario with paid runs.
+  - **(h) The D6 table holds Sonnet 4.5 alone**, the eval examples' review
+    model. `openai/gpt-5`, the triage example, is left out: no vendor list
+    price was read for it, and its only source is the catalog, so the check
+    would be circular. Haiku 4.5 and every other D6 candidate wait for Q35:
+    choosing them is the owner's. The mechanism's second row is a synthetic
+    model in the tests only.
+  - **(i) Per-attempt reasoning pairs by token counts, not by message.** The
+    engine retries inside one assistant message (`processor.ts` calls
+    `admission.admit` again on every SessionRetry, and the failed attempt
+    settles first), so pairing by message would leave every retried session
+    without a value. An attempt settles with the provider's raw counts
+    (`settled.tokens`, cache reads and writes inside input, reasoning inside
+    output) and its step records `getUsage`'s split of the same counts
+    (`Session.getUsage`, `session.ts:451`), so an attempt matches the steps of its session
+    whose input, cache reads and cache writes add up to its input and whose
+    output and reasoning add up to its output. Attempts and steps with the
+    same counts
+    pair in seq and step order when there are as many of each; otherwise none
+    of them gets a value. No runner change.
+  - **(j) Settled rows come from the artifact**: `outcome.passes` (by name, or
+    `lens:<lens>`) with each pass's cache writes and reasoning from
+    `artifact.passes`. Input is `ReviewPass.input − cacheRead − cacheWrite`;
+    output keeps reasoning; each kind is priced at the matching
+    `ModelRecord.price`, cache rates at the input rate when the snapshot lists
+    none, beside the pass's reported `costUsd`. A lens pass takes the cache
+    writes and reasoning only when it is the only lens pass, since neither
+    record names its lens; otherwise its cache writes stay inside its input.
+    Desktop artifacts and run.ts reports have no per-pass usage, so they add
+    no settled rows.
+  - **(k) Mutation M3 is restated** (below, "Mutations"): `estimateUsd` takes a
+    two-field `Price`, so "estimateUsd reads cacheRead" cannot happen.
+- **Critique decisions** (fifteen points; 11 taken in part, the rest in full).
+  1. _Haiku in the D6 table_ (major): taken, decision (h).
+  2. _Refusal messages_ (major): taken. Every existing message is unchanged
+     (`ci.test.ts`'s exact triage_model assertion passes as it was); the cache
+     fields are documented in USAGE and the README, and the new tests assert
+     the unchanged messages for malformed cache fields.
+  3. _Pairing by message_ (major): taken, decision (i). The retry test is
+     unconditional: a 500 is retried by `SessionRetry` (5xx is always
+     retryable, `retry.ts:76`), in the same session.
+  4. _The candidate suffix_ (major): taken. Only under `--scenario` or
+     `--cost-split`; K is 0 with no verify request; only
+     `<untrusted_candidate` blocks count; the subprocess test pins the
+     unflagged case lines.
+  5. _The citation "slips"_ (minor): taken. Dropped; only the HEAD and pin
+     corrections are recorded.
+  6. _Files beyond the list_ (minor): taken, decision (a).
+  7. _Cache write and the band definitions_ (minor): taken, decision (d).
+  8. _Exactness_ (minor): taken. `toBe` only for the per-pass kinds against
+     `estimateCostUsd`; `toBeCloseTo(…, 12)` for pass rows against the
+     all-passes row and for passes against `projectedRun.usd`. M8 is caught.
+  9. _USAGE text_ (minor): taken. The USAGE lines of `run.ts`, `report.ts`
+     and `vectorscope-replay.ts` are the only change visible without a new
+     flag: `--help` and every refusal's stderr print them. No test or
+     workflow step compares USAGE output (`git grep` over the test files and
+     workflows).
+  10. _The scenario nit's place_ (minor): taken. The first file with an added
+      line, else the first with any changed line; the review list only (the
+      security and verify digests are the HEAD ones under the scenario). The
+      Done re-run shows +1 on every seed case.
+  11. _Lens passes_ (minor): taken in part. Recorded under decision (j) and
+      Deferred. Where the critique asks for n/a, a lens pass that cannot be
+      told apart keeps its cache writes inside its input instead: the rows
+      stay numbers that add up, and the README says so. No dry projection runs
+      a lens today (depth and lenses are trusted-config only, and the
+      projection config sets only `maxCostUsd` and, under the scenario,
+      `verify`).
+  12. _Owner questions_ (minor): taken. Q7 and Q40 are added below, and the
+      workspace tier allow-list is the owner's action, not a build item.
+  13. _Cache writes in run.ts's line_ (minor): taken. The line says "Cache
+      writes are not reported here and are priced as input."
+  14. _Cache fields in a replay plan_ (minor): taken. `planReplay` prints that
+      the catalog's cache rates are used and the given ones are not.
+  15. _Volatile record fields_ (minor): taken. The HEAD-against-after check
+      compares stdout with `cmp` and, per record, the request bodies' sha256
+      after replacing the run directory's random `run-XXXXXX` name, plus the
+      records with `runtime`, `source.vector` and the request digests left
+      out (below).
+- **Unset byte-identity.** Scratch runs under `/tmp/vector-vectorscope/wp2/`
+  (`baseline.sh h` on the clean tree at `26d3e756`, `baseline.sh a` after the
+  build, both on 2026-11-08 with `--work` paths of one length; `compare.py`).
+  - Phase A's dry projections, without the new flags: Sonnet 4.5 with
+    `engine`, `engine:shared-verify` and `engine:cross-family` (`openai/gpt-5`
+    as triage), and Haiku 4.5 with the first two, every split. Their stdout is
+    identical between HEAD and after (`diff`, 0 lines). The 30 + 20 records
+    written are identical once the run directory's random `run-XXXXXX` name is
+    replaced and `runtime`, `source.vector` and the digests (which hash bodies
+    and prompts that name that directory) are left out, and every request
+    body's sha256 after the same replacement is identical (50 of 50 records).
+  - `report.ts --outputs` over the Sonnet records: the text output differs
+    only in its `JSON report: <path>` line (the two runs' `--out` paths), and
+    the JSON report is identical, keys included.
+  - `run.ts` estimates (Sonnet 3:15, Haiku 1:5 `--dry-run`) and a smoke
+    `ci.ts plan` with two-field `EVAL_MODELS`: stdout identical.
+  - Goldens captured at HEAD by scratch scripts (`golden/core-run.ts`,
+    `golden/engine-run.ts`) and asserted in the tests: `renderProjections`'
+    lines and the sha256 of `renderReport` and of the report JSON on a fixed
+    input (`535a49fc…`, `048a8e07…`), and the default canned replies' sha256
+    for review, security and verify hits (`c9060129…`, `a9e0bde0…`,
+    `c072df83…`).
+  - The four-field `run.ts` estimate block is identical to the two-field one;
+    the four-field run prints the note line after it and nothing else.
+  - Every existing test of the eight touched test files passes unchanged, and
+    `model-evidence.test.ts` passes with the pin unchanged.
+  - Scratch only (review round one, finding 2): the HEAD-against-after
+    comparison of stdout, records and request bodies above ran from the
+    scratch scripts and is not committed. No committed golden of the bodies,
+    or of the dry-run figures they price, is kept: each body names the work
+    and run directories, the platform and today's date, and its tokens are
+    its length / 3.5, so its digest and its dollars change by day, machine
+    and temporary-folder length, and a golden normalised for all of that
+    would move with any engine prompt or tool change from any lane. The
+    committed checks are the canned replies' sha256 (engine `eval.test.ts`),
+    the unflagged case lines, and the unflagged records' verify candidates,
+    equal under both variants (`vectorscope-replay.test.ts`).
+  - A two-field price string that differs from a `LIST_PRICES` entry (today
+    `anthropic/claude-sonnet-4.5` at anything but `3:15`) now prints one D6
+    warning line, by design under item 6: in `run.ts`'s dry and sending
+    estimates, in `ci.ts plan` and its step summary, and in a replay plan with
+    its "Prices" summary block. With every two-field price at its list price,
+    or for a model the table does not list, the output is byte-identical; the
+    checks above used list prices only (review round one, finding 8;
+    `ci.test.ts` pins the warning).
+- **Done: the zero-spend dry re-run** of Phase A's projection commands with
+  `--cost-split` (logs `/tmp/vector-vectorscope/wp2/logs/d-*.txt`), all ten
+  seed cases, every split, the canned model on this computer.
+  - Sonnet 4.5 (catalog 3 / 15 / 0.30 / 3.75), `engine` (and
+    `engine:shared-verify`, identical under the default replies), mean per
+    run, cached against uncached:
+
+    | Pass                   | Cached (low band) | Uncached (high band) | Share of cached | Share of uncached |
+    | ---------------------- | ----------------- | -------------------- | --------------- | ----------------- |
+    | review (10 runs)       | $0.1350           | $6.1320              | 49.2%           | 85.2%             |
+    | verify (10 runs)       | $0.1264           | $0.7830              | 46.1%           | 10.9%             |
+    | security (1 run, hono) | $0.1304           | $2.8223              | 4.8%            | 3.9%              |
+    | all passes             | $0.2744           | $7.1972              | 100%            | 100%              |
+
+    By kind over the ten runs, cached: input $1.6451, cache read $0.1540,
+    output $0.9450 (cache write not modelled); uncached: input $68.1924,
+    output $3.7800. The all-passes means equal Phase A's $0.2744 low and
+    $7.1973 high to rounding (the table sums kinds, the projection table sums
+    runs).
+
+  - Sonnet `engine:cross-family` with `openai/gpt-5` as triage: all passes
+    $0.2004 cached and $3.5258 uncached, verify 63.1% of the cached band and
+    review (on gpt-5) 33.6%.
+  - Haiku 4.5 (catalog 1 / 5 / 0.10 / 1.25), `engine`: all passes $0.0915
+    cached and $2.3990 uncached; verify 46.1% and 10.9%.
+  - `--scenario suggestion-untrusted --cost-split` on Sonnet, `engine` and
+    `engine:shared-verify`: every one of the ten cases shows N and N + 1
+    verify candidates (werkzeug 2/3, fastify 1/2, nats 6/7, caddy 1/2,
+    requests 1/2, express 1/2, vite 1/2, tracing 2/3, click 5/6, hono 3/4).
+    The extra candidate adds $0.0004 a case to the cached verify band
+    ($0.1264 to $0.1268) and $0.0026 to the uncached one.
+  - The D6 check printed nothing: the catalog's Sonnet 4.5 prices are its
+    list prices, and gpt-5 and Haiku 4.5 are not in the table.
+  - The strict egress guard: 63 + 42 + 42 connection attempts, 0 off this
+    computer.
+  - `report.ts --outputs <Sonnet records> --cost-split --severity-repeats`:
+    the projected split as above (24 rows in `costs`); `severityRepeats` is
+    empty and its section absent, because projection records hold no findings
+    and so make no runs. The settled table and per-repetition recall need a
+    paid replay (Q9).
+  - `run.ts` with `--price 3:15:0.3:3.75` on Sonnet 4.5 and
+    `--max-tokens 16000` prints the two-field estimate and the note; a smoke
+    `ci.ts plan`
+    with four-field `EVAL_MODELS` entries for Sonnet 4.5
+    (`3:15:0.3:3.75`) and Haiku 4.5 (`1:5:0.1:1.25`) prints both notes.
+  - These are estimates of one canned step per pass, not spend, and the gap
+    between the bands is mostly steps (5 against 30 for review, 20 for
+    security and 10 for verify) and growth, not caching.
+
+- **Evidence.** Each test file ran alone through `/home/user/.tools/vector-serial`
+  with `--timeout 30000` and `GITHUB_ACTIONS=false`; script tests from
+  `packages/script` (`../../script/vectorscope-eval/<file>.test.ts`), as
+  test.yml runs them.
+
+  | Check                                                          | HEAD (`26d3e756`, clean tree) | After                                    |
+  | -------------------------------------------------------------- | ----------------------------- | ---------------------------------------- |
+  | core `eval-report.test.ts`                                     | 28 pass, 226 `expect()`       | 36 pass, 699 `expect()`                  |
+  | core `model-evidence.test.ts`                                  | 30 pass, 393 `expect()`       | 30 pass, 393 `expect()`, pin unchanged   |
+  | `budget.test.ts`                                               | 21 pass, 119 `expect()`       | 26 pass, 169 `expect()`                  |
+  | `run.test.ts`                                                  | 14 pass, 111 `expect()`       | 18 pass, 147 `expect()`                  |
+  | `ci.test.ts`                                                   | 35 pass, 443 `expect()`       | 39 pass, 507 `expect()`                  |
+  | `replay.test.ts`                                               | 47 pass, 567 `expect()`       | 48 pass, 594 `expect()`                  |
+  | `report.test.ts`                                               | 41 pass, 291 `expect()`       | 44 pass, 310 `expect()`                  |
+  | engine `test/review/eval.test.ts`                              | 34 pass, 464 `expect()`       | 41 pass, 508 `expect()`                  |
+  | engine `test/review/vectorscope-replay.test.ts`                | 18 pass, 191 `expect()`       | 22 pass, 240 `expect()`                  |
+  | core `bun typecheck`                                           | not run                       | passes                                   |
+  | engine `bun typecheck`                                         | not run                       | passes                                   |
+  | eval `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` | not run                       | passes                                   |
+  | test-file lines removed (eight files)                          | n/a                           | 0 (1,412 added)                          |
+  | HEAD-against-after stdout and records (above)                  | n/a                           | identical                                |
+  | prettier `--check` on the 19 changed files                     | clean                         | clean (`--write` touched new lines only) |
+  | oxlint on the 18 changed source and test files                 | not run                       | 175 warnings, 6 on new lines (below)     |
+  | `git diff --check`                                             | n/a                           | clean                                    |
+  | mutations caught                                               | n/a                           | 22 of 22 (M3 restated)                   |
+
+- **Evidence notes.**
+  - The After column is after review round one. The build's own counts
+    before it: core `eval-report.test.ts` 35 pass, 691 `expect()`;
+    `ci.test.ts` 39, 502; `replay.test.ts` 48, 579;
+    `vectorscope-replay.test.ts` 22, 237; 1,333 test lines added; 173 oxlint
+    warnings, 4 on new lines; 18 of 18 mutations. Engine `eval.test.ts`,
+    `budget.test.ts`, `run.test.ts`, `report.test.ts` and
+    `model-evidence.test.ts` were re-run after the fixes with the counts
+    above.
+  - The four oxlint warnings on new lines are `no-unsafe-type-assertion` on
+    `as` casts of the kind beside them: `report.ts` reads untrusted JSON
+    records as `ProjectionRecord` and `ReplayArtifact`, as `loadOutputs`
+    already does two lines up, and the two tests cast a fixture record and the
+    seed manifest as their neighbours do. Review round one added two of the
+    same kind: the subprocess test casts a record it wrote, beside its seed
+    manifest cast, and the malformed-record test casts a record its type
+    forbids, which is what it tests. The 24 others found on new lines in
+    the first pass (`no-unnecessary-type-assertion` on index access, one
+    `require-array-sort-compare`) were fixed.
+  - The first run of the untrusted projection tests failed with "price
+    snapshot is not its provider's price": the shared `isolated()` helper
+    boots the fake provider unpriced. The new describe's `priced()` wrapper
+    sets the model's cost to the test's `PRICE`; `isolated()` is unchanged.
+  - The first `report.test.ts` run failed on a test filter that also matched
+    the projections table's own row; the filter now reads the split rows only.
+  - Lock contention from other lanes stretched several wall times (a 2 s test
+    file waited up to 150 s); no result depended on it.
+  - Commit gate (2026-11-08, on the same tree at `26d3e756`): the nine test
+    files above ran again, one at a time through the lock, with the After
+    counts of the Evidence table; the three typechecks pass, and so does the
+    full `bun turbo typecheck --concurrency=1` from the worktree root.
+- **Mutations.** Each was applied alone to the edited file, its test file run
+  (engine `eval.test.ts` with `-t "cost fidelity"`, `vectorscope-replay.test.ts`
+  with `-t "VS-21e"`), then the file restored from a saved copy and checked
+  byte for byte (`/tmp/vector-vectorscope/wp2/mutate.py`; M19 to M22,
+  from review round one, by `mutate_round1.py` the same way, the subprocess
+  one with `-t "VS-21e"`).
+
+  | #   | Mutation                                                           | Caught by                                   |
+  | --- | ------------------------------------------------------------------ | ------------------------------------------- |
+  | M1  | `parsePriceFields` puts `cacheRead` into `price`                   | `budget.test.ts`, `run.test.ts`             |
+  | M2  | `charge` prices cached tokens at a cache rate                      | `run.test.ts` (settle `costUsd`)            |
+  | M3  | `attempt` reserves input at the projection price's cache-read rate | `run.test.ts` (journal `reservedUsd`)       |
+  | M4  | `runArgs` emits a three-field `--price`                            | `ci.test.ts`                                |
+  | M5  | `replayArgs` emits a three-field `--model`                         | `ci.test.ts`                                |
+  | M6  | `projectionSplit` drops the 0 cache-read placeholder               | `eval-report.test.ts` (exact sum)           |
+  | M7  | `renderProjections` adds the split heading with no split           | `eval-report.test.ts` (HEAD golden)         |
+  | M8  | the all-passes row sums the first pass only                        | `eval-report.test.ts` (sum test)            |
+  | M9  | the scenario's nit is added by default                             | engine `eval.test.ts` (HEAD golden, counts) |
+  | M10 | the scenario's nit carries no suggestion                           | engine `eval.test.ts` (+1 test)             |
+  | M11 | `projectDry` drops `verify: "all"` under the scenario              | `vectorscope-replay.test.ts` (subprocess)   |
+  | M12 | a reasoning value of 0 is written                                  | engine `eval.test.ts` ("no reasoning key")  |
+  | M13 | attempts are paired with the next session's steps                  | engine `eval.test.ts` (40 and 7)            |
+  | M14 | the per-repetition mean is the pooled recall                       | `eval-report.test.ts` (44.4%)               |
+  | M15 | the pair key ignores the triage model                              | `eval-report.test.ts` (two-pair test)       |
+  | M16 | `listPriceWarnings` compares input only                            | `budget.test.ts` (cache-read warning)       |
+  | M17 | `report.ts` always passes `costSplit`                              | `report.test.ts` (unflagged output)         |
+  | M18 | a fifth price field is accepted                                    | `budget.test.ts` (refusal)                  |
+  | M19 | an unflagged `projectDry` answers with the scenario, verify: all   | `vectorscope-replay.test.ts` (subprocess)   |
+  | M20 | a missing run never takes its group's one recorded pair            | `eval-report.test.ts` (cross-family test)   |
+  | M21 | `projectedPassCosts` reads steps, tokens and rates unchecked       | `replay.test.ts` (malformed records)        |
+  | M22 | `projectedPassCosts` reads a given cache rate unchecked            | `replay.test.ts` (malformed records)        |
+
+  M3 as first written (`attempt` handing `projectionPrice ?? price` to
+  `estimateUsd`) survived, and correctly: `estimateUsd` reads only the input
+  and output rates, which a projection price shares with the two-field price,
+  so a cache field cannot reach a reservation that way at all. It was restated
+  as a reservation at the cache-read rate, the way a cache price could lower a
+  reservation, and is caught. The plan's M13 (an index off by one within one
+  count group) cannot be observed when each session pairs one attempt, so M13
+  pairs attempts with another session's steps instead.
+
+- **Review round one** (nine findings, none blocking; 3 and 7 are the same
+  defect. All eight distinct findings were fixed, finding 2 in part).
+  1. `repeatedRecall` put a cross-family group's missing run in a
+     single-model row of its own, so the pair's recall left out misses that
+     the group's `breakdowns.highSeverity` counts. Fixed as proposed: under
+     one recorded pair a missing run counts against that pair; under several
+     or none the group's missing runs share a row marked `missing`, rendered
+     "missing runs (planned <model>)". New test: a cross-family group with one
+     missing run pools 2/5, equal to `breakdowns.highSeverity`. The two-pair
+     test now expects the missing row, and the README's `--severity-repeats`
+     paragraph says how missing runs count. M20.
+  2. No committed test pins the unflagged projection bodies. Taken in part,
+     with the reason under "Unset byte-identity": a golden of the dry-run
+     figures would change by day and machine. The unflagged subprocess run
+     now writes its records with `--out`, and the test checks that both
+     variants' verify passes were asked about engine's flagged count of
+     candidates, so a scenario that leaks into an unflagged run fails it
+     (M19). The HEAD-against-after body comparison is recorded as scratch
+     only.
+  3. `candidates` called `JSON.parse` on a recorded body unguarded. Fixed:
+     the body is decoded with
+     `Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))`,
+     and one that does not decode prints `n/a verify candidate(s)`, so the
+     run still reaches its summary and egress lines. No test sends a non-JSON
+     body: the loopback server records JSON only.
+  4. `priceNotes` was single-use, and `planReplay` rebuilt it inline. Fixed:
+     it takes the note as a parameter, and both plans call it. A replay plan
+     now prints each model's note and its D6 line together, model by model,
+     instead of every note and then every warning; the tests read both with
+     `toContain`.
+  5. `run.ts`'s cache-aware dollars used `?? 0` fallbacks. Fixed: each run's
+     dollars are computed inside the branch where the projection price is
+     narrowed. The figure is unchanged (`run.test.ts` pins it).
+  6. `projectedPassCosts` read untrusted steps, tokens and rates unchecked.
+     Fixed as proposed: a pass whose prompt tokens, steps, input or output
+     rate, or a given cache rate, is not a finite number of 0 or more has no
+     rows. `projectionProblems` is unchanged, so the unflagged report is too.
+     New assertions: seven malformed records (`maxSteps: "10"` among them)
+     each pass `projectionProblems` and give no rows. M21, M22.
+  7. The same defect as 3, fixed with it.
+  8. A two-field price off its list price now warns, which the entry did not
+     say. Fixed in "Unset byte-identity", and `ci.test.ts` pins one D6 line in
+     the plan and its summary, with no cache note.
+  9. A projected lens row merges every lens. One sentence added to
+     `renderProjections`' definitions line; the Deferred bullet stays.
+
+  After the fixes: the three typechecks pass; the eight touched test files
+  and `model-evidence.test.ts` pass with the counts in the Evidence table;
+  prettier `--write` re-wrapped five new lines only, and `--check` is clean;
+  oxlint has two more `no-unsafe-type-assertion` warnings on new lines
+  (Evidence notes); `git diff --check` is clean.
+
+- **Invariants.**
+  - I-5: reservations stay worst-case and estimates stay estimates. A cache
+    price never reaches `Price`, `estimateUsd`, the Ledger or `charge`: the
+    four-field run's journal, estimate, budget and tickets equal the
+    two-field run's, and mutations M1 to M3 are caught.
+  - I-13: projection records, reports and every scratch output stay under
+    `/tmp/vector-vectorscope/wp2/`; a canned-scenario record is never written.
+  - I-1: every new input is a flag or an optional field, absent by default,
+    and there is no new review key (unset byte identity, above).
+  - I-12: no key, no `EVIDENCE_POLICY_KEYS` or `EvidenceScope` change, and no
+    pinned file changed.
+- **§0.3.**
+  1. Key: none.
+  2. D3 parity: no runner changed (engine `review/run.ts`, app
+     `ai-review.ts`), so no parity suite applies.
+  3. Evidence scope: no change. None of the touched files is in
+     `REVIEW_PIPELINE_FILES` (core `test/review/model-evidence.test.ts`), so
+     the pin does not move and `REVIEW_PIPELINE_REVISION` stays 1.
+  4. Replay variant: none. The scenario is a canned-model scenario of the dry
+     projection, not a registry variant.
+  5. Desktop half: none. Desktop projection waits for VS-10, and desktop
+     artifacts have no per-pass usage, so they add no settled rows.
+  6. This entry.
+- **Pin.** `REVIEW_PIPELINE_SOURCES`: old `dfeeef20fd190c79`, new
+  `dfeeef20fd190c79` (unchanged; `model-evidence.test.ts` passes with it).
+  `REVIEW_PIPELINE_REVISION` stays 1.
+- **Owner questions left undecided** (none new):
+  - Q45 (a), VS-21e's own approval; VS-21e amends Q15-scope packages
+    (VS-21a to VS-21c), so Q15 stays open beside it;
+  - Q35: which active models are D6's candidates and the operator per route,
+    their `LIST_PRICES` entries, the README and `ci.ts` example strings (still
+    Sonnet 4.5, which retires on 2026-11-30), and the D6 follow-up re-run of
+    the Phase A projections with the shared-prefix measurement;
+  - Q7: the eval key and its OpenRouter workspace, whose tier allow-list,
+    preset and Batch settings (README Owner setup step 5) are the owner's
+    actions, not a build item;
+  - Q40: caching-off on gpt-5.6 and later, which bears on what a cache price
+    means on OpenAI routes;
+  - Q9: the funded ablation, with the P0/P1 recall over three runs per pair
+    that the per-repetition table is the form for, and any effort sweep;
+  - Q44: how the pilot treats the $0.75 bound;
+  - Q5, and Q13 or the `self-evolving` merge, for R2.
+- **Deferred.**
+  - R2 (Q13 or the `self-evolving` merge): effort and `service_tier`
+    pinning on requests, and per-attempt reasoning from the runner's own
+    observer (today's pairing reads the session record after the fact).
+  - Grouping recall by lab, until codium's `labOf` (VS-29b).
+  - Lens passes: a projection record and `ReplayArtifact.passes` name no
+    lens, so projected lens passes would share one row and a settled lens pass
+    keeps its cache writes and reasoning only when it is the only one. Both
+    need the lens recorded (VS-28 wiring). Since review round one the
+    projected table's definitions line says that a lens row holds every lens
+    pass of its runs.
+  - VS-40a's long-context tiers and effort-keyed output, its own package.
+  - The `vectorscope-eval.yml` input descriptions, left unchanged: the
+    workflow's `models` and `triage_model` texts still read
+    `model=input:output`, which stays valid.
+  - test.yml and typecheck.yml on the branch, which the orchestrator
+    dispatches after the commit. Their run ids go here.
+- **Not verified.**
+  - OpenRouter's service-tier, preset, Batch and fee pages and Anthropic's
+    prices were not re-read: the README text and the D6 entry rest on REPORT-3
+    §7.1 and §7.4 (T3-9, T3-12, verified in round three).
+  - That a real provider's usage gives the same raw counts in
+    `settled.tokens` and the step record: the pairing is exact for the
+    OpenAI-compatible SDK path the fake server exercises; other SDKs'
+    reasoning fields are not exercised.
+  - Windows CI, until it is dispatched.
+  - No paid run, no model request and no workflow dispatch.

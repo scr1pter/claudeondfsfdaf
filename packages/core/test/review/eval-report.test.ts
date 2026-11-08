@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import {
   findingKey,
   IMPORTANCE,
@@ -14,16 +15,25 @@ import {
   type Verdict,
 } from "@vectordevai/core/review/eval"
 import {
+  ALL_PASSES,
   BLOCKING_REFERENCE,
   buildReport,
+  costSplit,
   DEFAULT_GATE,
   gateDigest,
   gateProblems,
   MIN_BLOCKING_FINDINGS,
+  projectionGroups,
+  projectionSplit,
+  renderProjections,
   renderReport,
+  TOKEN_KINDS,
+  type ByKind,
   type GateConfig,
+  type PassCost,
   type ReportInput,
 } from "@vectordevai/core/review/eval-report"
+import { estimateCostUsd } from "@vectordevai/core/review/plan"
 import type { FailureClass } from "@vectordevai/core/review/types"
 
 // The report and the D2 gate over synthetic saved runs. Large samples settle the statistical rules; small ones leave
@@ -1079,3 +1089,299 @@ describe("severity calibration (VS-45)", () => {
     )
   })
 })
+
+// VS-21e: each pass's projected cost by token kind, cached and uncached side by side; settled cost by pass; and
+// high-severity recall per repetition and model pair. None of it changes a report that does not ask for it.
+describe("cost fidelity (VS-21e)", () => {
+  const PRICES = [
+    { input: 3, output: 15 },
+    { input: 3, output: 15, cacheRead: 0.3 },
+    { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    { input: 1.25, output: 10, cacheRead: 0.125 },
+  ]
+  const total = (kinds: ByKind) => TOKEN_KINDS.reduce((sum, kind) => sum + kinds[kind], 0)
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex")
+
+  test("projectionSplit's kinds add up to estimateCostUsd's bands exactly: cached is the low band, uncached the high", () => {
+    for (const promptTokens of [0, 1, 1234, 100_000])
+      for (const maxSteps of [1, 3, 5, 30])
+        for (const price of PRICES) {
+          const bands = estimateCostUsd({ promptTokens, maxSteps, price })
+          const split = projectionSplit({ promptTokens, maxSteps, price })
+          expect(total(split.cached)).toBe(bands.low)
+          expect(total(split.uncached)).toBe(bands.high)
+          // Neither band models cache writes, and the high band reads nothing from the cache.
+          expect(split.cached.cacheWrite).toBe(0)
+          expect(split.uncached.cacheWrite).toBe(0)
+          expect(split.uncached.cacheRead).toBe(0)
+          if (price.cacheRead === undefined) expect(split.cached.cacheRead).toBe(0)
+          // At catalog-shaped prices, a cache read no dearer than input, the cached figure is at most the uncached.
+          expect(total(split.cached)).toBeLessThanOrEqual(total(split.uncached))
+        }
+    // The low band reads (S−1)·P at the cache-read rate: 4 of 5 prompt copies at 5 steps.
+    expect(projectionSplit({ promptTokens: 1000, maxSteps: 5, price: PRICES[1] }).cached.cacheRead).toBeCloseTo(
+      (4 * 1000 * 0.3) / 1_000_000,
+      15,
+    )
+  })
+
+  const projected = (variant: string, label: string, pass: string, promptTokens: number): PassCost => ({
+    variant,
+    model: "loopback/vendor/model",
+    case: label,
+    repetition: 1,
+    pass,
+    basis: "projected",
+    ...projectionSplit({ promptTokens, maxSteps: 30, price: PRICES[2] }),
+  })
+  const PASSES = [
+    projected("engine", "a", "review", 4000),
+    projected("engine", "a", "security", 3000),
+    projected("engine", "a", "verify", 2500),
+    // Case b ran no security pass.
+    projected("engine", "b", "review", 6000),
+    projected("engine", "b", "verify", 3100),
+    projected("engine:shared-verify", "a", "review", 4000),
+    projected("engine:shared-verify", "a", "verify", 2600),
+  ]
+
+  test("costSplit sums each group's runs per pass and band, and its pass rows add up to its all-passes row", () => {
+    const rows = costSplit(PASSES)
+    expect(rows.map((row) => [row.variant, row.pass, row.basis, row.runs])).toEqual([
+      ["engine", "review", "cached", 2],
+      ["engine", "review", "uncached", 2],
+      ["engine", "security", "cached", 1],
+      ["engine", "security", "uncached", 1],
+      ["engine", "verify", "cached", 2],
+      ["engine", "verify", "uncached", 2],
+      ["engine", ALL_PASSES, "cached", 2],
+      ["engine", ALL_PASSES, "uncached", 2],
+      ["engine:shared-verify", "review", "cached", 1],
+      ["engine:shared-verify", "review", "uncached", 1],
+      ["engine:shared-verify", "verify", "cached", 1],
+      ["engine:shared-verify", "verify", "uncached", 1],
+      ["engine:shared-verify", ALL_PASSES, "cached", 1],
+      ["engine:shared-verify", ALL_PASSES, "uncached", 1],
+    ])
+    for (const variant of ["engine", "engine:shared-verify"])
+      for (const basis of ["cached", "uncached"] as const) {
+        const mine = rows.filter((row) => row.variant === variant && row.basis === basis)
+        const all = mine.find((row) => row.pass === ALL_PASSES)!
+        // Sums over passes and runs reorder the additions, so they agree to rounding, not bit for bit.
+        for (const kind of TOKEN_KINDS)
+          expect(
+            mine.filter((row) => row.pass !== ALL_PASSES).reduce((sum, row) => sum + row.usd![kind], 0),
+          ).toBeCloseTo(all.usd![kind], 12)
+        const source = PASSES.filter((entry) => entry.variant === variant && entry.basis === "projected")
+        expect(total(all.usd!)).toBeCloseTo(
+          source.reduce((sum, entry) => sum + (entry.basis === "projected" ? total(entry[basis]) : 0), 0),
+          12,
+        )
+      }
+    // Settled rows: a pass with no price snapshot leaves its row with no dollars; reasoning sums where reported.
+    const settled = (label: string, pass: string, extra: Partial<Extract<PassCost, { basis: "settled" }>>) =>
+      ({
+        variant: "engine",
+        model: "router/vendor/model",
+        case: label,
+        repetition: 1,
+        pass,
+        basis: "settled",
+        tokens: { input: 1000, cacheRead: 500, cacheWrite: 100, output: 200 },
+        ...extra,
+      }) satisfies PassCost
+    const usd = { input: 0.003, cacheRead: 0.00015, cacheWrite: 0.000375, output: 0.003 }
+    const paid = costSplit([
+      settled("a", "review", { usd, reportedUsd: 0.0065, reasoning: 40 }),
+      settled("b", "review", { usd, reportedUsd: 0.0064 }),
+      settled("a", "verify", { reportedUsd: 0.002 }),
+    ])
+    expect(paid.map((row) => [row.pass, row.basis, row.runs])).toEqual([
+      ["review", "settled", 2],
+      ["verify", "settled", 1],
+      [ALL_PASSES, "settled", 2],
+    ])
+    expect(paid[0]).toMatchObject({ tokens: { input: 2000, cacheRead: 1000, cacheWrite: 200, output: 400 } })
+    expect(paid[0].usd!.input).toBeCloseTo(0.006, 12)
+    expect(paid[0].reportedUsd).toBeCloseTo(0.0129, 12)
+    expect(paid[0].reasoning).toBe(40)
+    expect(paid[1]).not.toHaveProperty("usd")
+    expect(paid[1]).not.toHaveProperty("reasoning")
+    expect(paid[2]).not.toHaveProperty("usd")
+    expect(paid[2].reasoning).toBe(40)
+  })
+
+  test("renderProjections with no split returns exactly the lines it returned before VS-21e", () => {
+    const input = goldenInput()
+    // Captured at 26d3e756, before VS-21e.
+    expect(renderProjections(projectionGroups(input.projected))).toEqual([
+      "| Variant · model | Runs | Cases | Requests | USD low (mean / median / p90) | USD high (mean / median / p90) | Tokens sent (mean / median / p90) | Over the cap | Off this computer |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| engine-next · loopback/vendor/candidate | 6 | 6 | 18 | $0.3500 / $0.3500 / $0.5500 | $1.7500 / $1.7500 / $2.7500 | 3003 / 3003 / 3005 | 1 | 0 |",
+      "",
+      "A projection runs every pass against a canned model on this computer and prices the bodies it would send (estimateCostUsd, from the price snapshot). Its dollars are estimates, not spend. A run over its dollar cap describes an uncapped run from that decision on.",
+    ])
+    expect(renderProjections(projectionGroups(input.projected), [])).toEqual(
+      renderProjections(projectionGroups(input.projected)),
+    )
+  })
+
+  test("renderProjections with a split puts each pass's cached and uncached rows side by side, then defines them", () => {
+    const groups = projectionGroups([])
+    const lines = renderProjections(groups, costSplit(PASSES))
+    expect(lines.slice(0, renderProjections(groups).length)).toEqual(renderProjections(groups))
+    const table = lines.filter((line) => line.startsWith("| engine · "))
+    expect(table.map((line) => line.split(" | ").slice(1, 3).join(" "))).toEqual([
+      "review cached",
+      "review uncached",
+      "security cached",
+      "security uncached",
+      "verify cached",
+      "verify uncached",
+      `${ALL_PASSES} cached`,
+      `${ALL_PASSES} uncached`,
+    ])
+    expect(table.every((line) => line.includes("| not modelled |"))).toBe(true)
+    expect(table.at(-1)!.endsWith("| 100.0% |")).toBe(true)
+    expect(lines).toContain(
+      "| Variant · model | Pass | Band | Runs | Input | Cache read | Cache write | Output | Total | Mean per run | Share of the band |",
+    )
+    expect(lines.at(-1)).toContain("Cached is estimateCostUsd's low band")
+    expect(lines.at(-1)).toContain("the gap between them is not a caching saving")
+    expect(lines.at(-1)).toContain("These are estimates, not spend.")
+  })
+
+  // Repetition 1 reviews bug-0 and finds its defect; repetition 2 reviews bug-1 to bug-3 and finds bug-1's alone; a
+  // planned repetition 4 of bug-0 has no run.
+  function repeated() {
+    const built = scenario({ bugs: 4, controls: 0, baseline: false })
+    const again = (run: EvalRun, found: boolean): EvalRun =>
+      found ? { ...run, repetition: 2 } : { ...run, repetition: 2, proposed: [], posted: [] }
+    const runs = [built.runs[0], again(built.runs[1], true), again(built.runs[2], false), again(built.runs[3], false)]
+    const judgements = [
+      ...built.judgements.filter((item) => item.run === runKey(built.runs[0])),
+      ...built.judgements
+        .filter((item) => item.run === runKey(built.runs[1]))
+        .map((item) => ({ ...item, run: runKey(runs[1]) })),
+    ]
+    const plan: PlanEntry[] = [
+      ...runs.map((run) => ({ variant: run.variant, model: run.model, case: run.case, repetition: run.repetition })),
+      { ...CANDIDATE, case: "bug-0", repetition: 4 },
+    ]
+    return { ...built, runs, judgements, plan, candidate: CANDIDATE }
+  }
+
+  test("high-severity recall per repetition averages the repetitions and pools them as breakdowns.highSeverity does", () => {
+    const result = buildReport({ title: "t", ...repeated(), severityRepeats: true })
+    expect(result.severityRepeats).toHaveLength(1)
+    const row = result.severityRepeats![0]
+    expect(row.pair).toEqual([CANDIDATE.model])
+    expect(row.repetitions.map((entry) => [entry.repetition, entry.recall.count, entry.recall.total])).toEqual([
+      [1, 1, 1],
+      [2, 1, 3],
+      [4, 0, 1],
+    ])
+    expect(row.mean).toBeCloseTo((1 + 1 / 3 + 0) / 3, 12)
+    expect(row.pooled).toEqual(result.groups[0].breakdowns.highSeverity)
+    expect(row.pooled).toMatchObject({ count: 2, total: 5 })
+    expect(row.repetitions[0].recall.interval).not.toBeNull()
+    const text = renderReport(result)
+    expect(text).toContain("## High-severity recall by repetition")
+    expect(text).toContain(`| ${CANDIDATE.variant} · ${CANDIDATE.model} | #1 100.0% (1/1) [`)
+    expect(text).toContain("; #2 33.3% (1/3) [")
+    expect(text).toContain("| 44.4% | 40.0% (2/5) [")
+    expect(text).toContain("A pair is the models a run recorded, not their labs (I-10)")
+  })
+
+  test("a second model pair in the same group gets its own row, and a pair is the run's recorded models", () => {
+    const input = repeated()
+    const triaged = input.runs.map((run, index) =>
+      index === 0 ? { ...run, repetition: 3, models: [run.model, "vendor/triage"] } : run,
+    )
+    const judgements = [
+      ...input.judgements,
+      ...input.judgements
+        .filter((item) => item.run === runKey(input.runs[0]))
+        .map((item) => ({ ...item, run: runKey(triaged[0]) })),
+    ]
+    const result = buildReport({
+      title: "t",
+      ...input,
+      runs: [input.runs[0], ...triaged],
+      judgements,
+      plan: [...input.plan, { ...CANDIDATE, case: "bug-0", repetition: 3 }],
+      severityRepeats: true,
+    })
+    expect(
+      result.severityRepeats!.map((row) => [row.pair, row.missing, row.repetitions.map((entry) => entry.repetition)]),
+    ).toEqual([
+      [[CANDIDATE.model], undefined, [1, 2]],
+      [[CANDIDATE.model, "vendor/triage"], undefined, [3]],
+      // Two recorded pairs: the missing repetition 4 belongs to neither, so it has a row of its own.
+      [[CANDIDATE.model], true, [4]],
+    ])
+    expect(result.severityRepeats![1].pooled).toMatchObject({ count: 1, total: 1 })
+    expect(result.severityRepeats![2].pooled).toMatchObject({ count: 0, total: 1 })
+    expect(renderReport(result)).toContain(
+      `| ${CANDIDATE.variant} · missing runs (planned ${CANDIDATE.model}) | #4 0.0% (0/1) [`,
+    )
+  })
+
+  test("a missing run counts against its group's one recorded pair, so a cross-family pair keeps its misses", () => {
+    const input = repeated()
+    const result = buildReport({
+      title: "t",
+      ...input,
+      runs: input.runs.map((run) => ({ ...run, models: [run.model, "vendor/triage"] })),
+      severityRepeats: true,
+    })
+    expect(result.severityRepeats).toHaveLength(1)
+    const row = result.severityRepeats![0]
+    expect(row.pair).toEqual([CANDIDATE.model, "vendor/triage"])
+    expect(row).not.toHaveProperty("missing")
+    expect(row.repetitions.map((entry) => [entry.repetition, entry.recall.count, entry.recall.total])).toEqual([
+      [1, 1, 1],
+      [2, 1, 3],
+      [4, 0, 1],
+    ])
+    expect(row.pooled).toEqual(result.groups[0].breakdowns.highSeverity)
+    expect(row.pooled).toMatchObject({ count: 2, total: 5 })
+  })
+
+  test("a report that asks for neither is byte for byte the report it was before VS-21e", () => {
+    const result = buildReport(goldenInput())
+    expect(result).not.toHaveProperty("costs")
+    expect(result).not.toHaveProperty("severityRepeats")
+    // Captured at 26d3e756, before VS-21e.
+    expect(sha(renderReport(result))).toBe("535a49fc6f8bcd38396cbb37a231a5590f2e8fbb5b1c238ed4201f9185789102")
+    expect(sha(JSON.stringify(result))).toBe("048a8e0738b108465002e94cf9a6661a15e17644687f9432091de489f3c52f91")
+    // Asked for, the sections follow the projections; costs alone add no recall section, and the reverse.
+    const withCosts = buildReport({ ...goldenInput(), costs: PASSES })
+    expect(withCosts.costs).toEqual(costSplit(PASSES))
+    expect(withCosts).not.toHaveProperty("severityRepeats")
+    const text = renderReport(withCosts)
+    expect(text).toContain("Projected cost by pass and token kind (VS-21e)")
+    expect(text).not.toContain("## Settled cost by pass and token kind")
+    expect(text).not.toContain("## High-severity recall by repetition")
+    expect(text.indexOf("Projected cost by pass")).toBeLessThan(text.indexOf("## Gate"))
+  })
+})
+
+// The golden input of VS-21e's unset byte-identity test: four bug cases and two controls in one group, each run with a
+// projection. The digests above were taken from this input at 26d3e756.
+function goldenInput() {
+  const built = scenario({ bugs: 4, controls: 2, baseline: false })
+  const projected = built.runs.map((run, index) => ({
+    variant: run.variant,
+    model: "loopback/vendor/candidate",
+    case: run.case,
+    repetition: 1,
+    usd: { low: 0.1 * (index + 1), high: 0.5 * (index + 1) },
+    tokens: { first: 1000 + index, sent: 3000 + index },
+    passes: 2,
+    requests: 3,
+    over: index === 2 ? 1 : 0,
+    outside: 0,
+  }))
+  return { title: "golden", ...built, projected, candidate: CANDIDATE }
+}

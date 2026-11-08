@@ -51,6 +51,7 @@ import {
 } from "./eval"
 import { judgingStatus, type JudgeCall } from "./eval-judge"
 import { fnv1a64 } from "./fingerprint"
+import { estimateCostUsd, type ReviewPrice } from "./plan"
 import { FAILURE_CLASSES } from "./types"
 
 export interface GateRules {
@@ -120,6 +121,10 @@ export interface ReportInput {
   // A proposed rubric the judgements were made under (IMPORTANCE_PROPOSAL); absent for the current rubric. Only passes
   // made under the same rubric and proposal count, and such a report is never a release decision.
   proposal?: string
+  // VS-21e, each only when asked for (report.ts --cost-split, --severity-repeats), so a report without them is the
+  // same report: each pass's projected and settled cost by token kind, and high-severity recall per repetition.
+  costs?: readonly PassCost[]
+  severityRepeats?: boolean
 }
 
 // VS-45's monitor: flag a package whose precision@blocking falls by more than MAX_BLOCKING_DROP against this variant of
@@ -188,6 +193,50 @@ export interface ProjectedRun extends PlanEntry {
   outside: number // connections that went off this computer
 }
 
+// VS-21e: the token kinds a pass's cost splits into, and an amount of each.
+export const TOKEN_KINDS = ["input", "cacheRead", "cacheWrite", "output"] as const
+export type TokenKind = (typeof TOKEN_KINDS)[number]
+export type ByKind = Record<TokenKind, number>
+// The row of a group that sums every pass.
+export const ALL_PASSES = "all passes"
+
+// One pass of one run, by token kind (VS-21e). Projected: the pass's two estimateCostUsd bands split by kind
+// (projectionSplit), the low band as `cached` and the high band as `uncached`. Settled: the tokens a paid replay's pass
+// reported, input apart from its cache reads and writes and output with its reasoning, priced at the run's price
+// snapshot (`usd`, absent without one), beside the cost the pass reported and its reasoning tokens when the provider
+// reported them.
+export type PassCost = PlanEntry & { pass: string } & (
+    | { basis: "projected"; cached: ByKind; uncached: ByKind }
+    | { basis: "settled"; tokens: ByKind; usd?: ByKind; reportedUsd?: number; reasoning?: number }
+  )
+
+// A group's cost for one pass, or every pass (ALL_PASSES), on one basis, summed over its runs (VS-21e). A settled row's
+// `usd` is absent when a run had no price snapshot, and its `reportedUsd` when a pass reported no cost; its reasoning is
+// the sum over the passes that reported any, absent when none did.
+export interface CostRow extends Group {
+  pass: string
+  basis: "cached" | "uncached" | "settled"
+  runs: number // case and repetition pairs
+  usd?: ByKind
+  tokens?: ByKind
+  reportedUsd?: number
+  reasoning?: number
+}
+
+// High-severity recall over one group's repetitions, for each pair of models its runs recorded (VS-21e, the form
+// VS-29b's report takes). `pair` is the run's models, review model first; it is not a lab (I-10). A missing run counts
+// against its group's pair when the group's runs recorded one; when they recorded several or none, its group's missing
+// runs share a row of their own, marked `missing`, whose pair is the planned model. `mean` averages the repetitions'
+// point estimates that are not n/a and has no interval; `pooled` counts every repetition's defects together, as
+// breakdowns.highSeverity does.
+export interface RepeatedRecall extends Group {
+  pair: string[]
+  missing?: true
+  repetitions: { repetition: number; recall: Proportion }[]
+  mean: number | null
+  pooled: Proportion
+}
+
 export interface ProjectionGroup extends Group {
   runs: number
   cases: number
@@ -249,6 +298,8 @@ export interface Report {
   gate: { config: GateConfig; digest: string }
   groups: GroupReport[]
   projections: ProjectionGroup[]
+  costs?: CostRow[] // VS-21e, only when the input gave costs
+  severityRepeats?: RepeatedRecall[] // VS-21e, only when the input asked for them
   judging: ReturnType<typeof judgingStatus> & {
     calls: number
     paid: number
@@ -432,6 +483,8 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
       operations: entry.operations,
     })),
     projections: projectionGroups(input.projected ?? []),
+    ...(input.costs ? { costs: costSplit(input.costs) } : {}),
+    ...(input.severityRepeats ? { severityRepeats: repeatedRecall(reports, gate.confidence) } : {}),
     judging: {
       ...status,
       calls: calls.length,
@@ -496,6 +549,56 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
 }
 
 type Entry = { score: RunScore; evalCase: EvalCase; run?: EvalRun }
+
+// High-severity recall per repetition and model pair in each group, by breakdowns.highSeverity's rule (recallOf over
+// the defects labelled blocking, adversarial cases left out), in the order pairs and repetitions first appear.
+function repeatedRecall(reports: readonly (Group & { entries: Entry[] })[], confidence: number): RepeatedRecall[] {
+  const blocking = (_: Entry, defect: LabelledDefect) => defect.severity === "blocking"
+  const pairOf = (run: EvalRun) => run.models ?? [run.model]
+  return reports.flatMap((group) => {
+    const pairs = [
+      ...new Map(
+        group.entries.flatMap((entry) =>
+          entry.run ? [[pairOf(entry.run).join("\n"), pairOf(entry.run)] as const] : [],
+        ),
+      ).values(),
+    ]
+    const missing = group.entries.filter((entry) => !entry.run)
+    // A missing run recorded no models. Under one recorded pair it counts against that pair, as breakdowns.highSeverity
+    // counts it against the group, so a cross-family pair's recall keeps its misses. Under several pairs, or none, it
+    // cannot be attributed and goes in a row of its own marked missing, whose pair is the planned model.
+    const rows: { pair: string[]; entries: Entry[]; missing?: true }[] =
+      pairs.length === 1
+        ? [{ pair: pairs[0], entries: group.entries }]
+        : [
+            ...pairs.map((pair) => ({
+              pair,
+              entries: group.entries.filter((entry) => entry.run && pairOf(entry.run).join("\n") === pair.join("\n")),
+            })),
+            ...(missing.length ? [{ pair: [group.model], entries: missing, missing: true as const }] : []),
+          ]
+    return rows.map((row) => {
+      const repetitions = [...new Set(row.entries.map((entry) => entry.score.repetition))].map((repetition) => ({
+        repetition,
+        recall: recallOf(
+          row.entries.filter((entry) => entry.score.repetition === repetition),
+          blocking,
+          confidence,
+        ),
+      }))
+      const values = repetitions.flatMap((entry) => (entry.recall.value === null ? [] : [entry.recall.value]))
+      return {
+        variant: group.variant,
+        model: group.model,
+        pair: row.pair,
+        ...(row.missing ? { missing: row.missing } : {}),
+        repetitions,
+        mean: values.length ? sum(values) / values.length : null,
+        pooled: recallOf(row.entries, blocking, confidence),
+      }
+    })
+  })
+}
 
 // Agreement on importance over the findings the importance metrics count: the reviewed runs' findings on labelled cases
 // that are not adversarial, nits only when counted. A variant with a "+", outside VARIANT_NAME, is an offline copy of
@@ -607,11 +710,78 @@ export function projectionGroups(projected: readonly ProjectedRun[]): Projection
   })
 }
 
+// VS-21e: a pass's two estimateCostUsd bands split by token kind. Each kind is estimateCostUsd itself with every other
+// rate at 0, so each term is the band's own and the kinds add up to the band exactly. While the price lists a cache
+// read, a zero one stays listed, or the band would price its cache reads as input. Neither band models cache writes
+// (the low band prices them as input), so cacheWrite is 0.
+export function projectionSplit(input: { promptTokens: number; maxSteps: number; price: ReviewPrice }) {
+  const listed = input.price.cacheRead === undefined ? {} : { cacheRead: 0 }
+  const priced = (price: ReviewPrice) =>
+    estimateCostUsd({ promptTokens: input.promptTokens, maxSteps: input.maxSteps, price })
+  const parts = {
+    input: priced({ input: input.price.input, output: 0, ...listed }),
+    cacheRead: priced({ ...input.price, input: 0, output: 0 }),
+    output: priced({ input: 0, output: input.price.output, ...listed }),
+  }
+  const band = (side: "low" | "high"): ByKind => ({
+    input: parts.input[side],
+    cacheRead: parts.cacheRead[side],
+    cacheWrite: 0,
+    output: parts.output[side],
+  })
+  return { cached: band("low"), uncached: band("high") }
+}
+
+// VS-21e: pass costs grouped by variant and model in the order they first appear, then by basis, a pass's cached and
+// uncached rows side by side, each group's passes in the order they first appear and then ALL_PASSES. Each row sums its
+// runs' passes, so a group's pass rows add up to its ALL_PASSES row.
+export function costSplit(passes: readonly PassCost[]): CostRow[] {
+  return dedupeGroups(passes).flatMap((group) => {
+    const mine = passes.filter((entry) => same(entry, group))
+    const names = [...new Set(mine.map((entry) => entry.pass))]
+    const rows = (entries: readonly PassCost[], pass: string): CostRow[] => {
+      const base = { ...group, pass, runs: new Set(entries.map((entry) => `${entry.case}#${entry.repetition}`)).size }
+      const projected = entries.flatMap((entry) => (entry.basis === "projected" ? [entry] : []))
+      const settled = entries.flatMap((entry) => (entry.basis === "settled" ? [entry] : []))
+      if (projected.length)
+        return [
+          { ...base, basis: "cached", usd: sumKinds(projected.map((entry) => entry.cached)) },
+          { ...base, basis: "uncached", usd: sumKinds(projected.map((entry) => entry.uncached)) },
+        ]
+      const priced = settled.flatMap((entry) => (entry.usd ? [entry.usd] : []))
+      const reported = settled.flatMap((entry) => (entry.reportedUsd === undefined ? [] : [entry.reportedUsd]))
+      const reasoning = settled.flatMap((entry) => (entry.reasoning === undefined ? [] : [entry.reasoning]))
+      return [
+        {
+          ...base,
+          basis: "settled",
+          tokens: sumKinds(settled.map((entry) => entry.tokens)),
+          ...(priced.length === settled.length ? { usd: sumKinds(priced) } : {}),
+          ...(reported.length === settled.length ? { reportedUsd: sum(reported) } : {}),
+          ...(reasoning.length ? { reasoning: sum(reasoning) } : {}),
+        },
+      ]
+    }
+    return (["projected", "settled"] as const).flatMap((basis) => {
+      const entries = mine.filter((entry) => entry.basis === basis)
+      if (!entries.length) return []
+      return [
+        ...names.flatMap((name) => {
+          const of = entries.filter((entry) => entry.pass === name)
+          return of.length ? rows(of, name) : []
+        }),
+        ...rows(entries, ALL_PASSES),
+      ]
+    })
+  })
+}
+
 // The projections as a table. A projection's dollars are estimates from the wire bodies it would send, never spend.
-export function renderProjections(groups: readonly ProjectionGroup[]): string[] {
+// With `costs` (VS-21e) a second table follows: each pass's cached and uncached figures side by side, by token kind.
+export function renderProjections(groups: readonly ProjectionGroup[], costs?: readonly CostRow[]): string[] {
   const cell = (value: Spread | null, show: (value: number) => string) =>
     value ? `${show(value.mean)} / ${show(value.p50)} / ${show(value.p90)}` : "n/a"
-  return [
+  const lines = [
     "| Variant · model | Runs | Cases | Requests | USD low (mean / median / p90) | USD high (mean / median / p90) | Tokens sent (mean / median / p90) | Over the cap | Off this computer |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...groups.map(
@@ -620,6 +790,26 @@ export function renderProjections(groups: readonly ProjectionGroup[]): string[] 
     ),
     "",
     "A projection runs every pass against a canned model on this computer and prices the bodies it would send (estimateCostUsd, from the price snapshot). Its dollars are estimates, not spend. A run over its dollar cap describes an uncapped run from that decision on.",
+  ]
+  const split = (costs ?? []).filter((row) => row.basis !== "settled")
+  if (!split.length) return lines
+  const usd = (value: number) => `$${value.toFixed(4)}`
+  const total = (row: CostRow) => sum(TOKEN_KINDS.map((kind) => row.usd?.[kind] ?? 0))
+  const band = (row: CostRow) =>
+    total(split.find((other) => same(other, row) && other.basis === row.basis && other.pass === ALL_PASSES) ?? row)
+  return [
+    ...lines,
+    "",
+    "Projected cost by pass and token kind (VS-21e), each pass's cached and uncached figures side by side:",
+    "",
+    "| Variant · model | Pass | Band | Runs | Input | Cache read | Cache write | Output | Total | Mean per run | Share of the band |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...split.map(
+      (row) =>
+        `| ${row.variant} · ${row.model} | ${row.pass} | ${row.basis} | ${row.runs} | ${usd(row.usd?.input ?? 0)} | ${usd(row.usd?.cacheRead ?? 0)} | not modelled | ${usd(row.usd?.output ?? 0)} | ${usd(total(row))} | ${usd(row.runs ? total(row) / row.runs : 0)} | ${band(row) > 0 ? percent(total(row) / band(row)) : "n/a"} |`,
+    ),
+    "",
+    "Cached is estimateCostUsd's low band: S = 5 steps, or maxSteps if fewer, each adding R = 2,000 tokens, with (S−1)·P read at the cache-read rate when the price lists one. Uncached is its high band: S = maxSteps and R = 4,000, nothing read from the cache. The bands differ in steps and growth as well as in caching, so the gap between them is not a caching saving. Neither band models cache writes: the low band prices them as input. A lens row holds every lens pass of its runs, since a projection record names no lens. These are estimates, not spend.",
   ]
 }
 
@@ -927,7 +1117,11 @@ export function renderReport(report: Report): string {
         ]
       : []),
     ...report.groups.flatMap((group) => renderGroup(group, gate, report.importance)),
-    ...(report.projections.length ? ["", "## Projections", "", ...renderProjections(report.projections)] : []),
+    ...(report.projections.length
+      ? ["", "## Projections", "", ...renderProjections(report.projections, report.costs)]
+      : []),
+    ...renderSettled((report.costs ?? []).filter((row) => row.basis === "settled")),
+    ...(report.severityRepeats?.length ? renderRepeats(report.severityRepeats) : []),
     ...(report.blockingDrops.length ? renderBlockingDrops(report.blockingDrops) : []),
     ...(report.decision ? renderDecision(report.decision, gate) : ["", "## Gate", "", "Not evaluated: no candidate."]),
     ...(report.problems.length || judging.problems.length
@@ -948,6 +1142,44 @@ export function renderReport(report: Report): string {
       : []),
     "",
   ].join("\n")
+}
+
+// VS-21e: what each pass of the paid replays reported, by token kind, at the run's price snapshot. Nothing without
+// settled rows.
+function renderSettled(rows: readonly CostRow[]) {
+  if (!rows.length) return []
+  const kind = (row: CostRow, name: TokenKind) =>
+    `${Math.round(row.tokens?.[name] ?? 0)} (${row.usd ? `$${row.usd[name].toFixed(4)}` : "no price"})`
+  return [
+    "",
+    "## Settled cost by pass and token kind",
+    "",
+    "| Variant · model | Pass | Runs | Input | Cache read | Cache write | Output | Total at the snapshot | Reported | Reasoning tokens |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map(
+      (row) =>
+        `| ${row.variant} · ${row.model} | ${row.pass} | ${row.runs} | ${TOKEN_KINDS.map((name) => kind(row, name)).join(" | ")} | ${row.usd ? `$${sum(TOKEN_KINDS.map((name) => row.usd?.[name] ?? 0)).toFixed(4)}` : "n/a"} | ${row.reportedUsd === undefined ? "n/a" : `$${row.reportedUsd.toFixed(4)}`} | ${row.reasoning === undefined ? "n/a" : Math.round(row.reasoning)} |`,
+    ),
+    "",
+    "Tokens as each pass's session reported them: input apart from its cache reads and writes, and output with its reasoning. Each kind is priced at the run's price snapshot, cache reads and writes at the input rate when the snapshot lists none, beside the cost the pass reported. Reasoning tokens are n/a where no pass reported any.",
+  ]
+}
+
+// VS-21e: high-severity recall per repetition, for each model pair in each group.
+function renderRepeats(rows: readonly RepeatedRecall[]) {
+  return [
+    "",
+    "## High-severity recall by repetition",
+    "",
+    "| Variant · pair | Repetitions (recall [interval]) | Mean of repetitions | Pooled |",
+    "| --- | --- | --- | --- |",
+    ...rows.map(
+      (row) =>
+        `| ${row.variant} · ${row.missing ? `missing runs (planned ${row.pair.join(" + ")})` : row.pair.join(" + ")} | ${row.repetitions.map((entry) => `#${entry.repetition} ${share(entry.recall)}`).join("; ")} | ${row.mean === null ? "n/a" : percent(row.mean)} | ${share(row.pooled)} |`,
+    ),
+    "",
+    "Recall of the defects labelled blocking, by the high-severity breakdown's rule. The mean of the repetitions averages their point estimates and has no interval; pooled counts every repetition's defects together, with its interval. A pair is the models a run recorded, not their labs (I-10): grouping by lab waits for VS-29b. A missing run counts against its group's one recorded pair; when the group recorded several or none, its missing runs share a row of their own.",
+  ]
 }
 
 function renderAgreement(agreement: ImportanceAgreement) {
@@ -1214,6 +1446,15 @@ function isReviewed(entry: Entry) {
 
 function sum(values: readonly number[]) {
   return values.reduce((total, value) => total + value, 0)
+}
+
+function sumKinds(values: readonly ByKind[]): ByKind {
+  return {
+    input: sum(values.map((value) => value.input)),
+    cacheRead: sum(values.map((value) => value.cacheRead)),
+    cacheWrite: sum(values.map((value) => value.cacheWrite)),
+    output: sum(values.map((value) => value.output)),
+  }
 }
 
 // Changed lines, as the dataset records them: under 100, under 1,000, and 1,000 or more.
