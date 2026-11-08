@@ -4,7 +4,14 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { browserCommand, owningDirectory, selectBrowserSpecs, selectUnitTests, unitCommand } from "./codium-ci-tests"
+import {
+  browserCommand,
+  owningDirectory,
+  retried,
+  selectBrowserSpecs,
+  selectUnitTests,
+  unitCommand,
+} from "./codium-ci-tests"
 
 const root = new URL("../../..", import.meta.url).pathname
 const read = (path: string) => Bun.file(`${root}/${path}`).text()
@@ -442,6 +449,31 @@ describe("Codium CI lane", () => {
     expect(app.scripts["test:browser"]).toContain("--conditions=browser")
     expect(app.scripts["test:e2e"]).toBe("playwright test")
     expect(await read("packages/desktop/scripts/test.ts")).toContain('"--no-env-file", "test"')
+  })
+
+  test("the picker tries a failed Electron download again and answers the last attempt's status", async () => {
+    const attempts = (answers: number[]) => {
+      const seen: number[] = []
+      const attempt = async () => {
+        const status = answers[seen.length]
+        seen.push(status)
+        return status
+      }
+      return { seen, attempt }
+    }
+    const recovered = attempts([1, 0, 1])
+    expect(await retried(recovered.attempt, [0, 0])).toBe(0)
+    expect(recovered.seen).toEqual([1, 0])
+    const down = attempts([1, 1, 2])
+    expect(await retried(down.attempt, [0, 0])).toBe(2)
+    expect(down.seen).toEqual([1, 1, 2])
+    const installed = attempts([0, 1])
+    expect(await retried(installed.attempt, [0, 0])).toBe(0)
+    expect(installed.seen).toEqual([0])
+    // Vector Codium run 42464293147 failed on one 504 from GitHub's release download; the lane now tries three times.
+    expect(await read("packages/cloud/src/codium-ci-tests.ts")).toMatch(
+      /retried\(\s*\(\) => run\(\[process\.execPath, "--no-env-file", installer\], desktop, "Electron runtime"\),\s*\[15_000, 60_000\],/,
+    )
   })
 
   test("in this checkout the picker finds the hosted API suite and the Codium tests, each with an owner", () => {
