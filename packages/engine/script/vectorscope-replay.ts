@@ -16,8 +16,10 @@
 // eval config supplies and a variant name never holds. It applies to that variant alone, and only in a dry run: a paid
 // cross-family replay waits for the owner's choice of pair (Q5) and a funded ablation (Q9).
 //
-// Load order matters. Static imports are node builtins, effect, the eval scripts' pure modules and types only: none
-// loads core flag.ts, which reads VECTOR_DISABLE_MODELS_FETCH once, or touches the network. main sets the engine's
+// Load order matters. Static imports are node builtins, effect, the eval scripts' pure modules, core's review/plan.ts
+// and types only: none loads core flag.ts, which reads VECTOR_DISABLE_MODELS_FETCH once, or touches the network.
+// plan.ts (VS-40a reads tierProblems from it) is pure and browser-safe, and the eval scripts' replay.ts already loads
+// it, through core dispatch.ts and eval-report.ts, which are pure too. main sets the engine's
 // environment first; a dry run then installs the strict egress guard before the first engine module loads, and a paid
 // run imports the backstop first, as every Vector entry point does. Every engine module is a dynamic import in the
 // branch that needs it.
@@ -30,6 +32,11 @@
 // VS-21e adds two dry-only flags, each off unless given: --cost-split adds each pass's projected cost by token kind,
 // cached and uncached side by side, with the D6 check of the catalog prices; --scenario suggestion-untrusted runs the
 // canned model's opt-in scenario under `verify: "all"` and writes no record. Without them a dry run is as it was.
+//
+// VS-40a adds one more dry-only flag, off unless given: --context-tiers reads each booted model's long-context tiers from
+// its committed catalog entry (catalogTiers) and prints each pass's estimates at those tiers beside the base-tier ones
+// (script/vectorscope-eval/replay.ts tieredPasses and renderTiers). The dry provider still boots without exact tiers
+// (engineConfig), and without the flag a dry run is as it was.
 
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -39,6 +46,7 @@ import { Cause, Effect, Exit, Option, Schema } from "effect"
 import type { ProjectionRecord, ReplayArtifact, VariantRecord } from "@/review/eval"
 import type { ResolvedModel } from "@/review/model"
 import type { ProjectionScenario } from "../test/fixture/projection"
+import { tierProblems, type ReviewTier } from "@vectordevai/core/review/plan"
 import {
   defaultLimits,
   formatSummary,
@@ -71,7 +79,9 @@ import {
   projectedPassCosts,
   projectedRun,
   projectionProblems,
+  renderTiers,
   replayPlan,
+  tieredPasses,
   triagePairProblem,
   variantRecord,
   type PlannedReplay,
@@ -87,6 +97,9 @@ export const CATALOG = join(REPO_ROOT, "packages", "web", "public", "models", "a
 // VS-21e: the canned model's opt-in scenarios (test/fixture/projection.ts PROJECTION_SCENARIOS), named here so that a
 // refusal is decided before any of it loads.
 export const SCENARIOS = ["suggestion-untrusted"] as const satisfies readonly ProjectionScenario[]
+// VS-40a: models.dev's stand-in threshold for a long-context rate listed as context_over_200k, as engine Session.costAt
+// applies it.
+const CONTEXT_OVER_200K = 200_000
 
 export const USAGE = `Usage (from packages/engine): bun script/vectorscope-replay.ts --model <id>=<in>:<out> --mirrors <dir> --work <dir> [options]
 
@@ -117,6 +130,8 @@ it projects each case against a canned model on this computer, under the strict 
                            side, and check the catalog's prices against D6's dated list prices (VS-21e)
   --scenario <name>        A dry run only, writing no record: run the canned model's ${SCENARIOS.join(", ")}
                            scenario, an untrusted case's nit with a suggestion under verify: all (VS-21e)
+  --context-tiers          A dry run only: add each pass's estimates at the long-context tiers of its model's committed
+                           catalog entry, beside the base-tier ones (VS-40a)
   --help                   Print this message
 
 It sends only with a budget, prices above zero, --ledger and --out, the development split and one repetition, in the
@@ -140,6 +155,7 @@ export interface ReplayFlags {
   dryRun: boolean
   costSplit?: true // VS-21e, dry runs only
   scenario?: ProjectionScenario // VS-21e, dry runs only, with no --out
+  contextTiers?: true // VS-40a, dry runs only
 }
 
 const OPTIONS = {
@@ -158,6 +174,7 @@ const OPTIONS = {
   "dry-run": { type: "boolean" },
   "cost-split": { type: "boolean" },
   scenario: { type: "string" },
+  "context-tiers": { type: "boolean" },
   help: { type: "boolean" },
 } as const
 
@@ -178,7 +195,9 @@ export function parseReplayArgs(argv: readonly string[]): ReplayFlags | string {
   )
   if (valued.length)
     return `${valued.map((name) => `--${name}`).join(" and ")} take${valued.length > 1 ? "" : "s"} no value`
-  const text = (name: Exclude<keyof typeof OPTIONS, "variant" | "dry-run" | "cost-split" | "help">) => {
+  const text = (
+    name: Exclude<keyof typeof OPTIONS, "variant" | "dry-run" | "cost-split" | "context-tiers" | "help">,
+  ) => {
     const value = values[name]
     return typeof value === "string" ? value : undefined
   }
@@ -271,6 +290,7 @@ export function parseReplayArgs(argv: readonly string[]): ReplayFlags | string {
     dryRun: values["dry-run"] === true,
     ...(values["cost-split"] === true ? { costSplit: true as const } : {}),
     ...(scenario === "suggestion-untrusted" ? { scenario } : {}),
+    ...(values["context-tiers"] === true ? { contextTiers: true as const } : {}),
   }
 }
 
@@ -287,6 +307,11 @@ export function replayMode(flags: ReplayFlags, env: Readonly<Record<string, stri
   const refusals = [
     ...(flags.costSplit || flags.scenario
       ? ["--cost-split and --scenario are for dry runs only: they project, and never shape what a paid replay sends."]
+      : []),
+    ...(flags.contextTiers
+      ? [
+          "--context-tiers is for dry runs only: it adds estimates to a projection and never shapes what a paid replay sends.",
+        ]
       : []),
     ...(flags.triage || flags.variants.some((variant) => variant.record?.models === "triage-pair")
       ? [
@@ -391,6 +416,57 @@ export function catalogModel(
   }
 }
 
+// VS-40a: the long-context tiers of the model's entry in the committed catalog's OpenRouter models (the entry
+// catalogModel reads, with its guards), as the estimate takes them, or why they cannot be used. Each `cost.tiers` item
+// {tier: {type: "context", size}, input, output, cache_read?, cache_write?} is a tier above `size` tokens, with a cache
+// rate only when it is above 0, as the engine prices it (SpendGuard.priceOf). Without exact tiers (none listed, or an
+// empty list) a context_over_200k rate stands in above 200,000 tokens, as in Session.costAt; with neither there is no
+// tier. Anything else, and any tierProblems, is a problem: a list out of order, a repeated threshold, a tier that is not
+// a context tier, a size or rate that is not a finite number, or a context_over_200k that is not a rate. The dry
+// provider never boots with these (engineConfig).
+export function catalogTiers(catalog: unknown, id: string): { tiers: ReviewTier[] } | { problem: string } {
+  const problem = (detail: string) => ({ problem: `${id}: the committed catalog's long-context tiers ${detail}.` })
+  const models = record(record(record(catalog)?.[PAID_PROVIDER])?.models)
+  const value = models && Object.hasOwn(models, id) ? record(models[id]) : undefined
+  if (!value) return problem(`cannot be read: it is not one of the catalog's ${PAID_PROVIDER} models (${CATALOG})`)
+  const cost = record(value.cost)
+  const amount = (rate: unknown): rate is number => finite(rate) && rate >= 0
+  // A rate object's rates, or undefined when input or output is missing or a rate is not a finite number of 0 or more.
+  const rates = (from: Record<string, unknown> | undefined) => {
+    const input = from?.input
+    const output = from?.output
+    const read = from?.cache_read
+    const write = from?.cache_write
+    if (!amount(input) || !amount(output)) return undefined
+    if (![read, write].every((rate) => rate === undefined || amount(rate))) return undefined
+    return {
+      input,
+      output,
+      ...(amount(read) && read > 0 ? { cacheRead: read } : {}),
+      ...(amount(write) && write > 0 ? { cacheWrite: write } : {}),
+    }
+  }
+  const listed = cost?.tiers
+  if (listed !== undefined && !Array.isArray(listed)) return problem("are not a list")
+  const exact = (Array.isArray(listed) ? listed : []).map((item) => {
+    const entry = record(item)
+    const tier = record(entry?.tier)
+    const priced = rates(entry)
+    return tier?.type === "context" && finite(tier.size) && priced ? { above: tier.size, ...priced } : undefined
+  })
+  const unread = exact.findIndex((tier) => tier === undefined)
+  if (unread >= 0)
+    return problem(`hold tier ${unread + 1}, which is not a context tier with a finite size and rates of 0 or more`)
+  const long = cost?.context_over_200k
+  const over = long === undefined ? undefined : rates(record(long))
+  if (long !== undefined && !over) return problem("hold a context_over_200k that is not a rate")
+  const tiers = exact.flatMap((tier) => (tier ? [tier] : []))
+  const chosen = tiers.length || !over ? tiers : [{ above: CONTEXT_OVER_200K, ...over }]
+  const problems = tierProblems(chosen)
+  if (problems.length) return problem(`are refused: ${problems.join("; ")}`)
+  return { tiers: chosen }
+}
+
 // Every environment variable a catalog provider reads, the eval key aside: removed before the engine loads, so the
 // engine finds no provider key of the machine's. The dry branch removes the eval key too.
 export function providerKeys(catalog: unknown): string[] {
@@ -429,7 +505,10 @@ export function engineEnvironment(root: string): Record<string, string> {
 // VECTOR_CONFIG_CONTENT: lsp, formatter and snapshot off, as the GitHub review job sets them, and one provider only.
 // Dry: the catalog model under PROJECTION_PROVIDER at the fake server, with a dummy key. Its long-context rate comes as
 // context_over_200k, the config's only form; the catalog's exact tiers are not carried, and seed prompts are far below
-// them. A dry run with a triage model (VS-29a) lists it beside the review model, under the same provider and key.
+// them. So the dry run's own admission applies a long-context rate above 200,000 tokens only, and only for a model that
+// lists context_over_200k; VS-40a's --context-tiers reads the exact tiers from the catalog for its estimates instead
+// (catalogTiers), with no engine config change (I-11). A dry run with a triage model (VS-29a) lists it beside the
+// review model, under the same provider and key.
 // Paid: OpenRouter from the catalog, with its key as the literal {env:...} reference the engine fills in, so the key's
 // value never enters this text.
 export function engineConfig(
@@ -562,6 +641,26 @@ export async function main(argv: string[], io: Io): Promise<number> {
     io.err(`--triage-model: ${triaged.problem}\n`)
     return 2
   }
+  // VS-40a, under --context-tiers only: each booted model's long-context tiers, from the same catalog entries, keyed by
+  // the model id a projection record names. Read before anything is created, so a refusal leaves --work as it was.
+  const catalogReads = flags.contextTiers
+    ? [flags.model.id, ...(flags.triage ? [flags.triage.id] : [])].map((id) => ({
+        id,
+        result: catalogTiers(catalog, id),
+      }))
+    : []
+  const unread = catalogReads.flatMap((entry) => ("problem" in entry.result ? [entry.result.problem] : []))
+  if (unread.length) {
+    io.err(unread.map((problem) => `--context-tiers: ${problem}\n`).join(""))
+    return 2
+  }
+  const modelTiers = flags.contextTiers
+    ? new Map(
+        catalogReads.flatMap((entry) =>
+          "tiers" in entry.result ? [[`${PROJECTION_PROVIDER}/${entry.id}`, entry.result.tiers] as const] : [],
+        ),
+      )
+    : undefined
 
   mkdirSync(flags.work, { recursive: true })
   const root = mkdtempSync(join(flags.work, "run-"))
@@ -583,6 +682,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
       planned,
       entry: chosen.entry,
       ...(flags.triage && triaged ? { triage: { id: flags.triage.id, entry: triaged.entry } } : {}),
+      ...(modelTiers ? { tiers: modelTiers } : {}),
       cases: join(root, "cases"),
       source,
       io,
@@ -599,6 +699,8 @@ interface Run {
   planned: PlannedReplay[]
   entry: CatalogEntry
   triage?: { id: string; entry: CatalogEntry } // --triage-model's catalog entry (VS-29a); a dry run's only
+  // VS-40a, under --context-tiers: each booted model's catalog tiers, keyed by `${PROJECTION_PROVIDER}/<id>`
+  tiers?: ReadonlyMap<string, readonly ReviewTier[]>
   cases: string // where each case's checkout is prepared
   source: { vector?: string; manifest: string }
   io: Io
@@ -737,6 +839,20 @@ async function projectDry(run: Run): Promise<number> {
         ...(run.triage ? listPriceWarnings(run.triage.id, catalogPrice(run.triage.entry)) : []),
       ]
     : []
+  // VS-40a, under --context-tiers only: the clean records' passes at the catalog's long-context tiers, after the
+  // projection table and before the D6 lines.
+  const tiers = run.tiers
+  const tiered = tiers
+    ? [
+        "",
+        ...renderTiers(
+          checked.flatMap((result) =>
+            result.record && !result.problems.length ? tieredPasses(result.record, tiers) : [],
+          ),
+          tiers,
+        ),
+      ]
+    : []
   run.io.out(
     [
       `Dry projection of ${run.planned.length} case(s) x ${flags.variants.length} variant(s) on ${flags.model.id}${
@@ -772,6 +888,7 @@ async function projectDry(run: Run): Promise<number> {
             )
           : undefined,
       ),
+      ...tiered,
       ...(warnings.length ? ["", ...warnings] : []),
       "",
       `Dry run: nothing was sent. The strict egress guard logged ${attempts.length} connection attempts, ${outside} off this computer.`,

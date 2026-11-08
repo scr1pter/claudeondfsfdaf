@@ -2,9 +2,13 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { Schema } from "effect"
+import { estimateDispatch } from "@vectordevai/core/review/dispatch"
+import { priceAt } from "@vectordevai/core/review/plan"
 import {
   CATALOG,
   catalogModel,
+  catalogTiers,
   engineConfig,
   engineEnvironment,
   main,
@@ -686,6 +690,317 @@ describe("the cost split and the canned scenario (VS-21e)", () => {
   })
 })
 
+// VS-40a: --context-tiers, a dry-only flag that is absent unless given, and the catalog's long-context tiers it reads.
+// Only Haiku 5.5's 100K tier is read from the committed catalog (the Done criterion); every other shape is an inline
+// fixture copied from api.json at 255cfd83, so an ordinary catalog update cannot break these tests.
+const context = (size: unknown) => ({ type: "context", size })
+const SONNET_45_COST = {
+  input: 3,
+  output: 15,
+  cache_read: 0.3,
+  cache_write: 3.75,
+  tiers: [{ input: 6, output: 22.5, cache_read: 0.6, cache_write: 7.5, tier: context(200_000) }],
+  context_over_200k: { input: 6, output: 22.5, cache_read: 0.6, cache_write: 7.5 },
+}
+const GPT_55_COST = {
+  input: 5,
+  output: 30,
+  cache_read: 0.5,
+  tiers: [{ input: 10, output: 45, cache_read: 1, tier: context(272_000) }],
+  context_over_200k: { input: 10, output: 45, cache_read: 1 },
+}
+const SONNET_55_COST = { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 }
+// One catalog model under the paid provider, as the committed catalog lists its OpenRouter models.
+const catalogOf = (cost: unknown, id = "vendor/model") => ({
+  [PAID_PROVIDER]: {
+    id: PAID_PROVIDER,
+    name: "OpenRouter",
+    env: [],
+    npm: "@openrouter/ai-sdk-provider",
+    models: {
+      [id]: {
+        id,
+        name: id,
+        release_date: "2025-01-01",
+        attachment: false,
+        reasoning: false,
+        tool_call: true,
+        limit: { context: 1_000_000, output: 64_000 },
+        cost,
+      },
+    },
+  },
+})
+const tiersOf = (catalog: unknown, id = "vendor/model") => {
+  const read = catalogTiers(catalog, id)
+  if ("problem" in read) throw new Error(read.problem)
+  return read.tiers
+}
+
+describe("long-context tiers from the catalog (VS-40a)", () => {
+  const catalog: unknown = JSON.parse(readFileSync(CATALOG, "utf8"))
+
+  test("Haiku 5.5's 100K tier is read from the committed catalog", () => {
+    expect(catalogTiers(catalog, "anthropic/claude-haiku-5.5")).toEqual({
+      tiers: [{ above: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
+    })
+  })
+
+  test("an exact tier wins over context_over_200k, which stands in above 200,000 only when no exact tier is listed", () => {
+    expect(tiersOf(catalogOf(GPT_55_COST))).toEqual([{ above: 272_000, input: 10, output: 45, cacheRead: 1 }])
+    expect(tiersOf(catalogOf(SONNET_45_COST))).toEqual([
+      { above: 200_000, input: 6, output: 22.5, cacheRead: 0.6, cacheWrite: 7.5 },
+    ])
+    expect(tiersOf(catalogOf(SONNET_55_COST))).toEqual([])
+    expect(
+      tiersOf(catalogOf({ input: 3, output: 15, tiers: [], context_over_200k: { input: 6, output: 22.5 } })),
+    ).toEqual([{ above: 200_000, input: 6, output: 22.5 }])
+    expect(
+      tiersOf(catalogOf({ input: 3, output: 15, context_over_200k: { input: 6, output: 22.5, cache_read: 0 } })),
+    ).toEqual([{ above: 200_000, input: 6, output: 22.5 }])
+    // A cache rate of 0 is none, as the engine prices it (SpendGuard.priceOf).
+    expect(
+      tiersOf(
+        catalogOf({
+          input: 1,
+          output: 2,
+          tiers: [{ input: 2, output: 4, cache_read: 0, cache_write: 0.5, tier: context(100_000) }],
+        }),
+      ),
+    ).toEqual([{ above: 100_000, input: 2, output: 4, cacheWrite: 0.5 }])
+    expect(tiersOf(catalogOf(undefined))).toEqual([])
+  })
+
+  test("refuse a tier list that is not ordered, repeats a threshold or holds anything but finite context tiers", () => {
+    const refused = { problem: expect.stringContaining("vendor/model: the committed catalog's long-context tiers") }
+    const tier = (size: unknown, extra: Record<string, unknown> = {}) => ({
+      input: 2,
+      output: 4,
+      tier: context(size),
+      ...extra,
+    })
+    for (const cost of [
+      { input: 1, output: 2, tiers: [tier(272_000), tier(128_000)] },
+      { input: 1, output: 2, tiers: [tier(200_000), tier(200_000)] },
+      { input: 1, output: 2, tiers: [{ input: 2, output: 4, tier: { type: "input", size: 100_000 } }] },
+      { input: 1, output: 2, tiers: [tier("100000")] },
+      { input: 1, output: 2, tiers: [tier(100_000, { input: -2 })] },
+      { input: 1, output: 2, tiers: [tier(100_000, { cache_read: -0.1 })] },
+      { input: 1, output: 2, tiers: [tier(100_000, { output: "4" })] },
+      { input: 1, output: 2, tiers: [tier(0)] },
+      { input: 1, output: 2, tiers: [null] },
+      { input: 1, output: 2, tiers: "100000" },
+      { input: 1, output: 2, context_over_200k: { input: "6", output: 22.5 } },
+      { input: 1, output: 2, context_over_200k: "6" },
+      { input: 1, output: 2, tiers: [tier(100_000)], context_over_200k: { input: 6 } },
+    ])
+      expect(catalogTiers(catalogOf(cost), "vendor/model")).toEqual(refused)
+    expect(catalogTiers(catalogOf(GPT_55_COST), "vendor/model")).not.toHaveProperty("problem")
+    for (const id of ["vendor/no-such-model", "__proto__", "constructor"])
+      expect(catalogTiers(catalog, id)).toEqual({
+        problem: expect.stringContaining(`${id}: the committed catalog's long-context tiers cannot be read`),
+      })
+    expect(catalogTiers("not a catalog", "vendor/model")).toHaveProperty("problem")
+  })
+
+  // The catalog's OpenRouter anthropic/claude-sonnet-4.5 (255cfd83), a large review pass: P 190,000 at 30 steps. The low
+  // band's last step, L(5) = 198,000, passes no tier, so its figures are the base-tier ones; the high band's steps 4 to
+  // 30 pass 200,000.
+  test("the Sonnet 4.5 200K tier from a catalog fixture", () => {
+    const tiers = tiersOf(catalogOf(SONNET_45_COST, "anthropic/claude-sonnet-4.5"), "anthropic/claude-sonnet-4.5")
+    const price = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+    const pass = (cached: boolean) =>
+      estimateDispatch([
+        {
+          pass: "review",
+          model: `${PROJECTION_PROVIDER}/anthropic/claude-sonnet-4.5`,
+          promptTokens: 190_000,
+          maxSteps: 30,
+          price: { ...price, tiers },
+          cached,
+        },
+      ]).passes[0]
+    const close = (range: { low: number; high: number } | undefined, low: number, high: number) => {
+      expect(range?.low).toBeCloseTo(low, 10)
+      expect(range?.high).toBeCloseTo(high, 10)
+    }
+    // The legacy range does not depend on caching.
+    for (const cached of [false, true]) {
+      close(pass(cached).usd, 0.903, 22.59)
+      close(pass(cached).tiered?.usd, 0.903, 43.2855)
+      expect(pass(cached).tiered?.usd.low).toBe(pass(cached).usd?.low)
+    }
+    close(pass(false).v2.usd, 3.045, 23.13)
+    close(pass(false).tiered?.v2, 3.045, 44.0685)
+    close(pass(true).v2.usd, 1.1091, 4.0977)
+    close(pass(true).tiered?.v2, 1.1091, 6.8922)
+  })
+
+  // I-10: one tier rule, checked against the engine's own. Each shape is decoded through the catalog schema and mapped by
+  // the engine's catalog reader, then priced by Session.costAt at each context size; the same entry, read by
+  // catalogTiers, is priced by core priceAt.
+  test("give Session.costAt's rates at every context size, for every catalog cost shape", async () => {
+    const { ModelCatalog } = await import("@vectordevai/schema/model-catalog")
+    const { Provider } = await import("../../src/provider/provider")
+    const { Session } = await import("../../src/session/session")
+    const { SpendGuard } = await import("@vectordevai/core/spend-guard")
+    const tier = (size: number, input: number, output: number, cache: Record<string, number> = {}) => ({
+      input,
+      output,
+      ...cache,
+      tier: { type: "context", size },
+    })
+    const shapes: [string, unknown][] = [
+      [
+        "one exact tier",
+        {
+          input: 0.1,
+          output: 0.5,
+          cache_read: 0.01,
+          cache_write: 0.125,
+          tiers: [tier(100_000, 0.5, 2.5, { cache_read: 0.05, cache_write: 0.625 })],
+        },
+      ],
+      [
+        "two exact tiers",
+        {
+          input: 1,
+          output: 4,
+          cache_read: 0.1,
+          tiers: [tier(128_000, 2, 8, { cache_read: 0.2 }), tier(256_000, 4, 16, { cache_read: 0.4 })],
+        },
+      ],
+      [
+        "context_over_200k only",
+        {
+          input: 3,
+          output: 15,
+          cache_read: 0.3,
+          cache_write: 3.75,
+          context_over_200k: { input: 6, output: 22.5, cache_read: 0.6, cache_write: 7.5 },
+        },
+      ],
+      ["both, equal", SONNET_45_COST],
+      ["both, different", GPT_55_COST],
+      ["neither", SONNET_55_COST],
+      [
+        "an empty tier list with context_over_200k",
+        { input: 3, output: 15, tiers: [], context_over_200k: { input: 6, output: 22.5 } },
+      ],
+      [
+        "a tier without the base's cache rates",
+        { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75, tiers: [tier(200_000, 6, 22.5)] },
+      ],
+    ]
+    const contexts = [
+      0,
+      99_999,
+      100_000,
+      100_001,
+      127_999,
+      128_000,
+      128_001,
+      199_999,
+      200_000,
+      200_001,
+      256_001,
+      271_999,
+      272_000,
+      272_001,
+      1_000_000,
+      Number.NaN,
+    ]
+    const rates = (price: { input: number; output: number; cacheRead?: number; cacheWrite?: number } | undefined) =>
+      price && { input: price.input, output: price.output, cacheRead: price.cacheRead, cacheWrite: price.cacheWrite }
+    type Cost = NonNullable<Parameters<typeof Session.costAt>[0]>
+    // The engine's rates for a cost at a context size, as run.ts prices an admission.
+    const engineAt = (cost: Cost, size: number) => {
+      const at = Session.costAt(cost, size)
+      return at && rates(SpendGuard.priceOf(at))
+    }
+    const mismatches = shapes.flatMap(([name, cost]) => {
+      const catalog = catalogOf(cost)
+      const provider = Schema.decodeUnknownSync(ModelCatalog.Provider)(catalog[PAID_PROVIDER])
+      const engineCost = Provider.fromModelCatalogProvider(provider).models["vendor/model"].cost
+      const base = SpendGuard.priceOf(engineCost)
+      if (!base) return [`${name}: unpriced`]
+      const tiers = tiersOf(catalog)
+      return contexts.flatMap((size) => {
+        const core = rates(priceAt({ ...base, tiers }, size))
+        const engine = engineAt(engineCost, size)
+        return JSON.stringify(core) === JSON.stringify(engine)
+          ? []
+          : [`${name} at ${size}: ${JSON.stringify(core)} against ${JSON.stringify(engine)}`]
+      })
+    })
+    expect(mismatches).toEqual([])
+    // The rule alone, on tiers mapped by hand: an unordered list, two equal thresholds (the first listed wins, as the
+    // engine's stable sort leaves it) and a stand-in over 200K.
+    const listed: Cost = {
+      input: 1,
+      output: 2,
+      cache: { read: 0.1, write: 0 },
+      tiers: [
+        { input: 4, output: 8, cache: { read: 0.4, write: 0 }, tier: { type: "context", size: 272_000 } },
+        { input: 2, output: 4, cache: { read: 0, write: 0 }, tier: { type: "context", size: 128_000 } },
+        { input: 3, output: 6, cache: { read: 0.3, write: 0.5 }, tier: { type: "context", size: 128_000 } },
+      ],
+    }
+    const listedPrice = {
+      input: 1,
+      output: 2,
+      cacheRead: 0.1,
+      tiers: [
+        { above: 272_000, input: 4, output: 8, cacheRead: 0.4 },
+        { above: 128_000, input: 2, output: 4 },
+        { above: 128_000, input: 3, output: 6, cacheRead: 0.3, cacheWrite: 0.5 },
+      ],
+    }
+    const over: Cost = {
+      input: 3,
+      output: 15,
+      cache: { read: 0.3, write: 0 },
+      experimentalOver200K: { input: 6, output: 22.5, cache: { read: 0.6, write: 0 } },
+    }
+    const overPrice = {
+      input: 3,
+      output: 15,
+      cacheRead: 0.3,
+      tiers: [{ above: 200_000, input: 6, output: 22.5, cacheRead: 0.6 }],
+    }
+    for (const size of contexts) {
+      expect(rates(priceAt(listedPrice, size))).toEqual(engineAt(listed, size))
+      expect(rates(priceAt(overPrice, size))).toEqual(engineAt(over, size))
+    }
+    expect(rates(priceAt(listedPrice, 128_001))).toEqual({
+      input: 2,
+      output: 4,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    })
+  })
+
+  test("--context-tiers is parsed when given, absent when not, takes no value and is for dry runs only", () => {
+    expect(flags(base)).not.toHaveProperty("contextTiers")
+    expect(flags([...base, "--context-tiers"]).contextTiers).toBe(true)
+    for (const value of ["true", "x", ""])
+      expect(parseReplayArgs([...base, `--context-tiers=${value}`])).toBe("--context-tiers takes no value")
+    expect(replayMode(flags([...base, ...sending, "--context-tiers"]), PROTECTED)).toEqual({
+      refused: expect.stringContaining(
+        "--context-tiers is for dry runs only: it adds estimates to a projection and never shapes what a paid replay sends.",
+      ),
+    })
+    expect(replayMode(flags([...base, ...sending, "--context-tiers", "--dry-run"]), PROTECTED)).toEqual({ mode: "dry" })
+    expect(replayMode(flags([...base, "--context-tiers"]), PROTECTED)).toEqual({ mode: "dry" })
+    // The VS-21e refusal is as it was.
+    expect(replayMode(flags([...base, ...sending, "--cost-split"]), PROTECTED)).toEqual({
+      refused: expect.stringContaining(
+        "--cost-split and --scenario are for dry runs only: they project, and never shape what a paid replay sends.",
+      ),
+    })
+  })
+})
+
 describe("a dry run with the cost split and the scenario, as a subprocess (VS-21e)", () => {
   const mirrorDir = path.join(root, "mirrors-21e", "pallets", "werkzeug")
   const commits = buildMirror(mirrorDir)
@@ -700,7 +1015,7 @@ describe("a dry run with the cost split and the scenario, as a subprocess (VS-21
       exclusions: [],
     }),
   )
-  const run = (name: string, extra: string[]) => {
+  const run = (name: string, extra: string[], model = `${MODEL}=${PRICE}`) => {
     const home = path.join(root, `home-21e-${name}`)
     const temp = path.join(root, `tmp-21e-${name}`)
     mkdirSync(home, { recursive: true })
@@ -710,7 +1025,7 @@ describe("a dry run with the cost split and the scenario, as a subprocess (VS-21
         process.execPath,
         path.join("script", "vectorscope-replay.ts"),
         "--model",
-        `${MODEL}=${PRICE}`,
+        model,
         "--manifest",
         manifest,
         "--mirrors",
@@ -791,6 +1106,52 @@ describe("a dry run with the cost split and the scenario, as a subprocess (VS-21
       expect(records).toHaveLength(2)
       expect(asked("engine")).toBe(count("engine"))
       expect(asked("engine:shared-verify")).toBe(count("engine"))
+    },
+    240_000,
+  )
+
+  // VS-40a: --context-tiers on the mirror and manifest above, on a model whose committed catalog entry lists a 100K tier
+  // (Haiku 5.5, a catalog example, not a D6 choice), and the same run without it. Their work, home and temporary
+  // directories have one length, so every count and dollar figure matches; only the egress count is left out of the
+  // comparison, since it depends on how the loopback connections were pooled. Two runs, as the test above has.
+  posix(
+    "VS-40a: --context-tiers adds the long-context block, and without it the output is that output less the block",
+    () => {
+      const haiku = "anthropic/claude-haiku-5.5"
+      const flagged = run("c", ["--context-tiers"], `${haiku}=0.1:0.5`)
+      expect(flagged.stderr).toBe("")
+      expect(flagged.code).toBe(0)
+      const lines = flagged.stdout.split("\n")
+      const start = lines.findIndex((line) => line.startsWith("Long-context tiers (VS-40a)"))
+      const end = lines.findIndex((line) => line.startsWith("Step k of a band is priced at the long-context tier"))
+      expect(start).toBeGreaterThan(0)
+      expect(end).toBeGreaterThan(start)
+      expect(lines[start - 1]).toBe("")
+      expect(lines).toContain(
+        `- ${PROJECTION_PROVIDER}/${haiku}: above 100000 tokens at input 0.5, output 2.5, cache read 0.05, cache write 0.625 (USD per million tokens)`,
+      )
+      const row = (variant: string, pass: string, estimate: string) =>
+        lines.find((line) =>
+          line.startsWith(`| ${variant} · ${PROJECTION_PROVIDER}/${haiku} | ${pass} | ${estimate} | 1 | `),
+        )
+      for (const variant of ["engine", "engine:shared-verify"])
+        for (const pass of ["review", "verify"])
+          for (const estimate of ["legacy", "v2"]) expect(row(variant, pass, estimate)).toBeDefined()
+      // The review's high band runs 30 steps of 4,000 more tokens each, so its last steps pass 100,000.
+      const cells = (row("engine", "review", "legacy") ?? "")
+        .split(" | ")
+        .map((cell) => Number(cell.replace(/[$| ]/g, "")))
+      expect(cells[7]).toBeGreaterThan(cells[6])
+      expect(flagged.stdout).toMatch(/connection attempts, 0 off this computer\./)
+      expect(flagged.stdout).not.toContain(DUMMY_KEY)
+      expect(readdirSync(path.join(root, "work-21e-c"))).toEqual([])
+
+      const plain = run("d", [], `${haiku}=0.1:0.5`)
+      expect(plain.stderr).toBe("")
+      expect(plain.code).toBe(0)
+      expect(plain.stdout).not.toContain("Long-context tiers")
+      const pooled = (text: string) => text.replace(/logged \d+ connection attempts/, "logged N connection attempts")
+      expect(pooled(plain.stdout)).toBe(pooled([...lines.slice(0, start - 1), ...lines.slice(end + 1)].join("\n")))
     },
     240_000,
   )

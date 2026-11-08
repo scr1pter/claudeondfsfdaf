@@ -1014,6 +1014,33 @@ suggestion-untrusted` adds one nit carrying a suggestion to the canned
   with `, K verify candidate(s)`. It is dry only and writes no record (`--out`
   is refused), so a canned scenario is never joined with paid runs. The default
   replies are unchanged.
+- **Long-context tiers (VS-40a).** The entry point's `--context-tiers` reads
+  each booted model's long-context tiers from its committed catalog entry
+  (`catalogTiers`, the entry `catalogModel` reads). Each `cost.tiers` item
+  `{tier: {type: "context", size}, input, output, cache_read?, cache_write?}` is
+  a tier above `size` tokens, with a cache rate only when it is above 0; without
+  exact tiers a `context_over_200k` rate stands in above 200,000 tokens, as the
+  engine's `Session.costAt` applies it. A tier list out of order, a repeated
+  threshold, a tier that is not a context tier, a size that is not a finite
+  number above 0, a rate that is not a finite number of 0 or more, or a tier
+  with neither an input nor an output rate above 0 is refused with exit 2 before
+  anything is created. After the projection table the run prints each model's
+  tiers and, by variant, model and pass, the legacy and v2 estimates at
+  base-tier and tiered prices, as means per run (`replay.ts` `tieredPasses` and
+  `renderTiers`, core `dispatch.ts` `PassEstimate.tiered`). Both are recomputed
+  from each record's inputs, as the engine computes the record's own `usd` and
+  `v2`, and a pass whose record holds other figures or none (an older engine,
+  or a hand edit) is left out, so the base-tier figures are always the record's
+  own. Step k is priced at the tier its prompt P + (k−1)·R passes, cache reads
+  and writes included; a band whose last step passes no tier keeps its
+  base-tier figure.
+  The VS-24 gate keeps the base-tier legacy low (VS-40's kill rule). The dry
+  provider still boots with `context_over_200k` alone, never with exact tiers
+  (no engine config change, I-11), so the projection's own admission and cap
+  decisions apply a long-context rate only above 200,000 tokens and only for a
+  model that lists `context_over_200k`, and the records' estimates and step
+  prices stay base-tier. Nothing new is written into a record, and without the
+  flag the output is as it was.
 
 ```
 cd packages/engine && bun test --timeout 30000 test/review/eval.test.ts
@@ -1055,6 +1082,8 @@ cd packages/engine && bun script/vectorscope-replay.ts --model anthropic/claude-
   `--cost-split` the entry point also runs the D6 price check on the
   catalog prices it booted with. `--model` and `--triage-model` stay at two
   price fields; their cache rates come from the catalog.
+- **`--context-tiers`** (VS-40a, under Projection above) is for dry runs only
+  too: a run that would send with it is refused.
 - **The send rules** (`replayMode`), all of which must hold, or nothing is
   sent and nothing is created: a budget; input and output prices above zero;
   `GITHUB_ACTIONS=true`, `VECTORSCOPE_EVAL_ENVIRONMENT=vectorscope-eval` and

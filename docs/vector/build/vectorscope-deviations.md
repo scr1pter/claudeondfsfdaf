@@ -15289,3 +15289,601 @@ quotes, so no slip is recorded there.
     reasoning fields are not exercised.
   - Windows CI, until it is dispatched.
   - No paid run, no model request and no workflow dispatch.
+
+## 2026-11-08 · VS-40a Estimator: long-context tiers and effort-keyed output (core)
+
+Addendum B §1.3, Now window: optional long-context tiers on `ReviewPrice`,
+priced per step by engine `Session.costAt`'s rule, a tiered range beside the
+legacy and v2 estimates, an effort-keyed output per step that is today's 1,800
+whenever effort is absent, and a dry-only replay flag that reads the tiers
+from the committed catalog. Built at `bfd8bdd6` on a clean tree, equal to
+`origin/vectorscope`. VS-40a is a proposal pending Q45 (b), off by default,
+with no review key; every new input is an optional field or a dry-only flag
+that is absent unless given. No runner file changes (engine `review/run.ts`,
+app `ai-review.ts`). Outside tests, only `ReviewEval.project` reaches the new
+code, through `estimateDispatch`: it reads `calibratedOutputPerStep`, which
+gives today's default without an effort, and no record's price lists tiers.
+The tiered figures appear only under the new flag. The build committed
+nothing: it left the changes in the working tree for the orchestrator's commit
+gate. It implements the WP-3 plan as corrected by
+its critique: nine of its ten points were taken in full and one in part
+(below, "Critique decisions"). It closes VS-21e's Deferred bullet "VS-40a's
+long-context tiers and effort-keyed output, its own package", which is left as
+written.
+
+Lane-note corrections, recorded and not edited elsewhere: the head was
+`bfd8bdd6`, not `41a64e5e` (WP-0 `7a2aaf4f`, VS-33b `ac801dd3`, the task-tool
+limit `26d3e756`, VS-21e `5ff3bcb7` and the import-test limit `bfd8bdd6` came
+after it), and `REVIEW_PIPELINE_SOURCES` was `dfeeef20fd190c79`, not
+`66cc83db55a87db9`. Addendum B's citations of `vectorscope-replay.ts` were
+right at its head `41a64e5e` and moved with VS-21e's added lines: 306-329 is
+now `CatalogEntry` at 318-333 and `catalogModel` at 335-392, and 399-401 (the
+`engineConfig` comment) is 429-433 at `bfd8bdd6`. `calibratedOutputPerStep`
+did not exist yet: VS-24c landed the constant `CALIBRATED_OUTPUT_PER_STEP`
+(`dispatch.ts:34`), and VS-40a adds the function beside it.
+
+- **What landed.**
+  - **Core `packages/core/src/review/plan.ts`** (pinned; additions and two
+    comment sentences only: `estimateCostUsd`, `nextStepCostUsd`,
+    `OUTPUT_PER_STEP`, `estimateBands` and `passInputTokens` keep their code
+    byte for byte).
+    - `ReviewPrice.tiers?: readonly ReviewTier[]` and
+      `ReviewTier { above, input, output, cacheRead?, cacheWrite? }`. A cache
+      rate a tier does not list is none at that tier, never the base one (the
+      engine reads a missing rate as 0, and `SpendGuard.priceOf` drops it).
+    - `priceAt(price, contextTokens)`: the tier with the highest threshold
+      the context is strictly over, the first listed among equal ones (the
+      engine's stable sort), else `price` itself. A tier comes back flat, with
+      its own cache rates only; a context that is not a number passes none.
+    - `tierProblems(tiers)`: one line per problem, "tier N ...": a threshold
+      that is not a finite number above 0, one equal to or below the one
+      before it, a rate that is not a finite number of 0 or more, and a tier
+      with neither input nor output above 0.
+    - `CacheReads` (`"none" | "prompt" | "prefix"`) and
+      `bandCostUsd({ promptTokens, band, price, reads, write, outputPerStep })`:
+      step k sends L(k) = P + (k−1)·R tokens, cache reads and writes included,
+      and is priced at `priceAt(price, L(k))`. "prompt" is the legacy low
+      band's rule (each step after the first reads P), "prefix" v2's h(S) rule
+      (step k reads L(k−1)); reads happen only where the step's rates list a
+      cache read. L(k) rises with k, so each tier's steps form one run, and
+      each run is summed in closed form: no loop over steps and no allocation.
+      Its run boundaries are the first step past each threshold the last step
+      passes, the quotient's floor corrected by one step either way so they
+      match `priceAt`'s strict comparison exactly. Steps that are not a whole
+      number of at least 1, growth below 0 or a last prompt that is not
+      finite give NaN.
+  - **Core `packages/core/src/review/dispatch.ts`** (pinned).
+    - `OutputFit { model, effort, tokens, fitted, cases }`, `OUTPUT_FITS`
+      (empty: measured entries only, added from D7 pilot artifacts with their
+      fit date and cases) and
+      `calibratedOutputPerStep(model?, effort?, fits = OUTPUT_FITS)`:
+      `CALIBRATED_OUTPUT_PER_STEP` itself whenever effort or model is absent,
+      else the entry for exactly that model and effort, else the default.
+      `model` is `PassPlan.model` ("provider/model") and the key is the part
+      after the provider, so "vectorscope-projection/x" and "openrouter/x"
+      find the same entry; `effort` is the engine variant name R2 will pin.
+    - `PassPlan.effort?` (nothing sets it before R2), echoed by `estimatePass`
+      and copied by `planOf` only when defined.
+    - `PassEstimate.tiered?: { usd, v2 }`, present only when the price lists
+      tiers: each band again through `bandCostUsd` ("prompt" and "none" at 600
+      output tokens for the legacy low and high bands; "prefix" with
+      "cache-write" or "none" with "input" for v2, as caching decides). A band
+      whose last step passes no tier, or whose last prompt is not finite, keeps
+      its base-tier figure, so a tier listed but never reached changes nothing
+      bit for bit, and NaN or Infinity steps stay as they are without tiers.
+    - `DispatchEstimate.tiered?`, after `v2`, present only when some pass has
+      `tiered`: the priced passes' tiered ranges, or their base ones.
+    - `estimatePass` reads v2's output per step from
+      `calibratedOutputPerStep(plan.model, plan.effort)`, for both its dollars
+      and its `outputTokens`. `decideDispatch`, `canLower`, `overLimits`,
+      `SHRINK_ORDER`, `shrinkStepCap`, `remainingUsd`, `cacheReadShare` and
+      `CALIBRATED_OUTPUT_PER_STEP` are unchanged; the gate reads the base-tier
+      legacy low only. The build's `v2.fitted` comment said it dates the
+      default fit only.
+    - Since review round one (finding 5), each estimate names the fit it
+      rests on. `PassEstimate.v2.fit?` is the measured `OUTPUT_FITS` entry a
+      pass is priced at, present only when its model and effort have one.
+      `DispatchEstimate.v2` gains `fits?`, those entries once each in pass
+      order, only when some pass has one, and its `fitted` (now optional) is
+      left out only when every pass has a measured fit. `estimateDispatch`
+      takes an optional `fits` (default `OUTPUT_FITS`) for tests and passes
+      it to `calibratedOutputPerStep`. With no measured fit, which is every
+      estimate today, nothing is added.
+  - **Core `packages/core/src/review/model-evidence.ts`**: the pin (below).
+  - **`script/vectorscope-eval/replay.ts`**: `TieredPass`,
+    `tieredPasses(record, tiers)` and `renderTiers(passes, tiers)` beside
+    `projectedPassCosts`, which now shares its checks through a new private
+    `pricedPass(record, pass)` (the same checks and rows as before; its tests
+    pass unchanged). `tieredPasses` re-estimates each pass with
+    `estimateDispatch` at its own model's snapshot plus the map's tiers for
+    that model id (never the snapshot's own `tiers`), cached as the record
+    assumed (engine `eval.ts`: a price with a cache read is a caching route);
+    `base` is the record's own estimate and `tiered` is `base` itself for a
+    model with no tier. Since review round one (finding 3) both are
+    recomputed from the record's inputs and compared with what it holds: a
+    pass whose record holds no `usd` and `v2.usd`, or other figures (an older
+    engine, or a hand edit), has no row. `renderTiers` prints each model's tiers, a table of
+    legacy and v2 rows per variant, model and pass with base-tier and tiered
+    low and high as means per run over distinct case and repetition, and one
+    definitions line.
+  - **Engine `packages/engine/script/vectorscope-replay.ts`** (not pinned).
+    - `--context-tiers` (boolean, `ReplayFlags.contextTiers?: true`), with
+      two USAGE lines; `--context-tiers=<value>` is refused by the existing
+      valued-switch check. `replayMode` refuses it on a run that would send
+      ("--context-tiers is for dry runs only: it adds estimates to a
+      projection and never shapes what a paid replay sends."), beside the
+      unchanged VS-21e refusal.
+    - `catalogTiers(catalog, id)`: the entry `catalogModel` reads, with its
+      record and `Object.hasOwn` guards. Each `cost.tiers` item maps to
+      `{ above: size, input, output, cacheRead?, cacheWrite? }`, a cache rate
+      only when above 0; without exact tiers (absent or `[]`) a
+      `context_over_200k` rate stands in above `CONTEXT_OVER_200K` = 200,000.
+      Problems, each "<id>: the committed catalog's long-context tiers ...": a
+      missing entry, `tiers` that is not a list, an entry that is not a
+      context tier with a finite size and rates of 0 or more, a present
+      `context_over_200k` that is not a rate (with or without exact tiers),
+      and any `tierProblems`.
+    - `main`, only under the flag, reads the tiers of `--model` and
+      `--triage-model` after the catalog checks and before anything is
+      created; a problem prints `--context-tiers: <problem>` and exits 2.
+      `Run.tiers` is keyed `vectorscope-projection/<id>`, the id a record
+      names. `projectDry`, under the flag only, prints `renderTiers` over the
+      clean records after the projection table and before the D6 lines.
+    - The header's load-order sentence names core `review/plan.ts` as a
+      static import (for `tierProblems`) and says why the rule holds; a
+      VS-40a paragraph; the `engineConfig` comment says the dry admission
+      applies a long-context rate above 200,000 only. `CatalogEntry`,
+      `catalogModel`, `dryModel`, `engineConfig`'s code and `projectionModel`
+      are unchanged.
+  - **`script/vectorscope-eval/README.md`** (additions only): "Long-context
+    tiers (VS-40a)" under Projection, and one bullet in the paid entry point's
+    list. No model string is added (Q35).
+- **Tests.** One test file at a time, from its package directory, through
+  `/home/user/.tools/vector-serial`, `--timeout 30000`, `GITHUB_ACTIONS=false`,
+  TMPDIR and XDG roots under `/tmp/vector-vectorscope/wp3/env/`. Every
+  existing test of the four touched test files passes unchanged; their diffs
+  remove 3 lines, one import and two lines of the VS-21e subprocess helper
+  (Evidence notes).
+  - Core `plan.test.ts`, describe "long-context tiers (VS-40a)", 6 tests:
+    `priceAt` (0 and 100,000 give the price itself, 100,001 the tier with no
+    `tiers` key, NaN the base, an unordered list's highest passed threshold,
+    the first of two equal ones, no inherited cache rate); the Haiku 5.5
+    example below; the OpenAI 272K tier (Q40 named beside it); `bandCostUsd`
+    against `estimateCostUsd`'s closed form for the legacy low and high and
+    v2 cached and uncached over the grid (8 prompts × 7 step caps × 5 prices,
+    `toBeCloseTo(…, 10)`), with NaN for NaN, Infinity, 0, −1 and 2.5 steps,
+    negative growth and an infinite prompt, and a finite figure at 10⁹ steps;
+    `estimateCostUsd` and `nextStepCostUsd` against HEAD's digests over the
+    grid with tiers absent and attached (`25301ac8…`, 280 cells;
+    `7551fe78…`, 75 cells) and three pin cases with tiers attached;
+    `tierProblems`' messages.
+  - Core `dispatch.test.ts`, describe "VS-40a: long-context tiers and
+    effort", 9 tests (8 from the build, 1 from review round one): HEAD's digest of `estimateDispatch` over the grid with
+    `cached` absent, false and true (`16756dd7…`, 840 estimates) and of the
+    SMALL list (`ce537cbb…`), no `tiered` key without tiers, and the same
+    digests with tiers attached once `tiered` and `tiers` are left out;
+    `calibratedOutputPerStep` (the default object itself without effort, a
+    fit only for its model and effort, the same fit for "openrouter/x" and
+    "vectorscope-projection/x", `OUTPUT_FITS` empty and well-formed); an
+    effort with no entry; the Haiku 5.5 review below with the gate's and the
+    shrink walk's decisions equal with and without tiers; a listed but
+    unreached tier equal bit for bit (`toBe`); the dispatch's tiered sum;
+    NaN and Infinity steps; `SHRINK_ORDER` pinned (item 4); and, since review
+    round one, a pass at a measured fit (supplied through `estimateDispatch`'s
+    `fits`) carrying it in `v2.fit`, the dispatch listing it in `v2.fits` and
+    dropping `fitted` only when every pass has one.
+  - `replay.test.ts` (from `packages/script`), 1 test in "projection records
+    (VS-21b)": `tieredPasses` on a Haiku 5.5-priced record (review passes the
+    tier, verify is listed but never reaches it and is equal to `toBe`, a
+    malformed pass has no row, a map under another key or empty gives
+    `tiered === base`, a snapshot's own `tiers` are ignored, 10⁹ steps
+    finish) and `renderTiers`' lines, including
+    `| engine · lmstudio/test-model | review | legacy | 1 | $0.0168 | $0.0324 | $0.4680 | $2.2600 |`
+    and a two-run mean. Since review round one its fixture passes hold engine
+    `eval.ts`'s own `usd` and `v2`, and five drifted or missing stored
+    figures each give no row.
+  - Engine `vectorscope-replay.test.ts`, describe "long-context tiers from the
+    catalog (VS-40a)", 6 tests: Haiku 5.5's 100K tier from the committed
+    catalog (the Done criterion); inline fixtures copied from `api.json` at
+    `255cfd83` for gpt-5.5 (the exact 272K tier wins over its
+    `context_over_200k`), Sonnet 4.5 (200K) and Sonnet 5.5 (none), an empty
+    list with `context_over_200k`, and a zero cache rate; thirteen refused
+    shapes and three refused ids; the Sonnet 4.5 200K tier from a fixture;
+    the parity test below; the flag. Plus 1 POSIX subprocess test inside the
+    VS-21e describe (below).
+- **Decisions.**
+  - **(a) `estimateCostUsd` and `nextStepCostUsd` stay tier-blind.** The gate
+    keeps the base-tier legacy low until the tiered estimate's median absolute
+    error on pilot runs is at least 5 points lower (VS-40's kill rule), and
+    `run.ts` resolves `Session.costAt` before it calls `nextStepCostUsd`, so a
+    tier-aware `nextStepCostUsd` would price a tier twice. All tier logic is
+    in `priceAt` and `bandCostUsd`, and only `PassEstimate.tiered` reads it.
+  - **(b) "prefix" is the exact per-step form of h(S):** step 1 writes P and
+    step k reads L(k−1) and writes R, so its reads add up to h(S)·(S·P +
+    R·S(S−1)/2) and, with no tier passed, it is v2's figure to rounding. It
+    reproduces `notes-tokenomics.md` §6.3's $0.0695; giving every step the
+    same h(S) share instead gives $0.0753, because it moves reads off the
+    expensive late steps.
+  - **(c) The base-figure fallback is in `estimatePass`, not `bandCostUsd`.**
+    `bandCostUsd` prices one band, while `estimateCostUsd` prices both from
+    `maxSteps` with band-specific rules, so only `estimatePass` holds both
+    figures. A band whose last step passes no tier takes `estimateCostUsd`'s
+    own number.
+  - **(d) The catalog-to-tier mapping is in the replay script**, beside
+    `catalogModel`, and its parity runs end to end through the engine's own
+    catalog reader (`Provider.fromModelCatalogProvider`) and `Session.costAt`.
+  - **(e) A fit is an object, and the table is injectable.** The return
+    carries its date and cases; `fits` is a test parameter, as VS-21e's
+    `listPriceWarnings` takes its table. `PassPlan.effort` is unused before
+    R2. No per-pass fit date is recorded until the first measured entry.
+    Review round one (finding 5) superseded that last sentence: a pass at a
+    measured entry now carries it, so the date is recorded once one exists.
+  - **(f) The flag is `--context-tiers`**, so it reads apart from OpenRouter's
+    service tiers and VS-37's packing tiers.
+  - **(g) A third copy of the rule** exists in the V2 runner's private
+    `costAt` (core `session/runner/model.ts:171-179`). It works on catalog
+    cost rows, not a `ReviewPrice`, so neither engine nor V2 code is reusable
+    here; VS-40a checks its rule against engine `Session.costAt` and leaves the
+    V2 one alone.
+  - **(h) Item 4 has no code.** T3-2's two levers stay offline: a verify
+    output sweep is a call to `bandCostUsd` with other `outputPerStep` values,
+    and a candidate cap waits for VS-44c's per-candidate prompts, the VS-21a
+    `VariantEntry.params` follow-up and Q9. `SHRINK_ORDER` and the variant
+    registry are unchanged, and a test pins `SHRINK_ORDER`.
+  - **(i) `pricedPass` is shared** by `projectedPassCosts` and
+    `tieredPasses` rather than copied: a small refactor of VS-21e's function
+    with the same checks, whose malformed-record tests pass unchanged and
+    whose mutation (M20) is caught.
+- **Known limit, unfixed (I-11).** The dry provider boots with
+  `context_over_200k` alone, so a dry run's own admission and cap decisions
+  apply a long-context rate only above 200,000 tokens and only for a model
+  that lists `context_over_200k`. For gpt-5.5 that is 200,000 where the real
+  route's exact tier starts at 272,000; for Haiku 5.5 the dry admission never
+  tiers at all. The records' `usd`, `v2` and per-request `stepUsd` stay
+  base-tier. Carrying exact tiers would change the engine config schema
+  (I-11, SDK regeneration) and is not Now.
+- **Critique decisions** (ten points; nine taken in full, one in part).
+  1. _A per-step loop_ (major): taken. `bandCostUsd` sums each tier's run in
+     closed form and returns NaN for a step count that is not a whole number
+     of at least 1; `estimateDispatch` with tiers and NaN or Infinity steps
+     gives the same NaN or Infinity as without them and never throws;
+     10⁹ steps finish (plan and replay tests). M17, M18, M19.
+  2. _The dry admission wording_ (major): taken. The definitions line, the
+     README, the `engineConfig` comment and "Known limit" above say the dry
+     provider carries `context_over_200k` only, and record the gpt-5.5
+     200K-against-272K divergence.
+  3. _A second mirror and two more runs_ (major): taken. The new subprocess
+     test is in VS-21e's describe and reuses its mirror and manifest, so
+     nothing new is built at collection time on Windows; it runs Haiku 5.5
+     once with the flag and once without, with a 240,000 ms limit. "Tiered
+     high above base high" is also checked in the replay unit test.
+  4. _Bit-for-bit equality for an unreached tier_ (minor): taken, with the
+     fallback in `estimatePass` (decision c). The dispatch test uses `toBe`,
+     and the replay test's verify row is a listed, unreached tier.
+  5. _The fit key and effort vocabulary_ (minor): taken (decision e and the
+     `OutputFit` comment); `v2.fitted`'s comment says it dates the default
+     fit only (review round one, finding 5, replaced that with per-pass fits).
+  6. _Layout_ (minor): taken in part. `tieredPasses` and `renderTiers` are
+     in `script/vectorscope-eval/replay.ts` beside `projectedPassCosts`,
+     tested from `packages/script`; `catalogTiers` and the flag are in the
+     entry point. Not taken: loading `dispatch.ts` dynamically. The eval
+     module imports it statically, as it imports `eval-report.ts`, and the
+     entry point loads that module statically; `dispatch.ts` imports only
+     `plan.ts` and a type, so the rule's purpose (no `flag.ts`, no network
+     before the guard) holds. The entry point's own static import of
+     `tierProblems` is named in its header with that reason.
+  7. _The live catalog in tests_ (minor): taken. Only Haiku 5.5's 100K tier
+     is read from the committed catalog.
+  8. _A double cast in the parity test_ (minor): taken. Each shape is decoded
+     through `ModelCatalog.Provider` (`Schema.decodeUnknownSync`), and a
+     direct case on hand-mapped engine and core tiers (an unordered list,
+     equal thresholds, the over-200K stand-in) checks the rule apart from the
+     mapping. Mismatches are listed by shape and size.
+  9. _Owner questions_ (minor): taken. Q15 is dropped (VS-40a amends VS-40, a
+     Q18-scope package, under Q45 (b)); Q40 is added and named beside the
+     OpenAI tier test; the README additions carry no model string, and Haiku
+     5.5 appears only in tests and the Done run as the catalog's example of a
+     100K tier.
+  10. _Process_ (minor): taken. This section; the commit identity is in the
+      commit note below; R2's legacy figures are labelled as independent of
+      caching; and the HEAD baseline ran in this worktree on the clean tree
+      before the first edit, with no other worktree and no stash.
+- **Review round one** (five findings, none blocking; all five fixed, none
+  disputed).
+  1. `renderTiers`' definitions line attributed the gate's base-tier legacy
+     low to "VS-40a's kill rule"; the rule is VS-40's (addendum B §1.3: "The
+     kill rule stays VS-40's"), as the README and `dispatch.ts` say. Fixed:
+     "(VS-40's kill rule)". `replay.test.ts` now pins the whole sentence; it
+     pinned only the words before the parenthesis.
+  2. The README said a tier is refused when its "size or rate ... is not a
+     finite number of 0 or more", which reads as if a size of 0 were taken;
+     `tierProblems` wants a threshold above 0, and the engine test refuses a
+     tier at 0. Fixed as proposed: the README names a size that is not a
+     finite number above 0, a rate that is not a finite number of 0 or more,
+     and a tier with neither an input nor an output rate above 0. No code
+     changed.
+  3. `tieredPasses`' comment called `base` "the estimate the record holds"
+     while it recomputed it and never read the record's `usd` or `v2.usd`.
+     Fixed by comparing, the finding's second option: both figures are
+     recomputed from the record's inputs, as engine `eval.ts` computes the
+     record's own, and a pass whose record holds no `usd` and `v2.usd`, or
+     other figures, has no row, so the base-tier figures are always the
+     record's own, as the definitions line says. Equality is exact: the
+     figures come from the same functions on the same inputs, and a JSON
+     round trip keeps a double. A stored range that is not an object reads
+     as none. A record from before VS-40 (no `v2`) now gives no row;
+     `--context-tiers` reads only the records its own run just wrote. The
+     comment and the README say both figures are recomputed. New
+     assertions: the fixture passes hold `eval.ts`'s `usd` and `v2`, the
+     rows' base-tier figures equal them, and a `usd` low moved by 10⁻⁹, a
+     doubled `v2.usd` high, a missing `v2`, a missing `usd` and a `usd` that
+     is a string each give no row. M23.
+  4. Engine `main`'s `read` array held elements with a `read` property, and
+     its `tiers` map shared a name with `projectDry`'s. Fixed as proposed:
+     `catalogReads` holds `{ id, result }`, and the map is `modelTiers`,
+     passed as `Run.tiers`. No behaviour change; the flag and subprocess
+     tests pass unchanged.
+  5. `DispatchEstimate.v2.fitted` was always `CALIBRATED_OUTPUT_PER_STEP`'s
+     date, so once `OUTPUT_FITS` gains an entry a dispatch's v2 figure would
+     carry the wrong fit date and case count (I-5). Fixed with the finding's
+     first option plus the dispatch-level list: `PassEstimate.v2.fit?`
+     carries the measured entry a pass rests on, and `DispatchEstimate.v2`
+     lists those entries in `fits?` and leaves `fitted` out when every pass
+     has one ("What landed"). The fit is carried whole (model, effort,
+     tokens, fitted, cases), not as `{tokens, fitted, cases}`, so it names
+     its key too. `fitted` stays first and `fit` and `fits` come last, so
+     with no measured fit every estimate's JSON is byte for byte HEAD's
+     (the grid and SMALL digests still hold) and no record changes: engine
+     `eval.ts` sets no effort. `estimateDispatch` gains an optional `fits`
+     parameter because `OUTPUT_FITS` is empty and a test cannot otherwise
+     reach a measured fit; `canLower`'s re-estimate leaves it at the default
+     and reads only the legacy range, which no fit moves. New test in
+     `dispatch.test.ts`. M24, M25, M26.
+- **Unset byte-identity.** Scratch runs under `/tmp/vector-vectorscope/wp3/`
+  (`baseline.sh h` on the clean tree at `bfd8bdd6` before any edit,
+  `baseline.sh a` after the build, both on 2026-11-08 with `--work` paths of
+  one length; `compare.py`).
+  - Phase A's dry projections without the new flag: Sonnet 4.5 with
+    `engine`, `engine:shared-verify` and `engine:cross-family` (`openai/gpt-5`
+    as triage), Haiku 4.5 and Haiku 5.5 with the first two, every split.
+    Their stdout is identical between HEAD and after (`diff`, 0 lines; 41,
+    30 and 30 lines). The 30 + 20 + 20 records written are identical once the
+    run directory's random `run-XXXXXX` name is replaced and `runtime`,
+    `source.vector` and the digests are left out, and every request body's
+    sha256 after the same replacement is identical (70 of 70 records). The
+    Done runs below, with the flag, print exactly the unflagged runs' stdout
+    less the VS-40a block and the blank line before it, the egress count
+    included.
+  - The grid digests above (HEAD's, printed by `golden/grid.ts` at
+    `bfd8bdd6`) are asserted in the core tests with tiers and effort absent;
+    `OUTPUT_PER_STEP` is still 600 and `CALIBRATED_OUTPUT_PER_STEP` still
+    `{1800, "2026-09-14", 1}`.
+  - The subprocess test's unflagged run prints exactly the flagged run's
+    output less the VS-40a block and the blank line before it (the egress
+    count aside, which depends on connection pooling).
+  - Review round one ran the three unflagged projections again on
+    2026-11-08 (tag `r`; `review1.sh`, `compare-r.py`). Their stdout is
+    identical to HEAD's for all three models, every request body's sha256
+    is identical (70 of 70 records), and 69 of the 70 records are identical
+    once normalized. The one that differs, Sonnet 4.5's hono case under
+    `engine:cross-family`, swaps the `seq` of the review and security passes'
+    first requests (2 and 1, against HEAD's 1 and 2): the two passes start
+    together on gpt-5, and `seq` is the order in which their first attempts
+    were admitted. It is a race, not a change. A second after run (`s`)
+    swapped them too; HEAD's sources run again (`t`: the five changed source
+    files replaced by `git show HEAD:<path>` for that one run, then restored
+    from copies and checked with `cmp`) did not; and a third after run (`u`)
+    was identical to HEAD in all 30 records. A later byte-identity check
+    should treat that `seq` order as unstable.
+  - The Done runs again (tag `q`, `compare-q.py`): their stdout equals the
+    build's once finding 1's wording is applied, so finding 3's check
+    dropped no row, and it equals the unflagged run's less the VS-40a block
+    and the blank line before it, the egress count included.
+  - Every existing test of the touched files passes unchanged, and the
+    regression files (core `eval-report`, `spend-guard`, `research/estimate`,
+    engine `eval` and `run`, app `ai-review`) pass with HEAD's counts.
+- **Done: the zero-spend dry run** with `--context-tiers`, all ten seed
+  cases, every split, the canned model on this computer (logs
+  `/tmp/vector-vectorscope/wp3/logs/d-*.txt`).
+  - Haiku 5.5 (catalog 0.1 / 0.5 / 0.01 / 0.125; its 100K tier, read from
+    the catalog, at 0.5 / 2.5 / 0.05 / 0.625), `engine` (and
+    `engine:shared-verify`, identical under the default replies), mean per run:
+
+    | Pass                   | Estimate | Base-tier low | Tiered low | Base-tier high | Tiered high |
+    | ---------------------- | -------- | ------------- | ---------- | -------------- | ----------- |
+    | review (10 runs)       | legacy   | $0.0045       | $0.0045    | $0.2044        | $0.5005     |
+    | review                 | v2       | $0.0068       | $0.0068    | $0.0607        | $0.1244     |
+    | verify (10 runs)       | legacy   | $0.0042       | $0.0042    | $0.0261        | $0.0261     |
+    | verify                 | v2       | $0.0065       | $0.0065    | $0.0160        | $0.0160     |
+    | security (1 run, hono) | legacy   | $0.0043       | $0.0043    | $0.0941        | $0.0941     |
+    | security               | v2       | $0.0066       | $0.0066    | $0.0362        | $0.0362     |
+
+    Only the review pass's high band (30 steps, each adding 4,000 tokens)
+    passes 100,000: its legacy high rises 2.4x and its v2 high 2.0x. Every low
+    band and the 10-step verify and 20-step security passes stay below it, so
+    their tiered figures are their base-tier ones exactly.
+
+  - Sonnet 4.5 with `engine`, `engine:shared-verify` and
+    `engine:cross-family` (`openai/gpt-5` as triage): Sonnet's 200K tier is
+    listed and gpt-5 lists none. No seed prompt's high band reaches 200,000
+    (L(30) = P + 116,000 with every P below 84,000), so every tiered figure is
+    its base-tier one, bit for bit: the review's legacy range is $0.1350 to
+    $6.1320 under `engine`, as in Phase A and VS-21e, and $0.0674 to $2.6208 on
+    gpt-5 under `engine:cross-family`.
+  - The strict egress guard: 42 + 63 connection attempts, 0 off this computer.
+  - These are estimates from each pass's first request, not spend, and the
+    gap between the bands is mostly steps and growth, not tiers.
+
+- **Evidence.** Each test file ran alone through `/home/user/.tools/vector-serial`
+  with `--timeout 30000` and `GITHUB_ACTIONS=false`; the script test from
+  `packages/script`, as test.yml runs it.
+
+  | Check                                                          | HEAD (`bfd8bdd6`, clean tree) | After                                    |
+  | -------------------------------------------------------------- | ----------------------------- | ---------------------------------------- |
+  | core `plan.test.ts`                                            | 26 pass, 908 `expect()`       | 32 pass, 2,643 `expect()`                |
+  | core `dispatch.test.ts`                                        | 22 pass, 134 `expect()`       | 31 pass, 230 `expect()`                  |
+  | core `model-evidence.test.ts`                                  | 30 pass, 393 `expect()`       | 30 pass, 393 `expect()`, pin moved       |
+  | core `eval-report.test.ts`                                     | 36 pass, 699 `expect()`       | 36 pass, 699 `expect()`                  |
+  | core `spend-guard.test.ts`                                     | 58 pass, 221 `expect()`       | 58 pass, 221 `expect()`                  |
+  | core `research/estimate.test.ts`                               | 9 pass, 22 `expect()`         | 9 pass, 22 `expect()`                    |
+  | `replay.test.ts`                                               | 48 pass, 594 `expect()`       | 49 pass, 630 `expect()`                  |
+  | app `ai-review.test.ts`                                        | 107 pass, 446 `expect()`      | 107 pass, 446 `expect()`                 |
+  | engine `test/review/vectorscope-replay.test.ts`                | 22 pass, 240 `expect()`       | 29 pass, 349 `expect()`                  |
+  | engine `test/review/eval.test.ts`                              | 41 pass, 508 `expect()`       | 41 pass, 508 `expect()`                  |
+  | engine `test/review/run.test.ts`                               | 44 pass, 315 `expect()`       | 44 pass, 315 `expect()`                  |
+  | core, engine, app and script `bun typecheck`                   | not run                       | pass                                     |
+  | eval `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` | not run                       | passes                                   |
+  | test-file lines removed (four files)                           | n/a                           | 3 (898 added)                            |
+  | HEAD-against-after stdout and records (above)                  | n/a                           | identical                                |
+  | prettier `--check` on the 10 changed files                     | clean                         | clean (`--write` touched new lines only) |
+  | oxlint on the 9 changed TypeScript files                       | not run                       | 42 warnings, 1 on a new line (below)     |
+  | oxlint on the 5 TypeScript files review round one changed      | n/a                           | 31 warnings, 2 on new lines (below)      |
+  | `git diff --check`                                             | n/a                           | clean                                    |
+  | mutations caught                                               | n/a                           | 26 of 26 (M10 restated as M10b)          |
+
+- **Evidence notes.**
+  - The After column is after review round one. The build's own counts
+    differed in two rows: core `dispatch.test.ts` 30 pass, 213 `expect()`, and
+    `replay.test.ts` 49 pass, 622 `expect()`. Review round one re-ran core
+    `plan`, `dispatch` and `model-evidence`, `replay.test.ts`, and engine
+    `vectorscope-replay` and `eval`, the test files that import `dispatch.ts`
+    or the changed scripts (the counts above), and the core, engine, app and
+    script typechecks and the eval `tsgo`, which pass. It did not re-run core
+    `eval-report`, `spend-guard` and `research/estimate`, app `ai-review` or
+    engine `run`: none imports a file it changed.
+  - Review round one's two oxlint warnings on new lines are both
+    `no-unsafe-type-assertion` casts through `unknown` in `replay.test.ts`:
+    the build's malformed pass (below) and the new stored `usd` that is a
+    string, which is what each tests.
+  - The one oxlint warning on a new line is `no-unsafe-type-assertion` on the
+    replay test's malformed pass (`maxSteps: "20"`, cast through `unknown`),
+    which is what it tests, as VS-21e's malformed-record cast beside it. Three
+    `no-unnecessary-type-assertion` warnings on new lines of the engine test
+    were fixed by dropping the non-null assertions; that file was run again
+    after the fix, with the After counts above.
+  - The three removed test lines are an import line split into a block, the
+    VS-21e subprocess helper's signature (it gains an optional `model`
+    parameter, defaulting to the Sonnet 4.5 string it had) and the argument
+    that reads it. The VS-21e test's body is unchanged.
+  - `baseline.sh h` looked for core `spend-guard.test.ts` under
+    `test/review/`; it lives at `test/spend-guard.test.ts` and ran from there,
+    on the same clean tree, before the first edit.
+  - The engine test file takes about 10 s longer than at HEAD (33 s against
+    44 s here), the two Haiku 5.5 subprocess runs.
+  - The full `bun turbo typecheck --concurrency=1` was not run: this package
+    does not push, and RULES.md makes it the push step's.
+  - Lock contention from other lanes stretched some wall times; no result
+    depended on it.
+  - Commit gate (2026-11-08, on the same tree at `bfd8bdd6`): the five test
+    files that changed or hold the pin (core `plan`, `dispatch` and
+    `model-evidence`, `replay.test.ts`, engine `vectorscope-replay`) ran
+    again, one at a time through the lock, with the After counts of the
+    Evidence table; the core, engine and script typechecks and the eval
+    `tsgo` pass, and so does the full `bun turbo typecheck --concurrency=1`
+    from the worktree root (23 of 23 tasks), which the note above left to
+    the push step.
+- **Mutations.** Each was applied alone to the edited file, its test file run
+  (engine `vectorscope-replay.test.ts` with `-t "VS-40a"`), then the file
+  restored from a saved copy and checked byte for byte
+  (`/tmp/vector-vectorscope/wp3/mutate.py`; M23 to M26, from review round
+  one, by hand the same way, with `cmp` against copies in
+  `/tmp/vector-vectorscope/wp3/backup-fix/`).
+
+  | #    | Mutation                                                | Caught by                                            |
+  | ---- | ------------------------------------------------------- | ---------------------------------------------------- |
+  | M1   | `priceAt` picks a tier at its threshold (`>=`)          | `plan.test.ts` (`priceAt`, 272K tier), engine parity |
+  | M2   | the lowest passed tier wins                             | `plan.test.ts` (unordered list), engine parity       |
+  | M3   | `context_over_200k` replaces the exact tiers            | engine catalog mapping (gpt-5.5), parity             |
+  | M4   | `context_over_200k` is dropped under an empty tier list | engine catalog mapping, parity                       |
+  | M5   | a cache rate of 0 is kept                               | engine catalog mapping (`cache_read: 0`)             |
+  | M6   | a tier inherits the base cache read                     | `plan.test.ts` (`priceAt`), engine parity            |
+  | M7   | "prefix" reads L(k), not L(k−1)                         | `plan.test.ts` (Haiku example, 272K tier)            |
+  | M8   | tiered steps take the base output rate                  | `plan.test.ts` (Haiku example, 272K tier)            |
+  | M9   | the legacy `usd` is the tiered one                      | `dispatch.test.ts` (HEAD digest, Haiku review)       |
+  | M10b | a fit is matched by model alone when effort is absent   | `dispatch.test.ts` (`calibratedOutputPerStep`)       |
+  | M11  | `tierProblems` accepts a repeated threshold             | `plan.test.ts`, engine refusals                      |
+  | M12  | `tierProblems` accepts a falling threshold              | `plan.test.ts`, engine refusals                      |
+  | M13  | the block renders without the flag                      | engine subprocess (the unflagged run)                |
+  | M14  | `replayMode` lets `--context-tiers` send                | engine flag test                                     |
+  | M15  | `tieredPasses` looks tiers up by the bare catalog id    | `replay.test.ts`, engine subprocess                  |
+  | M16  | the dispatch's tiered sum gives an untiered pass 0      | `dispatch.test.ts` (tiered sum)                      |
+  | M17  | `bandCostUsd` takes any step count                      | `plan.test.ts` (NaN cases)                           |
+  | M18  | `estimatePass` prices a listed tier no step reaches     | `dispatch.test.ts` (NaN and Infinity steps)          |
+  | M19  | a run starts one step early at an exact threshold       | `plan.test.ts` (L(17) = 100,000; L(7) = 272,000)     |
+  | M20  | `pricedPass` reads steps and tokens unchecked           | `replay.test.ts` (malformed passes, both functions)  |
+  | M21  | `catalogTiers` skips `tierProblems`                     | engine refusals                                      |
+  | M22  | `catalogTiers` takes a tier that is not a context tier  | engine refusals                                      |
+  | M23  | `tieredPasses` keeps a row when one stored figure holds | `replay.test.ts` (drifted stored figures)            |
+  | M24  | `estimatePass` drops a measured fit from `v2`           | `dispatch.test.ts` (measured fit)                    |
+  | M25  | the dispatch keeps `fitted` when every pass has a fit   | `dispatch.test.ts` (measured fit)                    |
+  | M26  | `estimateDispatch` ignores its `fits`                   | `dispatch.test.ts` (measured fit)                    |
+
+  M10 as first written (the early return without its effort check) survived,
+  correctly: with effort absent the lookup still compares
+  `fit.effort === undefined`, which no entry matches, so it is equivalent. It
+  was restated as M10b, a lookup that matches by model alone when effort is
+  absent, and is caught.
+
+- **Invariants.**
+  - I-1: every new field and the flag are absent unless given; with them
+    absent every estimate, record and projection output is byte-identical
+    (above), and there is no new review key.
+  - I-5: estimates stay estimates. No reservation, cap or ledger reads a
+    tier; the gate reads the base-tier legacy low.
+  - I-10: one tier rule, checked against engine `Session.costAt` end to end
+    over eight catalog shapes and sixteen context sizes, and directly on
+    hand-mapped tiers.
+  - I-11: no engine config schema change; the dry provider config is as it
+    was (Known limit above).
+  - I-13: every projection output stays under `/tmp/vector-vectorscope/wp3/`;
+    no record field is added.
+- **§0.3.**
+  1. Key: none.
+  2. D3 parity: no runner changed (engine `review/run.ts`, app
+     `ai-review.ts`); engine `run.test.ts` and app `ai-review.test.ts` pass
+     with HEAD's counts.
+  3. Evidence scope: `plan.ts` and `dispatch.ts` are in
+     `REVIEW_PIPELINE_FILES`, so the pin moves; `REVIEW_PIPELINE_REVISION`
+     stays 1, because no runner applies the change.
+  4. Replay variant: none, as VS-40.
+  5. Desktop half: none. `ai-review.ts` is unchanged and keeps VS-40's
+     documented difference, with no dollar cap until VS-10 and Q32.
+  6. This entry.
+- **Pin.** `REVIEW_PIPELINE_SOURCES`: old `dfeeef20fd190c79`, new
+  `c03a40b15b70e92a` (`model-evidence.test.ts` passes with it). The build
+  set `aeb2789791e3f8f0`; review round one's `dispatch.ts` change moved it
+  again, uncommitted, so the commit moves it once.
+  `REVIEW_PIPELINE_REVISION` stays 1.
+- **Owner questions left undecided** (none new):
+  - Q45 (b), VS-40a's own approval (it amends VS-40, a Q18-scope package);
+    Q18 stays open beside it;
+  - Q35: which models are D6's candidates; Haiku 5.5 is used here only as the
+    catalog's example of a 100K tier, not as a D6 choice;
+  - Q40: caching-off on gpt-5.6 and later, which bears on whether the OpenAI
+    272K tier's cache-read rate applies on those routes;
+  - Q9: the funded ablation, with T3-2's levers as variants;
+  - Q44: how the pilot treats the $0.75 bound, which a tiered estimate moves;
+  - Q13 or the `self-evolving` merge, for VS-24 wiring and R2.
+- **Deferred.**
+  - VS-24 wiring, including mapping the engine model's cost (`tiers`,
+    `experimentalOver200K`) to `ReviewTier`s for `PassPlan.price`;
+  - R2: effort pinned per pass, and the first measured `OUTPUT_FITS` entry
+    from D7 pilot artifacts (VS-21e item 3);
+  - the kill-rule measurement (the tiered estimate's median absolute error on
+    pilot runs), which needs paid runs (the owner's);
+  - exact tiers in the dry provider config (I-11);
+  - T3-2's levers as variants (the `VariantEntry.params` follow-up and Q9);
+  - the Q35 example updates;
+  - test.yml and typecheck.yml on the branch, which the orchestrator
+    dispatches after the commit, with
+    `git -c user.name=Vector -c user.email=bot@vectordev.ai commit` and the
+    session's Co-Authored-By and Claude-Session trailers. Their run ids go
+    here.
+- **Not verified.**
+  - Vendor tier pages were not re-read: the rates are the committed catalog's
+    at `255cfd83`, and the thresholds T3-3 and T3-6 verified in round three.
+  - How each provider counts cached tokens toward a tier: L(k) counts them,
+    as `run.ts`'s admission context does (input + cache read + cache write,
+    engine `processor.ts:377`) and as Anthropic does (addendum B §1.3).
+  - Windows CI, until it is dispatched.
+  - No paid run, no model request and no workflow dispatch.

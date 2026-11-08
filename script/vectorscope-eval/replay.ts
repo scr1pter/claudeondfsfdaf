@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { existsSync, statSync } from "node:fs"
 import { join, posix, resolve } from "node:path"
 import { parseArgs } from "node:util"
+import { estimateDispatch, type Range } from "../../packages/core/src/review/dispatch"
 import {
   findingKey,
   UTILISATION_PLACES,
@@ -11,6 +12,7 @@ import {
   type SliceUtilisation,
 } from "../../packages/core/src/review/eval"
 import { projectionSplit, type PassCost, type ProjectedRun } from "../../packages/core/src/review/eval-report"
+import type { ReviewTier } from "../../packages/core/src/review/plan"
 import type { ModelFinding, ReviewConfig, ReviewOutcome } from "../../packages/core/src/review/types"
 import type {
   AttemptRecord,
@@ -840,17 +842,13 @@ export function projectedRun(record: ProjectionRecord): ProjectedRun {
 // VS-21e: a projection record's passes by token kind, under projectedRun's variant, model, case and repetition: each
 // pass's two estimateCostUsd bands split as the report shows them (projectionSplit), at the price snapshot of the
 // pass's own model. A pass with no first request or no price has no estimate and is left out. Lens passes have no lens
-// in the record, so they share the name "lens". Read only a record projectionProblems passes. projectionProblems does
-// not check the fields read here, which the unflagged report never reads, so a pass whose prompt tokens, steps or rates
-// are not finite numbers of 0 or more is left out too, rather than read as $NaN (I-8).
+// in the record, so they share the name "lens". Read only a record projectionProblems passes. A pass pricedPass leaves
+// out is left out too, rather than read as $NaN (I-8).
 export function projectedPassCosts(record: ProjectionRecord): PassCost[] {
   const variant = replayVariant("engine", record.variant)
-  const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
   return record.passes.flatMap((pass) => {
-    const price = [record.models.review, record.models.triage].find((model) => model?.id === pass.model)?.price
-    if (pass.promptTokens === undefined || !price) return []
-    if (![pass.promptTokens, pass.maxSteps, price.input, price.output].every(amount)) return []
-    if (![price.cacheRead, price.cacheWrite].every((rate) => rate === undefined || amount(rate))) return []
+    const priced = pricedPass(record, pass)
+    if (!priced) return []
     return [
       {
         variant,
@@ -859,10 +857,121 @@ export function projectedPassCosts(record: ProjectionRecord): PassCost[] {
         repetition: record.repetition,
         pass: pass.pass,
         basis: "projected" as const,
-        ...projectionSplit({ promptTokens: pass.promptTokens, maxSteps: pass.maxSteps, price }),
+        ...projectionSplit({ promptTokens: priced.promptTokens, maxSteps: pass.maxSteps, price: priced.price }),
       },
     ]
   })
+}
+
+// VS-40a: one pass of a projection record at base-tier and long-context prices (tieredPasses).
+export interface TieredPass {
+  variant: string
+  model: string
+  case: string
+  repetition: number
+  pass: string
+  base: { usd: Range; v2: Range }
+  tiered: { usd: Range; v2: Range }
+}
+
+// VS-40a, the entry point's --context-tiers: a projection record's passes estimated again with the long-context tiers
+// of each pass's own model (`tiers`, keyed by the model id the record names), under projectedRun's variant, model, case
+// and repetition. Both figures are recomputed from the record's inputs with estimateDispatch, as engine eval.ts computes
+// the record's own usd and v2: `base` without tiers, and `tiered` pricing step k at the tier its prompt passes (core
+// dispatch.ts PassEstimate.tiered), which is `base` itself for a model with no tier. A pass is cached as the record
+// assumed (engine eval.ts: a price that lists a cache read is a caching route). A pass whose record holds no usd and
+// v2.usd, or holds figures other than the recomputed `base` (an older engine, or a hand edit), is left out, so `base` is
+// always what the record holds. Tiers in a record's own price snapshot are never read. A pass pricedPass leaves out is
+// left out here too. Read only a record projectionProblems passes.
+export function tieredPasses(
+  record: ProjectionRecord,
+  tiers: ReadonlyMap<string, readonly ReviewTier[]>,
+): TieredPass[] {
+  const variant = replayVariant("engine", record.variant)
+  return record.passes.flatMap((pass) => {
+    const priced = pricedPass(record, pass)
+    if (!priced) return []
+    const estimate = estimateDispatch([
+      {
+        pass: pass.pass,
+        model: pass.model,
+        promptTokens: priced.promptTokens,
+        maxSteps: pass.maxSteps,
+        price: { ...priced.price, tiers: tiers.get(pass.model) ?? [] },
+        cached: priced.price.cacheRead !== undefined,
+      },
+    ]).passes[0]
+    if (!estimate?.usd || !estimate.v2.usd) return []
+    const base = { usd: estimate.usd, v2: estimate.v2.usd }
+    // A record is untrusted JSON: a stored range that is not an object reads as none.
+    const held = (stored: Range | undefined, computed: Range) =>
+      stored?.low === computed.low && stored.high === computed.high
+    if (!held(pass.usd, base.usd) || !held(pass.v2?.usd, base.v2)) return []
+    return [
+      {
+        variant,
+        model: record.models.review.id,
+        case: record.label,
+        repetition: record.repetition,
+        pass: pass.pass,
+        base,
+        tiered: estimate.tiered ?? base,
+      },
+    ]
+  })
+}
+
+// VS-40a: the dry projection's long-context block under --context-tiers: each booted model's tiers, then one row per
+// variant and model, pass and estimate (the legacy range the gate reads, and VS-40's v2) with its base-tier and tiered
+// low and high, as means per run over distinct cases and repetitions, in first-appearance order.
+export function renderTiers(
+  passes: readonly TieredPass[],
+  tiers: ReadonlyMap<string, readonly ReviewTier[]>,
+): string[] {
+  const usd = (value: number) => `$${value.toFixed(4)}`
+  const rate = (value: number | undefined) => (value === undefined ? "none" : String(value))
+  const group = (row: TieredPass) => `${row.variant} · ${row.model}`
+  return [
+    "Long-context tiers (VS-40a), from the committed catalog's cost.tiers (context_over_200k above 200000 when it lists none):",
+    ...[...tiers].flatMap(([model, listed]) =>
+      listed.length
+        ? listed.map(
+            (tier) =>
+              `- ${model}: above ${tier.above} tokens at input ${tier.input}, output ${tier.output}, cache read ${rate(tier.cacheRead)}, cache write ${rate(tier.cacheWrite)} (USD per million tokens)`,
+          )
+        : [`- ${model}: no long-context tier listed, so its tiered figures are its base-tier ones`],
+    ),
+    "",
+    "| Variant · model | Pass | Estimate | Runs | Base-tier low | Tiered low | Base-tier high | Tiered high |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...[...new Set(passes.map(group))].flatMap((name) => {
+      const rows = passes.filter((row) => group(row) === name)
+      return [...new Set(rows.map((row) => row.pass))].flatMap((pass) => {
+        const named = rows.filter((row) => row.pass === pass)
+        const runs = new Set(named.map((row) => `${row.case}#${row.repetition}`)).size
+        const mean = (value: (row: TieredPass) => number) =>
+          usd(named.reduce((total, row) => total + value(row), 0) / runs)
+        return (["usd", "v2"] as const).map(
+          (estimate) =>
+            `| ${name} | ${pass} | ${estimate === "usd" ? "legacy" : "v2"} | ${runs} | ${mean((row) => row.base[estimate].low)} | ${mean((row) => row.tiered[estimate].low)} | ${mean((row) => row.base[estimate].high)} | ${mean((row) => row.tiered[estimate].high)} |`,
+        )
+      })
+    }),
+    "",
+    "Step k of a band is priced at the long-context tier its prompt P + (k−1)·R passes, cache reads and writes included, by engine Session.costAt's rule (the highest threshold strictly passed). Legacy is estimateCostUsd's range and v2 VS-40's; the base-tier figures are the projection's own. The VS-24 gate reads the base-tier legacy low (VS-40's kill rule). The dry provider boots with context_over_200k alone, never with the exact tiers (I-11), so the projection's own admission and cap decisions apply a long-context rate only above 200,000 tokens, and only for a model that lists context_over_200k, while its records' estimates and step prices stay base-tier. These are estimates from each pass's first request, not spend.",
+  ]
+}
+
+// The price snapshot of a pass's own model and the pass's prompt tokens, or undefined when it has no first request or no
+// price, or when its prompt tokens, steps or rates are not finite numbers of 0 or more. projectionProblems does not
+// check these fields, which the unflagged report never reads.
+function pricedPass(record: ProjectionRecord, pass: ProjectedPass) {
+  const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
+  const price = [record.models.review, record.models.triage].find((model) => model?.id === pass.model)?.price
+  if (pass.promptTokens === undefined || !price) return undefined
+  if (![pass.promptTokens, pass.maxSteps, price.input, price.output].every(amount)) return undefined
+  if (![price.cacheRead, price.cacheWrite].every((rate) => rate === undefined || amount(rate))) return undefined
+  return { promptTokens: pass.promptTokens, price }
 }
 
 // Why a projection record (VS-21b, ReviewEval.project) does not show what every pass of its case would send, if it

@@ -10,19 +10,23 @@
 // lower it. The high band and v2 go only into notes and artifacts. Every figure here is an estimate: admission in
 // Review.run and provider-side key limits stay the real bounds (I-5, C-10). estimateCostUsd was fitted on one review
 // (plan.ts) and must be recalibrated on replay data before the check leaves opt-in, and v2 takes over the gate only if
-// the pilot shows its median absolute error at least 5 points lower (VS-40).
+// the pilot shows its median absolute error at least 5 points lower (VS-40). VS-40a adds a tiered range beside both,
+// priced at the long-context tiers a price lists, and keys v2's output per step by effort; the gate reads neither.
 //
 // `remainingUsd` undefined means no dollar check. In ReviewConfig a cap of 0 means "none" (maxCostUsd, maxCostUsdPerPr,
 // maxCostUsdPerMonth), but a remainder of 0 or less stops every priced review, so a caller never passes a cap through
 // as it is: remainingUsd() below drops the caps that are 0 before taking the smallest.
 
 import {
+  bandCostUsd,
   estimateBands,
   estimateCostUsd,
   NEXT_STEP_SLACK,
   nextStepCostUsd,
   OUTPUT_PER_STEP,
   passInputTokens,
+  priceAt,
+  type CacheReads,
   type EstimateBand,
   type ReviewPrice,
 } from "./plan"
@@ -32,6 +36,32 @@ import type { ReviewConfig, Trigger } from "./types"
 // [G3-15]. One case, so it is a starting point to recalibrate, not a fit. Only v2 uses it; OUTPUT_PER_STEP stays 600 for
 // the existing budget checks (I-1).
 export const CALIBRATED_OUTPUT_PER_STEP = { tokens: 1_800, fitted: "2026-09-14", cases: 1 } as const
+
+// VS-40a: a measured output per step for one model at one effort, with its fit date and how many cases it rests on.
+// `model` is the model id within its provider: PassPlan.model less its "provider/" prefix, so a projection's
+// "vectorscope-projection/<id>" and a paid replay's "openrouter/<id>" find the same entry. `effort` is the engine
+// variant name R2 pins per pass (a key of the model's variants: none, minimal, low, medium, high, xhigh or max, as its
+// provider offers them).
+export interface OutputFit {
+  model: string
+  effort: string
+  tokens: number
+  fitted: string
+  cases: number
+}
+
+// VS-40a: measured entries only, each added from D7 pilot artifacts (VS-21e item 3) with its fit date and cases. None is
+// measured yet.
+export const OUTPUT_FITS: readonly OutputFit[] = []
+
+// VS-40a: the output per step v2 prices a pass at, as a fit. Without an effort it is CALIBRATED_OUTPUT_PER_STEP itself;
+// with one, the measured entry for this model (PassPlan.model, "provider/model") at exactly that effort, else that
+// default. `fits` is for tests, as VS-21e's listPriceWarnings takes its table, and estimateDispatch passes its own on.
+export function calibratedOutputPerStep(model?: string, effort?: string, fits: readonly OutputFit[] = OUTPUT_FITS) {
+  if (effort === undefined || model === undefined) return CALIBRATED_OUTPUT_PER_STEP
+  const id = model.slice(model.indexOf("/") + 1)
+  return fits.find((fit) => fit.model === id && fit.effort === effort) ?? CALIBRATED_OUTPUT_PER_STEP
+}
 
 // A step-cap shrink lowers a pass's cap to this fraction of its current cap, never above it (the pilot's 50%; other
 // fractions only in projections or the funded ablation, Q9).
@@ -72,6 +102,9 @@ export interface PassPlan {
   // breakpoint). v2 prices a cache-read share only when this is true and the price lists a cache read; otherwise it uses
   // the catalog's input price throughout.
   cached?: boolean
+  // VS-40a: the effort the pass runs at, as an engine variant name. It keys calibratedOutputPerStep, so without a
+  // measured entry for it v2 prices 1,800 tokens a step, as without it. Nothing sets it before R2 pins effort per pass.
+  effort?: string
 }
 
 export interface PassEstimate extends PassPlan {
@@ -81,9 +114,17 @@ export interface PassEstimate extends PassPlan {
   firstStepUsd?: number // what admission reserves for the first turn: nextStepCostUsd(P + NEXT_STEP_SLACK)
   v2: {
     cacheReadShare: Range // h(S) per band, or 0 when the pass is not cached or has no cache-read price
-    outputTokens: Range // S·CALIBRATED_OUTPUT_PER_STEP per band
+    outputTokens: Range // S·calibratedOutputPerStep(model, effort) per band
     usd?: Range
+    // VS-40a: the measured OUTPUT_FITS entry `outputTokens` and `usd` rest on, only when the pass's model and effort have
+    // one; without it they rest on CALIBRATED_OUTPUT_PER_STEP.
+    fit?: OutputFit
   }
+  // VS-40a, only when the price lists long-context tiers: `usd` and `v2.usd` again with step k priced at the tier its
+  // prompt P + (k−1)·R passes (plan.ts bandCostUsd); a band whose last step passes no tier keeps its base-tier figure.
+  // decideDispatch never reads it: the gate stays on the base-tier legacy low unless the tiered estimate's median
+  // absolute error on pilot runs is at least 5 points lower (VS-40's kill rule).
+  tiered?: { usd: Range; v2: Range }
 }
 
 export interface DispatchEstimate {
@@ -94,7 +135,13 @@ export interface DispatchEstimate {
   usd?: Range // over the priced passes; absent when none is priced
   firstStepUsd?: number
   unpriced: string[] // the passes with no price, which no dollar figure covers
-  v2: { fitted: string; outputTokens: Range; usd?: Range }
+  // `fitted` is CALIBRATED_OUTPUT_PER_STEP's date, the fit of every pass without a v2.fit, and is left out only when
+  // every pass has one. `fits` (VS-40a) lists the measured OUTPUT_FITS entries the passes rest on, their v2.fit, once
+  // each in pass order, and is there only when some pass has one.
+  v2: { fitted?: string; outputTokens: Range; usd?: Range; fits?: OutputFit[] }
+  // VS-40a, only when some pass has `tiered`: over the priced passes, each pass's tiered range, or its base-tier `usd`
+  // and `v2.usd` when its price lists no tier.
+  tiered?: { usd: Range; v2: Range }
 }
 
 export type DispatchLimit = "input-tokens" | "usd"
@@ -108,11 +155,23 @@ export type DispatchDecision =
   | { go: false; over: DispatchLimit[]; stop: "budget-estimate"; ineffective: Shrink[] }
 
 // Each pass estimated twice, the legacy range and v2, through the same estimateCostUsd so the two cannot drift (I-10).
-export function estimateDispatch(passes: readonly PassPlan[]): DispatchEstimate {
-  const estimates = passes.map(estimatePass)
+// `fits` is for tests (calibratedOutputPerStep).
+export function estimateDispatch(
+  passes: readonly PassPlan[],
+  fits: readonly OutputFit[] = OUTPUT_FITS,
+): DispatchEstimate {
+  const estimates = passes.map((plan) => estimatePass(plan, fits))
+  const measured = [...new Set(estimates.flatMap((estimate) => (estimate.v2.fit ? [estimate.v2.fit] : [])))]
   const priced = estimates.flatMap((estimate) =>
     estimate.usd && estimate.v2.usd
-      ? [{ usd: estimate.usd, v2: estimate.v2.usd, firstStep: estimate.firstStepUsd ?? 0 }]
+      ? [
+          {
+            usd: estimate.usd,
+            v2: estimate.v2.usd,
+            firstStep: estimate.firstStepUsd ?? 0,
+            tiered: estimate.tiered ?? { usd: estimate.usd, v2: estimate.v2.usd },
+          },
+        ]
       : [],
   )
   return {
@@ -128,10 +187,21 @@ export function estimateDispatch(passes: readonly PassPlan[]): DispatchEstimate 
       : {}),
     unpriced: estimates.filter((estimate) => estimate.price === undefined).map((estimate) => estimate.pass),
     v2: {
-      fitted: CALIBRATED_OUTPUT_PER_STEP.fitted,
+      ...(estimates.length && estimates.every((estimate) => estimate.v2.fit)
+        ? {}
+        : { fitted: CALIBRATED_OUTPUT_PER_STEP.fitted }),
       outputTokens: sum(estimates.map((estimate) => estimate.v2.outputTokens)),
       ...(priced.length ? { usd: sum(priced.map((entry) => entry.v2)) } : {}),
+      ...(measured.length ? { fits: measured } : {}),
     },
+    ...(estimates.some((estimate) => estimate.tiered)
+      ? {
+          tiered: {
+            usd: sum(priced.map((entry) => entry.tiered.usd)),
+            v2: sum(priced.map((entry) => entry.tiered.v2)),
+          },
+        }
+      : {}),
   }
 }
 
@@ -190,13 +260,15 @@ export function remainingUsd(
   return terms.length ? Math.min(...terms) : undefined
 }
 
-function estimatePass(plan: PassPlan): PassEstimate {
+function estimatePass(plan: PassPlan, fits: readonly OutputFit[]): PassEstimate {
   const bands = estimateBands(plan.maxSteps)
   const price = plan.price
   const caching = plan.cached === true && price?.cacheRead !== undefined
   const share = caching
     ? { low: cacheReadShare(plan.promptTokens, bands.low), high: cacheReadShare(plan.promptTokens, bands.high) }
     : { low: 0, high: 0 }
+  const fit = calibratedOutputPerStep(plan.model, plan.effort, fits)
+  const output = fit.tokens
   const legacy = price
     ? estimateCostUsd({ promptTokens: plan.promptTokens, maxSteps: plan.maxSteps, price })
     : undefined
@@ -207,9 +279,39 @@ function estimatePass(plan: PassPlan): PassEstimate {
         price,
         cacheReadShare: share,
         writePrice: caching ? (price.cacheWrite ?? price.input) : price.input,
-        outputPerStep: CALIBRATED_OUTPUT_PER_STEP.tokens,
+        outputPerStep: output,
       })
     : undefined
+  // VS-40a: a band again with step k at the tier its prompt passes. A band whose last step passes no tier, or whose last
+  // prompt is not finite, keeps its base-tier figure, so a tier that is listed but never reached changes nothing, bit for
+  // bit, and a step count that is not a number stays NaN or Infinity as it is without tiers.
+  const atTiers = (
+    band: EstimateBand,
+    base: number,
+    reads: CacheReads,
+    write: "input" | "cache-write",
+    per: number,
+  ) => {
+    const last = plan.promptTokens + (band.steps - 1) * band.growth
+    return price && Number.isFinite(last) && priceAt(price, last) !== price
+      ? bandCostUsd({ promptTokens: plan.promptTokens, band, price, reads, write, outputPerStep: per })
+      : base
+  }
+  const reads = caching ? "prefix" : "none"
+  const write = caching ? "cache-write" : "input"
+  const tiered =
+    price?.tiers?.length && legacy && v2
+      ? {
+          usd: {
+            low: atTiers(bands.low, legacy.low, "prompt", "input", OUTPUT_PER_STEP),
+            high: atTiers(bands.high, legacy.high, "none", "input", OUTPUT_PER_STEP),
+          },
+          v2: {
+            low: atTiers(bands.low, v2.low, reads, write, output),
+            high: atTiers(bands.high, v2.high, reads, write, output),
+          },
+        }
+      : undefined
   return {
     pass: plan.pass,
     model: plan.model,
@@ -217,6 +319,7 @@ function estimatePass(plan: PassPlan): PassEstimate {
     maxSteps: plan.maxSteps,
     ...(price ? { price } : {}),
     ...(plan.cached === undefined ? {} : { cached: plan.cached }),
+    ...(plan.effort === undefined ? {} : { effort: plan.effort }),
     inputTokens: perBand(bands, (band) => passInputTokens(plan.promptTokens, band)),
     outputTokens: perBand(bands, (band) => band.steps * OUTPUT_PER_STEP),
     ...(legacy && price
@@ -224,9 +327,11 @@ function estimatePass(plan: PassPlan): PassEstimate {
       : {}),
     v2: {
       cacheReadShare: share,
-      outputTokens: perBand(bands, (band) => band.steps * CALIBRATED_OUTPUT_PER_STEP.tokens),
+      outputTokens: perBand(bands, (band) => band.steps * output),
       ...(v2 ? { usd: v2 } : {}),
+      ...("effort" in fit ? { fit } : {}),
     },
+    ...(tiered ? { tiered } : {}),
   }
 }
 
@@ -259,6 +364,7 @@ function planOf(estimate: PassEstimate): PassPlan {
     maxSteps: estimate.maxSteps,
     ...(estimate.price ? { price: estimate.price } : {}),
     ...(estimate.cached === undefined ? {} : { cached: estimate.cached }),
+    ...(estimate.effort === undefined ? {} : { effort: estimate.effort }),
   }
 }
 

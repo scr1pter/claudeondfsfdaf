@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { cacheReadShare } from "@vectordevai/core/review/dispatch"
 import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
 import {
+  bandCostUsd,
   combineCostKinds,
   contextRefusal,
   diffBudgetChars,
@@ -13,11 +16,16 @@ import {
   passInputTokens,
   planDepth,
   planSpecialists,
+  priceAt,
+  tierProblems,
   verifyCandidates,
   verifyUnanswered,
   verifyUnconfirmed,
+  type CacheReads,
   type DepthInput,
+  type EstimateBand,
   type ReviewPrice,
+  type ReviewTier,
   type VerifyRule,
 } from "@vectordevai/core/review/plan"
 import { RISK_BANDS } from "@vectordevai/core/review/risk"
@@ -548,5 +556,230 @@ describe("the verify policy", () => {
     expect(noteTriageUnchecked(3, "a/cheap", "b/strong", "unanswered")).toBe(
       "The double-check on b/strong gave no verdict for 3 findings from the cheaper first pass on a/cheap, so they were left out: with a triage model, only findings the review model confirmed are reported.",
     )
+  })
+})
+
+// VS-40a (addendum B §1.3): long-context tiers. The grid's digests were printed by estimateCostUsd and nextStepCostUsd
+// at HEAD bfd8bdd6, before VS-40a, and are compared over every cell: with tiers absent and with tiers attached, which
+// neither function reads.
+const HAIKU_55 = { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
+const HAIKU_55_TIER = { above: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }
+const GPT_55 = { input: 5, output: 30, cacheRead: 0.5 }
+const GPT_55_TIER = { above: 272_000, input: 10, output: 45, cacheRead: 1 }
+const GRID_PROMPTS = [0, 1, 1_234.5, 5_300, 52_000, 95_000, 190_000, 248_000]
+const GRID_STEPS = [0, 1, 5, 7.9, 10, 20, 30]
+const GRID_PRICES: ReviewPrice[] = [
+  { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  { input: 3, output: 15 },
+  HAIKU_55,
+  GPT_55,
+  { input: 1.1, output: 4.4, cacheRead: 0.11 },
+]
+const GRID_CONTEXTS = [0, 3_000, 100_000, 100_001, 272_001]
+const GRID_CACHED = [0, 2_000, 1e9]
+// A tier above 100,000 at five times each grid price, which the grid's prompts pass.
+const tiered = (price: ReviewPrice): ReviewPrice => ({
+  ...price,
+  tiers: [
+    {
+      above: 100_000,
+      input: price.input * 5,
+      output: price.output * 5,
+      ...(price.cacheRead === undefined ? {} : { cacheRead: price.cacheRead * 5 }),
+      ...(price.cacheWrite === undefined ? {} : { cacheWrite: price.cacheWrite * 5 }),
+    },
+  ],
+})
+const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
+
+describe("long-context tiers (VS-40a)", () => {
+  test("priceAt follows Session.costAt's rule: the highest threshold strictly passed, the first listed among equal ones", () => {
+    const haiku = { ...HAIKU_55, tiers: [HAIKU_55_TIER] }
+    expect(priceAt(haiku, 0)).toBe(haiku)
+    expect(priceAt(haiku, 100_000)).toBe(haiku)
+    expect(priceAt(haiku, 100_001)).toEqual({ input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 })
+    expect(priceAt(haiku, 100_001)).not.toHaveProperty("tiers")
+    expect(priceAt(haiku, Number.NaN)).toBe(haiku)
+    expect(priceAt(HAIKU_55, 1e9)).toBe(HAIKU_55)
+    // An unordered list is read as the engine reads it: the highest threshold passed wins, wherever it is listed.
+    const unordered = {
+      input: 1,
+      output: 2,
+      tiers: [
+        { above: 272_000, input: 4, output: 8 },
+        { above: 128_000, input: 2, output: 4 },
+      ],
+    }
+    expect(priceAt(unordered, 128_000)).toBe(unordered)
+    expect(priceAt(unordered, 200_000)).toEqual({ input: 2, output: 4 })
+    expect(priceAt(unordered, 300_000)).toEqual({ input: 4, output: 8 })
+    // Equal thresholds: the first listed, as the engine's stable sort leaves it.
+    const repeated = {
+      input: 1,
+      output: 2,
+      tiers: [
+        { above: 200_000, input: 3, output: 6 },
+        { above: 200_000, input: 5, output: 10 },
+      ],
+    }
+    expect(priceAt(repeated, 200_001)).toEqual({ input: 3, output: 6 })
+    // A tier carries its own cache rates: the base ones are not inherited.
+    expect(priceAt({ ...HAIKU_55, tiers: [{ above: 10, input: 1, output: 2 }] }, 11)).toEqual({ input: 1, output: 2 })
+  })
+
+  // notes-tokenomics.md §6.3, the lane's own model: the large Haiku review pass, P 52,000 and R 3,000 over 20 steps at
+  // 1,500 output tokens a step, cached under v2's rule. Steps 18 to 20 pass 100,000.
+  test("the Haiku 5.5 example: 3 of 20 steps over 100K cost $0.0695 against $0.0436, and 100,000 itself is base-tier", () => {
+    const at = (price: ReviewPrice) =>
+      bandCostUsd({
+        promptTokens: 52_000,
+        band: { steps: 20, growth: 3_000 },
+        price,
+        reads: "prefix",
+        write: "cache-write",
+        outputPerStep: 1_500,
+      })
+    const withTier = at({ ...HAIKU_55, tiers: [HAIKU_55_TIER] })
+    const base = at(HAIKU_55)
+    expect(withTier).toBeCloseTo(0.069495, 12)
+    expect(base).toBeCloseTo(0.043635, 12)
+    expect(withTier.toFixed(4)).toBe("0.0695")
+    expect(base.toFixed(4)).toBe("0.0436")
+    // L(17) = 52,000 + 16 · 3,000 = 100,000 is not over 100,000. One token lower and step 17 is tiered too.
+    expect(at({ ...HAIKU_55, tiers: [{ ...HAIKU_55_TIER, above: 99_999 }] })).toBeCloseTo(0.077875, 12)
+  })
+
+  // Q40 (caching-off on gpt-5.6 and later) may change whether these routes read the cache at all; the rates here are
+  // the committed catalog's for openai/gpt-5.5 at 255cfd83.
+  test("the OpenAI 272K tier: double input and 1.5x output above 272,000, with no cache-write rate of its own", () => {
+    const gpt = { ...GPT_55, tiers: [GPT_55_TIER] }
+    expect(priceAt(gpt, 272_000)).toBe(gpt)
+    expect(priceAt(gpt, 272_001)).toEqual({ input: 10, output: 45, cacheRead: 1 })
+    const at = (price: ReviewPrice, reads: CacheReads, write: "input" | "cache-write", outputPerStep: number) =>
+      bandCostUsd({ promptTokens: 248_000, band: { steps: 10, growth: 4_000 }, price, reads, write, outputPerStep })
+    // L(7) = 272,000 is base-tier; steps 8 to 10 are tiered.
+    expect(at(gpt, "none", "input", 600)).toBeCloseTo(17.707, 10)
+    expect(at(GPT_55, "none", "input", 600)).toBeCloseTo(13.48, 10)
+    // Under caching each step writes at the cache-write rate, else its input rate: neither the tier nor the base lists
+    // one, so the tier's steps write at $10.
+    expect(at(gpt, "prefix", "cache-write", 1_800)).toBeCloseTo(3.703, 10)
+    expect(at(GPT_55, "prefix", "cache-write", 1_800)).toBeCloseTo(3.148, 10)
+  })
+
+  test("with no tier passed, bandCostUsd is estimateCostUsd's closed form for the same band and reads", () => {
+    for (const price of GRID_PRICES)
+      for (const promptTokens of GRID_PROMPTS)
+        for (const maxSteps of GRID_STEPS) {
+          const bands = estimateBands(maxSteps)
+          const band = (
+            range: EstimateBand,
+            reads: CacheReads,
+            write: "input" | "cache-write",
+            outputPerStep: number,
+          ) => bandCostUsd({ promptTokens, band: range, price, reads, write, outputPerStep })
+          const legacy = estimateCostUsd({ promptTokens, maxSteps, price })
+          expect(band(bands.low, "prompt", "input", OUTPUT_PER_STEP)).toBeCloseTo(legacy.low, 10)
+          expect(band(bands.high, "none", "input", OUTPUT_PER_STEP)).toBeCloseTo(legacy.high, 10)
+          const share = { low: cacheReadShare(promptTokens, bands.low), high: cacheReadShare(promptTokens, bands.high) }
+          const cached = estimateCostUsd({
+            promptTokens,
+            maxSteps,
+            price,
+            cacheReadShare: share,
+            writePrice: price.cacheWrite ?? price.input,
+            outputPerStep: 1_800,
+          })
+          expect(band(bands.low, "prefix", "cache-write", 1_800)).toBeCloseTo(cached.low, 10)
+          expect(band(bands.high, "prefix", "cache-write", 1_800)).toBeCloseTo(cached.high, 10)
+          const uncached = estimateCostUsd({
+            promptTokens,
+            maxSteps,
+            price,
+            cacheReadShare: { low: 0, high: 0 },
+            outputPerStep: 1_800,
+          })
+          expect(band(bands.low, "none", "input", 1_800)).toBeCloseTo(uncached.low, 10)
+          expect(band(bands.high, "none", "input", 1_800)).toBeCloseTo(uncached.high, 10)
+        }
+    // A band that is not a whole number of steps of at least 1, that shrinks, or whose last prompt is not finite gives
+    // NaN, never a loop or a free band.
+    const of = (band: EstimateBand, promptTokens = 5_300) =>
+      bandCostUsd({ promptTokens, band, price: tiered(HAIKU_55), reads: "none", write: "input", outputPerStep: 600 })
+    for (const steps of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 2.5])
+      expect(of({ steps, growth: 2_000 })).toBeNaN()
+    expect(of({ steps: 5, growth: -1 })).toBeNaN()
+    expect(of({ steps: 5, growth: 2_000 }, Number.POSITIVE_INFINITY)).toBeNaN()
+    // A billion steps is summed in closed form, a few runs long.
+    expect(Number.isFinite(of({ steps: 1e9, growth: 4_000 }))).toBe(true)
+  })
+
+  test("estimateCostUsd and nextStepCostUsd never read tiers: HEAD's figures, bit for bit, with tiers attached", () => {
+    const estimates = (attach: (price: ReviewPrice) => ReviewPrice) =>
+      GRID_PRICES.flatMap((price) =>
+        GRID_PROMPTS.flatMap((promptTokens) =>
+          GRID_STEPS.map((maxSteps) => estimateCostUsd({ promptTokens, maxSteps, price: attach(price) })),
+        ),
+      )
+    const nextSteps = (attach: (price: ReviewPrice) => ReviewPrice) =>
+      GRID_PRICES.flatMap((price) =>
+        GRID_CONTEXTS.flatMap((context) =>
+          GRID_CACHED.map((cached) => nextStepCostUsd(context, attach(price), cached)),
+        ),
+      )
+    const plain = (price: ReviewPrice) => price
+    expect(estimates(plain)).toHaveLength(280)
+    expect(digest(estimates(plain))).toBe("25301ac8762b81f606a62ca5d8532cd166b96942bedf4745c8f328f6cf6f1da0")
+    expect(digest(estimates(tiered))).toBe("25301ac8762b81f606a62ca5d8532cd166b96942bedf4745c8f328f6cf6f1da0")
+    expect(nextSteps(plain)).toHaveLength(75)
+    expect(digest(nextSteps(plain))).toBe("7551fe787e121177e25305cb617e5e773beba1b40a2f29178ac0fde6c02d9449")
+    expect(digest(nextSteps(tiered))).toBe("7551fe787e121177e25305cb617e5e773beba1b40a2f29178ac0fde6c02d9449")
+    // The pin cases above, with a tier their prompts and growth pass.
+    const sonnet = tiered({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 })
+    expect(estimateCostUsd({ promptTokens: 5_300, maxSteps: 30, price: sonnet })).toEqual({
+      low: 0.12725999999999998,
+      high: 5.9670000000000005,
+    })
+    expect(
+      estimateCostUsd({ promptTokens: 10_000, maxSteps: 30, price: tiered({ input: 3, output: 15, cacheRead: 0.3 }) }),
+    ).toEqual({ low: 0.147, high: 6.390000000000001 })
+    expect(
+      estimateCostUsd({
+        promptTokens: 80_000,
+        maxSteps: 0,
+        price: tiered({ input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }),
+      }),
+    ).toEqual({ low: 1.2449999999999999, high: 1.2449999999999999 })
+    expect(nextStepCostUsd(272_001, tiered(GPT_55), 2_000)).toBe(nextStepCostUsd(272_001, GPT_55, 2_000))
+    expect(OUTPUT_PER_STEP).toBe(600)
+  })
+
+  test("tierProblems refuses an unordered list, a repeated threshold, a threshold or rate that is not a number, and an unpriced tier", () => {
+    const tier = (above: number, extra: Partial<ReviewTier> = {}): ReviewTier => ({
+      above,
+      input: 1,
+      output: 2,
+      ...extra,
+    })
+    expect(tierProblems([])).toEqual([])
+    expect(tierProblems([HAIKU_55_TIER])).toEqual([])
+    expect(tierProblems([tier(100_000), tier(272_000)])).toEqual([])
+    expect(tierProblems([tier(272_000), tier(100_000)])).toEqual([
+      "tier 2's threshold, 100000, is below the one before it, 272000: tiers are listed in rising order",
+    ])
+    expect(tierProblems([tier(200_000), tier(200_000)])).toEqual(["tier 2 repeats the threshold before it, 200000"])
+    for (const above of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(tierProblems([tier(above)])).toEqual([`tier 1's threshold, ${above}, is not a number of tokens above 0`])
+    expect(tierProblems([tier(100_000, { cacheRead: -0.1 })])).toEqual([
+      "tier 1's cache read rate, -0.1, is not a number of 0 or more",
+    ])
+    expect(tierProblems([tier(100_000, { output: Number.NaN })])).toEqual([
+      "tier 1's output rate, NaN, is not a number of 0 or more",
+    ])
+    expect(tierProblems([tier(100_000, { input: 0, output: 0 })])).toEqual([
+      "tier 1 has no input or output rate above 0",
+    ])
+    // A cache-only tier is still unpriced; a zero cache rate is a rate.
+    expect(tierProblems([tier(100_000, { input: 0, output: 0, cacheRead: 1 })])).toHaveLength(1)
+    expect(tierProblems([tier(100_000, { cacheRead: 0, cacheWrite: 0 })])).toEqual([])
   })
 })

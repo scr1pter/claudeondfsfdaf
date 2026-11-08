@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
 import { parseReviewConfig } from "../../packages/core/src/review/config"
+import { estimateDispatch } from "../../packages/core/src/review/dispatch"
 import { findingKey, VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "../../packages/core/src/review/eval"
 import { TOKEN_KINDS } from "../../packages/core/src/review/eval-report"
 import { evidenceScope } from "../../packages/core/src/review/model-evidence"
@@ -32,11 +33,13 @@ import {
   projectedPassCosts,
   projectedRun,
   projectionProblems,
+  renderTiers,
   replayBudget,
   replayCharge,
   replayPlan,
   replayVariant,
   resolveVariant,
+  tieredPasses,
   triagePairProblem,
   unreplayable,
   unreplayableCases,
@@ -1193,6 +1196,108 @@ describe("projection records (VS-21b)", () => {
       expect(projectionProblems(malformed)).toEqual([])
       expect(projectedPassCosts(malformed)).toEqual([])
     }
+  })
+
+  // VS-40a: the entry point's --context-tiers rows. A Haiku 5.5-priced snapshot under its catalog's 100K tier: the
+  // review pass (P 95,000 at 30 steps) passes it, the verify pass (P 14,000 at 10 steps, whose last step sends 50,000)
+  // never does, so its tiered figures are its base-tier ones, bit for bit. Each pass holds the usd and v2 engine
+  // eval.ts records for it.
+  test("tiered passes sit beside the record's own base-tier estimates, and render as a table of means per run", () => {
+    const price = { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
+    const model = "lmstudio/test-model"
+    const tiers = new Map([[model, [{ above: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }]]])
+    const banded = (name: ProjectedPass["pass"], promptTokens: number, maxSteps: number) =>
+      pass(name, {
+        maxSteps,
+        promptTokens,
+        usd: estimateCostUsd({ promptTokens, maxSteps, price }),
+        v2: estimateDispatch([{ pass: name, model, promptTokens, maxSteps, price, cached: true }]).passes[0]?.v2,
+      })
+    const priced = record({
+      models: { review: { ...record().models.review, price } },
+      passes: [
+        banded("review", 95_000, 30),
+        banded("verify", 14_000, 10),
+        { ...banded("security", 9_000, 20), maxSteps: "20" } as unknown as ProjectedPass,
+      ],
+    })
+    expect(projectionProblems(priced)).toEqual([])
+    const rows = tieredPasses(priced, tiers)
+    expect(rows.map((row) => [row.variant, row.model, row.case, row.repetition, row.pass])).toEqual([
+      ["engine", model, "case", 1, "review"],
+      ["engine", model, "case", 1, "verify"],
+    ])
+    const [review, verify] = rows
+    if (!review || !verify) throw new Error("expected two rows")
+    // The base-tier figures are the record's own, bit for bit.
+    for (const [row, own] of [
+      [review, priced.passes[0]],
+      [verify, priced.passes[1]],
+    ] as const) {
+      expect(own?.usd).toEqual(row.base.usd)
+      expect(own?.v2?.usd).toEqual(row.base.v2)
+    }
+    // A pass whose record holds figures other than the recomputed ones, or no v2 (a record from before VS-40), has no
+    // row, rather than a base-tier figure the record does not hold.
+    const [held] = priced.passes
+    if (!held?.usd || !held.v2?.usd) throw new Error("expected the review pass to hold its estimates")
+    const drifted = (changed: Partial<ProjectedPass>) =>
+      tieredPasses(record({ models: priced.models, passes: [{ ...held, ...changed }] }), tiers)
+    expect(drifted({})).toHaveLength(1)
+    expect(drifted({ usd: { ...held.usd, low: held.usd.low + 1e-9 } })).toEqual([])
+    expect(drifted({ v2: { ...held.v2, usd: { ...held.v2.usd, high: held.v2.usd.high * 2 } } })).toEqual([])
+    expect(drifted({ v2: undefined })).toEqual([])
+    expect(drifted({ usd: undefined })).toEqual([])
+    expect(drifted({ usd: "0.0168" } as unknown as Partial<ProjectedPass>)).toEqual([])
+    expect(review.base.usd.low).toBeCloseTo(0.0168, 12)
+    expect(review.tiered.usd.low).toBeCloseTo(0.0324, 12)
+    expect(review.tiered.usd.high).toBeCloseTo(2.26, 12)
+    expect(review.tiered.usd.high).toBeGreaterThan(review.base.usd.high)
+    expect(verify.tiered).toEqual(verify.base)
+    expect(verify.tiered.usd.high).toBe(verify.base.usd.high)
+    // Tiers are keyed by the record's model id: under any other key the model has none, and nothing changes.
+    expect(
+      tieredPasses(priced, new Map([["test-model", tiers.get(model)!]])).every((row) => row.tiered === row.base),
+    ).toBe(true)
+    expect(tieredPasses(priced, new Map()).map((row) => row.tiered)).toEqual(rows.map((row) => row.base))
+    // A record's own price snapshot never brings tiers of its own.
+    const smuggled = record({
+      models: { review: { ...record().models.review, price: { ...price, tiers: tiers.get(model) } } },
+      passes: [banded("review", 95_000, 30)],
+    })
+    expect(tieredPasses(smuggled, new Map())[0]?.tiered).toEqual(review.base)
+    // A billion steps from a hand-edited record is summed in closed form, not step by step.
+    const long = tieredPasses(record({ models: priced.models, passes: [banded("review", 95_000, 1e9)] }), tiers)
+    expect(long).toHaveLength(1)
+    expect(Number.isFinite(long[0]?.tiered.usd.high)).toBe(true)
+
+    const lines = renderTiers(rows, new Map([...tiers, ["lmstudio/untiered-model", []]]))
+    expect(lines[0]).toBe(
+      "Long-context tiers (VS-40a), from the committed catalog's cost.tiers (context_over_200k above 200000 when it lists none):",
+    )
+    expect(lines).toContain(
+      `- ${model}: above 100000 tokens at input 0.5, output 2.5, cache read 0.05, cache write 0.625 (USD per million tokens)`,
+    )
+    expect(lines).toContain(
+      "- lmstudio/untiered-model: no long-context tier listed, so its tiered figures are its base-tier ones",
+    )
+    expect(lines).toContain(`| engine · ${model} | review | legacy | 1 | $0.0168 | $0.0324 | $0.4680 | $2.2600 |`)
+    expect(lines.some((line) => line.startsWith(`| engine · ${model} | review | v2 | 1 | $`))).toBe(true)
+    const verifyRows = lines.filter((line) => line.startsWith(`| engine · ${model} | verify |`))
+    expect(verifyRows).toHaveLength(2)
+    for (const line of verifyRows) {
+      const cells = line.split(" | ")
+      expect(cells[4]).toBe(cells[5])
+      expect(cells[6]).toBe(cells[7].replace(/ \|$/, ""))
+    }
+    expect(lines.at(-1)).toContain("The VS-24 gate reads the base-tier legacy low (VS-40's kill rule).")
+    expect(lines.at(-1)).toContain("context_over_200k alone")
+    // Two runs of one pass: a mean per run over distinct case and repetition.
+    const twice = renderTiers(
+      [review, { ...review, repetition: 2, tiered: { ...review.tiered, usd: { low: 0.0424, high: 2.26 } } }],
+      tiers,
+    )
+    expect(twice).toContain(`| engine · ${model} | review | legacy | 2 | $0.0168 | $0.0374 | $0.4680 | $2.2600 |`)
   })
 
   // VS-29a: a cross-family projection records the pair, the review model first, and the report reads both.
