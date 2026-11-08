@@ -11,7 +11,9 @@ on:
   pull_request:
     # No other workflow runs the web GitHub tests, and they load shared api/_lib modules (http, abuse, persistent-store)
     # and jose, so any hosted API change, the lockfile and the Bun version in package.json start the lane. api/** takes
-    # in the contract's api/github, api/cloud-agents, api/_lib/github-* and api/_lib/cloud-agents-* entries.
+    # in the contract's api/github, api/cloud-agents, api/_lib/github-* and api/_lib/cloud-agents-* entries. The shared
+    # engine files the agent phase's own-key seam, pinned policy and posting check live in, and the research runtime its
+    # tests run on, start it too (V18b).
     paths:
       - api/**
       - bun.lock
@@ -21,10 +23,14 @@ on:
       - packages/core/src/free-models.ts
       - packages/core/src/share/transport.ts
       - packages/engine/src/cli/cmd/github*.ts
+      - packages/engine/src/provider/provider.ts
+      - packages/engine/src/session/llm/request.ts
+      - packages/engine/src/session/posting.ts
       - packages/desktop/src/main/github-*.ts
       - packages/web/test/github-*.ts
       - packages/web/test/cloud-agents-*.ts
       - packages/engine/test/cli/github*.ts
+      - packages/engine/test/lib/research.ts
       - packages/engine/test/fixture/sandbox-*.ts
       - packages/engine/test/tool/registry*.ts
       - packages/core/test/github-agents.test.ts

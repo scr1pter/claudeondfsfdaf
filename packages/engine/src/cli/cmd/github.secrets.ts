@@ -217,4 +217,17 @@ export function createGithubSecrets() {
 
 export const credentials = createGithubSecrets()
 
+/**
+ * Whether this process holds an own-key run's channel: loaded, with no run token (the loader refuses a run token on own
+ * key and requires one on Codium). Such a run never sends a model request to Codium (INV-K1), so the provider layer
+ * leaves the Codium provider out whatever the repository's configuration names.
+ */
+export function ownKeyRun(holder: Pick<typeof credentials, "loaded" | "pendingRunToken"> = credentials) {
+  return holder.loaded() && holder.pendingRunToken() === undefined
+}
+
+// Why an own-key run cannot use a Codium model, wherever one is named: MODEL, an agent's model or small_model.
+export const OWN_KEY_CODIUM =
+  "Codium models run only in a Codium workflow. Set MODEL to your own provider's provider/model."
+
 export * as GithubSecrets from "./github.secrets"

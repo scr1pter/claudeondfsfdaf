@@ -1,6 +1,7 @@
-// V18a: the run bundle module, the stop-code table and the agent phase's labelled thread text. Temporary git
-// repositories and a loopback fake GitHub only: no CLI or Bun subprocess and no environment change, so the file runs
-// locally as well as in the lane. The git fixtures need a POSIX shell and symlinks; the lane runs it on ubuntu-24.04.
+// V18a: the run bundle module, the stop-code table and the agent phase's labelled thread text; V18b: INV-K1's agent
+// phase test, in-process against the fake LLM server. Temporary git repositories, a loopback fake GitHub and a
+// vectordev.ai recorder only: no CLI or Bun subprocess and no environment change, so the file runs locally as well as
+// in the lane. The git fixtures need a POSIX shell and symlinks; the lane runs it on ubuntu-24.04.
 
 import { afterAll, describe, expect, test } from "bun:test"
 import { $ } from "bun"
@@ -16,7 +17,7 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import { NamedError } from "@vectordevai/core/util/error"
 import { MessageV2 } from "../../src/session/message-v2"
 import { GithubBundle } from "../../src/cli/cmd/github.bundle"
-import { BODY_MAX_CHARS } from "../../src/cli/cmd/github.evidence"
+import { BODY_MAX_CHARS, parseNumstat } from "../../src/cli/cmd/github.evidence"
 import { UNTRUSTED_DATA_RULE } from "../../src/cli/cmd/github.policy"
 import { createReviewGitHub, type Permission } from "../../src/cli/cmd/github.review-api"
 import {
@@ -25,6 +26,23 @@ import {
   type GitHubIssue,
   type GitHubPullRequest,
 } from "../../src/cli/cmd/github.run-helpers"
+import { Effect } from "effect"
+import { githubAgentPhase } from "../../src/cli/cmd/github.agent"
+import { LLMRequestPrep } from "../../src/session/llm/request"
+import { Session } from "../../src/session/session"
+import { runtime, setup } from "../lib/research"
+import { FakeWeb } from "../../../core/test/lib/fake-web"
+import { NetworkGuard } from "../../../core/test/lib/network-guard"
+import {
+  CHANNEL,
+  RUN_ID,
+  cleanup,
+  cloudRecorder,
+  commitSetup,
+  eventFile,
+  fakeGithub,
+  stepEnv,
+} from "./github.agent-fixture"
 
 const roots: string[] = []
 afterAll(async () => {
@@ -625,10 +643,70 @@ describe("writeBundle", () => {
     await put(agent, { "a.txt": "v3\n" })
 
     await expect(bundle(agent, origin.base)).rejects.toThrow("Vector could not record the run's changes.")
+    // The evidence's change count needs the same blob and is refused the same way.
+    await expect(GithubBundle.numstat({ cwd: agent, baseSha: origin.base })).rejects.toThrow(
+      "Vector could not record the run's changes.",
+    )
     expect(await sh(agent, ["rev-list", "--objects", "--missing=print", origin.base])).toContain(`?${missing}`)
     expect(await fs.exists(path.join(agent, GithubAgents.BUNDLE_DIR))).toBe(false)
     // The remote was reachable: ordinary git fetches the blob lazily.
     expect(await sh(agent, ["cat-file", "-p", missing])).toBe("v1\n")
+  })
+
+  test("the evidence's change count runs pinned, against an index of its own", async () => {
+    const repo = await repository({
+      "a.txt": "one\ntwo\n",
+      "b.txt": "b\n",
+      "vector-out/old.txt": "old\n",
+      ".gitattributes": "*.txt diff=conv\n",
+    })
+    const traps = await scratch()
+    const marker = (name: string) => path.join(traps, name)
+    const script = (file: string) => `#!/bin/sh\ntouch '${file}'\n`
+    await put(traps, {
+      "hooks/post-index-change": script(marker("hook-ran")),
+      fsmonitor: script(marker("fsmonitor-ran")),
+    })
+    await Promise.all(
+      [path.join(traps, "hooks/post-index-change"), path.join(traps, "fsmonitor")].map((file) => fs.chmod(file, 0o755)),
+    )
+    await put(repo.dir, {
+      "a.txt": "one\nTWO\nthree\n",
+      "b.txt": "changed\n",
+      "c.txt": "new\n",
+      "vector-out/old.txt": "x\n",
+    })
+    // Marked unchanged in the agent's own index, b.txt's change would not show in a count read through that index.
+    await sh(repo.dir, ["update-index", "--assume-unchanged", "b.txt"])
+    const hostile: [string, string][] = [
+      ["core.hooksPath", path.join(traps, "hooks")],
+      ["core.fsmonitor", path.join(traps, "fsmonitor")],
+      ["diff.external", "/nonexistent/vector-ext-diff"],
+      ["diff.conv.textconv", "/nonexistent/vector-textconv"],
+      ["diff.relative", "true"],
+      ["color.ui", "always"],
+      ["protocol.allow", "always"],
+    ]
+    await hostile.reduce(async (previous, [key, value]) => {
+      await previous
+      await sh(repo.dir, ["config", key, value])
+    }, Promise.resolve())
+    const planted = await sh(repo.dir, ["ls-files", "-v"])
+
+    const counted = await GithubBundle.numstat({ cwd: repo.dir, baseSha: repo.base })
+    expect(counted).not.toContain("\x1b[")
+    // Tracked files only, outside vector-out/, and b.txt's change is counted.
+    expect(parseNumstat(counted)).toEqual([
+      { file: "a.txt", additions: 2, deletions: 1 },
+      { file: "b.txt", additions: 1, deletions: 1 },
+    ])
+    expect(await fs.exists(marker("hook-ran"))).toBe(false)
+    expect(await fs.exists(marker("fsmonitor-ran"))).toBe(false)
+    expect(await sh(repo.dir, ["ls-files", "-v"])).toBe(planted)
+    // Only a commit id is taken as the base, never a name or an option.
+    await expect(GithubBundle.numstat({ cwd: repo.dir, baseSha: "HEAD" })).rejects.toThrow(
+      "Vector could not record the run's changes.",
+    )
   })
 
   test("gitlinks and links that leave the tree are dropped from the patch and listed", async () => {
@@ -1121,4 +1199,82 @@ describe("agent-phase thread text", () => {
       server.stop(true)
     }
   })
+})
+
+// INV-K1, the agent phase's part (V18b): an own-key run makes no /api/cloud-agents/* request and sends no model request
+// to Codium. The credentials here hold a well-formed run token, so only the mode keeps heartbeat and settle off, and
+// the same recorder in a Codium run sees its settle, so the seam is live.
+const guard = NetworkGuard.use()
+const web = FakeWeb.start({ sites: {} })
+const it = runtime(web)
+afterAll(async () => {
+  await web.close()
+  await cleanup()
+})
+
+describe("own key (INV-K1)", () => {
+  it.instance(
+    "own-key agent phase sends no heartbeat or settle",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* setup()
+        yield* Effect.promise(() => commitSetup(test.dir))
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const cloud = cloudRecorder()
+        const credentials = {
+          loaded: () => true,
+          githubToken: () => CHANNEL.githubToken,
+          runToken: () => CHANNEL.runToken,
+        }
+        const env = stepEnv({
+          event: yield* Effect.promise(() => eventFile({ inputs: {}, sender: { login: "alice", type: "User" } })),
+          eventName: "workflow_dispatch",
+          thread: `dispatch-${RUN_ID}`,
+          github: github.url,
+          prompt: "Write the notes",
+        })
+        yield* test.llm.tool("write", { filePath: path.join(test.dir, "NOTES.md"), content: "notes\n" })
+        yield* test.llm.text("Wrote the notes.")
+        yield* test.llm.text("Write the notes")
+        const before = yield* test.llm.calls
+        const lines: string[] = []
+        const own = yield* githubAgentPhase({
+          env,
+          credentials,
+          services: cloud.services,
+          log: (line) => lines.push(line),
+        }).pipe(Effect.ensuring(Effect.sync(() => LLMRequestPrep.pin(undefined))))
+        expect(own).toMatchObject({ exitCode: 0, outcome: "changes" })
+        expect(cloud.requests).toEqual([])
+        // Every model request reached the fake model server; nothing tried vectordev.ai, its chat route included.
+        expect(yield* test.llm.calls).toBeGreaterThan(before)
+        expect(guard.outside()).toEqual([])
+        const sessionID = lines.find((line) => line.startsWith("vector session "))!.slice("vector session ".length)
+        const sessions = yield* Session.Service
+        const assistants = (yield* sessions.messages({ sessionID: sessionID as never })).filter(
+          (message) => message.info.role === "assistant",
+        )
+        expect(assistants.length).toBeGreaterThan(0)
+        for (const message of assistants)
+          expect(message.info.role === "assistant" ? String(message.info.providerID) : undefined).toBe("lmstudio")
+
+        const codium = yield* githubAgentPhase({
+          env: { ...env, VECTOR_MODE: "codium", MODEL: "vector-plan" },
+          credentials,
+          services: cloud.services,
+          log: () => {},
+        }).pipe(Effect.ensuring(Effect.sync(() => LLMRequestPrep.pin(undefined))))
+        github.stop()
+        expect(codium).toEqual({ exitCode: 0, outcome: "refused" })
+        expect(cloud.requests).toEqual([
+          {
+            path: GithubAgents.ENDPOINT.settle,
+            body: { outcome: "refused" },
+            authorization: `Bearer ${CHANNEL.runToken}`,
+          },
+        ])
+      }),
+    { git: true },
+    120_000,
+  )
 })

@@ -378,6 +378,32 @@ export async function writeBundle(input: {
   }
 }
 
+/**
+ * `git diff --numstat` of the working tree against `baseSha`, outside vector-out/: the evidence's change list when the
+ * session kept none. It runs as writeBundle's commands do, with the pinned config and the exact environment, so no
+ * hook, fsmonitor, transport, external diff or textconv runs, and against a private index read from the base, so
+ * nothing the agent wrote into `.git/index` hides a change. Tracked files only. Throws on a git failure or output past
+ * RAW_LIMIT bytes.
+ */
+export async function numstat(input: { cwd: string; baseSha: string; timeoutMs?: number }) {
+  if (!/^[0-9a-f]{40,64}$/.test(input.baseSha)) throw new Error(FAILED)
+  const signal = AbortSignal.timeout(input.timeoutMs ?? GIT_TIMEOUT_MS)
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "vector-index-"))
+  try {
+    const repo = { cwd: input.cwd, signal, index: path.join(scratch, "index") }
+    await must(repo, ["read-tree", input.baseSha])
+    const counted = await git(
+      repo,
+      ["diff", "--numstat", "--no-ext-diff", "--no-textconv", ...LISTING, input.baseSha, "--", ".", EXCLUDE],
+      { limit: RAW_LIMIT },
+    )
+    if (counted.overflow) throw new Error(FAILED)
+    return counted.output.toString("utf8")
+  } finally {
+    await fs.rm(scratch, { recursive: true, force: true })
+  }
+}
+
 async function record(input: Parameters<typeof writeBundle>[0], repo: Repo) {
   const staged = await stage(repo, input.baseSha)
   const sized = staged.refused ?? (await sizeRefusal(repo, staged.entries))

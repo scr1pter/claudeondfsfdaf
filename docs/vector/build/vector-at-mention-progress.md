@@ -785,14 +785,149 @@ For each package, record its commit, the focused tests and typechecks run locall
   - Full typecheck (`TURBO_CACHE_DIR=/home/user/.cache/vector-typecheck bun turbo typecheck --concurrency=1`, from the worktree root, 04:01:07–04:01:32 UTC, on the final code; the later Markdown edits are read by no typecheck): exit 0, 23 of 23 successful, 22 cached, 24.083s. Before the review fixes: 03:28:53–03:29:19 UTC, exit 0, 23 of 23, 19 cached, 25.346s.
   - `bunx prettier --check` (Prettier 3.6.2): clean on the progress file, the deviations file and the three code files (one line of `github.bundle.ts` was rewrapped by `prettier --write`). The spec already failed it at `85f22a2c` (Prettier rewrites 298 of its lines there: table alignment, `*emphasis*` and the 2.12 code block). Every edited spec line that Prettier would rewrite sits in the 2.1 table or that code block, whose old lines Prettier also rewrites; the other edited lines (the 2.9.2 paragraph and the `patch.diff` item) are already as Prettier writes them. So the spec is left unformatted to keep its diff to the clarification. `git diff --check`: clean.
 - **Commit gate (2026-11-08, same environment, logs in `/tmp/vector-v18a/gate/`):** `test/cli/github.bundle.test.ts` 20 pass, 0 fail, 391 `expect()` calls; `test/cli/github.policy.test.ts` 10 pass, 0 fail, 82; `test/cli/github.evidence.test.ts` 16 pass, 0 fail, 64; `test/cli/github.review-api.test.ts` 3 pass, 0 fail, 17. `bun typecheck` in `packages/engine`: exit 0. Full typecheck from the worktree root (04:11:17–04:14:09 UTC): exit 0, 23 of 23 successful, 21 cached, 23.692s.
-- **Not yet done for this package:** the commit hashes, the pre-push hook and the exact-head lane run. A commit cannot name its own hash, so they are recorded in the next entry once seen.
+- **Not yet done for this package:** the commit hashes, the pre-push hook and the exact-head lane run. A commit cannot name its own hash, so they are recorded in the next entry once seen. (Resolved: see run `42446058983`.)
 - **Carried to V18b and V18c:**
   - wire the builders and `writeBundle` into `--phase agent`, with one `createReviewGitHub` per run whose `check` refuses every post, and channel credentials loaded before the account gate (2.13);
-  - make the 2.9.2 draft codes non-retryable in `SessionRetry`, or count its 15 minutes against the deadline (deviation V18a item 4);
+  - make the 2.9.2 draft codes non-retryable in `SessionRetry`, or count its 15 minutes against the deadline (deviation V18a item 4) (moved to V18c with the Codium wiring: deviation V18b item 3);
   - how the trigger comment's own text is labelled in the agent prompt;
   - publish's table chooses the ceiling or used-up line from `stop` and `limit` (V21);
   - publish writes any path it echoes after `escapeVectorMarkers`, in a code span, and knows the limits of deviation V18a item 7 (files inside a base gitlink's directory are not staged; a `.gitmodules` link makes writeBundle throw) (V21);
   - deferred verification that needs the agent phase: INV-C7 over a fake model provider (extending the same named test), the deadline abort producing a draft bundle, no reaction, comment, push or network git in the agent phase, the `issues` payload prompt, channel credentials kept out of `process.env` and children, and INV-K1's "own-key agent phase sends no heartbeat or settle".
+
+### V18b. Agent phase: own key and shared core
+
+- **Status:** built in the working tree of `/home/user/wt/vam` on 2026-11-08, on top of `d5444dc4`, and committed there on 2026-11-08 as two commits (the plan was three; deviation V18b item 15):
+  - first the spec clarification alone, `2b597921` (`docs(github): clarify the V18b agent phase contract`, the five spec lines of deviation V18b item 1), whose body names the missing-bundle carry to V21 and V24 (refusal or crash, told apart by the agent job's result);
+  - then `feat(github): V18b run the agent phase and write the bundle`, with the mechanical lift of `githubRun`'s session helpers and the `/vector fix` helpers (deviation V18b item 2), everything else and these two records. Its body repeats deviation V18b item 3 (the Codium session path moves to V18c, which needs the orchestrator's explicit acceptance) and lists the shared files it touches: `packages/engine/src/provider/provider.ts`, `.github/workflows/vector-at-mention.yml` and `packages/cloud/src/workflow-compliance.test.ts`.
+
+  `vector github run --phase agent` now runs the own-key agent phase. A Codium run is refused and settled, and a schedule is refused, until V18c and V22. Without `--phase`, `vector github run` follows the same code path as before (2.11.5). Nothing installs a v3 workflow yet (V23 and V24), and `MIN_AGENTS_CLI` 1.99.113 is unpublished.
+
+- **V18a carried over (seen 2026-11-08):**
+  - Commits `cca837e1` (`docs(github): clarify the V18a run bundle contract`) and `d5444dc4` (`feat(github): V18a add the run bundle, stop codes and labelled thread text`) each carry a body and both trailers (`git log -3 --format=%b`).
+  - Their push went through the pre-push hook. `/tmp/vector-v18a/gate/push.log` shows 23 of 23 tasks successful, 21 cached, 21.163s, then `85f22a2c..d5444dc4  HEAD -> vector-at-mention`.
+  - In that log the remote says the repository moved (`https://github.com/scr1pter/claudeondfsfdaf.git`). The Actions API still answers for `scr1pter/vectordev.ai` and returns `html_url`s under the new name. The remote was not changed.
+  - Lane run `42446058983` concluded `success` in all 8 jobs, each on `ubuntu-24.04`. It is `Vector at-mention` run 25, attempt 1, the push of `d5444dc441abdbbd31c87f396cda700bc8b9e265`, from 2026-11-08 04:15:23 to 04:20:10 UTC (`https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42446058983`). The jobs below were read from the Actions API's job list and each job's log.
+    - `hosted API` (`128625117867`):
+      - "Typecheck hosted API" succeeded.
+      - "Run GitHub API tests": 302 pass, 0 fail, 24,341 `expect()` calls across 11 files, against Valkey 7.2.14.
+      - "Run hosted API tests": 10 pass, 0 fail, 37 `expect()` calls across 2 files.
+      - "Check the lane policy": 18 pass, 0 fail, 135 `expect()` calls.
+    - `engine and core` (`128625117729`):
+      - "Run engine GitHub tests": 329 pass, 0 fail, 3 snapshots, 3,150 `expect()` calls across 21 files (59.44s).
+      - "Run core GitHub tests": 412 pass, 0 fail, 1,947 `expect()` calls across 23 files.
+    - `desktop engine bundle (node)` (`128625117868`): "Build complete", then "node bundle smoke passed on node v24.22.2".
+    - `sandbox (codium, success)` (`128625117934`) and `sandbox (own-key, success)` (`128625117949`): the assert step ran with finish `success` and upload `success`, and the artifact sentinel succeeded.
+    - `sandbox (codium, cancelled)` (`128625117887`), `sandbox (codium, bundle-refusal)` (`128625117940`) and `sandbox (codium, seal-refusal)` (`128625117984`): the sentinel was skipped, and the assert step ran with finish `failure` and upload `skipped`.
+    - All five sandbox jobs end with "Sandbox probe passed: channel private, runner capabilities inaccessible, detached child stopped, staged checkout removed, original workspace empty."
+  - V18a is complete.
+- **Files** (from `git diff --numstat` against `d5444dc4`, and line counts for the new files):
+  - `docs/vector/build/vector-at-mention-spec.md` (5 added, 5 removed): the clarification of deviation V18b item 1.
+  - `packages/engine/src/cli/cmd/github.run-helpers.ts` (413 added, 4 removed):
+    - `taskPart` moved here;
+    - `chat`, `summarize`, `subscribeSessionEvents` and `collectSessionEvidence` lifted from `githubRun`, each with an explicit context;
+    - `getUserPrompt`'s attachment loop moved into a private `attachments`;
+    - the agent-phase `getAgentUserPrompt` and `agentFindingForPrompt`;
+    - `fixContext` (with an optional `format`), `isFixCommand` and `findingForPrompt`, moved from the handler.
+  - `packages/engine/src/cli/cmd/github.handler.ts` (41 added, 287 removed): `githubRun`'s closures call the lifted helpers with the same arguments. `taskPart`, `fixContext`, `isFixCommand` and `findingForPrompt` are re-exported.
+  - `packages/engine/src/cli/cmd/github.agent.ts` (new, 704 lines): `githubAgentPhase`, `refuseCodiumAgent`, `agentRoute`, `afterMention`, `agentModel`, `readOnlyGithub`, `readOnlyFetch`, `readOnlyQuery` and the fixed log lines. It uses Node APIs only.
+  - `packages/engine/src/cli/cmd/github.ts` (40 added, 1 removed): the `--phase` option, which takes `agent` only and conflicts with `--event` and `--token`, plus its `instance` rule and handler branch.
+  - `packages/engine/src/cli/cmd/github.secrets.ts` (13 added): `ownKeyRun` and `OWN_KEY_CODIUM`.
+  - `packages/engine/src/cli/cmd/github.review-api.ts` (3 added, 1 removed): an optional `fetch` in `ReviewGitHubOptions`.
+  - `packages/engine/src/cli/cmd/github.bundle.ts` (26 added): `numstat`, the evidence's pinned change count (deviation V18b item 8).
+  - `packages/engine/src/provider/provider.ts` (11 added, 2 removed): the own-key Codium seam of deviation V18b item 7. This is a shared file (contract 0.2).
+  - `.github/workflows/vector-at-mention.yml` (7 added, 1 removed) and `packages/cloud/src/workflow-compliance.test.ts` (6 added): the pull-request paths and the policy's required paths gain `packages/engine/src/provider/provider.ts`, `src/session/llm/request.ts`, `src/session/posting.ts` and `test/lib/research.ts` (shared files). No step changes: the engine step's `test/cli/github*.test.ts` and the policy's list already cover the new test files.
+  - Tests:
+    - `packages/engine/test/cli/github.agent-fixture.ts` (new, 267 lines; a helper, not a test file);
+    - `github.agent-phase.test.ts` (new, 900 lines, 16 tests);
+    - `github.agent-channel.test.ts` (new, 214 lines);
+    - `github.agent-cli.test.ts` (new, 144 lines, 2 tests);
+    - `github.bundle.test.ts` (160 added, 4 removed): INV-K1's test, the pinned count's test, the count's half of the partial-clone test and the file header;
+    - `packages/engine/test/lib/research.ts` (3 added): a `replacements` option.
+  - `docs/vector/build/vector-at-mention-deviations.md`: the V18b entry. This entry.
+  - Unchanged: `packages/engine/src/index.ts`, whose loader wiring already loads the channel before the gate.
+- **Local evidence of the first build (2026-11-08), before the review fixes below.** Every Bun command ran through `vector-serial`, from `packages/engine`, one file per command, as `bun test --timeout 30000`. Each had `GITHUB_ACTIONS=false`, and `TMPDIR`, the four XDG roots and `VECTOR_TEST_HOME` under `/tmp/vector-v18b/`. Gate logs are in `/tmp/vector-v18b/gate/` and earlier runs in `/tmp/vector-v18b/logs/`.
+  - `test/cli/github.agent-phase.test.ts`: 16 pass, 0 fail, 172 `expect()` calls (14.53s). It runs in-process (`runtime(web)`, `setup()`, the fake LLM server, `NetworkGuard.use()`). It spawns only git and the shell tool's fixed check, and changes no environment variable.
+  - `test/cli/github.bundle.test.ts`: 21 pass, 0 fail, 401 `expect()` calls. These are the 20 V18a tests, unchanged, plus "own-key agent phase sends no heartbeat or settle".
+  - `test/cli/github.agent-channel.test.ts`: each child case was run directly, as the lane's parent runs it, with `VECTOR_TEST_GITHUB_AGENT_CHANNEL` set and the six private names unset for the command.
+    - `environment`: 1 pass, 0 fail, 12 `expect()` calls.
+    - `codium-config`: 1 pass, 0 fail, 9 `expect()` calls.
+    - The parent cases spawn `bun test` and run in the lane only.
+  - Regressions, one file each:
+    - `github.policy`: 10 pass, 0 fail, 82 `expect()` calls;
+    - `github.evidence`: 16 pass, 0 fail, 64;
+    - `github.review-api`: 3 pass, 0 fail, 17;
+    - `github.cloud`: 40 pass, 0 fail, 460;
+    - `github.workflow`: 35 pass, 0 fail, 3 snapshots, 715;
+    - `github.route`: 11 pass, 0 fail, 69;
+    - `test/tool/memory.test.ts` (imports `taskPart` from the handler): 18 pass, 0 fail, 110.
+  - CI-only, inspected and not run locally, because they spawn the CLI or Bun:
+    - `github.agent-cli.test.ts`, and the parents of `github.agent-channel.test.ts`;
+    - `github.run-routing.test.ts`, `github.review.test.ts`, `github.provider-credentials.test.ts`, `github.lifecycle.test.ts`, `github.cloud-lifecycle.test.ts` and `github.auth.test.ts`. These prove that the lift left `githubRun` and the gate as they were.
+  - What the in-process credential case proves: with a holder of the test's own, the phase never exports the holder. The fixture values are counted 0 in a tool's child and are absent from `process.env`. The provider layer and `Env` read the process's holder, so the case with the process's holder loaded is the `environment` child. The loader-before-gate order is the CLI test's to prove.
+  - Mutation spot checks (`/tmp/vector-v18b/logs/mutations.log`). Each was restored from a saved copy and checked with `cmp`, and each made exactly the named test fail:
+    - no read-only check in `readOnlyFetch`: the client test;
+    - exporting the GitHub token to `process.env`: the in-process credential case;
+    - exporting a provider key to `process.env`: the `environment` child;
+    - no pinned policy, and the policy also in the user turn: the policy test;
+    - no Codium refusal: the refusal test;
+    - own key allowed a `vector-plan` MODEL: the `agentModel` test;
+    - a settle on own key, with a well-formed run token in the holder: INV-K1's test;
+    - a `git fetch origin`: the no-network-git test;
+    - the issue's task taken from the API: the issues test;
+    - no posting check: the posting test;
+    - no writer check: the refusal test and the dispatch test;
+    - a raw diff hunk: the policy test;
+    - a raw finding: the policy test. The first run of this mutation survived, because the finding's own escaping kept the closing tag out. The test now parses the finding line as JSON, and the mutation fails it;
+    - a session error with no default row: the error test;
+    - the three provider guards removed: the `codium-config` child.
+  - `bun typecheck` in `packages/engine` (`tsgo --noEmit`): exit 0. No other package changed.
+  - Full typecheck (`TURBO_CACHE_DIR=/home/user/.cache/vector-typecheck bun turbo typecheck --concurrency=1`, from the worktree root, 05:40:59–05:42:40 UTC): exit 0, 23 of 23 successful, 0 cached, 1m40.846s (`/tmp/vector-v18b/gate/typecheck-full.log`).
+  - `bunx prettier --check` on the 13 changed code and test files and on the progress and deviations files: clean (Prettier added two blank lines inside the new deviations entry). `git diff --check`: clean. The spec edit is in one table row and two list items that are already as Prettier writes them.
+  - One local log of an early `environment` child run held a value from this machine's environment, printed by a `toBeUndefined()` failure. It was deleted at once, and every such check in the new tests now prints names only.
+- **Review fixes (2026-11-08).** A review of the uncommitted package found two blocking defects and eleven non-blocking points (deviation V18b item 14). After the fixes, on the final source, with the same conventions and fresh roots under `/tmp/vector-v18b/review-fix/` (logs in `/tmp/vector-v18b/review-fix/logs/`):
+  - `test/cli/github.agent-phase.test.ts`: 16 pass, 0 fail, 185 `expect()` calls (13.84s). The no-network-git test now makes its edit through the shell, with the agent's hooks and fsmonitor pointed at marker scripts; the GraphQL test refuses the `#`-in-a-string bypass and any `operationName`; the route test asserts `AUTHOR_REFUSED` and refuses a bot's and an id-less `issues` event; the posting test's summary turn is the memory sentence, so the title falls back.
+  - `test/cli/github.bundle.test.ts`: 22 pass, 0 fail, 408 `expect()` calls. New: "the evidence's change count runs pinned, against an index of its own", and the partial-clone test also refuses the count.
+  - `test/cli/github.agent-channel.test.ts` children, run directly as before: `environment` 1 pass, 0 fail, 12 `expect()` calls; `codium-config` 1 pass, 0 fail, 9.
+  - `test/cli/github.run-routing.test.ts` with `-t "finding's thread|what the task job posts"`, which selects only its in-process tests of the moved `/vector fix` helpers and of the handler's posting source (no `cliIt` case runs): 7 pass, 0 fail, 27 `expect()` calls. The whole file stays CI-only.
+  - Regressions, one file each, unchanged counts: `github.policy` 10 pass, 0 fail, 82; `github.evidence` 16, 0, 64; `github.review-api` 3, 0, 17; `github.cloud` 40, 0, 460; `github.workflow` 35, 0, 3 snapshots, 715; `github.route` 11, 0, 69; `test/tool/memory.test.ts` 18, 0, 110.
+  - `packages/cloud`: `GITHUB_ACTIONS=false bun test --timeout 30000 src/workflow-compliance.test.ts` 18 pass, 0 fail, 135 `expect()` calls.
+  - Mutation checks (`/tmp/vector-v18b/review-fix/mut/`), each restored from a saved copy and checked with `cmp`, each failing exactly the named test:
+    - the old unpinned count through `Git.Service`: the no-network-git test (the agent's `post-index-change` hook ran);
+    - no count at all: the no-network-git test (the evidence listed no change);
+    - comments stripped before the word tests: the GraphQL test;
+    - a body schema that is not strict: the GraphQL test;
+    - `title ?? fallback`: the posting test;
+    - `NOT_A_TASK` for an author mismatch: the route test;
+    - the count through the agent's own index: the pinned-count test;
+    - no `core.hooksPath=/dev/null` in writeBundle's config: the pinned-count test and the hostile-config test;
+    - no hex check on the count's base: the pinned-count test.
+  - `bun typecheck` in `packages/engine` and in `packages/cloud` (`tsgo --noEmit`): exit 0.
+  - Full typecheck from the worktree root (06:25:37–06:26:31 UTC): exit 0, 23 of 23 successful, 21 cached, 24.67s (`/tmp/vector-v18b/review-fix/logs/typecheck-full.log`).
+- **Commit gate (2026-11-08, same conventions, fresh roots under `/tmp/vector-v18b/commit-gate/roots/`, logs in `/tmp/vector-v18b/commit-gate/logs/`), on the source that was committed:**
+  - `test/cli/github.bundle.test.ts`: 22 pass, 0 fail, 408 `expect()` calls (8.14s).
+  - `test/cli/github.agent-phase.test.ts`: 16 pass, 0 fail, 185 `expect()` calls (15.59s).
+  - `test/cli/github.agent-channel.test.ts` children, run directly with `VECTOR_TEST_GITHUB_AGENT_CHANNEL` set and the six private names unset for the command: `environment` 1 pass, 0 fail, 12 `expect()` calls; `codium-config` 1 pass, 0 fail, 9. The parents stay CI-only.
+  - `packages/cloud` `src/workflow-compliance.test.ts`: 18 pass, 0 fail, 135 `expect()` calls.
+  - Regressions, one file each: `github.policy` 10 pass, 0 fail, 82; `github.review-api` 3, 0, 17; `github.run-routing.test.ts -t "finding's thread|what the task job posts"` (in-process cases only) 7, 0, 27; `test/tool/memory.test.ts` 18, 0, 110.
+  - CI-only, not run locally: `github.agent-cli.test.ts`, the parents of `github.agent-channel.test.ts`, and the rest of `github.run-routing.test.ts` plus `github.review.test.ts` (they spawn the CLI or Bun).
+  - `bun typecheck` in `packages/engine` and in `packages/cloud` (`tsgo --noEmit`): exit 0.
+  - Full typecheck from the worktree root (06:38:14–06:38:15 UTC): exit 0, 23 of 23 successful, 23 cached (the sources were unchanged since the 06:25 review-fix run), 547ms.
+- **Not yet done:** the feat commit's hash, the pre-push hook and the exact-head lane run (all 8 jobs, including the five sandbox-probe jobs and the Node bundle job). A commit cannot name its own hash, so they are recorded in V18c's entry once seen.
+- **Carried to:**
+  - V18c:
+    - the Codium agent phase: `withRunHeartbeat`, the deadline timer at `VECTOR_RUN_DEADLINE` minus `STOP_MARGIN_SECONDS`, the 15-minute `MODEL_PLAN_CONCURRENCY` wait, and `SessionRetry` for the 2.9.2 draft codes;
+    - `stopReason` with `codium: true`, on the error cause that `chat` now keeps;
+    - INV-C7's fake-provider half;
+    - Codium ticket dispatches, and untrusted labels for `startCloudRun` prompts;
+    - the Codium instance (V18b starts none).
+  - V19: Codium's cost label flows through `buildEvidenceBody` into the bundle body.
+  - V21:
+    - a missing bundle is a refusal when the agent job succeeded (nothing to publish) and a crash when it did not (one failure comment): publish tells them apart by the agent job's result, never by the bundle alone (deviation V18b item 1);
+    - publish adds `Closes #n`;
+    - the bundle's title, body and comment are already posting-checked, but publish's own text rules (2.12) still apply.
+  - V22: schedule prompts replace `SCHEDULE_NOT_YET`.
+  - V24: the v3 builder passes publish the agent job's result (for example `VECTOR_AGENT_RESULT: ${{ needs.agent.result }}`, allowlisted under INV-S15), and keeps a missing `vector-run-*` artifact from failing publish: today's upload step keeps the default `if-no-files-found: warn` and the download step has `continue-on-error: true`; keep both or set `if-no-files-found: ignore` (deviation V18b item 1).
+  - V27b: session artifacts (`session.vsa`).
 
 ## Owner checks recorded
 

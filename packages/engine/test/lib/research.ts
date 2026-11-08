@@ -189,6 +189,8 @@ export function runtime(
     readonly mcp?: Layer.Layer<MCP.Service>
     /** The HTTP client every request goes through, such as one that sends a search service's to the fake web. */
     readonly http?: Layer.Layer<HttpClient.HttpClient>
+    /** Further services to replace, such as a fake Codium catalog. */
+    readonly replacements?: LayerNode.Replacements
   } = {},
 ) {
   const config = mkdtempSync(path.join(os.tmpdir(), "vector-research-"))
@@ -213,6 +215,7 @@ export function runtime(
         Layer.succeed(ResearchRun.NetworkService, { resolver: web.resolver, publicNames: [FakeWeb.DOMAIN] }),
       ],
       ...(options.http ? [[httpClient, options.http] as const] : []),
+      ...(options.replacements ?? []),
     ]),
   )
   afterAll(() => {

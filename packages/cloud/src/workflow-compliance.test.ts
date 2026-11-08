@@ -177,6 +177,12 @@ describe("@vector CI lane", () => {
         "packages/core/src/review/**",
         "packages/core/src/github-agents.ts",
         "packages/engine/src/cli/cmd/github*.ts",
+        // The engine files the agent phase's own-key seam, its pinned policy and its posting check live in, and the
+        // research runtime its tests run on (V18b).
+        "packages/engine/src/provider/provider.ts",
+        "packages/engine/src/session/llm/request.ts",
+        "packages/engine/src/session/posting.ts",
+        "packages/engine/test/lib/research.ts",
         "packages/desktop/src/main/github-*.ts",
         ".github/workflows/vector-at-mention.yml",
       ]),

@@ -4,6 +4,7 @@ import { effectCmd } from "../effect-cmd"
 import { githubShareConsent, prepareGithubEnvironment } from "./github.environment"
 import type { PublicSession } from "@vectordevai/schema/public-session"
 import { TASK_MENTIONS, mentionsFrom, routeGithubEvent } from "./github.route"
+import { GithubSecrets } from "./github.secrets"
 
 export { extractResponseText, formatPromptTooLargeError, parseGitHubRemote } from "./github.shared"
 
@@ -74,8 +75,29 @@ export const GithubRunCommand = effectCmd({
       .option("token", {
         type: "string",
         describe: "GitHub personal access token (github_pat_********)",
-      }),
+      })
+      .option("phase", {
+        choices: ["agent"] as const,
+        describe: "run the v3 agent job's phase, inside `vector github sandbox run`",
+      })
+      // A mock event or token never reaches the agent phase: it reads only the Actions event and the secret channel.
+      .conflicts("phase", ["event", "token"]),
   instance: (args) => {
+    // The agent phase loads no project, configuration or plugin unless the channel's credentials are in memory, and a
+    // Codium run (refused until V18c) loads none at all. Consent is read from the holder: the loader has already taken
+    // VECTOR_CLI_TOKEN out of the environment. Codium never shares (2.13).
+    if (args.phase === "agent") {
+      if (!GithubSecrets.credentials.loaded() || process.env.VECTOR_MODE !== "own-key") return false
+      sharing.set(
+        args,
+        githubShareConsent({
+          SHARE: process.env.SHARE,
+          VECTOR_SHARE_CONSENT: process.env.VECTOR_SHARE_CONSENT,
+          VECTOR_CLI_TOKEN: GithubSecrets.credentials.cliToken(),
+        }),
+      )
+      return true
+    }
     sharing.set(args, githubShareConsent(process.env))
     const warning = prepareGithubEnvironment(process.env, false)
     if (warning) console.warn(warning)
@@ -83,6 +105,23 @@ export const GithubRunCommand = effectCmd({
   },
   handler: (args) =>
     Effect.gen(function* () {
+      if (args.phase === "agent") {
+        const { AGENT_NEEDS_CHANNEL, githubAgentPhase, refuseCodiumAgent } = yield* Effect.promise(
+          () => import("./github.agent"),
+        )
+        if (!GithubSecrets.credentials.loaded()) {
+          console.error(AGENT_NEEDS_CHANNEL)
+          process.exitCode = 1
+          return
+        }
+        const result =
+          process.env.VECTOR_MODE === "own-key"
+            ? yield* githubAgentPhase({ share: sharing.get(args) })
+            : yield* Effect.promise(() => refuseCodiumAgent())
+        // Nothing comes back when SIGINT or SIGTERM ended the phase, which then set 130 or 143.
+        if (result) process.exitCode = result.exitCode
+        return
+      }
       const { githubRun, githubEventContext } = yield* Effect.promise(() => import("./github.handler"))
       // Reviews have their own job, so the event is routed before any task work starts.
       const context = githubEventContext(args)

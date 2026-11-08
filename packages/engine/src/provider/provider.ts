@@ -2212,9 +2212,11 @@ const layer = Layer.effect(
         if (freeCatalog.enabled && isProviderAllowed(ProviderV2.ID.vector) && vectorToken && freeCatalog.models.length)
           providers[ProviderV2.ID.vector] = fromFreeModels(freeCatalog.models)
         if (!freeCatalog.enabled) delete providers[ProviderV2.ID.vector]
-        // Codium replaces every user or project override of its ID, so prices and destination stay Vector's.
+        // Codium replaces every user or project override of its ID, so prices and destination stay Vector's. An own-key
+        // GitHub run never sends a model request to Codium (INV-K1), whatever MODEL, an agent or small_model names.
         delete providers[planID]
-        if (planCatalog.enabled && isProviderAllowed(planID)) providers[planID] = fromModelPlans(planCatalog.models)
+        if (planCatalog.enabled && isProviderAllowed(planID) && !GithubSecrets.ownKeyRun())
+          providers[planID] = fromModelPlans(planCatalog.models)
         if (openRouterKey && isProviderAllowed(ProviderV2.ID.openrouter)) {
           providers[ProviderV2.ID.openrouter] ??= fromFreeModels([], "openrouter")
           Object.assign(providers[ProviderV2.ID.openrouter].models, fromFreeModels(ownedFree, "openrouter").models)
@@ -2378,6 +2380,7 @@ const layer = Layer.effect(
       delete s.providers[planID]
       if (
         current.enabled &&
+        !GithubSecrets.ownKeyRun() &&
         !Config.local().enabled &&
         !cfg.disabled_providers?.includes(planID) &&
         (!cfg.enabled_providers || cfg.enabled_providers.includes(planID))
@@ -2710,6 +2713,12 @@ const layer = Layer.effect(
             reason: "off-in-local",
             message: `${providerID}: off in Vector Local. ${OFF_IN_LOCAL.vector}`,
           },
+        })
+      if (providerID === planID && GithubSecrets.ownKeyRun())
+        return yield* new ModelNotFoundError({
+          providerID,
+          modelID,
+          unavailable: { id: providerID, reason: "no-models", message: GithubSecrets.OWN_KEY_CODIUM },
         })
       // A turn waits for vectordev.ai's answer when this account has no Codium catalog yet.
       if (providerID === planID) yield* refreshCodium({ wait: true })
