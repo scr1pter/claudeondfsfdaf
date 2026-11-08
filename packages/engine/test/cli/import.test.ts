@@ -3,6 +3,12 @@ import { Effect } from "effect"
 import { cliIt, withCliFixture } from "../lib/cli-process"
 import path from "node:path"
 
+// The round trip starts six CLI processes and the public history test four. Each takes 2 to 3.5 s on a Windows runner
+// (11 to 17 s and 8 to 14 s for the two tests), and more than twice that when the runner slows (test.yml run
+// 42443552558: past 30 s for both), so those two get a limit of their own. Each process keeps its own 30 s limit, so a
+// hang still fails.
+const PROCESSES = 120_000
+
 cliIt.live(
   "import rejects remote URLs without contacting them",
   ({ vector }) =>
@@ -48,7 +54,7 @@ cliIt.live(
         }),
       )
     }),
-  30_000,
+  PROCESSES,
 )
 
 cliIt.live(
@@ -116,7 +122,7 @@ cliIt.live(
       expect(sanitized.stdout).not.toContain(marker)
       expect(sanitized.stdout).not.toContain("Imported user message")
     }),
-  30_000,
+  PROCESSES,
 )
 
 cliIt.live(
