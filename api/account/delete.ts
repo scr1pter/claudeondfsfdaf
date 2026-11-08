@@ -14,6 +14,7 @@ import { persistentStore } from "../_lib/persistent-store.js"
 import { revocationConfigured, revokeAccountTokens } from "../_lib/revocation.js"
 import { cancelModelPlanAccount } from "../_lib/model-plan-account.js"
 import { forgetUsage } from "../_lib/usage.js"
+import { closeCloudWorkspaces } from "../_lib/cloud-workspaces.js"
 
 /**
  * Deleting a Vector account, from the website with its browser session or from
@@ -69,6 +70,9 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const tokensRevoked = await revokeAccountTokens(user.id)
     if (revocationConfigured() && !tokensRevoked)
       throw new ApiError(503, "REVOCATION_FAILED", "Account access could not be revoked. Retry account deletion.")
+    await closeCloudWorkspaces(user.id).catch(() => {
+      throw new ApiError(503, "WORKSPACE_DELETION_FAILED", "Cloud workspace access could not be closed. Retry account deletion.")
+    })
     await cancelModelPlanAccount(user.id).catch(() => {
       throw new ApiError(
         503,

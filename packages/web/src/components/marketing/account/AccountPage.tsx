@@ -150,6 +150,12 @@ export function AccountPage(props: { preview?: AccountState }) {
           <FreeDownload accessToken={token} />
         </section>
 
+        {account && <section className="acct-section">
+          <h2>Cloud workspaces</h2>
+          <p>Code with Vector in a GitHub repository and return to your saved cloud chats from another device.</p>
+          <a className="acct-button acct-button-secondary" href="/workspaces">Open cloud workspaces</a>
+        </section>}
+
         <CliLaunchPanel
           accessToken={token}
           previewToken={props.preview ? "vct_eyJ2IjoxLCJzdWIiOiJwcmV2aWV3IiwiZXhwIjoxfQ.previewsignature0000000000000000000000" : undefined}
@@ -180,7 +186,8 @@ export function AccountPage(props: { preview?: AccountState }) {
                 <p className="acct-fine">
                   This cannot be undone. Vector deletes your account and sign-in and stops the CLI tokens this account
                   has issued. Any Vector Codium plan ends at once, and the credits left, this month's or purchased, can
-                  no longer be used. Repositories on your own machine are not touched, and neither is anything you have
+                  no longer be used. Access to your Vector cloud workspaces closes immediately, and their files are
+                  queued for cleanup, which may take time. Repositories on your own machine are not touched, and neither is anything you have
                   already published to your own cloud accounts.
                 </p>
                 <label className="acct-danger-label" htmlFor="acct-delete-confirm">
@@ -224,7 +231,7 @@ export function AccountPage(props: { preview?: AccountState }) {
             ) : (
               <>
                 <p className="acct-fine">
-                  Deleting removes your sign-in and stops your CLI tokens. It cannot be undone.
+                  Deleting removes your sign-in, stops your CLI tokens and closes your cloud workspaces. Workspace files are queued for cleanup. It cannot be undone.
                 </p>
                 <button
                   className="acct-button acct-button-quiet"
