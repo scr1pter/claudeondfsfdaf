@@ -1914,6 +1914,16 @@ unchanged.
   `PATCH` part.update could relabel step usage) and records its readings and hand-offs under "P4 review decisions"
   below. Its changes were left uncommitted for the lane lead, so its commit, push
   and Vector Codium run are recorded by the package that pushes them.
+- **8 Nov 2026 (P4d).** Run 42457442687 (push, head `39db0daf`, P4c's commit, which the lead committed and pushed)
+  completed with success, 14 of 14 jobs; its Codium tests job 128659369695 passed every step, and the last 290 lines of
+  its log show the last HttpApi exerciser gate at `pass=309 fail=0` followed by `check:generated` (the picker's file
+  count was not read). Job ids are in `codium-p4-repairs.md` ("CI before P4d"); `origin/codium` was still `39db0daf`
+  when it was read. P4d repaired F60 (a mixed review's wording printed `vector-plan/<model>`) and F61 (P4b's F18: the
+  engine review model was never `"codium"`, so the P5 review token stop could miss a Codium review), which closes F18.
+  It records the A27 public-copy divergences as owner decisions O1 to O9 and two hand-offs to Codex (F63, F64) under
+  "P4 review decisions" below. With P4d, P4 is closed for A21 to A28; its open items are listed in
+  `codium-p4-repairs.md` ("P4 summary"). At the time of this record (8 Nov 2026) P4d's changes were not yet committed;
+  the package that pushes them adds a dated line here with the commit sha and its Vector Codium run id and conclusion.
 
 ## P4 review decisions (8 Nov 2026)
 
@@ -2015,6 +2025,8 @@ P4b's readings, from its review of A23 and A24 (`4fde1a49..b4c05481` and the A24
   `panel.test.ts` case that reaches the stop with an explicit `triageModel` without building `costKind: "codium"` by
   hand. Not done in P4b: label plan C11 (spec A26) owns `review/model.ts`, and the repair changes review budgets and
   footers and the P5 stop. It needs no Codex-owned file: `github.review.ts` keeps calling `resolveReviewModel` as it is.
+  8 Nov 2026 (P4d): repaired as F61 (R1) in `packages/engine/src/review/model.ts`; see `codium-p4-repairs.md`, "A26
+  review footer", and P4d's readings below.
 - **Hand-off to the P6 addendum (F28, A41).** In `packages/app/src/components/settings-vector-codium.tsx:66-100` the
   phone usage alert (A41, `4caf1073`) is sent before the desktop notification, and a failed desktop `notify` removes the
   dedupe key, so while it keeps failing every later run of that effect with Usage open sends the phone alert again. The
@@ -2091,3 +2103,72 @@ P4c's readings, from its review of A25 (`b4c05481..295ab95e`; findings F35 to F5
   here and stay with the integration.
 - **Range.** `git log b4c05481..295ab95e` also holds the test-only `44c35f1c` and `9c5bc861`, which P4b reviewed with
   the other A24 follow-ups; P4c read `d505d566` and `4bc40a87` only for the A25 notes' claims.
+
+P4d's readings, from its review of A26 to A28 (`295ab95e..d13d91e3`; findings F57 to F78 in `codium-p4-repairs.md`,
+sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
+
+- **F61 is repaired in `review/model.ts`, not in Codex's file.** Label plan §4.3 and C11 give the engine review cost
+  kind to `packages/engine/src/review/model.ts`, which spec A26 owns, so `resolveReviewModel` now passes
+  `codium: Billing.isCodium(model.providerID)`. `github.review.ts` keeps calling it as it is, so GitHub Codium reviews
+  now meet the P5 token stop too. The repair adds the stop for a Codium review with an explicit `triageModel`, with no
+  listed review roles and with a same-lab pair, and an unused Codium run reports `"codium"`. It also removes the dollar
+  price, the dollar cap, the CLI's dollar estimate and the dollar estimate in a GitHub review's "too large" note from a
+  Codium model that has a catalog price; the catalog ships Codium models unpriced (`provider.ts:1806`), so that case is
+  defensive, and label plan §2 rules out dollar figures for Codium work. Step and time limits are unchanged.
+- **Mixed review wording renames only the Codium model (F60).** Each Codium model of a mixed review's model list reads
+  `Vector Codium · <model>` (label plan §2), and the existing `<models> · <own figure> + Codium` layout stays, as in
+  the app's per-pass lines (`ai-review.ts:1889-1891`):
+  `anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium`. With `·` as the separator,
+  `$0.21` follows the Codium model, so it could be read as that model's cost; a layout with a figure per model would be
+  a separate change, and the tests pin the exact strings so any reorder is deliberate. The figure is own-key spend, so
+  P1 holds; the review of P4d's repairs agreed and asked for no change. If the owner or the label plan wants an
+  unambiguous layout later, the own figures move next to the own models
+  (`anthropic/claude-sonnet-4-5 · $0.21 + Vector Codium · vector-velocity · Codium`) and the exact-string pins in
+  `format.test.ts`, `review.render.test.ts` and `codium-no-figures.test.ts` change with it. The pattern is built from
+  `Billing.CODIUM_PROVIDER_ID` (label plan C1). `vector review --json` keeps the raw id: it is machine output, and
+  §3.4's JSON row is `{ kind, model }`.
+- **The public share's notice is an owner decision (O9, P4a's F10).** P4a accepted it under label plan §3.7. §3.7 keeps
+  billing, token and cost fields out of `PublicSession` and says nothing about the notice's text, while §2 says
+  `vector-plan` is never printed as a provider name; as label-surface copy it goes to the owner with the other copy
+  findings. No change.
+- **Public-copy divergences are owner decisions (F71, O1 to O8).** The brief allows wording changes only towards text
+  the contract states verbatim, and the contract's own text is not safe to adopt: §1.3's Plus variants 1 and 2 and
+  Ultra variants 1 and 2 conflict with H4, and its fallbacks name models that are not served while `ROUTE_ACCEPTANCES`
+  is empty. So nothing was changed, the spec's text was not adopted either, and each item records what changes for
+  either answer.
+- **A27's Velocity and Labs claims stay open owner decisions (O4, O5).** The deviation "A27 public presentation" cites
+  an approved owner override for "planned 550B+" and an "explicit no-Labs scope". No lane document holds either, and
+  `codium-p5-repairs.md` lists both ("Vector Labs on the pricing page", "the 550B Velocity wording") as pending. H2
+  bans a parameter count, and the lander (`Lander.astro`, `landing-copy.test.ts:183-189`) and investor page
+  (`test/investor-page.test.ts:177-201`, whose README guard bans "Planned" and `\d+B\+`) word Velocity differently
+  again. P4d changes none of it.
+- **The listing's staleness bound is accepted (F66).** `listedPerks` fails closed on any read error, but a value read
+  just before an outage stays for the 30 s switch cache plus the config route's `s-maxage=60` and
+  `stale-while-revalidate=30`, about 2 minutes in all; a switch never written reads `on` (A11). Both are read as A11 and
+  §4.14 behaviour; tightening the route's cache is the owner's one-line call.
+- **Hand-offs to Codex (F63, F64).** `github.evidence.ts`'s `formatCost` omits "on your keys" from the mixed line (label
+  plan §3.8) and prints `$0.00 + Codium` beside own free work (§2); `github.review.ts:692-695` logs
+  `Spent $0.0000 + Codium` while own steps have reported $0. Both files are Codex's (spec §0.5) and were not edited. The
+  proposed regressions are in the repairs doc; no test was added here, because it would fail until Codex repairs them.
+- **Test placement (F78).** R1's regressions are in `packages/engine/test/review/model.test.ts` and `panel.test.ts`,
+  the two files P4b's F18 named; the brief's list has no engine review-model test file. The panel case puts the
+  resolver's kind on the file's loopback models, which run the passes, with a mock layer of only the four services
+  `resolveReviewModel` reads (Provider's `getModel` and `line`, Config, Auth, ModelCatalog). `model.test.ts`'s own
+  service layer is private to that file, and test files do not import each other, so the case builds its four mocks
+  rather than reusing it.
+- **The panel case stays, retitled (P4d review).** The review of P4d's repairs found that the panel case mostly
+  repeats `model.test.ts` (the resolver's `"codium"` answer) and the existing "on Vector Codium the check and the judge
+  do not start past the stop" case, builds a mock layer, and was titled "explicit triageModel" while its triage model is
+  the `FIRST` fixture with the resolved kind copied onto it. It is kept, as P4b's hand-off asked for a `panel.test.ts`
+  case that reaches the stop without writing `costKind: "codium"` by hand, and it fails against the previous source
+  (the kind was `"unknown"`). Its title now says what it checks: "the kind resolveReviewModel returns for a Vector
+  Codium model is the one the runner's token stop reads". Its mocks follow `model.test.ts`, which mocks the same
+  services. A real Provider with a Codium listing can be built the way `test/provider/model-plans.test.ts` does (the
+  core `codium-gateway` fixture, with its own FreeModels and ModelPlans service stand-ins and a gateway server), which
+  is more setup than this one case needs; P4d left that as it is. Neither test drives the CLI or GitHub caller from the resolver into `Review.run`; F78 records that gap and why no
+  end-to-end case was added (the caller harnesses fake both ends, and Codium's fixed destination cannot be served by
+  the loopback LLM server).
+- **A27's commit message lists no `api/_lib/model-plan-*.ts` edit (F67).** `4e993a62` edited
+  `api/_lib/model-plan-config.ts` (an export) and `api/_lib/model-plan-status.ts` (the listing and its cache check),
+  and its one-line message lists neither, against spec §0 item 5. Pushed commits are not amended, so the list is
+  recorded in F67.

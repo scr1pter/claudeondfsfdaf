@@ -371,6 +371,8 @@ finding says otherwise.
   `packages/engine/test/review/model.test.ts` that resolves a `vector-plan` model and expects `"codium"`, and a
   `panel.test.ts` case that reaches the stop with an explicit `triageModel` without building `costKind: "codium"` by
   hand. Also in `codium-deviations.md` (Lane status and "P4 review decisions").
+- 8 Nov 2026 (P4d): repaired as F61 (R1) in `packages/engine/src/review/model.ts`; see "A26 review footer". The
+  `panel.test.ts` case runs the resolver on the review model and copies its kind onto the triage model (F61, F78).
 
 **F19. Desktop limits might hold or reserve dollars for a known Codium run.** Not confirmed; one reading recorded.
 
@@ -1042,3 +1044,438 @@ unchanged.
 Edits to `api/_lib/model-plan-*.ts`: none.
 
 Shared label files touched: none.
+
+## A26 review footer
+
+P4d reviews A26 to A28, the range `295ab95e..d13d91e3`: `9afebc91` (A26, review accounting and cached output),
+`4e993a62` and `b12f3cab` (A27, the copy module, listing and /codium, and its FAQ wording fix) and `d13d91e3` (A28, the
+account page). `git diff --stat 295ab95e d13d91e3` shows 46 files; the four commits touch 22, 21, 2 and 11 files (56
+in all, 10 of them in more than one commit). The brief's count of 54 matches neither (F78). P4d read spec §5 A26 to
+A28, §1.1 to §1.3, §4.11, §4.14, §7.1, invariants H1 to H7 and P1, label plan §2, §3.4, §3.7, §3.8, §4.3 and C11, the
+A26, A27 and A28 notes, and the deviations sections "A26: review accounting and cached output", "A27 public
+presentation" and "A28 account billing presentation". Each finding was checked against the code at `39db0daf`
+(`origin/codium` on 8 Nov 2026, P4c's commit, fetched again before these records were written). Line numbers are at
+`39db0daf` unless a finding says "after the repair". Findings continue from F57. No service, account, deployment or
+provider was called (the GitHub reads were read-only run, job and log queries), no Codex-owned file (spec §0.5:
+`packages/engine/src/cli/cmd/github.*`) was edited, no public copy, price, tagline, legal page or
+`test/codium-legal.test.ts` was touched, and `api/_lib/model-plan-*.ts` was not edited.
+
+**F57. Codium-only reviews show no tokens or dollars.** Not confirmed.
+
+- Core: `costWording` (`packages/core/src/review/format.ts:121-122`) answers a pure Codium cost with
+  `Vector Codium · <model> · Codium` before it reads any figure; `failedSpend` (`:483-485`) and `noteFailed` go
+  through it; the footer's pull request total (`:891-898`) prints `Codium over N reviews` when `costUsd` is 0.
+- Engine CLI: the footer goes through `costWording` whenever `reviewCostHasCodium` (`cli/cmd/review.render.ts:223-235`);
+  per-pass lines print `review: Codium` (`:239-253`); `reviewForOutput` (`cli/cmd/review-output.ts:13`) gives a pure
+  Codium review `{ kind: "codium", model }` with no numbers.
+- App: `reviewSpendText` (`packages/app/src/features/pull-requests/ai-review.ts:592-600`), `spentSoFar` (`:1586-1597`),
+  `passLines` (`:1878-1902`), `estimateText` (`:2248`, "Runs on your Vector Codium plan.") and `reviewFooter`
+  (`:2227-2236`, through core `costWording`); the app's own cost kind checks `Billing.isCodium` first (`:371`).
+- Codex's files (read, not edited): `github.review.ts:692-695` logs `Spent: Codium` for a Codium-only run;
+  `github.evidence.ts:293-294` writes `**Cost:** Codium · Vector Codium · <model> · N turns`.
+- Tests: `format.test.ts` "pure Codium wording and failure ignore raw numeric fields and missing usage",
+  `review.render.test.ts` "Codium footer and passes omit legacy numbers…", `codium-no-figures.test.ts` (first case),
+  `github.review.test.ts:1951`.
+
+**F58. Mixed reviews keep their own-key costs.** Not confirmed. `measure` (`packages/engine/src/review/run.ts:296-350`)
+keeps own dollars and own tokens and sets `tokensOwnOnly: true`; `passes` (`:353-395`) groups each session's steps by
+model and billing and keeps dollars only for own priced or unknown steps; the app's measurement does the same
+(`ai-review.ts:1015-1130`). `nextState` (`packages/core/src/review/state.ts:380-406`) always adds own dollars, and own
+tokens only when `tokensOwnOnly === true`. `costWording`'s mixed branches (`format.ts:123-143`) print own figures with
+`+ Codium`. Tests: `format.test.ts` "mixed fresh usage shows only attributed own figures alongside Codium",
+`codium-no-figures.test.ts` (mixed case).
+
+**F59. Review state key `k`.** Not confirmed. `nextState` counts a Codium review once in `codiumReviews` (`:399`), adds
+nothing in carry mode (`:382`), and `c` stays dollars; `encodeRaw` writes `k` only when the count exists (`:553`) and
+`decodeState` reads it (`:590`). Older decoders check only `v === 1` (`:570`) and ignore unknown keys, as label plan
+§3.4 asks. Tests: `state.test.ts` (54 pass here).
+
+**F60. Mixed review wording printed the raw provider id `vector-plan/<model>`.** Confirmed, repaired (R2).
+
+- `costWording` stripped the prefix only in its pure branch (`format.ts:122`); every mixed, unknown, free, plan or
+  missing-usage branch printed `cost.model` as it came. The engine joins the models a review used with " + "
+  (`run.ts:345-349`), so a mixed review's PR footer, its failure note, the app footer and the CLI footer read
+  `anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity · $0.21 + Codium`.
+- Label plan §2: "Never print `vector-plan` as a provider name; it reads 'Vector Codium'", with exceptions only for ids
+  the person has to type. §3.4 and §3.6 give the form `Vector Codium · <model>`. `format.test.ts:908-909` pinned the
+  defect.
+- **Repair** (`format.ts`, after the repair `:120-152`): one module pattern, built from `Billing.CODIUM_PROVIDER_ID`
+  (the import `state.ts` already uses), matches a Codium model at the start of the list or after " + ". The pure branch
+  strips it as before; every other branch prints `model`, the same list with each Codium model as
+  `Vector Codium · <model>`. The layout is unchanged: `<models> · <own figure> + Codium`. So the example reads
+  `anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium`. `other/vector-plan/model` is not
+  touched. One function covers the PR footer, `noteFailed`/`failedSpend`, the app footer and the CLI footer. JSON keeps
+  the raw id: it is machine output, and label plan §3.4's JSON row is `{ kind, model }`. No signature changed.
+- **Regression:** `format.test.ts` "a mixed review names its Codium models Vector Codium, never by the vector-plan id"
+  (exact strings for priced with proven own tokens, partial, missing usage, plan and unknown, plus `noteFailed` and a
+  `buildSummaryBody` footer, none containing `vector-plan`); the expectation at `:908-909` now reads
+  `anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium` (the old value pinned the defect; this
+  is not a loosening); `review.render.test.ts`'s mixed case now requires
+  `openai/gpt-4.1 + Vector Codium · vector-flash · $0.12 + Codium · 1m 52s` and no `vector-plan`; the mixed case of
+  `codium-no-figures.test.ts` requires `own/coder + Vector Codium · vector-flash · $0.12 + Codium` and no `vector-plan`
+  in any label. All four fail against the previous source ("Tests run here (P4d)").
+
+**F61. The engine review model was never `costKind: "codium"` (P4b's F18).** Confirmed, repaired (R1).
+
+- `resolveReviewModel` (`packages/engine/src/review/model.ts:128-134`) called `SpendGuard.costKindOf` without `codium`,
+  against label plan §4.3 and C11, so a Vector Codium model read `"unknown"` (the shipped catalog has no price,
+  `provider.ts:1806`), `"priced"` if a catalog entry had a price, or `"plan"` under an OAuth sign-in. The runner's own
+  `resolved()` (`run.ts:942-953`), used only for the models it picks itself, already answered `"codium"`.
+- Effects before the repair. `Review.run` applies `CODIUM_REVIEW_TOKEN_STOP` only when a chosen model is `"codium"`
+  (`run.ts:400`), and the runner picks the plan's review pair only for a Codium model without a `triageModel`
+  (`chooseModels`, `:919-939`). So three Codium reviews ran without the stop: one with an explicit `triageModel` (both
+  models come from the resolver), one whose plan lists no review roles, and one whose pair is from a single lab
+  (`reviewModels` keeps the review model with no triage, `packages/core/src/review/second-lab.ts:60-69`). An unused or
+  empty run reported `"unknown"` (`run.ts:310,339`). For a priced Codium catalog entry the review got a dollar price, so
+  the dollar cap applied (`run.ts:207`), the CLI printed a dollar estimate for a review of more than 50 files right
+  after "Runs on your Vector Codium plan." (`cli/cmd/review.ts:367-378`), and a GitHub review's "too large" note
+  carried a dollar estimate (`github.review.ts:453-466`).
+- Callers: `cli/cmd/review.ts:345-353` (model, `triageModel`, `judgeModel`) and Codex's `github.review.ts:1214` (through
+  `deps.resolveModel`, `:291,297`).
+- **Repair** (`review/model.ts`): `codium: Billing.isCodium(model.providerID)` in that call, with
+  `import { Billing } from "@vectordevai/schema/billing"` (the import style `review-output.ts` uses). `costKindOf`
+  checks `codium` first (`packages/core/src/spend-guard.ts:38-50`), so the price is never set for a Codium model. No
+  signature or export changed, and no Codex file was edited: `github.review.ts` keeps calling `resolveReviewModel` as it
+  is.
+- Effects after the repair. The token stop now applies to all three cases above, in CLI and GitHub reviews; an unused
+  Codium run reports `"codium"`. For a priced Codium catalog entry it removes the dollar price, the dollar cap and both
+  dollar estimates, as label plan §2 and §4.3 ask (no dollar figure for Codium work; step and time limits stay). That
+  case is defensive, since the catalog ships Codium models unpriced. Nothing changes for own-key models.
+- **Regression:** `packages/engine/test/review/model.test.ts` "a Vector Codium model is Codium whatever its listed price
+  or sign-in" (the workflow `MODEL`, a priced `--model` and an `exact` `triageModel` under an OAuth sign-in all resolve
+  to `"codium"` with no price); `packages/engine/test/review/panel.test.ts` "the kind resolveReviewModel returns for a
+  Vector Codium model is the one the runner's token stop reads". That case resolves one `vector-plan` review model
+  (`exact`) through `resolveReviewModel`, with a mock layer of only the four services it reads (Provider's `getModel`
+  and `line`, the test Config, Auth and ModelCatalog), and copies the resolved kind onto the file's loopback models,
+  which run the passes. Its triage model is the file's `FIRST` fixture with that kind copied onto it, so the resolver
+  is not run on a triage model there (`model.test.ts` covers an `exact` `triageModel`). It runs once with that triage
+  model and once with the review model alone, each over `CODIUM_REVIEW_TOKEN_STOP`, with a VERIFY reply queued. Before
+  the repair verify ran (`ok`, the kind was `"unknown"`); after it, verify is `skipped` with `budget` and no VERIFY
+  request is sent. It overlaps the existing "on Vector Codium the check and the judge do not start past the stop" case,
+  which sets the kind by hand; what it adds is that the value the resolver returns is the one the stop reads. These are
+  the two files P4b's F18 named; neither drives the CLI or GitHub caller (test placement and coverage: F78).
+
+**F62. A26's `Billing.of` callers, left to P4d by P4a's F13 and P4b's F34.** Not a defect (reading).
+
+- App `ai-review.ts:562, 1018, 1020, 1064, 1068, 1602, 1610, 1639`; engine `run.ts:267, 310, 311, 362`;
+  `github.evidence.ts:116, 126, 134, 135` (Codex's, read only).
+- Each filters to assistant messages or step parts first, except `reviewProgressSpend` (`ai-review.ts:1600-1617`). It
+  also reads the review prompt, whose model is the pass's own, so it gives the same answer (P4b's reading). On an own-key
+  review its `own` list includes that prompt, so before the first reply exists the line reads "Cost unknown · token
+  usage unavailable", the same text A26 gives a running step without counters; on Codium the prompt reads as Codium
+  and the line is "Codium".
+
+**F63. Codex's evidence cost line for mixed reviews.** Confirmed, hand-off to Codex (not edited, spec §0.5).
+
+- `formatCost` (`packages/engine/src/cli/cmd/github.evidence.ts:290-310`) prints a mixed line without "on your keys".
+  Label plan §3.8 gives it verbatim: `**Cost:** $0.12 + Codium · 48.2k in / 3.1k out on your keys · 4 turns`.
+- Own free or zero-cost turns beside Codium print `$0.00 + Codium`; label plan §2's table reads `free + Codium` and says
+  never `$0.00` beside Codium.
+- Proposed regression for Codex (`packages/engine/test/cli/github.evidence.test.ts`): `measureCost` over one Codium turn
+  and one own free turn gives a line without `$0.00`; a mixed priced line contains `on your keys`. No test was added
+  here: it would fail until Codex repairs its file.
+
+**F64. Codex's GitHub Actions log for mixed reviews.** Confirmed, hand-off to Codex (not edited).
+
+- `github.review.ts:692-695` logs `Spent $0.0000 + Codium` while the own steps have reported $0 so far: the runner sends
+  `kind: "unknown"` once any own step is reported (`run.ts:268-277`).
+- Proposal: print `Spent: Codium` when `event.codium` is set and `costUsd` is 0, the same rule as core's PR total
+  (`format.ts:891-898`). `run.ts`'s event is not changed, since `github.review.ts` is its only consumer. Proposed
+  regression: a review with one own $0 step and one Codium step logs no `$0.0000`.
+
+**F65. P4a's F10: the public share's model-switched notice keeps `vector-plan/<id>`.** Owner decision O9, no change.
+
+- `publicArchive` writes `Model changed to <providerID>/<id>` (`packages/core/src/share/archive.ts:122`), so a shared
+  Codium session shows `vector-plan/<model>`. It holds no amount, token figure or plan name.
+- Label plan §3.7 ("Public share. No change") is about not adding billing, token or cost fields to `PublicSession`; it
+  says nothing about the notice text, and §2 says `vector-plan` is never printed as a provider name. P4a handed F10 to
+  P4d as label-surface copy, and the brief makes any copy finding P4d records an owner decision. Either answer is a
+  one-line change at `archive.ts:122` (for example `Model changed to Vector Codium · <id>` for a Codium model) with an
+  archive test, and needs no schema change, since the notice is text.
+
+## A27 copy and listing
+
+**F66. `listedPerks` (`api/_lib/codium-perks.ts:98-146`).** Not confirmed.
+
+- It returns nothing unless Codium is deployed on and `CODIUM_LISTED_PERKS` names known ids. Otherwise it lists the
+  configured ids that are, all at once: ready in `perkServices`, on their service switch (`switches`, `:79-93`), with
+  the `codium` switch on, not in `perks-off`, Track B live for Track B perks (`CODIUM_TRACK_B_LIVE`), and with the
+  GitHub App configured for App perks. A loop then removes any perk whose `CodiumCopy.requires` parent is gone, so a
+  parent's removal hides its descendants.
+- A store read that fails, or a corrupt value (`readSwitchState` and `readDisabledSet` throw 503 through
+  `persistentStore` and `decode`, `api/_lib/codium-switches.ts:65-77,174-186,225-242`), or a throwing service check
+  lands in the `catch` and lists nothing. A failing service check empties the whole set, not just its perk; that is
+  fail-closed and accepted.
+- **Staleness bound.** Both readers keep each value for `SWITCH_CACHE_MS` (30 s, `:24`, `remember` `:246-250`) per
+  fetcher, and the public config route adds `public, max-age=0, s-maxage=60, stale-while-revalidate=30`
+  (`api/model-plans/config.ts:19`). So a store outage just after a good read can keep a perk listed for up to about
+  2 minutes (30 s + 60 s + 30 s) before the listing fails closed. A switch key that has never been written decodes to
+  `on` (`decode`, `:225-226`: "A missing switch is on", A11's rule), so a perk relies on `CODIUM_LISTED_PERKS` and its
+  service check until the owner writes its switch. Both are read here as A11 and §4.14 behaviour and accepted; nothing
+  is changed. If the owner wants a tighter bound, the route's `s-maxage` is the one-line change.
+- Perks with no `perkServices` entry (`github-agents`, `github-no-secret`, `scheduled`, `reviews`, `computer`,
+  `overnight`, `brain`, `auto-learns`, `brain-cloud`) can never list, whatever is configured.
+- Tests: `packages/web/test/codium-public.test.ts:33-127` (empty intent, dependencies, Track B and App, switches and
+  kills, unreadable or corrupt data) and `:286` (an unreadable store lists nothing).
+
+**F67. The public listing path.** Not confirmed.
+
+- `publicCodiumTiers` (`api/_lib/codium-public.ts:21-80`) drops the listing and the offers when the runtime reads fail
+  (`:34-35`), takes caps from `publicEntitlements` and multiples from `ENTITLEMENTS` (`:65-70`), and enables purchase
+  only with the sales and Codium switches on and a served model (`:57`).
+- The config route caches as in F66. The prerender passes `runtime: false` (`packages/web/src/pages/codium.astro:15`),
+  so the build holds no runtime perk, model or founder window.
+- The status answer computes the same listing (`api/_lib/model-plan-status.ts:58`), and `cachedBody` (`:142-150`)
+  serves a cached body only when its stored `listed` equals the current one, so a removed perk also drops its caps and
+  meters.
+- A27 edited `api/_lib/model-plan-config.ts` (only to export `CODIUM_TASK_RANGES`) and `api/_lib/model-plan-status.ts`
+  (the listing and the cache check above). Its commit message (`4e993a62`, one line) lists neither, against spec §0
+  item 5; pushed commits are not amended, so the list is recorded here. A26, `b12f3cab` and A28 edited no
+  `api/_lib/model-plan-*.ts` file.
+
+**F68. Taglines never name an unlisted perk.** Not confirmed. The text of each `TAGLINES` variant
+(`packages/schema/src/codium-copy.ts:154-181`) names only perks in its own `requires`:
+
+| Plan  | Requires                       | Names                                                         |
+| ----- | ------------------------------ | ------------------------------------------------------------- |
+| Plus  | github-agents, reviews, remote | second-lab reviews, agents in your own repo, phone approvals  |
+| Plus  | github-agents, reviews         | agents and second-lab reviews in your own repo                |
+| Plus  | none                           | Codium without provider keys                                  |
+| Pro   | second-opinion, vault          | two labs checking work, your Brain kept safe                  |
+| Pro   | second-opinion                 | a second lab checking work                                    |
+| Pro   | none                           | more monthly usage                                            |
+| Max   | computer                       | a computer Vector runs for you                                |
+| Max   | github-agents                  | Codium working in your own repo                               |
+| Max   | none                           | a larger monthly allowance                                    |
+| Ultra | computer, github-agents        | a computer Vector runs for you, Codium agents, no daily limit |
+| Ultra | github-agents                  | the most Codium agent time, no daily limit                    |
+| Ultra | none                           | the largest allowance, no daily limit                         |
+
+"No daily limit" is Ultra's cap (`dailyShare: null`), not a perk. `tierView` (`:235-272`) picks the first variant
+whose `requires` are all among the enabled and applicable perks, and `codium-copy.test.ts:37` walks every listing
+subset.
+
+**F69. Numbers, prices and percentages.** Not confirmed, with two copy slips sent to O8.
+
+- Every number in `PERK_COPY`, the limits and the usage line comes from `ENTITLEMENTS`; prices come from
+  `CodiumPlan.PLANS`. Percent appears only as `Up to N% of your month a day` (`:269`) and `N% more per dollar`
+  (`:258`). Tests: `CodiumPricing.test.ts:157` (caps and multiples), `:227` (only $10/$50/$100/$200, and `%` only in
+  the allowed forms), `codium-copy.test.ts:68`.
+- Slips: `codium-copy.ts:54` gives "with 1 paired computers" on Plus (`remote.computers: 1`), and `:82` gives "every 1
+  minutes" on Ultra's On Call (`intervalSec: 60`). Neither perk is listed, so neither shows; both are O8.
+
+**F70. Banned phrases.** H3 and H4 hold: a scan of `codium-copy.ts`, `CodiumPricing.tsx`, `codium-pricing.ts`,
+`ModelPlans.tsx` and `codium.astro` finds no "exclusive", "every PR", "every pull request", "guaranteed", "24/7",
+"SLA", uptime or response-time promise, and every cloud-agent line carries "in your own repo, on your own Actions
+minutes" (`ACTIONS`, `:18`). The `hosted` hits are code identifiers, and "Self-hosted sessions and invitations" is a
+free-workspace row, not cloud-agent copy. H2 does not hold for Velocity: "planned 550B+ parameter"
+(`codium-copy.ts:148`, and the FAQ at `CodiumPricing.tsx:530`) is a parameter count, which H2 bans. That is O4. The
+button's "Coming soon" (`CodiumPricing.tsx:154`, a plan not on sale) is §7.1's own button text ("'Coming soon' while
+sales are off"), outside H2, which covers Velocity and Labs copy; it was already there at `b57af809` (git blame names
+`d13d91e3`, which re-indented the branch). No change.
+
+**F71. Public copy that differs from contract-verbatim text.** Confirmed as divergences; owner decisions, not changed.
+The brief allows wording changes only to bring copy into line with text the contract states verbatim, but adopting the
+spec's text is not safe either: §1.3's Plus variants 1 and 2 and Ultra variants 1 and 2 name Codium agent work without
+H4's "in your own repo, on your own Actions minutes", and its fallbacks name models (three labs, Sol, Kimi, Argon,
+Sonnet 5.5, Opus 5.5, Sol Deep and Deepest) that are not served while `ROUTE_ACCEPTANCES` is empty. Each item is the
+owner's; either answer is a one-line change (or one entry) in the named file, plus the named assertions where a test
+pins the text.
+
+| #   | Where                                                                     | Contract text                                                                                                                                                                                                                                                                                     | Current text                                                                                                                                                                                                 | Why it is the owner's; what changes either way                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| O1  | Taglines, `codium-copy.ts:154-181`                                        | §1.3, e.g. Plus "No keys. Reviews checked by a second lab, @vector in your GitHub, and your agents on your phone."; Max 2 "Close the laptop. @vector keeps working in your own repo, on your own Actions minutes."                                                                                | e.g. Plus "No keys. Reviews checked by a second lab, agents in your own repo, on your own Actions minutes, and approvals on your phone."; Max 2 "Close the laptop. Codium keeps working in your own repo, …" | §1.3 conflicts with H4 and with model availability (above); "@vector" is Codex's product name. `TAGLINES` entries; the subset tests `codium-copy.test.ts:26,37` keep applying.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| O2  | Plus usage line, `codium-copy.ts:257`                                     | §7.1 "Codium · on models from three labs"                                                                                                                                                                                                                                                         | "Codium · coding models without provider keys"                                                                                                                                                               | "Three labs" is a model claim while no route is accepted. One line; no test pins the string (the A29 docs entry `packages/web/src/data/docs-nav.ts:133` shares its wording).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| O3  | Page description, `packages/web/src/pages/codium.astro:21`                | §7.1 "Vector is free. Codium is Vector's monthly plan, from $10 to $200: models from up to five labs with no keys, plus more on Max and Ultra. No top-ups or overage charges."                                                                                                                    | "… from $10 to $200: coding models without provider keys, with more usage on Max and Ultra. No top-ups or overage charges."                                                                                  | "Five labs" is a model claim. One line; no test pins it (`CodiumPricing.test.ts:284` reads the page source and could).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| O4  | Velocity, `codium-copy.ts:144-151` and `CodiumPricing.tsx:530`            | §1.1 and §7.1 "Vector Velocity, Vector's premium coding model: only on Max and Ultra, when it launches."                                                                                                                                                                                          | "Vector's planned 550B+ parameter coding model. Intended for Max and Ultra if it launches; no date, and not part of today's purchase."                                                                       | H2 bans a parameter count. A27 cites an "approved owner override" (its notes; deviations "A27 public presentation") that no lane document holds, and P5 lists "the 550B Velocity wording" as pending. Other surfaces word it differently: `Lander.astro:93,301,510` ("the 550B-parameter model", pinned by `packages/web/test/landing-copy.test.ts:183-189`) and the investor page ("A 550B-parameter model", "In development", `test/investor-page.test.ts:177-188`), whose README guard (`:194-201`) bans "Planned" and `\d+B\+`. `COMING.velocity.text` and the FAQ sentence; `codium-copy.test.ts:96-100`, `CodiumPricing.test.ts:214-221`, `ModelPlans.test.ts:181-191`. |
+| O5  | The Vector Labs Coming row on Ultra, absent: `codium-copy.ts:265`         | §1.1 Coming row "Vector Velocity, Vector Labs" (Ultra); §1.2 "Always shown, always with the 'Coming' tag"; §7.1 "Labs: 'Vector Labs' plus the Coming pill, nothing else."                                                                                                                         | Velocity only; tests assert no "Labs" (`codium-copy.test.ts:105`, `CodiumPricing.test.ts:224`)                                                                                                               | A27's "explicit no-Labs scope" has no source document; P5 lists "Vector Labs on the pricing page" as pending. Adding it is one `COMING` entry for Ultra and the two test lines; keeping it out is the current state.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| O6  | `EVERY_PLAN` (`codium-copy.ts:207-214`) and `FREE_WORKSPACE` (`:190-205`) | §1.1 "Every plan includes": usage "as a whole percentage, with a forecast"; "'Codium' in place of tokens and prices". "Stays free": "distillation and 'Bootstrap this repo' with your own model"; the "Checked by a second lab" line; §7.1 "@vector in GitHub with your own key as a repo secret" | "Usage shown as a percentage"; no Codium-label row; no distillation or Bootstrap row; "Vectorscope with your own key, including its three-lab panel"; "GitHub agents with your own key as a repo secret"     | Rows of public claims. Each is one array entry; `codium-copy.test.ts:65` ("three-lab panel") and `CodiumPricing.test.ts:191` (the free workspace stays Included).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| O7  | `PERK_COPY` labels and text, `codium-copy.ts:23-142`                      | §1.1 headlines, e.g. "@vector in your GitHub on Codium, no API key"; "A cloud computer Vector runs for you" (working label)                                                                                                                                                                       | "GitHub agents on Codium" and "No repo secret"; label "Cloud computer" (text uses `COMPUTER_LABEL`)                                                                                                          | The @vector name is Codex's; the computer-use brand name is §8.3 item 7. One line per label; `codium-copy.test.ts:108` reads where each kind of work runs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| O8  | Plurals, `codium-copy.ts:54,82`                                           | (numbers from `ENTITLEMENTS`)                                                                                                                                                                                                                                                                     | "with 1 paired computers" (Plus); "every 1 minutes" (Ultra On Call)                                                                                                                                          | Grammar of unlisted copy. One line each; no test pins them (a Plus and an Ultra case in `codium-copy.test.ts` would).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| O9  | Public share notice, `packages/core/src/share/archive.ts:122` (F65)       | label plan §2: `vector-plan` never printed as a provider name                                                                                                                                                                                                                                     | "Model changed to vector-plan/<id>"                                                                                                                                                                          | Label-surface copy handed on by P4a (F10). One line and an archive test; no schema change.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+
+**F72. The A27 notes' last sentence: "The next exact revision run must verify the correction before A27 is declared
+fully accepted."** Stale record, repaired with a dated status paragraph in `codium-a27-pricing-notes.md`.
+
+- `b12f3cab` (the FAQ's "demanding tasks") has no Vector Codium run of its own: `list_workflow_runs` for
+  `vector-codium.yml` shows run 41270832389 (push, head `4e993a62`, created 03:51:51Z) and then run 41272142017 (push,
+  head `d13d91e3`, created 04:12:01Z), and `d13d91e3`'s parent is `b12f3cab`.
+- Run 41270832389 (A27): failure, 10 jobs; only Codium tests 124743088404 failed, at "Run the Codium test files" (the
+  wording policy, as the notes say), with its exerciser and generated-client steps passing; typecheck api 124743088472,
+  schema 124743088474, engine 124743088491, web 124743088530, app 124743088531, cloud 124743088532, core
+  124743088558 and desktop 124743088561 and Codium browser specs 124743088537 passed.
+- Run 41272142017 (A28, contains `b12f3cab`): success, 10 of 10 jobs: Codium tests 124746918153 (every step, the test
+  files, the HttpApi exerciser and "Check generated client"), Codium browser specs 124746918066, typecheck cloud
+  124746918144, app 124746918163, core 124746918165, desktop 124746918202, web 124746918277, api 124746918281, schema
+  124746918315 and engine 124746918360.
+- `test/no-project-wording.test.ts` is not shown here from that log: the job log has 7,071 lines and only its last line
+  was read. The picker runs every `test/*.test.ts` (34 at `d13d91e3`, this file among them) and its step fails when any
+  file fails (`packages/cloud/src/codium-ci-tests.ts`, `main`), so the step's success means the file passed; that is an
+  inference from the step result, not a log line. It passes here too (2 pass).
+
+## A28 account page
+
+**F73. No purchased or top-up text.** Not confirmed. `ModelPlans.tsx` never renders `status.purchased` or a top-up
+row. "New Codium purchases are not available right now."
+(`packages/web/src/components/marketing/account/ModelPlans.tsx:342`) is about sales being off, not purchased credits. Test: `ModelPlans.test.ts:325` (retired fields never render, even in
+a legacy response with a balance or pack).
+
+**F74. H7: an old-shaped status still renders.** Not confirmed. The server always sends `purchased: { bought: false }`
+with `empty` and `low` (`api/_lib/model-plan-status.ts:65,193`); `readModelPlanStatus`
+(`packages/web/src/lib/model-plans.ts:169-204`) reads the older shape. Tests: `ModelPlans.test.ts:63`,
+`packages/web/src/lib/model-plans.test.ts:75` and `packages/core/test/model-plan-status-compat.test.ts` (the 1.99.111
+and 1.99.112 decoders; 4 pass here).
+
+**F75. Offers and recovery.** Not confirmed. The upgrade label (`packages/web/src/lib/model-plan-actions.ts:71`) is
+spec A28's text with the plan name and price filled in: "Upgrade to Max: $100 today, then monthly from today. Keeps
+what's left of this month." "Switch at renewal" is offered below the current rank (`:58-63`, also while sales are off,
+and `:75-79`). A paused plan offers no plan change and one recovery button (`modelPlanRecovery`, `:21-28`): "Confirm
+payment" for an action-required invoice, else "Update payment method", the A28 deviation's refinement of spec A28's
+single "Update payment method". A signed-in paused visitor on /codium sees "Update card" or "Confirm payment"
+(`CodiumPricing.tsx:248`), the same refinement of "Update card". Tests: `ModelPlans.test.ts:50,204,237,259`,
+`model-plan-actions.test.ts` (10 pass) and `CodiumPricing.test.ts:74`.
+
+**F76. P1 on the account page.** Not confirmed. The card shows shares, counts and public caps only: the month meter and
+Today as whole shares, caps from `ENTITLEMENTS`, and the Vault gigabytes and the paired-computer count from the status
+meters (`ModelPlans.tsx:209-239`). The status answer carries shares, caps and timestamps only
+(`model-plan-status-api.test.ts:247`, "… in shares, caps and timestamps only (P1)"; the file has 22 pass here), and
+`readModelPlanStatus` drops private amounts (`model-plans.test.ts:23`).
+
+**F77. The A28 notes' "The normal 23-package push hook and exact revision scoped CI remain publication gates."** Stale
+record, repaired with a dated status paragraph in `codium-a28-account-notes.md`: run 41272142017 (push, head
+`d13d91e3`) completed with success, 10 of 10 jobs (ids in F72).
+
+**F78. The brief's counts and file list.** The brief gives 54 files; `git diff --stat 295ab95e d13d91e3` shows 46, and
+the four commits touch 22, 21, 2 and 11 (56 in all). The brief's test-file list has no engine review-model test: R1's
+regressions are in `packages/engine/test/review/model.test.ts` and `panel.test.ts`, the two files P4b's F18 hand-off
+named for this repair (`codium-deviations.md`, "Hand-off to P4d (F18)"). The other P4d tests are in listed files
+(`packages/core/test/review/format.test.ts`, `packages/engine/test/cli/review.render.test.ts`,
+`packages/app/src/features/economics/codium-no-figures.test.ts`).
+
+What R1's tests do not cover: the caller wiring. No test runs the CLI's `executeLocalReview`
+(`cli/cmd/review.ts:345-353`, `:448-449`) or Codex's `github.review.ts` (`:291-297`, `:1212-1214`) from a
+`vector-plan` model through `resolveReviewModel` into `Review.run`, so a later change that dropped `costKind` between
+the resolver and the runner in either caller would not be caught by them. Both callers pass the resolved object on as
+it is today. The harnesses in `test/cli/review.test.ts` and `test/cli/github.review.test.ts` replace `resolveModel` and
+`runReview` with fakes, and a real run cannot reach a loopback server for a Codium model: the
+engine lists Codium models at the fixed `ModelPlans.API_URL` (`provider/provider.ts:1799`), which the fake LLM server
+cannot stand in for (as in P4b's research cases). A CLI case that injected the real resolver and asserted the
+`costKind` on the captured run input would cover the CLI half; P4d did not add one, and the GitHub half is Codex's
+file and its test.
+
+## CI before P4d
+
+- **Run 42457442687** (Vector Codium, push, head `39db0daf`, P4c's commit): completed with success at 07:19:25Z, 14 of
+  14 jobs. Codium tests 128659369695; Codium browser specs 128659369669; typecheck engine 128659369696, desktop
+  128659369841, core 128659369853, app 128659369865, web 128659369907, schema 128659369911, cloud 128659369930,
+  ops-worker 128659369957, api 128659369967 and relay 128659369985; Ops Worker dry run and miniflare smoke
+  128659369720; Remote relay dry run and local smoke 128659369556. The Codium tests job passed every step ("Run the
+  Codium test files", "Run HttpApi exerciser gates", "Check generated client"). Its log has 9,297 lines; P4d read the
+  last 290, which show the last exerciser gate at `summary pass=309 fail=0 skip=0 missing=0 extra=0` and then
+  `bun run check:generated`. The picker's file count and the earlier gates are further up and were not read; their
+  step reports success. `origin/codium` was still `39db0daf` when it was read.
+- **The A26 to A28 runs**, by id: 41269650177 (head `9afebc91`, A26): success; 41270832389 (head `4e993a62`, A27):
+  failure in Codium tests 124743088404 only; 41272142017 (head `d13d91e3`, A28, includes `b12f3cab`): success,
+  all 10 jobs. Job ids are in F72.
+
+## Tests run here (P4d)
+
+Every run went through `/home/user/.tools/vector-serial` from the package directory with `--timeout 30000`, one file at
+a time, with XDG, `VECTOR_TEST_HOME` and `TMPDIR` roots under `/tmp/vector-codium/p4d/`. App runs add `--isolate`;
+root files run from `test/`. All exited 0 after the repairs.
+
+| Package | File                                                    | Result                                                        |
+| ------- | ------------------------------------------------------- | ------------------------------------------------------------- |
+| core    | `test/review/format.test.ts`                            | 54 pass (1 new, 1 expectation changed)                        |
+| core    | `test/review/state.test.ts`                             | 54 pass                                                       |
+| core    | `test/review/second-lab.test.ts`                        | 17 pass                                                       |
+| core    | `test/model-plan-status-compat.test.ts`                 | 4 pass                                                        |
+| engine  | `test/review/model.test.ts`                             | 13 pass (1 new)                                               |
+| engine  | `test/review/panel.test.ts`                             | 8 pass (1 new); with `-t "token stop"` 3 pass, 5 filtered out |
+| engine  | `test/review/run.test.ts`                               | 33 pass                                                       |
+| engine  | `test/cli/review.render.test.ts`                        | 11 pass (1 extended)                                          |
+| engine  | `test/cli/review-output.test.ts`                        | 2 pass                                                        |
+| engine  | `test/cli/review.test.ts`                               | 25 pass                                                       |
+| engine  | `test/cli/github.evidence.test.ts`                      | 21 pass                                                       |
+| engine  | `test/cli/github.review.test.ts`                        | 41 pass; with `-t "Codium"` 1 pass, 40 filtered out           |
+| app     | `src/features/economics/codium-no-figures.test.ts`      | 2 pass (1 extended)                                           |
+| app     | `src/features/pull-requests/ai-review.test.ts`          | 110 pass                                                      |
+| schema  | `test/codium-copy.test.ts`                              | 8 pass                                                        |
+| web     | `src/components/marketing/codium/CodiumPricing.test.ts` | 15 pass                                                       |
+| web     | `src/components/marketing/account/ModelPlans.test.ts`   | 19 pass                                                       |
+| web     | `src/lib/model-plans.test.ts`                           | 15 pass                                                       |
+| web     | `src/lib/model-plan-actions.test.ts`                    | 10 pass                                                       |
+| web     | `test/codium-public.test.ts`                            | 13 pass                                                       |
+| web     | `test/model-plan-status-api.test.ts`                    | 22 pass                                                       |
+| web     | `test/model-plans.test.ts`                              | 21 pass                                                       |
+| root    | `test/codium-plan-names.test.ts`                        | 6 pass                                                        |
+| root    | `test/no-project-wording.test.ts`                       | 2 pass                                                        |
+| root    | `test/investor-page.test.ts`                            | 14 pass                                                       |
+
+**Against the previous source** (the new and changed tests in place, `format.ts` and `review/model.ts` as at
+`39db0daf`; each test file depends on one repair only):
+
+- `packages/core/test/review/format.test.ts`: 52 pass, 2 fail. "legacy model prefixes identify pure and mixed Codium…"
+  expected `anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium` and received
+  `anthropic/claude-sonnet-4-5 + vector-plan/vector-velocity · $0.21 + Codium`; the new mixed case failed its list
+  comparison on all five wordings.
+- `packages/engine/test/review/model.test.ts`: 12 pass, 1 fail; the new case's first assertion expected `"codium"` and
+  received `"unknown"` (the priced `--model` case reads `"priced"` before the repair, by `costKindOf`'s order).
+- `packages/engine/test/review/panel.test.ts -t "token stop"`: 2 pass, 1 fail (5 filtered out); the new case got
+  `["verify", "ok", undefined]` where `["verify", "skipped", "budget"]` was expected. It failed in about 1 s, with no
+  hang.
+- `packages/engine/test/cli/review.render.test.ts`: 10 pass, 1 fail; the footer read
+  `openai/gpt-4.1 + vector-plan/vector-flash · $0.12 + Codium · 1m 52s · sessions: ses_a1, ses_b2`.
+- `packages/app/src/features/economics/codium-no-figures.test.ts`: 1 pass, 1 fail; the mixed footer read
+  `own/coder + vector-plan/vector-flash · $0.12 + Codium (100 in / 20 out) · 0s`.
+
+Typecheck: `bun typecheck` in `packages/core`, `packages/engine`, `packages/app`, `packages/schema` and `packages/web`
+(web: 206 files, 0 errors, 0 warnings), and the api tree with `bun typecheck --project ../../tsconfig.json` from
+`packages/engine`: exit 0 each. The full typecheck from the worktree root
+(`TURBO_CACHE_DIR=/home/user/.cache/vector-typecheck bun turbo typecheck --concurrency=1`): 25 of 25 tasks successful
+(22 from cache). After the last test edits (a comment in `model.test.ts`, prettier's layout of the new
+`panel.test.ts` case), `model.test.ts` ran again (13 pass), `panel.test.ts` ran again (8 pass), engine `bun typecheck`
+exited 0 and the full typecheck again gave 25 of 25 (22 from cache). After the review of these repairs retitled the
+new `panel.test.ts` case and rewrote its comment (no assertion changed; P4 review decisions, "The panel case stays,
+retitled"), `panel.test.ts` ran again (8 pass; with `-t "token stop"` 3 pass, 5 filtered out), engine `bun typecheck`
+exited 0 and the full typecheck gave 25 of 25 (22 from cache).
+
+Formatting (`prettier`, through the lock, each file compared with prettier's output for the same file at `39db0daf`):
+`format.ts`, `review/model.ts`, `format.test.ts`, `model.test.ts`, `review.render.test.ts` and
+`codium-no-figures.test.ts` are clean. `panel.test.ts` reports the same three spots it reports at `39db0daf` (two
+`reply()` chains and one `Review.run(` call in earlier tests), which P4d left as they are; its added lines add none.
+The five records add no formatting issue to those already at `39db0daf`. No public schema or HttpApi changed, so no
+generator ran.
+
+**Merge prediction.** A read-only `git merge-tree --write-tree --name-only` of `origin/self-evolving` `0c1f1b52` (fetched
+again before this record) with `39db0daf`, and with a probe commit of P4d's tree built in a temporary index and object
+directory (so neither the worktree index nor the shared store changed and no ref moved), reports the same 7 content
+conflicts as D1's list. Self-evolving has no change since the merge base to any file P4d touched.
+
+**CI only:** the Valkey and Postgres cases, `bun run test:httpapi`, `bun run check:generated`, the browser specs, the
+relay and ops Worker jobs and the full picker run. At the time of this record (8 Nov 2026) P4d's changes were not yet
+committed; the package that pushes them adds a dated status line under "CI before P4d" with the commit sha and its
+Vector Codium run id and conclusion.
+
+Files touched by P4d's repairs: `packages/core/src/review/format.ts` (R2) and `packages/engine/src/review/model.ts`
+(R1); tests `packages/core/test/review/format.test.ts`, `packages/engine/test/review/model.test.ts`,
+`packages/engine/test/review/panel.test.ts`, `packages/engine/test/cli/review.render.test.ts` and
+`packages/app/src/features/economics/codium-no-figures.test.ts`. Codex's `github.evidence.ts` and `github.review.ts`:
+read, not edited (F63, F64). No public copy, price, tagline, listing, switch, legal page or
+`test/codium-legal.test.ts` changed. No configuration was added, so `MODEL-PLANS.md` and `.env.example` are unchanged.
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+Shared label files touched: `packages/core/src/review/format.ts`.
+
+## P4 summary
+
+P4 is closed for A21 to A28: P4a (A21, A22), P4b (A23, A24 and its follow-ups), P4c (A25) and P4d (A26 to A28) each
+checked their range against the code and repaired what they confirmed (P4b F16; P4c F43 and F46; P4d F60 and F61).
+Open items, each recorded where it is owned:
+
+- F6: an unknown cost kind on self-evolving (hand-off to the self-evolving lane and owner step 9).
+- F28: A41's phone usage alert can repeat while the desktop notification keeps failing (hand-off to the P6 addendum).
+- F44: `--sanitize` keeps the lifecycle record's text fields (privacy, the lead's queue).
+- F63 and F64: Codex's evidence cost line and Actions log for mixed reviews (hand-offs to Codex).
+- O1 to O9: public copy and label-surface copy that are the owner's to decide (F65, F71).
