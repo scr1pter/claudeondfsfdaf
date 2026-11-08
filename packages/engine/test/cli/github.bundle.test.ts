@@ -1,7 +1,8 @@
 // V18a: the run bundle module, the stop-code table and the agent phase's labelled thread text; V18b: INV-K1's agent
-// phase test, in-process against the fake LLM server. Temporary git repositories, a loopback fake GitHub and a
-// vectordev.ai recorder only: no CLI or Bun subprocess and no environment change, so the file runs locally as well as
-// in the lane. The git fixtures need a POSIX shell and symlinks; the lane runs it on ubuntu-24.04.
+// phase test, in-process against the fake LLM server; V18c: INV-C7 end to end, each 2.9.2 code from a fake Codium
+// gateway in front of the fake LLM server. Temporary git repositories, a loopback fake GitHub and a vectordev.ai
+// recorder only: no CLI or Bun subprocess and no environment change, so the file runs locally as well as in the lane.
+// The git fixtures need a POSIX shell and symlinks; the lane runs it on ubuntu-24.04.
 
 import { afterAll, describe, expect, test } from "bun:test"
 import { $ } from "bun"
@@ -27,8 +28,9 @@ import {
   type GitHubPullRequest,
 } from "../../src/cli/cmd/github.run-helpers"
 import { Effect } from "effect"
-import { githubAgentPhase } from "../../src/cli/cmd/github.agent"
+import { DEADLINE_MISSING, githubAgentPhase, stoppedLine } from "../../src/cli/cmd/github.agent"
 import { LLMRequestPrep } from "../../src/session/llm/request"
+import { SessionRetry } from "../../src/session/retry"
 import { Session } from "../../src/session/session"
 import { runtime, setup } from "../lib/research"
 import { FakeWeb } from "../../../core/test/lib/fake-web"
@@ -38,15 +40,30 @@ import {
   RUN_ID,
   cleanup,
   cloudRecorder,
+  codiumFakes,
   commitSetup,
   eventFile,
+  fakeClock,
   fakeGithub,
+  holder,
+  resetTree,
   stepEnv,
 } from "./github.agent-fixture"
 
 const roots: string[] = []
 afterAll(async () => {
   await Promise.all(roots.map((root) => fs.rm(root, { recursive: true, force: true })))
+})
+
+// The agent phase's tests run in-process on the research runtime, with the fake Codium gateway in front of each
+// instance's fake LLM server; it stays off (no catalog, no credential) unless a test turns it on.
+const guard = NetworkGuard.use()
+const web = FakeWeb.start({ sites: {} })
+const gateway = codiumFakes()
+const it = runtime(web, { replacements: gateway.replacements })
+afterAll(async () => {
+  await web.close()
+  await cleanup()
 })
 
 async function scratch() {
@@ -170,116 +187,232 @@ const draft = (
 const EARLY = draft(undefined, R.early)
 
 describe("stop codes", () => {
-  test("stop-code table, including an unknown code", () => {
-    const rows: [string, unknown, GithubBundle.Stop][] = [
-      ["401 run expired", gatewayError(401, "MODEL_PLAN_RUN_EXPIRED"), draft("MODEL_PLAN_RUN_EXPIRED", R.expired)],
-      [
-        "429 run limit, ceiling",
-        gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "ceiling"),
-        draft("MODEL_PLAN_RUN_LIMIT", R.ceiling, { limit: "ceiling" }),
-      ],
-      [
-        "429 run limit, hours",
-        gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "hours"),
-        draft("MODEL_PLAN_RUN_LIMIT", R.usedUp, { limit: "hours" }),
-      ],
-      [
-        "429 run limit, at once",
-        gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "at-once"),
-        draft("MODEL_PLAN_RUN_LIMIT", R.usedUp, { limit: "at-once" }),
-      ],
-      ["429 run limit, no limit", gatewayError(429, "MODEL_PLAN_RUN_LIMIT"), draft("MODEL_PLAN_RUN_LIMIT", R.usedUp)],
-      [
-        "429 run limit, an unknown limit",
-        gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "weekly"),
-        draft("MODEL_PLAN_RUN_LIMIT", R.usedUp),
-      ],
-      ["429 daily limit", gatewayError(429, "MODEL_PLAN_DAILY_LIMIT"), draft("MODEL_PLAN_DAILY_LIMIT", R.daily)],
-      ["402 exhausted", gatewayError(402, "MODEL_PLAN_EXHAUSTED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
-      [
-        "402 payment required",
-        gatewayError(402, "MODEL_PLAN_PAYMENT_REQUIRED"),
-        draft("MODEL_PLAN_BLOCKED", R.binding),
-      ],
-      ["402 plan required", gatewayError(402, "MODEL_PLAN_REQUIRED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
-      ["402 capacity", gatewayError(402, "MODEL_PLAN_CAPACITY"), draft("MODEL_PLAN_BLOCKED", R.binding)],
-      ["403 blocked", gatewayError(403, "MODEL_PLAN_BLOCKED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
-      ["403 perk required", gatewayError(403, "CODIUM_PERK_REQUIRED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
-      [
-        "429 concurrency",
-        gatewayError(429, "MODEL_PLAN_CONCURRENCY"),
-        { behaviour: "wait", stop: "MODEL_PLAN_CONCURRENCY", reason: R.busy },
-      ],
-      ["429 busy", gatewayError(429, "MODEL_PLAN_BUSY"), draft("MODEL_PLAN_BUSY", R.busy)],
-      ["503 renewing", gatewayError(503, "MODEL_PLAN_RENEWING"), draft("MODEL_PLAN_RENEWING", R.busy)],
-      [
-        "403 upgrade required",
-        gatewayError(403, "MODEL_PLAN_UPGRADE_REQUIRED"),
-        draft("MODEL_PLAN_UPGRADE_REQUIRED", R.model),
-      ],
-      [
-        "426 update required",
-        gatewayError(426, "CODIUM_UPDATE_REQUIRED"),
-        draft("CODIUM_UPDATE_REQUIRED", R.update, { advice: GithubBundle.UPDATE_ADVICE }),
-      ],
-      ["503 plans disabled", gatewayError(503, "MODEL_PLANS_DISABLED"), draft("MODEL_PLANS_DISABLED", R.unavailable)],
-      [
-        "503 model unavailable",
-        gatewayError(503, "MODEL_PLAN_MODEL_UNAVAILABLE"),
-        draft("MODEL_PLAN_MODEL_UNAVAILABLE", R.unavailable),
-      ],
-      [
-        "the code from metadata alone",
-        new SessionV1.APIError({
-          message: "m",
-          isRetryable: false,
-          metadata: { code: "MODEL_PLAN_DAILY_LIMIT" },
-        }).toObject(),
-        draft("MODEL_PLAN_DAILY_LIMIT", R.daily),
-      ],
-      // The default row: any other code, any 5xx, anything that is not an API error.
-      ["401 sign-in required", gatewayError(401, "CODIUM_SIGN_IN_REQUIRED"), EARLY],
-      ["401 with no body", gatewayError(401), EARLY],
-      ["400 context (a ContextOverflowError)", gatewayError(400, "MODEL_PLAN_CONTEXT"), EARLY],
-      ["503 store unavailable", gatewayError(503, "PERSISTENT_STORE_UNAVAILABLE"), EARLY],
-      ["503 cloud agents unavailable", gatewayError(503, "CLOUD_AGENTS_UNAVAILABLE"), EARLY],
-      ["an unknown code", gatewayError(429, "MODEL_PLAN_SOMETHING_NEW"), EARLY],
-      ["a lower-case look-alike", gatewayError(429, "model_plan_run_expired"), EARLY],
-      ["500 with no body", gatewayError(500), EARLY],
-      ["502 with an HTML body", { name: "APIError", data: { statusCode: 502, responseBody: "<html>" } }, EARLY],
-      ["an Error", new Error("boom"), EARLY],
-      ["undefined", undefined, EARLY],
-      ["a string", "MODEL_PLAN_RUN_EXPIRED", EARLY],
-      ["an aborted session", new SessionV1.AbortedError({ message: "aborted" }).toObject(), EARLY],
-      ["an unknown named error", new NamedError.Unknown({ message: "MODEL_PLAN_BUSY" }).toObject(), EARLY],
-      ["an APIError with no data", { name: "APIError" }, EARLY],
-      ["an APIError with null data", { name: "APIError", data: null }, EARLY],
-      ["an APIError with the wrong types", { name: "APIError", data: { responseBody: 7, metadata: "x" } }, EARLY],
-      ["an APIError with broken JSON", { name: "APIError", data: { responseBody: '{"error":' } }, EARLY],
-      [
-        "an APIError whose body is far too long",
-        {
-          name: "APIError",
-          data: { responseBody: JSON.stringify({ error: { code: "MODEL_PLAN_BUSY", pad: "x".repeat(70_000) } }) },
-        },
-        EARLY,
-      ],
-    ]
-    rows.forEach(([name, error, expected]) => {
-      expect({ name, stop: GithubBundle.stopReason(error, { codium: true }) }).toEqual({ name, stop: expected })
-    })
+  it.instance(
+    "stop-code table, including an unknown code",
+    () =>
+      Effect.gen(function* () {
+        const rows: [string, unknown, GithubBundle.Stop][] = [
+          ["401 run expired", gatewayError(401, "MODEL_PLAN_RUN_EXPIRED"), draft("MODEL_PLAN_RUN_EXPIRED", R.expired)],
+          [
+            "429 run limit, ceiling",
+            gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "ceiling"),
+            draft("MODEL_PLAN_RUN_LIMIT", R.ceiling, { limit: "ceiling" }),
+          ],
+          [
+            "429 run limit, hours",
+            gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "hours"),
+            draft("MODEL_PLAN_RUN_LIMIT", R.usedUp, { limit: "hours" }),
+          ],
+          [
+            "429 run limit, at once",
+            gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "at-once"),
+            draft("MODEL_PLAN_RUN_LIMIT", R.usedUp, { limit: "at-once" }),
+          ],
+          [
+            "429 run limit, no limit",
+            gatewayError(429, "MODEL_PLAN_RUN_LIMIT"),
+            draft("MODEL_PLAN_RUN_LIMIT", R.usedUp),
+          ],
+          [
+            "429 run limit, an unknown limit",
+            gatewayError(429, "MODEL_PLAN_RUN_LIMIT", "weekly"),
+            draft("MODEL_PLAN_RUN_LIMIT", R.usedUp),
+          ],
+          ["429 daily limit", gatewayError(429, "MODEL_PLAN_DAILY_LIMIT"), draft("MODEL_PLAN_DAILY_LIMIT", R.daily)],
+          ["402 exhausted", gatewayError(402, "MODEL_PLAN_EXHAUSTED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
+          [
+            "402 payment required",
+            gatewayError(402, "MODEL_PLAN_PAYMENT_REQUIRED"),
+            draft("MODEL_PLAN_BLOCKED", R.binding),
+          ],
+          ["402 plan required", gatewayError(402, "MODEL_PLAN_REQUIRED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
+          ["402 capacity", gatewayError(402, "MODEL_PLAN_CAPACITY"), draft("MODEL_PLAN_BLOCKED", R.binding)],
+          ["403 blocked", gatewayError(403, "MODEL_PLAN_BLOCKED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
+          ["403 perk required", gatewayError(403, "CODIUM_PERK_REQUIRED"), draft("MODEL_PLAN_BLOCKED", R.binding)],
+          [
+            "429 concurrency",
+            gatewayError(429, "MODEL_PLAN_CONCURRENCY"),
+            { behaviour: "wait", stop: "MODEL_PLAN_CONCURRENCY", reason: R.busy },
+          ],
+          ["429 busy", gatewayError(429, "MODEL_PLAN_BUSY"), draft("MODEL_PLAN_BUSY", R.busy)],
+          ["503 renewing", gatewayError(503, "MODEL_PLAN_RENEWING"), draft("MODEL_PLAN_RENEWING", R.busy)],
+          [
+            "403 upgrade required",
+            gatewayError(403, "MODEL_PLAN_UPGRADE_REQUIRED"),
+            draft("MODEL_PLAN_UPGRADE_REQUIRED", R.model),
+          ],
+          [
+            "426 update required",
+            gatewayError(426, "CODIUM_UPDATE_REQUIRED"),
+            draft("CODIUM_UPDATE_REQUIRED", R.update, { advice: GithubBundle.UPDATE_ADVICE }),
+          ],
+          [
+            "503 plans disabled",
+            gatewayError(503, "MODEL_PLANS_DISABLED"),
+            draft("MODEL_PLANS_DISABLED", R.unavailable),
+          ],
+          [
+            "503 model unavailable",
+            gatewayError(503, "MODEL_PLAN_MODEL_UNAVAILABLE"),
+            draft("MODEL_PLAN_MODEL_UNAVAILABLE", R.unavailable),
+          ],
+          [
+            "the code from metadata alone",
+            new SessionV1.APIError({
+              message: "m",
+              isRetryable: false,
+              metadata: { code: "MODEL_PLAN_DAILY_LIMIT" },
+            }).toObject(),
+            draft("MODEL_PLAN_DAILY_LIMIT", R.daily),
+          ],
+          // The default row: any other code, any 5xx, anything that is not an API error.
+          ["401 sign-in required", gatewayError(401, "CODIUM_SIGN_IN_REQUIRED"), EARLY],
+          ["401 with no body", gatewayError(401), EARLY],
+          ["400 context (a ContextOverflowError)", gatewayError(400, "MODEL_PLAN_CONTEXT"), EARLY],
+          ["503 store unavailable", gatewayError(503, "PERSISTENT_STORE_UNAVAILABLE"), EARLY],
+          ["503 cloud agents unavailable", gatewayError(503, "CLOUD_AGENTS_UNAVAILABLE"), EARLY],
+          ["an unknown code", gatewayError(429, "MODEL_PLAN_SOMETHING_NEW"), EARLY],
+          ["a lower-case look-alike", gatewayError(429, "model_plan_run_expired"), EARLY],
+          ["500 with no body", gatewayError(500), EARLY],
+          ["502 with an HTML body", { name: "APIError", data: { statusCode: 502, responseBody: "<html>" } }, EARLY],
+          ["an Error", new Error("boom"), EARLY],
+          ["undefined", undefined, EARLY],
+          ["a string", "MODEL_PLAN_RUN_EXPIRED", EARLY],
+          ["an aborted session", new SessionV1.AbortedError({ message: "aborted" }).toObject(), EARLY],
+          ["an unknown named error", new NamedError.Unknown({ message: "MODEL_PLAN_BUSY" }).toObject(), EARLY],
+          ["an APIError with no data", { name: "APIError" }, EARLY],
+          ["an APIError with null data", { name: "APIError", data: null }, EARLY],
+          ["an APIError with the wrong types", { name: "APIError", data: { responseBody: 7, metadata: "x" } }, EARLY],
+          ["an APIError with broken JSON", { name: "APIError", data: { responseBody: '{"error":' } }, EARLY],
+          [
+            "an APIError whose body is far too long",
+            {
+              name: "APIError",
+              data: { responseBody: JSON.stringify({ error: { code: "MODEL_PLAN_BUSY", pad: "x".repeat(70_000) } }) },
+            },
+            EARLY,
+          ],
+        ]
+        rows.forEach(([name, error, expected]) => {
+          expect({ name, stop: GithubBundle.stopReason(error, { codium: true }) }).toEqual({ name, stop: expected })
+        })
 
-    // Every stop code has a row of its own, and the deadline row records "deadline".
-    GithubAgents.STOP_CODES.forEach((code) => {
-      expect({ code, stop: GithubBundle.stopReason(gatewayError(429, code), { codium: true }).stop }).not.toEqual({
-        code,
-        stop: undefined,
-      })
-    })
-    expect(GithubBundle.DEADLINE).toEqual(draft("deadline", R.expired))
-    expect(GithubBundle.describeStop("deadline")).toEqual({ reason: R.expired })
-    expect(GithubBundle.describeStop()).toEqual({ reason: R.early })
-  })
+        // Every stop code has a row of its own, and the deadline row records "deadline".
+        GithubAgents.STOP_CODES.forEach((code) => {
+          expect({ code, stop: GithubBundle.stopReason(gatewayError(429, code), { codium: true }).stop }).not.toEqual({
+            code,
+            stop: undefined,
+          })
+        })
+        expect(GithubBundle.DEADLINE).toEqual(draft("deadline", R.expired))
+        expect(GithubBundle.describeStop("deadline")).toEqual({ reason: R.expired })
+        expect(GithubBundle.describeStop()).toEqual({ reason: R.early })
+
+        // The fake-provider half (INV-C7 end to end, V18c): a Codium run whose model request the fake gateway refuses with
+        // each code at its 2.9.2 status, one unknown code and a 500 with no body. With a change made first the run drafts;
+        // with none it fails with the same stop, which publish words as one comment. The session's retries follow 2.9.2:
+        // concurrency waits out its window on the run's clock (8 minutes a refusal), the busy rows, the unknown code and
+        // the 500 keep the client's usual retries, and every other row is sent once.
+        const test = yield* setup()
+        yield* Effect.promise(() => commitSetup(test.dir))
+        gateway.reset({ codium: true, target: test.llm.url })
+        const github = fakeGithub({ roles: { alice: "write" } })
+        const credentials = yield* Effect.promise(() => holder("codium"))
+        const event = yield* Effect.promise(() => eventFile({ inputs: {}, sender: { login: "alice", type: "User" } }))
+        const status: Record<GithubAgents.StopCode, number> = {
+          MODEL_PLAN_RUN_EXPIRED: 401,
+          MODEL_PLAN_RUN_LIMIT: 429,
+          MODEL_PLAN_DAILY_LIMIT: 429,
+          MODEL_PLAN_EXHAUSTED: 402,
+          MODEL_PLAN_PAYMENT_REQUIRED: 402,
+          MODEL_PLAN_REQUIRED: 402,
+          MODEL_PLAN_CAPACITY: 402,
+          MODEL_PLAN_BLOCKED: 403,
+          CODIUM_PERK_REQUIRED: 403,
+          MODEL_PLAN_CONCURRENCY: 429,
+          MODEL_PLAN_BUSY: 429,
+          MODEL_PLAN_RENEWING: 503,
+          MODEL_PLAN_UPGRADE_REQUIRED: 403,
+          CODIUM_UPDATE_REQUIRED: 426,
+          MODEL_PLANS_DISABLED: 503,
+          MODEL_PLAN_MODEL_UNAVAILABLE: 503,
+        }
+        const answers: { name: string; status: number; code?: string; limit?: string }[] = [
+          ...GithubAgents.STOP_CODES.map((code) => ({
+            name: code,
+            status: status[code],
+            code,
+            ...(code === "MODEL_PLAN_RUN_LIMIT" ? { limit: "hours" } : {}),
+          })),
+          { name: "an unknown code", status: 429, code: "MODEL_PLAN_SOMETHING_NEW" },
+          { name: "500 with no body", status: 500 },
+        ]
+        const usual = ["MODEL_PLAN_BUSY", "MODEL_PLAN_RENEWING", "an unknown code", "500 with no body"]
+        for (const answer of answers) {
+          for (const changes of [true, false]) {
+            const row = `${answer.name}, ${changes ? "with" : "without"} changes`
+            yield* Effect.promise(() => resetTree(test.dir))
+            if (changes)
+              yield* test.llm.tool("write", { filePath: path.join(test.dir, "NOTES.md"), content: "notes\n" })
+            const time = fakeClock()
+            gateway.reset({
+              queue: changes ? [{ kind: "forward" }] : [],
+              sticky: { kind: "refuse", status: answer.status, code: answer.code, limit: answer.limit },
+              onRefusal: () => (time.state.now += 8 * 60_000),
+            })
+            const cloud = cloudRecorder()
+            const lines: string[] = []
+            const result = yield* githubAgentPhase({
+              env: stepEnv({
+                event,
+                eventName: "workflow_dispatch",
+                thread: `dispatch-${RUN_ID}`,
+                github: github.url,
+                mode: "codium",
+                model: "vector-plan",
+                prompt: "Write the notes",
+                deadline: String(time.state.now + 2 * 3_600_000),
+              }),
+              credentials,
+              services: cloud.services,
+              clock: time.clock,
+              log: (line) => lines.push(line),
+              error: (line) => lines.push(`error: ${line}`),
+            }).pipe(Effect.ensuring(Effect.sync(() => LLMRequestPrep.pin(undefined))))
+            const expected = GithubBundle.stopReason(gatewayError(answer.status, answer.code, answer.limit), {
+              codium: true,
+            })
+            const outcome = changes ? "draft" : "failed"
+            expect(result, row).toMatchObject({ exitCode: 0, outcome })
+            const out = yield* Effect.promise(() => written(test.dir))
+            expect(out.summary, row).toMatchObject({ mode: "codium", outcome, draft: changes })
+            expect(out.summary?.stop, row).toBe(expected.stop)
+            expect(out.summary?.limit, row).toBe(answer.code === "MODEL_PLAN_RUN_LIMIT" ? "hours" : undefined)
+            expect(out.patch.toString().includes("NOTES.md"), row).toBe(changes)
+            expect(gateway.state.requests.filter((request) => request.action === "refuse").length, row).toBe(
+              answer.code === "MODEL_PLAN_CONCURRENCY"
+                ? 3
+                : usual.includes(answer.name)
+                  ? SessionRetry.RETRY_MAX_ATTEMPTS + 1
+                  : 1,
+            )
+            expect(cloud.requests, row).toEqual([
+              { path: GithubAgents.ENDPOINT.settle, body: { outcome }, authorization: `Bearer ${CHANNEL.runToken}` },
+            ])
+            // The log has the reason line, and never the gateway's own words (P6).
+            expect(lines, row).toContain(`error: ${stoppedLine(expected)}`)
+            expect(
+              lines.filter((line) => /fixture gateway|credits|\$9|buy/i.test(line)),
+              row,
+            ).toEqual([])
+          }
+        }
+        github.stop()
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    300_000,
+  )
 
   test("an own-key run never takes a Codium row", () => {
     GithubAgents.STOP_CODES.forEach((code) => {
@@ -1204,13 +1337,6 @@ describe("agent-phase thread text", () => {
 // INV-K1, the agent phase's part (V18b): an own-key run makes no /api/cloud-agents/* request and sends no model request
 // to Codium. The credentials here hold a well-formed run token, so only the mode keeps heartbeat and settle off, and
 // the same recorder in a Codium run sees its settle, so the seam is live.
-const guard = NetworkGuard.use()
-const web = FakeWeb.start({ sites: {} })
-const it = runtime(web)
-afterAll(async () => {
-  await web.close()
-  await cleanup()
-})
 
 describe("own key (INV-K1)", () => {
   it.instance(
@@ -1219,6 +1345,8 @@ describe("own key (INV-K1)", () => {
       Effect.gen(function* () {
         const test = yield* setup()
         yield* Effect.promise(() => commitSetup(test.dir))
+        // The Codium catalog and credential stay off, as on a runner with no Codium binding.
+        gateway.reset({ codium: false, target: test.llm.url })
         const github = fakeGithub({ roles: { alice: "write" } })
         const cloud = cloudRecorder()
         const credentials = {
@@ -1257,22 +1385,42 @@ describe("own key (INV-K1)", () => {
         expect(assistants.length).toBeGreaterThan(0)
         for (const message of assistants)
           expect(message.info.role === "assistant" ? String(message.info.providerID) : undefined).toBe("lmstudio")
+        // Nothing reached the Codium gateway, and the Codium catalog was never read with the run token.
+        expect(gateway.state.requests).toEqual([])
+        expect(gateway.state.reads).not.toContain(CHANNEL.runToken)
 
+        // The same holder in a Codium run, with no deadline from a mint: it fails closed and settles failed, with no
+        // model request and no bundle, so the recorder is live.
+        yield* Effect.promise(() => resetTree(test.dir))
+        const calls = yield* test.llm.calls
+        const errors: string[] = []
         const codium = yield* githubAgentPhase({
           env: { ...env, VECTOR_MODE: "codium", MODEL: "vector-plan" },
           credentials,
           services: cloud.services,
           log: () => {},
+          error: (line) => errors.push(line),
         }).pipe(Effect.ensuring(Effect.sync(() => LLMRequestPrep.pin(undefined))))
         github.stop()
-        expect(codium).toEqual({ exitCode: 0, outcome: "refused" })
+        expect(codium).toEqual({ exitCode: 1 })
+        expect(errors).toEqual([DEADLINE_MISSING])
         expect(cloud.requests).toEqual([
           {
             path: GithubAgents.ENDPOINT.settle,
-            body: { outcome: "refused" },
+            body: { outcome: "failed" },
             authorization: `Bearer ${CHANNEL.runToken}`,
           },
         ])
+        expect(yield* test.llm.calls).toBe(calls)
+        expect(gateway.state.requests).toEqual([])
+        expect(
+          yield* Effect.promise(() =>
+            fs.stat(path.join(test.dir, GithubAgents.BUNDLE_DIR)).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        ).toBe(false)
       }),
     { git: true },
     120_000,

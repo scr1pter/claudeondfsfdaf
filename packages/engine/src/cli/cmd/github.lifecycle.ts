@@ -62,6 +62,8 @@ export function withRunHeartbeat<A, E, R>(
     outcome: () => GithubAgents.Outcome
     credentials?: Pick<ReturnType<typeof GithubSecrets.createGithubSecrets>, "runToken">
     services?: Services
+    /** The time between running beats; HEARTBEAT_SECONDS by default. Tests shorten it. */
+    intervalMs?: number
   },
 ) {
   return Effect.suspend(() => {
@@ -108,7 +110,7 @@ export function withRunHeartbeat<A, E, R>(
           )
           const pulse = Effect.gen(function* () {
             while (!stopped) {
-              yield* Effect.sleep(GithubAgents.HEARTBEAT_SECONDS * 1000)
+              yield* Effect.sleep(input.intervalMs ?? GithubAgents.HEARTBEAT_SECONDS * 1000)
               const answer = yield* Effect.promise((signal) =>
                 heartbeat({ token, state: "running", services: input.services, signal }),
               )

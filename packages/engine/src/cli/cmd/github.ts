@@ -83,11 +83,15 @@ export const GithubRunCommand = effectCmd({
       // A mock event or token never reaches the agent phase: it reads only the Actions event and the secret channel.
       .conflicts("phase", ["event", "token"]),
   instance: (args) => {
-    // The agent phase loads no project, configuration or plugin unless the channel's credentials are in memory, and a
-    // Codium run (refused until V18c) loads none at all. Consent is read from the holder: the loader has already taken
-    // VECTOR_CLI_TOKEN out of the environment. Codium never shares (2.13).
+    // The agent phase loads no project, configuration or plugin unless the channel's credentials are in memory. A Codium
+    // run's engine starts only with the run token the account gate authorized, and index.ts has already set VECTOR_PURE
+    // and VECTOR_DISABLE_PROJECT_CONFIG for it, so no repository plugin or configuration loads; Codium never shares
+    // (2.13). Own-key consent is read from the holder: the loader has already taken VECTOR_CLI_TOKEN out of the
+    // environment.
     if (args.phase === "agent") {
-      if (!GithubSecrets.credentials.loaded() || process.env.VECTOR_MODE !== "own-key") return false
+      if (!GithubSecrets.credentials.loaded()) return false
+      if (process.env.VECTOR_MODE === "codium") return GithubSecrets.credentials.runToken() !== undefined
+      if (process.env.VECTOR_MODE !== "own-key") return false
       sharing.set(
         args,
         githubShareConsent({
@@ -106,18 +110,24 @@ export const GithubRunCommand = effectCmd({
   handler: (args) =>
     Effect.gen(function* () {
       if (args.phase === "agent") {
-        const { AGENT_NEEDS_CHANNEL, githubAgentPhase, refuseCodiumAgent } = yield* Effect.promise(
+        const { AGENT_NEEDS_CHANNEL, UNKNOWN_MODE, githubAgentPhase } = yield* Effect.promise(
           () => import("./github.agent"),
         )
-        if (!GithubSecrets.credentials.loaded()) {
-          console.error(AGENT_NEEDS_CHANNEL)
+        // The same checks as the instance rule, which started no instance for these.
+        const mode = process.env.VECTOR_MODE
+        const refused = !GithubSecrets.credentials.loaded()
+          ? AGENT_NEEDS_CHANNEL
+          : mode === "codium" && GithubSecrets.credentials.runToken() === undefined
+            ? GithubSecrets.CODIUM_UNAUTHORIZED
+            : mode !== "codium" && mode !== "own-key"
+              ? UNKNOWN_MODE
+              : undefined
+        if (refused) {
+          console.error(refused)
           process.exitCode = 1
           return
         }
-        const result =
-          process.env.VECTOR_MODE === "own-key"
-            ? yield* githubAgentPhase({ share: sharing.get(args) })
-            : yield* Effect.promise(() => refuseCodiumAgent())
+        const result = yield* githubAgentPhase({ share: mode === "own-key" ? sharing.get(args) : undefined })
         // Nothing comes back when SIGINT or SIGTERM ended the phase, which then set 130 or 143.
         if (result) process.exitCode = result.exitCode
         return

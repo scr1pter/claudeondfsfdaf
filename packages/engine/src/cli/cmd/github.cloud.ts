@@ -7,6 +7,8 @@ import { githubFetch } from "./github.shared"
 import { GithubSecrets } from "./github.secrets"
 
 const SITE = "https://vectordev.ai"
+/** A one-time run ticket as `startCloudRun` writes it into a dispatch's `inputs.ticket` (2.5). */
+export const TICKET = /^vtk_[A-Za-z0-9_-]{43}$(?![\s\S])/
 const Run = z
   .object({
     token: z.string().refine(GithubSecrets.validRunToken),
@@ -216,12 +218,7 @@ export async function mintRunToken(input: {
         : null
   const comment = optionalId(env.VECTOR_COMMENT_ID)
   const pr = optionalId(env.VECTOR_PR)
-  if (
-    comment === null ||
-    pr === null ||
-    (env.VECTOR_TICKET && !/^vtk_[A-Za-z0-9_-]{43}$(?![\s\S])/.test(env.VECTOR_TICKET))
-  )
-    return finish("denied")
+  if (comment === null || pr === null || (env.VECTOR_TICKET && !TICKET.test(env.VECTOR_TICKET))) return finish("denied")
   let retries = 0
   let polls = 0
   let waitUntil: number | undefined

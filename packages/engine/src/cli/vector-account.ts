@@ -235,7 +235,7 @@ export async function ensureVectorAccount(): Promise<void> {
     const { verifyGithubRun } = await import("./cmd/github.cloud")
     const accepted = process.env.GITHUB_ACTIONS === "true" && (await verifyGithubRun())
     if (accepted) return
-    UI.error("This Codium run is not authorized.")
+    UI.error(GithubSecrets.CODIUM_UNAUTHORIZED)
     process.exit(1)
   }
   if (GithubSecrets.credentials.loaded() && !GithubSecrets.credentials.cliToken()) {

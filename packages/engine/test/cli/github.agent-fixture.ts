@@ -1,12 +1,17 @@
-// Fakes for the agent phase's tests (V18b): an event file outside the repository, a loopback fake GitHub that records
-// every request, a git origin that demands credentials and counts its hits, a vectordev.ai recorder behind the cloud
-// client's Services seam, and channel holders made with createGithubSecrets. Nothing here assigns process.env, and no
+// Fakes for the agent phase's tests (V18b, V18c): an event file outside the repository, a loopback fake GitHub that
+// records every request, a git origin that demands credentials and counts its hits, a vectordev.ai recorder behind the
+// cloud client's Services seam, channel holders made with createGithubSecrets, and a fake Codium gateway with its
+// catalog and run credential behind the services the provider layer reads. Nothing here assigns process.env, and no
 // request leaves this computer.
 
 import { $ } from "bun"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { Effect, Layer } from "effect"
+import type { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { FreeModels } from "@vectordevai/core/free-models"
+import { ModelPlans } from "@vectordevai/core/model-plans"
 import type { Services } from "../../src/cli/cmd/github.cloud"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 
@@ -28,6 +33,17 @@ export const CHANNEL = {
 
 /** Every fixture credential value, for checks that none reached an environment or an output. */
 export const VALUES = [CHANNEL.githubToken, CHANNEL.cliToken, CHANNEL.runToken, ...Object.values(CHANNEL.keys)]
+
+/** A well-formed one-time run ticket (`vtk_` and 43 safe characters); not a real one. */
+export const TICKET_FIXTURE = `vtk_${"fixtureTicket_-".repeat(3).slice(0, 43)}`
+
+/** The one model the fake Codium catalog lists, so `MODEL: vector-plan` picks it. */
+export const CODIUM_MODEL = {
+  id: "codium-fixture",
+  name: "Codium Fixture",
+  contextLength: 100_000,
+  maxOutputTokens: 8_000,
+}
 
 export type Recorded = { method: string; path: string; query?: string; authorization?: string }
 
@@ -71,6 +87,12 @@ export async function commitSetup(dir: string) {
   const status = await git(dir, ["status", "--porcelain"])
   if (status !== "") throw new Error(`The test repository is not clean: ${status}`)
   return git(dir, ["rev-parse", "HEAD"])
+}
+
+/** Back to the base between runs in one repository: the agent's edits and the bundle go. */
+export async function resetTree(dir: string) {
+  await git(dir, ["checkout", "-q", "--", "."])
+  await git(dir, ["clean", "-fdq"])
 }
 
 /** Every ref and HEAD, to show the phase moved none. */
@@ -189,9 +211,10 @@ export function pullData(input: {
 
 /**
  * The vectordev.ai side of the cloud client, through its Services seam: every request is recorded with its path, body
- * and authorization, and heartbeat and settle are accepted.
+ * and authorization, and settle is accepted. A heartbeat is answered `{ok: true, stop: false}`, or with what `heartbeat`
+ * returns for its body.
  */
-export function cloudRecorder() {
+export function cloudRecorder(options: { heartbeat?: (body: unknown) => unknown } = {}) {
   const requests: { path: string; body: unknown; authorization?: string }[] = []
   const services: Services = {
     oidc: async () => {
@@ -204,19 +227,24 @@ export function cloudRecorder() {
     notice: () => {},
     request: async (url, init) => {
       const request = new Request(url, init)
+      const body: unknown = await request.json().catch(() => undefined)
       requests.push({
         path: new URL(request.url).pathname,
-        body: await request.json().catch(() => undefined),
+        body,
         authorization: request.headers.get("authorization") ?? undefined,
       })
-      return Response.json(request.url.endsWith("/heartbeat") ? { ok: true, stop: false } : { ok: true })
+      if (!request.url.endsWith("/heartbeat")) return Response.json({ ok: true })
+      return Response.json(options.heartbeat?.(body) ?? { ok: true, stop: false })
     },
   }
   return { services, requests }
 }
 
-/** A channel holder of its own, loaded from one channel line; process.env is never read or changed. */
-export async function holder(mode: "own-key" | "codium") {
+/**
+ * A channel holder of its own, loaded from one channel line; process.env is never read or changed. A Codium holder's
+ * run token is authorized, as the account gate's starting heartbeat would, unless `authorized` is false.
+ */
+export async function holder(mode: "own-key" | "codium", authorized = true) {
   const secrets = GithubSecrets.createGithubSecrets()
   const line =
     mode === "codium"
@@ -233,8 +261,117 @@ export async function holder(mode: "own-key" | "codium") {
       yield JSON.stringify(line) + "\n"
     })(),
   )
-  if (mode === "codium") await secrets.authorize(async () => true)
+  if (mode === "codium" && authorized) await secrets.authorize(async () => true)
   return secrets
+}
+
+/** What the fake gateway does with one task request: send it on to the fake model server, hold it, or refuse it. */
+export type GatewayAction =
+  | { kind: "forward" }
+  | { kind: "hold" }
+  | { kind: "refuse"; status: number; code?: string; limit?: string }
+
+export type GatewayRequest = { authorization?: string; title: boolean; action: GatewayAction["kind"] }
+
+/**
+ * A fake Codium gateway with its catalog and run credential, as runtime() replacements. While `codium` is false (the
+ * default) the catalog is off and the credential is missing, so an own-key test sees no Codium provider; set it before
+ * an instance's first provider read, since the provider layer keeps its list per instance. The catalog lists
+ * CODIUM_MODEL only for the fixture run token. A title request is always sent on to the fake model server at `target`,
+ * which answers titles itself. Every other request takes the next action from `queue`, or `sticky` once the queue is
+ * empty (forward by default). A refusal is the gateway's `{error: {code, message, limit?}}` with `retry-after-ms: 1`,
+ * and calls `onRefusal` first; a held request waits until its caller aborts it and resolves `held`.
+ */
+export function codiumFakes() {
+  const state = {
+    codium: false,
+    target: "",
+    queue: [] as GatewayAction[],
+    sticky: { kind: "forward" } as GatewayAction,
+    onRefusal: (() => {}) as () => void,
+    held: Promise.withResolvers<void>(),
+    reads: [] as (string | undefined)[],
+    requests: [] as GatewayRequest[],
+  }
+  const reset = (input: Partial<Pick<typeof state, "codium" | "target" | "queue" | "sticky" | "onRefusal">> = {}) => {
+    state.codium = input.codium ?? state.codium
+    state.target = input.target ?? state.target
+    state.queue = input.queue ?? []
+    state.sticky = input.sticky ?? { kind: "forward" }
+    state.onRefusal = input.onRefusal ?? (() => {})
+    state.held = Promise.withResolvers<void>()
+    state.reads.splice(0)
+    state.requests.splice(0)
+  }
+  const forward = (body: string, signal: AbortSignal | null | undefined) =>
+    fetch(`${state.target}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: signal ?? undefined,
+    })
+  const request = async (url: string, init: RequestInit) => {
+    if (url !== ModelPlans.CHAT_URL) throw new Error("The fake gateway answers chat requests only.")
+    const body = typeof init.body === "string" ? init.body : ""
+    const title = body.includes("Generate a title for this conversation")
+    const action: GatewayAction = title ? { kind: "forward" } : (state.queue.shift() ?? state.sticky)
+    state.requests.push({
+      authorization: new Headers(init.headers).get("authorization") ?? undefined,
+      title,
+      action: action.kind,
+    })
+    if (action.kind === "forward") return forward(body, init.signal)
+    if (action.kind === "hold") {
+      state.held.resolve()
+      return new Promise<Response>((_, reject) => {
+        const signal = init.signal
+        if (!signal) return
+        if (signal.aborted) return reject(signal.reason)
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+      })
+    }
+    state.onRefusal()
+    return new Response(
+      action.code === undefined
+        ? ""
+        : JSON.stringify({
+            error: {
+              code: action.code,
+              message: "fixture gateway words: credits, plan, $9",
+              ...(action.limit ? { limit: action.limit } : {}),
+            },
+          }),
+      { status: action.status, headers: { "content-type": "application/json", "retry-after-ms": "1" } },
+    )
+  }
+  const replacements: LayerNode.Replacements = [
+    [
+      ModelPlans.node,
+      Layer.succeed(
+        ModelPlans.Service,
+        ModelPlans.Service.of({
+          catalog: (token) =>
+            Effect.sync(() => {
+              state.reads.push(token)
+              return token === CHANNEL.runToken && state.codium
+                ? { enabled: true, models: [CODIUM_MODEL] }
+                : { enabled: false, models: [] }
+            }),
+          request,
+        }),
+      ),
+    ],
+    [
+      FreeModels.credentialsNode,
+      Layer.succeed(
+        FreeModels.CredentialsService,
+        FreeModels.CredentialsService.of({
+          get: (provider) => Effect.sync(() => (provider === "vector" && state.codium ? CHANNEL.runToken : undefined)),
+        }),
+      ),
+    ],
+  ]
+  return { state, reset, replacements }
 }
 
 /** The agent step's environment as the sandbox starts the engine with it (SANDBOX_ENV_ALLOW), for one event. */
@@ -247,6 +384,8 @@ export function stepEnv(input: {
   model?: string
   prompt?: string
   mentions?: string
+  /** VECTOR_RUN_DEADLINE, epoch milliseconds as mint writes it. */
+  deadline?: string
 }): Record<string, string | undefined> {
   return {
     GITHUB_ACTIONS: "true",
@@ -263,5 +402,30 @@ export function stepEnv(input: {
     MODEL: input.model ?? "lmstudio/test-model",
     MENTIONS: input.mentions ?? "/vector,/vs",
     ...(input.prompt !== undefined ? { VECTOR_PROMPT: input.prompt } : {}),
+    ...(input.deadline !== undefined ? { VECTOR_RUN_DEADLINE: input.deadline } : {}),
+  }
+}
+
+/**
+ * The agent phase's clock for a test: time moves only when the test moves it, each timer is recorded and fires only
+ * when the test fires it, running heartbeats come every `heartbeatMs` (an hour unless a test asks for them), and a
+ * concurrency retry waits at least 1 ms of real time rather than RETRY_INITIAL_DELAY.
+ */
+export function fakeClock(start = 1_800_000_000_000, heartbeatMs = 3_600_000) {
+  const state = { now: start, timers: [] as { ms: number; fire: () => void; cleared: boolean }[] }
+  return {
+    state,
+    clock: {
+      now: () => state.now,
+      timer: (ms: number, fire: () => void) => {
+        const entry = { ms, fire, cleared: false }
+        state.timers.push(entry)
+        return () => {
+          entry.cleared = true
+        }
+      },
+      heartbeatMs,
+      minDelayMs: 1,
+    },
   }
 }

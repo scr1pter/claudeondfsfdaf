@@ -117,6 +117,32 @@ function parseJSON(value: unknown) {
   })
 }
 
+/**
+ * A rule for the Codium gateway's answers that one caller pins for every model request of this process: today only a
+ * Codium GitHub agent phase (V18c), which follows its run's stop-code table (contract 2.9.2). `classify` answers "stop"
+ * (end the step with this error, no retry), "wait" (retry while `remaining()` is above zero, spaced by the usual delay
+ * but never less than `minDelayMs` and never more than RETRY_MAX_DELAY_NO_HEADERS, so a longer retry-after is
+ * shortened; the attempt and elapsed-time caps do not apply, the rule's window does), or undefined (the usual
+ * retries). Nothing is pinned anywhere else, so the desktop, `vector run` and own-key runs retry as before.
+ */
+export type GatewayRule = {
+  readonly classify: (error: Err, provider: string) => "stop" | "wait" | undefined
+  /** How much longer a "wait" answer may be retried, in milliseconds; the rule keeps its own window. */
+  readonly remaining: () => number
+  /**
+   * The shortest wait between "wait" retries, RETRY_INITIAL_DELAY by default: a zero or tiny retry-after must not
+   * turn the window into a tight loop of requests.
+   */
+  readonly minDelayMs?: number
+}
+
+const pinned: { gateway?: GatewayRule } = {}
+
+/** Pins `rule` for every later retry decision of this process, or removes it with undefined. */
+export function pinGateway(rule: GatewayRule | undefined) {
+  pinned.gateway = rule
+}
+
 export function policy(opts: {
   provider: string
   parse: (error: unknown) => Err
@@ -125,21 +151,35 @@ export function policy(opts: {
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
       const error = opts.parse(meta.input)
+      const api = SessionV1.APIError.isInstance(error) ? error : undefined
+      const retryIn = (wait: number, retry: Retryable) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          yield* opts.set({
+            attempt: meta.attempt,
+            message: retry.message,
+            action: retry.action,
+            next: now + wait,
+          })
+          return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
+        })
+      const gateway = pinned.gateway
+      const kind = gateway?.classify(error, opts.provider)
+      if (kind === "stop") return Cause.done(meta.attempt)
+      if (gateway && kind === "wait") {
+        const left = gateway.remaining()
+        if (left <= 0) return Cause.done(meta.attempt)
+        const wait = Math.max(delay(meta.attempt, api), gateway.minDelayMs ?? RETRY_INITIAL_DELAY)
+        return retryIn(Math.min(wait, RETRY_MAX_DELAY_NO_HEADERS, left), {
+          message: retryable(error, opts.provider)?.message ?? "Provider is busy",
+        })
+      }
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
-      const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
+      const wait = delay(meta.attempt, api)
       // A provider that keeps failing must end the run with its last error instead of retrying unattended forever.
       if (meta.attempt > RETRY_MAX_ATTEMPTS || meta.elapsed + wait > RETRY_MAX_MS) return Cause.done(meta.attempt)
-      return Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis
-        yield* opts.set({
-          attempt: meta.attempt,
-          message: retry.message,
-          action: retry.action,
-          next: now + wait,
-        })
-        return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
-      })
+      return retryIn(wait, retry)
     }),
   )
 }

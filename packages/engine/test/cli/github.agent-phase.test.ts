@@ -17,7 +17,6 @@ import {
   AGENT_NEEDS_CHANNEL,
   AUTHOR_REFUSED,
   BOT_REFUSED,
-  CODIUM_NOT_YET,
   FALLBACK_TITLE,
   FORK_REFUSED,
   NOT_A_TASK,
@@ -32,7 +31,6 @@ import {
   githubAgentPhase,
   readOnlyGithub,
   readOnlyQuery,
-  refuseCodiumAgent,
   type AgentPhaseInput,
 } from "../../src/cli/cmd/github.agent"
 import { GithubBundle } from "../../src/cli/cmd/github.bundle"
@@ -65,6 +63,7 @@ import {
   pullData,
   refs,
   stepEnv,
+  TICKET_FIXTURE,
 } from "./github.agent-fixture"
 
 const POLICY =
@@ -578,7 +577,7 @@ describe("the agent phase's credentials and policy", () => {
 
 describe("refusals", () => {
   it.instance(
-    "scheduled and Codium runs are refused until V22 and V18c",
+    "a scheduled run is refused until V22, and on Codium it settles refused",
     () =>
       Effect.gen(function* () {
         const test = yield* setup()
@@ -597,23 +596,37 @@ describe("refusals", () => {
         expect(schedule.result).toEqual({ exitCode: 0, outcome: "refused" })
         expect(schedule.lines).toEqual([SCHEDULE_NOT_YET])
 
+        // A Codium schedule is refused the same way, and its settle releases the slot the gate's starting heartbeat
+        // opened. Its deadline timer is set and cleared; no catalog, model or GitHub request is made.
         const cloud = cloudRecorder()
+        const timers: { ms: number; cleared: boolean }[] = []
+        const now = 1_800_000_000_000
         const codium = yield* phase({
           env: stepEnv({
-            event: yield* Effect.promise(() => eventFile({ inputs: {}, sender: alice })),
-            eventName: "workflow_dispatch",
-            thread: `dispatch-${RUN_ID}`,
+            event: yield* Effect.promise(() => eventFile({ schedule: "17 3 * * 1" })),
+            eventName: "schedule",
+            thread: "schedule-0123abcd",
             github: github.url,
             mode: "codium",
             model: "vector-plan",
-            prompt: "Do it",
+            deadline: String(now + 3_600_000),
           }),
           credentials: yield* Effect.promise(() => holder("codium")),
           services: cloud.services,
+          clock: {
+            now: () => now,
+            timer: (ms) => {
+              const timer = { ms, cleared: false }
+              timers.push(timer)
+              return () => {
+                timer.cleared = true
+              }
+            },
+          },
         })
         github.stop()
         expect(codium.result).toEqual({ exitCode: 0, outcome: "refused" })
-        expect(codium.lines).toEqual([CODIUM_NOT_YET])
+        expect(codium.lines).toEqual([SCHEDULE_NOT_YET])
         expect(cloud.requests).toEqual([
           {
             path: GithubAgents.ENDPOINT.settle,
@@ -621,18 +634,7 @@ describe("refusals", () => {
             authorization: `Bearer ${CHANNEL.runToken}`,
           },
         ])
-        // The CLI's no-instance path settles the same way.
-        const direct = cloudRecorder()
-        expect(
-          yield* Effect.promise(() =>
-            refuseCodiumAgent({
-              credentials: { runToken: () => CHANNEL.runToken },
-              services: direct.services,
-              log: () => {},
-            }),
-          ),
-        ).toEqual({ exitCode: 0, outcome: "refused" })
-        expect(direct.requests.map((request) => request.path)).toEqual([GithubAgents.ENDPOINT.settle])
+        expect(timers).toEqual([{ ms: 3_600_000 - GithubAgents.STOP_MARGIN_SECONDS * 1000, cleared: true }])
         expect(yield* test.llm.calls).toBe(calls)
         expect(github.seen).toEqual([])
         expect(yield* Effect.promise(() => noBundle(test.dir))).toBe(true)
@@ -839,6 +841,46 @@ describe("routing, models and the command line", () => {
       refused: BOT_REFUSED,
     })
     expect(route("workflow_dispatch", { inputs: { mode: "review" }, sender: alice })).toEqual({ refused: NOT_A_TASK })
+    // Vector's App bot with a one-time ticket starts a Codium task, its login compared as the route script compares it
+    // and its type a Bot; any other bot, the App's login without the Bot type, a missing or malformed ticket, review
+    // mode, a MENTIONS with no App handle and own key are refused.
+    const service = { login: "vector-test[bot]", id: 77, type: "Bot" }
+    const codium = { ...env, VECTOR_MODE: "codium", MENTIONS: "@vector-test,/vector,/vs" }
+    const ticketed = { inputs: { mode: "task", ticket: TICKET_FIXTURE }, sender: service }
+    const dispatched = (payload: unknown, values: Record<string, string> = codium) =>
+      agentRoute({ name: "workflow_dispatch", payload }, values)
+    expect(dispatched(ticketed)).toEqual({
+      route: {
+        kind: "dispatch",
+        thread: `dispatch-${RUN_ID}`,
+        trigger: "Do it",
+        login: "vector-test[bot]",
+        review: false,
+        ticket: true,
+      },
+    })
+    ;[
+      { ...ticketed, sender: { login: "helper[bot]", type: "Bot" } },
+      { ...ticketed, sender: { login: "Vector-Test[bot]", type: "Bot" } },
+      { ...ticketed, sender: { login: "vector-test", type: "Bot" } },
+      { ...ticketed, sender: { login: "vector-test[bot]" } },
+      { ...ticketed, sender: { login: "vector-test[bot]", id: 77, type: "User" } },
+      { inputs: { mode: "task" }, sender: service },
+      { inputs: { mode: "task", ticket: "" }, sender: service },
+      { inputs: { mode: "task", ticket: `${TICKET_FIXTURE}\n` }, sender: service },
+      { inputs: { mode: "task", ticket: TICKET_FIXTURE.slice(0, -1) }, sender: service },
+      { inputs: { mode: "task", ticket: 7 }, sender: service },
+    ].forEach((payload) => expect(dispatched(payload)).toEqual({ refused: BOT_REFUSED }))
+    expect(dispatched({ inputs: { mode: "review", ticket: TICKET_FIXTURE }, sender: service })).toEqual({
+      refused: NOT_A_TASK,
+    })
+    expect(dispatched(ticketed, { ...codium, MENTIONS: "/vector,/vs" })).toEqual({ refused: BOT_REFUSED })
+    expect(dispatched(ticketed, { ...codium, MENTIONS: "@vector-test!,/vector" })).toEqual({ refused: BOT_REFUSED })
+    expect(dispatched(ticketed, { ...codium, VECTOR_MODE: "own-key" })).toEqual({ refused: BOT_REFUSED })
+    // A person's dispatch never carries the ticket flag, even with a ticket input.
+    expect(dispatched({ ...ticketed, sender: alice })).toEqual({
+      route: { kind: "dispatch", thread: `dispatch-${RUN_ID}`, trigger: "Do it", login: "alice", review: false },
+    })
     expect(route("workflow_dispatch", { inputs: null, sender: alice })).toMatchObject({
       route: { kind: "dispatch", thread: `dispatch-${RUN_ID}`, trigger: "Do it" },
     })

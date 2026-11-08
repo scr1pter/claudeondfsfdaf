@@ -555,6 +555,10 @@ export type ChatContext = {
   sessionID: SessionID
   variant?: PromptInput["variant"]
   model: NonNullable<PromptInput["model"]>
+  /** Where a turn's error is printed; console.error by default. A Codium agent phase prints none (P6). */
+  reportError?: (label: "Agent error:" | "Summary agent error:", error: unknown) => void
+  /** True once the run was stopped: chat then sends no further turn, the summary turn included. */
+  halted?: () => boolean
 }
 
 type SessionContext = {
@@ -583,6 +587,8 @@ export async function chat(ctx: ChatContext, message: string, files: PromptFiles
   return ctx.run(
     Effect.gen(function* () {
       const prompt = ctx.prompt
+      // A stopped run sends no further turn.
+      if (ctx.halted?.()) throw new Error("The run stopped before this turn.")
       const result = yield* prompt.prompt({
         sessionID: ctx.sessionID,
         messageID: MessageID.ascending(),
@@ -614,7 +620,7 @@ export async function chat(ctx: ChatContext, message: string, files: PromptFiles
 
       if (result.info.role === "assistant" && result.info.error) {
         const err = result.info.error
-        console.error("Agent error:", err)
+        ;(ctx.reportError ?? console.error)("Agent error:", err)
         if (err.name === "ContextOverflowError") throw new Error(formatPromptTooLargeError(files), { cause: err })
         const message = "message" in err.data ? err.data.message : ""
         throw new Error(`${err.name}: ${message}`, { cause: err })
@@ -623,6 +629,7 @@ export async function chat(ctx: ChatContext, message: string, files: PromptFiles
       const text = extractResponseText(result.parts)
       if (text) return text
 
+      if (ctx.halted?.()) throw new Error("The run stopped before this turn.")
       console.log("Requesting summary from agent...")
       const summary = yield* prompt.prompt({
         sessionID: ctx.sessionID,
@@ -641,7 +648,7 @@ export async function chat(ctx: ChatContext, message: string, files: PromptFiles
 
       if (summary.info.role === "assistant" && summary.info.error) {
         const err = summary.info.error
-        console.error("Summary agent error:", err)
+        ;(ctx.reportError ?? console.error)("Summary agent error:", err)
         if (err.name === "ContextOverflowError") throw new Error(formatPromptTooLargeError(files), { cause: err })
         const message = "message" in err.data ? err.data.message : ""
         throw new Error(`${err.name}: ${message}`, { cause: err })

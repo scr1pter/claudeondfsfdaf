@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import { constants, type Stats } from "node:fs"
 import path from "node:path"
+import type { Readable } from "node:stream"
 import { z } from "zod"
 
 const token = z
@@ -153,6 +154,60 @@ async function channelLine(input: AsyncIterable<Uint8Array | string>) {
   }
 }
 
+/**
+ * The stream's chunks from its 'data', 'end', 'close' and 'error' events, then the stream is destroyed, which closes
+ * stdin as 2.13 asks. On Bun 1.3.14, once anything has read `process.stdin.isTTY` before the loader runs, as the CLI's
+ * startup does, `for await (const chunk of process.stdin)` over a stdin that Bun.spawn was given as bytes ends at once
+ * with none of them, while these events still deliver the whole line; through a pipe, and on Node, both ways read it.
+ * A stream that has already ended or been destroyed yields nothing, so the loader refuses it instead of waiting. The
+ * stream is resumed once the listeners are on: a 'data' listener does not start a stream that something paused.
+ */
+async function* streamChunks(stream: Readable): AsyncGenerator<Uint8Array | string> {
+  const queue: (Uint8Array | string)[] = []
+  const state: { ended: boolean; failed: boolean; wake?: () => void } = {
+    ended: stream.readableEnded || stream.destroyed,
+    failed: false,
+  }
+  const data = (chunk: Uint8Array | string) => {
+    queue.push(chunk)
+    state.wake?.()
+  }
+  const end = () => {
+    state.ended = true
+    state.wake?.()
+  }
+  const error = () => {
+    state.failed = true
+    state.wake?.()
+  }
+  stream.on("data", data)
+  stream.on("end", end)
+  stream.on("close", end)
+  stream.on("error", error)
+  stream.resume()
+  try {
+    while (true) {
+      if (state.failed) throw unavailable()
+      const chunk = queue.shift()
+      if (chunk !== undefined) {
+        yield chunk
+        continue
+      }
+      if (state.ended) return
+      await new Promise<void>((resolve) => {
+        state.wake = resolve
+      })
+      state.wake = undefined
+    }
+  } finally {
+    stream.removeListener("data", data)
+    stream.removeListener("end", end)
+    stream.removeListener("close", end)
+    stream.removeListener("error", error)
+    stream.destroy()
+  }
+}
+
 /** One holder per CLI process. Tests create a separate holder, never replace process.env or a global service. */
 export function createGithubSecrets() {
   let held: Channel | undefined
@@ -188,11 +243,8 @@ export function createGithubSecrets() {
     held = parsed.data
   }
   return {
-    load(
-      env: Record<string, string | undefined> = process.env,
-      input: AsyncIterable<Uint8Array | string> = process.stdin,
-    ) {
-      return (loading ??= load(env, input).catch(() => {
+    load(env: Record<string, string | undefined> = process.env, input?: AsyncIterable<Uint8Array | string>) {
+      return (loading ??= load(env, input ?? streamChunks(process.stdin)).catch(() => {
         throw unavailable()
       }))
     },
@@ -225,6 +277,9 @@ export const credentials = createGithubSecrets()
 export function ownKeyRun(holder: Pick<typeof credentials, "loaded" | "pendingRunToken"> = credentials) {
   return holder.loaded() && holder.pendingRunToken() === undefined
 }
+
+// What the account gate and the agent phase say when the gate did not authorize a Codium run's token.
+export const CODIUM_UNAUTHORIZED = "This Codium run is not authorized."
 
 // Why an own-key run cannot use a Codium model, wherever one is named: MODEL, an agent's model or small_model.
 export const OWN_KEY_CODIUM =

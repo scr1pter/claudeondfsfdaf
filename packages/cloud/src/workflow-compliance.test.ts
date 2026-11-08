@@ -183,6 +183,9 @@ describe("@vector CI lane", () => {
         "packages/engine/src/session/llm/request.ts",
         "packages/engine/src/session/posting.ts",
         "packages/engine/test/lib/research.ts",
+        // The session retry module, where a Codium run's 2.9.2 gateway rule is pinned, and its test (V18c).
+        "packages/engine/src/session/retry.ts",
+        "packages/engine/test/session/retry.test.ts",
         "packages/desktop/src/main/github-*.ts",
         ".github/workflows/vector-at-mention.yml",
       ]),
@@ -250,6 +253,7 @@ describe("@vector CI lane", () => {
         ["packages/web", "test/cloud-agents-*.test.ts"],
         ["packages/engine", "test/cli/github*.test.ts"],
         ["packages/engine", "test/tool/registry*.test.ts"],
+        ["packages/engine", "test/session/retry.test.ts"],
         ["packages/core", "test/github-agents.test.ts"],
         ["packages/core", "test/review/*.test.ts"],
         ["packages/core", "test/child-environment.test.ts"],

@@ -13,7 +13,8 @@ on:
     # and jose, so any hosted API change, the lockfile and the Bun version in package.json start the lane. api/** takes
     # in the contract's api/github, api/cloud-agents, api/_lib/github-* and api/_lib/cloud-agents-* entries. The shared
     # engine files the agent phase's own-key seam, pinned policy and posting check live in, and the research runtime its
-    # tests run on, start it too (V18b).
+    # tests run on, start it too (V18b), as do the session retry module that holds a Codium run's gateway rule and its
+    # test (V18c).
     paths:
       - api/**
       - bun.lock
@@ -26,6 +27,7 @@ on:
       - packages/engine/src/provider/provider.ts
       - packages/engine/src/session/llm/request.ts
       - packages/engine/src/session/posting.ts
+      - packages/engine/src/session/retry.ts
       - packages/desktop/src/main/github-*.ts
       - packages/web/test/github-*.ts
       - packages/web/test/cloud-agents-*.ts
@@ -33,6 +35,7 @@ on:
       - packages/engine/test/lib/research.ts
       - packages/engine/test/fixture/sandbox-*.ts
       - packages/engine/test/tool/registry*.ts
+      - packages/engine/test/session/retry.test.ts
       - packages/core/test/github-agents.test.ts
       - packages/core/test/review/**
       - packages/core/test/child-environment.test.ts
@@ -155,6 +158,13 @@ jobs:
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
         run: GITHUB_ACTIONS=false bun test --timeout 30000 test/cli/github*.test.ts test/tool/registry*.test.ts
+
+      # retry.ts decides every provider's retries in the desktop and in `vector run`, and a Codium agent phase pins its
+      # gateway rule there (V18c). test.yml has never run on this branch, so the lane runs the module's own test.
+      - name: Run engine session retry tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/session/retry.test.ts
 
       - name: Run core GitHub tests
         if: ${{ !cancelled() }}

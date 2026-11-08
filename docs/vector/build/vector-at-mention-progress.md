@@ -912,7 +912,7 @@ For each package, record its commit, the focused tests and typechecks run locall
   - CI-only, not run locally: `github.agent-cli.test.ts`, the parents of `github.agent-channel.test.ts`, and the rest of `github.run-routing.test.ts` plus `github.review.test.ts` (they spawn the CLI or Bun).
   - `bun typecheck` in `packages/engine` and in `packages/cloud` (`tsgo --noEmit`): exit 0.
   - Full typecheck from the worktree root (06:38:14–06:38:15 UTC): exit 0, 23 of 23 successful, 23 cached (the sources were unchanged since the 06:25 review-fix run), 547ms.
-- **Not yet done:** the feat commit's hash, the pre-push hook and the exact-head lane run (all 8 jobs, including the five sandbox-probe jobs and the Node bundle job). A commit cannot name its own hash, so they are recorded in V18c's entry once seen.
+- **Not yet done:** the feat commit's hash, the pre-push hook and the exact-head lane run (all 8 jobs, including the five sandbox-probe jobs and the Node bundle job). A commit cannot name its own hash, so they are recorded in V18c's entry once seen. (Run `42455742210` at `9d78e572` failed in the CI-only CLI test; V18c's entry records it and its repair.)
 - **Carried to:**
   - V18c:
     - the Codium agent phase: `withRunHeartbeat`, the deadline timer at `VECTOR_RUN_DEADLINE` minus `STOP_MARGIN_SECONDS`, the 15-minute `MODEL_PLAN_CONCURRENCY` wait, and `SessionRetry` for the 2.9.2 draft codes;
@@ -928,6 +928,105 @@ For each package, record its commit, the focused tests and typechecks run locall
   - V22: schedule prompts replace `SCHEDULE_NOT_YET`.
   - V24: the v3 builder passes publish the agent job's result (for example `VECTOR_AGENT_RESULT: ${{ needs.agent.result }}`, allowlisted under INV-S15), and keeps a missing `vector-run-*` artifact from failing publish: today's upload step keeps the default `if-no-files-found: warn` and the download step has `continue-on-error: true`; keep both or set `if-no-files-found: ignore` (deviation V18b item 1).
   - V27b: session artifacts (`session.vsa`).
+
+### V18c. Codium lifecycle, deadline and stop codes in the agent phase
+
+- **Status:** built in the working tree of `/home/user/wt/vam` on 2026-11-08, on top of `9d78e572`, and left uncommitted there, as the orchestrator asked. The commit gate then committed it on 2026-11-08 as two commits, not the four planned below (deviation V18c item 16), each with the lane's identity, both trailers and a body that lists the shared files it touches:
+  - first the spec clarification alone, `2595ab4a` (`docs(github): clarify the V18c Codium lifecycle contract`, deviation V18c item 1; shared files touched: none);
+  - then `feat(github): V18c add Codium heartbeat, deadline and stop codes to the agent phase`, with everything else and these two records: the stdin loader repair (item 2), the lifecycle, deadline and stop codes, and the ticket admission (item 9). Its body lists the shared files it touches: `packages/engine/src/session/retry.ts`, `packages/engine/src/cli/vector-account.ts`, `.github/workflows/vector-at-mention.yml` and `packages/cloud/src/workflow-compliance.test.ts`.
+
+  The planned series, with the critique's split (deviation V18c item 14), kept as the plan it was:
+  1. `docs(github): clarify the V18c Codium lifecycle contract`: `docs/vector/build/vector-at-mention-spec.md` alone (deviation V18c item 1).
+  2. `fix(github): read the secret channel from stdin events`: `packages/engine/src/cli/cmd/github.secrets.ts` (`streamChunks` with its `resume()`), `packages/engine/test/cli/github.secrets-stdin.test.ts`, and the deviations file's V18c heading with item 2 (the V18b repair). `fix` is a type RULES.md and AGENTS.md allow, though the lane notes' list of titles omits it; the body says the commit repairs V18b's CI-only `github.agent-cli.test.ts`, which failed in lane run `42455742210` at `9d78e572`. The file's new `CODIUM_UNAUTHORIZED` constant belongs to commit 3; if `github.secrets.ts` is staged whole here, it rides along unused until commit 3 and typechecks.
+  3. `feat(github): V18c run Codium agent phases with heartbeat, deadline and stop codes`: `packages/engine/src/session/retry.ts`, `github.agent.ts` (all but the ticket parts), `github.ts`, `github.lifecycle.ts`, `github.run-helpers.ts`, `packages/engine/src/cli/vector-account.ts` (the gate's line from `GithubSecrets.CODIUM_UNAUTHORIZED`), the tests, `.github/workflows/vector-at-mention.yml` (the pull-request paths and the new "Run engine session retry tests" step), `packages/cloud/src/workflow-compliance.test.ts`, the rest of the deviations entry and this entry. Shared files to list: `packages/engine/src/session/retry.ts`, `packages/engine/src/cli/vector-account.ts`, `.github/workflows/vector-at-mention.yml`, `packages/cloud/src/workflow-compliance.test.ts`.
+  4. `feat(github): V18c admit Codium ticket dispatches from the App bot`: `serviceDispatch` (with its `Bot` type check), `SERVICE_TASK` and the `ticket` branch of `gather` in `github.agent.ts`, `TICKET` in `github.cloud.ts`, `TICKET_FIXTURE`, the ticket rows of `github.agent-phase.test.ts` and the ticket case of `github.agent-codium.test.ts` (deviation V18c item 9).
+
+  A Codium `vector github run --phase agent` now runs its session: heartbeat from the gate's starting beat to its settle, the deadline timer, 2.9.2 in its retries and its bundle, P6-safe error lines, and ticket dispatches from the App bot. Own key never heartbeats, settles or waits (INV-K1). Nothing installs a v3 workflow yet (V23 and V24), `MIN_AGENTS_CLI` 1.99.113 is unpublished, and without `--phase` `vector github run` is unchanged (2.11.5): `chat`'s new options default to today's behaviour.
+
+- **V18b carried over (seen 2026-11-08 with the read-only Actions API):**
+  - Commits `2b597921` (`docs(github): clarify the V18b agent phase contract`) and `9d78e572` (`feat(github): V18b run the agent phase and write the bundle`) each carry a body and both trailers (`git log -2 --format=%b`).
+  - Their push went through the pre-push hook: `/tmp/vector-v18b/commit-gate/logs/push.log` shows 23 of 23 tasks successful, 22 cached, 20.892s, then `d5444dc4..9d78e572  HEAD -> vector-at-mention`.
+  - **Lane run `42455742210` concluded `failure`.** It is `Vector at-mention` run 26, attempt 1, the push of `9d78e57276deab4f35216f2d0b94c1548d66840f`, from 2026-11-08 06:40:55 to 06:43:56 UTC, every job on `ubuntu-24.04`:
+    - `engine and core` (`128654246428`) failed in "Run engine GitHub tests": 350 pass, 1 fail, 3 snapshots, 3,364 `expect()` calls across 24 files (109.59s). The failing test is `github.agent-cli.test.ts` › "the CLI agent phase loads its channel before the account gate and leaves no credential in children" (exit 1 with "The GitHub run credentials are unavailable or invalid."). "Run core GitHub tests" passed: 412 pass, 0 fail, 1,947 `expect()` calls across 23 files.
+    - The other seven jobs succeeded: `hosted API` (`128654246586`), `desktop engine bundle (node)` (`128654246517`), `sandbox (codium, success)` (`128654246482`), `sandbox (own-key, success)` (`128654246722`), `sandbox (codium, bundle-refusal)` (`128654246587`), `sandbox (codium, cancelled)` (`128654246593`) and `sandbox (codium, seal-refusal)` (`128654246493`).
+  - So `9d78e572` is red, and V18b's done gate is not met at its own head. It can be met only through V18c's exact-head run, which runs the same tests with the repair.
+  - The root cause (deviation V18c item 2): on Bun 1.3.14, once `process.stdin.isTTY` has been read, `for await` over a stdin that Bun.spawn was given as bytes ends with none of them. Reproduced here (`/tmp/vector-v18c/node-probe/bun-parent.ts`, through the lock): the old reader read 0 of 401 bytes given to Bun.spawn as bytes, and 401 of 401 through an ended node:child_process pipe (the sandbox's way); the new reader loaded the channel both ways and left stdin destroyed. Under Node v22.23.4 (`parent.mjs`, `parent-old.mjs` in the same folder) the new reader loaded the channel and refused an empty stdin at once, and Node's own `for await` read all 401 bytes.
+- **Files** (from `git diff --numstat` against `9d78e572` after the review fixes, and line counts for the new files):
+  - `docs/vector/build/vector-at-mention-spec.md` (11 added, 5 removed): 0.2's shared list and section 3 V18 (deviation V18c item 1).
+  - `packages/engine/src/cli/cmd/github.secrets.ts` (60 added, 5 removed): `streamChunks` with its `resume()`, the loader's default input (item 2), and the shared `CODIUM_UNAUTHORIZED` (item 8).
+  - `packages/engine/src/session/retry.ts` (51 added, 11 removed): `GatewayRule` with its optional `minDelayMs`, `pinGateway` and the pinned rule in `policy` (item 3). A shared file, now in contract 0.2's list.
+  - `packages/engine/src/cli/vector-account.ts` (1 added, 1 removed): the gate prints `GithubSecrets.CODIUM_UNAUTHORIZED` (item 8). A shared file in contract 0.2's list.
+  - `packages/engine/src/cli/cmd/github.agent.ts` (319 added, 51 removed): the Codium phase (`withRunHeartbeat`, `haltSwitch`, the cancel repeat and `CANCEL_REPEAT_MS`, the deadline, `runDeadline`, `gatewayRetry`, `gatewayRule`, `stopOf`, `errorLine` with `providerAnswer`, `stoppedLine`, the signal checks, the run's mode in the bundle route), `serviceDispatch` and the ticket prompt; `refuseCodiumAgent` and `CODIUM_NOT_YET` removed.
+  - `packages/engine/src/cli/cmd/github.ts` (21 added, 11 removed): the Codium instance rule and the handler's refusals (item 8).
+  - `packages/engine/src/cli/cmd/github.lifecycle.ts` (3 added, 1 removed): `withRunHeartbeat`'s `intervalMs`.
+  - `packages/engine/src/cli/cmd/github.run-helpers.ts` (9 added, 2 removed): `ChatContext`'s optional `reportError` and `halted`.
+  - `packages/engine/src/cli/cmd/github.cloud.ts` (3 added, 6 removed): the exported `TICKET` pattern, which mint now uses (same behaviour).
+  - `.github/workflows/vector-at-mention.yml` (11 added, 1 removed) and `packages/cloud/src/workflow-compliance.test.ts` (4 added): the pull-request paths and the policy's required paths gain `packages/engine/src/session/retry.ts` and `packages/engine/test/session/retry.test.ts`; the `engine and core` job gains "Run engine session retry tests", and the policy's named-checks list gains `["packages/engine", "test/session/retry.test.ts"]` (shared files; deviation V18c item 13).
+  - Tests:
+    - `packages/engine/test/cli/github.agent-codium.test.ts` (new, 871 lines, 10 tests);
+    - `packages/engine/test/cli/github.secrets-stdin.test.ts` (new, 95 lines, 4 tests; CI-only);
+    - `packages/engine/test/cli/github.agent-fixture.ts` (174 added, 10 removed; a helper, not a test file): `codiumFakes`, `fakeClock` (with `minDelayMs: 1`), `resetTree`, `TICKET_FIXTURE`, `CODIUM_MODEL`, `holder(mode, authorized)`, `stepEnv`'s `deadline`, `cloudRecorder`'s `heartbeat` answer;
+    - `packages/engine/test/cli/github.bundle.test.ts` (271 added, 123 removed): INV-C7's named test gains the fake-provider half, INV-K1's test its Codium deadline rule and the gateway checks, and the runtime moves to the top of the file;
+    - `packages/engine/test/cli/github.agent-phase.test.ts` (62 added, 20 removed): the Codium schedule refusal and the ticket route rows (a sender with the App's login and no `Bot` type is refused).
+  - `docs/vector/build/vector-at-mention-deviations.md`: the V18c entry. This entry, and the V18b line above.
+  - Unchanged: `github.handler.ts` and `github.bundle.ts` (the brief named them; deviation V18c item 1), `packages/engine/src/index.ts` and `packages/engine/test/session/retry.test.ts` (now run by the lane).
+- **Local evidence (2026-11-08).** Every Bun command ran through `vector-serial`, from `packages/engine` unless named, one file per command, as `bun test --timeout 30000`, with `GITHUB_ACTIONS=false` and `TMPDIR`, the four XDG roots and `VECTOR_TEST_HOME` fresh under `/tmp/vector-v18c/roots/<run>/` (`/tmp/vector-v18c/bin/t.sh`; logs in `/tmp/vector-v18c/logs/`).
+  - The new and changed test files, on the final source:
+    - `test/cli/github.agent-codium.test.ts`: 9 pass, 0 fail, 277 `expect()` calls (15.71s). Its `expect()` count moves by a few between runs (262, 264 and 277 were seen), because the heartbeat cases check every running beat and the beats come every 20 ms of real time.
+    - `test/cli/github.bundle.test.ts`: 22 pass, 0 fail, 739 `expect()` calls (21.17s). With `-t "stop-code table"` alone, INV-C7's test: 1 pass, 0 fail, 384 `expect()` calls (16.88s for the file, its 36 agent phases included).
+    - `test/cli/github.agent-phase.test.ts`: 16 pass, 0 fail, 199 `expect()` calls (14.72s).
+    - The first full run of `github.agent-codium.test.ts` exited 143 with 9 pass: the SIGTERM case had set `process.exitCode` and set it back to `undefined`, which Bun ignores. It now sets it back to 0, and the mutation run below shows a failing case still exits 1.
+  - Regressions, one file each, on the source before two comment-only edits (the loader's comment and the CI-only loader test's header):
+    - `github.policy` 10 pass, 0 fail, 82 `expect()` calls; `github.evidence` 16, 0, 64; `github.review-api` 3, 0, 17; `github.cloud` 40, 0, 460; `github.cloud-lifecycle` 2, 0, 9; `github.workflow` 35, 0, 3 snapshots, 715; `github.route` 11, 0, 69;
+    - `github.run-routing.test.ts -t "finding's thread|what the task job posts"` (its in-process cases only): 7, 0, 27;
+    - `test/tool/memory.test.ts` 18, 0, 110; `test/session/retry.test.ts` 34, 0, 49; `test/provider/model-plans.test.ts` 11, 0, 49;
+    - the `github.agent-channel.test.ts` children, run directly with `VECTOR_TEST_GITHUB_AGENT_CHANNEL` set and the six private names unset: `environment` 1, 0, 12; `codium-config` 1, 0, 9;
+    - `packages/cloud`: `src/workflow-compliance.test.ts` 18, 0, 135.
+  - CI-only, inspected and not run locally, because they spawn Bun or the CLI: `github.secrets-stdin.test.ts`, `github.agent-cli.test.ts`, the parents of `github.agent-channel.test.ts`, the rest of `github.run-routing.test.ts`, `github.review.test.ts`, `github.lifecycle.test.ts`, `github.auth.test.ts` and `github.provider-credentials.test.ts`.
+  - `github.secrets-stdin.test.ts` in its committed form has never run. The probes (`/tmp/vector-v18c/node-probe/bun-parent.ts` before the review, `/tmp/vector-v18c/resume-probe/` after it, deviation V18c item 2) covered the same reader behaviour with copies of the loader run from scratch folders with the default environment. The test runs the real `src/cli/cmd/github.secrets.ts` from `packages/engine`, so the bunfig's `@opentui/solid/preload` applies, with a PATH-only environment; its first run is the lane's engine step, and its result goes into the next entry.
+  - The lane's engine step took 109.59s at `9d78e572`. Locally `github.agent-codium.test.ts` takes about 16 s and the bundle file's new half about 15 s, so the step should grow by roughly half a minute; the exact-head run will show it.
+- **After the review (2026-11-08, deviation V18c item 15).** The same runner (`/tmp/vector-v18c/bin/t.sh`), one file per command, on the source with every review fix:
+  - `test/cli/github.agent-codium.test.ts`: 10 pass, 0 fail, 286 `expect()` calls (16.48s); an earlier run of the same source before the AI SDK row was nested two links down gave 10 pass, 290 calls (16.53s). The count still moves with the 20 ms heartbeat cases.
+  - `test/cli/github.agent-phase.test.ts`: 16 pass, 0 fail, 200 `expect()` calls (15.86s).
+  - `test/cli/github.bundle.test.ts`: 22 pass, 0 fail, 739 `expect()` calls (22.28s).
+  - `test/session/retry.test.ts`: 34 pass, 0 fail, 49 `expect()` calls (10.01s); unchanged by the review, and now a lane step.
+  - `test/cli/github.cloud.test.ts`: 40 pass, 0 fail, 460 `expect()` calls; `test/cli/github.cloud-lifecycle.test.ts` (inspected: pure Effect, it spawns nothing): 2 pass, 0 fail, 9 `expect()` calls.
+  - `packages/cloud`: `src/workflow-compliance.test.ts` 18 pass, 0 fail, 135 `expect()` calls (the new step and its named file pass the policy).
+  - The resume probe (deviation V18c item 2), not a test file: with `resume()` the loader read the line, and refused an empty stdin, paused or not, under Bun 1.3.14 and Node v22.23.4; without it a paused stdin never answered (Bun: killed at 5 s; Node: exit 13).
+  - Review mutation spot checks (`/tmp/vector-v18c/bin/fix-mutations.sh` and `fix-mutations-2.sh`, log `/tmp/vector-v18c/logs/fix-mutations.log`; each restored and checked with `cmp`, identical every time), each failing its named test with exit 1: `errorLine` without the cause-chain walk (the P6 rows: the first row printed "Agent failed: fixture gateway words: credits, plan, $9"); the walk without `LLMError` (the LLM error row) and without `APICallError` (the AI SDK row; at one link down `turnError` already caught it, so the row was moved two links down and checked again); the wait without its floor (the pure retry test: 0 instead of 2000); `serviceDispatch` without the `Bot` check (the route test admitted the type-less sender); the halt hook without its repeat (the deadline test: no repeat timer); and the repeat never stopped (the deadline test: the timers not cleared).
+- **Mutation spot checks** (`/tmp/vector-v18c/bin/mutations.sh`, log `/tmp/vector-v18c/logs/mutations.log`). Each was applied to `github.agent.ts`, run against the named test with `-t`, restored from a saved copy and checked with `cmp` (identical every time), and each made the named test fail with exit 1:
+  - no pinned rule: the concurrency test, and INV-C7's table (its request counts);
+  - `gatewayRetry` never classifying: the table;
+  - a window of twice `CONCURRENCY_RETRY_MS`: the concurrency test;
+  - the run's own stop not recorded: the deadline and heartbeat-stop tests;
+  - a passed stop time given a timer instead of stopping at once: the deadline test;
+  - an own-key timer with no deadline: the own-key deadline test;
+  - `stopOf` with `codium: false`: the table;
+  - the bundle's mode fixed to own key: the table;
+  - the gateway's message logged on Codium (no reason-line rule): the table's P6 check;
+  - the ticket admitted on own key: the route test;
+  - the settle outcome fixed to `changes`: the table;
+  - no signal check before the bundle: the SIGTERM test (a bundle was written);
+  - the ticket's prompt unescaped: the ticket test;
+  - a missing deadline admitted on Codium: the deadline-rules test.
+- **Typechecks:** `bun typecheck` in `packages/engine` and in `packages/cloud` (`tsgo --noEmit`): exit 0. Full typecheck from the worktree root (`TURBO_CACHE_DIR=/home/user/.cache/vector-typecheck bun turbo typecheck --concurrency=1`, 08:21:23–08:21:59 UTC): exit 0, 23 of 23 successful, 19 cached, 34.643s (`/tmp/vector-v18c/logs/typecheck-full.log`). After the review fixes: `bun typecheck` in `packages/engine` and `packages/cloud`: exit 0; the full typecheck (09:00:52–09:01:17 UTC): exit 0, 23 of 23 successful, 21 cached, 24.421s (`/tmp/vector-v18c/logs/fix-typecheck-full.log`).
+- **Formatting:** `bunx prettier --check` (through the lock) on the 13 changed code, test and workflow files and on this file and the deviations file: clean (`/tmp/vector-v18c/logs/prettier.log`; this file was checked again after this entry was written, below). The spec is not Prettier-clean at `9d78e572` either; its 16 edited lines are exactly as Prettier writes them (the formatted diff against the formatted `9d78e572` copy holds those lines and nothing else). `git diff --check`: clean. After the review fixes the same checks were repeated on the 15 changed code, test and workflow files (`vector-account.ts` among them), this file, the deviations file and the spec's edited lines (`/tmp/vector-v18c/logs/fix-prettier.log`).
+- **Commit gate (2026-11-08, logs `/tmp/vector-vam/v18c-gate/logs/`).** `git status` and `git diff HEAD` held only this package's files (the 16 modified and 2 new files listed above); nothing unrelated was present. The changed test files ran again on the final source, one file per command through `vector-serial`, from the owning package, `GITHUB_ACTIONS=false bun test --timeout 30000`, with `TMPDIR`, the four XDG roots and `VECTOR_TEST_HOME` fresh under `/tmp/vector-vam/v18c-gate/roots/<run>/` (`/tmp/vector-vam/v18c-gate/bin/t.sh`):
+  - `packages/engine`: `test/cli/github.agent-codium.test.ts` 10 pass, 0 fail, 282 `expect()` calls (15.48s); `test/cli/github.bundle.test.ts` 22, 0, 739 (20.43s); `test/cli/github.agent-phase.test.ts` 16, 0, 200 (14.79s); `test/session/retry.test.ts` 34, 0, 49 (10.15s); `test/cli/github.cloud.test.ts` 40, 0, 460 (1.97s).
+  - `packages/cloud`: `src/workflow-compliance.test.ts` 18, 0, 135.
+  - CI-only, inspected and not run: `test/cli/github.secrets-stdin.test.ts` (each case spawns Bun).
+  - `bun typecheck` in `packages/engine` and `packages/cloud` (`tsgo --noEmit`): exit 0. Full typecheck from the worktree root (09:06:53–09:07:17 UTC): exit 0, 23 of 23 successful, 22 cached, 23.374s.
+- **Not yet done:** the feat commit's hash (a commit cannot name its own), the pre-push hook, and the exact-head lane run of `vector-at-mention.yml` (all 8 jobs, including the five sandbox-probe jobs and the Node bundle job, with the engine step running `github.agent-cli`, `github.secrets-stdin` and `github.agent-codium`, and the new "Run engine session retry tests" step running `test/session/retry.test.ts` for the first time in this lane). They are recorded in V19's entry once seen. That run is also the first green head for V18b's work.
+- **Carried to:**
+  - V19: the Codium cost line in the bundle body (`buildEvidenceBody`'s generic one today) and the Codium status and usage notices under Actions (deviation V18c item 10).
+  - V20: the Codium review path reuses `gatewayRetry`, `gatewayRule`, `SessionRetry.pinGateway`, `stoppedLine` and the deadline rules.
+  - V21: publish words the stop and the update advice from `describeStop`; it must re-derive a ticket run from the event (a `Bot` sender `<slug>[bot]` with a ticket input) and publish it with `GITHUB_TOKEN` (INV-S18), since the bundle records no such flag (deviation V18c item 9); the missing-bundle rule of deviation V18b item 1 still applies, now with `cancelled` runs writing none.
+  - V22: schedule prompts replace `SCHEDULE_NOT_YET`, on Codium too.
+  - V24: once the v3 generator can write the App bot's user id (for example `VECTOR_APP_BOT_ID`), the agent phase's `serviceDispatch` also compares `sender.id` (INV-S2; deviation V18c item 9).
+  - V27b: session artifacts (`session.vsa`).
+  - V29: the new copy of deviation V18c item 10.
+  - V30: a CLI-level Codium journey, which needs a fake-vectordev.ai seam, because `github.cloud.ts`'s `SITE` and the gate's heartbeat are fixed to `https://vectordev.ai`.
+  - Owner (section 4 step 1): whether one missed heartbeat should end a run (deviation V18c item 4).
 
 ## Owner checks recorded
 
