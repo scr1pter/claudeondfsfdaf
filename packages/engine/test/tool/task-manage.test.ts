@@ -1288,15 +1288,75 @@ describe("isolated task merge and discard", () => {
     expect((yield* isolation.settle({ taskID: task.id, attempt: 1 })).state).toBe("changed")
     return task
   })
+  // The parent's files at a commit of their own. Git for Windows defaults to autocrlf=true, so a merge's checkout bytes
+  // would be CRLF; these tests compare exact bytes.
+  const base = Effect.fn("TaskManagerTest.base")(function* (directory: string, files: string[]) {
+    yield* git(directory, ["config", "core.autocrlf", "false"])
+    yield* Effect.promise(() => Promise.all(files.map((file) => fs.writeFile(path.join(directory, file), "base\n"))))
+    yield* git(directory, ["add", ...files])
+    yield* git(directory, ["commit", "-m", "base"])
+  })
+  // An agent caller `sessionID` that approves every ask, after checking that the ask showed the child's diff.
+  const by = (asked: string[][], sessionID: string) => ({
+    kind: "agent" as const,
+    sessionID,
+    ask: (input: { patterns: string[]; metadata: { diff: string } }) =>
+      Effect.sync(() => {
+        expect(input.metadata.diff).toContain("child change")
+        asked.push(input.patterns)
+      }),
+    assertWritable: () => Effect.void,
+    assertExternalDirectory: () => Effect.void,
+  })
 
-  isolatedIt.instance("an agent merges and discards only its direct children, after approving the diff", () => Effect.gen(function* () {
+  // Whichever of these three tests sets up the first isolated child in a run also pays a one-time warm-up of the
+  // isolation code, so the cheapest runs first and the refusals, with two children, run last. A discard asks nothing:
+  // neither TaskManager.discard nor TaskIsolation.discard calls `by.ask`.
+  isolatedIt.instance("an agent merges and discards only its direct children: the direct parent's discard asks nothing, keeps its reason and leaves the parent's files untouched", () => Effect.gen(function* () {
     const home = yield* InstanceState.context
-    // Git for Windows defaults to autocrlf=true, so a merge's checkout bytes would be CRLF; this compares exact bytes.
-    yield* git(home.directory, ["config", "core.autocrlf", "false"])
-    for (const file of ["merged.txt", "discarded.txt"])
-      yield* Effect.promise(() => fs.writeFile(path.join(home.directory, file), "base\n"))
-    yield* git(home.directory, ["add", "merged.txt", "discarded.txt"])
-    yield* git(home.directory, ["commit", "-m", "base"])
+    yield* base(home.directory, ["discarded.txt"])
+    const sessions = yield* Session.Service
+    const manager = yield* TaskManager.Service
+    const isolation = yield* TaskIsolation.Service
+    const root = yield* sessions.create()
+    const lead = yield* child(root.id)
+    // Isolation fences the conversation family owner-only before its first child exists.
+    yield* isolation.fence(root.id)
+    const dropped = yield* isolatedChild(lead.id, "discarded.txt")
+    const asked: string[][] = []
+
+    // The direct parent discards its child, whose changes never reach the parent's files.
+    const discarded = yield* manager.discard({ sessionID: lead.id, taskID: dropped.id, by: by(asked, lead.id), reason: "Superseded" })
+    expect(discarded.task.isolation?.state).toBe("discarded")
+    expect((yield* isolation.get(dropped.id)).discardReason).toBe("Superseded")
+    expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "discarded.txt"), "utf8"))).toBe("base\n")
+    expect(asked).toEqual([])
+  }), { git: true })
+
+  isolatedIt.instance("an agent merges and discards only its direct children, after approving the diff: the direct parent's merge asks once with the diff and writes the child's change", () => Effect.gen(function* () {
+    const home = yield* InstanceState.context
+    yield* base(home.directory, ["merged.txt"])
+    const sessions = yield* Session.Service
+    const manager = yield* TaskManager.Service
+    const isolation = yield* TaskIsolation.Service
+    const root = yield* sessions.create()
+    const lead = yield* child(root.id)
+    // Isolation fences the conversation family owner-only before its first child exists.
+    yield* isolation.fence(root.id)
+    const kept = yield* isolatedChild(lead.id, "merged.txt")
+    const asked: string[][] = []
+
+    // The direct parent merges after an edit approval that showed the diff.
+    const merged = yield* manager.merge({ sessionID: lead.id, taskID: kept.id, by: by(asked, lead.id) })
+    expect(merged.merged).toEqual(["merged.txt"])
+    expect(merged.task.isolation?.state).toBe("merged")
+    expect(asked).toEqual([["merged.txt"]])
+    expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "merged.txt"), "utf8"))).toBe("child change\n")
+  }), { git: true })
+
+  isolatedIt.instance("an agent merges and discards only its direct children: an ancestor or a caller naming another session is refused and nothing is asked", () => Effect.gen(function* () {
+    const home = yield* InstanceState.context
+    yield* base(home.directory, ["merged.txt", "discarded.txt"])
     const sessions = yield* Session.Service
     const manager = yield* TaskManager.Service
     const isolation = yield* TaskIsolation.Service
@@ -1307,43 +1367,20 @@ describe("isolated task merge and discard", () => {
     const kept = yield* isolatedChild(lead.id, "merged.txt")
     const dropped = yield* isolatedChild(lead.id, "discarded.txt")
     const asked: string[][] = []
-    const by = (sessionID: string) => ({
-      kind: "agent" as const,
-      sessionID,
-      ask: (input: { patterns: string[]; metadata: { diff: string } }) =>
-        Effect.sync(() => {
-          expect(input.metadata.diff).toContain("child change")
-          asked.push(input.patterns)
-        }),
-      assertWritable: () => Effect.void,
-      assertExternalDirectory: () => Effect.void,
-    })
 
     // The root sees both tasks among its descendants but is not their parent; a caller naming another session is
-    // refused too. Nothing is asked, written or discarded.
-    for (const [sessionID, actor] of [[root.id, root.id], [lead.id, root.id]] as const) {
-      const merge = yield* manager.merge({ sessionID, taskID: kept.id, by: by(actor) }).pipe(Effect.flip)
+    // refused too, even when the session it names is the parent: only TaskManager refuses that one, as TaskIsolation
+    // checks `by` alone. Nothing is asked, written or discarded.
+    for (const [sessionID, actor] of [[root.id, root.id], [lead.id, root.id], [root.id, lead.id]] as const) {
+      const merge = yield* manager.merge({ sessionID, taskID: kept.id, by: by(asked, actor) }).pipe(Effect.flip)
       expect(merge.code).toBe("forbidden")
-      const discard = yield* manager.discard({ sessionID, taskID: dropped.id, by: by(actor) }).pipe(Effect.flip)
+      const discard = yield* manager.discard({ sessionID, taskID: dropped.id, by: by(asked, actor) }).pipe(Effect.flip)
       expect(discard.code).toBe("forbidden")
     }
     expect(asked).toEqual([])
     expect((yield* isolation.get(kept.id)).state).toBe("changed")
     expect((yield* isolation.get(dropped.id)).state).toBe("changed")
     expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "merged.txt"), "utf8"))).toBe("base\n")
-
-    // The direct parent merges after an edit approval that showed the diff.
-    const merged = yield* manager.merge({ sessionID: lead.id, taskID: kept.id, by: by(lead.id) })
-    expect(merged.merged).toEqual(["merged.txt"])
-    expect(merged.task.isolation?.state).toBe("merged")
-    expect(asked).toEqual([["merged.txt"]])
-    expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "merged.txt"), "utf8"))).toBe("child change\n")
-
-    // And discards its other child, whose changes never reach the parent's files.
-    const discarded = yield* manager.discard({ sessionID: lead.id, taskID: dropped.id, by: by(lead.id), reason: "Superseded" })
-    expect(discarded.task.isolation?.state).toBe("discarded")
-    expect((yield* isolation.get(dropped.id)).discardReason).toBe("Superseded")
-    expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "discarded.txt"), "utf8"))).toBe("base\n")
   }), { git: true })
 
   isolatedIt.instance("a shared child has no isolated changes: review, merge and discard answer not found without a registry path", () => Effect.gen(function* () {
