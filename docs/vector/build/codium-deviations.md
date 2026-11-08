@@ -1893,3 +1893,57 @@ unchanged.
   when `VECTOR_TEST_POSTGRES_URL` is set), since the job log names no Postgres marker for that file, and the line says
   so. Deferred: the other stale lines of earlier records, review coverage for A15 and A16, `MODEL-PLANS.md`, and A51
   onward. This record's own push and its Vector Codium run are recorded by the next package.
+- **8 Nov 2026 (P4a).** Run 42439456526 (push, head `dc64a6a5`, D1's commit of this record) completed with success,
+  all 14 jobs green. Its Codium tests job 128605353887 shows 248 of 248 picker files passing, the HttpApi exerciser at
+  `pass=309 fail=0` and `check:generated` passing; the job ids are in `codium-p4-repairs.md` ("CI before this review").
+
+## P4 review decisions (8 Nov 2026)
+
+Contract readings from P4a's review of A21 and A22 ([codium-p4-repairs.md](codium-p4-repairs.md)), which changed no
+source. P4b, P4c and P4d add theirs below.
+
+- **A21's done criterion covers the client only.** Spec §5 A21's "Done: `check:generated` green" checks
+  `packages/client/src/generated` and `src/generated-effect`. `vector-codium.yml` has no drift check for the legacy SDK
+  (`packages/sdk/openapi.json`, `packages/sdk/js/src/gen`, `src/v2/gen`), which A21 also regenerated. That half was
+  verified here by running `./packages/sdk/js/script/build.ts` at `dc64a6a5`: it left `packages/sdk` unchanged, with no
+  untracked file, although A49 and P7 had changed schema and server source since the last regeneration (A45). Packages
+  that change the public schema keep running both generators (AGENTS.md); an SDK drift check in CI would be a workflow
+  change of its own.
+- **Ancillary usage is still only added.** The A21 and A22 decisions let AncillaryUsage route on its model's provider id
+  because nothing subtracts it; at `dc64a6a5` that still holds (`projector.ts:662-686` only adds).
+- **A failed V2 compaction stays counted.** Compaction.Failed (`projector.ts:700-718`) adds the usage it reports, Codium
+  or not, and creates no row, so no revert takes it back. §4.2's "revert, removal and moves keep working" applies to
+  the records that have rows: steps, parts, messages and compaction summaries. The provider bills the failed request
+  too (`compaction.ts:245`).
+- **`Billing.Kind` is a closed literal.** It decodes only `"codium"`, and a record carrying any other `billing` fails to
+  decode as a whole (`billing.test.ts`, "a billing value other than codium is refused", six schemas). A second billing
+  kind therefore needs a decoder that tolerates unknown kinds, released before any writer of the new kind, as §6 asks
+  of cost kinds.
+- **The stored-flag rule governs the totals.** The A21 decision "Accounting reads the stored flag, never `Billing.of`"
+  and the A22 decision "Records are routed by their own stored flag on both sides" cover cost, unpriced steps,
+  `codium_steps` and tokens, and hold at `dc64a6a5`. The own-only provenance bit that A25 added beside them
+  (`knownOwnOnly`, `tokens_own_only`) is a separate proof that reads the provider id through
+  `Billing.hasOwnIdentity`, the same way when a record is added and when it is subtracted; P4c reviews it with A25.
+- **`Billing.of` is for display, and it also answers for a V1 user message.** It reads `model.providerID`, which V1
+  user messages carry, so a caller that means assistant work filters by role first. Aggregate callers that read a
+  session's `model.providerID` do so on purpose, as §6's fallback for an older engine. A21 and A22 added no caller;
+  P4b to P4d check the A23 to A28 callers.
+- **Database downgrade (label plan §6, accepted).** An engine without A22 reads a flagged step as an ordinary one. When
+  it reverts or removes such a step, it subtracts the step's stored tokens, which were never added, and one unpriced
+  step, and leaves `codium_steps` alone. In a Codium-only session the token totals then go negative (`SessionTokens` is
+  `Schema.Finite`, so nothing fails to encode), and after an upgrade `codium_steps` can exceed `unpriced_steps`,
+  against the A22 decision's `codium_steps ≤ unpriced_steps`. No clamp is added (A21 decision); only the owner's test
+  sessions hold Codium steps. No reader shows the difference below 0: `CodiumUsage.ownUnpricedSteps`
+  (`packages/core/src/codium-usage.ts:13-15`) clamps it with `Math.max(0, …)` for the TUI and app surfaces, and the
+  task note (`packages/engine/src/tool/task.ts:316,342`) prints its pricing sentence only when it is above 0. In such a
+  session the clamp can hide an own unknown step. Nothing about the downgrade is handed on.
+- **An unknown cost kind on self-evolving is a hand-off (F6).** Label plan §6 asks the self-evolving branch to decode a
+  persisted cost kind it does not know as `"unknown"`. At `origin/self-evolving` `e0bfa00b`, `RunBudget.CostKind` is
+  still the closed literal (`packages/schema/src/run-budget.ts:26` there) and `Task.BudgetScope.costKind` reads it
+  (`packages/schema/src/task.ts:46` there), so a newer kind still fails the decode of a record's `budgetScopes`. The
+  codium lane does not change self-evolving; this is handed to the self-evolving lane and owner step 9.
+- **The public share keeps the raw model id in its model-switched notice (F10).** `publicArchive` writes
+  `Model changed to <providerID>/<id>` (`packages/core/src/share/archive.ts:121` at `dc64a6a5`, already there at
+  `4fde1a49`), so a shared Codium session shows `vector-plan/<model>`. It holds no amount, token figure or plan tier
+  name, and label plan §3.7 leaves the public share unchanged, so it is accepted here; any change of that wording is
+  label-surface copy for P4d.

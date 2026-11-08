@@ -12,6 +12,15 @@ No provider, Stripe, OpenRouter or GitHub API call, account setting, deployment 
 **Owner step 9 (merge codium into self-evolving, build spec §8.2 step 9) is pending the owner's go-ahead; not
 performed.** See "Merge into self-evolving" below.
 
+**Status on 8 Nov 2026 (P4a).** A21's commit `90f0c83f` has since run in GitHub CI: Vector Codium run 41176960799 (run
+29, push) passed all 10 jobs, as the A22 record already noted. Its Codium tests job 124466390398 shows 93 of 93 picked
+files passing, with `packages/schema/test/billing.test.ts` (39 pass), `contract-hygiene.test.ts` (5) and
+`packages/core/test/review/plan.test.ts` (11), the HttpApi exerciser at `pass=304 fail=0` and "Check generated client"
+passing. A21 has since been merged into self-evolving with A22 (owner step 9) through `d36a3607` ("feat(integration):
+combine Codium accounting with isolated agents", 1 Nov), and it is in PR #20. The "Not run anywhere" bullet under "CI
+only" still holds (D1, `codium-deviations.md` "Lane status (8 Nov 2026)"). The P4 phase review
+(`codium-p4-repairs.md`, P4a) covered A21 and found no code defect.
+
 ## CI evidence before the change
 
 Branch `codium`, workflow `.github/workflows/vector-codium.yml`, read through the GitHub API in this package: run
