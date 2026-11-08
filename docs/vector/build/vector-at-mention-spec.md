@@ -326,7 +326,7 @@ Test: `packages/engine/test/tool/registry-actions.test.ts` › "bridged and comp
 
 **INV-S14. Repository work only, and thread text is data.**
 - Every Actions task session carries `REPO_WORK_POLICY` (2.17) and the untrusted-data rule in its system instructions, never in the user turn.
-- Every issue, PR, comment and review body reaches the prompt JSON-encoded inside its wrapper, so it cannot close the wrapper, and labelled with its author's permission (`writer` or `untrusted`).
+- Every issue, PR, comment and review body reaches the prompt JSON-encoded inside its wrapper, so it cannot close the wrapper, and labelled with its author's permission (`writer` or `untrusted`). The one exception is the task itself: the trigger text of an author whose write access the agent phase has checked again (the trigger comment's body, an `issues` event's text after the mention, a dispatch's `VECTOR_PROMPT`) goes first, as written. The whole issue or PR is in the thread block either way, labelled.
 - Comments by non-writers, other than the issue or PR body itself, are collapsed to a count by default.
 - Prompt data from `startCloudRun` is labelled untrusted.
 
@@ -1257,7 +1257,7 @@ type RunSummary = { v: 1; mode: "codium" | "own-key"
 | Command | Where | Does | Exit |
 |---|---|---|---|
 | `vector github install [--own-key] [--schedule "<cron>=<prompt>"]…` | local | interactive as today, plus the mode choice when Codium is listed (V23); the unadvertised `--codium` flag skips the listing check for owner acceptance | 0 / 1 |
-| `vector github run [--phase agent]` | Actions | `--phase agent` runs inside the sandbox: reads the secret channel, writes the bundle (2.12) and, on Codium, `vector-out/session.vsa`; without it, today's single job | 0 when a bundle or result was written, whatever the outcome; 1 on a crash |
+| `vector github run [--phase agent]` | Actions | `--phase agent` runs inside the sandbox: reads the secret channel, writes the bundle (2.12) and, on Codium, `vector-out/session.vsa`; without it, today's single job | 0 when a bundle or result was written, whatever the outcome, and when the agent phase refuses the event with one log line and no bundle (`RunSummary` has no refused outcome); 1 on a crash |
 | `vector github mint --purpose task\|review` | Actions | OIDC (`mint`) → `/api/cloud-agents/mint` with `VECTOR_THREAD`. On `ok`: prints `::add-mask::<token>`, writes the token to `$RUNNER_TEMP/vector-secrets/run-token` (directory 0700, file 0600, created exclusively) after a strict charset check, and appends only `VECTOR_RUN_DEADLINE` and `VECTOR_RUN_ID` to `$GITHUB_ENV`. Always writes `status=<MINT_STATUS>` and, on `ok`, `rid=<rid>` to `$GITHUB_OUTPUT`. Waits on `at-once` as in 1.4. Never prints a server error body | 0 when a status was decided; 1 on a crash |
 | `vector github sandbox prepare` / `run -- <command>` / `finish` | Actions | 2.11.3 steps 6–8 | prepare: 0 ready, 1 any check failed; run: the command's exit code; finish: 0 |
 | `vector github bind` | Actions | Refuses locally (exit 2, "Run the bind from the default branch.") when `GITHUB_REF` is not `refs/heads/<repository.default_branch>` from `GITHUB_EVENT_PATH`. Otherwise OIDC (`bind`) → `/api/cloud-agents/bind` with `VECTOR_BIND_CODE`. Prints "Bound owner/repo to a Vector account." and nothing about the account | 0 bound, 2 refused, 1 error |
@@ -1748,14 +1748,14 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** the run-routing and review suites.
 
 ### V18. Engine: agent phase, run bundle, untrusted thread text, deadline and stop codes
-- **Files:** `packages/engine/src/cli/cmd/github.bundle.ts` (new: `writeBundle`, `stopReason(error)`, `RunSummary` schema); `github.run-helpers.ts` (prompt builders); `github.handler.ts` (`--phase agent` path); `packages/engine/test/cli/github.bundle.test.ts` (new).
+- **Files:** `packages/engine/src/cli/cmd/github.bundle.ts` (new: `writeBundle`, `stopReason(error)`, `RunSummary` schema); `github.run-helpers.ts` (prompt builders, and `githubRun`'s session helpers lifted with explicit contexts); `github.agent.ts` (new: the `--phase agent` path, so `githubRun` stays as it is for 2.11.5); `github.ts` (the `--phase` option); `github.handler.ts` (`githubRun` calls the lifted helpers; `fixContext` takes the finding's format); `packages/engine/test/cli/github.bundle.test.ts` (new).
 - **Changes:**
   - **Credentials.** The agent phase calls V15's loader on the secret channel before the account gate and before any session, tool or child exists (2.13).
   - **What the agent phase does:**
     - It reuses the lifted helpers' routing, prompt and session code. It makes no reactions, comments or pushes, and no network git: it works on the checked-out head and records `headRef` from the API.
     - It runs with `VECTOR_PURE=1` in both modes and `VECTOR_DISABLE_PROJECT_CONFIG=1` on Codium, so no repository plugin, and on Codium no repository configuration, runs inside the engine that holds the credentials.
-    - It builds the prompt for `issues` events from the event payload's title and body after the mention (read from `GITHUB_EVENT_PATH`), for dispatches from `VECTOR_PROMPT`, and for schedules as in V22.
-    - **Thread text is data (INV-S14):** every issue, PR, comment and review body is JSON-encoded with `untrustedJson` inside its wrapper and labelled with its author's permission (`writer` or `untrusted`), using the collaborator-permission API with a per-login cache. Comments by non-writers other than the issue or PR body are collapsed to a count. `githubSystemInstructions` carries the policy and the untrusted-data rule.
+    - It builds the prompt for `issues` events from the event payload's title and body after the mention (read from `GITHUB_EVENT_PATH`), for dispatches from `VECTOR_PROMPT`, and for schedules as in V22. Until V22, a schedule is refused with one log line, no bundle and exit 0.
+    - **Thread text is data (INV-S14):** every issue, PR, comment and review body is JSON-encoded with `untrustedJson` inside its wrapper and labelled with its author's permission (`writer` or `untrusted`), using the collaborator-permission API with a per-login cache. Comments by non-writers other than the issue or PR body are collapsed to a count. The verified writer's trigger text (the comment, the issue's text after the mention, `VECTOR_PROMPT`) is the task and goes first as written; everything else is labelled JSON. `githubSystemInstructions` carries the policy and the untrusted-data rule.
     - It writes the bundle into `vector-out/`; the sandbox copies it out.
     - On Codium only, it heartbeats and settles with the outcome.
     - It uses the Codium default model when `MODEL` is `vector-plan`: the catalog's default entry, or `vars.VECTOR_MODEL`.
