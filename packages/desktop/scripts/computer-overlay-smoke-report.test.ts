@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { Script } from "node:vm"
 import { EventEmitter } from "node:events"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { Computer } from "@vectordevai/schema/computer"
 import { Hands } from "@vectordevai/schema/hands"
 import { ComputerOverlayPage } from "@vectordevai/app/computer/overlay-page"
 import {
@@ -12,6 +16,14 @@ import {
   parseComputerSmokeController,
   COMPUTER_SMOKE_GEOMETRY_MARK,
   COMPUTER_SMOKE_NATIVE_MARK,
+  COMPUTER_SMOKE_DRIVER_STAGES,
+  COMPUTER_SMOKE_DRIVER_CAUSES,
+  COMPUTER_SMOKE_DRIVER_NATIVE_CODES,
+  COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES,
+  COMPUTER_SMOKE_DRIVER_REASONS,
+  COMPUTER_SMOKE_NATIVE_REASONS,
+  computerSmokeDriverFailure,
+  parseComputerSmokeDriverResultFrame,
   COMPUTER_SMOKE_ASAR_MARK,
   COMPUTER_SMOKE_PROPERTIES_MARK,
   COMPUTER_SMOKE_PROPERTY_STEPS,
@@ -315,6 +327,187 @@ test("native proof diagnostics retain fixed boundary/result facts without changi
     expect(() => parseComputerSmokeNativeDiagnostic(line({ ...boundary, ...patch }))).toThrow()
   expect(() => parseComputerSmokeNativeDiagnostic(line(result) + " ".repeat(513))).toThrow()
   expect(() => parseComputerSmokeNativeDiagnostic(COMPUTER_SMOKE_NATIVE_MARK + "{")).toThrow()
+})
+
+test("Windows driver failure receipts name only a closed stage and cause on an unskipped failure", () => {
+  const line = (value: unknown) => COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value)
+  const result = {
+    protocol: 1,
+    kind: "result",
+    phase: "exit",
+    stop: { ok: false, reason: "native_failure" },
+    exitCode: 1,
+  }
+  const frame = { id: 1, protocol: 1, check: "native-os-stop", ok: false, reason: "native_failure" }
+  for (const stage of COMPUTER_SMOKE_DRIVER_STAGES)
+    for (const cause of COMPUTER_SMOKE_DRIVER_CAUSES) {
+      expect(computerSmokeDriverFailure({ ...frame, stage, cause })).toEqual({ stage, cause })
+      const receipt = { ...result, stop: { ...result.stop, ...computerSmokeDriverFailure({ ...frame, stage, cause }) } }
+      // The Electron smoke emits its parsed receipt and the parent re-parses and re-emits that same line.
+      const emitted =
+        COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(parseComputerSmokeNativeDiagnostic(line(receipt), "win32"))
+      expect(emitted.length).toBeLessThanOrEqual(512)
+      expect(parseComputerSmokeNativeDiagnostic(emitted, "win32")).toEqual({
+        ...receipt,
+        stop: { ...result.stop, stage, cause },
+      })
+      expect(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(parseComputerSmokeNativeDiagnostic(emitted, "win32"))).toBe(
+        emitted,
+      )
+    }
+  const driver = { ...frame, reason: "parent_invalid", stage: "observe-parent", cause: "driver_failure" }
+  expect(computerSmokeDriverFailure(driver)).toEqual({ stage: "observe-parent", cause: "driver_failure" })
+  expect(computerSmokeDriverFailure(frame)).toBeUndefined()
+  expect(
+    parseComputerSmokeNativeDiagnostic(
+      line({
+        ...result,
+        stop: { ok: false, reason: "parent_invalid", stage: "observe-parent", cause: "driver_failure" },
+      }),
+      "win32",
+    ),
+  ).toEqual({
+    ...result,
+    stop: { ok: false, reason: "parent_invalid", stage: "observe-parent", cause: "driver_failure" },
+  })
+  const valid = { stage: "files", cause: "std_exception" }
+  // A driver_failure may accompany only one of the Windows driver's own reasons, never a parent or macOS reason.
+  for (const reason of COMPUTER_SMOKE_NATIVE_REASONS) {
+    const stop = { ok: false, reason, ...valid, cause: "driver_failure" }
+    if ((COMPUTER_SMOKE_DRIVER_REASONS as readonly string[]).includes(reason)) {
+      expect(computerSmokeDriverFailure({ ...frame, ...stop })).toEqual({ stage: "files", cause: "driver_failure" })
+      expect(parseComputerSmokeNativeDiagnostic(line({ ...result, stop }), "win32")).toEqual({ ...result, stop })
+      continue
+    }
+    expect(() => computerSmokeDriverFailure({ ...frame, ...stop })).toThrow()
+    expect(() => parseComputerSmokeNativeDiagnostic(line({ ...result, stop }), "win32")).toThrow()
+  }
+  // Only a win32 receiver accepts the location; any other or an omitted platform rejects it.
+  for (const platform of ["darwin", "linux", undefined]) {
+    expect(parseComputerSmokeNativeDiagnostic(line(result), platform)).toEqual(result)
+    for (const patch of [{ stage: "files" }, { cause: "std_exception" }, valid])
+      expect(() =>
+        parseComputerSmokeNativeDiagnostic(line({ ...result, stop: { ...result.stop, ...patch } }), platform),
+      ).toThrow()
+  }
+  for (const patch of [
+    { stage: "files" },
+    { cause: "std_exception" },
+    { ...valid, stage: "PRIVATE" },
+    { ...valid, stage: "Files" },
+    { ...valid, stage: "observe_parent" },
+    { ...valid, stage: "" },
+    { ...valid, stage: 1 },
+    { ...valid, cause: "driver_skip" },
+    { ...valid, cause: "core_failure:PRIVATE" },
+    { ...valid, cause: "core_failure:" },
+    { ...valid, cause: "core_failure:native_operation_failed" },
+    { ...valid, cause: "hresult:0x80070005" },
+    { ...valid, cause: "hresult:-2147024891" },
+    { ...valid, cause: "hresult:" },
+    { ...valid, cause: "Unknown" },
+    { ...valid, cause: "std_exception " },
+    { ...valid, reason: "parent_invalid" },
+    { ...valid, reason: "PRIVATE" },
+    { ...valid, ok: true },
+    { ...valid, ok: true, reason: undefined },
+    { ...valid, skipped: true },
+    { ...valid, skipped: true, reason: "screen_denied" },
+    { ...valid, cause: "driver_failure", skipped: true, reason: "screen_denied" },
+    { ...valid, cause: "driver_failure", reason: "window_changed" },
+    { ...valid, cause: "driver_failure", reason: "screen_denied" },
+  ]) {
+    const stop = { ...result.stop, ...patch }
+    expect(() => computerSmokeDriverFailure({ ...frame, ...patch })).toThrow()
+    expect(() => parseComputerSmokeNativeDiagnostic(line({ ...result, stop }), "win32")).toThrow()
+  }
+  for (const patch of [{ stage: "files" }, { cause: "std_exception" }, valid]) {
+    expect(() =>
+      parseComputerSmokeNativeDiagnostic(
+        line({ ...result, capture: { ok: false, reason: "native_failure", ...patch } }),
+        "win32",
+      ),
+    ).toThrow()
+    expect(() => parseComputerSmokeNativeDiagnostic(line({ ...result, ...patch }), "win32")).toThrow()
+  }
+  // Receipts cannot change report rows or exit expectations; the report parser reads only report lines.
+  const failed = report("win32")
+  failed.checks[16] = { name: "native-os-stop", ok: false, reason: "native_proof_invalid" }
+  failed.checks[17] = { name: "native-capture-exclusion", ok: false, reason: "native_proof_invalid" }
+  const stdout =
+    line({ ...result, stop: { ...result.stop, ...valid } }) + "\n" + COMPUTER_SMOKE_MARK + JSON.stringify(failed)
+  expect(parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 1 })).toEqual(
+    failed,
+  )
+  expect(() =>
+    parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 0 }),
+  ).toThrow()
+})
+
+test("only a win32 driver result frame may carry the closed failure location", () => {
+  const frame = { id: 1, protocol: 1, check: "native-os-stop", ok: false, reason: "native_failure" }
+  const located = { ...frame, stage: "files", cause: "std_exception" }
+  expect(parseComputerSmokeDriverResultFrame(located, "win32")).toEqual({ stage: "files", cause: "std_exception" })
+  for (const platform of ["win32", "darwin"]) {
+    expect(parseComputerSmokeDriverResultFrame(frame, platform)).toBeUndefined()
+    const passed = { id: 1, protocol: 1, check: "native-os-stop", ok: true }
+    expect(parseComputerSmokeDriverResultFrame(passed, platform)).toBeUndefined()
+    expect(
+      parseComputerSmokeDriverResultFrame({ ...frame, capture: { ok: false, reason: "native_failure" } }, platform),
+    ).toBeUndefined()
+    for (const patch of [{ id: 0 }, { id: 2 }, { check: "native-capture-exclusion" }, { nonce: "PRIVATE" }])
+      expect(() => parseComputerSmokeDriverResultFrame({ ...frame, ...patch }, platform)).toThrow()
+  }
+  // The macOS driver never names a Windows driver stage, even a valid one.
+  for (const platform of ["darwin", "linux"])
+    for (const patch of [{ stage: "files" }, { cause: "std_exception" }, { stage: "files", cause: "std_exception" }])
+      expect(() => parseComputerSmokeDriverResultFrame({ ...frame, ...patch }, platform)).toThrow()
+  // A win32 location is still checked against the result it would locate.
+  for (const patch of [
+    { ok: true },
+    { ok: true, reason: undefined },
+    { skipped: true, reason: "noninteractive_desktop" },
+    { reason: "parent_invalid" },
+    { reason: "window_changed", cause: "driver_failure" },
+    { stage: "PRIVATE" },
+    { stage: undefined },
+  ])
+    expect(() => parseComputerSmokeDriverResultFrame({ ...located, ...patch }, "win32")).toThrow()
+})
+
+test("Windows driver diagnostic enums match the native allowlists exactly", async () => {
+  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+  const driver = await readFile(path.join(native, "overlay_driver.h"), "utf8")
+  const privileged = await readFile(path.join(native, "privileged_self_test.h"), "utf8")
+  // wire() emits a location only with one of overlay_driver_reason's values, so the mirror must match it.
+  const reasons = (await readFile(path.join(native, "overlay_driver.cpp"), "utf8")).match(
+    /bool overlay_driver_reason\(std::wstring_view value\) noexcept \{\s*static constexpr std::array reasons\{([^}]+)\};/,
+  )?.[1]
+  expect(reasons).toBeDefined()
+  expect([...(reasons ?? "").matchAll(/L"([^"]+)"/g)].map((match) => match[1])).toEqual([
+    ...COMPUTER_SMOKE_DRIVER_REASONS,
+  ])
+  expect(COMPUTER_SMOKE_DRIVER_REASONS).toHaveLength(18)
+  expect(COMPUTER_SMOKE_NATIVE_REASONS.slice(0, 18)).toEqual([...COMPUTER_SMOKE_DRIVER_REASONS])
+  for (const [source, name, expected] of [
+    [driver, "overlay_driver_stages", COMPUTER_SMOKE_DRIVER_STAGES],
+    [driver, "overlay_driver_hresult_classes", COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES],
+    [privileged, "windows_privileged_native_codes", COMPUTER_SMOKE_DRIVER_NATIVE_CODES],
+  ] as const) {
+    const declaration = source.match(new RegExp(`${name}\\s*\\{([^}]+)\\};`))?.[1]
+    expect(declaration).toBeDefined()
+    expect([...(declaration ?? "").matchAll(/L"([^"]+)"/g)].map((match) => match[1])).toEqual([...expected])
+  }
+  // The enum order is the wire order, so the enumerators must name the same stages in the same order.
+  const enumerators = driver.match(/enum class OverlayDriverStage : uint8_t \{([^}]+)\};/)?.[1]
+  expect(enumerators?.split(",").map((name) => name.trim().replaceAll("_", "-"))).toEqual([
+    ...COMPUTER_SMOKE_DRIVER_STAGES,
+  ])
+  expect(COMPUTER_SMOKE_DRIVER_NATIVE_CODES).toEqual([...Computer.ComputerErrorCode.literals, "unknown"])
+  expect(COMPUTER_SMOKE_DRIVER_CAUSES).toHaveLength(40)
+  expect(new Set(COMPUTER_SMOKE_DRIVER_CAUSES).size).toBe(40)
+  expect(COMPUTER_SMOKE_DRIVER_CAUSES).toContain("core_failure:unknown")
+  expect(COMPUTER_SMOKE_DRIVER_CAUSES).not.toContain("driver_skip")
 })
 
 describe("fixed real Electron computer smoke reports", () => {

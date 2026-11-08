@@ -368,7 +368,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
               nativeDiagnostics.has("boundary")
             )
               throw new Error("The native diagnostic receipt is out of phase or exceeds its bound.")
-            const diagnostic = parseComputerSmokeNativeDiagnostic(line)
+            const diagnostic = parseComputerSmokeNativeDiagnostic(line, process.platform)
             if (nativeDiagnostics.has(diagnostic.kind)) throw new Error("The native diagnostic receipt is duplicated.")
             nativeDiagnostics.add(diagnostic.kind)
             process.stdout.write(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(diagnostic) + "\n")

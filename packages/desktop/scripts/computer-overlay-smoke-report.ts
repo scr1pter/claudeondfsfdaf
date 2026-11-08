@@ -342,7 +342,8 @@ export function parseComputerSmokeAsarDiagnostic(line: string): ComputerSmokeAsa
 }
 
 export const COMPUTER_SMOKE_NATIVE_MARK = "computer-smoke-native "
-export const COMPUTER_SMOKE_NATIVE_REASONS = [
+// The Windows driver's own closed reasons (overlay_driver_reason in overlay_driver.cpp); a test checks both.
+export const COMPUTER_SMOKE_DRIVER_REASONS = [
   "isolation_required",
   "noninteractive_desktop",
   "elevated_parent",
@@ -361,6 +362,9 @@ export const COMPUTER_SMOKE_NATIVE_REASONS = [
   "medium_token_unavailable",
   "bootstrap_failed",
   "native_failure",
+] as const
+export const COMPUTER_SMOKE_NATIVE_REASONS = [
+  ...COMPUTER_SMOKE_DRIVER_REASONS,
   "responsibility_missing",
   "accessibility_denied",
   "post_event_denied",
@@ -392,6 +396,127 @@ export const COMPUTER_SMOKE_NATIVE_PREREQUISITES: readonly string[] = [
   "desktop_unavailable",
   "target_unavailable",
 ]
+// Closed failure-only locations of the never-shipped Windows Stop driver (overlay_driver.h). This file stays
+// import-free for the smoke bundle, so the native codes mirror privileged_self_test.h; a test checks both.
+export const COMPUTER_SMOKE_DRIVER_STAGES = [
+  "dpi",
+  "parent",
+  "files",
+  "observe-parent",
+  "observe-bootstrap",
+  "isolation",
+  "token",
+  "desktop",
+  "ready-write",
+  "envelope-read",
+  "envelope-shape",
+  "request",
+  "foreground",
+  "guardian-create",
+  "backend-create",
+  "uia-create",
+  "uia-available",
+  "window-observe",
+  "stop-element",
+  "window-current",
+  "quiet",
+  "guardian-ready",
+  "reserve",
+  "refresh",
+  "post",
+  "observe-down",
+  "retire",
+  "observe-up",
+  "cleanup",
+] as const
+export const COMPUTER_SMOKE_DRIVER_NATIVE_CODES = [
+  "unavailable",
+  "permissions",
+  "busy",
+  "stopped",
+  "paused",
+  "locked",
+  "blocked",
+  "protected",
+  "denied",
+  "not_granted",
+  "stale_frame",
+  "stale_ref",
+  "changed",
+  "occluded",
+  "secure_field",
+  "elevated",
+  "secure_desktop",
+  "not_foreground",
+  "capture_unavailable",
+  "no_ui_tree",
+  "out_of_bounds",
+  "needs_foreground",
+  "timeout",
+  "app_not_found",
+  "unsupported_action",
+  "frame_too_large",
+  "helper_incompatible",
+  "unsupported_os",
+  "blocked_by_os",
+  "responsible_missing",
+  "failed",
+  "unknown",
+] as const
+export const COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES = ["access_denied", "rpc", "not_found", "timeout", "other"] as const
+export const COMPUTER_SMOKE_DRIVER_CAUSES = [
+  "driver_failure",
+  ...COMPUTER_SMOKE_DRIVER_NATIVE_CODES.map((code) => `core_failure:${code}` as const),
+  ...COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES.map((bucket) => `hresult:${bucket}` as const),
+  "std_exception",
+  "unknown",
+] as const
+export type ComputerSmokeDriverStage = (typeof COMPUTER_SMOKE_DRIVER_STAGES)[number]
+export type ComputerSmokeDriverCause = (typeof COMPUTER_SMOKE_DRIVER_CAUSES)[number]
+export type ComputerSmokeDriverFailure = { stage: ComputerSmokeDriverStage; cause: ComputerSmokeDriverCause }
+
+/**
+ * Reads the optional closed location of a coherent, unskipped Windows Stop driver failure. It is a
+ * location only: it grants no pass, skip, retry or authority and never changes a reason or an exit.
+ * Both keys or neither; anything else throws, which the caller treats as invalid native evidence.
+ */
+export function computerSmokeDriverFailure(value: Record<string, unknown>): ComputerSmokeDriverFailure | undefined {
+  if (value.stage === undefined && value.cause === undefined) return undefined
+  if (
+    value.ok !== false ||
+    value.skipped !== undefined ||
+    typeof value.reason !== "string" ||
+    !(COMPUTER_SMOKE_DRIVER_REASONS as readonly string[]).includes(value.reason) ||
+    typeof value.stage !== "string" ||
+    !(COMPUTER_SMOKE_DRIVER_STAGES as readonly string[]).includes(value.stage) ||
+    typeof value.cause !== "string" ||
+    !(COMPUTER_SMOKE_DRIVER_CAUSES as readonly string[]).includes(value.cause) ||
+    // Every cause other than a driver failure is a caught native exception, which reports native_failure.
+    (value.cause !== "driver_failure" && value.reason !== "native_failure")
+  )
+    throw new Error("The native driver failure location is invalid.")
+  return { stage: value.stage as ComputerSmokeDriverStage, cause: value.cause as ComputerSmokeDriverCause }
+}
+
+/**
+ * Checks a finite driver result frame's identity and keys for the receiving platform. Only the Windows
+ * driver may name the closed location of its own unskipped failure. The caller still validates ok,
+ * skipped and reason; any throw is stream_invalid, a failure.
+ */
+export function parseComputerSmokeDriverResultFrame(value: Record<string, unknown>, platform: string) {
+  if (
+    value.id !== 1 ||
+    value.check !== "native-os-stop" ||
+    !exact(
+      value,
+      platform === "win32"
+        ? ["id", "ok", "protocol", "check", "skipped", "reason", "capture", "stage", "cause"]
+        : ["id", "ok", "protocol", "check", "skipped", "reason", "capture"],
+    )
+  )
+    throw new Error("The finite native result is invalid.")
+  return computerSmokeDriverFailure(value)
+}
 
 export type ComputerSmokeNativePhase = "artifact" | "button" | "spawn" | "ready" | "result" | "exit" | "cleanup"
 export const COMPUTER_SMOKE_NATIVE_CAUSES = [
@@ -447,13 +572,17 @@ export type ComputerSmokeNativeDiagnostic =
       protocol: 1
       kind: "result"
       phase: "exit"
-      stop: ComputerSmokeNativeOutcome
+      stop: ComputerSmokeNativeOutcome & Partial<ComputerSmokeDriverFailure>
       capture?: ComputerSmokeNativeOutcome
       exitCode: number | null
     }
 
-/** Observational fixed reasons only; this receipt cannot authorize native action or replace its result. */
-export function parseComputerSmokeNativeDiagnostic(line: string): ComputerSmokeNativeDiagnostic {
+/**
+ * Observational fixed reasons only; this receipt cannot authorize native action or replace its result.
+ * `platform` is the receiving process's platform: only a win32 stop outcome may carry the Windows
+ * driver's failure location, so an omitted platform rejects it.
+ */
+export function parseComputerSmokeNativeDiagnostic(line: string, platform?: string): ComputerSmokeNativeDiagnostic {
   if (!line.startsWith(COMPUTER_SMOKE_NATIVE_MARK) || line.length > 512)
     throw new Error("The native smoke diagnostic is invalid.")
   const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_NATIVE_MARK.length))
@@ -489,10 +618,14 @@ export function parseComputerSmokeNativeDiagnostic(line: string): ComputerSmokeN
       ...(value.architecture === undefined ? {} : { architecture: value.architecture as "x64" | "arm64" }),
     }
   }
-  const outcome = (value: unknown): ComputerSmokeNativeOutcome => {
+  // Only the Windows driver's stop outcome may name its closed failure location; capture never does.
+  const outcome = (value: unknown, stop: boolean): ComputerSmokeNativeOutcome & Partial<ComputerSmokeDriverFailure> => {
     if (
       !record(value) ||
-      !exact(value, ["ok", "skipped", "reason"]) ||
+      !exact(
+        value,
+        stop && platform === "win32" ? ["ok", "skipped", "reason", "stage", "cause"] : ["ok", "skipped", "reason"],
+      ) ||
       typeof value.ok !== "boolean" ||
       (value.skipped !== undefined && value.skipped !== true) ||
       (value.reason !== undefined &&
@@ -507,6 +640,7 @@ export function parseComputerSmokeNativeDiagnostic(line: string): ComputerSmokeN
       ok: value.ok,
       ...(value.skipped ? { skipped: true } : {}),
       ...(value.reason ? { reason: value.reason as ComputerSmokeNativeOutcome["reason"] } : {}),
+      ...(stop ? computerSmokeDriverFailure(value) : undefined),
     }
   }
   if (
@@ -524,8 +658,8 @@ export function parseComputerSmokeNativeDiagnostic(line: string): ComputerSmokeN
     protocol: 1,
     kind: "result",
     phase: "exit",
-    stop: outcome(value.stop),
-    ...(value.capture === undefined ? {} : { capture: outcome(value.capture) }),
+    stop: outcome(value.stop, true),
+    ...(value.capture === undefined ? {} : { capture: outcome(value.capture, false) }),
     exitCode: value.exitCode,
   }
 }

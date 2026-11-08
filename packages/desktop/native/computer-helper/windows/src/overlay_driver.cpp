@@ -4,11 +4,14 @@
 #include "availability.h"
 #include "input.h"
 #include "input_guardian.h"
+#include "privileged_self_test.h"
 #include "uia_native.h"
 #include "windows_process_tree.h"
 #include "../tests/caller_token_acl.h"
 #include <bcrypt.h>
+#include <propidl.h>
 #include <tlhelp32.h>
+#include <uiautomation.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -28,8 +31,6 @@ namespace {
 static_assert(overlay_driver_identity::kSourceDigest == build::kSourceDigest);
 static_assert(overlay_driver_identity::kElectronVersion == "42.11.4");
 constexpr size_t frame_limit = 8192;
-struct DriverFailure { std::wstring reason; };
-struct DriverSkip { std::wstring reason; };
 [[noreturn]] void invalid(std::wstring reason = L"proof_changed") { throw DriverFailure{std::move(reason)}; }
 void require(bool value, std::wstring reason = L"proof_changed") { if (!value) invalid(std::move(reason)); }
 bool keys(const JsonObject& value, const std::set<std::wstring>& expected) {
@@ -200,42 +201,47 @@ uint64_t refresh_stop(const WindowsUiaBackend& uia, const WindowsWindow& window,
   require(uia.equal(current.root, expected.root) && uia.equal(current.element, expected.element) && current.security.bounds == expected.security.bounds && current.name.text == expected.name.text && GetTickCount64() - started < 50);
   return started;
 }
-OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::shared_ptr<Lifetime>& life, const FixtureFiles& files, HANDLE input, PipeFrameWriter& writer) {
-  require(actual_parent() == options.parent && life->current(), L"parent_invalid"); const auto parent = observe_windows_process(options.parent), self = observe_windows_process(GetCurrentProcessId());
+// Each store below names the next fallible step for a failed result frame. They are plain enum
+// assignments: no call, allocation or wait is added, including inside the prepared-to-post window.
+OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::shared_ptr<Lifetime>& life, const FixtureFiles& files, HANDLE input, PipeFrameWriter& writer, OverlayDriverStage& stage) {
+  using Stage = OverlayDriverStage;
+  stage = Stage::observe_parent; require(actual_parent() == options.parent && life->current(), L"parent_invalid"); const auto parent = observe_windows_process(options.parent), self = observe_windows_process(GetCurrentProcessId());
   require(parent.process.creation_time == life->birth && parent.process.creation_time <= self.process.creation_time && equal_path(parent.process.image.path, files.electron.path) && hex(parent.process.image.sha256) == files.electron.sha256 && same_file(self.process.image, files.self.image), L"parent_invalid");
-  const auto bootstrap = observe_windows_process(actual_parent(options.parent));
+  stage = Stage::observe_bootstrap; const auto bootstrap = observe_windows_process(actual_parent(options.parent));
   require(bootstrap.process.creation_time <= parent.process.creation_time && same_file(bootstrap.process.image, files.self.image) && same_context(bootstrap.process.token, parent.process.token) && !bootstrap.process.token.ui_access && !bootstrap.process.token.app_container && windows_owner_current(bootstrap), L"parent_invalid");
   require(files.current() && same_context(parent.process.token, self.process.token), L"parent_invalid");
-  if (!isolated()) throw DriverSkip{L"isolation_required"};
-  if (!serving_token_allowed(parent.process.token) || !serving_token_allowed(self.process.token) || !same_token(parent.process.token, self.process.token)) throw DriverSkip{L"elevated_parent"};
-  if (!windows_desktop_available(observe_windows_desktop())) throw DriverSkip{L"noninteractive_desktop"};
-  JsonObject ready; ready.Insert(L"protocol", JsonValue::CreateNumberValue(1)); ready.Insert(L"ready", JsonValue::CreateBooleanValue(true)); ready.Insert(L"nonce", JsonValue::CreateStringValue(options.nonce)); ready.Insert(L"parentPID", JsonValue::CreateNumberValue(options.parent)); ready.Insert(L"parentCreationTime", JsonValue::CreateStringValue(std::to_wstring(life->birth))); ready.Insert(L"sourceDigest", JsonValue::CreateStringValue(widen(overlay_driver_identity::kSourceDigest)));
-  require(writer.write(response_success(0, ready)), L"control_invalid"); const auto envelope = PrivateReader{}.read(input, life);
-  require(keys(envelope, {L"id", L"ok", L"stop"}) && safe_integer(field(envelope, L"id")) == 1 && envelope.GetNamedBoolean(L"ok"), L"control_invalid");
-  const auto request = parse_overlay_stop_request(envelope.GetNamedObject(L"stop")); require(request && request->parent == options.parent && request->nonce == options.nonce && request->parent_created == life->birth && request->source_digest == widen(overlay_driver_identity::kSourceDigest), L"control_invalid");
-  DWORD foreground = 0; if (!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != options.parent) throw DriverSkip{L"foreground_unavailable"};
-  auto guardian = InputGuardian::native(); auto backend = InputBackend::system({}, guardian); const auto uia = WindowsUiaBackend::system();
+  stage = Stage::isolation; if (!isolated()) throw DriverSkip{L"isolation_required"};
+  stage = Stage::token; if (!serving_token_allowed(parent.process.token) || !serving_token_allowed(self.process.token) || !same_token(parent.process.token, self.process.token)) throw DriverSkip{L"elevated_parent"};
+  stage = Stage::desktop; if (!windows_desktop_available(observe_windows_desktop())) throw DriverSkip{L"noninteractive_desktop"};
+  stage = Stage::ready_write; JsonObject ready; ready.Insert(L"protocol", JsonValue::CreateNumberValue(1)); ready.Insert(L"ready", JsonValue::CreateBooleanValue(true)); ready.Insert(L"nonce", JsonValue::CreateStringValue(options.nonce)); ready.Insert(L"parentPID", JsonValue::CreateNumberValue(options.parent)); ready.Insert(L"parentCreationTime", JsonValue::CreateStringValue(std::to_wstring(life->birth))); ready.Insert(L"sourceDigest", JsonValue::CreateStringValue(widen(overlay_driver_identity::kSourceDigest)));
+  require(writer.write(response_success(0, ready)), L"control_invalid"); stage = Stage::envelope_read; const auto envelope = PrivateReader{}.read(input, life);
+  stage = Stage::envelope_shape; require(keys(envelope, {L"id", L"ok", L"stop"}) && safe_integer(field(envelope, L"id")) == 1 && envelope.GetNamedBoolean(L"ok"), L"control_invalid");
+  stage = Stage::request; const auto request = parse_overlay_stop_request(envelope.GetNamedObject(L"stop")); require(request && request->parent == options.parent && request->nonce == options.nonce && request->parent_created == life->birth && request->source_digest == widen(overlay_driver_identity::kSourceDigest), L"control_invalid");
+  stage = Stage::foreground; DWORD foreground = 0; if (!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != options.parent) throw DriverSkip{L"foreground_unavailable"};
+  stage = Stage::guardian_create; auto guardian = InputGuardian::native(); stage = Stage::backend_create; auto backend = InputBackend::system({}, guardian); stage = Stage::uia_create; const auto uia = WindowsUiaBackend::system();
   struct Close { InputBackend& backend; const WindowsUiaBackend& uia; std::shared_ptr<InputGuardian> guardian; ~Close() { guardian->close(); if (backend.close) backend.close(); if (uia.close) uia.close(); } } close{backend, uia, guardian};
-  if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
-  const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
+  stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
+  stage = Stage::window_observe; const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
   require(window.hwnd == request->banner && window.surface == request->banner && window.owner.process.pid == options.parent && window.physical_owner.process.pid == options.parent && same_windows_process(window.owner.process, parent.process) && same_windows_process(window.physical_owner.process, parent.process));
-  const auto element = observe_stop(uia, window, *request); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; require(valid_overlay_stop_request(observed_request) && window_current(observed_request, parent, window, life));
-  if (!backend.quiet()) throw DriverSkip{L"physical_input"};
-  require(guardian->ready(), L"guardian_unavailable");
-  const InputRelease release{InputReleaseKind::mouse_button, 0, 0, false, 0}; const auto ticket = guardian->reserve(release); require(ticket.has_value(), L"guardian_unavailable");
+  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current; require(valid_overlay_stop_request(observed_request) && window_current(observed_request, parent, window, life));
+  stage = Stage::quiet; if (!backend.quiet()) throw DriverSkip{L"physical_input"};
+  stage = Stage::guardian_ready; require(guardian->ready(), L"guardian_unavailable");
+  stage = Stage::reserve; const InputRelease release{InputReleaseKind::mouse_button, 0, 0, false, 0}; const auto ticket = guardian->reserve(release); require(ticket.has_value(), L"guardian_unavailable");
   bool attempted = false, confirmed_up = false;
   try {
-    const auto prepared = refresh_stop(uia, window, observed_request, element);
-    require(files.current() && windows_owner_current(bootstrap) && window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50);
+    stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element);
+    require(files.current() && windows_owner_current(bootstrap) && window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50); stage = Stage::post;
     const auto outcome = backend.post({InputEventKind::button_down, point(observed_request), release, 0, 0, backend.tag}, [&] {
       if (!files.current() || !windows_owner_current(bootstrap) || !window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50) return false;
       attempted = true; return true;
     });
     if (outcome == InputPostResult::not_posted) { attempted = false; invalid(L"input_post_failed"); }
+    // The former single condition is unchanged; the stage names observe-down only once the post was accepted.
+    if (outcome == InputPostResult::accepted) stage = Stage::observe_down;
     require(outcome == InputPostResult::accepted && guardian->observed(*ticket, true, 50), L"input_post_failed");
     if (backend.confirm_down) backend.confirm_down(release);
-    guardian->retire(*ticket); confirmed_up = guardian->observed(*ticket, false, 300); require(confirmed_up, L"cleanup_failed");
-    if (backend.forget_release) backend.forget_release(release);
+    stage = Stage::retire; guardian->retire(*ticket); stage = Stage::observe_up; confirmed_up = guardian->observed(*ticket, false, 300); require(confirmed_up, L"cleanup_failed");
+    stage = Stage::cleanup; if (backend.forget_release) backend.forget_release(release);
   } catch (...) { guardian->retire(*ticket, !attempted); (void)guardian->drain(300); throw; }
   require(confirmed_up, L"cleanup_failed"); return {true, false, {}};
 }
@@ -375,6 +381,45 @@ bool overlay_driver_reason(std::wstring_view value) noexcept {
   static constexpr std::array reasons{L"isolation_required", L"noninteractive_desktop", L"elevated_parent", L"foreground_unavailable", L"uia_unavailable", L"guardian_unavailable", L"physical_input", L"source_mismatch", L"parent_invalid", L"control_invalid", L"stop_target_invalid", L"proof_changed", L"input_post_failed", L"cleanup_failed", L"deadline_exceeded", L"medium_token_unavailable", L"bootstrap_failed", L"native_failure"};
   return std::find(reasons.begin(), reasons.end(), value) != reasons.end();
 }
+std::wstring_view overlay_driver_stage_name(OverlayDriverStage stage) noexcept {
+  const auto index = static_cast<size_t>(stage); return index < overlay_driver_stages.size() ? overlay_driver_stages[index] : std::wstring_view{};
+}
+bool overlay_driver_stage(std::wstring_view value) noexcept {
+  return std::find(overlay_driver_stages.begin(), overlay_driver_stages.end(), value) != overlay_driver_stages.end();
+}
+bool overlay_driver_cause(std::wstring_view value) noexcept {
+  constexpr std::wstring_view core_prefix = L"core_failure:", hresult_prefix = L"hresult:";
+  if (value == L"driver_failure" || value == L"std_exception" || value == L"unknown") return true;
+  if (value.starts_with(core_prefix)) return std::find(windows_privileged_native_codes.begin(), windows_privileged_native_codes.end(), value.substr(core_prefix.size())) != windows_privileged_native_codes.end();
+  return value.starts_with(hresult_prefix) && std::find(overlay_driver_hresult_classes.begin(), overlay_driver_hresult_classes.end(), value.substr(hresult_prefix.size())) != overlay_driver_hresult_classes.end();
+}
+// Ordered buckets: RPC_E_TIMEOUT is in FACILITY_RPC, so timeouts are classified first.
+std::wstring_view overlay_driver_hresult_class(HRESULT code) noexcept {
+  if (code == static_cast<HRESULT>(UIA_E_TIMEOUT) || code == RPC_E_TIMEOUT || code == HRESULT_FROM_WIN32(ERROR_TIMEOUT)) return L"timeout";
+  if (code == E_ACCESSDENIED) return L"access_denied";
+  if (HRESULT_FACILITY(code) == FACILITY_RPC || code == HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE) || code == HRESULT_FROM_WIN32(RPC_S_CALL_FAILED) || code == HRESULT_FROM_WIN32(RPC_S_CALL_FAILED_DNE)) return L"rpc";
+  if (code == static_cast<HRESULT>(UIA_E_ELEMENTNOTAVAILABLE) || code == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) || code == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || code == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND) || code == HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE)) return L"not_found";
+  return L"other";
+}
+OverlayDriverResult overlay_driver_caught(OverlayDriverMode mode, OverlayDriverStage stage, std::exception_ptr error) {
+  // Only a stop-mode failure has a result frame. The launch bootstrap record keeps its exact keys.
+  const auto diagnosed = [mode, stage](std::wstring reason, std::wstring_view cause) {
+    OverlayDriverResult value{false, false, std::move(reason)};
+    if (mode == OverlayDriverMode::stop) { value.stage = overlay_driver_stage_name(stage); value.cause = cause; }
+    return value;
+  };
+  auto result = diagnosed(L"native_failure", L"unknown");
+  try { if (error) std::rethrow_exception(error); }
+  catch (const DriverSkip& skip) { result = {false, true, skip.reason}; }
+  catch (const DriverFailure& driver) { result = mode == OverlayDriverMode::launch_electron && driver.reason == L"medium_token_unavailable" ? OverlayDriverResult{false, true, driver.reason} : diagnosed(driver.reason, L"driver_failure"); }
+  catch (const Failure& core_error) { result = diagnosed(L"native_failure", L"core_failure:" + windows_privileged_native_code(core_error.code)); }
+  // A core ProtocolError carries the same closed code list; it must precede its std::exception base.
+  catch (const ProtocolError& protocol) { result = diagnosed(L"native_failure", L"core_failure:" + windows_privileged_native_code(protocol.code)); }
+  catch (const winrt::hresult_error& com) { result = diagnosed(L"native_failure", L"hresult:" + std::wstring(overlay_driver_hresult_class(com.code().value))); }
+  catch (const std::exception&) { result = diagnosed(L"native_failure", L"std_exception"); }
+  catch (...) { result = diagnosed(L"native_failure", L"unknown"); }
+  return result;
+}
 int OverlayDriverResult::exit_code() const noexcept {
   static constexpr std::array prerequisites{L"isolation_required", L"noninteractive_desktop", L"elevated_parent", L"foreground_unavailable", L"uia_unavailable", L"physical_input", L"medium_token_unavailable"};
   if ((ok && skipped) || (!reason.empty() && !overlay_driver_reason(reason)) || (ok && !reason.empty()) || (!ok && reason.empty()) || (skipped && std::find(prerequisites.begin(), prerequisites.end(), reason) == prerequisites.end())) return 1;
@@ -383,21 +428,28 @@ int OverlayDriverResult::exit_code() const noexcept {
 JsonObject OverlayDriverResult::wire() const {
   const bool coherent = (ok && !skipped && reason.empty()) || (!ok && !reason.empty() && overlay_driver_reason(reason) && (!skipped || exit_code() == 77));
   JsonObject result; result.Insert(L"id", JsonValue::CreateNumberValue(1)); result.Insert(L"protocol", JsonValue::CreateNumberValue(1)); result.Insert(L"check", JsonValue::CreateStringValue(L"native-os-stop")); result.Insert(L"ok", JsonValue::CreateBooleanValue(coherent && ok));
-  if (coherent && skipped) result.Insert(L"skipped", JsonValue::CreateBooleanValue(true)); if (!coherent || !reason.empty()) result.Insert(L"reason", JsonValue::CreateStringValue(coherent ? reason : L"native_failure")); return result;
+  if (coherent && skipped) result.Insert(L"skipped", JsonValue::CreateBooleanValue(true)); if (!coherent || !reason.empty()) result.Insert(L"reason", JsonValue::CreateStringValue(coherent ? reason : L"native_failure"));
+  // Both closed diagnostics or neither, and only on a coherent unskipped failure. A cause other than a
+  // driver failure always reported native_failure. Anything else is dropped and nothing else changes.
+  if (coherent && !ok && !skipped && overlay_driver_stage(stage) && overlay_driver_cause(cause) && (cause == L"driver_failure" || reason == L"native_failure")) {
+    result.Insert(L"stage", JsonValue::CreateStringValue(stage)); result.Insert(L"cause", JsonValue::CreateStringValue(cause));
+  }
+  return result;
 }
 int run_overlay_driver(const OverlayDriverOptions& options, HANDLE input, HANDLE output) noexcept {
-  std::shared_ptr<Lifetime> life; std::unique_ptr<PipeFrameWriter> writer; OverlayDriverResult result;
+  std::shared_ptr<Lifetime> life; std::unique_ptr<PipeFrameWriter> writer; OverlayDriverResult result; auto stage = OverlayDriverStage::dpi;
   try {
     require((options.mode == OverlayDriverMode::stop || options.mode == OverlayDriverMode::launch_electron) && overlay_driver_hex(options.nonce), L"control_invalid");
     require(SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != nullptr, L"native_failure");
-    const auto parent = actual_parent(); require(parent && parent != GetCurrentProcessId() && (options.mode == OverlayDriverMode::launch_electron || parent == options.parent), L"parent_invalid"); life = Lifetime::arm(parent, options.mode == OverlayDriverMode::launch_electron ? 122'000 : 15'000);
+    stage = OverlayDriverStage::parent; const auto parent = actual_parent(); require(parent && parent != GetCurrentProcessId() && (options.mode == OverlayDriverMode::launch_electron || parent == options.parent), L"parent_invalid"); life = Lifetime::arm(parent, options.mode == OverlayDriverMode::launch_electron ? 122'000 : 15'000);
     if (options.mode == OverlayDriverMode::stop) { require(GetFileType(input) == FILE_TYPE_PIPE && GetFileType(output) == FILE_TYPE_PIPE, L"control_invalid"); writer = std::make_unique<PipeFrameWriter>(output, life->stop.get(), [life] { life->revoked.store(true); }); }
-    const auto files = fixture_files();
+    stage = OverlayDriverStage::files; const auto files = fixture_files();
     if (options.mode == OverlayDriverMode::launch_electron) { const auto status = launch_electron(options, life, files, output); SetEvent(life->stop.get()); return status; }
-    result = click_stop(options, life, files, input, *writer);
-  } catch (const DriverSkip& failure) { result = {false, true, failure.reason}; }
-  catch (const DriverFailure& failure) { result = {false, options.mode == OverlayDriverMode::launch_electron && failure.reason == L"medium_token_unavailable", failure.reason}; }
-  catch (...) { result = {false, false, L"native_failure"}; }
+    result = click_stop(options, life, files, input, *writer, stage);
+  } catch (...) {
+    // Classification builds strings. If that itself throws, keep the former key-less native_failure.
+    try { result = overlay_driver_caught(options.mode, stage, std::current_exception()); } catch (...) { result = {false, false, L"native_failure"}; }
+  }
   if (writer) { if (!writer->write(result.wire())) result = {false, false, L"control_invalid"}; writer->cancel(); (void)writer->close(std::chrono::milliseconds(100)); }
   else if (options.mode == OverlayDriverMode::launch_electron) {
     // The bootstrap forwards Electron's stdout unchanged on success. Its own failure is one fixed

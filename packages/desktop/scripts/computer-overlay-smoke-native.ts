@@ -16,6 +16,8 @@ import {
   parseComputerSmokeAsarDiagnostic,
   COMPUTER_SMOKE_NATIVE_REASONS,
   COMPUTER_SMOKE_NATIVE_PREREQUISITES,
+  computerSmokeDriverFailure,
+  parseComputerSmokeDriverResultFrame,
   parseComputerSmokeNativeDiagnostic,
   type ComputerSmokeReason,
   type ComputerSmokeNativePhase,
@@ -96,7 +98,10 @@ type NativeDiagnosticState = {
 }
 function emitNativeDiagnostic(value: unknown) {
   try {
-    const receipt = parseComputerSmokeNativeDiagnostic(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value))
+    const receipt = parseComputerSmokeNativeDiagnostic(
+      COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value),
+      process.platform,
+    )
     process.stdout.write(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(receipt) + "\n")
   } catch {
     // Diagnostics cannot replace the original native proof, refusal, exit or cleanup path.
@@ -267,12 +272,7 @@ async function nativeProof(input: NativeProofInput, diagnostic: NativeDiagnostic
           continue
         }
         diagnostic.phase = "result"
-        if (
-          value.id !== 1 ||
-          value.check !== "native-os-stop" ||
-          !exact(value, ["id", "ok", "protocol", "check", "skipped", "reason", "capture"])
-        )
-          throw new Error("The finite native result is invalid.")
+        parseComputerSmokeDriverResultFrame(value, process.platform)
         outcome({
           ok: value.ok,
           ...(value.skipped === undefined ? {} : { skipped: value.skipped }),
@@ -321,7 +321,7 @@ async function nativeProof(input: NativeProofInput, diagnostic: NativeDiagnostic
       protocol: 1,
       kind: "result",
       phase: "exit",
-      stop: receiptOutcome(result),
+      stop: { ...receiptOutcome(result), ...computerSmokeDriverFailure(result) },
       ...(record(result.capture) ? { capture: receiptOutcome(result.capture) } : {}),
       exitCode: status,
     })

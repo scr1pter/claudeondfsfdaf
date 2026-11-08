@@ -115,6 +115,10 @@ describe("separate source-bound computer overlay artifacts", () => {
       { protocol: 2 },
       { check: "overlay-count" },
       { details: "private native content" },
+      // The Stop driver's closed failure location never belongs in the launch bootstrap record.
+      { stage: "files" },
+      { cause: "std_exception" },
+      { stage: "files", cause: "std_exception" },
     ])
       expect(parseComputerOverlayBootstrapUnavailable(line({ ...unavailable, ...change }), 77)).toBeUndefined()
   })
