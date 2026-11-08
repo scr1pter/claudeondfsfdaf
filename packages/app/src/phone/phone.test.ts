@@ -20,8 +20,12 @@ async function sources() {
     }
   }
   await walk(DIR)
+  // Named with "/" on every system: on Windows path.relative gives "routes\cloud-runs.tsx", which the checks below miss.
   return Promise.all(
-    files.map(async (file) => ({ file: path.relative(DIR, file), text: await readFile(file, "utf8") })),
+    files.map(async (file) => ({
+      file: path.relative(DIR, file).split(path.sep).join("/"),
+      text: await readFile(file, "utf8"),
+    })),
   )
 }
 

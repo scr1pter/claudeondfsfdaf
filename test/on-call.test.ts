@@ -48,7 +48,7 @@ import {
 // Worker (A46's own code, in memory) gets the account's verified domains and monitors. S1: every count comes from the
 // snapshot. S3: run tokens are refused. The store, the account service, DNS and the sites are fakes.
 
-let world = new OpsWorld()
+let world: OpsWorld
 beforeEach(() => {
   world = new OpsWorld()
   files.clear()

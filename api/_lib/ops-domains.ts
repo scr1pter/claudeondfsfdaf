@@ -163,7 +163,7 @@ async function readFile(domain: string, expected: string, safe: DomainCheckOptio
   try {
     response = await safeFetch(
       `https://${domain}${OPS_VERIFY.wellKnownPath}`,
-      { method: "GET", headers: { accept: "text/plain", "user-agent": "Vector-Verify/1" } },
+      { method: "GET", headers: { accept: "text/plain", "user-agent": "Vector/Domain-Verify" } },
       { timeoutMs: OPS_VERIFY.timeoutMs, maxResponseBytes: OPS_VERIFY.fileBytes, ...safe },
     )
   } catch (error) {

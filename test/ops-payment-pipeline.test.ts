@@ -57,7 +57,7 @@ const REPO = 42
 const HOST = "shop.example.com"
 const HEAD = "a".repeat(40)
 
-let world = new OpsWorld(MEDIA)
+let world: OpsWorld
 let deleted: string[] = []
 let mediaDown = false
 let alerts: { account: string; title: string; allowPaused?: boolean }[] = []

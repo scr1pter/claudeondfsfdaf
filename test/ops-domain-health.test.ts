@@ -31,7 +31,7 @@ import { CRON_SECRET, DAY, invoke, MAX, NOW, OpsWorld, ULTRA } from "./ops-fixtu
 
 const HOST = "shop.example.com"
 
-let world = new OpsWorld()
+let world: OpsWorld
 let alerts: { account: string; title: string; tag?: string; allowPaused?: boolean }[] = []
 const recordAlert: AlertSender = async (account, alert, options) => {
   alerts.push({

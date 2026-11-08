@@ -61,7 +61,7 @@ export async function checkPrivate(input: { readonly api: string; readonly repo:
   let blocked: string | undefined
   const response = await input
     .send(`${input.api.replace(/\/+$/, "")}/repos/${input.repo}`, {
-      headers: { accept: "application/vnd.github+json", "user-agent": "vector-brain-vault" },
+      headers: { accept: "application/vnd.github+json", "user-agent": "Vector/Brain-Vault" },
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     })

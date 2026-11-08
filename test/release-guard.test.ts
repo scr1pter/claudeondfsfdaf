@@ -68,7 +68,7 @@ import {
 // again before every write. The server never merges. Incidents alert the phone, can be snoozed, and start a fix run only
 // on the person's tap. GitHub's API is a fake (test/ops-fixture.ts); nothing reaches GitHub, Cloudflare or Stripe.
 
-let world = new OpsWorld()
+let world: OpsWorld
 let alerts: { account: string; title: string; tag?: string; allowPaused?: boolean }[] = []
 const recordAlert: AlertSender = async (account, alert, options) => {
   alerts.push({
