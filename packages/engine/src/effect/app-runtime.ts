@@ -60,6 +60,14 @@ import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainEmbed } from "@vectordevai/core/brain/embed"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
+import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
+import { LearnedSkill } from "@/skill/learned"
+import { TaskNotify } from "@/task/notify"
+import { TaskLimits } from "@/task/limits"
+import { TaskRecovery } from "@/task/recovery"
+import { TaskAttention } from "@/task/attention"
+import { TaskSignals } from "@/task/signals"
 import { ResearchStore } from "@vectordevai/core/research/store"
 
 export const AppLayer = AppNodeBuilderV1.build(
@@ -86,6 +94,11 @@ export const AppLayer = AppNodeBuilderV1.build(
     SessionProjector.node,
     SessionStatus.node,
     BackgroundJob.node,
+    TaskNotify.node,
+    TaskLimits.node,
+    TaskRecovery.node,
+    TaskAttention.node,
+    TaskSignals.node,
     RuntimeFlags.node,
     EventV2Bridge.node,
     SessionRunState.node,
@@ -98,6 +111,9 @@ export const AppLayer = AppNodeBuilderV1.build(
     SpendGuard.node,
     Brain.node,
     BrainKnowledge.node,
+    BrainSkill.node,
+    BrainWorkflow.node,
+    LearnedSkill.node,
     BrainEmbed.node,
     // `vector memory erase` forgets research with the memory it erases.
     ResearchStore.node,

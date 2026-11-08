@@ -21,6 +21,8 @@ import type { LLMClientShape } from "@vectordevai/llm/route"
 import { LLMNative } from "./native-request"
 import { ToolOrder } from "./tool-order"
 
+const BOUNDARY = Symbol("vector.native-cache-boundary")
+
 export type RuntimeStatus =
   | { readonly type: "supported"; readonly apiKey: string; readonly baseURL?: string }
   | { readonly type: "unsupported"; readonly reason: string }
@@ -43,6 +45,10 @@ type StreamInput = {
   readonly providerOptions?: Record<string, any>
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
+  /** False for a request whose prefix is never sent again: no cache breakpoints (LLM.StreamInput.cache). */
+  readonly cache?: boolean
+  /** The index in `messages` of a fork's last inherited message, which takes a cache breakpoint of its own. */
+  readonly boundary?: number
 }
 
 export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
@@ -93,11 +99,29 @@ export function stream(input: StreamInput): StreamResult {
   // — if a field ever needs to differ between the two surfaces, the
   // translation belongs here, not split across both packages.
   const tools = nativeTools(input.tools, input)
+  // The native request places its own cache breakpoints and does not read the transform's markers, so the fork's
+  // boundary goes to it too, found again after the transform may have dropped or rewritten messages.
+  const tagged =
+    input.boundary === undefined
+      ? input.messages
+      : input.messages.map((message, index) =>
+          index === input.boundary ? Object.assign({ ...message }, { [BOUNDARY]: true }) : message,
+        )
+  const messages = ProviderTransform.message(
+    tagged,
+    input.model,
+    input.providerOptions ?? {},
+    input.cache !== false,
+    input.boundary,
+  )
+  const boundary = input.boundary === undefined ? -1 : messages.findIndex((message) => BOUNDARY in message)
   const request = LLMNative.request({
     model: input.model,
     apiKey: current.apiKey,
     baseURL: current.baseURL,
-    messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}),
+    messages,
+    cache: input.cache !== false,
+    ...(boundary >= 0 ? { boundary } : {}),
     toolChoice: input.toolChoice,
     temperature: input.temperature,
     topP: input.topP,

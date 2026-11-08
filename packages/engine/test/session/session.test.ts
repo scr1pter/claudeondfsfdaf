@@ -307,6 +307,58 @@ describe("forked sessions", () => {
   )
 })
 
+describe("forked Codium sessions", () => {
+  it.instance("a fork copies Codium history without adding a Codium step, an unpriced step or tokens", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const info = yield* session.create({ title: "codium fork" })
+      const tokens = { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }
+      const message = yield* session.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: MessageID.ascending(),
+        sessionID: info.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        unpriced: true,
+        path: { cwd: "/tmp", root: "/tmp" },
+        tokens,
+        modelID: "deepseek",
+        providerID: "vector-plan",
+        time: { created: Date.now(), completed: Date.now() },
+        finish: "stop",
+      } as unknown as SessionV1.Info)
+      yield* session.updatePart({
+        id: PartID.ascending(),
+        messageID: message.id,
+        sessionID: info.id,
+        type: "step-finish",
+        reason: "stop",
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens,
+      })
+
+      const fork = yield* session.fork({ sessionID: info.id })
+
+      const copy = yield* session.get(fork.id)
+      expect(copy.cost).toBe(0)
+      expect(copy.unpricedSteps).toBeUndefined()
+      expect(copy.codiumSteps).toBeUndefined()
+      expect(copy.tokens).toEqual({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+      expect(yield* session.get(info.id)).toMatchObject({ unpricedSteps: 1, codiumSteps: 1 })
+      // The cloned message keeps its flag, for display; its copied step carries none.
+      const copied = (yield* session.messages({ sessionID: fork.id }))[0]
+      expect(copied?.info).toMatchObject({ role: "assistant", billing: "codium", forked: true })
+      expect(copied?.parts.find((part) => part.type === "step-finish")).not.toHaveProperty("billing", "codium")
+      yield* session.remove(fork.id)
+      yield* session.remove(info.id)
+    }),
+  )
+})
+
 describe("usage by directory", () => {
   it.instance("counts only the sessions in the directory asked for", () =>
     Effect.gen(function* () {
@@ -385,6 +437,150 @@ describe("unpriced steps", () => {
       const after = yield* session.get(info.id)
       expect(after.cost).toBe(0.25)
       expect(after.unpricedSteps).toBeUndefined()
+      yield* session.remove(info.id)
+    }),
+  )
+})
+
+describe("Codium steps", () => {
+  const tokens = { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }
+  const noTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  const assistant = (sessionID: SessionID, providerID: string) =>
+    ({
+      id: MessageID.ascending(),
+      role: "assistant",
+      parentID: MessageID.ascending(),
+      sessionID,
+      mode: "build",
+      agent: "build",
+      cost: 0,
+      path: { cwd: "/tmp", root: "/tmp" },
+      tokens,
+      modelID: "deepseek",
+      providerID,
+      time: { created: Date.now() },
+    }) as unknown as SessionV1.Assistant
+  // A step-finish part as the processor writes one: a Codium step carries the flag Session.getUsage returned.
+  const step = (message: SessionV1.Assistant, value: { cost: number; unpriced?: true; billing?: "codium" }) => ({
+    id: PartID.ascending(),
+    messageID: message.id,
+    sessionID: message.sessionID,
+    type: "step-finish" as const,
+    reason: "stop",
+    ...value,
+    tokens,
+  })
+  const codium = { cost: 0, unpriced: true, billing: "codium" } as const
+
+  it.instance("only assistant messages on Vector Codium are published with the flag", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const info = yield* session.create({ title: "codium flag" })
+      const onCodium = assistant(info.id, "vector-plan")
+      const stamped = yield* session.updateMessage(onCodium)
+      const own = yield* session.updateMessage(assistant(info.id, "lmstudio"))
+      yield* session.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: info.id,
+        agent: "build",
+        model: { providerID: "vector-plan", modelID: "deepseek" },
+        time: { created: Date.now() },
+      } as unknown as SessionV1.Info)
+      expect(stamped).toMatchObject({ billing: "codium" })
+      // The published copy carries the flag; the caller's object is left as it was.
+      expect(onCodium).not.toHaveProperty("billing")
+      expect(own).not.toHaveProperty("billing")
+      const stored = (yield* session.messages({ sessionID: info.id })).map((message) => message.info)
+      expect(stored.map((message) => [message.role, "billing" in message ? message.billing : undefined])).toEqual([
+        ["assistant", "codium"],
+        ["assistant", undefined],
+        ["user", undefined],
+      ])
+      yield* session.remove(info.id)
+    }),
+  )
+
+  it.instance("a Codium step counts as one unpriced Codium step with no tokens until it is removed", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const events = yield* EventV2Bridge.Service
+      const info = yield* session.create({ title: "codium steps" })
+      const stale = yield* session.get(info.id)
+      const message = yield* session.updateMessage(assistant(info.id, "vector-plan"))
+      const codiumStep = step(message, codium)
+      yield* session.updatePart(codiumStep)
+      expect(yield* session.get(info.id)).toMatchObject({ cost: 0, unpricedSteps: 1, codiumSteps: 1, tokens: noTokens })
+
+      // An own step beside it counts as before, and a session update read before both steps erases neither.
+      yield* session.updatePart(step(message, { cost: 0.25 }))
+      yield* events.publish(SessionV1.Event.Updated, { sessionID: info.id, info: { ...stale, title: "renamed" } })
+      expect(yield* session.get(info.id)).toMatchObject({
+        title: "renamed",
+        cost: 0.25,
+        unpricedSteps: 1,
+        codiumSteps: 1,
+        tokens,
+      })
+
+      yield* session.removePart({ sessionID: info.id, messageID: message.id, partID: codiumStep.id })
+      const removed = yield* session.get(info.id)
+      expect(removed).toMatchObject({ cost: 0.25, tokens })
+      expect(removed.unpricedSteps).toBeUndefined()
+      expect(removed.codiumSteps).toBeUndefined()
+
+      yield* session.updatePart(step(message, codium))
+      expect((yield* session.get(info.id)).codiumSteps).toBe(1)
+      yield* session.removeMessage({ sessionID: info.id, messageID: message.id })
+      const cleared = yield* session.get(info.id)
+      expect(cleared).toMatchObject({ cost: 0, tokens: noTokens })
+      expect(cleared.unpricedSteps).toBeUndefined()
+      expect(cleared.codiumSteps).toBeUndefined()
+      yield* session.remove(info.id)
+    }),
+  )
+
+  it.instance("a Codium step moved to another session takes its Codium count with it", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const from = yield* session.create({ title: "codium from" })
+      const to = yield* session.create({ title: "codium to" })
+      const message = yield* session.updateMessage(assistant(from.id, "vector-plan"))
+      const moved = step(message, codium)
+      yield* session.updatePart(moved)
+      yield* session.updatePart({ ...moved, sessionID: to.id })
+      const left = yield* session.get(from.id)
+      expect(left.unpricedSteps).toBeUndefined()
+      expect(left.codiumSteps).toBeUndefined()
+      expect(yield* session.get(to.id)).toMatchObject({ unpricedSteps: 1, codiumSteps: 1, tokens: noTokens })
+      yield* session.remove(from.id)
+      yield* session.remove(to.id)
+    }),
+  )
+
+  it.instance("a Codium step recorded before the flag is taken back as the ordinary step it was counted as", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const info = yield* session.create({ title: "flagless codium" })
+      const message = yield* session.updateMessage(assistant(info.id, "vector-plan"))
+      // Written before A22: the message is on Vector Codium, but its step-finish parts carry no flag.
+      const removed = step(message, { cost: 0, unpriced: true })
+      yield* session.updatePart(removed)
+      yield* session.updatePart(step(message, { cost: 0, unpriced: true }))
+      expect(yield* session.get(info.id)).toMatchObject({
+        unpricedSteps: 2,
+        tokens: { input: 200, output: 40, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      expect((yield* session.get(info.id)).codiumSteps).toBeUndefined()
+
+      yield* session.removePart({ sessionID: info.id, messageID: message.id, partID: removed.id })
+      expect(yield* session.get(info.id)).toMatchObject({ unpricedSteps: 1, tokens })
+      yield* session.removeMessage({ sessionID: info.id, messageID: message.id })
+      const after = yield* session.get(info.id)
+      expect(after).toMatchObject({ tokens: noTokens })
+      expect(after.unpricedSteps).toBeUndefined()
+      // Never below 0: a negative count would fail the session's encoding on every read.
+      expect(after.codiumSteps).toBeUndefined()
       yield* session.remove(info.id)
     }),
   )

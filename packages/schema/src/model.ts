@@ -57,6 +57,25 @@ export const Api = Schema.Union([
   .annotate({ identifier: "Model.Api" })
 export type Api = typeof Api.Type
 
+/**
+ * What Vector Codium's model list says about one of its entries (§4.12): the lab, the Codium Auto role, and whether
+ * the account's plan can use it. Codium Auto itself carries `auto`, the models it picks from. A `manualOnly` model is
+ * chosen only by name, and a `locked` one needs the plan it names; neither is ever picked automatically.
+ */
+export interface Codium extends Schema.Schema.Type<typeof Codium> {}
+export const Codium = Schema.Struct({
+  lab: Schema.String.pipe(optional),
+  role: Schema.Literals(["floor", "default", "ceiling"]).pipe(optional),
+  manualOnly: Schema.Boolean.pipe(optional),
+  locked: Schema.Struct({
+    plan: Schema.String,
+    name: Schema.String,
+    previewUntil: Schema.Finite.pipe(optional),
+  }).pipe(optional),
+  preview: Schema.Struct({ until: Schema.Finite }).pipe(optional),
+  auto: Schema.Struct({ floor: Schema.String, default: Schema.String, ceiling: Schema.String }).pipe(optional),
+}).annotate({ identifier: "Model.Codium" })
+
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
   id: ID,
@@ -89,6 +108,7 @@ export const Info = Schema.Struct({
     input: Schema.Int.pipe(optional),
     output: Schema.Int,
   }),
+  codium: Codium.pipe(optional),
 })
   .annotate({ identifier: "ModelV2.Info" })
   .pipe(

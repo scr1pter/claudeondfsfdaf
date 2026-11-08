@@ -56,6 +56,23 @@ export function recentModels(
     .map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
 }
 
+/**
+ * The favorites after toggling `model`, or undefined when it cannot be added. A favorite is always removable, even one
+ * that is no longer valid (a Codium model the plan stopped including still shows under Favorites with its badge); only
+ * adding one asks `valid`.
+ */
+export function toggledFavorites(
+  model: { providerID: string; modelID: string },
+  favorites: { providerID: string; modelID: string }[],
+  valid: (model: { providerID: string; modelID: string }) => boolean,
+) {
+  const same = (item: { providerID: string; modelID: string }) =>
+    item.providerID === model.providerID && item.modelID === model.modelID
+  if (favorites.some(same)) return favorites.filter((item) => !same(item))
+  if (!valid(model)) return
+  return [model, ...favorites]
+}
+
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
   init: () => {
@@ -69,9 +86,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const event = useEvent()
     const permission = usePermission()
 
+    // A Codium model the plan no longer includes is never restored or cycled to: every request to it would be refused.
+    // The person chooses it from the model list, which asks to change plan instead.
     function isModelValid(model: { providerID: string; modelID: string }) {
-      const provider = sync.data.provider.find((item) => item.id === model.providerID)
-      return !!provider?.models[model.modelID]
+      const info = sync.data.provider.find((item) => item.id === model.providerID)?.models[model.modelID]
+      return !!info && !(model.providerID === ModelPlanStatus.PROVIDER_ID && ModelPlanStatus.isLocked(info))
     }
 
     // A Vector choice stays on the shared allowance, even when the user's own OpenRouter account lists the same model.
@@ -332,7 +351,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         cycle(direction: 1 | -1) {
           const current = currentModel()
           if (!current) return
-          const recent = modelStore.recent
+          const recent = modelStore.recent.filter(
+            (item) =>
+              isModelValid(item) || (item.providerID === current.providerID && item.modelID === current.modelID),
+          )
           const index = recent.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
           if (index === -1) return
           let next = index + direction
@@ -389,7 +411,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         },
         toggleFavorite(model: { providerID: string; modelID: string }) {
           batch(() => {
-            if (!isModelValid(model)) {
+            const next = toggledFavorites(model, modelStore.favorite, isModelValid)
+            if (!next) {
               toast.show({
                 message: `Model ${model.providerID}/${model.modelID} is not valid`,
                 variant: "warning",
@@ -397,12 +420,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               })
               return
             }
-            const exists = modelStore.favorite.some(
-              (x) => x.providerID === model.providerID && x.modelID === model.modelID,
-            )
-            const next = exists
-              ? modelStore.favorite.filter((x) => x.providerID !== model.providerID || x.modelID !== model.modelID)
-              : [model, ...modelStore.favorite]
             setModelStore(
               "favorite",
               next.map((x) => ({ providerID: x.providerID, modelID: x.modelID })),

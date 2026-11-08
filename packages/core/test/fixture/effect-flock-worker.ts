@@ -1,6 +1,6 @@
 import fs from "fs/promises"
 import os from "os"
-import { Effect } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { EffectFlock } from "@vectordevai/core/util/effect-flock"
 import { Global } from "@vectordevai/core/global"
@@ -44,7 +44,7 @@ async function job() {
   }
 }
 
-await Effect.runPromise(
+const exit = await Effect.runPromiseExit(
   Effect.gen(function* () {
     const flock = yield* EffectFlock.Service
     yield* flock.withLock(
@@ -53,8 +53,15 @@ await Effect.runPromise(
       msg.dir,
     )
   }).pipe(Effect.provide(testLayer)),
-).catch((err) => {
-  const text = err instanceof Error ? (err.stack ?? err.message) : String(err)
-  process.stderr.write(text)
-  process.exit(1)
-})
+)
+
+// Report every error and defect in the cause, with nested system errors (code, syscall, path); the tests print it
+// when a worker exits non-zero. exitCode is set first so the worker still exits 1 if the process exits before the
+// write callback runs.
+if (Exit.isFailure(exit)) {
+  process.exitCode = 1
+  process.stderr.write(
+    `effect-flock-worker ${process.pid} failed at ${new Date().toISOString()}\n${Cause.pretty(exit.cause)}\n`,
+    () => process.exit(1),
+  )
+}

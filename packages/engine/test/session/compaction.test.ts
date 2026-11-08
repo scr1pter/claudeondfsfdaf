@@ -1451,6 +1451,40 @@ describe("session.compaction.process", () => {
     }),
   )
 
+  // 5.E.3: a fork's compaction takes floor fork.from. The messages before it are its parent's, so an overflow on the
+  // fork's first own request never replays one of them as the fork's own.
+  it.instance(
+    "a fork's overflow never replays a user message from before its floor",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      yield* createUserMessage(session.id, "root")
+      yield* createUserMessage(session.id, "INHERITED_REQUEST")
+      const msg = yield* createUserMessage(session.id, "fork assignment")
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+
+      const result = yield* SessionCompaction.use.process({
+        parentID: msg.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: true,
+        overflow: true,
+        floor: msg.id,
+      })
+
+      const all = yield* ssn.messages({ sessionID: session.id })
+      const last = all.at(-1)
+      expect(result).toBe("continue")
+      expect(last?.info.role).toBe("user")
+      expect(last?.parts[0]?.type === "text" ? last.parts[0].text : "").toContain(
+        "previous request exceeded the provider's size limit",
+      )
+      // Only the original stays: nothing after the fork's request carries the inherited text.
+      const after = all.filter((item) => item.info.id > msg.id)
+      expect(JSON.stringify(after)).not.toContain("INHERITED_REQUEST")
+    }),
+  )
+
   it.instance(
     "falls back to overflow guidance when no replayable turn exists",
     Effect.gen(function* () {

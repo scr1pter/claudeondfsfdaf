@@ -18,7 +18,13 @@ export type SpendLimitSet = {
 
 export type SpendPolicy = { interactive: SpendLimitSet; unattended: SpendLimitSet }
 
-export type SpendWindowTotal = { costUsd: number; tokens: number; runs: number; unmeasuredRuns: number }
+export type SpendWindowTotal = {
+  costUsd: number
+  tokens: number
+  runs: number
+  unmeasuredRuns: number
+  billing?: "codium"
+}
 
 export type SpendSummary = {
   at: string
@@ -29,6 +35,7 @@ export type SpendSummary = {
 }
 
 export type SpendEvent = {
+  billing?: "codium"
   id: string
   projectPath: string
   runId: string

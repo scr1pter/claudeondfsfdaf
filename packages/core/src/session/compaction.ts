@@ -2,6 +2,7 @@ export * as SessionCompaction from "./compaction"
 
 import { LLM, LLMError, LLMEvent, Message, type LLMRequest, type Model, type Usage } from "@vectordevai/llm"
 import { DateTime, Effect, Stream } from "effect"
+import { Billing } from "@vectordevai/schema/billing"
 import type { Config } from "../config"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
@@ -261,13 +262,17 @@ export const make = (dependencies: Dependencies) => {
           { continues: true, patched: false },
         )
         const used = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
-        const spent = attempted
-          ? {
-              cost: spend.costUsd ?? 0,
-              ...(usage === undefined || (spend.costUsd === undefined && used > 0) ? { unpriced: true } : {}),
-              tokens,
-            }
-          : {}
+        // A Vector Codium summary is billed to the account's plan, so it is never priced here; the guard still counts
+        // it as a Codium step through the spend's cost kind.
+        const spent = !attempted
+          ? {}
+          : Billing.isCodium(input.model.provider)
+            ? { cost: 0, unpriced: true, billing: "codium" as const, tokens }
+            : {
+                cost: spend.costUsd ?? 0,
+                ...(usage === undefined || (spend.costUsd === undefined && used > 0) ? { unpriced: true } : {}),
+                tokens,
+              }
         const complete = summarized._tag === "Success" && summarized.value && !failed && summary.trim().length > 0
         if (complete) failures.delete(input.sessionID)
         if (!complete && attempted && summarized._tag === "Success")

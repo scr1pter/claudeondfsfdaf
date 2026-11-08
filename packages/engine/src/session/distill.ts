@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { Context, Duration, Effect, Exit, Layer, Option } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import type { Brain } from "@vectordevai/core/brain/brain"
@@ -47,8 +48,8 @@ export type Estimate = {
   readonly refused?: { readonly reason: Reason; readonly message: string }
   /** Sections and tokens that would be sent, and the output cap. */
   readonly sections: number
-  readonly input: number
-  readonly output: number
+  readonly input?: number
+  readonly output?: number
   readonly costKind?: SpendGuard.CostKind
   /** At catalog rates, for a priced model. */
   readonly lowUsd?: number
@@ -63,8 +64,8 @@ export type Distilled = {
   readonly records: readonly BrainSchema.Record[]
   readonly duplicate: number
   readonly dropped: BrainDistill.Dropped
-  readonly tokens: BrainKnowledge.DistillRun["tokens"]
-  readonly cost: number
+  readonly tokens?: BrainKnowledge.DistillRun["tokens"]
+  readonly cost?: number
   readonly costKind: SpendGuard.CostKind
   /** Why the model gave nothing usable, when it did not. */
   readonly error?: string
@@ -115,7 +116,9 @@ const layer = Layer.effect(
       if (!model)
         return refuse(
           "no-model",
-          input.model ? `${input.model} is not available. Check the provider and its key.` : "Connect a provider or choose a model first.",
+          input.model
+            ? `${input.model} is not available. Check the provider and its key.`
+            : "Connect a provider or choose a model first.",
         )
       const info = yield* provider.getProvider(model.providerID).pipe(Effect.option)
       const urls = [model.api.url, Option.isSome(info) ? info.value.options.baseURL : undefined].filter(
@@ -136,13 +139,17 @@ const layer = Layer.effect(
       const name = `${model.providerID}/${model.id}`
       if (!model.capabilities.toolcall)
         return refuse("no-model", `${name} cannot answer through a tool, which suggestions need. Choose another model.`)
-      if (model.limit.context > 0 && model.limit.context < picked.tokens + BrainDistill.OVERHEAD + BrainDistill.LIMIT.output)
+      if (
+        model.limit.context > 0 &&
+        model.limit.context < picked.tokens + BrainDistill.OVERHEAD + BrainDistill.LIMIT.output
+      )
         return refuse(
           "no-model",
           `${name} cannot hold this request. Choose a model with a larger context, or send less with a lower token limit.`,
         )
       const signIn = yield* auth.get(model.providerID).pipe(Effect.catch(() => Effect.succeed(undefined)))
       const costKind = SpendGuard.costKindOf({
+        codium: Billing.isCodium(model.providerID),
         free: isFreeModel(model),
         oauthPlan:
           signIn?.type === "oauth" &&
@@ -180,7 +187,7 @@ const layer = Layer.effect(
         model: planned.name,
         sections: planned.picked.sections.length,
         costKind: planned.costKind,
-        ...planned.estimate,
+        ...(planned.costKind === "codium" ? {} : planned.estimate),
       } satisfies Estimate
     })
 
@@ -209,8 +216,17 @@ const layer = Layer.effect(
           sessionID: session.id,
           agent: "distill",
           model: { providerID: planned.model.providerID, modelID: planned.model.id },
-          format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: BrainDistill.SCHEMA, retryCount: 0 }),
-          parts: [{ type: "text", text: BrainDistill.prompt({ title: planned.document.title, sections: planned.picked.sections }) }],
+          format: new SessionV1.OutputFormatJsonSchema({
+            type: "json_schema",
+            schema: BrainDistill.SCHEMA,
+            retryCount: 0,
+          }),
+          parts: [
+            {
+              type: "text",
+              text: BrainDistill.prompt({ title: planned.document.title, sections: planned.picked.sections }),
+            },
+          ],
         })
         .pipe(
           Effect.provideService(SessionAdmission.Current, policy),
@@ -240,14 +256,14 @@ const layer = Layer.effect(
         cacheWrite: spent?.cacheWrite ?? 0,
       }
       const cost = spent && Number.isFinite(spent.costUsd) ? spent.costUsd : 0
+      const usage = planned.costKind === "codium" ? {} : { tokens, cost }
       const dropped = { invalid: assistant?.structured === undefined ? 0 : decoded.invalid, ...locked.dropped }
       const stored = yield* knowledge.distilled(place, input.document, {
         records: locked.kept,
         run: {
           model: planned.name,
           session: kept,
-          tokens,
-          cost,
+          ...usage,
           costKind: planned.costKind,
           dropped,
           ...(error ? { error } : {}),
@@ -260,8 +276,7 @@ const layer = Layer.effect(
         records: stored?.records ?? [],
         duplicate: stored?.duplicate ?? 0,
         dropped,
-        tokens,
-        cost,
+        ...usage,
         costKind: planned.costKind,
         ...(error ? { error } : {}),
       } satisfies Distilled

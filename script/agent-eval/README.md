@@ -254,6 +254,23 @@ refusals and estimate, with nothing run), and `harness.test.ts` (four tasks
 against the real engine: the same numbers twice, brain off never reads a
 planted `brain.db`, and the blind control loses brain on's advantage).
 
+## Do prompt changes help?
+
+`prompt-evolve/` runs prompt variants of Vector's own agents against the compounding
+tasks with a clause-aware scripted model, the footprint scenarios and your own
+recorded traces, all offline, and against a real model only with `--live --yes`.
+Each variant is checked against contracts that list every safety sentence of the
+built-in prompts, and the report lists every sentence a variant removes or
+changes. A variant is promotable only when it keeps every contract clause, costs
+no more offline and is not worse live; you then apply its diff by hand on a
+normal branch. Replays run on a clone without remotes, and live runs get an
+environment built from scratch. Live and replay results are never committed. See
+[`prompt-evolve/README.md`](prompt-evolve/README.md).
+
+```
+bun script/agent-eval/prompt-evolve/run.ts --variants <id> --tasks t01-slugify --scenario solo-fix
+```
+
 ## Unavailable is not zero
 
 The rule this harness must never break: **a runtime that cannot be measured is

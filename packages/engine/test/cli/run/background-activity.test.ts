@@ -78,6 +78,10 @@ for (const format of ["default", "json"] as const)
           extraArgs: ["--dangerously-skip-permissions", "--size", "thorough"],
           env: {
             VECTOR_RUN_BACKGROUND_WAIT_MS: "1000",
+            // A finished helper's note is held in the parent's note window (TaskNotify) before it goes out; keep that
+            // window inside the 1s idle deadline so only the nested work's activity is under test.
+            VECTOR_EXPERIMENTAL_NOTE_QUIET_MS: "100",
+            VECTOR_EXPERIMENTAL_NOTE_HOLD_MS: "500",
             VECTOR_CONFIG_CONTENT: JSON.stringify({
               ...testProviderConfig(llm.url),
               agent: {

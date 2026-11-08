@@ -1,5 +1,6 @@
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
+import { validCliTokenID, verifyCliTokenClaims } from "./cli-token.js"
 
 /**
  * CLI tokens are stateless HMAC grants with a ninety-day life (see cli-token.ts),
@@ -25,11 +26,41 @@ export function revocationConfigured() {
 }
 
 const key = (accountID: string) => `vector:cli-revoked:${accountID}`
+const tokenKey = (accountID: string, jti: string) => `${key(accountID)}:token:${jti}`
+const ACCOUNT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
 
 /** Grants and shared inference require an authoritative revocation check. */
 export async function requireUnrevokedAccount(accountID: string, fetcher: typeof fetch = fetch) {
   if (await persistentStore(["GET", key(accountID)], fetcher))
     throw new ApiError(401, "CLI_TOKEN_INVALID", "Sign in to Vector again to continue.")
+}
+
+/** Marked CLI credentials can be revoked singly; account deletion still overrides every credential. */
+export async function requireUnrevokedCliToken(token: string, fetcher: typeof fetch = fetch, now = Date.now()) {
+  const claims = verifyCliTokenClaims(token, now)
+  await requireUnrevokedAccount(claims.id, fetcher)
+  if (claims.jti && (await persistentStore(["GET", tokenKey(claims.id, claims.jti)], fetcher)))
+    throw new ApiError(401, "CLI_TOKEN_INVALID", "Sign in to Vector again to continue.")
+  return claims
+}
+
+/** Internal only: all arguments come from authenticated verified token claims, never untrusted request fields. */
+export async function revokeCliToken(
+  accountID: string,
+  jti: string,
+  expiresAt: number,
+  fetcher: typeof fetch = fetch,
+  now = Date.now(),
+) {
+  if (!ACCOUNT_ID.test(accountID) || !validCliTokenID(jti) || !Number.isSafeInteger(expiresAt) || expiresAt < 0)
+    throw new ApiError(400, "CLI_TOKEN_REVOCATION_INVALID", "Choose a valid account token to revoke.")
+  if (expiresAt <= now) return
+  const result = await persistentStore(
+    ["SET", tokenKey(accountID, jti), "1", "EX", Math.ceil((expiresAt - now) / 1000)],
+    fetcher,
+  )
+  if (result !== "OK")
+    throw new ApiError(503, "PERSISTENT_STORE_UNAVAILABLE", "Protected account services are temporarily unavailable.")
 }
 
 /**

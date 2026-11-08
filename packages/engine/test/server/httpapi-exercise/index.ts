@@ -51,6 +51,22 @@ function data(validate: (value: any) => void) {
   }
 }
 
+// An unknown learned skill reaches the memory handler and is refused as not found, whatever the route asks of it.
+function skillNotFound(body: unknown) {
+  object(body)
+  check(
+    body.name === "MemoryError" && isRecord(body.data) && body.data.code === "not-found",
+    "a learned skill that is not there should be refused as not found",
+  )
+}
+
+// A task with no isolation record reaches the task manager and is refused as not found. Merge and discard are sent
+// without a body, as the SDK sends them with no option, so a payload refusal cannot pass for this answer.
+function notIsolated(body: unknown) {
+  object(body)
+  check(body.code === "not_found", "a task with no isolated changes should be refused as not found")
+}
+
 function locationData(validate: (value: any) => void) {
   return (body: any) => {
     object(body)
@@ -118,6 +134,56 @@ const scenarios: Scenario[] = [
       object(body)
       check(body.healthy === true, "server should report healthy")
     }),
+  http.protected
+    .get("/experimental/session/usage", "experimental.session.usage.codium")
+    .inProject({ git: true })
+    .seeded((ctx) => ctx.codiumSession())
+    .json(200, (body) => {
+      object(body)
+      check(body.lifetimeTokens === 0 && body.lifetimeCost === 0, "Codium usage must not expose tokens or dollars")
+      check(
+        body.inputTokens === 0 && body.outputTokens === 0 && body.reasoningTokens === 0 && body.cachedTokens === 0,
+        "all token components must exclude Codium",
+      )
+      check(body.codiumResponses === 1 && body.modelResponses === 1, "Codium response activity should remain visible")
+      check(body.completedChats === 1 && body.activeDays === 1, "Codium should retain chat and day activity")
+      array(body.favoriteModels)
+      check(body.favoriteModels.length === 0, "Codium must not appear in token-share preferences")
+      array(body.days)
+      object(body.days[0])
+      check(body.days[0].tokens === 0 && body.days[0].codium === 1, "Codium-only days should remain visible")
+    }),
+  http.protected
+    .get("/api/session/{sessionID}", "v2.session.get.codium")
+    .inProject({ git: true })
+    .seeded((ctx) => ctx.codiumSession())
+    .at((ctx) => ({ path: route("/api/session/{sessionID}", { sessionID: ctx.state.id }), headers: ctx.headers() }))
+    .json(
+      200,
+      data((body) => {
+        object(body)
+        check(body.codiumSteps === 1, "session info should expose the stored Codium step count")
+        check(body.cost === 0, "Codium steps must not count as local dollar spend")
+        object(body.tokens)
+        check(body.tokens.input === 0 && body.tokens.output === 0, "session totals should exclude Codium tokens")
+      }),
+    ),
+  http.protected
+    .get("/api/session/{sessionID}/spend", "v2.session.spend.codium")
+    .inProject({ git: true })
+    .seeded((ctx) => ctx.codiumSession())
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/spend", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      data((body) => {
+        object(body)
+        check(body.costKind === "codium" && body.codiumSteps === 1, "spend response should preserve Codium billing")
+        check(body.unpricedSteps === 0 && body.spentUsd === 0, "Codium must not consume dollar or unknown-step caps")
+      }),
+    ),
   http.protected
     .get("/global/event", "global.event")
     .global()
@@ -235,6 +301,42 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  // The first start records the owner's global prompt files as they are (section 8.3), so nothing is held here.
+  http.protected.get("/config/prompt-trust", "config.promptTrust.get").json(
+    200,
+    (body) => {
+      object(body)
+      array(body.held)
+      array(body.files)
+      check(
+        body.held.length === 0 && body.files.length === 0,
+        "the first start records the owner's prompt files as they are, so nothing is held",
+      )
+    },
+    "status",
+  ),
+  http.protected
+    .post("/config/prompt-trust/approve", "config.promptTrust.approve")
+    .mutating()
+    .at((ctx) => ({ path: "/config/prompt-trust/approve", headers: ctx.headers(), body: { files: [] } }))
+    .json(
+      200,
+      (body) => {
+        object(body)
+        check(body.approved === 0, "approving the empty list the owner was shown approves nothing")
+      },
+      "status",
+    ),
+  // A file the owner was never shown is never approved unseen: the list must be read again.
+  http.protected
+    .post("/config/prompt-trust/approve", "config.promptTrust.approve.stale")
+    .mutating()
+    .at((ctx) => ({
+      path: "/config/prompt-trust/approve",
+      headers: ctx.headers(),
+      body: { files: [{ path: "/nowhere/.vector/agents/unseen.md", fingerprint: "0".repeat(64) }] },
+    }))
+    .status(409),
   http.protected.get("/project", "project.list").json(200, array, "status"),
   http.protected.get("/project/current", "project.current").json(
     200,
@@ -734,7 +836,10 @@ const scenarios: Scenario[] = [
       200,
       (body) => {
         object(body)
-        check(body.text === "HTTP API memory: releases go out on Thursdays.", "memory create should return the saved text")
+        check(
+          body.text === "HTTP API memory: releases go out on Thursdays.",
+          "memory create should return the saved text",
+        )
         check(body.status === "active", "a memory the user adds is active")
       },
       "status",
@@ -782,10 +887,7 @@ const scenarios: Scenario[] = [
     .mutating()
     .at((ctx) => ({ path: route("/memory/{memoryID}", { memoryID: "m0none" }), headers: ctx.headers() }))
     .json(400, object, "status"),
-  http.protected
-    .post("/memory/tidy", "memory.tidy")
-    .mutating()
-    .json(200, object, "status"),
+  http.protected.post("/memory/tidy", "memory.tidy").mutating().json(200, object, "status"),
   http.protected
     .post("/memory/erase", "memory.erase")
     .mutating()
@@ -806,7 +908,11 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/memory/import", "memory.import")
     .mutating()
-    .at((ctx) => ({ path: "/memory/import", headers: ctx.headers(), body: { text: "# Notes\n\nNothing to bring in." } }))
+    .at((ctx) => ({
+      path: "/memory/import",
+      headers: ctx.headers(),
+      body: { text: "# Notes\n\nNothing to bring in." },
+    }))
     .json(
       200,
       (body) => {
@@ -817,7 +923,10 @@ const scenarios: Scenario[] = [
     ),
   http.protected.get("/memory/settings", "memory.settings.get").json(200, (body) => {
     object(body)
-    check(typeof body.facets === "object" && body.modelLearner === "local-only", "learning settings should say each facet and the model learner")
+    check(
+      typeof body.facets === "object" && body.modelLearner === "local-only",
+      "learning settings should say each facet and the model learner",
+    )
   }),
   http.protected
     .patch("/memory/settings", "memory.settings.update")
@@ -829,11 +938,91 @@ const scenarios: Scenario[] = [
       check(typeof body.repositoryDocs === "boolean", "memory settings should say whether repository docs are read")
       check(body.keepOriginals === false, "originals are not kept unless the user turns it on")
     }),
+  http.protected.get("/memory/skills", "memory.skills.list").json(200, (body) => {
+    object(body)
+    check(Array.isArray(body.skills) && body.skills.length === 0, "a new repository has no learned skills")
+    check(
+      isRecord(body.settings) && body.settings.skills === "review" && body.settings.skillDrafter === "local-only",
+      "skills wait for review and drafts are worded locally by default",
+    )
+  }),
+  http.protected
+    .get("/memory/skills", "memory.skills.list.review")
+    .at((ctx) => ({ path: "/memory/skills?filter=review", headers: ctx.headers() }))
+    .json(200, (body) => {
+      object(body)
+      check(Array.isArray(body.skills) && body.skills.length === 0, "no drafts wait in a new repository")
+    }),
+  http.protected
+    .get("/memory/skills/{memoryID}", "memory.skills.get.missing")
+    .at((ctx) => ({ path: route("/memory/skills/{memoryID}", { memoryID: "s0none" }), headers: ctx.headers() }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .patch("/memory/skills/{memoryID}", "memory.skills.update.missing")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/memory/skills/{memoryID}", { memoryID: "s0none" }),
+      headers: ctx.headers(),
+      body: { action: "approve" },
+    }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .delete("/memory/skills/{memoryID}", "memory.skills.forget.missing")
+    .mutating()
+    .at((ctx) => ({ path: route("/memory/skills/{memoryID}", { memoryID: "s0none" }), headers: ctx.headers() }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .get("/memory/skills/{memoryID}/share", "memory.skills.sharePreview.missing")
+    .at((ctx) => ({ path: route("/memory/skills/{memoryID}/share", { memoryID: "s0none" }), headers: ctx.headers() }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .post("/memory/skills/{memoryID}/share", "memory.skills.share.missing")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/memory/skills/{memoryID}/share", { memoryID: "s0none" }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .json(400, skillNotFound, "status"),
+  http.protected.get("/memory/workflow", "memory.workflow.get").json(200, (body) => {
+    object(body)
+    check(
+      body.mode === "apply" && body.explore === false,
+      "workflow insights apply learned defaults and do not explore by default",
+    )
+    check(
+      Array.isArray(body.tiers) &&
+        body.tiers.map((item) => (isRecord(item) ? item.tier : undefined)).join(",") === "light,standard,thorough",
+      "workflow insights should list every size",
+    )
+    check(
+      body.tiers.every((item) => isRecord(item) && Array.isArray(item.arms) && item.arms.length === 0),
+      "a new repository has no runs",
+    )
+  }),
+  http.protected
+    .delete("/memory/workflow", "memory.workflow.reset")
+    .mutating()
+    .json(
+      200,
+      (body) => {
+        object(body)
+        check(body.removed === 0, "a repository with no runs forgets none")
+      },
+      "status",
+    ),
+  http.protected
+    .delete("/memory/workflow", "memory.workflow.reset.invalid")
+    .at((ctx) => ({ path: "/memory/workflow?tier=chat", headers: ctx.headers() }))
+    .status(400),
   http.protected.get("/memory/model", "memory.model.get").json(200, (body) => {
     object(body)
     check(body.state === "absent", "no search model is downloaded until the user asks")
     check(body.downloads === false, "tests turn search model downloads off")
-    check(Array.isArray(body.options) && body.options.length === 2, "the model status should list what can be downloaded")
+    check(
+      Array.isArray(body.options) && body.options.length === 2,
+      "the model status should list what can be downloaded",
+    )
   }),
   // Downloads are off in tests; installing from a folder is what an offline computer does instead.
   http.protected
@@ -848,7 +1037,10 @@ const scenarios: Scenario[] = [
     object(body)
     check(Array.isArray(body.documents), "documents list should return documents")
     check(typeof body.indexing === "boolean", "documents list should say whether anything is being read")
-    check(isRecord(body.limits) && body.limits.upload === 64 * 1024 * 1024, "documents list should give the upload limit")
+    check(
+      isRecord(body.limits) && body.limits.upload === 64 * 1024 * 1024,
+      "documents list should give the upload limit",
+    )
   }),
   // The upload takes multipart form data only; memory-documents.test.ts sends real files.
   http.protected
@@ -912,12 +1104,18 @@ const scenarios: Scenario[] = [
     .json(400, object, "status"),
   http.protected
     .get("/memory/documents/{documentID}/file", "memory.documents.file")
-    .at((ctx) => ({ path: route("/memory/documents/{documentID}/file", { documentID: "dnone" }), headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: route("/memory/documents/{documentID}/file", { documentID: "dnone" }),
+      headers: ctx.headers(),
+    }))
     .json(400, object, "status"),
   // Nothing is sent to a model here: the flag is off by default, and no document dnone exists either way.
   http.protected
     .get("/memory/documents/{documentID}/distill", "memory.distill.estimate")
-    .at((ctx) => ({ path: route("/memory/documents/{documentID}/distill", { documentID: "dnone" }), headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: route("/memory/documents/{documentID}/distill", { documentID: "dnone" }),
+      headers: ctx.headers(),
+    }))
     .json(200, (body) => {
       object(body)
       check(typeof body.refused === "object", "an estimate for a document that is not there says why it would not run")
@@ -950,7 +1148,11 @@ const scenarios: Scenario[] = [
     .json(400, object, "status"),
   http.protected
     .post("/memory/posting-check", "memory.posting.check")
-    .at((ctx) => ({ path: "/memory/posting-check", headers: ctx.headers(), body: { parts: ["Fixed the retry loop."], typed: false } }))
+    .at((ctx) => ({
+      path: "/memory/posting-check",
+      headers: ctx.headers(),
+      body: { parts: ["Fixed the retry loop."], typed: false },
+    }))
     .json(200, (body) => {
       object(body)
       check(body.status === "clean", "text that repeats nothing of the owner's memory posts as it is")
@@ -1106,6 +1308,38 @@ const scenarios: Scenario[] = [
   http.protected.get("/experimental/capabilities", "experimental.capabilities.get").json(200, (body) => {
     check(typeof body === "object" && body !== null, "capabilities should be an object")
     check("backgroundSubagents" in body, "capabilities should report background subagents")
+    check(
+      typeof (body as { subagentLimits?: unknown }).subagentLimits === "boolean",
+      "capabilities should report whether task lists carry subagent limits",
+    )
+    check(
+      (body as { workDelegation?: unknown }).workDelegation === true,
+      "capabilities should report that Work requests are offered subagents",
+    )
+    check(
+      (body as { sessionStop?: unknown }).sessionStop === true,
+      "capabilities should report the route that stops a session with its helpers",
+    )
+    check(
+      (body as { taskPromote?: unknown }).taskPromote === true,
+      "capabilities should report the route that moves a session's tasks to the background",
+    )
+    check(
+      (body as { taskResume?: unknown }).taskResume === true,
+      "capabilities should report the route that resumes a session's stopped or interrupted tasks",
+    )
+    check(
+      (body as { taskAttention?: unknown }).taskAttention === true,
+      "capabilities should report that tasks say when they wait on the user",
+    )
+    check(
+      (body as { taskIsolation?: unknown }).taskIsolation === true,
+      "capabilities should report the routes that review, merge and discard isolated tasks",
+    )
+    check(
+      (body as { backgroundShells?: unknown }).backgroundShells === true,
+      "capabilities should report that task lists, stop and wait reach background commands",
+    )
   }),
   http.protected
     .post("/experimental/session/{sessionID}/background", "experimental.session.background")
@@ -1118,6 +1352,83 @@ const scenarios: Scenario[] = [
     .json(200, (body) => {
       check(body === false, "background route should be a no-op without running subagents")
     }),
+  http.protected
+    .post("/experimental/session/{sessionID}/stop", "experimental.session.stop")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Session stop owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/stop", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { helpers: true },
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      check(body.aborted === false, "stopping an idle session should abort no turn")
+      check(body.tasks.length === 0, "an idle session should have no helpers to stop")
+      check(
+        body.shells === 0 && body.excluded === 0 && body.skipped === 0,
+        "an idle session should have no commands or workspaces to count",
+      )
+    }),
+  http.protected.get("/experimental/workflow/saved", "experimental.workflow.saved").json(200, (body) => {
+    object(body)
+    array(body.workflows)
+  }),
+  http.protected
+    .post("/experimental/workflow/validate", "experimental.workflow.validate.invalid")
+    .withLlm()
+    .at((ctx) => ({ path: "/experimental/workflow/validate", headers: ctx.headers(), body: { spec: "{}" } }))
+    .json(200, (body) => {
+      object(body)
+      check(body.ok === false, "invalid workflow must not validate")
+      array(body.issues)
+    }),
+  http.protected
+    .post("/experimental/session/{sessionID}/workflow", "experimental.workflow.start.invalid")
+    .withLlm()
+    .seeded((ctx) => ctx.session({ title: "Invalid workflow owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { spec: "{}" },
+    }))
+    .status(400),
+  http.protected
+    .get("/experimental/session/{sessionID}/workflow", "experimental.workflow.list")
+    .seeded((ctx) => ctx.session({ title: "Workflow board owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.runs)
+      check(body.runs.length === 0, "fresh workflow board must be empty")
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/workflow/{runID}", "experimental.workflow.get.missing")
+    .seeded((ctx) => ctx.session({ title: "Workflow detail owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow/{runID}", {
+        sessionID: ctx.state.id,
+        runID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/experimental/session/{sessionID}/workflow/{runID}/resume", "experimental.workflow.resume.missing")
+    .seeded((ctx) => ctx.session({ title: "Workflow resume owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow/{runID}/resume", {
+        sessionID: ctx.state.id,
+        runID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .get("/experimental/session/{sessionID}/tasks", "experimental.task.list")
@@ -1130,6 +1441,48 @@ const scenarios: Scenario[] = [
       object(body)
       array(body.tasks)
       check(body.tasks.length === 0 && body.truncated === false, "a fresh task board should be empty")
+      object(body.limits)
+      const limits = body.limits as Record<string, unknown>
+      check(
+        ["running", "queued", "maxRunning", "launched", "maxPerRequest"].every(
+          (key) => typeof limits[key] === "number",
+        ),
+        "the task board should carry the conversation's subagent counts and limits",
+      )
+      check(
+        limits.running === 0 && limits.launched === 0 && limits.maxRunning === 8 && limits.maxPerRequest === 32,
+        "a fresh conversation should have no subagents and the default limits",
+      )
+      object(limits.spend)
+      check(
+        typeof (limits.spend as Record<string, unknown>).spentUsd === "number",
+        "the task board should carry the request's subagent spend",
+      )
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/tasks", "experimental.task.list.active")
+    .seeded((ctx) => ctx.session({ title: "Active task board owner" }))
+    .at((ctx) => ({
+      path: `${route("/experimental/session/{sessionID}/tasks", { sessionID: ctx.state.id })}?active=true&descendants=true`,
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      check(body.tasks.length === 0 && body.truncated === false, "a fresh active task board should be empty")
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/tasks", "experimental.task.list.shells")
+    .seeded((ctx) => ctx.session({ title: "Background command board owner" }))
+    .at((ctx) => ({
+      path: `${route("/experimental/session/{sessionID}/tasks", { sessionID: ctx.state.id })}?shells=true`,
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      array(body.shells)
+      check(body.shells.length === 0, "a fresh conversation should have no background commands")
     }),
   http.protected
     .get("/experimental/session/{sessionID}/tasks/{taskID}", "experimental.task.inspect.missing")
@@ -1167,6 +1520,71 @@ const scenarios: Scenario[] = [
       array(body.tasks)
       check(body.tasks.length === 0, "stopping an empty board should not start work")
     }),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/background", "experimental.task.background")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Task background owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/background", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      check(body.tasks.length === 0, "a fresh session should have no task to move to the background")
+    }),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/resume", "experimental.task.resume.missing")
+    .seeded((ctx) => ctx.session({ title: "Task resume owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/resume", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { taskIDs: ["ses_missing"] },
+    }))
+    .status(400),
+  http.protected
+    .get("/experimental/session/{sessionID}/tasks/{taskID}/changes", "experimental.task.changes.missing")
+    .seeded((ctx) => ctx.session({ title: "Task changes owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/{taskID}/changes", {
+        sessionID: ctx.state.id,
+        taskID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(400, notIsolated),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/{taskID}/merge", "experimental.task.merge.missing")
+    .seeded((ctx) => ctx.session({ title: "Task merge owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/{taskID}/merge", {
+        sessionID: ctx.state.id,
+        taskID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(400, notIsolated),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/{taskID}/discard", "experimental.task.discard.missing")
+    .seeded((ctx) => ctx.session({ title: "Task discard owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/{taskID}/discard", {
+        sessionID: ctx.state.id,
+        taskID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(400, notIsolated),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/resume", "experimental.task.resume.invalid")
+    .seeded((ctx) => ctx.session({ title: "Task resume owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/resume", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { taskIDs: [] },
+    }))
+    .status(400),
   http.protected
     .post("/experimental/session/{sessionID}/tasks/wait", "experimental.task.wait.invalid")
     .seeded((ctx) => ctx.session({ title: "Task wait owner" }))

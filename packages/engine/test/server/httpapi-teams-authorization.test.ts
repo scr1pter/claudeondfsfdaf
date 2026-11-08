@@ -8,6 +8,8 @@ import { Context, Effect, Layer, Option } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Auth } from "../../src/auth"
+import { FreeModels } from "@vectordevai/core/free-models"
+import { ModelPlans } from "@vectordevai/core/model-plans"
 import { Config } from "../../src/config/config"
 import { Installation } from "../../src/installation"
 import { InstanceStore } from "../../src/project/instance-store"
@@ -42,6 +44,10 @@ const apiLayer = HttpRouter.serve(
 ).pipe(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provide(Layer.mock(Auth.Service)({})),
+  Layer.provide(Layer.mock(FreeModels.CredentialsService)({})),
+  Layer.provide(
+    Layer.mock(ModelPlans.Service)({ request: () => Promise.reject(new Error("No Codium gateway in this test")) }),
+  ),
   Layer.provide(
     Layer.mock(Teams.Service)({
       current: () => Effect.succeed(status),

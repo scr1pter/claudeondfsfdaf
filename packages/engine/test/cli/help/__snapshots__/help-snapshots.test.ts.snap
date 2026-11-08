@@ -80,63 +80,70 @@ Positionals:
   message  message to send                                                     [array] [default: []]
 
 Options:
-  -h, --help         show help                                                             [boolean]
-  -v, --version      show version number                                                   [boolean]
-      --print-logs   print logs to stderr                                                  [boolean]
-      --log-level    log level                  [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure         run without external plugins                                          [boolean]
-      --command      the command to run, use message for args                               [string]
-  -c, --continue     continue the last session                                             [boolean]
-  -s, --session      session id to continue                                                 [string]
-      --fork         fork the session before continuing (requires --continue or --session) [boolean]
-      --share        publish this session’s conversation, code, and tool output publicly on
-                     vectordev.ai, including future updates (30 days)                      [boolean]
-  -m, --model        model to use in the format of provider/model                           [string]
-      --agent        agent to use                                                           [string]
-      --format       format: default (formatted) or json (raw JSON events)
-                                          [string] [choices: "default", "json"] [default: "default"]
-  -f, --file         file(s) to attach to message                                            [array]
-      --title        title for the session (defaults to the truncated prompt)               [string]
-      --attach       attach to a running vector server (e.g., http://localhost:4096)        [string]
-  -p, --password     basic auth password (defaults to VECTOR_SERVER_PASSWORD)               [string]
-  -u, --username     basic auth username (default: VECTOR_SERVER_USERNAME or vector)        [string]
-      --dir          directory to run in, path on remote server if attaching                [string]
-      --port         port for the local server (defaults to random port if no value provided)
-                                                                                            [number]
-      --variant      model variant (provider-specific reasoning effort, e.g., high, max, minimal)
-                                                                                            [string]
-      --thinking     show thinking blocks                                                  [boolean]
-  -i, --interactive  run in direct interactive split-footer mode          [boolean] [default: false]
-      --max-cost     stop this run within one step per running agent of spending this many US
-                     dollars, counted at the charge the provider reported or else at catalog list
-                     price                                                                  [number]
-      --max-steps    stop this run after this many model steps                              [number]
-      --size         how much harness each prompt gets: auto (default) sizes it from what it says;
-                     only thorough offers subagents
-                                 [string] [choices: "auto", "chat", "light", "standard", "thorough"]
-      --judge        run LLM-as-a-judge after large tasks that changed files (thorough) or after
-                     every task that changed files (changes)
-                                                    [string] [choices: "off", "thorough", "changes"]
-      --research     Deep research (preview): plan the question, search and read the web and this
-                     repository's brain, and write a report in which each claim cites a quote from
-                     its source. Makes no code changes. Reads public pages for the run without
-                     asking; any other approval, a page on your own network included, needs --auto
+  -h, --help          show help                                                            [boolean]
+  -v, --version       show version number                                                  [boolean]
+      --print-logs    print logs to stderr                                                 [boolean]
+      --log-level     log level                 [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure          run without external plugins                                         [boolean]
+      --command       the command to run, use message for args                              [string]
+      --workflow      run a saved workflow name or local JSON file; prints its plan and progress to
+                      stderr and report to stdout                                           [string]
+      --input         with --workflow: input key=value (JSON values or literal strings)      [array]
+      --summarize     with --workflow: ask the conversation's agent to summarize the final report
                                                                                            [boolean]
-      --depth        with --research: focused (one agent, plus up to 2 researchers), deep (up to 4
-                     researchers and a judge that checks the citations) or auto (the default)
-                                                       [string] [choices: "focused", "deep", "auto"]
-      --search       with --research: browser (the default: each research agent searches the web in
-                     its own browser in the desktop app) or none (this repository's brain, its files
-                     and the addresses in the message)         [string] [choices: "browser", "none"]
-      --scope        with --research: the web, this repository's brain and files, or both (all)
-                                                           [string] [choices: "web", "brain", "all"]
-      --report       with --research: write the report, with its sources, to this Markdown file
+  -c, --continue      continue the last session                                            [boolean]
+  -s, --session       session id to continue                                                [string]
+      --fork          fork the session before continuing (requires --continue or --session)[boolean]
+      --share         publish this session’s conversation, code, and tool output publicly on
+                      vectordev.ai, including future updates (30 days)                     [boolean]
+  -m, --model         model to use in the format of provider/model                          [string]
+      --agent         agent to use                                                          [string]
+      --format        format: default (formatted) or json (raw JSON events)
+                                          [string] [choices: "default", "json"] [default: "default"]
+  -f, --file          file(s) to attach to message                                           [array]
+      --title         title for the session (defaults to the truncated prompt)              [string]
+      --attach        attach to a running vector server (e.g., http://localhost:4096)       [string]
+  -p, --password      basic auth password (defaults to VECTOR_SERVER_PASSWORD)              [string]
+  -u, --username      basic auth username (default: VECTOR_SERVER_USERNAME or vector)       [string]
+      --dir           directory to run in, path on remote server if attaching               [string]
+      --port          port for the local server (defaults to random port if no value provided)
+                                                                                            [number]
+      --variant       model variant (provider-specific reasoning effort, e.g., high, max, minimal)
                                                                                             [string]
-      --auto         auto-approve permissions that are not explicitly denied (dangerous!)
+      --thinking      show thinking blocks                                                 [boolean]
+  -i, --interactive   run in direct interactive split-footer mode         [boolean] [default: false]
+      --max-cost      Dollar cap for this run. Vector Codium steps are not counted; step limits
+                      still apply.                                                          [number]
+      --max-steps     stop this run after this many model steps                             [number]
+      --stop-helpers  Ctrl+C at a terminal also stops the subagents and background commands this
+                      session started, not only the main turn. Without --attach, exiting ends them
+                      anyway                                                               [boolean]
+      --size          how much harness each prompt gets: auto (default) sizes it from what it says;
+                      standard and thorough offer subagents; light only manages ones already running
+                                 [string] [choices: "auto", "chat", "light", "standard", "thorough"]
+      --judge         run LLM-as-a-judge after large tasks that changed files (thorough) or after
+                      every task that changed files (changes)
+                                                    [string] [choices: "off", "thorough", "changes"]
+      --research      Deep research (preview): plan the question, search and read the web and this
+                      repository's brain, and write a report in which each claim cites a quote from
+                      its source. Makes no code changes. Reads public pages for the run without
+                      asking; any other approval, a page on your own network included, needs --auto
+                                                                                           [boolean]
+      --depth         with --research: focused (one agent, plus up to 2 researchers), deep (up to 4
+                      researchers and a judge that checks the citations) or auto (the default)
+                                                       [string] [choices: "focused", "deep", "auto"]
+      --search        with --research: browser (the default: each research agent searches the web in
+                      its own browser in the desktop app) or none (this repository's brain, its
+                      files and the addresses in the message)  [string] [choices: "browser", "none"]
+      --scope         with --research: the web, this repository's brain and files, or both (all)
+                                                           [string] [choices: "web", "brain", "all"]
+      --report        with --research: write the report and sources to a .md, .json, .docx or .pdf
+                      file                                                                  [string]
+      --auto          auto-approve permissions that are not explicitly denied (dangerous!)
                                                                           [boolean] [default: false]
-      --local        keep this run on Vector Local: model calls go only to the model servers on your
-                     list, and Vector's own requests to vectordev.ai are blocked. It only tightens,
-                     and changes no setting                                                [boolean]"
+      --local         keep this run on Vector Local: model calls go only to the model servers on
+                      your list, and Vector's own requests to vectordev.ai are blocked. It only
+                      tightens, and changes no setting                                     [boolean]"
 `;
 
 exports[`vector CLI help-text snapshots every documented command emits stable help text: vector debug --help 1`] = `
@@ -849,4 +856,31 @@ Options:
       --print-logs  print logs to stderr                                                   [boolean]
       --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
       --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`vector CLI help-text snapshots every documented command emits stable help text: vector workflow --help 1`] = `
+"vector workflow <action> [target]
+
+validate workflows or manage runs (separate from memory workflow insights)
+
+Positionals:
+  action        [string] [required] [choices: "saved", "validate", "list", "show", "resume", "stop"]
+  target  workflow name/file for validate; run ID for show, resume or stop                  [string]
+
+Options:
+  -h, --help          show help                                                            [boolean]
+  -v, --version       show version number                                                  [boolean]
+      --print-logs    print logs to stderr                                                 [boolean]
+      --log-level     log level                 [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure          run without external plugins                                         [boolean]
+      --attach        owning server URL; omit for offline file validation                   [string]
+  -s, --session       parent session ID for list, show, resume or stop                      [string]
+      --dir           workspace directory on the attached server                            [string]
+      --file          replacement workflow JSON file for resume                             [string]
+      --input         input key=value; JSON values are parsed, other values stay strings     [array]
+      --retry-failed  retry failed nodes when resuming                     [boolean] [default: true]
+      --reason        why this run should stop                                              [string]
+      --json          print the structured response                       [boolean] [default: false]
+      --username      server username (or VECTOR_SERVER_USERNAME)                           [string]
+      --password      server password (prefer VECTOR_SERVER_PASSWORD)                       [string]"
 `;

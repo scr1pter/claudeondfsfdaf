@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 import {
   classifyTaskDifficulty,
@@ -24,6 +25,7 @@ type TestModel = {
   }
   limit: { context: number; output: number }
   variants: Record<string, unknown>
+  codium?: { manualOnly?: boolean; locked?: { plan: string; name: string }; auto?: unknown }
 }
 
 const model = (id: string, input: Partial<TestModel> = {}): TestModel => ({
@@ -156,7 +158,12 @@ describe("task intelligence", () => {
   })
 
   test("a plan waits on the user until a reply that is not a greeting's comes from another agent", () => {
-    const reply = (id: string, extra: object) => ({ id, role: "assistant", time: { created: 1, completed: 2 }, ...extra })
+    const reply = (id: string, extra: object) => ({
+      id,
+      role: "assistant",
+      time: { created: 1, completed: 2 },
+      ...extra,
+    })
     const user = { id: "u", role: "user", time: { created: 0 } }
     expect(planPending([user, reply("p", { agent: "plan" })])).toBe(true)
     // A thanks and its quick reply in between are not the work.
@@ -238,6 +245,65 @@ describe("task intelligence", () => {
       routed: true,
     })
     expect(routeModelForImages({ current: text, available: [text] })).toEqual({ model: undefined, routed: false })
+  })
+
+  test("complex work on Codium never routes onto Auto, a locked model or a manual-only lane", () => {
+    const codium = { provider: { id: "vector-plan" } }
+    const current = model("deepseek/deepseek-v4.1-flash", {
+      ...codium,
+      capabilities: { reasoning: false, toolcall: true },
+    })
+    // Each is far stronger than the current model by name and window, so only the Codium listing keeps it out.
+    const locked = model("anthropic/claude-opus-5.5", {
+      ...codium,
+      codium: { locked: { plan: "vector-200", name: "Ultra" } },
+    })
+    const long = model("moonshotai/kimi-k3:long", { ...codium, codium: { manualOnly: true } })
+    const fast = model("google/gemini-3.5-pro:fast", { ...codium, codium: { manualOnly: true } })
+    const auto = model(ModelPlanStatus.AUTO_ID, {
+      ...codium,
+      codium: { auto: { floor: "a", default: "b", ceiling: "c" } },
+    })
+    const bareAuto = model(ModelPlanStatus.AUTO_ID, codium)
+    expect(
+      routeModelForTask({ difficulty: "complex", current, available: [current, locked, long, fast, auto, bareAuto] }),
+    ).toEqual({ model: current, routed: false })
+    // A usable stronger Codium model is still a target.
+    const sonnet = model("anthropic/claude-sonnet-4.9", codium)
+    expect(
+      routeModelForTask({ difficulty: "complex", current, available: [current, locked, long, fast, auto, sonnet] }),
+    ).toEqual({ model: sonnet, routed: true })
+    // Auto itself stays put: it picks a model for each message's size.
+    expect(routeModelForTask({ difficulty: "complex", current: auto, available: [auto, sonnet] })).toEqual({
+      model: auto,
+      routed: false,
+    })
+    // A manual-only model the person chose stays chosen for work that is not complex.
+    expect(routeModelForTask({ difficulty: "simple", current: long, available: [long, sonnet] }).model).toBe(long)
+  })
+
+  test("an image on Codium never lands on Auto, a locked model or a manual-only lane", () => {
+    const vision = { reasoning: true, toolcall: true, input: { image: true } }
+    const codium = { provider: { id: "vector-plan" }, capabilities: vision }
+    const text = model("deepseek/deepseek-v4.1-flash", { provider: { id: "vector-plan" } })
+    const locked = model("anthropic/claude-opus-5.5", {
+      ...codium,
+      codium: { locked: { plan: "vector-200", name: "Ultra" } },
+    })
+    const fast = model("google/gemini-3.5-pro:fast", { ...codium, codium: { manualOnly: true } })
+    const auto = model(ModelPlanStatus.AUTO_ID, {
+      ...codium,
+      codium: { auto: { floor: "a", default: "b", ceiling: "c" } },
+    })
+    expect(routeModelForImages({ current: text, available: [text, locked, fast, auto] })).toEqual({
+      model: undefined,
+      routed: false,
+    })
+    const usable = model("google/gemini-3.5-pro", codium)
+    expect(routeModelForImages({ current: text, available: [text, locked, fast, auto, usable] })).toEqual({
+      model: usable,
+      routed: true,
+    })
   })
 
   test("an image never moves a prompt onto Vector Codium", () => {

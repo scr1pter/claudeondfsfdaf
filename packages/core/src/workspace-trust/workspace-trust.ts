@@ -163,8 +163,27 @@ export function hasInputs(current: Snapshot) {
   return current[captured].size > 0
 }
 
+/** Compares approved inputs across a workspace copy without rebasing external dependencies. */
+export function contentKey(current: Snapshot) {
+  if (current[unavailable] !== undefined)
+    throw new Error(`Workspace trust snapshot unavailable: ${current[unavailable]}`)
+  const identity = (file: string) =>
+    contains(current.workspace, file) ? `workspace:${path.relative(current.workspace, file)}` : `external:${file}`
+  const hash = createHash("sha256").update("workspace-content\0")
+  for (const [file, value] of Array.from(current[captured], ([file, value]) => [identity(file), value] as const).sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    hash.update(`file\0${JSON.stringify([file, value.mode & 0o777, value.content.length])}\0`)
+    hash.update(value.content)
+  }
+  for (const directory of Array.from(current[executionDirectories], identity).sort()) {
+    hash.update(`cwd\0${JSON.stringify(directory)}\0`)
+  }
+  return hash.digest("hex")
+}
+
 export async function status(stateDirectory: string, current: Snapshot): Promise<Status> {
-  if (current[unavailable]) {
+  if (current[unavailable] !== undefined) {
     return { workspace: current.workspace, fingerprint: current.fingerprint, trusted: false }
   }
   const store = await readStore(stateDirectory)
@@ -177,7 +196,8 @@ export async function status(stateDirectory: string, current: Snapshot): Promise
 }
 
 export async function approve(stateDirectory: string, current: Snapshot) {
-  if (current[unavailable]) throw new Error(`Workspace trust snapshot unavailable: ${current[unavailable]}`)
+  if (current[unavailable] !== undefined)
+    throw new Error(`Workspace trust snapshot unavailable: ${current[unavailable]}`)
   const target = path.join(stateDirectory, filename)
   await Flock.withLock(
     target,
@@ -187,10 +207,40 @@ export async function approve(stateDirectory: string, current: Snapshot) {
         path: current.workspace,
         fingerprint: current.fingerprint,
       }
-      await fs.mkdir(stateDirectory, { recursive: true })
-      const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`
-      await fs.writeFile(temporary, JSON.stringify(store, null, 2), { mode: 0o600 })
-      await fs.rename(temporary, target)
+      await writeStore(stateDirectory, store)
+    },
+    { dir: path.join(stateDirectory, "locks") },
+  )
+}
+
+export async function inherit(stateDirectory: string, parent: Snapshot, child: Snapshot): Promise<boolean> {
+  if (parent[unavailable] !== undefined || child[unavailable] !== undefined || contentKey(parent) !== contentKey(child))
+    return false
+  return Flock.withLock(
+    path.join(stateDirectory, filename),
+    async () => {
+      const store = await readStore(stateDirectory)
+      const approved = store.workspaces[key(parent.workspace)]
+      // Approval and revocation use this same lock: a stale in-memory trusted flag grants nothing here.
+      if (approved?.path !== parent.workspace || approved.fingerprint !== parent.fingerprint) return false
+      store.workspaces[key(child.workspace)] = { path: child.workspace, fingerprint: child.fingerprint }
+      await writeStore(stateDirectory, store)
+      return true
+    },
+    { dir: path.join(stateDirectory, "locks") },
+  )
+}
+
+export async function forget(stateDirectory: string, workspace: string) {
+  const canonical = await canonicalize(workspace)
+  await Flock.withLock(
+    path.join(stateDirectory, filename),
+    async () => {
+      const store = await readStore(stateDirectory)
+      if (!Object.hasOwn(store.workspaces, key(canonical))) return
+      delete store.workspaces[key(canonical)]
+      // Stored fingerprints are unvalidated data, never paths to remove from the materialized cache.
+      await writeStore(stateDirectory, store)
     },
     { dir: path.join(stateDirectory, "locks") },
   )
@@ -201,7 +251,8 @@ export function readFileString(current: Snapshot, file: string) {
 }
 
 export async function materialize(stateDirectory: string, current: Snapshot): Promise<TrustedSnapshot> {
-  if (current[unavailable]) throw new Error(`Workspace trust snapshot unavailable: ${current[unavailable]}`)
+  if (current[unavailable] !== undefined)
+    throw new Error(`Workspace trust snapshot unavailable: ${current[unavailable]}`)
   const parent = path.join(stateDirectory, cacheDirectory)
   const target = path.join(parent, current.fingerprint)
   await fs.mkdir(parent, { recursive: true, mode: 0o700 })
@@ -367,9 +418,19 @@ export function hostExecutable(current: TrustedSnapshot, command: string) {
 }
 
 async function canonicalize(workspace: string) {
-  const resolved = await fs.realpath(workspace).catch(() => path.resolve(workspace))
-  const normalized = path.normalize(resolved)
+  const normalized = path.normalize(await realpath(path.resolve(workspace)))
   return process.platform === "win32" ? normalized.toLowerCase() : normalized
+}
+
+// A workspace that is gone, such as a removed task checkout, keys as it did while it existed: its deepest existing
+// ancestor resolves through the same realpath, so a data folder reached through a link or a Windows 8.3 short temp
+// path still meets the key stored under the real path.
+async function realpath(target: string): Promise<string> {
+  const resolved = await fs.realpath(target).catch(() => undefined)
+  if (resolved) return resolved
+  const parent = path.dirname(target)
+  if (parent === target) return target
+  return path.join(await realpath(parent), path.basename(target))
 }
 
 async function collect(
@@ -827,4 +888,12 @@ async function readStore(stateDirectory: string): Promise<Store> {
     return { version, workspaces: {} }
   }
   return parsed as Store
+}
+
+async function writeStore(stateDirectory: string, store: Store) {
+  await fs.mkdir(stateDirectory, { recursive: true })
+  const target = path.join(stateDirectory, filename)
+  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`
+  await fs.writeFile(temporary, JSON.stringify(store, null, 2), { mode: 0o600 })
+  await fs.rename(temporary, target)
 }

@@ -9,10 +9,13 @@ import { useGlobal } from "@/context/global"
 import { useServer } from "@/context/server"
 import { sessionHref } from "@/utils/session-route"
 import { LocalMemoryPanel } from "@/features/memory/local-memory-panel"
+import { clearOutcomes } from "@/features/economics/economics-repository"
 import { Markdown } from "@vectordevai/session-ui/markdown"
 import { CITE_PREFIX, HELD, reportMarkdown, size, statusLabel } from "@/features/research/research-model"
 import { SettingsMemoryDocuments } from "./memory-documents"
 import { SettingsMemorySearchModel } from "./memory-search-model"
+import { SettingsMemorySkills } from "./memory-skills"
+import { SettingsMemoryWorkflow } from "./memory-workflow"
 import { downloadResearch, type ReportFormat } from "@/features/research/report-download"
 import {
   ABOUT,
@@ -61,6 +64,14 @@ type Scope = "repository" | "personal"
 const PRIVATE =
   "Kept from guests and from models that may train on prompts: it was learned from a private document, or it names someone or something from what you typed."
 
+// The section the page opens on next, asked for from outside Settings: the workflow chip opens Workflow insights.
+const [requested, setRequested] = createSignal<MemoryTab>()
+
+/** Opens Settings > Memory on `tab` the next time the page is shown. */
+export function requestMemoryTab(tab: MemoryTab) {
+  setRequested(tab)
+}
+
 // Settings > Memory: one place for what steers Vector. Rules people wrote and the user's MEMORY.md are shown as they
 // are read (and changed in their files); what Vector learned is listed with where it came from, and can be searched,
 // edited, pinned, approved, put away or forgotten. It replaces the Local memory card in General and the old rules page.
@@ -68,7 +79,8 @@ export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirect
   const global = useGlobal()
   const server = useServer()
   const directory = () => props.sessionDirectory ?? props.repositoryPath
-  const [tab, setTab] = createSignal<MemoryTab>(props.tab ?? "memory")
+  const [tab, setTab] = createSignal<MemoryTab>(props.tab ?? requested() ?? "memory")
+  setRequested(undefined)
   const [scope, setScope] = createSignal<Scope>(directory() ? "repository" : "personal")
   const [filter, setFilter] = createSignal<MemoryFilter>("active")
   const [query, setQuery] = createSignal("")
@@ -177,10 +189,30 @@ export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirect
         <ResearchRuns client={client} repository={!!directory()} />
       </Show>
 
+      <Show when={tab() === "skills"}>
+        <SettingsMemorySkills
+          client={client}
+          repository={!!directory()}
+          settings={settings.latest}
+          onSettings={(next) => setSettings(next)}
+        />
+      </Show>
+
       <Show when={tab() === "about"}>
         <AboutYou
           client={client}
           repository={!!directory()}
+          directory={directory()}
+          settings={settings.latest}
+          onSettings={(next) => setSettings(next)}
+        />
+      </Show>
+
+      <Show when={tab() === "workflow"}>
+        <SettingsMemoryWorkflow
+          client={client}
+          repository={!!directory()}
+          directory={directory()}
           settings={settings.latest}
           onSettings={(next) => setSettings(next)}
         />
@@ -354,7 +386,7 @@ export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirect
           }}
         />
 
-        <EraseCard scope={scope()} repository={!!directory()} act={act} />
+        <EraseCard scope={scope()} directory={directory()} act={act} />
       </Show>
     </section>
   )
@@ -666,7 +698,7 @@ function MemoryRow(props: {
 
 function EraseCard(props: {
   scope: Scope
-  repository: boolean
+  directory?: string
   act: (run: (current: VectorClient) => Promise<{ error?: unknown }>, done: string) => Promise<void>
 }) {
   const [confirming, setConfirming] = createSignal<"repository" | "personal" | "all" | "research" | undefined>()
@@ -677,7 +709,7 @@ function EraseCard(props: {
         ? "everything Vector learned, in every repository and about you, and every Deep research run"
         : scope === "personal"
           ? "everything Vector learned about you"
-          : "everything Vector learned in this repository, its failure memory and Deep research runs included"
+          : "everything Vector learned in this repository, its failure memory, skills, workflow insights, Deep research runs and the app's model recommendations included"
   return (
     <div class="settings-v2-card settings-v2-card--wide">
       <div class="settings-v2-card-head">
@@ -685,8 +717,9 @@ function EraseCard(props: {
           <h3 class="settings-v2-card-title">Tidy and erase</h3>
           <p class="settings-v2-card-description">
             Vector tidies its memory on its own every few hours, with no model call: it merges duplicates, archives what
-            goes unused, and drops what waited for your review for 30 days. Erasing never touches files you or your team
-            wrote.
+            goes unused, and drops what waited for your review for 30 days. Erasing a repository or everything also
+            erases its learned skills, workflow insights and the app's model recommendations for it. Erasing never
+            touches files you or your team wrote.
           </p>
         </div>
       </div>
@@ -706,7 +739,7 @@ function EraseCard(props: {
               >
                 Tidy now
               </ButtonV2>
-              <Show when={props.repository}>
+              <Show when={props.directory}>
                 <ButtonV2 variant="outline" onClick={() => setConfirming("repository")}>
                   Erase what Vector learned here
                 </ButtonV2>
@@ -733,13 +766,15 @@ function EraseCard(props: {
                   variant="danger"
                   onClick={async () => {
                     const chosen = scope()
-                    await props.act(
-                      (current) =>
-                        chosen === "research"
-                          ? current.memory.research.forgetAll()
-                          : current.memory.erase({ scope: chosen }),
-                      "Erased.",
-                    )
+                    await props.act(async (current) => {
+                      if (chosen === "research") return current.memory.research.forgetAll()
+                      const result = await current.memory.erase({ scope: chosen })
+                      // The app's model recommendations are kept apart from the brain; erasing a repository or
+                      // everything clears this repository's too.
+                      if (chosen !== "personal" && !result.error && props.directory)
+                        await clearOutcomes(props.directory)
+                      return result
+                    }, "Erased.")
                     setConfirming(undefined)
                   }}
                 >
@@ -993,6 +1028,7 @@ type Act = <T>(
 function AboutYou(props: {
   client: () => VectorClient | undefined
   repository: boolean
+  directory?: string
   settings?: MemorySettings
   /** The settings the engine answered with, for the page's other sections. */
   onSettings: (settings: MemorySettings) => void
@@ -1206,7 +1242,9 @@ function AboutYou(props: {
                     }
                   >
                     <For each={shown(group())}>
-                      {(entry) => <AboutRow entry={entry} evidence={evidenceOf} act={act} />}
+                      {(entry) => (
+                        <AboutRow entry={entry} evidence={evidenceOf} act={act} directory={props.directory} />
+                      )}
                     </For>
                     <Show when={group().entries.length > shown(group()).length}>
                       <ButtonV2
@@ -1278,6 +1316,7 @@ function AboutRow(props: {
   entry: MemoryEntryView
   evidence: (entry: MemoryEntryView) => Promise<readonly { type: string; quote?: string; sessionID?: string }[]>
   act: Act
+  directory?: string
 }) {
   const server = useServer()
   const dialog = useDialog()
@@ -1459,7 +1498,13 @@ function AboutRow(props: {
                 variant="danger"
                 onClick={async () => {
                   await props.act(
-                    (current) => current.memory.eraseSession({ sessionID: sessionID() }),
+                    async (current) => {
+                      const result = await current.memory.eraseSession({ sessionID: sessionID() })
+                      // The session's model recommendation goes with what it taught.
+                      if (!result.error && props.directory)
+                        await clearOutcomes(props.directory, { sessionID: sessionID() })
+                      return result
+                    },
                     (count) => ERASE_SESSION.done(count ?? 0),
                   )
                   setConfirming(undefined)

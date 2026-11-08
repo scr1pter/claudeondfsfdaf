@@ -24,6 +24,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { buildPrompt } from "@vectordevai/core/session/compaction"
 import { SessionCompactionEvent } from "@vectordevai/schema/session-compaction-event"
+import { SessionCodiumAuto } from "./codium-auto"
 
 export const Event = SessionCompactionEvent
 
@@ -145,6 +146,74 @@ export function splitTurn(input: {
   })
 }
 
+const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
+  messages: SessionV1.WithParts[]
+  model: Provider.Model
+}) {
+  const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
+  return Token.estimate(JSON.stringify(msgs))
+})
+
+/**
+ * The recent turns a summary keeps word for word, within the preserve budget. With a `floor` (a fork's first own
+ * message) the kept tail starts at or after it: the history before it is the parent's, which the fork's own messages
+ * cannot point back to.
+ */
+export const select = Effect.fn("SessionCompaction.select")(function* (input: {
+  messages: SessionV1.WithParts[]
+  cfg: ConfigV1.Info
+  model: Provider.Model
+  floor?: MessageID
+}) {
+  const limit = input.cfg.compaction?.tail_turns ?? DEFAULT_TAIL_TURNS
+  if (limit <= 0) return { head: input.messages, tail_start_id: undefined }
+  const budget = preserveRecentBudget({ cfg: input.cfg, model: input.model })
+  const floor = input.floor
+  const all = turns(input.messages).filter((turn) => floor === undefined || turn.id >= floor)
+  if (!all.length) return { head: input.messages, tail_start_id: undefined }
+  const recent = all.slice(-limit)
+  const sizes = yield* Effect.forEach(
+    recent,
+    (turn) =>
+      estimate({
+        messages: input.messages.slice(turn.start, turn.end),
+        model: input.model,
+      }),
+    { concurrency: 1 },
+  )
+
+  let total = 0
+  let keep: Tail | undefined
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const turn = recent[i]!
+    const size = sizes[i]
+    if (total + size <= budget) {
+      total += size
+      keep = { start: turn.start, id: turn.id }
+      continue
+    }
+    const remaining = budget - total
+    const split = yield* splitTurn({
+      messages: input.messages,
+      turn,
+      model: input.model,
+      budget: remaining,
+      estimate,
+    })
+    if (split) keep = split
+    else if (!keep) {
+      yield* Effect.logInfo("tail fallback", { budget, size, total })
+    }
+    break
+  }
+
+  if (!keep || keep.start === 0) return { head: input.messages, tail_start_id: undefined }
+  return {
+    head: input.messages.slice(0, keep.start),
+    tail_start_id: keep.id,
+  }
+})
+
 export interface Interface {
   readonly isOverflow: (input: {
     tokens: SessionV1.Assistant["tokens"]
@@ -161,11 +230,15 @@ export interface Interface {
     overflow?: boolean
     /** What the summary must keep besides the conversation, such as a research run's digest. */
     context?: readonly string[]
+    /** A fork's first own message: the kept tail and an overflow's replayed message come from it or after it. */
+    floor?: MessageID
   }) => Effect.Effect<"continue" | "stop">
   readonly create: (input: {
     sessionID: SessionID
     agent: string
     model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+    /** What the person chose when `model` is the one Codium Auto picked for the message (its `selected`). */
+    selected?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
     auto: boolean
     overflow?: boolean
   }) => Effect.Effect<void>
@@ -187,6 +260,19 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
 
+    // The model Codium Auto picks for a summary: standard work over the history it summarises (`visible`, after the
+    // last compaction boundary). When Auto cannot run, the session gets the notice a turn would and nothing is sent.
+    const autoSummary = Effect.fnUntraced(function* (sessionID: SessionID, visible: readonly SessionV1.WithParts[]) {
+      return yield* provider
+        .codiumAuto({ tier: "standard", contextTokens: SessionCodiumAuto.contextTokens(visible) })
+        .pipe(
+          Effect.tapError((err) =>
+            events.publish(Session.Event.Error, { sessionID, error: SessionCodiumAuto.notice(err) }),
+          ),
+          Effect.orDie,
+        )
+    })
+
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
       model: Provider.Model
@@ -197,67 +283,6 @@ const layer = Layer.effect(
         model: input.model,
         outputTokenMax: flags.outputTokenMax,
       })
-    })
-
-    const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
-      messages: SessionV1.WithParts[]
-      model: Provider.Model
-    }) {
-      const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
-      return Token.estimate(JSON.stringify(msgs))
-    })
-
-    const select = Effect.fn("SessionCompaction.select")(function* (input: {
-      messages: SessionV1.WithParts[]
-      cfg: ConfigV1.Info
-      model: Provider.Model
-    }) {
-      const limit = input.cfg.compaction?.tail_turns ?? DEFAULT_TAIL_TURNS
-      if (limit <= 0) return { head: input.messages, tail_start_id: undefined }
-      const budget = preserveRecentBudget({ cfg: input.cfg, model: input.model })
-      const all = turns(input.messages)
-      if (!all.length) return { head: input.messages, tail_start_id: undefined }
-      const recent = all.slice(-limit)
-      const sizes = yield* Effect.forEach(
-        recent,
-        (turn) =>
-          estimate({
-            messages: input.messages.slice(turn.start, turn.end),
-            model: input.model,
-          }),
-        { concurrency: 1 },
-      )
-
-      let total = 0
-      let keep: Tail | undefined
-      for (let i = recent.length - 1; i >= 0; i--) {
-        const turn = recent[i]!
-        const size = sizes[i]
-        if (total + size <= budget) {
-          total += size
-          keep = { start: turn.start, id: turn.id }
-          continue
-        }
-        const remaining = budget - total
-        const split = yield* splitTurn({
-          messages: input.messages,
-          turn,
-          model: input.model,
-          budget: remaining,
-          estimate,
-        })
-        if (split) keep = split
-        else if (!keep) {
-          yield* Effect.logInfo("tail fallback", { budget, size, total })
-        }
-        break
-      }
-
-      if (!keep || keep.start === 0) return { head: input.messages, tail_start_id: undefined }
-      return {
-        head: input.messages.slice(0, keep.start),
-        tail_start_id: keep.id,
-      }
     })
 
     // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
@@ -326,6 +351,7 @@ const layer = Layer.effect(
       auto: boolean
       overflow?: boolean
       context?: readonly string[]
+      floor?: MessageID
     }) {
       const parent = input.messages.findLast((m) => m.info.id === input.parentID)
       if (!parent || parent.info.role !== "user") {
@@ -345,6 +371,7 @@ const layer = Layer.effect(
         const idx = input.messages.findIndex((m) => m.info.id === input.parentID)
         for (let i = idx - 1; i >= 0; i--) {
           const msg = input.messages[i]
+          if (input.floor !== undefined && msg.info.id < input.floor) break
           if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction")) {
             replay = { info: msg.info, parts: msg.parts }
             messages = input.messages.slice(0, i)
@@ -363,10 +390,15 @@ const layer = Layer.effect(
       const primary = yield* provider
         .getModel(userMessage.model.providerID, userMessage.model.modelID)
         .pipe(Effect.orDie)
-      const model =
+      // Codium Auto as the compaction agent's own model is a listing entry the gateway never serves: the summary runs
+      // on the model Auto picks for it, whichever provider the session is on.
+      const own =
         isFreeModel(primary) || !agent.model
-          ? primary
-          : yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
+          ? undefined
+          : SessionCodiumAuto.isAuto(agent.model)
+            ? yield* autoSummary(input.sessionID, input.messages)
+            : agent.model
+      const model = own ? yield* provider.getModel(own.providerID, own.modelID).pipe(Effect.orDie) : primary
       // A summary gains little from the high reasoning budget a session may run at, so compaction stops at medium.
       const variant =
         ["high", "xhigh", "max"].includes(userMessage.model.variant ?? "") && model.variants?.medium
@@ -381,6 +413,7 @@ const layer = Layer.effect(
         messages: history.filter((_, index) => !hidden.has(index)),
         cfg,
         model,
+        floor: input.floor,
       })
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(
@@ -477,6 +510,7 @@ const layer = Layer.effect(
             time: { created: Date.now() },
             agent: original.agent,
             model: original.model,
+            ...(original.selected ? { selected: original.selected } : {}),
             format: original.format,
             tools: original.tools,
             system: original.system,
@@ -525,6 +559,7 @@ const layer = Layer.effect(
               time: { created: Date.now() },
               agent: userMessage.agent,
               model: userMessage.model,
+              ...(userMessage.selected ? { selected: userMessage.selected } : {}),
             })
             const text =
               (input.overflow
@@ -562,13 +597,29 @@ const layer = Layer.effect(
       sessionID: SessionID
       agent: string
       model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+      selected?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
       auto: boolean
       overflow?: boolean
     }) {
+      // A summary for a session on Codium Auto runs on the model Auto picks for it; the session stays on Auto. An
+      // automatic compaction hands over the model Auto already picked for the message, with Auto as `selected`: the
+      // summary and the continue message after it stay on that pick, and the session stays on Auto.
+      const auto = SessionCodiumAuto.isAuto(input.model)
+      const selected = auto ? { providerID: input.model.providerID, modelID: input.model.modelID } : input.selected
+      const model = auto
+        ? yield* autoSummary(
+            input.sessionID,
+            MessageV2.filterCompacted(
+              (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).toReversed(),
+            ),
+          )
+        : input.model
       const msg = yield* session.updateMessage({
         id: MessageID.ascending(),
         role: "user",
-        model: input.model,
+        // Not rebuilt: the loop hands over the last user message's model with its variant.
+        model,
+        ...(selected ? { selected } : {}),
         sessionID: input.sessionID,
         agent: input.agent,
         time: { created: Date.now() },

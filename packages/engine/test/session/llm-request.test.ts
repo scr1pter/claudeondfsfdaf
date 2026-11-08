@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createOpenAI } from "@ai-sdk/openai"
-import { jsonSchema, streamText, tool } from "ai"
+import { jsonSchema, streamText, tool, type ModelMessage } from "ai"
+import { convertToLanguageModelPrompt, standardizePrompt } from "ai/internal"
 import { Effect } from "effect"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -385,6 +386,40 @@ describe("system prompt layout across sessions", () => {
     expect(new Headers(prepared.headers).get("x-session-id")).toBe(value.sessionID)
   })
 
+  test("a Codium request's purpose is set last, cannot be overridden and reaches Codium only", async () => {
+    const codium = model("vendor/coder", "@ai-sdk/openai-compatible", "vector-plan", false)
+    const plugin = (headers: Record<string, string>) =>
+      ({
+        ...input({ model: codium, directory: "/work/a" }).plugin,
+        trigger: (name: string, _input: unknown, output: { headers: Record<string, string> }) =>
+          Effect.succeed(name === "chat.headers" ? { ...output, headers } : output),
+      }) as Input["plugin"]
+    const purpose = async (value: Partial<Input>) =>
+      new Headers((await prepare({ ...input({ model: codium, directory: "/work/a" }), ...value })).headers).get(
+        "x-vector-purpose",
+      )
+    expect(await purpose({})).toBe("chat")
+    expect(await purpose({ purpose: "title" })).toBe("title")
+    expect(
+      await purpose({ agent: { name: "judge", mode: "subagent", options: {}, permission: [] } as Input["agent"] }),
+    ).toBe("judge")
+    // Neither model configuration nor a plugin can claim another purpose.
+    expect(
+      await purpose({
+        purpose: "brain",
+        model: { ...codium, headers: { "X-Vector-Purpose": "review" } } as Input["model"],
+        plugin: plugin({ "x-vector-purpose": "race" }),
+      }),
+    ).toBe("brain")
+    // Any other provider never sees the header, even when a plugin adds it.
+    const other = await prepare({
+      ...input({ model: gpt, directory: "/work/a" }),
+      purpose: "title",
+      plugin: plugin({ "X-Vector-Purpose": "title" }),
+    })
+    expect(new Headers(other.headers).has("x-vector-purpose")).toBe(false)
+  })
+
   test("tools go out in name order whatever order they were offered in", async () => {
     const value = input({ model: gpt, directory: "/work/a" })
     const schema = jsonSchema({ type: "object", properties: {} })
@@ -397,6 +432,150 @@ describe("system prompt layout across sessions", () => {
       },
     })
     expect(Object.keys(prepared.tools)).toEqual(["bash", "read", "todowrite"])
+  })
+})
+
+// A learned workflow default sends Thorough work at the model's default effort, which adds no reasoning options of its
+// own (section 6.3). So reasoning the user configured for the model is sent as configured, where the size's high effort
+// would have replaced it, and a variant the user picked still wins over both.
+describe("a learned default effort", () => {
+  const thinking = {
+    ...claude,
+    options: { thinking: { type: "enabled", budgetTokens: 2048 } },
+    variants: {
+      high: { thinking: { type: "enabled", budgetTokens: 32_000 } },
+      max: { thinking: { type: "enabled", budgetTokens: 64_000 } },
+    },
+  } as unknown as Input["model"]
+
+  test("keeps the model's own reasoning options", async () => {
+    const value = input({ model: thinking, directory: "/work/a" })
+    const learned = await prepare({ ...value, effort: "default" })
+    const sized = await prepare({ ...value, effort: "high" })
+    expect(learned.params.options.thinking).toEqual({ type: "enabled", budgetTokens: 2048 })
+    expect(sized.params.options.thinking).toEqual({ type: "enabled", budgetTokens: 32_000 })
+  })
+
+  test("never beats the variant the user picked", async () => {
+    const value = input({ model: thinking, directory: "/work/a" })
+    const picked = await prepare({
+      ...value,
+      user: { ...value.user, model: { ...value.user.model, variant: "max" } } as Input["user"],
+      effort: "default",
+    })
+    expect(picked.params.options.thinking).toEqual({ type: "enabled", budgetTokens: 64_000 })
+  })
+})
+
+// A fork's first request of a run names its root's prompt cache key (5.E.3). Only that key changes: the headers still
+// carry the fork's own session IDs.
+describe("a fork's cache key", () => {
+  const openrouter = model("anthropic/claude-sonnet-4.5", "@openrouter/ai-sdk-provider", "openrouter")
+  const strip = (prepared: LLMRequestPrep.Prepared) => ({ ...prepared, tools: Object.keys(prepared.tools) })
+
+  test.each([
+    [gpt, "promptCacheKey"],
+    [openrouter, "prompt_cache_key"],
+  ] as const)("changes only %s's key", async (target, key) => {
+    const value = { ...input({ model: target, directory: "/work/child" }), parentSessionID: "ses_root" }
+    const own = await prepare(value)
+    const keyed = await prepare({ ...value, cacheKey: "ses_root" })
+    expect(own.params.options[key]).toBe(value.sessionID)
+    expect(keyed.params.options[key]).toBe("ses_root")
+    expect(strip(keyed)).toEqual(
+      strip({
+        ...own,
+        params: { ...own.params, options: { ...own.params.options, [key]: "ses_root" } },
+        messageTransformOptions: { ...own.messageTransformOptions, [key]: "ses_root" },
+      }),
+    )
+    const headers = new Headers(keyed.headers)
+    expect(headers.get("x-session-affinity")).toBe(value.sessionID)
+    expect(headers.get("x-session-id")).toBe(value.sessionID)
+    expect(headers.get("x-parent-session-id")).toBe("ses_root")
+  })
+
+  test("adds no key where the provider takes none", async () => {
+    const value = input({ model: claude, directory: "/work/child" })
+    const own = await prepare(value)
+    const keyed = await prepare({ ...value, cacheKey: "ses_root" })
+    expect(strip(keyed)).toEqual(strip(own))
+    expect(JSON.stringify(keyed.params.options)).not.toContain("ses_root")
+  })
+
+  // The root's key only routes the fork to the cache that holds the parent's prefix. The explicit stable-prefix cache
+  // boundary stays on the same static prefix, so the two compose instead of replacing each other.
+  test("keeps the stable-prefix cache boundary while it names the root's key", async () => {
+    const sol = {
+      ...model("gpt-6.1-sol", "@ai-sdk/openai", "openai"),
+      api: { id: "gpt-6.1-sol", npm: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
+    }
+    const value = input({ model: sol, directory: "/work/root" })
+    const base = { ...value, provider: { ...value.provider, options: { apiKey: "test-key" } } }
+    const root = await prepare({ ...base, sessionID: "ses_root" })
+    const fork = { ...base, sessionID: "ses_child", parentSessionID: "ses_root" }
+    const own = await prepare(fork)
+    const keyed = await prepare({ ...fork, cacheKey: "ses_root" })
+    const marker = ProviderTransform.promptCachePrefix([...SystemPrompt.provider(sol), STABLE].join("\n"))
+    expect(root.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(marker)
+    expect(own.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(marker)
+    expect(keyed.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(marker)
+    expect(root.params.options.promptCacheKey).toBe("ses_root")
+    expect(own.params.options.promptCacheKey).toBe("ses_child")
+    expect(keyed.params.options.promptCacheKey).toBe("ses_root")
+    expect(keyed.messages).toEqual(root.messages)
+    expect(new Headers(keyed.headers).get("x-session-id")).toBe("ses_child")
+  })
+})
+
+// A fork's cache breakpoint is placed by the index of its last inherited message in the request's messages, which must
+// name the same message in the prompt the AI SDK builds from them.
+describe("LLMRequestPrep.promptIndex", () => {
+  const result = (id: string) => ({
+    role: "tool" as const,
+    content: [
+      { type: "tool-result" as const, toolCallId: id, toolName: "read", output: { type: "text" as const, value: id } },
+    ],
+  })
+  const call = (...ids: string[]) => ({
+    role: "assistant" as const,
+    content: ids.map((id) => ({ type: "tool-call" as const, toolCallId: id, toolName: "read", input: {} })),
+  })
+  const messages: ModelMessage[] = [
+    { role: "system", content: "Stable block" },
+    { role: "system", content: "Session block" },
+    { role: "user", content: "Look around." },
+    call("a", "b"),
+    result("a"),
+    result("b"),
+    { role: "user", content: "<fork_assignment>Fix it.</fork_assignment>" },
+    call("c"),
+    result("c"),
+  ]
+
+  test("names the same message in the prompt the AI SDK builds", async () => {
+    const prompt = await convertToLanguageModelPrompt({
+      prompt: await standardizePrompt({ messages }),
+      supportedUrls: {},
+      download: undefined,
+    })
+    expect(prompt).toHaveLength(8)
+    for (const [index, expected] of [
+      [2, "user"],
+      [3, "assistant"],
+      [4, "tool"],
+      [5, "tool"],
+      [6, "user"],
+      [8, "tool"],
+    ] as const) {
+      const at = LLMRequestPrep.promptIndex(messages, index)
+      expect(prompt[at]?.role).toBe(expected)
+    }
+    // Both tool messages land in one, after the system blocks and the two messages before them.
+    expect(LLMRequestPrep.promptIndex(messages, 4)).toBe(4)
+    expect(LLMRequestPrep.promptIndex(messages, 5)).toBe(4)
+    expect(LLMRequestPrep.promptIndex(messages, 6)).toBe(5)
+    expect(JSON.stringify(prompt[LLMRequestPrep.promptIndex(messages, 5)])).toContain('"toolCallId":"b"')
   })
 })
 

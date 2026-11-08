@@ -80,5 +80,7 @@ export const BudgetStopError = NamedError.create("BudgetStopError", {
   spentUsd: Schema.optional(Schema.Finite),
   capUsd: Schema.optional(Schema.Finite),
   unpricedSteps: Schema.optional(NonNegativeInt),
+  // The run's Vector Codium steps, which the guard counts apart from its unpriced (unknown) steps.
+  codiumSteps: Schema.optional(NonNegativeInt),
   estimate: Schema.optional(Schema.Struct({ lowUsd: Schema.Finite, highUsd: Schema.Finite })),
 })

@@ -3,6 +3,8 @@
 // grouping, health, and conflict rules can be tested without a renderer.
 
 import { formatUsd } from "@/features/economics/format-spend"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
+import type { RunBudget } from "@vectordevai/schema/run-budget"
 
 export type DashboardAgentStatus =
   | "queued"
@@ -33,6 +35,8 @@ export type DashboardAgentInput = {
   changedFiles: string[]
   estimatedCost: string
   actualCost?: string
+  billing?: "codium"
+  costKind?: RunBudget.CostKind
   agent?: string
   swarmRunId?: string
   swarmRole?: "coordinator" | "worker"
@@ -243,7 +247,21 @@ export function agentCostLabel(agent: {
   actualCost?: string
   estimatedCost: string
   running: boolean
+  billing?: "codium"
+  costKind?: RunBudget.CostKind
 }) {
+  if (agent.billing === "codium") {
+    const amount = Number(agent.actualCost?.replace(/[$,\s]/g, ""))
+    const known = agent.actualCost && amount !== 0 ? measuredCost(agent.actualCost) : undefined
+    const own =
+      agent.costKind === "unknown"
+        ? known
+          ? `${known} + unpriced`
+          : "Cost unknown"
+        : (known ??
+          (agent.costKind === "free" ? "free model" : agent.costKind === "plan" ? "covered by plan" : undefined))
+    return CodiumUsage.withCodium(own, 1)
+  }
   if (agent.actualCost) return measuredCost(agent.actualCost)
   if (agent.runtime !== "vector") return agent.estimatedCost || undefined
   return agent.running ? "measuring…" : "unmeasured"

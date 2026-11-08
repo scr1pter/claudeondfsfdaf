@@ -101,8 +101,12 @@ test("the investor page counts the built-in subagents that ship and describes Ve
   const agents = (await Bun.file(path.join(root, "packages/engine/src/agent/agent.ts")).text())
     .split(/\n\s+name: "/)
     .slice(1)
+    // Each agent's own fields, up to the brace that closes its definition.
+    .map((agent) => agent.split(/\n {10}\}/)[0])
+  // A hidden subagent is Vector's own machinery that no model or person picks, such as the workflow coordinator
+  // (WP31), so the page does not count it.
   const subagents = agents
-    .filter((agent) => agent.includes('mode: "subagent"'))
+    .filter((agent) => agent.includes('mode: "subagent"') && !agent.includes("hidden: true"))
     .map((agent) => agent.slice(0, agent.indexOf('"')))
   const words = [
     "Zero",

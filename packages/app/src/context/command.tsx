@@ -152,7 +152,18 @@ export function parseKeybind(config: string): Keybind[] {
   })
 }
 
+/**
+ * Whether AltGr is held. Many keyboards type characters with AltGr, which Windows reports as Ctrl+Alt, so no shortcut
+ * fires with it held: AltGr+B must never run a ctrl+alt+b binding such as backgroundTasks.promote. A Mac has no AltGr
+ * (Option is Alt, and Firefox on macOS reports Option as AltGraph too), so there the check never applies.
+ */
+export function altGraphHeld(event: KeyboardEvent, mac = IS_MAC) {
+  if (mac) return false
+  return typeof event.getModifierState === "function" && event.getModifierState("AltGraph")
+}
+
 export function matchKeybind(keybinds: Keybind[], event: KeyboardEvent): boolean {
+  if (altGraphHeld(event)) return false
   const eventKey = normalizeKey(event.key)
 
   for (const kb of keybinds) {
@@ -238,6 +249,47 @@ function isEditableTarget(target: EventTarget | null) {
   if (target.closest("[contenteditable='true']")) return true
   if (target.closest("input, textarea, select")) return true
   return false
+}
+
+/** Each key signature to the first enabled command bound to it; suggested copies are left out. */
+export function commandKeymap(options: readonly CommandOption[]) {
+  const map = new Map<string, CommandOption>()
+  for (const option of options) {
+    if (option.id.startsWith(SUGGESTED_PREFIX)) continue
+    if (option.disabled) continue
+    if (!option.keybind) continue
+
+    const keybinds = parseKeybind(option.keybind)
+    for (const kb of keybinds) {
+      if (!kb.key) continue
+      const sig = signature(kb.key, kb.ctrl, kb.meta, kb.shift, kb.alt)
+      if (map.has(sig)) continue
+      map.set(sig, option)
+    }
+  }
+  return map
+}
+
+/**
+ * What a keydown runs: the command palette, a command, or nothing. Unmodified keys typed into an editable field stay
+ * there unless the command allows it, and AltGr never runs anything: it types a character (altGraphHeld).
+ */
+export function keydownCommand(
+  event: KeyboardEvent,
+  input: { palette: ReadonlySet<string>; keymap: ReadonlyMap<string, CommandOption> },
+): "palette" | CommandOption | undefined {
+  if (altGraphHeld(event)) return
+  const sig = signatureFromEvent(event)
+  const isPalette = input.palette.has(sig)
+  const option = input.keymap.get(sig)
+  const modified = event.ctrlKey || event.metaKey || event.altKey
+  const isTab = event.key === "Tab"
+
+  if (isEditableTarget(event.target) && !isPalette && !isAllowedEditableKeybind(option?.id) && !modified && !isTab)
+    return
+
+  if (isPalette) return "palette"
+  return option
 }
 
 export const { use: useCommand, provider: CommandProvider } = createSimpleContext({
@@ -333,23 +385,7 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       return new Set(keybinds.map((kb) => signature(kb.key, kb.ctrl, kb.meta, kb.shift, kb.alt)))
     })
 
-    const keymap = createMemo(() => {
-      const map = new Map<string, CommandOption>()
-      for (const option of options()) {
-        if (option.id.startsWith(SUGGESTED_PREFIX)) continue
-        if (option.disabled) continue
-        if (!option.keybind) continue
-
-        const keybinds = parseKeybind(option.keybind)
-        for (const kb of keybinds) {
-          if (!kb.key) continue
-          const sig = signature(kb.key, kb.ctrl, kb.meta, kb.shift, kb.alt)
-          if (map.has(sig)) continue
-          map.set(sig, option)
-        }
-      }
-      return map
-    })
+    const keymap = createMemo(() => commandKeymap(options()))
 
     const optionMap = createMemo(() => {
       const map = new Map<string, CommandOption>()
@@ -371,25 +407,14 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (suspended() || dialog.active) return
-
-      const sig = signatureFromEvent(event)
-      const isPalette = palette().has(sig)
-      const option = keymap().get(sig)
-      const modified = event.ctrlKey || event.metaKey || event.altKey
-      const isTab = event.key === "Tab"
-
-      if (isEditableTarget(event.target) && !isPalette && !isAllowedEditableKeybind(option?.id) && !modified && !isTab)
-        return
-
-      if (isPalette) {
-        event.preventDefault()
+      const target = keydownCommand(event, { palette: palette(), keymap: keymap() })
+      if (!target) return
+      event.preventDefault()
+      if (target === "palette") {
         showPalette()
         return
       }
-
-      if (!option) return
-      event.preventDefault()
-      option.onSelect?.("keybind")
+      target.onSelect?.("keybind")
     }
 
     onMount(() => {

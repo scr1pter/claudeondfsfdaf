@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 export const prerender = true
 ---
 <DocsPage id="sdk">
@@ -26,6 +27,12 @@ try {
   server.close()
 }`}</code></pre>
   <p>The launcher finds <code>vector</code> on PATH. It does not install Vector or connect a provider. Pass an <code>AbortSignal</code> to stop the process when your application exits. Browser code should import the client entry only.</p>
+  <h3 id="subagents-and-workflows">Subagents and workflows</h3>
+  <p>{release113.since} the <code>/v2/client</code> export reaches the routes for subagents and workflows. <code>client.experimental.session.stop({"{"} sessionID, helpers: true {"}"})</code> is Stop including helpers; with <code>helpers: false</code> it stops only the main turn and keeps later helper reports from starting a turn until the next message. <code>client.experimental.task.list</code> takes <code>active</code> and <code>shells</code>, and returns the limits. <code>client.experimental.task.background</code>, <code>task.resume</code>, <code>task.changes</code>, <code>task.merge</code> and <code>task.discard</code> move subagents to the background, resume them, and review, merge or discard an isolated subagent's changes. <code>client.experimental.workflow.saved</code>, <code>validate</code>, <code>start</code>, <code>list</code>, <code>get</code> and <code>resume</code> handle workflows.</p>
+  <pre><code>{`const { data: flags } = await client.experimental.capabilities.get()
+if (flags?.sessionStop) await client.experimental.session.stop({ sessionID: session.id, helpers: true })`}</code></pre>
+  <p>{release113.since} check <code>client.experimental.capabilities.get()</code> first. Each feature has its own flag: <code>workDelegation</code>, <code>subagentLimits</code>, <code>sessionStop</code>, <code>taskPromote</code>, <code>taskResume</code>, <code>taskAttention</code>, <code>taskIsolation</code>, <code>workflows</code> and <code>backgroundShells</code>. A missing flag, or an answer that is not JSON, means the server's engine does not have that feature. Merge, discard and the workflow saved, validate, start and resume routes are for the server owner only, and <code>POST /session/:id/abort</code> is unchanged.</p>
+  <p>{release113.since} a prompt with a <code>json_schema</code> format now gets the retries its <code>retryCount</code> promises, 2 by default: an answer that does not match the schema goes back to the model until it matches or the retries run out, and is then captured as not valid. <code>retryCount: 0</code> captures the first answer, as before.</p>
   <h3>Authentication and API versions</h3>
   <p>Keep the server on loopback unless you have configured authenticated network access. The server can operate on files and run tools. With the release that ships the SDK, set <code>VECTOR_SERVER_PASSWORD</code> and optionally <code>VECTOR_SERVER_USERNAME</code>, then pass the corresponding Authorization header through the SDK client’s <code>headers</code> option. Never embed server credentials in a public webpage.</p>
   <p>The root and <code>/client</code> exports retain grouped v1 arguments. The <code>/v2/client</code> export uses flat arguments. Match the SDK release to the server and consult its generated declarations for request and response types. The package includes its applicable license and third-party notices.</p>

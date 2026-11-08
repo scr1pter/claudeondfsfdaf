@@ -9,6 +9,9 @@ import { Location } from "@vectordevai/core/location"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { SessionRunnerModel } from "@vectordevai/core/session/runner/model"
 import { PluginInternal } from "@vectordevai/core/plugin/internal"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "../request-owner"
+import { SessionAudienceHttp } from "../session-audience"
 import { DateTime, Effect, Option, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -36,29 +39,58 @@ const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
 
 function allowsSessionLocation(principal: Principal, item: SessionV2.Info) {
-  if (allowsSession(principal, item.id)) return true
-  if (principal.kind === "owner") return true
-  return guestWorkspaceDirectory(principal, item.location.workspaceID) === item.location.directory
+  return Effect.gen(function* () {
+    // The cheap scope check runs first, so a guest's list never walks the family of a session it cannot see anyway.
+    if (
+      !allowsSession(principal, item.id) &&
+      guestWorkspaceDirectory(principal, item.location.workspaceID) !== item.location.directory
+    )
+      return false
+    return yield* SessionAudienceHttp.session(item.id, principal.kind === "owner" && (yield* RequestOwner.owner))
+  })
 }
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
     const guard = yield* SpendGuard.Service
+    const audience = yield* SessionAudience.Service
+    // The per-request audience checks use the instance these routes were built with, so a host serving them (the CLI
+    // server, the embedded SDK) has nothing more to provide per request.
+    const withAudience = Effect.provideService(SessionAudience.Service, audience)
+    const requireRaw = (id: string) =>
+      RequestOwner.owner.pipe(
+        Effect.flatMap((owner) => SessionAudienceHttp.assertSession(id, owner)),
+        withAudience,
+      )
+    const requireOwner = Effect.gen(function* () {
+      if (yield* RequestOwner.owner) return
+      return yield* new ForbiddenError({ message: "This operation requires the server owner." })
+    })
+    // A helper inside a conversation with isolated work may run only where its task placement says, which this
+    // location-scoped runner cannot see. It continues through its parent conversation instead, never at home.
+    const requireHomePlacement = Effect.fn("SessionHttpApi.requireHomePlacement")(function* (sessionID: SessionV2.ID) {
+      const current = yield* session.get(sessionID).pipe(Effect.option)
+      if (Option.isNone(current) || !current.value.parentID || !(yield* audience.isPrivate(sessionID))) return
+      return yield* new ConflictError({
+        resource: sessionID,
+        message:
+          "This helper belongs to a conversation with isolated work. Continue it through its parent conversation.",
+      })
+    })
 
     // Whether the principal may open a session by its ID; a session that cannot be read is never allowed.
     const allowsSessionID = (principal: Principal, sessionID: SessionV2.ID) =>
-      allowsSession(principal, sessionID)
-        ? Effect.succeed(true)
-        : session.get(sessionID).pipe(
-            Effect.map((item) => allowsSessionLocation(principal, item)),
-            Effect.catch(() => Effect.succeed(false)),
-          )
+      session.get(sessionID).pipe(
+        Effect.flatMap((item) => allowsSessionLocation(principal, item).pipe(withAudience)),
+        Effect.catch(() => Effect.succeed(false)),
+      )
 
     return handlers
       .handle(
         "session.importArchive",
         Effect.fn(function* (ctx) {
+          yield* requireOwner
           return {
             data: yield* session.importArchive({
               archive: ctx.payload.archive,
@@ -70,24 +102,28 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.share",
         Effect.fn(function* (ctx) {
+          yield* requireOwner
           return { data: yield* session.share({ sessionID: ctx.params.sessionID, ...ctx.payload }) }
         }),
       )
       .handle(
         "session.sharePreview",
         Effect.fn(function* (ctx) {
+          yield* requireOwner
           return { data: yield* session.sharePreview(ctx.params.sessionID) }
         }),
       )
       .handle(
         "session.shareFlush",
         Effect.fn(function* (ctx) {
+          yield* requireOwner
           return { data: yield* session.shareFlush(ctx.params.sessionID) }
         }),
       )
       .handle(
         "session.unshare",
         Effect.fn(function* (ctx) {
+          yield* requireOwner
           yield* session.unshare(ctx.params.sessionID)
           return HttpApiSchema.NoContent.make()
         }),
@@ -109,7 +145,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             })
             .pipe(Effect.catch((error) => Effect.logError("Failed to list Vector sessions", error).pipe(Effect.as([]))))
           const principal = yield* RequestPrincipal
-          const allowed = sessions.filter((item) => allowsSessionLocation(principal, item))
+          const allowed = yield* Effect.filter(sessions, (item) =>
+            allowsSessionLocation(principal, item).pipe(withAudience),
+          )
           const first = allowed[0]
           const last = allowed.at(-1)
           return {
@@ -144,6 +182,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           const principal = yield* RequestPrincipal
           const requested = ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) }
+          const owner = yield* RequestOwner.owner
+          yield* SessionAudienceHttp.assertDirectory(requested.directory, owner).pipe(withAudience)
           const guestDirectory = guestWorkspaceDirectory(principal, requested.workspaceID)
           if (principal.kind === "guest" && guestDirectory === undefined)
             return yield* new ForbiddenError({ message: "Guest sessions require an allowed workspace" })
@@ -163,18 +203,31 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             principal.kind === "guest"
               ? Location.Ref.make({ directory: AbsolutePath.make(guestDirectory!), workspaceID: requested.workspaceID })
               : requested
-          const created = yield* session.create({
-            id: ctx.payload.id,
-            agent: ctx.payload.agent,
-            model: ctx.payload.model,
-            location,
-            title: ctx.payload.title,
-            parentID: ctx.payload.parentID,
-            internal: ctx.payload.internal,
-          })
+          if (ctx.payload.parentID) yield* SessionAudienceHttp.admit(ctx.payload.parentID, owner).pipe(withAudience)
+          const created = yield* session
+            .create(
+              {
+                id: ctx.payload.id,
+                agent: ctx.payload.agent,
+                model: ctx.payload.model,
+                location,
+                title: ctx.payload.title,
+                parentID: ctx.payload.parentID,
+                internal: ctx.payload.internal,
+              },
+              owner ? "owner" : "guest",
+            )
+            .pipe(
+              Effect.catchDefect((error) =>
+                error instanceof SessionAudience.Denied
+                  ? Effect.fail(new ForbiddenError({ message: error.message }))
+                  : Effect.die(error),
+              ),
+            )
           // An ID that already names a session adopts it wherever it lives, so the guest's claims decide the answer.
-          if (!allowsSessionLocation(principal, created))
+          if (!(yield* allowsSessionLocation(principal, created).pipe(withAudience)))
             return yield* new ForbiddenError({ message: "This session is outside the guest's workspace" })
+          yield* SessionAudienceHttp.admit(created.id, owner).pipe(withAudience)
           return { data: created }
         }),
       )
@@ -193,6 +246,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.get",
         Effect.fn(function* (ctx) {
+          yield* requireRaw(ctx.params.sessionID)
           return {
             data: yield* session.get(ctx.params.sessionID).pipe(
               Effect.catchTag(
@@ -228,7 +282,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           // Every request in a session a guest has worked in is kept off models that may train (FreeModelGuests), so a
           // guest's switch to one is refused here, where it can be explained.
-          if ((yield* RequestPrincipal).kind !== "owner") yield* refuseTrainingFreeModel(ctx.payload.model)
+          if (!(yield* RequestOwner.owner)) yield* refuseTrainingFreeModel(ctx.payload.model)
           yield* session.switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -247,8 +301,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           // Resuming runs the turn on the owner's OpenRouter account and acceptance, so a guest may not resume one
           // whose model may train.
-          if ((yield* RequestPrincipal).kind !== "owner")
+          if (!(yield* RequestOwner.owner))
             yield* refuseTrainingFreeModel({ providerID: ProviderV2.ID.openrouter, id: ctx.payload.modelID })
+          yield* requireHomePlacement(ctx.params.sessionID)
           yield* session.resumeFreeModels({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -275,10 +330,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          const owner = yield* RequestOwner.owner
+          yield* requireHomePlacement(ctx.params.sessionID)
+          yield* SessionAudienceHttp.admit(ctx.params.sessionID, owner).pipe(withAudience)
           // A guest never accepted the free-model training notice, so the owner's acceptance must not carry a guest's
           // prompt to a model that may train. The prompt runs on the session's model, or the default without one.
           // The model is judged as the runner chooses it, so a session without one is judged by its automatic choice.
-          if ((yield* RequestPrincipal).kind !== "owner") {
+          if (!owner) {
             const current = yield* session.get(ctx.params.sessionID).pipe(Effect.option)
             yield* pluginsLoaded
             const catalog = yield* Effect.serviceOption(Catalog.Service)
@@ -294,7 +352,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           // The budget is armed in memory before admission, so the drain that promotes this input runs under it. A guest's
           // budget can only tighten the limits the owner's run has.
           if (ctx.payload.budget)
-            yield* (yield* RequestPrincipal).kind === "owner"
+            yield* owner
               ? guard.arm(ctx.params.sessionID, ctx.payload.budget)
               : guard.tighten(ctx.params.sessionID, ctx.payload.budget)
           return {
@@ -342,6 +400,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               spentUsd: run.spentUsd,
               steps: run.steps,
               unpricedSteps: run.unpricedSteps,
+              codiumSteps: run.codiumSteps,
               costKind: run.costKind,
             },
           }
@@ -482,6 +541,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.context",
         Effect.fn(function* (ctx) {
+          yield* requireRaw(ctx.params.sessionID)
           return {
             data: yield* session.context(ctx.params.sessionID).pipe(
               Effect.catchTag("Session.NotFoundError", (error) =>
@@ -510,6 +570,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.history",
         Effect.fn(function* (ctx) {
+          yield* requireRaw(ctx.params.sessionID)
           return yield* session
             .history({
               sessionID: ctx.params.sessionID,
@@ -534,11 +595,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       )
       .handle(
         "session.events",
-        Effect.fn((ctx) =>
-          Effect.succeed(
-            session.events({ sessionID: ctx.params.sessionID, after: ctx.query.after }).pipe(Stream.orDie),
-          ),
-        ),
+        Effect.fn(function* (ctx) {
+          const owner = yield* RequestOwner.owner
+          yield* SessionAudienceHttp.assertSession(ctx.params.sessionID, owner).pipe(withAudience)
+          return session.events({ sessionID: ctx.params.sessionID, after: ctx.query.after }).pipe(
+            Stream.filterEffect((event) => SessionAudienceHttp.envelope(event, owner).pipe(withAudience)),
+            Stream.orDie,
+          )
+        }),
       )
       .handle(
         "session.interrupt",
@@ -550,6 +614,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.message",
         Effect.fn(function* (ctx) {
+          yield* requireRaw(ctx.params.sessionID)
           const message = yield* session.message(ctx.params)
           if (message) return { data: message }
           return yield* new MessageNotFoundError({

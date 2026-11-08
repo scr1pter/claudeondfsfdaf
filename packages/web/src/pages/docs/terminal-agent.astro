@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -50,7 +51,11 @@ vector whoami</code><button class="doc-cmd-copy" type="button" aria-label="Copy 
             The token is verified at the first command of each UTC day and cached with a seven-day offline grace window, so a flaky network never locks you out of your own terminal. Only a definitive invalid or expired answer signs you out. <code>login</code>, <code>logout</code>, <code>whoami</code>, <code>completion</code>, <code>upgrade</code> and <code>uninstall</code> work signed out.
           </p>
           <p>
-            Each check also counts your account as active that day, with the CLI version, operating system and CPU architecture. Once a day the CLI also sends the totals of your local token use: tokens by type, recorded cost, tokens and tasks per day, the models and providers you use with their share of tokens, effort levels, chats and streaks. Never your prompts, code, file names or model output. A CI runner (where <code>CI</code> is set) never sends these totals, and the workflows <code>vector github install</code> writes set <code>VECTOR_DISABLE_USAGE=1</code>. Set <code>VECTOR_DISABLE_USAGE=1</code> to keep the account check without being counted and send nothing else.
+            Each check also counts your account as active that day, with the CLI version, operating system and CPU architecture. Once a day the CLI also sends the totals of your local token use: tokens by type, recorded cost, tokens and tasks per day, the models and providers you use with their share of tokens, the effort levels you picked, chats and streaks. Never your prompts, code, file names or model output. A CI runner (where <code>CI</code> is set) never sends these totals, and the workflows <code>vector github install</code> writes set <code>VECTOR_DISABLE_USAGE=1</code>. Set <code>VECTOR_DISABLE_USAGE=1</code> to keep the account check without being counted and send nothing else.
+          </p>
+          <p>
+            {release113.since} usage check-ins are unchanged and never include skills or workflow data. A learned
+            workflow default changes no usage total: the effort levels are the ones you picked.
           </p>
 
           <h2 id="cli-run">One-shot and scripted runs</h2>
@@ -67,6 +72,65 @@ vector run -c "now fix it" --variant high</code><button class="doc-cmd-copy" typ
             running at the time, says why, and exits
             with code 3, so a script can tell a budget stop from a failure. See
             <a href="/docs/tokenomics">Tokenomics</a> for the Run Guard.
+          </p>
+
+          <h2 id="cli-helpers">Subagents and workflows in the terminal</h2>
+          <p>
+            {release113.since} with the next CLI release, <code>vector tasks</code> manages the subagents of a session on
+            a running server, given <code>--attach</code> and <code>--session</code>: <code>list</code> (with
+            <code>--active</code>, <code>--shells</code> for background commands and <code>--descendants</code>),
+            <code>inspect</code>, <code>message</code>, <code>stop</code> (<code>--background</code> stops only background
+            subagents), <code>wait</code>, <code>interrupt</code> (<code>--helpers</code> also stops every helper),
+            <code>resume</code> (IDs, or <code>--interrupted</code> for every subagent a restart interrupted, with an
+            optional message), <code>promote</code> (Move to background), <code>changes</code> (<code>--diff</code> for
+            the patch), <code>merge</code> (<code>--file</code> to pick paths), <code>discard</code>, and
+            <code>workflow</code> for a run's stages. <code>vector tasks list</code> starts with the limits line, such as
+            "5 of 8 running · 12 of 32 started this request · $3.10 of $25.00 subagent spend".
+          </p>
+          <p>
+            {release113.since} <code>merge</code> and <code>discard</code> ask (y/N) at a terminal and need
+            <code>--yes</code> without one. Only the server owner may merge or discard, and both refuse to run from an
+            agent's shell or Vector's own terminal, as <code>vector run --workflow</code> and
+            <code>vector workflow resume</code> do. An action the server's engine lacks says the engine predates 1.99.113
+            and needs an update.
+          </p>
+          <p class="doc-cmd"><code>vector tasks list --attach http://localhost:4096 --session &lt;id&gt; --active
+vector tasks resume --interrupted --attach http://localhost:4096 --session &lt;id&gt;
+vector tasks merge &lt;taskID&gt; --attach http://localhost:4096 --session &lt;id&gt;</code><button class="doc-cmd-copy" type="button" aria-label="Copy this command">Copy</button></p>
+          <p>
+            {release113.since} with the next CLI release, <code>vector workflow</code> validates a workflow file offline
+            and, attached to a server, lists saved workflows and lists, shows, resumes and stops runs.
+            <code>vector run --workflow &lt;name or file&gt;</code>, with <code>--input key=value</code> and
+            <code>--summarize</code>, runs one and prints its plan before it starts. <code>vector workflow</code> is not
+            <code>vector memory workflow</code>, which shows workflow insights. See
+            <a href="/docs/workflows#cli">Workflows in the terminal</a>.
+          </p>
+          <p>
+            {release113.since} with the next CLI release, Ctrl+C in a scripted <code>vector run</code> at a terminal
+            stops the run's work. Attached to a server with <code>--attach</code>, the first press stops the main turn
+            and says how many helpers are still running, and a second within 5 seconds stops them too and exits with
+            code 130; <code>--stop-helpers</code> makes the first press stop everything. Without <code>--attach</code>
+            the engine runs inside <code>vector run</code>, so Ctrl+C stops the run and its helpers at once and exits
+            with code 130. <code>vector run</code> waits for background subagents and background commands before it
+            ends, within its inactivity limit, and <code>--size</code> standard and thorough offer subagents while light
+            only manages ones already running. With <code>--mini</code>, the palette gains Stop including helpers and
+            Resume interrupted helpers, and without <code>--attach</code> exiting ends the helpers it started.
+          </p>
+          <p>
+            {release113.since} with the next CLI release, the TUI stops the main turn and every helper with
+            <code>&lt;leader&gt;k</code> (Ctrl+X then K by default) or <code>/stop-all</code>. Esc Esc still stops only
+            the main turn, then a toast says how many helpers are still running and how to stop them; the palette toggle
+            "Esc also stops helpers" makes Esc Esc stop them too. Ctrl+B moves a whole foreground batch to the
+            background. <code>/tasks</code> leads with "Resume all interrupted (N)" and Stop including helpers, lists
+            helpers under "Interrupted by a restart" and "Workflow &lt;title&gt;", and offers Resume, Continue with a
+            message, Move to background, Merge, Discard, and a run's stages and agents. After a restart a toast points
+            to <code>/tasks</code> once. <code>/workflow</code> asks for a saved workflow's inputs and shows its plan
+            before it starts.
+          </p>
+          <p>
+            {release113.since} Windows WSL servers keep the engine version the desktop requires, so they get these
+            commands once a later desktop release requires the new CLI; until then the desktop hides what that engine
+            lacks.
           </p>
 
           <h2 id="cli-sessions">Sessions: list, export, import</h2>

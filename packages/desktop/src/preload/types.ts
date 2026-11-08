@@ -619,6 +619,9 @@ export type ParallelWorkspaceRecord = {
   riskLevel: "low" | "medium" | "high"
   estimatedCost: string
   actualCost?: string
+  measuredCost?: number
+  billing?: "codium"
+  costKind?: "free" | "priced" | "plan" | "local" | "unknown" | "codium"
   finalSummary: string
   mergeState: "none" | "merged" | "discarded"
   logs: string[]
@@ -689,6 +692,8 @@ export type SwarmModelCandidate = {
   provider: string
   model: string
   label?: string
+  /** Codium Auto, a model the plan does not include, or one chosen only by name: a swarm never adds these itself. */
+  codium?: { locked?: boolean; manualOnly?: boolean; auto?: boolean }
 }
 
 export type SwarmTaskRecord = {
@@ -790,6 +795,8 @@ export type BackgroundTaskRecord = {
   browserActive: boolean
   costEstimate: string
   actualUsage?: string
+  billing?: "codium"
+  costKind?: "free" | "priced" | "plan" | "local" | "unknown" | "codium"
   errorSummary?: string
   logs: string[]
   actions: {

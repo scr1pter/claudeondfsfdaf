@@ -4,6 +4,7 @@ import type { Prompt } from "@/context/prompt"
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 let resolveExecutionAgent: typeof import("./submit").resolveExecutionAgent
 let resolveSubmissionAgent: typeof import("./submit").resolveSubmissionAgent
+let queueEnabled: typeof import("./submit").queueEnabled
 
 const createdClients: string[] = []
 const createdSessions: string[] = []
@@ -33,6 +34,12 @@ const sentPrompts: Array<{
 }> = []
 const syncedDirectories: string[] = []
 const promotedDrafts: Array<{ draftID: string; server: string; sessionId: string }> = []
+// Every session_status write, from the directory store and the server store alike.
+const statusSets: Array<{ sessionID: string; type: string }> = []
+// Every stop request the root client received, in order.
+const stops: Array<{ route: string; input: Record<string, unknown> }> = []
+let promptError: Error | undefined
+let commands: Array<{ name: string }> = []
 
 let params: { id?: string } = {}
 let search: { draftId?: string } = {}
@@ -47,9 +54,10 @@ let engineAgents = [{ name: "build" }, { name: "research" }]
 let providerLoaded = true
 // The desktop app's Vector account bridge; the web build has none.
 let vectorAccount: object | undefined = {}
-const toasts: Array<{ title?: string; description?: string }> = []
+const toasts: Array<{ title?: string; description?: string; actions?: Array<{ label: string; onClick: unknown }> }> = []
 
-const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
+const typed = (text: string): Prompt => [{ type: "text", content: text, start: 0, end: text.length }]
+let promptValue: Prompt = typed("ls")
 const prompt = {
   ready: Object.assign(() => true, { promise: Promise.resolve(true) }),
   current: () => promptValue,
@@ -97,11 +105,29 @@ const clientFor = (directory: string) => {
       },
       prompt: async () => ({ data: undefined }),
       promptAsync: async (input: (typeof sentPrompts)[number]["input"]) => {
+        if (promptError) throw promptError
         sentPrompts.push({ directory, input })
         return { data: undefined }
       },
       command: async () => ({ data: undefined }),
-      abort: async () => ({ data: undefined }),
+      abort: async (input: { sessionID: string }) => {
+        stops.push({ route: "session.abort", input })
+        return { data: true }
+      },
+    },
+    experimental: {
+      session: {
+        stop: async (input: Record<string, unknown>) => {
+          stops.push({ route: "experimental.session.stop", input })
+          return { data: { aborted: true, tasks: [], shells: 0, excluded: 0, skipped: 0 } }
+        },
+      },
+      task: {
+        stop: async (input: Record<string, unknown>) => {
+          stops.push({ route: "experimental.task.stop", input })
+          return { data: { tasks: [] } }
+        },
+      },
     },
     worktree: {
       create: async () => ({ data: { directory: `${directory}/new` } }),
@@ -121,7 +147,7 @@ beforeAll(async () => {
 
   mock.module("@vectordevai/ui/toast", () => ({
     Toast: { Region: () => null },
-    showToast: (options: { title?: string; description?: string }) => {
+    showToast: (options: (typeof toasts)[number]) => {
       toasts.push(options)
       return 0
     },
@@ -209,7 +235,9 @@ beforeAll(async () => {
         get agent() {
           return engineAgents
         },
-        command: [],
+        get command() {
+          return commands
+        },
         config: {},
         get provider_ready() {
           return providerReady
@@ -235,7 +263,9 @@ beforeAll(async () => {
           remove: () => undefined,
         },
       },
-      set: () => undefined,
+      set: (key: string, sessionID: string, value: { type: string }) => {
+        if (key === "session_status") statusSets.push({ sessionID, type: value.type })
+      },
     }),
   }))
 
@@ -243,7 +273,9 @@ beforeAll(async () => {
     useServerSync: () => () => ({
       session: {
         remember: () => undefined,
-        set: () => undefined,
+        set: (key: string, sessionID: string, value: { type: string }) => {
+          if (key === "session_status") statusSets.push({ sessionID, type: value.type })
+        },
       },
       child: (directory: string) => {
         syncedDirectories.push(directory)
@@ -283,6 +315,7 @@ beforeAll(async () => {
   createPromptSubmit = mod.createPromptSubmit
   resolveExecutionAgent = mod.resolveExecutionAgent
   resolveSubmissionAgent = mod.resolveSubmissionAgent
+  queueEnabled = mod.queueEnabled
 })
 
 beforeEach(() => {
@@ -310,6 +343,11 @@ beforeEach(() => {
   providerLoaded = true
   vectorAccount = {}
   toasts.length = 0
+  statusSets.length = 0
+  stops.length = 0
+  promptError = undefined
+  commands = []
+  promptValue = typed("ls")
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -1705,5 +1743,387 @@ describe("pasted text", () => {
       },
     })
     expect(commands).toMatchObject([{ command: "review", arguments: "Always cc my manager.", pasted: [[0, 21]] }])
+  })
+})
+
+describe("follow-ups while Vector works", () => {
+  const event = () => ({ preventDefault: () => undefined }) as unknown as Event
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 5))
+  // The open session's queueEnabled, as the session page builds it, while the agent works.
+  const working =
+    (followup: "steer" | "queue", steer = true) =>
+    (alternate: boolean) =>
+      queueEnabled({ busy: true, blocked: false, child: false, followup, steer, alternate })
+
+  const submitWhileWorking = (input: {
+    shouldQueue: (alternate: boolean) => boolean
+    mode?: "normal" | "shell"
+    queued?: unknown[]
+    foreground?: () => { promote?: () => Promise<boolean> } | undefined
+  }) =>
+    createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => input.mode ?? "normal",
+      working: () => true,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      shouldQueue: input.shouldQueue,
+      onQueue: (draft) => {
+        input.queued?.push(draft)
+        return true
+      },
+      foreground: input.foreground,
+      onSubmit: () => undefined,
+    })
+
+  test("Enter steers by default; Queue, an older engine and Alt+Enter flip it; idle, blocked and subagent sessions never queue", () => {
+    const base = { busy: true, blocked: false, child: false, followup: "steer" as const, steer: true, alternate: false }
+    expect(queueEnabled(base)).toBe(false)
+    expect(queueEnabled({ ...base, alternate: true })).toBe(true)
+    expect(queueEnabled({ ...base, followup: "queue" })).toBe(true)
+    expect(queueEnabled({ ...base, followup: "queue", alternate: true })).toBe(false)
+    // An engine before 1.99.100 cannot take a message mid-run, so Enter queues there and Alt+Enter steers.
+    expect(queueEnabled({ ...base, steer: false })).toBe(true)
+    expect(queueEnabled({ ...base, steer: false, alternate: true })).toBe(false)
+    for (const closed of [{ busy: false }, { blocked: true }, { child: true }])
+      for (const alternate of [false, true])
+        for (const followup of ["steer", "queue"] as const)
+          expect(queueEnabled({ ...base, ...closed, alternate, followup })).toBe(false)
+  })
+
+  test("Alt+Enter queues a message that would steer, and plain Enter steers it into the running turn", async () => {
+    params = { id: "session-1" }
+    promptValue = typed("also update the changelog")
+    const queued: unknown[] = []
+    const submit = submitWhileWorking({ shouldQueue: working("steer"), queued })
+
+    await submit.handleSubmit(event(), { alternate: true })
+    expect(queued).toHaveLength(1)
+    expect(sentPrompts).toHaveLength(0)
+
+    await submit.handleSubmit(event())
+    await settle()
+    expect(queued).toHaveLength(1)
+    expect(sentPrompts).toHaveLength(1)
+  })
+
+  test("with Queue chosen, Enter queues and Alt+Enter steers", async () => {
+    params = { id: "session-1" }
+    promptValue = typed("also update the changelog")
+    const queued: unknown[] = []
+    const submit = submitWhileWorking({ shouldQueue: working("queue"), queued })
+
+    await submit.handleSubmit(event())
+    expect(queued).toHaveLength(1)
+    await submit.handleSubmit(event(), { alternate: true })
+    await settle()
+    expect(queued).toHaveLength(1)
+    expect(sentPrompts).toHaveLength(1)
+  })
+
+  test("slash commands and shell input always queue while the agent works, whatever the mode", async () => {
+    params = { id: "session-1" }
+    commands = [{ name: "review" }]
+    promptValue = typed("/review the parser")
+    const queued: Array<{ shell?: true; prompt: Prompt }> = []
+    const submit = submitWhileWorking({ shouldQueue: working("steer"), queued: queued as unknown[] })
+    await submit.handleSubmit(event())
+    await submit.handleSubmit(event(), { alternate: true })
+    expect(queued).toHaveLength(2)
+    expect(queued.every((draft) => draft.shell === undefined)).toBe(true)
+
+    // Shell input queues as a shell command, never as a prompt.
+    promptValue = typed("bun test")
+    const shell = submitWhileWorking({ shouldQueue: working("queue"), mode: "shell", queued: queued as unknown[] })
+    await shell.handleSubmit(event(), { alternate: true })
+    expect(queued).toHaveLength(3)
+    expect(queued[2]!.shell).toBe(true)
+
+    // Text that only starts with a slash is a message, and steers.
+    promptValue = typed("/tmp is full, clear it")
+    await submit.handleSubmit(event())
+    await settle()
+    expect(queued).toHaveLength(3)
+    expect(sentPrompts).toHaveLength(1)
+    expect(sentShell).toHaveLength(0)
+  })
+
+  test("nothing queues once the queue is closed, commands included", async () => {
+    params = { id: "session-1" }
+    commands = [{ name: "review" }]
+    promptValue = typed("/review the parser")
+    const queued: unknown[] = []
+    const blocked = (alternate: boolean) =>
+      queueEnabled({ busy: true, blocked: true, child: false, followup: "queue", steer: true, alternate })
+    await submitWhileWorking({ shouldQueue: blocked, queued }).handleSubmit(event())
+    expect(queued).toHaveLength(0)
+  })
+
+  test("a queued shell draft runs as a shell command when it is sent", async () => {
+    const { sendFollowupDraft } = await import("./submit")
+    const ran: Array<{ command: string; agent: string }> = []
+    let prompted = false
+    const sent = await sendFollowupDraft({
+      client: {
+        local: { get: async () => ({ data: undefined }) },
+        session: {
+          shell: async (input: { command: string; agent: string }) => {
+            ran.push(input)
+            return { data: undefined }
+          },
+          promptAsync: async () => {
+            prompted = true
+            return { data: undefined }
+          },
+        },
+      } as never,
+      serverSync: { session: { set: () => undefined } } as never,
+      sync: {
+        data: { command: [], agent: engineAgents, message: {}, part: {}, config: {} },
+        session: { optimistic: { add: () => undefined, remove: () => undefined } },
+      } as never,
+      draft: {
+        sessionID: "session-1",
+        sessionDirectory: "/repo/main",
+        prompt: typed("bun test"),
+        context: [],
+        agent: "build",
+        model: { providerID: "provider", modelID: "model" },
+        shell: true,
+      },
+    })
+    expect(sent).toBe(true)
+    expect(ran).toEqual([expect.objectContaining({ command: "bun test", agent: "build" })])
+    expect(prompted).toBe(false)
+  })
+
+  test("a steer while a foreground subagent holds the turn says it waits for that step, and offers Move to background", async () => {
+    params = { id: "session-1" }
+    promptValue = typed("also update the changelog")
+    const moved: string[] = []
+    const waits = () => toasts.filter((toast) => toast.title === "prompt.toast.steerWaits.title")
+    await submitWhileWorking({
+      shouldQueue: working("steer"),
+      foreground: () => ({ promote: async () => (moved.push("moved"), true) }),
+    }).handleSubmit(event())
+    await settle()
+    expect(sentPrompts).toHaveLength(1)
+    expect(waits()).toHaveLength(1)
+    expect(waits()[0]?.actions?.map((action) => action.label)).toEqual(["prompt.toast.steerWaits.background"])
+    ;(waits()[0]!.actions![0]!.onClick as () => void)()
+    expect(moved).toEqual(["moved"])
+
+    // An engine that cannot move them still says why the message waits, without the button.
+    toasts.length = 0
+    await submitWhileWorking({ shouldQueue: working("steer"), foreground: () => ({}) }).handleSubmit(event())
+    await settle()
+    expect(waits()).toHaveLength(1)
+    expect(waits()[0]?.actions).toBeUndefined()
+
+    // No foreground subagent, or a steer that failed: nothing waits on one.
+    toasts.length = 0
+    await submitWhileWorking({ shouldQueue: working("steer"), foreground: () => undefined }).handleSubmit(event())
+    await settle()
+    promptError = new Error("The engine refused the message")
+    await submitWhileWorking({
+      shouldQueue: working("steer"),
+      foreground: () => ({ promote: async () => true }),
+    }).handleSubmit(event())
+    await settle()
+    expect(waits()).toEqual([])
+    expect(moved).toEqual(["moved"])
+  })
+
+  test("a failed steer keeps the session busy, while a failed send from idle still shows it idle", async () => {
+    params = { id: "session-1" }
+    promptValue = typed("also update the changelog")
+    promptError = new Error("The engine refused the message")
+
+    await submitWhileWorking({ shouldQueue: working("steer") }).handleSubmit(event())
+    await settle()
+    // The run it was joining is still going: nothing marks the session idle, or busy.
+    expect(statusSets).toEqual([])
+    expect(toasts.some((toast) => toast.title === "prompt.toast.promptSendFailed.title")).toBe(true)
+
+    const idle = createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+    })
+    await idle.handleSubmit(event())
+    await settle()
+    expect(statusSets.at(0)).toEqual({ sessionID: "session-1", type: "busy" })
+    expect(statusSets.at(-1)).toEqual({ sessionID: "session-1", type: "idle" })
+  })
+})
+
+describe("the abort scope", () => {
+  const helpers = { count: 2, taskIDs: ["ses_a", "ses_b"], sessionIDs: ["ses_a", "ses_b"], untracked: [] }
+  const none = { count: 0, taskIDs: [], sessionIDs: [], untracked: [] }
+  const capabilities = (sessionStop: boolean) => ({
+    backgroundSubagents: true,
+    workDelegation: true,
+    subagentLimits: true,
+    sessionStop,
+    taskPromote: true,
+    taskResume: true,
+    taskAttention: true,
+    taskIsolation: true,
+    workflows: true,
+    backgroundShells: true,
+  })
+  const stopper = (input: {
+    scope: "turn" | "all"
+    helpers?: typeof helpers | (() => typeof helpers)
+    sessionStop?: boolean
+    aborted?: string[]
+  }) =>
+    createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => true,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onAbort: () => input.aborted?.push("paused"),
+      stopScope: () => input.scope,
+      helpers: () => (typeof input.helpers === "function" ? input.helpers() : (input.helpers ?? none)),
+      capabilities: () => capabilities(input.sessionStop ?? true),
+    })
+
+  test("Stop with the default setting stops only the main turn, then says how many helpers still work", async () => {
+    params = { id: "session-1" }
+    const aborted: string[] = []
+    await stopper({ scope: "turn", helpers, aborted }).abort()
+    expect(stops).toEqual([{ route: "session.abort", input: { sessionID: "session-1" } }])
+    expect(aborted).toEqual(["paused"])
+    const toast = toasts.at(-1)
+    expect(toast?.title).toBe("prompt.toast.helpersLeft.title.other")
+    expect(toast?.actions?.map((action) => action.label)).toEqual([
+      "prompt.toast.helpersLeft.stopAll",
+      "prompt.toast.helpersLeft.showTasks",
+    ])
+  })
+
+  test("the toast's Stop them too stops the main turn and every helper through route 1", async () => {
+    params = { id: "session-1" }
+    await stopper({ scope: "turn", helpers }).abort()
+    const stopAll = toasts.at(-1)?.actions?.[0]?.onClick as () => void
+    stops.length = 0
+    stopAll()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(stops).toEqual([
+      {
+        route: "experimental.session.stop",
+        input: { sessionID: "session-1", helpers: true, reason: "Stopped with the main agent; partial work was kept." },
+      },
+    ])
+  })
+
+  test("Stop them too stops the conversation that was stopped, even after the user opened another one", async () => {
+    params = { id: "session-1" }
+    const aborted: string[] = []
+    await stopper({ scope: "turn", helpers, aborted }).abort()
+    const stopAll = toasts.at(-1)?.actions?.[0]?.onClick as () => void
+    stops.length = 0
+    params = { id: "session-2" }
+    stopAll()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(stops).toEqual([
+      {
+        route: "experimental.session.stop",
+        input: { sessionID: "session-1", helpers: true, reason: "Stopped with the main agent; partial work was kept." },
+      },
+    ])
+    // The open conversation's queue is not paused: only the Stop itself paused the stopped one's.
+    expect(aborted).toEqual(["paused"])
+
+    // An engine without route 1 stops the stopped conversation's helpers, not the ones of the conversation now open.
+    const other = { count: 1, taskIDs: ["ses_other"], sessionIDs: ["ses_other"], untracked: [] }
+    stops.length = 0
+    params = { id: "session-1" }
+    await stopper({
+      scope: "turn",
+      helpers: () => (params.id === "session-1" ? helpers : other),
+      sessionStop: false,
+    }).abort()
+    const older = toasts.at(-1)?.actions?.[0]?.onClick as () => void
+    stops.length = 0
+    params = { id: "session-2" }
+    older()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(stops.map((stop) => [stop.route, stop.input.sessionID])).toEqual([
+      ["session.abort", "session-1"],
+      ["experimental.task.stop", "session-1"],
+    ])
+    expect(stops[1]!.input.taskIDs).toEqual(["ses_a", "ses_b"])
+  })
+
+  test("with Stop set to include helpers, the default stop (Esc, Ctrl+G, Stop) never uses the plain abort", async () => {
+    params = { id: "session-1" }
+    await stopper({ scope: "all", helpers }).abort()
+    expect(stops.map((stop) => stop.route)).toEqual(["experimental.session.stop"])
+    expect(stops[0]!.input.helpers).toBe(true)
+    expect(toasts).toEqual([])
+
+    // An engine without route 1 gets the abort and task.stop for the helpers.
+    stops.length = 0
+    await stopper({ scope: "all", helpers, sessionStop: false }).abort()
+    expect(stops.map((stop) => stop.route)).toEqual(["session.abort", "experimental.task.stop"])
+    expect(stops[1]!.input.taskIDs).toEqual(["ses_a", "ses_b"])
+  })
+
+  test("a scope named by the Stop menu wins over the setting, and no toast appears without helpers", async () => {
+    params = { id: "session-1" }
+    await stopper({ scope: "all", helpers }).abort("turn")
+    expect(stops.map((stop) => stop.route)).toEqual(["session.abort"])
+    expect(toasts.at(-1)?.title).toBe("prompt.toast.helpersLeft.title.other")
+
+    stops.length = 0
+    toasts.length = 0
+    await stopper({ scope: "turn" }).abort("all")
+    expect(stops.map((stop) => stop.route)).toEqual(["experimental.session.stop"])
+
+    stops.length = 0
+    await stopper({ scope: "turn" }).abort()
+    expect(stops.map((stop) => stop.route)).toEqual(["session.abort"])
+    expect(toasts).toEqual([])
+  })
+
+  test("an empty submit while working stops with the setting's scope", async () => {
+    params = { id: "session-1" }
+    promptValue = typed("   ")
+    await stopper({ scope: "all", helpers }).handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(stops.map((stop) => stop.route)).toEqual(["experimental.session.stop"])
   })
 })

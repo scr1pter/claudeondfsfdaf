@@ -87,7 +87,17 @@ describe("event HttpApi", () => {
 
         const created = yield* requestInDirectory("/session", directory, { method: "POST" })
         expect(created.status).toBe(200)
-        expect(yield* readEvent(reader)).toMatchObject({ type: "session.created" })
+        expect(yield* readEvent(reader)).toMatchObject({
+          type: "session.created",
+          properties: {
+            info: {
+              tokensOwnOnly: true,
+              subagentTokensOwnOnly: true,
+              cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            },
+          },
+        })
       }),
     { trusted: true, git: true, config: { formatter: false, lsp: false } },
   )

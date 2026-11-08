@@ -433,3 +433,24 @@ test("late ancillary usage refreshes an already recorded idle session", async ()
   expect(calls).toEqual(["s1", "s1"])
   recorder.dispose()
 })
+
+test("Codium and mixed delegated Codium usage never become dollar recommendation evidence", () => {
+  expect(session({ spend: { cost: 0.02, codiumSteps: 1 } })).toBeUndefined()
+  expect(session({ spend: { cost: 0.02, subagentCodiumSteps: 1 } })).toBeUndefined()
+  expect(
+    session({
+      messages: [
+        {
+          info: {
+            role: "assistant",
+            providerID: "vector-plan",
+            modelID: "vector-flash",
+            tokens: usage,
+            cost: 0,
+            finish: "stop",
+          },
+        },
+      ],
+    }),
+  ).toBeUndefined()
+})

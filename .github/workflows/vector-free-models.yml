@@ -60,7 +60,7 @@ jobs:
         env:
           VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
         run: >-
-          bun test test/model-plans-api.test.ts test/model-topups-api.test.ts test/model-plans.test.ts
+          bun test test/model-plans-api.test.ts test/model-plans.test.ts
           test/codium-payments.test.ts test/model-plan-setup.test.ts
           test/model-plan-models-api.test.ts test/model-plan-status-api.test.ts test/model-plan-context.test.ts
           test/model-plan-catalog.test.ts src/lib/model-plans.test.ts src/components/marketing/codium

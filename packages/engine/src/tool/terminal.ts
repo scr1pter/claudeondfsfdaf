@@ -255,13 +255,20 @@ export const TerminalTool = Tool.define<
           params,
           `Vector did not open the terminal: ${Shell.name(shell)} cannot pass one of the arguments literally. Run the command line instead.`,
         )
-      if (Sandbox.sandboxEnabled()) yield* ctx.ask(unsandboxed(line || shell))
-      yield* permission.ask(ctx, { command: line, cwd, shell })
+      // A terminal runs outside the shell sandbox: with it on, that is asked after the refusals, before the shell asks.
+      const scan = yield* permission.ask(ctx, {
+        command: line,
+        cwd,
+        shell,
+        ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line || shell) } : {}),
+      })
       const extra = yield* plugin.trigger(
         "shell.env",
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
+      // As the shell tool does before it spawns: the files the command line writes become this session's changes.
+      yield* permission.admit(ctx, [scan])
       const created = yield* pty.create(
         {
           title: params.title ?? (line.split("\n")[0].slice(0, 80) || undefined),
@@ -352,23 +359,28 @@ export const TerminalTool = Tool.define<
         strokes,
         Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\",
       )
-      for (const line of typed.lines) {
-        if (Sandbox.sandboxEnabled()) yield* ctx.ask(unsandboxed(line.text))
-        const recalled = line.recalled === true || HISTORY.test(line.text)
-        yield* permission.ask(ctx, {
-          command: line.text,
-          cwd: info.cwd,
-          shell,
-          unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
-          // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
-          recalled:
-            recalled ||
-            (!line.exact &&
-              line.text
-                .split(/[\s;&|()`{}]+/)
-                .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
-        })
-      }
+      const scans = yield* Effect.forEach(typed.lines, (line) =>
+        Effect.gen(function* () {
+          const recalled = line.recalled === true || HISTORY.test(line.text)
+          return yield* permission.ask(ctx, {
+            command: line.text,
+            cwd: info.cwd,
+            shell,
+            ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line.text) } : {}),
+            unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
+            // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
+            recalled:
+              recalled ||
+              (!line.exact &&
+                line.text
+                  .split(/[\s;&|()`{}]+/)
+                  .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
+          })
+        }),
+      )
+      // One admission for every line the strokes submit, before the first keystroke: a line refused above or here types
+      // nothing, and leaves no claim on a file an earlier line of the same call names.
+      yield* permission.admit(ctx, scans)
       pending.set(info.id, typed.line)
       const from = (yield* pty.read(info.id, { limit: 0 })).end
       for (const [index, data] of writes.entries()) {

@@ -144,6 +144,7 @@ export const LIMITS: Readonly<Record<Research.Depth, { readonly usd: number; rea
 export function capLabel(input: {
   readonly depth: Depth
   readonly local: boolean
+  readonly codium?: boolean
   readonly own?: { readonly usd?: number; readonly steps?: number }
   readonly limits?: Partial<Record<Research.Depth, { readonly usd?: number; readonly steps?: number }>>
 }) {
@@ -151,6 +152,7 @@ export function capLabel(input: {
   const own = input.own?.usd !== undefined || input.own?.steps !== undefined ? input.own : undefined
   const limits = { ...LIMITS[depth], ...input.limits?.[depth] }
   const steps = own ? own.steps : limits.steps
+  if (input.codium) return steps === undefined ? "Codium · no step cap" : `Codium · ${steps} steps`
   if (input.local) return steps === undefined ? "Local · no step cap" : `Local · ${steps} steps`
   const usd = own ? own.usd : limits.usd
   if (usd !== undefined) return `Cap $${usd.toFixed(2)}`
