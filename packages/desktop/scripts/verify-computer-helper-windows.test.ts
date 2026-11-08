@@ -324,6 +324,50 @@ describe("Windows final-location executable admission", () => {
       await value.cleanup()
     }
   })
+  test("the release x64 verifier reads the packed Main pins through the asar reader's Windows backslash names", async () => {
+    const value = await fixture()
+    try {
+      const require = createRequire(import.meta.url)
+      const builder = createRequire(require.resolve("electron-builder/package.json"))
+      const library = createRequire(builder.resolve("app-builder-lib/package.json"))
+      const asar: {
+        listPackage(file: string): string[]
+        statFile(
+          file: string,
+          entry: string,
+          followLinks?: boolean,
+        ): { size?: number; unpacked?: boolean; link?: string }
+        extractFile(file: string, entry: string): Buffer
+      } = require(library.resolve("@electron/asar"))
+      // The simulated naming rules below are those of the pinned reader; a bumped reader must revisit them.
+      expect(
+        await Bun.file(path.resolve(path.dirname(library.resolve("@electron/asar")), "../package.json")).json(),
+      ).toMatchObject({ name: "@electron/asar", version: "3.4.1" })
+      // On Windows the pinned reader lists path.win32 joins and splits a nested read on "\\", so a "/" name is absent
+      // there (preview 42454176369, Windows desktop apps step 15). This reads the same real archive with those rules;
+      // on a Windows host the real reader already names entries this way, so the case holds there unchanged.
+      const host = (entry: string) => {
+        if (entry.includes("/")) throw new Error(`"${entry}" was not found in this archive`)
+        return entry.split("\\").join(path.sep)
+      }
+      const windows = (listed: (names: string[]) => string[]) => ({
+        listPackage: (file: string) => listed(asar.listPackage(file).map((entry) => entry.replaceAll("/", "\\"))),
+        statFile: (file: string, entry: string, followLinks?: boolean) => asar.statFile(file, host(entry), followLinks),
+        extractFile: (file: string, entry: string) => asar.extractFile(file, host(entry)),
+      })
+      expect(
+        await extractWindowsHelperCompiledPins(value.app, { asar: windows((names) => names), separator: "\\" }),
+      ).toEqual({ x64: digest(value.bytes) })
+      await expect(
+        extractWindowsHelperCompiledPins(value.app, {
+          asar: windows((names) => [...names, "\\out\\main\\index.js"]),
+          separator: "\\",
+        }),
+      ).rejects.toThrow("missing or ambiguous")
+    } finally {
+      await value.cleanup()
+    }
+  })
   test("observes signing through a fixed encoded command and private literal-path environment", async () => {
     const value = await fixture()
     try {

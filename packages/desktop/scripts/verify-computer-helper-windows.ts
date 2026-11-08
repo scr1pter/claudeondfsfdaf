@@ -67,16 +67,25 @@ async function loadReaders() {
   return readers.value
 }
 
-/** Read code from the actual packed Main, not a separate unsigned metadata file or the build environment. */
-export async function extractWindowsHelperCompiledPins(app: string): Promise<ComputerHelperPins> {
+/**
+ * Read code from the actual packed Main, not a separate unsigned metadata file or the build environment. The pinned
+ * asar reader names entries with the host's path separator: its listing joins them with path.join and a nested read
+ * splits on path.sep, so on Windows both use backslashes. Names are checked in "/" form and read in the host form.
+ */
+export async function extractWindowsHelperCompiledPins(
+  app: string,
+  dependencies: { asar?: AsarReader; separator?: string } = {},
+): Promise<ComputerHelperPins> {
   const root = await realpath(app)
   const archive = path.join(root, "resources/app.asar")
   const status = await lstat(archive)
   if (!status.isFile() || status.isSymbolicLink() || !(await realpath(archive)).startsWith(root + path.sep))
     throw new Error("The packaged Windows Main archive is missing or invalid.")
-  const { asar } = await loadReaders()
+  const asar = dependencies.asar ?? (await loadReaders()).asar
+  const separator = dependencies.separator ?? path.sep
   const read = (entry: string, limit: number) => {
-    const metadata = asar.statFile(archive, entry, false)
+    const name = entry.split("/").join(separator)
+    const metadata = asar.statFile(archive, name, false)
     if (
       metadata.link ||
       metadata.unpacked ||
@@ -85,7 +94,7 @@ export async function extractWindowsHelperCompiledPins(app: string): Promise<Com
       metadata.size > limit
     )
       throw new Error("The packaged Main pin source must be bounded, packed regular code.")
-    return asar.extractFile(archive, entry).toString("utf8")
+    return asar.extractFile(archive, name).toString("utf8")
   }
   const manifest: unknown = JSON.parse(read("package.json", 65_536))
   if (!record(manifest) || (manifest.main !== "./out/main/index.js" && manifest.main !== "out/main/index.js"))
@@ -93,11 +102,13 @@ export async function extractWindowsHelperCompiledPins(app: string): Promise<Com
   const listed = asar.listPackage(archive)
   if (listed.length > 65_536) throw new Error("The packaged Main archive has too many entries.")
   const sources = listed
+    .map((entry) => entry.split(separator).join("/"))
     .filter((entry) => /^\/?out\/main\/.+\.(?:c|m)?js$/.test(entry))
     .map((entry) => entry.replace(/^\//, ""))
   if (
     !sources.includes("out/main/index.js") ||
     sources.length > 256 ||
+    new Set(sources).size !== sources.length ||
     sources.some((entry) => entry.split("/").some((part) => part === "." || part === ".."))
   )
     throw new Error("The packaged Main JavaScript files are missing or ambiguous.")
