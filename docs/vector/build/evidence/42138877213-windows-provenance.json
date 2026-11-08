@@ -774,7 +774,7 @@
       "passed": 35,
       "failed": 0,
       "skipped": 11,
-      "source": "step 12 log totals"
+      "source": "step 12 log totals, matched by the verified report rows in verifiedReportArchive"
     },
     "genericElectronSmoke": {
       "passed": 15,
@@ -825,7 +825,7 @@
       }
     }
   ],
-  "artifactVerification": "API metadata only: ZIP not downloaded, so no member is verified; its API size and digest are independently witnessed by the producing job's CI upload lines in uploadWitness",
+  "artifactVerification": "Verified (H2, 2026-11-08): the ZIP was downloaded after H1; its 1343 bytes and SHA-256 match the API size_in_bytes and digest, and both members' raw bytes and SHA-256 are in verifiedReportArchive. The uploadWitness CI lines remain a second, independent witness of the same size and digest.",
   "uploadWitness": {
     "job": 127633948612,
     "step": 25,
@@ -848,26 +848,462 @@
       "sizeInBytes": true,
       "digest": true
     },
-    "verification": "API metadata only: CI log witness of the uploaded ZIP; no member verified"
+    "verification": "CI log witness of the uploaded ZIP. Superseded as this artifact's verification by the H2 download (verifiedReportArchive, 2026-11-08), which it matches."
   },
   "limitations": [
-    "Artifact 13467212708 was not downloaded: its storage host is not allowed from this environment, and widening network access is an owner decision.",
-    "The per-scenario isolated breakdown is unverified for this run.",
-    "The job log prints only the totals lines; the per-row SKIPPED/FAILED lines go to the step summary only.",
-    "Observed: step 12 shows no throw and no error line after its totals; the log never prints the exit code. Derived from the step source (.github/workflows/computer-helper.yml:721 throws on any nonzero status): the self-test command exited 0. Its API conclusion success does not distinguish this alone because the step is continue-on-error. The native report code is unverified because the artifact was not downloaded.",
+    "Artifact 13467212708 could not be downloaded during H1 because its storage host was not allowed from this environment. It was downloaded and verified on 2026-11-08 during H2; see corrections.",
+    "The job log prints only the totals lines; the per-row SKIPPED/FAILED lines go to the step summary only. The per-row isolated facts come from the verified report.",
+    "Observed: step 12 shows no throw and no error line after its totals; the log never prints the exit code. Derived from the step source (.github/workflows/computer-helper.yml:721 throws on any nonzero status): the self-test command exited 0. Its API conclusion success does not distinguish this alone because the step is continue-on-error. The verified isolated report records code 0, consistent with that derivation.",
     "Staged step 18 shows the same 28 receipts as the fast run and then the throw; there is no native Stop evidence.",
     "windows-arm64-test was skipped after windows-build failed, and the stage archive/upload, digest and shipping/test upload steps 19-24 were skipped."
   ],
   "inferences": [
-    "Inference only, not observed: 35 passed/11 skipped/0 failed (46 rows, the same total as the fast run's 34/2/10 at the same commit) is consistent with capture-color-patch passing and the aggregate privileged row becoming a skip (as in the Mac isolated-auto reports, where that row is skipped native-skip with report code 0), which would suggest intermittent capture timing. It is one consistent explanation, not the only one, and no row is verified."
+    "Inference only: capture-color-patch failed in the same-commit fast run 42138851647 (stage capture-window-item-full-ticket-expired, nativeCode capture_unavailable) and passed in this run, which suggests intermittent capture timing. Two runs establish neither a failure rate nor a cause."
   ],
-  "verifiedReportArchive": null,
+  "verifiedReportArchive": {
+    "zipPath": "/tmp/vector-hands/artifacts/dl/a13467212708.zip",
+    "zipBytes": 1343,
+    "zipSha256": "344af284c3207bf49d2ad58da0b1b11e5f9199d820c1e7c977de8da2a5c7051f",
+    "apiSizeMatched": true,
+    "apiDigestMatched": true,
+    "extractedTo": "/tmp/vector-hands/h2-x13467212708",
+    "memberOrder": "ZIP member order",
+    "reports": [
+      {
+        "member": "computer-win32-privileged.json",
+        "rawBytes": 4276,
+        "rawSha256": "3d6371d61c8591394f0ea59fdb32855247af01487156ecdead74f1adf221f9ea",
+        "counts": {
+          "passed": 35,
+          "failed": 0,
+          "skipped": 11
+        },
+        "report": {
+          "schemaVersion": 1,
+          "platform": "win32",
+          "privileged": "auto",
+          "checks": [
+            {
+              "name": "catalog",
+              "status": "passed"
+            },
+            {
+              "name": "unit",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged",
+              "status": "passed"
+            },
+            {
+              "name": "packaged",
+              "status": "passed"
+            },
+            {
+              "name": "target-control",
+              "status": "passed"
+            },
+            {
+              "name": "probe.first",
+              "status": "passed"
+            },
+            {
+              "name": "probe.fresh",
+              "status": "passed"
+            },
+            {
+              "name": "responsible",
+              "status": "passed"
+            },
+            {
+              "name": "unverified-parent",
+              "status": "passed"
+            },
+            {
+              "name": "channel-eof",
+              "status": "passed"
+            },
+            {
+              "name": "parent-death",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.cancel-idle",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.eof",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.frame-too-large",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.heartbeat-loss",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.hello",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.malformed-json",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.permissions",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.session",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.shutdown",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.unsupported-action",
+              "status": "passed"
+            },
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "native-skip"
+            },
+            {
+              "name": "unprivileged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "target-control.windows-test-target-control-schema",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.privileged-isolated-target",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.apps-running-target",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.apps-installed-target",
+              "status": "skipped",
+              "reason": "target_not_installed"
+            },
+            {
+              "name": "privileged.capture-color-patch",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.capture-affinity-exclusion",
+              "status": "passed"
+            },
+            {
+              "name": "privileged.uia-counter-increment",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.uia-value-set-and-readback",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.secure-field-refusal",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.tagged-click-increments",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.unicode-type-readback",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.stale-capture-refusal",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.owned-input-release",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.input-detection-probe",
+              "status": "skipped",
+              "reason": "input_detection_unavailable"
+            },
+            {
+              "name": "privileged.hardware-user-input-pauses",
+              "status": "skipped",
+              "reason": "hardware_input_required"
+            },
+            {
+              "name": "privileged.isolated-target-cleanup",
+              "status": "passed"
+            }
+          ],
+          "code": 0
+        }
+      },
+      {
+        "member": "computer-win32-core.json",
+        "rawBytes": 2466,
+        "rawSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+        "counts": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 1
+        },
+        "report": {
+          "schemaVersion": 1,
+          "platform": "win32",
+          "privileged": "off",
+          "checks": [
+            {
+              "name": "catalog",
+              "status": "passed"
+            },
+            {
+              "name": "unit",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged",
+              "status": "passed"
+            },
+            {
+              "name": "packaged",
+              "status": "passed"
+            },
+            {
+              "name": "target-control",
+              "status": "passed"
+            },
+            {
+              "name": "probe.first",
+              "status": "passed"
+            },
+            {
+              "name": "probe.fresh",
+              "status": "passed"
+            },
+            {
+              "name": "responsible",
+              "status": "passed"
+            },
+            {
+              "name": "unverified-parent",
+              "status": "passed"
+            },
+            {
+              "name": "channel-eof",
+              "status": "passed"
+            },
+            {
+              "name": "parent-death",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.cancel-idle",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.eof",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.frame-too-large",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.heartbeat-loss",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.hello",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.malformed-json",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.permissions",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.session",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.shutdown",
+              "status": "passed"
+            },
+            {
+              "name": "conformance.unsupported-action",
+              "status": "passed"
+            },
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            },
+            {
+              "name": "unprivileged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "unprivileged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.wire-codec",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-pe",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-manifest",
+              "status": "passed"
+            },
+            {
+              "name": "packaged.packaged-version",
+              "status": "passed"
+            },
+            {
+              "name": "target-control.windows-test-target-control-schema",
+              "status": "passed"
+            }
+          ],
+          "code": 0
+        }
+      }
+    ],
+    "comparison": {
+      "with": "fast run 42138851647 artifact 13467231643 member computer-win32-privileged.json",
+      "withRawBytes": 4427,
+      "withRawSha256": "2ff6f251868d290ecaa1dab3a5d7bc558871c7b36302b200ea1b4124342e3a87",
+      "sameRowNamesInOrder": true,
+      "rows": 46,
+      "differingRows": [
+        {
+          "name": "privileged",
+          "fastRun42138851647": {
+            "name": "privileged",
+            "status": "failed",
+            "reason": "native-check-failed"
+          },
+          "thisRun": {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "native-skip"
+          }
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "fastRun42138851647": {
+            "name": "privileged.capture-color-patch",
+            "status": "failed",
+            "reason": "native_operation_failed",
+            "stage": "capture-window-item-full-ticket-expired",
+            "nativeCode": "capture_unavailable"
+          },
+          "thisRun": {
+            "name": "privileged.capture-color-patch",
+            "status": "passed"
+          }
+        }
+      ],
+      "coreReportNote": "The core member is byte-identical to the fast run's core report (artifact 13467356383, raw SHA-256 7fda39dd...) and carries no run or architecture, so it is tied to this job only by its upload."
+    }
+  },
   "interpretation": {
     "requiredCore": "30 passed, 0 failed, 1 skipped (log totals)",
-    "isolatedScenarios": "35 passed, 0 failed, 11 skipped (log totals; report not downloaded)",
+    "isolatedScenarios": "35 passed, 0 failed, 11 skipped (log totals and verified report rows, report code 0)",
     "nativeOsStopCredit": false,
     "captureCredit": false,
     "arm64ExecutionCredit": false,
     "releaseReadinessCredit": false
-  }
+  },
+  "corrections": [
+    {
+      "date": "2026-11-08",
+      "package": "H2",
+      "reason": "Artifact 13467212708 was downloaded and digest-verified after H1 wrote this record. The download was possible only because GitHub's artifact storage hosts had been added to the session environment's allowed hosts through user-approved environment changes (the last approval at 2026-11-08 03:50 UTC, before the download in the same minute); no lane package requested network access.",
+      "changedFields": [
+        "counts.isolated.source",
+        "artifactVerification",
+        "uploadWitness.verification",
+        "limitations",
+        "inferences",
+        "verifiedReportArchive",
+        "interpretation.isolatedScenarios"
+      ],
+      "previously": {
+        "artifactVerification": "API metadata only: ZIP not downloaded, so no member is verified; its API size and digest are independently witnessed by the producing job's CI upload lines in uploadWitness",
+        "uploadWitness.verification": "API metadata only: CI log witness of the uploaded ZIP; no member verified",
+        "limitations": [
+          "Artifact 13467212708 was not downloaded: its storage host is not allowed from this environment, and widening network access is an owner decision.",
+          "The per-scenario isolated breakdown is unverified for this run.",
+          "The job log prints only the totals lines; the per-row SKIPPED/FAILED lines go to the step summary only.",
+          "Observed: step 12 shows no throw and no error line after its totals; the log never prints the exit code. Derived from the step source (.github/workflows/computer-helper.yml:721 throws on any nonzero status): the self-test command exited 0. Its API conclusion success does not distinguish this alone because the step is continue-on-error. The native report code is unverified because the artifact was not downloaded.",
+          "Staged step 18 shows the same 28 receipts as the fast run and then the throw; there is no native Stop evidence.",
+          "windows-arm64-test was skipped after windows-build failed, and the stage archive/upload, digest and shipping/test upload steps 19-24 were skipped."
+        ],
+        "inferences": [
+          "Inference only, not observed: 35 passed/11 skipped/0 failed (46 rows, the same total as the fast run's 34/2/10 at the same commit) is consistent with capture-color-patch passing and the aggregate privileged row becoming a skip (as in the Mac isolated-auto reports, where that row is skipped native-skip with report code 0), which would suggest intermittent capture timing. It is one consistent explanation, not the only one, and no row is verified."
+        ],
+        "verifiedReportArchive": null,
+        "interpretation.isolatedScenarios": "35 passed, 0 failed, 11 skipped (log totals; report not downloaded)"
+      },
+      "outcome": "The report rows confirm the H1 inference: capture-color-patch passed and the aggregate privileged row is skipped native-skip with report code 0; the other 44 rows equal the fast run's. The cause of the fast run's failure remains an inference."
+    }
+  ]
 }
