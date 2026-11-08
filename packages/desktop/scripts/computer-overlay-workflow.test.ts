@@ -21,6 +21,11 @@ const commands = (name: string) =>
   steps(name)
     .flatMap((step) => (typeof step.run === "string" ? [step.run] : []))
     .join("\n")
+const lines = (value: unknown) =>
+  String(value)
+    .trimEnd()
+    .split("\n")
+    .map((line) => line.trim())
 const plan = steps("plan").find((step) => step.id === "plan")!
 
 function desktopPlan(value: string, event: "push" | "workflow_dispatch" | "workflow_call") {
@@ -112,6 +117,9 @@ test("native prerequisite absence never swallows an assertion failure or authori
     const actual = steps(name).find((step) => String(step.name).startsWith("Run actual isolated"))!
     expect(actual.if).toContain("inputs['isolated-desktop']")
     expect(actual["continue-on-error"]).toBeUndefined()
+    expect(job(name)["continue-on-error"]).toBeUndefined()
+    // The pinned bodies run under the runner's built-in job shell wrapper, which keeps a nonzero status failing.
+    expect(actual.shell).toBeUndefined()
     expect(actual["timeout-minutes"]).toBe(3)
     expect(record(actual.env).VECTOR_COMPUTER_TEST_ISOLATED).toBe("1")
     expect(record(actual.env).PRIVILEGED_REQUIRED).toBe("${{ inputs['privileged-required'] }}")
@@ -120,8 +128,49 @@ test("native prerequisite absence never swallows an assertion failure or authori
     expect(actual.run).not.toContain("--no-sandbox")
     expect(String(actual.run)).toMatch(/(?:==|\-eq) 77/)
     expect(String(actual.run)).toMatch(/(?:!=|\-ne) 0/)
-    expect(String(actual.run)).not.toMatch(/continue-on-error|exit 0|elevatedToken/)
+    expect(String(actual.run)).not.toMatch(/continue-on-error|elevatedToken/)
   }
+
+  // Only an already permitted pre-Electron prerequisite 77 may end the step successfully, after its explicit skip
+  // summary; the smoke's status is read once, right after it runs, and every other nonzero status fails the step.
+  const windows = String(
+    steps("windows-build").find((step) => String(step.name).startsWith("Run actual isolated"))!.run,
+  )
+  expect(record(record(job("windows-build").defaults).run).shell).toBe("pwsh")
+  expect(lines(windows).filter((line) => !line.startsWith("#"))).toEqual([
+    "$required = @()",
+    'if ($env:PRIVILEGED_REQUIRED -eq "true") { $required = @("--require-native") }',
+    "bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 @required",
+    "$status = $LASTEXITCODE",
+    'if ($status -eq 77 -and $env:PRIVILEGED_REQUIRED -ne "true") {',
+    '"SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> $env:GITHUB_STEP_SUMMARY',
+    "exit 0",
+    "} elseif ($status -ne 0) {",
+    expect.stringMatching(/^throw "[^"]+"$/),
+    "}",
+  ])
+  // PowerShell keywords and variable names are case-insensitive.
+  expect(windows.match(/\bexit\b/gi)).toEqual(["exit"])
+  expect(windows.match(/\$LASTEXITCODE\b/gi)).toEqual(["$LASTEXITCODE"])
+  expect(windows).not.toContain("||")
+
+  // Bash keeps the smoke's exact status: no exit 0, and a nonzero status other than the permitted 77 exits with itself.
+  const mac = String(steps("mac-build").find((step) => String(step.name).startsWith("Run actual isolated"))!.run)
+  expect(record(record(job("mac-build").defaults).run).shell).toBe("bash")
+  expect(lines(mac)).toEqual([
+    "set -euo pipefail",
+    "native_args=(--native-stage native/out/overlay-darwin)",
+    'if [[ "$PRIVILEGED_REQUIRED" == true ]]; then native_args+=(--require-native); fi',
+    "status=0",
+    'bun --no-env-file ./scripts/computer-overlay-smoke.ts "${native_args[@]}" || status=$?',
+    'if [[ "$status" == 77 && "$PRIVILEGED_REQUIRED" != true ]]; then',
+    'echo "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> "$GITHUB_STEP_SUMMARY"',
+    'elif [[ "$status" != 0 ]]; then',
+    'exit "$status"',
+    "fi",
+  ])
+  expect(mac).not.toMatch(/\bexit 0\b|\|\|\s*true|set \+e/)
+  expect(mac.match(/\bexit\b/g)).toEqual(["exit"])
 })
 
 test("Mac compiler feedback after a fatal controller failure cannot grant native, artifact or release credit", () => {

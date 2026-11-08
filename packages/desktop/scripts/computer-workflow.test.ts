@@ -29,6 +29,11 @@ const commands = (value: Record<string, unknown>) =>
     .flatMap((step) => (typeof step.run === "string" ? [step.run] : []))
     .join("\n")
     .replace(/(?:\\|`)\r?\n\s*/g, " ")
+const lines = (value: unknown) =>
+  String(value)
+    .trimEnd()
+    .split("\n")
+    .map((line) => line.trim())
 
 // Run the workflows' actual simple conditions, rather than reproducing their routing logic in the fixture.
 function expression(
@@ -746,11 +751,15 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   const script = commands(diagnostic)
   expect(script).toContain("--platform win32 --arch x64 --channel prod --out native/out/win32")
   expect(script).toContain("bun install --frozen-lockfile --ignore-scripts")
-  expect(script).not.toMatch(
-    /--arch (?:arm64|x64,arm64)|--privileged (?:auto|require)|--native-stage|tar -|native-ready/,
-  )
+  expect(script).not.toMatch(/--arch (?:arm64|x64,arm64)|--privileged (?:auto|require)|tar -|native-ready/)
+  // Only the finite staged diagnostic enters the never-shipped native stage, and no stage archive is made or restored.
+  const staged = current.find((step) => step.name === "Run the actual medium-token staged overlay diagnostic")!
+  for (const step of current.filter((step) => step !== staged))
+    expect(JSON.stringify(step), String(step.name)).not.toContain("--native-stage")
+  expect(String(staged.run).match(/--native-stage/g)).toHaveLength(1)
+  expect(script).not.toContain("computer-overlay-smoke-artifact.ts")
   const uploads = current.filter((step) => String(step.uses).includes("upload-artifact"))
-  expect(uploads).toHaveLength(3)
+  expect(uploads).toHaveLength(4)
   expect(uploads[0]!.if).toBe("${{ always() }}")
   expect(uploads[0]!.with).toEqual({
     name: "computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
@@ -838,6 +847,70 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     "retention-days": 7,
   })
   expect(current.indexOf(uploads[2]!)).toBeGreaterThan(current.indexOf(isolated))
+  const electron = current.find(
+    (step) => step.name === "Install the pinned Electron runtime for the staged diagnostic",
+  )!
+  const stage = current.find((step) => step.name === "Build the source-bound x64 native overlay diagnostic stage")!
+  expect(electron["timeout-minutes"]).toBe(5)
+  // Each preparation command is followed only by its own throw, so its failure is never reset or ignored.
+  expect(lines(electron.run)).toEqual([
+    "node node_modules/electron/install.js",
+    expect.stringMatching(/^if \(\$LASTEXITCODE -ne 0\) \{ throw "[^"]+" \}$/),
+  ])
+  expect(stage["timeout-minutes"]).toBe(15)
+  expect(lines(stage.run)).toEqual([
+    "bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32",
+    expect.stringMatching(/^if \(\$LASTEXITCODE -ne 0\) \{ throw "[^"]+" \}$/),
+  ])
+  expect(staged["timeout-minutes"]).toBe(3)
+  expect(staged.env).toEqual({ VECTOR_COMPUTER_TEST_ISOLATED: "1" })
+  expect(record(record(diagnostic.defaults).run).shell).toBe("pwsh")
+  // A prerequisite 77 is a summarized skip that ends the step, never a pass; every other nonzero status throws.
+  expect(lines(staged.run)).toEqual([
+    'bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-staged-diagnostic.log"',
+    "$status = $LASTEXITCODE",
+    "if ($status -eq 77) {",
+    '"SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> $env:GITHUB_STEP_SUMMARY',
+    "exit 0",
+    "} elseif ($status -ne 0) {",
+    expect.stringMatching(/^throw "[^"]+"$/),
+    "}",
+  ])
+  for (const step of [electron, stage, staged]) {
+    expect(step.if, String(step.name)).toBe("${{ success() && steps.required_protocol.outcome == 'success' }}")
+    expect(step["continue-on-error"], String(step.name)).toBeUndefined()
+    expect(step.shell, String(step.name)).toBeUndefined()
+    for (const successful of [false, true])
+      for (const outcome of ["success", "failure", "skipped", "cancelled"])
+        expect(
+          expression(
+            String(step.if),
+            {},
+            "workflow_dispatch",
+            "refs/heads/hands",
+            {},
+            { success: successful, steps: { required_protocol: { outcome } } },
+          ),
+        ).toBe(successful && outcome === "success")
+  }
+  expect(current.indexOf(electron)).toBeGreaterThan(current.indexOf(uploads[2]!))
+  expect(current.indexOf(stage)).toBeGreaterThan(current.indexOf(electron))
+  expect(current.indexOf(staged)).toBeGreaterThan(current.indexOf(stage))
+  expect(current.indexOf(uploads[3]!)).toBeGreaterThan(current.indexOf(staged))
+  // The staged evidence is the bounded log and stage manifest only, never the stage itself.
+  expect(uploads[3]!.if).toBe("${{ always() }}")
+  expect(uploads[3]!.with).toEqual({
+    name: "computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    path: expect.any(String),
+    "if-no-files-found": "ignore",
+    overwrite: false,
+    "retention-days": 7,
+  })
+  expect(lines(record(uploads[3]!.with).path)).toEqual([
+    "${{ runner.temp }}/computer-win32-staged-diagnostic.log",
+    "packages/desktop/native/out/overlay-win32/computer-overlay-smoke.json",
+  ])
+  expect(diagnostic["timeout-minutes"]).toBe(45)
   const release = record(workflow("vector-desktop-release.yml").document.jobs)
   for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
   for (const value of Object.values(release))
