@@ -1227,10 +1227,10 @@ const layer = Layer.effect(
       if (verdicts.length > 0) {
         yield* researchStore.judged(place, runID, verdicts)
         // The report is saved again with the verdicts, so its confidence counts them and unsupported notes are struck.
-        const spent = (yield* guard.snapshot(sessionID))?.spentUsd
+        const spend = SpendGuard.reportSpend(yield* guard.snapshot(sessionID))
         yield* researchStore.report(place, runID, report.value, {
           judged: true,
-          ...(spent ? { spend: `${SpendGuard.formatUsd(spent)} at list prices` } : {}),
+          ...(spend ? { spend } : {}),
           seconds: Math.round((Date.now() - detail.run.created_at) / 1000),
         })
       }

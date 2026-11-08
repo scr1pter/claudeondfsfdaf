@@ -68,7 +68,9 @@ export const ResearchReportTool = Tool.define<
           if (found.lead.id !== ctx.sessionID)
             return { title: "Not saved", output: "Only the research lead writes the report.", metadata: {} }
           // A lead the build agent started shares its launcher's run, whose spend is not the research's alone.
-          const spent = found.lead.parentID ? undefined : yield* guard.snapshot(SessionID.make(ctx.sessionID))
+          const spend = found.lead.parentID
+            ? undefined
+            : SpendGuard.reportSpend(yield* guard.snapshot(SessionID.make(ctx.sessionID)))
           const input: Research.ReportInput = {
             title: params.title,
             answer: params.answer,
@@ -83,14 +85,7 @@ export const ResearchReportTool = Tool.define<
           }
           const saved = yield* store.report(found.place, found.run.id, input, {
             judged: found.detail.notes.some((note) => note.verdict !== undefined && note.verdict !== "not-judged"),
-            ...(spent && (spent.spentUsd > 0 || spent.codiumSteps > 0)
-              ? {
-                  spend:
-                    spent.spentUsd > 0
-                      ? `${SpendGuard.formatUsd(spent.spentUsd)} at list prices${spent.codiumSteps > 0 ? " + Codium" : ""}`
-                      : "Codium",
-                }
-              : {}),
+            ...(spend ? { spend } : {}),
             seconds: Math.round((Date.now() - found.run.created_at) / 1000),
           })
           if (saved.type === "refused")

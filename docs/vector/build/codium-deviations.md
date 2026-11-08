@@ -1896,6 +1896,16 @@ unchanged.
 - **8 Nov 2026 (P4a).** Run 42439456526 (push, head `dc64a6a5`, D1's commit of this record) completed with success,
   all 14 jobs green. Its Codium tests job 128605353887 shows 248 of 248 picker files passing, the HttpApi exerciser at
   `pass=309 fail=0` and `check:generated` passing; the job ids are in `codium-p4-repairs.md` ("CI before this review").
+- **8 Nov 2026 (P4b).** Run 42442788455 (push, head `46236dce`, P4a's commit) and run 42444316138 (push, head
+  `3082bb2c`, another session's commit) both completed with success, 14 of 14 jobs each; each Codium tests log shows 248
+  of 248 picker files passing, the HttpApi exerciser at `pass=309 fail=0` and "Check generated client" passing.
+  typecheck.yml run 42444321838 and test.yml run 42444319661, both dispatched on `3082bb2c`, completed with success. Job
+  ids are in `codium-p4-repairs.md` ("CI before P4b"). P4b repaired the research report's Spend line (F16) and hands on
+  two findings it did not repair: F18 (the engine review model is never `costKind "codium"`, so the P5 review token stop
+  can miss a Codium review) to P4d, and F28 (A41's phone usage alert can repeat while the desktop notification keeps
+  failing) to the P6 addendum, the package that appends the A36 review to `codium-p6-repairs.md`, since A41 is in P6's
+  range; both are under "P4 review decisions" below and stay open here until those packages record them. P4c adds a
+  dated line here with the Vector Codium run id and conclusion for P4b's own commit, once that run has completed.
 
 ## P4 review decisions (8 Nov 2026)
 
@@ -1947,3 +1957,62 @@ source. P4b, P4c and P4d add theirs below.
   `4fde1a49`), so a shared Codium session shows `vector-plan/<model>`. It holds no amount, token figure or plan tier
   name, and label plan §3.7 leaves the public share unchanged, so it is accepted here; any change of that wording is
   label-surface copy for P4d.
+
+P4b's readings, from its review of A23 and A24 (`4fde1a49..b4c05481` and the A24 follow-ups; findings F16 to F34 in
+`codium-p4-repairs.md`):
+
+- **The research Spend line follows label plan §3.2, not the A23 wording (F16).** §3.2 says a Codium-only report has no
+  Spend line and a mixed one reads `$0.12 at list prices + Codium`; A23 wrote `- Spend: Codium`, and the V1 judge's
+  re-save (`packages/engine/src/session/prompt.ts:1230-1233`, which the label plan does not list) dropped `+ Codium`.
+  The contract wins. All three writers now call `SpendGuard.reportSpend` in `packages/core/src/spend-guard.ts`, beside
+  `formatUsd`. The helper is not in `research/report.ts`, a pure renderer that would then load the guard, the event
+  module and the database through it, and not in `codium-usage.ts`, which the app imports. Reports saved before the
+  repair are not rewritten: one keeps `- Spend: Codium`, or a judged mixed one its line without `+ Codium`, until its
+  run saves another version.
+- **F16's tests reach beyond the brief's file list.** Besides `packages/core/test/spend-guard.test.ts` (listed), one
+  case each went into `packages/core/test/session/research-v2.test.ts`,
+  `packages/engine/test/tool/research-note.test.ts` and `packages/engine/test/session/research-judge.test.ts`, which the
+  list does not name: the helper's own cases would still pass with any call site put back to its old expression, so each
+  writer needs a test that saves a report. The engine cases record their Codium step in the test's guard rather than
+  running a Codium provider turn, because Codium's destination is fixed (label plan C5); they prove the writer's reading
+  of a real guard snapshot. The core V2 case runs the scripted research on a `vector-plan` model, so its steps are
+  Codium by the runner's own classification. P4b's plan had put the helper in `research/report.ts` with cases in
+  `research/report.test.ts`; both moved to the guard and its listed test file, for the reason above.
+- **Known-Codium desktop runs carry no desktop budget (F19).** A subagent of such a run on its own configured model
+  spends own-key dollars that the desktop windows do not stop mid-run, since no `budgetUsd` is sent. That spend is
+  measured afterwards, counts in the windows and blocks later own-key runs, and the engine's own caps still apply.
+  Accepted: D-3 and C8 say the desktop "neither blocks such a run … nor reserves `budgetUsd`", and the A23 decision
+  records why no `usd: 0` budget is sent (the budget schema is strictly positive, and headroom checks would refuse
+  it).
+- **Check-ins rely on `summarizeUsage` (F20).** `UsageReport.fromSummary` adds no `vector-plan` filter of its own: both
+  senders read the bundled engine, which already leaves Codium out, and label plan §6 rules out skew between desktop
+  main and engine.
+- **Turns that end during a pending refresh share it (F27).** The 15-second read after a Codium turn is coalesced: turns
+  ending while it is pending get that one read, and a debit that lands later shows at the next focus or Refresh. Spec
+  A24 asks for one refresh after a turn ends, not one per turn.
+- **The Host locally exemption is the dashboard's label only (F30).** `9c5bc861` lets `agent-dashboard-model.ts` keep
+  its `CodiumUsage` import, its two `billing?: "codium"` declarations, its `billing === "codium"` branch and its
+  `withCodium` call, and renames the test to "have no account or plan access". Label plan §3.1 and §3.2 (the agent
+  dashboard row) and C7 (`features/agents/agent-dashboard-model.ts:241-250`) put that label in this file; any other
+  Codium, account, credits, pricing or plan text there, or anywhere else in the agents feature, still fails the test.
+- **`Billing.of` callers from A23 and A24 read assistant work or a session on purpose (F34).** Each filters to assistant
+  messages or their parts first, or reads a session's or favourite model's provider id as label plan §6's fallback.
+  `reviewProgressSpend` (`features/pull-requests/ai-review.ts:1600-1602`) also reads the review prompt, whose model is
+  the pass's own, so it gives the same answer; the rest of `ai-review.ts` is A26's and P4d's.
+- **Hand-off to P4d (F18).** `packages/engine/src/review/model.ts:128-135` calls `costKindOf` without `codium`, against
+  label plan §4.3, so `resolveReviewModel` never answers `"codium"`. A Codium review with an explicit `triageModel`,
+  with no listed review roles, or with a same-lab pair never applies `CODIUM_REVIEW_TOKEN_STOP` (`review/run.ts:400`),
+  and its unused or empty run reports `"unknown"` (`run.ts:310,339`). Repair:
+  `codium: Billing.isCodium(model.providerID)` in that call, with a `test/review/model.test.ts` case and a
+  `panel.test.ts` case that reaches the stop with an explicit `triageModel` without building `costKind: "codium"` by
+  hand. Not done in P4b: label plan C11 (spec A26) owns `review/model.ts`, and the repair changes review budgets and
+  footers and the P5 stop. It needs no Codex-owned file: `github.review.ts` keeps calling `resolveReviewModel` as it is.
+- **Hand-off to the P6 addendum (F28, A41).** In `packages/app/src/components/settings-vector-codium.tsx:66-100` the
+  phone usage alert (A41, `4caf1073`) is sent before the desktop notification, and a failed desktop `notify` removes the
+  dedupe key, so while it keeps failing every later run of that effect with Usage open sends the phone alert again. The
+  effect runs again when a status read changes a value it reads (the share left moving from 19% to 18%, or a good read
+  after a failed one); `reconcile` leaves an unchanged read silent. A24's desktop path (off by default, one alert per
+  account, plan and renewal, retry after a failed notify) is as spec A24 asks. The A41 interaction is outside P4b's
+  range and past the P6 review, so it goes to the P6 addendum (the package that appends the A36 review to
+  `codium-p6-repairs.md`). Its regression test: both switches on, the desktop `notify` rejects on two status reads whose
+  share left differs (19% then 18% left), and exactly one `sendPhoneAlert` call (one `phoneAlerts.send`) is expected.
