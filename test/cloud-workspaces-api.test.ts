@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import { createServer } from "node:http"
 import handler from "../api/cloud-workspaces.js"
 import { closeCloudWorkspaces } from "../api/_lib/cloud-workspaces.js"
-import { mintCliToken } from "../api/_lib/cli-token.js"
+import { mintCliToken, verifyCliTokenClaims } from "../api/_lib/cli-token.js"
 import { verifyWorkspaceRequest } from "../packages/cloud-workspaces/src/signing.js"
 
 const ACCOUNT = "79b8ab70-d17d-449c-8d73-67ff7d00b362"
@@ -51,6 +51,7 @@ const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
 const state = {
   auth: 0,
   revoked: false,
+  revokedTokenKeys: new Set<string>(),
   rateCount: 1,
   scopeCounts: {} as Record<string, number>,
   upstreamStatus: 200,
@@ -91,7 +92,8 @@ beforeAll(async () => {
       if (path === "/kv") {
         const command = (await request.json()) as unknown[]
         state.commands.push(command)
-        if (command[0] === "GET") return Response.json({ result: state.revoked ? "1" : null })
+        if (command[0] === "GET")
+          return Response.json({ result: state.revoked || state.revokedTokenKeys.has(String(command[1])) ? "1" : null })
         if (command[0] === "EVAL") {
           const count =
             Object.entries(state.scopeCounts).find(([scope]) =>
@@ -189,6 +191,7 @@ beforeEach(() => {
   })
   state.commands.length = 0
   state.requests.length = 0
+  state.revokedTokenKeys.clear()
 })
 
 afterAll(async () => {
@@ -306,6 +309,31 @@ test("signed CLI account tokens use the same revoked-account and pilot gates wit
   expect(JSON.stringify(state.requests)).not.toContain(token)
   state.revoked = true
   expect((await send({ token })).status).toBe(401)
+})
+
+test("revoking one marked CLI token blocks its reads and writes while another token and browser session remain admitted", async () => {
+  const user = { id: ACCOUNT, email: "workspace@example.test" }
+  const revoked = mintCliToken(user, Date.now(), "cli").token
+  const retained = mintCliToken(user, Date.now(), "cli").token
+  const claims = verifyCliTokenClaims(revoked)
+  expect(claims.client).toBe("cli")
+  expect(claims.jti).toMatch(/^[A-Za-z0-9_-]{22}$/)
+  expect((await send({ token: revoked })).status).toBe(200)
+  expect((await send({ token: retained })).status).toBe(200)
+  const key = `vector:cli-revoked:${ACCOUNT}:token:${claims.jti}`
+  state.revokedTokenKeys.add(key)
+  const denied = await send({ token: revoked })
+  expect(denied.status).toBe(401)
+  expect(denied.body).toMatchObject({ error: { code: "CLI_TOKEN_INVALID" } })
+  expect((await send({ token: revoked, body: { action: "delete", workspaceId: WORKSPACE } })).status).toBe(401)
+  expect(state.requests).toHaveLength(2)
+  expect(state.commands).toContainEqual(["GET", key])
+  expect(state.revoked).toBe(false)
+  expect((await send({ token: retained })).status).toBe(200)
+  expect((await send()).status).toBe(200)
+  expect(state.requests).toHaveLength(4)
+  expect(JSON.stringify(state.requests)).not.toContain(revoked)
+  expect(JSON.stringify(state.requests)).not.toContain(retained)
 })
 
 test("create validates the command and binds its idempotency key and optional GitHub token in the signed body", async () => {
