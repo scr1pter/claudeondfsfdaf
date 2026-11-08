@@ -1,0 +1,873 @@
+{
+  "repository": "scr1pter/claudeondfsfdaf",
+  "source": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a",
+  "run": {
+    "id": 42138877213,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "createdAt": "2026-11-06T00:43:17Z",
+    "updatedAt": "2026-11-06T00:54:46Z",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42138877213"
+  },
+  "jobs": [
+    {
+      "id": 127633847677,
+      "name": "computer-helper / plan",
+      "status": "completed",
+      "conclusion": "success",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-06T00:43:21Z",
+          "completed_at": "2026-11-06T00:43:22Z"
+        },
+        {
+          "name": "Checkout repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-06T00:43:22Z",
+          "completed_at": "2026-11-06T00:43:31Z"
+        },
+        {
+          "name": "Resolve native coverage and safe artifact names",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-06T00:43:31Z",
+          "completed_at": "2026-11-06T00:43:31Z"
+        },
+        {
+          "name": "Post Checkout repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-06T00:43:31Z",
+          "completed_at": "2026-11-06T00:43:31Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-11-06T00:43:31Z",
+          "completed_at": "2026-11-06T00:43:31Z"
+        }
+      ]
+    },
+    {
+      "id": 127633948612,
+      "name": "computer-helper / windows-build",
+      "status": "completed",
+      "conclusion": "failure",
+      "labels": [
+        "windows-2025"
+      ],
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-06T00:43:35Z",
+          "completed_at": "2026-11-06T00:43:37Z"
+        },
+        {
+          "name": "Checkout repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-06T00:43:37Z",
+          "completed_at": "2026-11-06T00:43:51Z"
+        },
+        {
+          "name": "Setup Node for the real Electron smoke",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-06T00:43:51Z",
+          "completed_at": "2026-11-06T00:43:55Z"
+        },
+        {
+          "name": "Setup Bun",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-06T00:43:55Z",
+          "completed_at": "2026-11-06T00:43:57Z"
+        },
+        {
+          "name": "Configure the MSVC environment",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-06T00:43:57Z",
+          "completed_at": "2026-11-06T00:44:01Z"
+        },
+        {
+          "name": "Install frozen dependencies without lifecycle scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-06T00:44:01Z",
+          "completed_at": "2026-11-06T00:46:35Z"
+        },
+        {
+          "name": "Restore immutable helpers from an earlier attempt",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 7,
+          "started_at": "2026-11-06T00:46:35Z",
+          "completed_at": "2026-11-06T00:46:35Z"
+        },
+        {
+          "name": "Verify restored Windows source before native checks",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 8,
+          "started_at": "2026-11-06T00:46:35Z",
+          "completed_at": "2026-11-06T00:46:35Z"
+        },
+        {
+          "name": "Build both channel helper architectures",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-11-06T00:46:35Z",
+          "completed_at": "2026-11-06T00:52:17Z"
+        },
+        {
+          "name": "Run Windows unit and fresh version/probe checks",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-11-06T00:52:17Z",
+          "completed_at": "2026-11-06T00:52:20Z"
+        },
+        {
+          "name": "Run required Windows protocol and lifecycle checks",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-11-06T00:52:20Z",
+          "completed_at": "2026-11-06T00:52:31Z"
+        },
+        {
+          "name": "Run explicitly isolated Windows scenarios",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-11-06T00:52:31Z",
+          "completed_at": "2026-11-06T00:52:50Z"
+        },
+        {
+          "name": "Summarize Windows protocol readiness",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-11-06T00:52:50Z",
+          "completed_at": "2026-11-06T00:52:50Z"
+        },
+        {
+          "name": "Install the exact pinned Electron runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-11-06T00:52:50Z",
+          "completed_at": "2026-11-06T00:52:55Z"
+        },
+        {
+          "name": "Run real Electron overlay properties and controller lifecycle",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-11-06T00:52:55Z",
+          "completed_at": "2026-11-06T00:53:06Z"
+        },
+        {
+          "name": "Restore the immutable never-shipped overlay stage",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 16,
+          "started_at": "2026-11-06T00:53:06Z",
+          "completed_at": "2026-11-06T00:53:06Z"
+        },
+        {
+          "name": "Build the source-bound never-shipped native overlay stage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-11-06T00:53:06Z",
+          "completed_at": "2026-11-06T00:54:27Z"
+        },
+        {
+          "name": "Run actual isolated medium-token Windows overlay Stop",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 18,
+          "started_at": "2026-11-06T00:54:27Z",
+          "completed_at": "2026-11-06T00:54:42Z"
+        },
+        {
+          "name": "Archive the verified never-shipped overlay stage separately",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 19,
+          "started_at": "2026-11-06T00:54:42Z",
+          "completed_at": "2026-11-06T00:54:42Z"
+        },
+        {
+          "name": "Upload the immutable never-shipped overlay stage",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 20,
+          "started_at": "2026-11-06T00:54:42Z",
+          "completed_at": "2026-11-06T00:54:42Z"
+        },
+        {
+          "name": "Expose the verified source digest",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 21,
+          "started_at": "2026-11-06T00:54:42Z",
+          "completed_at": "2026-11-06T00:54:42Z"
+        },
+        {
+          "name": "Archive shipping files and tests separately",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 22,
+          "started_at": "2026-11-06T00:54:42Z",
+          "completed_at": "2026-11-06T00:54:42Z"
+        },
+        {
+          "name": "Upload shipping helpers",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 23,
+          "started_at": "2026-11-06T00:54:42Z",
+          "completed_at": "2026-11-06T00:54:42Z"
+        },
+        {
+          "name": "Upload native tests",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 24,
+          "started_at": "2026-11-06T00:54:42Z",
+          "completed_at": "2026-11-06T00:54:42Z"
+        },
+        {
+          "name": "Preserve check reports",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-11-06T00:54:42Z",
+          "completed_at": "2026-11-06T00:54:43Z"
+        },
+        {
+          "name": "Post Setup Bun",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 48,
+          "started_at": "2026-11-06T00:54:43Z",
+          "completed_at": "2026-11-06T00:54:43Z"
+        },
+        {
+          "name": "Post Setup Node for the real Electron smoke",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 49,
+          "started_at": "2026-11-06T00:54:43Z",
+          "completed_at": "2026-11-06T00:54:43Z"
+        },
+        {
+          "name": "Post Checkout repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 50,
+          "started_at": "2026-11-06T00:54:43Z",
+          "completed_at": "2026-11-06T00:54:44Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 51,
+          "started_at": "2026-11-06T00:54:44Z",
+          "completed_at": "2026-11-06T00:54:44Z"
+        }
+      ]
+    },
+    {
+      "id": 127638361565,
+      "name": "computer-helper / windows-arm64-test",
+      "status": "completed",
+      "conclusion": "skipped",
+      "labels": [
+        "windows-11-arm"
+      ],
+      "steps": []
+    }
+  ],
+  "unselectedJobs": [
+    {
+      "id": 127633849139,
+      "name": "production app benchmark",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849238,
+      "name": "e2e (${{ matrix.settings.name }})",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849241,
+      "name": "macOS Electron overlay/controller diagnostic (no release evidence)",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849478,
+      "name": "unit (${{ matrix.settings.name }})",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849574,
+      "name": "Windows Electron overlay/controller diagnostic (no release evidence)",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849593,
+      "name": "desktop engine bundle (node)",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849627,
+      "name": "macOS temporary certificate diagnostic (no release evidence)",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849723,
+      "name": "engine (linux, shard ${{ matrix.shard }}/4)",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633849795,
+      "name": "engine (windows, shard ${{ matrix.shard }}/6)",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633897715,
+      "name": "Windows x64 native and staged diagnostics (no release evidence)",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633900268,
+      "name": "Hands UI (${{ matrix.settings.name }})",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633950455,
+      "name": "computer-helper / desktop-e2e-linux",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633950548,
+      "name": "computer-helper / mac-build",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633950634,
+      "name": "computer-helper / overlay-linux",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 127633951505,
+      "name": "computer-helper / mac-test",
+      "conclusion": "skipped"
+    }
+  ],
+  "stepAttribution": "Each receipt's step is the windows-build step whose '##[group]Run' header precedes it in the job log, matched against the computer-helper.yml step commands (10 unit/version/probe, 11 required core, 12 isolated, 15 generic Electron smoke, 18 staged Stop).",
+  "receipts": [
+    {
+      "logLine": 493,
+      "at": "2026-11-06T00:52:20.0664320Z",
+      "step": 10,
+      "line": "vector-caller-context initial r=restricted d=parent o=u a=g c=s"
+    },
+    {
+      "logLine": 550,
+      "at": "2026-11-06T00:52:22.8122700Z",
+      "step": 11,
+      "line": "vector-caller-context initial r=restricted d=parent o=u a=g c=b"
+    },
+    {
+      "logLine": 551,
+      "at": "2026-11-06T00:52:31.4956881Z",
+      "step": 11,
+      "line": "Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-core.json"
+    },
+    {
+      "logLine": 611,
+      "at": "2026-11-06T00:52:34.0647405Z",
+      "step": 12,
+      "line": "vector-caller-context initial r=restricted d=parent o=u a=g c=b"
+    },
+    {
+      "logLine": 612,
+      "at": "2026-11-06T00:52:50.6992545Z",
+      "step": 12,
+      "line": "Computer helper checks: 35 passed, 11 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-privileged.json"
+    },
+    {
+      "logLine": 793,
+      "at": "2026-11-06T00:52:56.8958573Z",
+      "step": 15,
+      "line": "computer-smoke-loader-started"
+    },
+    {
+      "logLine": 794,
+      "at": "2026-11-06T00:52:56.9447166Z",
+      "step": 15,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"boot\"}"
+    },
+    {
+      "logLine": 795,
+      "at": "2026-11-06T00:52:57.0249496Z",
+      "step": 15,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"ready\"}"
+    },
+    {
+      "logLine": 796,
+      "at": "2026-11-06T00:52:57.0251062Z",
+      "step": 15,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"properties\"}"
+    },
+    {
+      "logLine": 797,
+      "at": "2026-11-06T00:53:01.1149755Z",
+      "step": 15,
+      "line": "computer-smoke-window-region {\"protocol\":1,\"windows\":4,\"owned\":4,\"simple\":4,\"matched\":4,\"painted\":4,\"ok\":true}"
+    },
+    {
+      "logLine": 798,
+      "at": "2026-11-06T00:53:01.3459832Z",
+      "step": 15,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"controller\"}"
+    },
+    {
+      "logLine": 799,
+      "at": "2026-11-06T00:53:01.3461654Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"underlay\"}"
+    },
+    {
+      "logLine": 800,
+      "at": "2026-11-06T00:53:01.4185458Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-acquire\"}"
+    },
+    {
+      "logLine": 801,
+      "at": "2026-11-06T00:53:01.7085542Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-check\"}"
+    },
+    {
+      "logLine": 802,
+      "at": "2026-11-06T00:53:01.7117690Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-close\"}"
+    },
+    {
+      "logLine": 803,
+      "at": "2026-11-06T00:53:01.7507807Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-acquire\"}"
+    },
+    {
+      "logLine": 804,
+      "at": "2026-11-06T00:53:02.0367601Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-check\"}"
+    },
+    {
+      "logLine": 805,
+      "at": "2026-11-06T00:53:05.8646265Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-close\"}"
+    },
+    {
+      "logLine": 806,
+      "at": "2026-11-06T00:53:05.8919609Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-acquire\"}"
+    },
+    {
+      "logLine": 807,
+      "at": "2026-11-06T00:53:06.1817444Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-check\"}"
+    },
+    {
+      "logLine": 808,
+      "at": "2026-11-06T00:53:06.2019960Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-close\"}"
+    },
+    {
+      "logLine": 809,
+      "at": "2026-11-06T00:53:06.2075855Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-acquire\"}"
+    },
+    {
+      "logLine": 810,
+      "at": "2026-11-06T00:53:06.5030066Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-pause\"}"
+    },
+    {
+      "logLine": 811,
+      "at": "2026-11-06T00:53:06.5043771Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-ready\"}"
+    },
+    {
+      "logLine": 812,
+      "at": "2026-11-06T00:53:06.5044603Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-listener\"}"
+    },
+    {
+      "logLine": 813,
+      "at": "2026-11-06T00:53:06.5046259Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-proof\"}"
+    },
+    {
+      "logLine": 814,
+      "at": "2026-11-06T00:53:06.5078067Z",
+      "step": 15,
+      "line": "computer-smoke-asar {\"protocol\":1,\"rawRegular\":true,\"rawBounded\":true,\"rawBytes\":110862,\"rawRead\":true,\"virtualDirectory\":true,\"virtualRead\":false}"
+    },
+    {
+      "logLine": 815,
+      "at": "2026-11-06T00:53:06.5079046Z",
+      "step": 15,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-close\"}"
+    },
+    {
+      "logLine": 816,
+      "at": "2026-11-06T00:53:06.5521646Z",
+      "step": 15,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"cleanup\"}"
+    },
+    {
+      "logLine": 817,
+      "at": "2026-11-06T00:53:06.5566953Z",
+      "step": 15,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"report\"}"
+    },
+    {
+      "logLine": 818,
+      "at": "2026-11-06T00:53:06.8499895Z",
+      "step": 15,
+      "line": "computer-smoke {\"protocol\":1,\"platform\":\"win32\",\"electron\":\"42.11.4\",\"checks\":[{\"name\":\"overlay-count\",\"ok\":true},{\"name\":\"overlay-bounds\",\"ok\":true},{\"name\":\"overlay-window-properties\",\"ok\":true},{\"name\":\"overlay-stack-level\",\"ok\":true},{\"name\":\"overlay-ignore-pointer\",\"ok\":true},{\"name\":\"overlay-workspaces\",\"ok\":false,\"skipped\":true,\"reason\":\"not_applicable\"},{\"name\":\"overlay-content-protection\",\"ok\":true},{\"name\":\"overlay-banner-copy\",\"ok\":true},{\"name\":\"overlay-sandbox\",\"ok\":true},{\"name\":\"overlay-ipc-rejected\",\"ok\":true},{\"name\":\"transparent-theme-switch\",\"ok\":true},{\"name\":\"window-all-closed\",\"ok\":true},{\"name\":\"focus-preserved\",\"ok\":true},{\"name\":\"controller-stop-cancels-helper\",\"ok\":true},{\"name\":\"heartbeat-loss-removes-overlays\",\"ok\":true},{\"name\":\"helper-crash-removes-overlays\",\"ok\":true},{\"name\":\"native-os-stop\",\"ok\":false,\"skipped\":true,\"reason\":\"native_harness_unavailable\"},{\"name\":\"native-capture-exclusion\",\"ok\":false,\"skipped\":true,\"reason\":\"not_applicable\"}]}"
+    },
+    {
+      "logLine": 944,
+      "at": "2026-11-06T00:54:30.9328477Z",
+      "step": 18,
+      "line": "computer-smoke-bootstrap-token {\"protocol\":1,\"route\":\"restricted\",\"owner\":\"u\",\"access\":\"n\",\"cause\":\"r\"}"
+    },
+    {
+      "logLine": 945,
+      "at": "2026-11-06T00:54:33.3099168Z",
+      "step": 18,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"boot\"}"
+    },
+    {
+      "logLine": 946,
+      "at": "2026-11-06T00:54:33.3454469Z",
+      "step": 18,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"ready\"}"
+    },
+    {
+      "logLine": 947,
+      "at": "2026-11-06T00:54:33.3481665Z",
+      "step": 18,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"properties\"}"
+    },
+    {
+      "logLine": 948,
+      "at": "2026-11-06T00:54:34.5220305Z",
+      "step": 18,
+      "line": "computer-smoke-window-region {\"protocol\":1,\"windows\":4,\"owned\":4,\"simple\":4,\"matched\":4,\"painted\":4,\"ok\":true}"
+    },
+    {
+      "logLine": 949,
+      "at": "2026-11-06T00:54:34.7335422Z",
+      "step": 18,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"controller\"}"
+    },
+    {
+      "logLine": 950,
+      "at": "2026-11-06T00:54:34.7338211Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"underlay\"}"
+    },
+    {
+      "logLine": 951,
+      "at": "2026-11-06T00:54:34.8114308Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-acquire\"}"
+    },
+    {
+      "logLine": 952,
+      "at": "2026-11-06T00:54:35.1166741Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-check\"}"
+    },
+    {
+      "logLine": 953,
+      "at": "2026-11-06T00:54:35.1219212Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"stop-close\"}"
+    },
+    {
+      "logLine": 954,
+      "at": "2026-11-06T00:54:35.1636640Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-acquire\"}"
+    },
+    {
+      "logLine": 955,
+      "at": "2026-11-06T00:54:35.4730296Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-check\"}"
+    },
+    {
+      "logLine": 956,
+      "at": "2026-11-06T00:54:39.3001325Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"heartbeat-close\"}"
+    },
+    {
+      "logLine": 957,
+      "at": "2026-11-06T00:54:39.3279805Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-acquire\"}"
+    },
+    {
+      "logLine": 958,
+      "at": "2026-11-06T00:54:39.6346657Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-check\"}"
+    },
+    {
+      "logLine": 959,
+      "at": "2026-11-06T00:54:39.6567065Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"crash-close\"}"
+    },
+    {
+      "logLine": 960,
+      "at": "2026-11-06T00:54:39.6644130Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-acquire\"}"
+    },
+    {
+      "logLine": 961,
+      "at": "2026-11-06T00:54:39.9531244Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-pause\"}"
+    },
+    {
+      "logLine": 962,
+      "at": "2026-11-06T00:54:39.9596389Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-ready\"}"
+    },
+    {
+      "logLine": 963,
+      "at": "2026-11-06T00:54:39.9597426Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-listener\"}"
+    },
+    {
+      "logLine": 964,
+      "at": "2026-11-06T00:54:39.9599365Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-proof\"}"
+    },
+    {
+      "logLine": 965,
+      "at": "2026-11-06T00:54:40.0084283Z",
+      "step": 18,
+      "line": "computer-smoke-asar {\"protocol\":1,\"rawRegular\":true,\"rawBounded\":true,\"rawBytes\":110862,\"rawRead\":true,\"virtualDirectory\":true,\"virtualRead\":false}"
+    },
+    {
+      "logLine": 966,
+      "at": "2026-11-06T00:54:41.4229397Z",
+      "step": 18,
+      "line": "computer-smoke-native {\"protocol\":1,\"kind\":\"result\",\"phase\":\"exit\",\"stop\":{\"ok\":false,\"reason\":\"native_failure\"},\"exitCode\":1}"
+    },
+    {
+      "logLine": 967,
+      "at": "2026-11-06T00:54:41.4230168Z",
+      "step": 18,
+      "line": "computer-smoke-controller {\"protocol\":1,\"step\":\"native-close\"}"
+    },
+    {
+      "logLine": 968,
+      "at": "2026-11-06T00:54:41.4732274Z",
+      "step": 18,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"cleanup\"}"
+    },
+    {
+      "logLine": 969,
+      "at": "2026-11-06T00:54:41.4781391Z",
+      "step": 18,
+      "line": "computer-smoke-phase {\"protocol\":1,\"phase\":\"report\"}"
+    },
+    {
+      "logLine": 970,
+      "at": "2026-11-06T00:54:41.8806571Z",
+      "step": 18,
+      "line": "computer-smoke {\"protocol\":1,\"platform\":\"win32\",\"electron\":\"42.11.4\",\"checks\":[{\"name\":\"overlay-count\",\"ok\":true},{\"name\":\"overlay-bounds\",\"ok\":true},{\"name\":\"overlay-window-properties\",\"ok\":true},{\"name\":\"overlay-stack-level\",\"ok\":true},{\"name\":\"overlay-ignore-pointer\",\"ok\":true},{\"name\":\"overlay-workspaces\",\"ok\":false,\"skipped\":true,\"reason\":\"not_applicable\"},{\"name\":\"overlay-content-protection\",\"ok\":true},{\"name\":\"overlay-banner-copy\",\"ok\":true},{\"name\":\"overlay-sandbox\",\"ok\":true},{\"name\":\"overlay-ipc-rejected\",\"ok\":true},{\"name\":\"transparent-theme-switch\",\"ok\":true},{\"name\":\"window-all-closed\",\"ok\":true},{\"name\":\"focus-preserved\",\"ok\":true},{\"name\":\"controller-stop-cancels-helper\",\"ok\":true},{\"name\":\"heartbeat-loss-removes-overlays\",\"ok\":true},{\"name\":\"helper-crash-removes-overlays\",\"ok\":true},{\"name\":\"native-os-stop\",\"ok\":false,\"reason\":\"native_proof_invalid\"},{\"name\":\"native-capture-exclusion\",\"ok\":false,\"reason\":\"native_proof_invalid\"}]}"
+    },
+    {
+      "logLine": 971,
+      "at": "2026-11-06T00:54:41.8810750Z",
+      "step": 18,
+      "line": "computer-smoke-failure {\"protocol\":1,\"cause\":\"assertion_failed\",\"phase\":\"report\",\"hint\":\"none\"}"
+    },
+    {
+      "logLine": 976,
+      "at": "2026-11-06T00:54:42.0880722Z",
+      "step": 18,
+      "line": "     | Actual isolated overlay Stop failed or required native evidence is unavailable."
+    },
+    {
+      "logLine": 977,
+      "at": "2026-11-06T00:54:42.1086082Z",
+      "step": 18,
+      "line": "##[error]Process completed with exit code 1."
+    }
+  ],
+  "counts": {
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1,
+      "source": "step 11 log totals"
+    },
+    "isolated": {
+      "passed": 35,
+      "failed": 0,
+      "skipped": 11,
+      "source": "step 12 log totals"
+    },
+    "genericElectronSmoke": {
+      "passed": 15,
+      "failed": 0,
+      "skipped": 3,
+      "skippedChecks": [
+        {
+          "name": "overlay-workspaces",
+          "reason": "not_applicable"
+        },
+        {
+          "name": "native-os-stop",
+          "reason": "native_harness_unavailable"
+        },
+        {
+          "name": "native-capture-exclusion",
+          "reason": "not_applicable"
+        }
+      ],
+      "source": "step 15 final computer-smoke receipt"
+    },
+    "stagedElectronSmoke": {
+      "passed": 15,
+      "failed": 2,
+      "skipped": 1,
+      "source": "step 18 final computer-smoke receipt"
+    }
+  },
+  "artifacts": [
+    {
+      "id": 13467212708,
+      "node_id": "MDg6QXJ0aWZhY3QxMzQ2NzIxMjcwOA==",
+      "name": "computer-helper-win32-reports-pr-dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a",
+      "size_in_bytes": 1343,
+      "url": "https://api.github.com/repos/scr1pter/claudeondfsfdaf/actions/artifacts/13467212708",
+      "archive_download_url": "https://api.github.com/repos/scr1pter/claudeondfsfdaf/actions/artifacts/13467212708/zip",
+      "expired": false,
+      "created_at": "2026-11-06T00:54:43Z",
+      "updated_at": "2026-11-06T00:54:43Z",
+      "expires_at": "2026-11-20T00:54:42Z",
+      "digest": "sha256:344af284c3207bf49d2ad58da0b1b11e5f9199d820c1e7c977de8da2a5c7051f",
+      "workflow_run": {
+        "id": 42138877213,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      }
+    }
+  ],
+  "artifactVerification": "API metadata only: ZIP not downloaded, so no member is verified; its API size and digest are independently witnessed by the producing job's CI upload lines in uploadWitness",
+  "uploadWitness": {
+    "job": 127633948612,
+    "step": 25,
+    "stepName": "Preserve check reports",
+    "lines": [
+      {
+        "logLine": 1046,
+        "at": "2026-11-06T00:54:42.7729064Z",
+        "step": 25,
+        "line": "Uploaded bytes 1343"
+      },
+      {
+        "logLine": 1048,
+        "at": "2026-11-06T00:54:42.9006443Z",
+        "step": 25,
+        "line": "SHA256 digest of uploaded artifact zip is 344af284c3207bf49d2ad58da0b1b11e5f9199d820c1e7c977de8da2a5c7051f"
+      }
+    ],
+    "matchesApi": {
+      "sizeInBytes": true,
+      "digest": true
+    },
+    "verification": "API metadata only: CI log witness of the uploaded ZIP; no member verified"
+  },
+  "limitations": [
+    "Artifact 13467212708 was not downloaded: its storage host is not allowed from this environment, and widening network access is an owner decision.",
+    "The per-scenario isolated breakdown is unverified for this run.",
+    "The job log prints only the totals lines; the per-row SKIPPED/FAILED lines go to the step summary only.",
+    "Observed: step 12 shows no throw and no error line after its totals; the log never prints the exit code. Derived from the step source (.github/workflows/computer-helper.yml:721 throws on any nonzero status): the self-test command exited 0. Its API conclusion success does not distinguish this alone because the step is continue-on-error. The native report code is unverified because the artifact was not downloaded.",
+    "Staged step 18 shows the same 28 receipts as the fast run and then the throw; there is no native Stop evidence.",
+    "windows-arm64-test was skipped after windows-build failed, and the stage archive/upload, digest and shipping/test upload steps 19-24 were skipped."
+  ],
+  "inferences": [
+    "Inference only, not observed: 35 passed/11 skipped/0 failed (46 rows, the same total as the fast run's 34/2/10 at the same commit) is consistent with capture-color-patch passing and the aggregate privileged row becoming a skip (as in the Mac isolated-auto reports, where that row is skipped native-skip with report code 0), which would suggest intermittent capture timing. It is one consistent explanation, not the only one, and no row is verified."
+  ],
+  "verifiedReportArchive": null,
+  "interpretation": {
+    "requiredCore": "30 passed, 0 failed, 1 skipped (log totals)",
+    "isolatedScenarios": "35 passed, 0 failed, 11 skipped (log totals; report not downloaded)",
+    "nativeOsStopCredit": false,
+    "captureCredit": false,
+    "arm64ExecutionCredit": false,
+    "releaseReadinessCredit": false
+  }
+}

@@ -1,0 +1,1432 @@
+{
+  "schemaVersion": 1,
+  "kind": "release-artifacts-only-preview",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "observedAt": "2026-11-08T02:35:19Z",
+  "run": {
+    "id": 42140933292,
+    "name": "Vector desktop release",
+    "path": ".github/workflows/vector-desktop-release.yml",
+    "run_number": 101,
+    "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a",
+    "head_branch": "hands",
+    "run_attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42140933292",
+    "created_at": "2026-11-06T01:01:11Z",
+    "updated_at": "2026-11-06T01:19:25Z"
+  },
+  "dispatchInputs": {
+    "tag": "v1.99.112",
+    "prerelease": false,
+    "dry_run": true,
+    "allow_unsigned": true,
+    "evidence": "prepare job 127640777343 step 3 environment (TAG, DRY_RUN, REQUESTED_UNSIGNED, PRERELEASE) and the reusable-workflow input dumps in jobs 127646069154, 127646312950 and 127641332772"
+  },
+  "dryRunGuard": {
+    "job": 127640777343,
+    "step3": {
+      "name": "Validate tag, version, and release notes",
+      "conclusion": "success",
+      "environment": [
+        "2026-11-06T01:01:23.2649621Z TAG: v1.99.112",
+        "2026-11-06T01:01:23.2649791Z DRY_RUN: true",
+        "2026-11-06T01:01:23.2649959Z REQUESTED_UNSIGNED: true",
+        "2026-11-06T01:01:23.2650148Z PRERELEASE: false",
+        "2026-11-06T01:01:23.2650360Z EVENT_REPOSITORY: scr1pter/claudeondfsfdaf"
+      ]
+    },
+    "guardLines": ".github/workflows/vector-desktop-release.yml:72-79",
+    "guardResult": "passed: step 3 succeeded with DRY_RUN true and printed neither the guard refusal nor an error",
+    "protectedEnvironmentStep": "step 4 skipped (.github/workflows/vector-desktop-release.yml:126-127, if: ${{ !inputs.dry_run }})",
+    "signingPolicy": "step 9 succeeded with RELEASE_DRY_RUN true; its dry-run branch writes unsigned=true and the 'Artifacts-only unsigned preview' line only to the step output and summary, so the branch taken is source-derived, not printed",
+    "releaseJobCondition": ".github/workflows/vector-desktop-release.yml:1211 if: ${{ !inputs.dry_run }} on the publish job",
+    "gatesNotExercised": "The publish job and the mac/windows packaging and signing jobs also need the failed Test (desktop) job, so their skips are overdetermined; this run does not show that the dry_run condition alone kept publishing or signing off."
+  },
+  "jobSummary": {
+    "total": 34,
+    "success": 26,
+    "failure": 1,
+    "skipped": 7
+  },
+  "jobs": [
+    {
+      "id": 127640777343,
+      "name": "Validate release metadata",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:01:14Z",
+      "completedAt": "2026-11-06T01:02:25Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245116,
+      "name": "Prepare one immutable release catalog",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:23Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245135,
+      "name": "Preflight release credentials",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:02:30Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245209,
+      "name": "Typecheck (desktop)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:25Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245243,
+      "name": "Typecheck (sdk-next)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:23Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245250,
+      "name": "Typecheck (engine)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:38Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245259,
+      "name": "Typecheck (app)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:33Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245279,
+      "name": "Typecheck (cloud)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:19Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245293,
+      "name": "Typecheck (core)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:19Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245309,
+      "name": "Test (desktop)",
+      "conclusion": "failure",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:06:00Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245372,
+      "name": "Test (core)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:06:23Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245385,
+      "name": "Test (cloud)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:25Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245418,
+      "name": "Test (app)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:55Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245419,
+      "name": "Test (vector 1/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:08:21Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245423,
+      "name": "Test (vector 4/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:07:29Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245426,
+      "name": "Test (vector 2/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:09:07Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245436,
+      "name": "Test (hosted-api)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:20Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245444,
+      "name": "Test (sdk-next)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:03:16Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245578,
+      "name": "Test (vector 3/4)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:11:18Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641245686,
+      "name": "Build or restore the tested immutable computer helpers / plan",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:27Z",
+      "completedAt": "2026-11-06T01:02:39Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641332772,
+      "name": "Build or restore the tested immutable computer helpers / mac-build",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:42Z",
+      "completedAt": "2026-11-06T01:15:29Z",
+      "labels": [
+        "macos-15"
+      ]
+    },
+    {
+      "id": 127641332829,
+      "name": "Build or restore the tested immutable computer helpers / windows-build",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:02:42Z",
+      "completedAt": "2026-11-06T01:14:50Z",
+      "labels": [
+        "windows-2025"
+      ]
+    },
+    {
+      "id": 127641334150,
+      "name": "Build or restore the tested immutable computer helpers / desktop-e2e-linux",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-06T01:02:40Z",
+      "completedAt": "2026-11-06T01:02:40Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641334486,
+      "name": "Build or restore the tested immutable computer helpers / overlay-linux",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-06T01:02:40Z",
+      "completedAt": "2026-11-06T01:02:40Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641604107,
+      "name": "Build smoke (desktop)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:03:25Z",
+      "completedAt": "2026-11-06T01:06:05Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127641604118,
+      "name": "Build smoke (website)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:03:24Z",
+      "completedAt": "2026-11-06T01:04:17Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127644718292,
+      "name": "Linux desktop apps",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-06T01:11:19Z",
+      "completedAt": "2026-11-06T01:11:19Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "id": 127646069154,
+      "name": "Build or restore the tested immutable computer helpers / windows-arm64-test",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:14:52Z",
+      "completedAt": "2026-11-06T01:19:24Z",
+      "labels": [
+        "windows-11-arm"
+      ]
+    },
+    {
+      "id": 127646312950,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-26)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:15:31Z",
+      "completedAt": "2026-11-06T01:16:43Z",
+      "labels": [
+        "macos-26"
+      ]
+    },
+    {
+      "id": 127646313054,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-15-intel)",
+      "conclusion": "success",
+      "startedAt": "2026-11-06T01:15:32Z",
+      "completedAt": "2026-11-06T01:18:26Z",
+      "labels": [
+        "macos-15-intel"
+      ]
+    },
+    {
+      "id": 127647816060,
+      "name": "macOS desktop apps",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-06T01:19:25Z",
+      "completedAt": "2026-11-06T01:19:24Z",
+      "labels": [
+        "macos-15"
+      ]
+    },
+    {
+      "id": 127647816620,
+      "name": "Verify the final ARM64 helper and actual packed Main pins",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-06T01:19:25Z",
+      "completedAt": "2026-11-06T01:19:24Z",
+      "labels": [
+        "windows-11-arm"
+      ]
+    },
+    {
+      "id": 127647816703,
+      "name": "Windows desktop apps",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-06T01:19:25Z",
+      "completedAt": "2026-11-06T01:19:24Z",
+      "labels": [
+        "windows-2025"
+      ]
+    },
+    {
+      "id": 127647817627,
+      "name": "Publish release and update feeds",
+      "conclusion": "skipped",
+      "startedAt": "2026-11-06T01:19:25Z",
+      "completedAt": "2026-11-06T01:19:24Z",
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    }
+  ],
+  "desktopTests": {
+    "job": 127641245309,
+    "step": 7,
+    "summaryLine": "2026-11-06T01:05:58.5659197Z Desktop: 181/183 test files passed",
+    "testFilesRun": 183,
+    "failedFiles": [
+      {
+        "file": "packages/desktop/scripts/computer-overlay-workflow.test.ts",
+        "fileCounts": {
+          "pass": 5,
+          "fail": 1,
+          "expectCalls": 91,
+          "tests": 6
+        },
+        "failedCase": "native prerequisite absence never swallows an assertion failure or authorizes a high-token input fallback",
+        "failedAt": "2026-11-06T01:03:29.9427815Z",
+        "failedAssertion": "not /continue-on-error|exit 0|elevatedToken/",
+        "location": "computer-overlay-workflow.test.ts:123:36",
+        "receivedEvidence": {
+          "logLine": 672,
+          "receivedChars": 691
+        },
+        "matchedAlternative": {
+          "value": [
+            "exit 0"
+          ],
+          "label": "derived from the logged Received text"
+        },
+        "sourceAtHead": ".github/workflows/computer-helper.yml:785 (exit 0 after the permitted 77 summary in the windows-build Stop step, added in c5c1515b)"
+      },
+      {
+        "file": "packages/desktop/scripts/computer-workflow.test.ts",
+        "fileCounts": {
+          "pass": 27,
+          "fail": 1,
+          "expectCalls": 1733,
+          "tests": 28
+        },
+        "failedCase": "x64 diagnostics reuse bounded native checks and isolated scenarios without release evidence",
+        "failedAt": "2026-11-06T01:03:30.3124633Z",
+        "failedAssertion": "not /--arch (?:arm64|x64,arm64)|--privileged (?:auto|require)|--native-stage|tar -|native-ready/",
+        "location": "computer-workflow.test.ts:749:22",
+        "receivedEvidence": {
+          "logLine": 713,
+          "receivedChars": 4480
+        },
+        "matchedAlternative": {
+          "value": [
+            "--native-stage"
+          ],
+          "label": "derived from the logged Received text"
+        },
+        "sourceAtHead": ".github/workflows/test.yml:260 (the staged x64 diagnostic step added in c5c1515b)"
+      }
+    ],
+    "unevaluatedExpectations": "Bun stops a case at its first failing expect. computer-workflow.test.ts:753 expects 3 upload steps, while the x64 diagnostic job at this source has 4 upload steps (.github/workflows/test.yml computer-helper-windows-units, source read), so that later expectation was never evaluated and will also need updating. In computer-overlay-workflow.test.ts the failing expect is the last statement of its mac-build/windows-build loop and failed on the windows-build step, so no later expectation in that case was skipped.",
+    "otherTestJobs": "9 of 10 Test jobs succeeded"
+  },
+  "helperJobs": [
+    {
+      "id": 127641245686,
+      "name": "Build or restore the tested immutable computer helpers / plan",
+      "conclusion": "success"
+    },
+    {
+      "id": 127641332772,
+      "name": "Build or restore the tested immutable computer helpers / mac-build",
+      "conclusion": "success",
+      "labels": [
+        "macos-15"
+      ],
+      "logWitnesses": [
+        "2026-11-06T01:03:23.5185800Z No earlier helper artifact exists in this run.",
+        "2026-11-06T01:03:23.5298880Z bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel \"$VECTOR_CHANNEL\" --out native/out/darwin",
+        "2026-11-06T01:03:23.5299720Z bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel \"$VECTOR_CHANNEL\" --out native/out/darwin-repro",
+        "2026-11-06T01:14:58.8025430Z Computer helper checks: 31 passed, 1 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-core.json",
+        "2026-11-06T01:14:58.9950190Z ##[group]Run bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel \"$VECTOR_CHANNEL\" --out native/out/darwin --check-lock",
+        "2026-11-06T01:15:15.2317900Z certificate-fixture matching=1 valid=1 trust=unknown",
+        "2026-11-06T01:15:22.8917200Z signing-cleanup owned-keychain=deleted exact-identity=absent-from-restored-search-list"
+      ],
+      "steps": "9 build twice, 10 identical shipping bytes, 11 grant-free checks, 16 identity lock, 17 version/toolchain, 26 temporary CI certificate, 27 cleanup succeeded; 13 isolated scenarios and 28-36 overlay/stage steps skipped",
+      "reportArtifact": 13468970472
+    },
+    {
+      "id": 127646312950,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-26)",
+      "conclusion": "success",
+      "labels": [
+        "macos-26"
+      ],
+      "logWitnesses": [
+        "2026-11-06T01:15:31.9014960Z Image: macos-26-arm64",
+        "2026-11-06T01:16:35.6247630Z Computer helper checks: 31 passed, 1 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-matrix.json"
+      ],
+      "reportArtifact": 13468481957,
+      "isolatedStep10": "skipped"
+    },
+    {
+      "id": 127646313054,
+      "name": "Build or restore the tested immutable computer helpers / mac-test (macos-15-intel)",
+      "conclusion": "success",
+      "labels": [
+        "macos-15-intel"
+      ],
+      "logWitnesses": [
+        "2026-11-06T01:18:19.0496970Z Computer helper checks: 31 passed, 1 skipped, 0 failed. Report: /Users/runner/work/_temp/computer-darwin-matrix.json"
+      ],
+      "reportArtifact": 13466834952,
+      "isolatedStep10": "skipped"
+    },
+    {
+      "id": 127641332829,
+      "name": "Build or restore the tested immutable computer helpers / windows-build",
+      "conclusion": "success",
+      "labels": [
+        "windows-2025"
+      ],
+      "logWitnesses": [
+        "2026-11-06T01:05:54.0069012Z No earlier helper artifact exists in this run.",
+        "2026-11-06T01:05:54.1745975Z ##[group]Run bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32",
+        "2026-11-06T01:14:39.7975622Z Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: D:\\a\\_temp\\computer-win32-core.json"
+      ],
+      "steps": "7 restore ran and found no earlier artifact, 8 restored-source verification skipped, 9 built both architectures from source, 12 isolated scenarios and 14-20 overlay/stage steps skipped",
+      "reportArtifact": 13466814601
+    },
+    {
+      "id": 127646069154,
+      "name": "Build or restore the tested immutable computer helpers / windows-arm64-test",
+      "conclusion": "success",
+      "labels": [
+        "windows-11-arm"
+      ],
+      "logWitnesses": [
+        "2026-11-06T01:14:53.6743538Z Microsoft Windows 11",
+        "2026-11-06T01:14:53.6743968Z 10.0.26200",
+        "2026-11-06T01:14:53.6745945Z Image: windows-11-vs2026-arm64",
+        "2026-11-06T01:18:55.3180954Z bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32",
+        "2026-11-06T01:18:56.6089310Z if (version.sourceDigest !== manifest.sourceDigest || version.arch !== \"arm64\") throw new Error(\"ARM64 identity differs from its manifest.\")",
+        "2026-11-06T01:19:06.4691065Z vector-caller-context initial r=restricted d=parent o=u a=g c=b",
+        "2026-11-06T01:19:16.4461998Z Computer helper checks: 30 passed, 1 skipped, 0 failed. Report: C:\\a\\_temp\\computer-win32-arm64.json"
+      ],
+      "steps": "7 restore and verify, 8 unit/version (arch arm64)/2 probes, 9 required core succeeded; 10 isolated ARM64 scenarios skipped",
+      "reportArtifact": 13469350648
+    }
+  ],
+  "reportsAreNotSelfIdentifying": "Report schema {schemaVersion, platform, privileged, checks, code} has no architecture, commit, run or runner. The fast-run core, preview x64 core and ARM64 reports are byte-identical (sha256 7fda39dd...), and the Mac core and both matrix reports are byte-identical (sha256 c8d5457b...). Each report is tied to its job only by that job's upload log lines, runner labels and image lines, not by its bytes or artifact name.",
+  "skippedByDesign": [
+    {
+      "id": 127641334486,
+      "name": "Build or restore the tested immutable computer helpers / overlay-linux",
+      "reason": "the plan job's desktop output is false (.github/workflows/computer-helper.yml:166) because the release calls computer-helper with full-desktop-e2e false (.github/workflows/vector-desktop-release.yml:242); this job requires that output"
+    },
+    {
+      "id": 127641334150,
+      "name": "Build or restore the tested immutable computer helpers / desktop-e2e-linux",
+      "reason": "the plan job's desktop output is false (.github/workflows/computer-helper.yml:166) because the release calls computer-helper with full-desktop-e2e false (.github/workflows/vector-desktop-release.yml:242); this job requires that output"
+    },
+    {
+      "step": "windows-arm64-test step 10, windows-build step 12, mac-build step 13, both mac-test step 10",
+      "reason": "isolated scenario steps require inputs isolated-desktop, which the release passes as false (.github/workflows/vector-desktop-release.yml:244)"
+    },
+    {
+      "step": "windows-build steps 3 and 14-20, mac-build steps 4 and 28-36",
+      "reason": "Electron, generic overlay and source-bound stage steps require the plan's desktop output, false here for the same full-desktop-e2e reason; the actual Stop steps additionally require isolated-desktop"
+    }
+  ],
+  "skippedDownstream": [
+    {
+      "id": 127644718292,
+      "name": "Linux desktop apps",
+      "reason": "needs the failed Test (desktop) job"
+    },
+    {
+      "id": 127647816060,
+      "name": "macOS desktop apps",
+      "reason": "needs the failed Test (desktop) job"
+    },
+    {
+      "id": 127647816703,
+      "name": "Windows desktop apps",
+      "reason": "needs the failed Test (desktop) job"
+    },
+    {
+      "id": 127647816620,
+      "name": "Verify the final ARM64 helper and actual packed Main pins",
+      "reason": "needs windows, which was skipped"
+    },
+    {
+      "id": 127647817627,
+      "name": "Publish release and update feeds",
+      "reason": "overdetermined: if: !inputs.dry_run is false and its needs (mac, windows, windows-arm64-helper, linux) were skipped; the dry_run gate itself was not exercised past a failed dependency"
+    }
+  ],
+  "priorPreviews": [
+    {
+      "id": 42043906253,
+      "headSha": "2b5f4ed278c4ef5e40daf1b5054e646c0d7cce5a",
+      "conclusion": "cancelled",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42043906253",
+      "packagingAndPublishJobs": [
+        {
+          "id": 127305374903,
+          "name": "Linux desktop apps",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127305968897,
+          "name": "macOS desktop apps",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127305969155,
+          "name": "Windows desktop apps",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127305970473,
+          "name": "Verify the final ARM64 helper and actual packed Main pins",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127305971407,
+          "name": "Publish release and update feeds",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        }
+      ]
+    },
+    {
+      "id": 42044912052,
+      "headSha": "4b49882e29af11f03cebd0f4cf395dcec3384f1c",
+      "conclusion": "failure",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42044912052",
+      "packagingAndPublishJobs": [
+        {
+          "id": 127312586841,
+          "name": "Linux desktop apps",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        },
+        {
+          "id": 127319640980,
+          "name": "macOS desktop apps",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        },
+        {
+          "id": 127319641946,
+          "name": "Windows desktop apps",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        },
+        {
+          "id": 127319643856,
+          "name": "Verify the final ARM64 helper and actual packed Main pins",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        },
+        {
+          "id": 127319643921,
+          "name": "Publish release and update feeds",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        }
+      ]
+    },
+    {
+      "id": 42053349008,
+      "headSha": "b86d5dbd4e67df9ca02d0244be8822677100c925",
+      "conclusion": "failure",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42053349008",
+      "packagingAndPublishJobs": [
+        {
+          "id": 127341263064,
+          "name": "Linux desktop apps",
+          "conclusion": "success",
+          "stepsRun": 12
+        },
+        {
+          "id": 127354745941,
+          "name": "Windows desktop apps",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        },
+        {
+          "id": 127354746098,
+          "name": "macOS desktop apps",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        },
+        {
+          "id": 127354747628,
+          "name": "Publish release and update feeds",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        },
+        {
+          "id": 127354747888,
+          "name": "Verify the final ARM64 helper and actual packed Main pins",
+          "conclusion": "skipped",
+          "stepsRun": 0
+        }
+      ]
+    },
+    {
+      "id": 42074920869,
+      "headSha": "06f73fd8d5d61d9e0acacb1228a6dda88571fd7f",
+      "conclusion": "cancelled",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42074920869",
+      "packagingAndPublishJobs": [
+        {
+          "id": 127419399005,
+          "name": "macOS desktop apps",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127419399361,
+          "name": "Linux desktop apps",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127419399502,
+          "name": "Windows desktop apps",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127419400805,
+          "name": "Verify the final ARM64 helper and actual packed Main pins",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        },
+        {
+          "id": 127419402908,
+          "name": "Publish release and update feeds",
+          "conclusion": "cancelled",
+          "stepsRun": 0
+        }
+      ]
+    }
+  ],
+  "priorPackagingNote": "Linux desktop apps executed and succeeded once, in 42053349008 job 127341263064 at b86d5dbd (an earlier source; its AppImages were not verified here). macOS and Windows desktop apps, the final ARM64 verifier and publish have never executed on this lane.",
+  "artifacts": [
+    {
+      "id": 13469350648,
+      "name": "computer-helper-win32-arm64-report-v1.99.112",
+      "sizeInBytes": 556,
+      "digest": "sha256:033c19d6aea00074eb1cf7dfe52ce78362e045d9ab40754fb96fdf4191039841",
+      "expired": false,
+      "createdAt": "2026-11-06T01:19:17Z",
+      "expiresAt": "2026-11-20T01:19:17Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127646069154,
+        "witnesses": [
+          "2026-11-06T01:19:17.7272671Z SHA256 digest of uploaded artifact zip is 033c19d6aea00074eb1cf7dfe52ce78362e045d9ab40754fb96fdf4191039841",
+          "2026-11-06T01:19:18.1324567Z Artifact computer-helper-win32-arm64-report-v1.99.112.zip successfully finalized. Artifact ID 13469350648"
+        ]
+      },
+      "localZip": "/tmp/vector-hands/artifacts/dl/a13469350648.zip",
+      "zipVerified": true,
+      "zipBytes": 556,
+      "zipSha256": "033c19d6aea00074eb1cf7dfe52ce78362e045d9ab40754fb96fdf4191039841",
+      "members": [
+        {
+          "member": "computer-win32-arm64.json",
+          "rawBytes": 2466,
+          "rawSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "win32",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "nonPassing": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 13469165164,
+      "name": "computer-helper-darwin-tests-v1.99.112",
+      "sizeInBytes": 3601734,
+      "digest": "sha256:0daa8148d6908650543e1a59c88d1ec544548bb3ccba82c8eae94b89d1b59fbe",
+      "expired": false,
+      "createdAt": "2026-11-06T01:15:04Z",
+      "expiresAt": "2026-11-20T01:15:02Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127641332772,
+        "witnesses": [
+          "2026-11-06T01:15:03.8552600Z SHA256 digest of uploaded artifact zip is 0daa8148d6908650543e1a59c88d1ec544548bb3ccba82c8eae94b89d1b59fbe",
+          "2026-11-06T01:15:04.3211150Z Artifact computer-helper-darwin-tests-v1.99.112.zip successfully finalized. Artifact ID 13469165164"
+        ]
+      },
+      "consumedBy": [
+        {
+          "job": 127646312950,
+          "witnesses": [
+            "2026-11-06T01:16:19.4481290Z - computer-helper-darwin-tests-v1.99.112 (ID: 13469165164, Size: 3601734, Expected Digest: sha256:0daa8148d6908650543e1a59c88d1ec544548bb3ccba82c8eae94b89d1b59fbe)",
+            "2026-11-06T01:16:20.9672390Z SHA256 digest of downloaded artifact is 0daa8148d6908650543e1a59c88d1ec544548bb3ccba82c8eae94b89d1b59fbe"
+          ]
+        },
+        {
+          "job": 127646313054,
+          "witnesses": [
+            "2026-11-06T01:17:53.4081140Z - computer-helper-darwin-tests-v1.99.112 (ID: 13469165164, Size: 3601734, Expected Digest: sha256:0daa8148d6908650543e1a59c88d1ec544548bb3ccba82c8eae94b89d1b59fbe)",
+            "2026-11-06T01:17:55.0697170Z SHA256 digest of downloaded artifact is 0daa8148d6908650543e1a59c88d1ec544548bb3ccba82c8eae94b89d1b59fbe"
+          ]
+        }
+      ],
+      "localZip": "/tmp/vector-hands/artifacts/dl/a13469165164.zip",
+      "zipVerified": true,
+      "zipBytes": 3601734,
+      "zipSha256": "0daa8148d6908650543e1a59c88d1ec544548bb3ccba82c8eae94b89d1b59fbe",
+      "members": [
+        {
+          "member": "computer-helper-darwin-tests.tar",
+          "rawBytes": 9826816,
+          "rawSha256": "d9602c649a270abf24d557ba455b13445cb2526f501dde39ba620a3a142484bb",
+          "tarEntries": [
+            {
+              "name": "tests",
+              "type": "directory",
+              "size": 0,
+              "mode": "0o755",
+              "sha256": null
+            },
+            {
+              "name": "tests/VectorComputerCaller",
+              "type": "file",
+              "size": 242728,
+              "mode": "0o755",
+              "sha256": "791bab73d7d5fd042b4eb73ab943658ecdef95f56ee4f05701ecb6a433675997"
+            },
+            {
+              "name": "tests/VectorComputerTests",
+              "type": "file",
+              "size": 8833992,
+              "mode": "0o755",
+              "sha256": "223ec66def6feb26d6e8eb069cfcf880e2fad5d25c5eca1336542aa6856799c4"
+            },
+            {
+              "name": "tests/VectorComputerTestTarget.app",
+              "type": "directory",
+              "size": 0,
+              "mode": "0o755",
+              "sha256": null
+            },
+            {
+              "name": "tests/computer-helper-tests.json",
+              "type": "file",
+              "size": 1382,
+              "mode": "0o644",
+              "sha256": "e781da5f21a96ee088a81c7a55ab2ad572a688717f19d36380cfe0ff7534cfce"
+            },
+            {
+              "name": "tests/VectorComputerTestTarget.app/Contents",
+              "type": "directory",
+              "size": 0,
+              "mode": "0o755",
+              "sha256": null
+            },
+            {
+              "name": "tests/VectorComputerTestTarget.app/Contents/_CodeSignature",
+              "type": "directory",
+              "size": 0,
+              "mode": "0o755",
+              "sha256": null
+            },
+            {
+              "name": "tests/VectorComputerTestTarget.app/Contents/MacOS",
+              "type": "directory",
+              "size": 0,
+              "mode": "0o755",
+              "sha256": null
+            },
+            {
+              "name": "tests/VectorComputerTestTarget.app/Contents/Info.plist",
+              "type": "file",
+              "size": 1001,
+              "mode": "0o644",
+              "sha256": "ccae75d201f630254d280304a3718c068ebbf6e725fd4144d2b7bdff39b310de"
+            },
+            {
+              "name": "tests/VectorComputerTestTarget.app/Contents/MacOS/VectorComputerTestTarget",
+              "type": "file",
+              "size": 737760,
+              "mode": "0o755",
+              "sha256": "d17e79809295582b1a125fb61b18dd9f105358b6c0861eff2dd33a2bb053fb82"
+            },
+            {
+              "name": "tests/VectorComputerTestTarget.app/Contents/_CodeSignature/CodeResources",
+              "type": "file",
+              "size": 2200,
+              "mode": "0o644",
+              "sha256": "6686de10a28a2fe11b36cbb86dcbacc827cfc4ea116b4dabf1845e5aee629e9b"
+            }
+          ],
+          "note": "members read in-memory with python3 -I tarfile from the verified ZIP bytes; nothing extracted to disk or executed"
+        }
+      ]
+    },
+    {
+      "id": 13468995402,
+      "name": "computer-helper-darwin-v1.99.112",
+      "sizeInBytes": 4001330,
+      "digest": "sha256:16946b0c7246e50ff3e29087f2ce2e8a9486b13c85a2b1f90c5358036ba11c0e",
+      "expired": false,
+      "createdAt": "2026-11-06T01:15:02Z",
+      "expiresAt": "2026-11-20T01:15:00Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127641332772,
+        "witnesses": [
+          "2026-11-06T01:15:02.0284440Z SHA256 digest of uploaded artifact zip is 16946b0c7246e50ff3e29087f2ce2e8a9486b13c85a2b1f90c5358036ba11c0e",
+          "2026-11-06T01:15:02.4988820Z Artifact computer-helper-darwin-v1.99.112.zip successfully finalized. Artifact ID 13468995402"
+        ]
+      },
+      "consumedBy": [
+        {
+          "job": 127646312950,
+          "witnesses": [
+            "2026-11-06T01:16:17.0928860Z - computer-helper-darwin-v1.99.112 (ID: 13468995402, Size: 4001330, Expected Digest: sha256:16946b0c7246e50ff3e29087f2ce2e8a9486b13c85a2b1f90c5358036ba11c0e)",
+            "2026-11-06T01:16:18.8123220Z SHA256 digest of downloaded artifact is 16946b0c7246e50ff3e29087f2ce2e8a9486b13c85a2b1f90c5358036ba11c0e"
+          ]
+        },
+        {
+          "job": 127646313054,
+          "witnesses": [
+            "2026-11-06T01:17:52.5357090Z SHA256 digest of downloaded artifact is 16946b0c7246e50ff3e29087f2ce2e8a9486b13c85a2b1f90c5358036ba11c0e"
+          ]
+        }
+      ],
+      "verification": "API metadata only: not downloaded here; the producing job's upload digest and any consuming job's download digest are CI log witnesses"
+    },
+    {
+      "id": 13468970472,
+      "name": "computer-helper-darwin-reports-v1.99.112",
+      "sizeInBytes": 993,
+      "digest": "sha256:e37e8aa2585b35d190786468f59f8aa273e95cf83a500a8c78bb985d60b41205",
+      "expired": false,
+      "createdAt": "2026-11-06T01:15:24Z",
+      "expiresAt": "2026-11-20T01:15:23Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127641332772,
+        "witnesses": [
+          "2026-11-06T01:15:23.8724860Z SHA256 digest of uploaded artifact zip is e37e8aa2585b35d190786468f59f8aa273e95cf83a500a8c78bb985d60b41205",
+          "2026-11-06T01:15:24.3428040Z Artifact computer-helper-darwin-reports-v1.99.112.zip successfully finalized. Artifact ID 13468970472"
+        ]
+      },
+      "localZip": "/tmp/vector-hands/artifacts/dl/a13468970472.zip",
+      "zipVerified": true,
+      "zipBytes": 993,
+      "zipSha256": "e37e8aa2585b35d190786468f59f8aa273e95cf83a500a8c78bb985d60b41205",
+      "members": [
+        {
+          "member": "computer-darwin-core.json",
+          "rawBytes": 2611,
+          "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "nonPassing": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        },
+        {
+          "member": "computer-darwin-core.json.unit-diagnostic.json",
+          "rawBytes": 438,
+          "rawSha256": "13e19db66d4399af14c7159e281ba96faa14430c3b4846ce548b567a0fc00347",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 13468481957,
+      "name": "computer-helper-darwin-report-macos-26-v1.99.112",
+      "sizeInBytes": 1003,
+      "digest": "sha256:fa2d427dab5aca56651b2b66167fe33ced5c577616c3d4afdc529e986bc15a95",
+      "expired": false,
+      "createdAt": "2026-11-06T01:16:38Z",
+      "expiresAt": "2026-11-20T01:16:36Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127646312950,
+        "witnesses": [
+          "2026-11-06T01:16:37.1176660Z SHA256 digest of uploaded artifact zip is fa2d427dab5aca56651b2b66167fe33ced5c577616c3d4afdc529e986bc15a95",
+          "2026-11-06T01:16:37.6457980Z Artifact computer-helper-darwin-report-macos-26-v1.99.112.zip successfully finalized. Artifact ID 13468481957"
+        ]
+      },
+      "localZip": "/tmp/vector-hands/artifacts/dl/a13468481957.zip",
+      "zipVerified": true,
+      "zipBytes": 1003,
+      "zipSha256": "fa2d427dab5aca56651b2b66167fe33ced5c577616c3d4afdc529e986bc15a95",
+      "members": [
+        {
+          "member": "computer-darwin-matrix.json",
+          "rawBytes": 2611,
+          "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "nonPassing": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        },
+        {
+          "member": "computer-darwin-matrix.json.unit-diagnostic.json",
+          "rawBytes": 438,
+          "rawSha256": "9792fadedf1e13812bad7a1d27634ae2d6b9b9065b6552626ce35591d97c480a",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 13468233620,
+      "name": "computer-helper-win32-v1.99.112",
+      "sizeInBytes": 1981540,
+      "digest": "sha256:ac68401a3550efcfc889e5571bc6c71d4e95e1e93b00363d075a2a91d80d3a65",
+      "expired": false,
+      "createdAt": "2026-11-06T01:14:42Z",
+      "expiresAt": "2026-11-20T01:14:41Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127641332829,
+        "witnesses": [
+          "2026-11-06T01:14:42.6058983Z SHA256 digest of uploaded artifact zip is ac68401a3550efcfc889e5571bc6c71d4e95e1e93b00363d075a2a91d80d3a65",
+          "2026-11-06T01:14:43.0551964Z Artifact computer-helper-win32-v1.99.112.zip successfully finalized. Artifact ID 13468233620"
+        ]
+      },
+      "consumedBy": [
+        {
+          "job": 127646069154,
+          "witnesses": [
+            "2026-11-06T01:18:52.9603290Z - computer-helper-win32-v1.99.112 (ID: 13468233620, Size: 1981540, Expected Digest: sha256:ac68401a3550efcfc889e5571bc6c71d4e95e1e93b00363d075a2a91d80d3a65)",
+            "2026-11-06T01:18:53.9298961Z SHA256 digest of downloaded artifact is ac68401a3550efcfc889e5571bc6c71d4e95e1e93b00363d075a2a91d80d3a65"
+          ]
+        }
+      ],
+      "verification": "API metadata only: not downloaded here; the producing job's upload digest and any consuming job's download digest are CI log witnesses"
+    },
+    {
+      "id": 13467598929,
+      "name": "vector-model-catalog",
+      "sizeInBytes": 543279,
+      "digest": "sha256:f773c050a8e096f6f16ca2673dbfd7690c69155469330bc5d0f5cc77855da8bb",
+      "expired": false,
+      "createdAt": "2026-11-06T01:03:19Z",
+      "expiresAt": "2026-12-06T01:03:18Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127641245116,
+        "witnesses": [
+          "2026-11-06T01:03:19.3563115Z SHA256 digest of uploaded artifact zip is f773c050a8e096f6f16ca2673dbfd7690c69155469330bc5d0f5cc77855da8bb",
+          "2026-11-06T01:03:19.8649450Z Artifact vector-model-catalog.zip successfully finalized. Artifact ID 13467598929"
+        ]
+      },
+      "verification": "API metadata only: not downloaded here; the producing job's upload digest and any consuming job's download digest are CI log witnesses"
+    },
+    {
+      "id": 13467489159,
+      "name": "computer-helper-win32-tests-v1.99.112",
+      "sizeInBytes": 4098427,
+      "digest": "sha256:9d1066807c99129e0039a68d0b934d00ee466e414cfa43f176a38e48f411791d",
+      "expired": false,
+      "createdAt": "2026-11-06T01:14:45Z",
+      "expiresAt": "2026-11-20T01:14:43Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127641332829,
+        "witnesses": [
+          "2026-11-06T01:14:44.8759382Z SHA256 digest of uploaded artifact zip is 9d1066807c99129e0039a68d0b934d00ee466e414cfa43f176a38e48f411791d",
+          "2026-11-06T01:14:45.3484884Z Artifact computer-helper-win32-tests-v1.99.112.zip successfully finalized. Artifact ID 13467489159"
+        ]
+      },
+      "consumedBy": [
+        {
+          "job": 127646069154,
+          "witnesses": [
+            "2026-11-06T01:18:54.7743508Z - computer-helper-win32-tests-v1.99.112 (ID: 13467489159, Size: 4098427, Expected Digest: sha256:9d1066807c99129e0039a68d0b934d00ee466e414cfa43f176a38e48f411791d)",
+            "2026-11-06T01:18:55.2320473Z SHA256 digest of downloaded artifact is 9d1066807c99129e0039a68d0b934d00ee466e414cfa43f176a38e48f411791d"
+          ]
+        }
+      ],
+      "localZip": "/tmp/vector-hands/artifacts/dl/a13467489159.zip",
+      "zipVerified": true,
+      "zipBytes": 4098427,
+      "zipSha256": "9d1066807c99129e0039a68d0b934d00ee466e414cfa43f176a38e48f411791d",
+      "members": [
+        {
+          "member": "computer-helper-win32-tests.tar",
+          "rawBytes": 10416128,
+          "rawSha256": "89f4553f25fb6a2af0cd3f712e31dd0a4d7fb0051e930d41fcdd985c5cc58ea8",
+          "tarEntries": [
+            {
+              "name": "x64/tests",
+              "type": "directory",
+              "size": 0,
+              "mode": "0o777",
+              "sha256": null
+            },
+            {
+              "name": "x64/tests/computer-helper-tests.json",
+              "type": "file",
+              "size": 800,
+              "mode": "0o666",
+              "sha256": "117b5597605ce74b81e6d6babcd5c9ffb3f80bdc0fb763b1c3346d4d26f3b7cf"
+            },
+            {
+              "name": "x64/tests/computer-test-target.exe",
+              "type": "file",
+              "size": 514560,
+              "mode": "0o777",
+              "sha256": "40d7399a1ecff730a2a4b938ee2a0fe2c673669fa4fb02bddff627736c958cd1"
+            },
+            {
+              "name": "x64/tests/vector-computer-tests.exe",
+              "type": "file",
+              "size": 4207104,
+              "mode": "0o777",
+              "sha256": "f2826fe655c2e960c4c89e5407858850e68b2c437fc70ac0a14a2237290e6440"
+            },
+            {
+              "name": "x64/tests/VectorComputerCaller.exe",
+              "type": "file",
+              "size": 238080,
+              "mode": "0o777",
+              "sha256": "f3d497d18d5164b7c59575f4075b5753b0aaa41505d20d32f5614bd7ea364b09"
+            },
+            {
+              "name": "arm64/tests",
+              "type": "directory",
+              "size": 0,
+              "mode": "0o777",
+              "sha256": null
+            },
+            {
+              "name": "arm64/tests/computer-helper-tests.json",
+              "type": "file",
+              "size": 806,
+              "mode": "0o666",
+              "sha256": "bd3186b57d91e55c818e5848c6da1fa1031e2a4b5cae47cffd7d95a4f063466e"
+            },
+            {
+              "name": "arm64/tests/computer-test-target.exe",
+              "type": "file",
+              "size": 519680,
+              "mode": "0o777",
+              "sha256": "c4c3dc53af50db63907ec4489e0cecd2b72acbf83ce9375c1ad9bbd5f3358b3b"
+            },
+            {
+              "name": "arm64/tests/vector-computer-tests.exe",
+              "type": "file",
+              "size": 4705792,
+              "mode": "0o777",
+              "sha256": "ba66c7c14b111239e7a0d59e325f9177318ed9446ac2bdcbb3affb2cd4bf6acd"
+            },
+            {
+              "name": "arm64/tests/VectorComputerCaller.exe",
+              "type": "file",
+              "size": 222720,
+              "mode": "0o777",
+              "sha256": "5a9a71c266e485ff2782cd86b2e2e065228032fd8a1a34a0f1a896f0360d2d2c"
+            }
+          ],
+          "note": "members read in-memory with python3 -I tarfile from the verified ZIP bytes; nothing extracted to disk or executed"
+        }
+      ]
+    },
+    {
+      "id": 13466834952,
+      "name": "computer-helper-darwin-report-macos-15-intel-v1.99.112",
+      "sizeInBytes": 1001,
+      "digest": "sha256:912460364545dc02a183ad395a71a2ba64600e863167e5f9b8cf40599d9f8068",
+      "expired": false,
+      "createdAt": "2026-11-06T01:18:21Z",
+      "expiresAt": "2026-11-20T01:18:20Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127646313054,
+        "witnesses": [
+          "2026-11-06T01:18:21.1630020Z SHA256 digest of uploaded artifact zip is 912460364545dc02a183ad395a71a2ba64600e863167e5f9b8cf40599d9f8068",
+          "2026-11-06T01:18:21.6393900Z Artifact computer-helper-darwin-report-macos-15-intel-v1.99.112.zip successfully finalized. Artifact ID 13466834952"
+        ]
+      },
+      "localZip": "/tmp/vector-hands/artifacts/dl/a13466834952.zip",
+      "zipVerified": true,
+      "zipBytes": 1001,
+      "zipSha256": "912460364545dc02a183ad395a71a2ba64600e863167e5f9b8cf40599d9f8068",
+      "members": [
+        {
+          "member": "computer-darwin-matrix.json",
+          "rawBytes": 2611,
+          "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "darwin",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "nonPassing": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        },
+        {
+          "member": "computer-darwin-matrix.json.unit-diagnostic.json",
+          "rawBytes": 438,
+          "rawSha256": "7e808c74f9c2707f5782fb4d3079d0d8ee55c3826b1d9fffd0cae1fb4b913480",
+          "unitDiagnostic": {
+            "trigger": "complete",
+            "spawned": true,
+            "exitObserved": true,
+            "closeObserved": true,
+            "signaled": false,
+            "stdoutBytes": 36,
+            "stderrBytes": 2309,
+            "progress": {
+              "entered": true,
+              "passed": 24,
+              "complete": true,
+              "invalid": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 13466814601,
+      "name": "computer-helper-win32-reports-v1.99.112",
+      "sizeInBytes": 554,
+      "digest": "sha256:78dc4f194569ba4a8204a85afed6b4f23a9d03e0cc10864f71af0763a6853b29",
+      "expired": false,
+      "createdAt": "2026-11-06T01:14:46Z",
+      "expiresAt": "2026-11-20T01:14:45Z",
+      "workflowRun": {
+        "id": 42140933292,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "dbdb5160a2fed2f53d5bd0d0a0da7992da1c633a"
+      },
+      "producedBy": {
+        "job": 127641332829,
+        "witnesses": [
+          "2026-11-06T01:14:46.2944652Z SHA256 digest of uploaded artifact zip is 78dc4f194569ba4a8204a85afed6b4f23a9d03e0cc10864f71af0763a6853b29",
+          "2026-11-06T01:14:46.7398001Z Artifact computer-helper-win32-reports-v1.99.112.zip successfully finalized. Artifact ID 13466814601"
+        ]
+      },
+      "localZip": "/tmp/vector-hands/artifacts/dl/a13466814601.zip",
+      "zipVerified": true,
+      "zipBytes": 554,
+      "zipSha256": "78dc4f194569ba4a8204a85afed6b4f23a9d03e0cc10864f71af0763a6853b29",
+      "members": [
+        {
+          "member": "computer-win32-core.json",
+          "rawBytes": 2466,
+          "rawSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "win32",
+            "privileged": "off",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "nonPassing": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "interpretation": {
+    "dryRunGuard": "passed",
+    "publishTagDeploySigning": "no publish, tag, deploy or production-signing job ran; the gates were not exercised past the failed test dependency",
+    "rootCause": "c5c1515b changed computer-helper.yml (exit 0 after the permitted 77 summary) and test.yml (the staged --native-stage x64 diagnostic) without updating the two contract tests, which were last changed earlier (computer-overlay-workflow.test.ts in d98ee867, computer-workflow.test.ts in 40f812d0). The unit job runs only selected desktop tests, so only the release workflow's Test (desktop) ran them. The workflow changes are intended per hands-deviations.md C8 follow-up item 3.",
+    "arm64": "unit/version/probe/core pass at current source on windows-11-arm (job 127646069154, image windows-11-vs2026-arm64, OS 10.0.26200), using helpers that windows-build 127641332829 rebuilt from source in this run; isolated ARM64 scenarios not run (release isolated-desktop false); packaged ARM64 self-test not run",
+    "macOS": "grant-free core/matrix only (31 passed, 0 failed, 1 disabled skip on each of macos-15 build, macos-26 and macos-15-intel); temporary CI certificate, no Developer ID",
+    "packaging": "macOS and Windows packaging never executed on this lane; Linux packaging was skipped in this run and last executed in 42053349008 at an earlier source",
+    "notProven": [
+      "immutable restoration across attempts",
+      "final package hashes and signatures",
+      "compiled Windows Main pins",
+      "actual ARM64 packaged self-test",
+      "Linux helper absence in the AppImage",
+      "updater metadata",
+      "byte audits"
+    ],
+    "packagingCredit": false,
+    "signingCredit": false,
+    "releaseReadinessCredit": false,
+    "nativeOsStopCredit": false,
+    "captureCredit": false,
+    "arm64IsolatedCredit": false
+  },
+  "validationMethod": "Read-only GitHub API and get_job_logs. Spill copies (byte-exact tool output): the job lists of 42140933292, 42043906253, 42044912052, 42053349008 and 42074920869. Transcriptions (small inline tool output re-typed, with node_id/actor fields dropped where noted): run objects, artifact lists, the fast get_workflow_job, the reduced job lists of 42138851647/42138877213 and the release run listing; where a second source exists they were cross-checked: artifact sizes and digests against local ZIP hashes and CI upload/download log lines, run and job ids/conclusions/head SHAs against the job lists and the release run listing, and the 42140933292 job list against a second identical spill; artifact created/expiry times have only their single API response. Job logs: full saved logs for 127633764774, 127633948612, 127640777343, 127641245309 and 127641332829; transcribed excerpts of witness lines for 127646069154, 127646312950, 127646313054, 127641332772 and 127641245116. Exact size and SHA-256 for 7 ZIPs; raw members read with python3 -I; tar members read in-memory with python3 -I tarfile from the verified ZIP bytes; nothing extracted to disk or executed. No Bun, tests, native code, Electron, dispatch, source edits or signed download URLs."
+}
