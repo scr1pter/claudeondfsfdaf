@@ -1596,6 +1596,81 @@ Nine findings, all confirmed against the code and fixed. Where the fixes choose 
 
 Evidence (macOS, 2026-11-04; package cwd, one file per command, `--timeout 30000`). Engine: `test/server/global-lifecycle.test.ts` 7 pass; with the old `working` line both new cases failed. App: `test-browser/background-tasks.test.ts` 9 (`--conditions=browser --preload ./happydom.ts`) and `src/components/settings-v2/subagent-switches.test.ts` 18 (`--preload ./happydom.ts`) pass; with the new effect disabled the late-flags case failed. Web: as in WP40a's evidence line above. Typechecks: engine `bun typecheck`, app `bun typecheck` and `bun run typecheck:e2e`, and web `astro check` pass. Not run here: the Playwright spec (CI only).
 
+## 2026-11-04 CI10 - CI after Phase 9 (Windows step deadline, catalog refresh race, ripgrep on Windows)
+
+Backfilled 2026-11-08 from the commit bodies and CI logs; no local re-run. This entry covers three commits titled "fix(multiagent): CI after Phase 9", all on 2026-11-04 (-0800): `62aacab9` (19:44), `020c3458` (20:30) and `d624e760` (21:06). Every run cited is a `workflow_dispatch` of test.yml on self-evolving. Run and step times are UTC. Every number comes from the job lists and job logs, unless it is marked as from a commit body.
+
+Also unrecorded until now:
+- `f551fd76` (19:05) and `14e49f34` (19:27) have the same title and fix the e2e specs.
+  - `f551fd76`: the e2e SSE transport consumed request bodies, so every POST with a body failed before it reached the network (from its body). In run [41943664010](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41943664010) on `434b735c`, e2e (linux) job `126970414523` hit its 30-minute step limit; its last progress line was spec 194 of 280. e2e (windows) job `126970414589` also failed, after its step ran 30:07.
+  - `14e49f34`: the Settings → Agents stop-work question now opens with `dialog.push`, over Settings. In run [41959395503](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41959395503) on `f551fd76`, e2e (linux) job `127021881136` and e2e (windows) job `127021880774` each had 1 failed, 1 skipped and 278 passed (15.6 and 15.5 minutes). On both, the failure was subagent-limits.spec.ts:28, "the owner sees 8, 32 and $25, and saving 4 writes budget.subagents.running after the stop-work dialog".
+  - Both e2e jobs passed in run [41963481022](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41963481022) (jobs `127035021598` and `127035021606`).
+- `47e97a94` ("fix(multiagent): CI after Phase 8", 14:29, before the Phase 9 review above) raised one test's own deadline from the 30-second default to 60 s: manager-workflow.test.ts's 300-agent stop case. No assertion changed. Its body gives 15-23 s for that case on CI before Phase 8. It is recorded here as fact and not reviewed. Where this entry says no test deadline changed, it means only `62aacab9`, `020c3458` and `d624e760`.
+- Run [41925753700](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41925753700), the baseline below, is on `47e97a94`. Attempt 1's engine (linux, shard 2/4) job `126909620047` crashed ("panic: Segmentation fault at address 0xFFFFFFFFFFFFFFF8", "Bun has crashed", exit code 132). Attempt 2 re-ran only that job, and it passed. The crash was not diagnosed.
+
+1. Windows step deadline (`62aacab9`: `.github/workflows/test.yml` only; the Windows engine step's `timeout-minutes` went from 30 to 45, with a comment).
+
+   What failed: engine (windows, shard 9/12) reached "The action 'Run Engine shard' has timed out after 30 minutes" twice:
+   - run 41943664010 on `434b735c`, job `126970413963`, step 00:50:14-01:20:21;
+   - run 41959395503 on `f551fd76`, job `127021881188`, step 03:11:19-03:41:26.
+
+   Diagnosis:
+   - Baseline: in run 41925753700, attempt 1's job `126909620451` ran the step in 19:17 (22:53:15-23:12:32). Its attempt-2 copy, `126931388197`, has the same times and is the log read. Bun reported 629 pass, 28 skip and 0 fail of 657 tests across 45 files (1,155.87 s).
+   - Both cut runs ran the same files in the same order. Each was stopped in the 38th file, test/task/isolation.test.ts, after 20 and after 79 of its 83 cases. So 7 files never ran.
+   - Summed test durations from the logs: 1,150.0 s for the baseline's 45 files, against 1,794.0 s and 1,799.6 s for the 38 files that each cut run reached.
+   - Run 41959395503 against the baseline:
+     - isolation 684.6 s for 79 cases, against 434.2 s for 83 (1.58x);
+     - session/task-size 385.5 s against 262.8 s (1.47x);
+     - session/prompt 279.0 s against 135.0 s (2.07x);
+     - cli/github.review 174.5 s against 119.7 s (1.46x);
+     - the 16 files over 3 s in the baseline that ran to their end (task-size, prompt and github.review among them) were 1.41x to 2.32x slower.
+     - So the body's "1.5 to 2 times slower" holds for this run.
+   - Run 41943664010 was 1.65x to 3.94x slower on the same 16 files (task-size 534.6 s, prompt 485.4 s).
+   - The body says that in the second run every test it reached passed. That is right: 540 pass, 0 fail. The first run had five failures before the cut, which the body does not name:
+     - prompt.test.ts "running task tool preserves metadata after tool-call transition", 5,301.87 ms ("timed out waiting for running task metadata");
+     - prompt.test.ts "finalizes assistant when cancelled before processor creation completes", 3,012.75 ms, at its own 3,000 ms deadline;
+     - three task-size.test.ts cases at the 30,000 ms deadline: "a run that ends on a question and a courtesy line is not judged until the user answers" (30,001.81 ms), "after a judged Thorough migration whose report ends on a closing line, a new request is Work and not judged again" (30,000.58 ms) and "thanks or hi after a Thorough report that ends on a closing line is one quick-lane request" (30,012.09 ms).
+
+   Repair: the Windows engine step limit went to 45 minutes. No test deadline, assertion or shard count changed.
+
+   Validation, shard 9/12's step afterwards:
+   - 26:42 in run [41963481022](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41963481022) on `62aacab9` (job `127035021773`);
+   - 29:54 in run [41968211015](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41968211015) on `020c3458` (job `127050084292`);
+   - 30:32 in run [41971876322](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41971876322) on `d624e760` (job `127061781005`, 05:11:10-05:41:42);
+   - 30:10 in run [41982324473](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41982324473) on `98c6423a` (job `127095046624`).
+   - The last two passed only because of the new limit.
+
+   Also in run 41959395503, and not diagnosed: engine (windows, shard 8/12) job `127021881279` failed "tool.registry > preserves Zod arg descriptions from older config-scoped plugin packages" at its own 20,000 ms deadline (20,013.33 ms). Bun reported 553 pass, 1 skip and 1 fail of 555 tests across 45 files (264.40 s). No commit changed that test. Shard 8/12 passed in every later run read here (jobs `127035021886`, `127050084173`, `127061780944` and `127095046545`). Whether the file stayed in that shard was not checked.
+
+2. Catalog refresh race (`020c3458`: packages/core/test/model-plans.test.ts, +5 lines, two forced catalog reads before the refusal; no assertion changed). The file is Codium's and came in by merge.
+
+   What failed: run 41963481022 on `62aacab9`. Every job passed except unit (windows), job `127035021414`. Core had 3,533 pass, 39 skip and 1 fail of 3,573 tests across 326 files (406.15 s). The failure was "a fresh engine lists the account's last catalog while vectordev.ai is slow, and only for that account" (135.22 ms), at model-plans.test.ts:154:95. It expected `enabled: false` with no models and received `enabled: true` with the `vendor/coder` model (diff -2/+9).
+
+   From the commit body only: the cause (two late refreshes each save the cache file when they land, which on a slow runner can be after the refusal is saved); that the old test with an added delay fails at 40 and 44 ms; and that the new one passes at every delay.
+
+   Validation: on Windows the case passed in job `127050083784` (248.64 ms) and in job `127061780894` (265.70 ms).
+
+3. Ripgrep on Windows (`d624e760`: test.yml gains an "Install ripgrep (Windows)" step in the unit job, as the Windows engine shards have: Chocolatey, the native rg.exe put on PATH, a 10-minute limit; no test changed).
+
+   What failed: run 41968211015 on `020c3458` had 20 jobs succeed, 1 fail and 3 manual jobs skipped. The failure was unit (windows), job `127050083784`:
+   - Core had 3,529 pass, 39 skip and 1 fail of 3,569 tests across 326 files (466.50 s).
+   - The failure was "Ripgrep > (unnamed)", 60,692.42 ms. That is the `beforeAll` of packages/core/test/ripgrep.test.ts: a 65_000 ms hook that runs `prepareRipgrep` from test/fixture/ripgrep.ts, which has `Effect.timeout("60 seconds")`.
+   - The log shows "downloading ripgrep" (15.1.0, x86_64-pc-windows-msvc.zip) at 04:36:42.67 and a TimeoutError at 04:37:43.33. A second download, by tool-grep.test.ts at 04:38:15, failed no test.
+   - The job's "Install ripgrep" step was Linux-only and was skipped.
+
+   Validation: run 41971876322 on `d624e760` had 21 jobs succeed and 3 manual jobs skipped.
+   - In unit (windows) job `127061780894`, "Install ripgrep (Windows)" ran 05:11:42-05:12:27.
+   - Core had 3,534 pass, 39 skip and 0 fail of 3,573 across 326 files (445.35 s).
+   - No "downloading ripgrep" line appears in the log's last 5,000 lines, which hold all of core's output.
+   - Run 41982324473 on `98c6423a` also had 21 succeed and 3 skipped.
+
+Evidence (Linux container, 2026-11-08): the job lists and job logs of the runs above, read with the read-only GitHub tools; per-file sums computed from those logs; test counts from Bun's own summary lines; no local re-run.
+
+Remaining:
+- No commit here addressed the test-level timeouts. The 3 s prompt case and two of the task-size cases fail again in `f062bcce`'s run (CI11), now in engine (windows, shard 1/12): the shard number moved with the file list after the main merge (CI11). Their diagnosis is CI12.
+- The 20 s registry timeout and the Bun crash are not diagnosed.
+- Spec 7.2 item 1 (multiagent-parity-spec.md line 2524) still says "Windows 6", while test.yml has 12 Windows engine shards with a 45-minute step. This backfill does not edit the spec.
+
 ## 2026-11-04 Final end-to-end review
 
 Fifteen findings, each confirmed again against the code before it was fixed; none was rejected. The parts the review's skeptic had already rejected (the default-instance capability read, R10's shell caveat, the tokenomics claim and the FAQ answer about limits) stay as they were. Where the fixes choose between options or go beyond the finding:
@@ -1614,3 +1689,146 @@ Fifteen findings, each confirmed again against the code before it was fixed; non
 - Codium, Hands and @vector files were not touched. No route, schema or config changed, so no generator was run.
 
 Evidence (macOS, 2026-11-04; package cwd, one file per command, `--timeout 30000`). Engine: `test/session/task-size-history.test.ts` 34, `test/session/task-size.test.ts` 53, `test/task/shells.test.ts` 11, `test/task/isolation.test.ts` 90, `test/task/notify.test.ts` 16, `test/task/notify-admission.test.ts` 4, `test/task/recovery.test.ts` 7, `test/task/workflow-notify.test.ts` 2, `test/tool/task-manage.test.ts` 50 and `test/server/session-stop.test.ts` 4 pass. `test/task/isolation-terminal.test.ts`: the new stop case passes; the existing save case fails here on macOS before any terminal code runs (`/var` against `/private/var` in the checkout path), unchanged by this work and covered by Linux CI. With the old code the new sizing, Light, terminal and disk cases each failed. Core: `test/background-job-store.test.ts` 13 pass. App: `subagent-switches.test.ts` 18, `subagent-limits.test.ts` 11, `subagent-model.test.ts` 78, `engine-capabilities.test.ts` 12 and `followup-model.test.ts` 29 (`--preload ./happydom.ts`), and `test-browser/background-tasks.test.ts` 10 (`--conditions=browser --preload ./happydom.ts`) pass. Web: `release-113-multiagent-docs.test.ts` 11, `docs-settings` 5, `release-copy` 11, `release-111-docs` 11, `docs-config-paths` 2, `brain-docs` 12 and `repository-traces` 5 pass. Typechecks: core, engine and app `bun typecheck`, app `bun run typecheck:e2e`, and web `astro check` pass. Not run here: the Playwright specs (CI only).
+
+## 2026-11-05 MAIN2 (integrate origin/main 4299d743)
+
+Backfilled 2026-11-08 from the commit bodies, git and CI logs; no local re-run.
+
+Status: origin/main `4299d743` was merged into self-evolving by one merge commit, `b7ba4fa9` "Merge main into self-evolving" (2026-11-05 18:13 -0800). Its parents are `a2789e3a` (self-evolving, "docs(multiagent): merge plan") and `4299d743` (origin/main). 33 conflicts were resolved, keeping main's tokenomics and research code as main has it, with the multi-agent and Codium behaviour added around it. The review fix is `c879dffd` (below). The CI fix is `f062bcce` (CI11). Unlike the MAIN entry, there is no record of local typechecks or test runs for this merge: neither commit body names any.
+
+Inputs:
+- Merge base `78526052`, the MAIN entry's main tip (2026-10-30, "docs(web): mark desktop 1.99.112 published").
+- Main had 248 commits the branch lacked (`git rev-list a2789e3a..4299d743`). 243 of them came after `1d853606`, main's tip when the merge plan was first written; 243 is the count the body and the merge plan give. The branch had 156 commits main lacked.
+- On 2026-11-08 an in-memory `git merge-tree --write-tree --name-only --no-messages a2789e3a 4299d743` listed exactly the body's 33 files.
+- CI: PR #20 was opened 2026-11-06 01:42 UTC. Its first pull_request runs were created at 03:08:50 UTC (the test run at 03:08:51), on `c879dffd`; no test, Verify or typecheck run exists on `a2789e3a` or `b7ba4fa9`. Why `b7ba4fa9` has none is not recorded.
+
+Conflicted files by area (33, from the body):
+- Brain and research migrations (4): core brain/database.ts and brain.ts, and core test/brain/database.test.ts and migration-knowledge.test.ts.
+- Memory and research export (2): the engine's HttpApi memory handler and the app's settings-v2/memory.tsx.
+- Spend accounting and budgets (5): core spend-guard.ts and its test, task-size.ts, session/compaction.ts and session/runner/llm.ts.
+- Engine session, usage and prompt cache (9): session/llm.ts, llm/request.ts, processor.ts, session.ts and title-usage.ts, and the llm-request, processor-effect, task-size and title-usage tests.
+- Tools and CLI (6): tool/apply_patch.ts, task-manage.ts and task.ts, cli/cmd/run.ts and stats.ts, and test/cli/stats.test.ts.
+- Context display, app and TUI (4): the app's session-context-tab.tsx, and the TUI's prompt/index.tsx, sidebar/context.tsx and subagent-footer.tsx.
+- Generated SDK (3): both types.gen.ts files and openapi.json, regenerated with `./packages/sdk/js/script/build.ts` according to the body.
+
+Brain migrations run in id order: facets, revocation, learned_skills, workflow, research_claims. None was renumbered, and none has shipped.
+
+Judgement calls: see the merge plan's "Main moved on 5 November 2026" section (multiagent-merge-plan.md line 10) and `b7ba4fa9`'s body, which lists 14. They are not repeated here. Among them, these adjust tests to the other side's rules (from the body, and not re-run here):
+- the Standard task-size note keeps main's "not routine tool calls", and core's task-size.test.ts expects it (1 line against `a2789e3a`, from git);
+- main's session-context-metrics test fixture gains the `tokensOwnOnly` flags the merged engine sets (same numbers, plus `codiumSteps: 0`), and the Codium e2e spec also checks the new "Chat input/output tokens" labels;
+- main's migration-knowledge test also expects research_claims (main's own run 42130320793 fails without it), and migration-learned expects all five migration ids;
+- the Codium compaction runner test counts the earlier no-usage turn as one unpriced step, under main's absent-usage rule (2 → 3, with a new intermediate assertion);
+- main's nested-activity CLI test sets the note window to 100/500 ms, so self-evolving's 1.5 s note hold fits its 1 s idle limit. The body says it still fails without main's ancestry fix.
+
+Generated files:
+- Against `a2789e3a`, the merge changes 5 SDK files (+122/-9): both sdk.gen.ts files, both types.gen.ts files and openapi.json.
+- packages/client/src/generated and src/generated-effect are the branch's, unchanged.
+- CI's "Check generated client" step (test.yml line 125, in unit (linux)) passed on `c879dffd` (job `127686037773`) and on `f062bcce` (job `127701422867`).
+
+Version pin and lockfile: the 1.99.112 version pin and bun.lock were not changed by this integration.
+- packages/desktop/package.json has `"version": "1.99.112"` on both parents, in the merge, in `c879dffd` and in `f062bcce`.
+- bun.lock in `b7ba4fa9` is byte-identical to main's: `git diff 4299d743 b7ba4fa9 -- bun.lock` is empty. Against `a2789e3a` it takes main's pdf-lib entries (+15/-1: pdf-lib 1.17.1 with @pdf-lib/fontkit 1.1.1, @pdf-lib/standard-fonts 1.0.0, @pdf-lib/upng 1.0.1 and tslib 1.14.1; pako moves to 1.0.11, with unicode-trie keeping a nested pako 0.2.9), which come with main's packages/core/package.json additions.
+- Neither `c879dffd` nor `f062bcce` touches either file.
+
+Review fixes (`c879dffd` "fix(merge): review of main merge", 2026-11-05 18:59 -0800; 7 files, +264/-15):
+- The learned-skill drafter is charged like main's model learner:
+  - prompt.ts captures the run's spend scopes before the run ends, and releases them when the drafter finishes, or at once when there is no drafter;
+  - skill-learn.ts's `modelDraft` returns the plain draft once the captured run has stopped, and charges its request through `TitleUsage` with the prompt's helper cost kind;
+  - learning-fixture.ts exposes `SessionSkillLearn`.
+- `vector stats` (cli/cmd/stats.ts):
+  - a V2 compaction row without a Codium flag counts as own work unless the session shows Codium;
+  - lifetime unpriced steps subtract the Codium records seen, 1.99.112's unflagged Codium steps and titles included.
+- Tests:
+  - skill-learn.test.ts: "the model drafter's request counts against the run that launched it, as the model learner's does" and "a run that stopped after its snapshot keeps the plain draft, and the model drafter sends nothing", each with the file's 90_000 ms deadline;
+  - stats.test.ts: "a V2 compaction summary without Codium counts in lifetime own cost and tokens, as on main", the same case "in window", and "lifetime statistics show 1.99.112 Codium history as Codium, not as unpriced requests".
+- "Each fails without its fix" is from the commit body only. No mutation hashes were saved.
+- The commit also changed 3 lines of the merge plan (+2/-1).
+- CI, in run [42154724940](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42154724940): the three stats cases passed in engine (linux, shard 2/4) job `127686037695` (44.51, 46.31 and 62.26 ms), and the two skill-learn cases passed in engine (windows, shard 3/12) job `127686037932` (7,125.38 and 7,219.18 ms).
+
+Evidence (Linux container, 2026-11-08): `git` on the commits named above (the rev-list counts, the in-memory merge-tree, numstats, and the version pin and bun.lock diffs); the job lists and job logs of runs 42154724940 and 42159471110, read with the read-only GitHub tools; no local re-run.
+
+Owner decisions: none taken here. The merge plan's Owner checks and Open items hold them.
+
+Remaining: the CI repair on this merge is CI11.
+
+## 2026-11-05 CI11 - CI after main merge
+
+Backfilled 2026-11-08 from the commit bodies and CI logs; no local re-run. This entry covers `f062bcce` "fix(merge): CI after main merge" (2026-11-05 19:55 -0800). Every run on `c879dffd` and `f062bcce` cited here is a pull_request run on PR #20, which GitHub runs on the PR merged with main. The earlier runs named for comparison are CI5's and CI10's `workflow_dispatch` runs and main's own push run 42130320793 on `4299d743`. Times are UTC.
+
+What failed: run [42154724940](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42154724940) on `c879dffd` (2026-11-06, 03:08-03:45). 6 of the 21 jobs that ran failed, with 7 distinct tests; 3 manual jobs were skipped.
+- engine (linux, shard 1/4), job `127686037849`: 1,748 pass, 3 skip and 3 fail of 1,754 tests across 137 files. The failures were:
+  - the egress inventory, "Vector Local's connection inventory > every file that writes an address is a call site in the source registry or says why it needs none" (54.99 ms);
+  - workflow-learn's "a priced run's cost is known, and a background subagent still running marks the run partial" (1,420.30 ms);
+  - "tool parameters > JSON Schema (wire shape) > terminal".
+- engine (linux, shard 2/4), job `127686037695`: "vector CLI help-text snapshots > every documented command emits stable help text" (37,289.73 ms); 2,153 pass, 32 skip and 1 fail of 2,186.
+- engine (windows, shard 2/12), job `127686038160`: the help snapshots (77,151.14 ms); 892 pass, 26 skip and 1 fail of 919.
+- engine (windows, shard 3/12), job `127686037932`: all three "Vector source independence" cases, with EMFILE ("too many open files", errno -24) at upstream-free.test.ts lines 36 and 57; 344 pass, 9 skip and 3 fail of 356.
+- engine (windows, shard 5/12), job `127686037956`: the egress inventory; 404 pass, 6 skip and 1 fail of 411.
+- engine (windows, shard 9/12), job `127686037999`: workflow-learn (5,478.71 ms) and the terminal parameters; 510 pass, 26 skip and 2 fail of 538.
+- Verify run [42154724794](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42154724794) and typecheck run [42154724789](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42154724789) passed.
+
+Diagnosis from the logs:
+- Egress inventory: the test found two files from main that write an address and are not listed: packages/core/src/research/export.ts (schemas.openxmlformats.org) and packages/engine/src/provider/transform.ts (api.openai.com). Main's own run 42130320793 on `4299d743` fails this test too.
+- Terminal parameters: main changed the descriptions of the wait pattern and the timeout ("open, wait: a regular expression to wait for in the output; open waits for readiness when supplied"; "open with pattern, wait: give up after this many milliseconds …") without updating the snapshot.
+- Help snapshots: `--report` now reads "write the report and sources to a .md, .json, .docx or .pdf file". Main's run 42130320793 fails both snapshot tests too (merge plan, "CI evidence for `f062bcce`").
+- workflow-learn: workflow-learn.test.ts:211, `expect(row?.cost_usd).toBeGreaterThan(0)`, failed with "Expected and actual values must be numbers or bigints". The test's scripted steps reported no usage, and under main's usage uncertainty a step without counters leaves the run's cost unknown.
+- upstream-free: the test opened every tracked file at once with `Promise.all`. The merged tree has enough files to run out of file handles on Windows.
+
+Repair (`f062bcce`: 5 test files, +33/-22, no source):
+- egress-inventory.test.ts gains two `ADDRESSES` entries, each with the reason it needs no source: the Office Open XML namespace names a .docx export writes, and OpenAI's address, compared to decide whether prompt cache boundaries apply.
+- The parameter and help snapshots are set to main's text.
+- workflow-learn's scripted steps report usage (800/40 and 900/60 tokens).
+- upstream-free reads tracked files in batches of 256.
+- No deadline changed, and no assertion was removed.
+
+Old-code evidence: the red run on `c879dffd` is the failure on the old code for all seven tests. No local mutation was run. The upstream-free batching is proven only by Windows CI, since EMFILE did not occur on Linux.
+
+Validation: run [42159471110](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110) on `f062bcce` (merge ref `da97e8ce`). On attempt 1, all six shards above passed, with the same test and file counts as on `c879dffd`:
+- `127701423004`: 1,751 pass, 3 skip, 0 fail; egress 88.02 ms, workflow-learn 1,953.76 ms, terminal passed;
+- `127701422938`: 2,154/32/0; help 35,503.11 ms;
+- `127701423060`: 893/26/0; help 40,759.94 ms;
+- `127701423043`: 347/9/0; the three source-independence cases at 1,267.78, 21.27 and 145.22 ms;
+- `127701423019`: 405/6/0; egress 92.65 ms;
+- `127701423331`: 512/26/0; workflow-learn 4,979.69 ms, terminal passed.
+- Typecheck run [42159471067](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471067) passed its 4 jobs.
+
+Attempt 1 also failed four other jobs. Each has its own later entry:
+- unit (windows), job `127701423000`: core "util.effect-flock > enforces mutual exclusion under process contention", 14,085.55 ms, against its own 60_000 ms deadline; a `toEqual` at effect-flock.test.ts:458. Core had 3,640 pass, 44 skip and 1 fail of 3,685 tests across 332 files (471.98 s). Goes to CI13.
+- engine (windows, shard 12/12), job `127701423208`: test/server/local.test.ts "the Local API > a new identity pin for a server on the list, or none, needs confirm; Add server says what changed", 1,612.27 ms (at local.test.ts:413); 612 pass, 9 skip and 1 fail of 622. Goes to CI14.
+- engine (windows, shard 1/12), job `127701423223`: 749 pass, 26 skip and 4 fail, plus 1 error between tests, of 779 tests across 46 files (1,488.62 s). The step took 24:49 (04:07:32-04:32:21), under its 45-minute limit. Goes to CI12. The four timeouts:
+  - prompt.test.ts "finalizes assistant when cancelled before processor creation completes", 3,000.49 ms, at its own 3,000 ms deadline;
+  - task-size.test.ts "after a judged Thorough migration whose report ends on a closing line, a new request is Work and not judged again", 30,004.65 ms, and "thanks or hi after a Thorough report that ends on a closing line is one quick-lane request", 30,020.78 ms;
+  - task-manage.test.ts "isolated task merge and discard > an agent merges and discards only its direct children, after approving the diff", 30,016.24 ms.
+  - All four are repeats, handed to CI12 and not re-diagnosed here. The first three also failed in run 41943664010 (CI10). The task-manage case failed on Windows before, in run 41133403420 (engine windows 1/6, the CI5 entry's "CI evidence"). CI5 traced that failure to line endings and to a junction that isolation-admission's finalizer left behind (its causes 2 and 3), not to a deadline.
+  - The shard number moved with the file list. In the shard 9/12 logs read for CI10 (runs 41925753700, 41943664010 and 41959395503), prompt, task-size and isolation.test.ts ran in shard 9/12. Through `98c6423a`, shard 1/12's step took 3:11 to 5:06 (for example `126970414072` 4:35, `127061780959` 3:16, `127095046235` 5:06). The main merge added files, which changes Bun's whole-file split. On `c879dffd`, shard 1/12's step already took 16:38 (`127686037969`). On `f062bcce`, shard 1/12 holds prompt, task-size and task-manage, but not isolation.test.ts, which now runs in shard 2/12 (`127701423060`, step 15:56).
+- Verify run [42159471068](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471068), job `127701422434`, the 30-minute "Vector Local desktop packet capture": the capture's report says "4 packets used an unexpected address, port or protocol". Each of the 4 is UDP from 198.18.0.1 to 198.18.0.53, destination port 53, and the report's `bytes` field reads 0 for each. The capture saw 6,190 packets in 60 cycles over 1,800,028 ms. Goes to CI15.
+- Attempt 2 re-ran those four jobs unchanged; they started from 04:34:47. All four passed: `127713924142`, `127713925314`, `127713925306` (shard 1/12's step took 13:48) and Verify `127713927586`.
+- A pass on re-run explains nothing. These four failures are not recorded as runner timing; CI12 to CI15 diagnose them. The PR body's "runner timing and DNS" wording is the owner's to change.
+
+Other checks on `f062bcce`, as the merge plan's CI evidence section records them: free models [42159471115](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471115) and public sharing [42159471061](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471061) passed; 37 check runs, 31 success and 6 skipped, plus the Vercel status (deployment `27EEvRhGjE5DktpQJXa6J2TKTk6m`, 2026-11-06 03:58 UTC).
+
+Evidence (Linux container, 2026-11-08): the job lists and job logs of runs 42154724940 and 42159471110, the capture log of Verify job 127701422434, and the run records of 42154724794 and 42154724789, read with the read-only GitHub tools; test counts from Bun's own summary lines; no local re-run.
+
+Remaining:
+- CI12 to CI15.
+- No macOS runner.
+- Later docs-only pushes re-run every check. Their Windows shard 1/12 results are CI12's timing samples. The first is SE-1's push `e0bfa00b` (test run [42439504860](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42439504860)): engine (windows, shard 1/12) job `128605501418` passed with 753 pass, 26 skip and 0 fail of 779 tests across 46 files (1,024.32 s). Its step took 17:05 (2026-11-08 02:46:20-03:03:25) and the job 21:13 (02:42:15-03:03:28).
+
+## 2026-11-08 SE-2 (backfill of CI10, MAIN2 and CI11)
+
+Status: CI10, MAIN2 and CI11 above were added in commit-time order: CI10 before the Final end-to-end review (`98c6423a`, 2026-11-04 22:41 -0800), MAIN2 and CI11 after it. Docs only: this file is the only one changed, and no line that was already in it changed. The entries are written from the commit bodies, git and the CI logs; nothing they cite was re-run locally. This entry is kept short, as the package's record of its own checks; whether every package gets one is the lane's call.
+
+Evidence (Linux container, 2026-11-08; one Bun workload at a time through the lock):
+- `git diff --check` is clean. The diff is this file only, with 0 deletions. Its added headings are CI10, MAIN2, CI11 and this entry's.
+- Name scan: packages/engine, `bun test --timeout 30000 test/compliance/upstream-free.test.ts` with fresh XDG roots under /tmp/vector-selfev. Its "tracked paths and binary contents keep the upstream holder only in license notices" case reads this file and passes after the edit. One other case, "a GitHub token does not take the default model from an OpenAI key", fails in this container before and after the edit, and passes with a clean environment (`env -i` with HOME, PATH and the XDG roots: 12 pass) and in CI (job `127701423043`). No email address, model name or Vercel URL is in the added lines.
+- `bun turbo typecheck --concurrency=1` from the worktree root: 23 of 23 tasks successful (20 from the cache; session-ui, ui and app ran and passed). At the commit gate, run again: 23 of 23 (21 from the cache). The name scan at the gate gave the same result: 11 pass and the same 1 fail, and 12 pass with a clean environment.
+
+The push waited for SE-1's PR checks on `e0bfa00b`, since a new push cancels an in-progress PR run. At 03:25 UTC e2e (windows), engine (windows) 2/12 and 6/12 and engine (linux) 2/4 were still running. Judged at 03:36 UTC, all green on attempt 1:
+- Test run 42439504860 completed with success at 03:34 UTC. Its last two jobs: e2e (windows) `128605501444` (03:06:03-03:29:56) and engine (windows, shard 2/12) `128605501526` (03:08:17-03:34:23; 893 pass, 26 skip and 0 fail of 919 tests across 46 files, 1,309.08 s).
+- Verify 42439504857 (the packet capture job `128605501270` included), typecheck 42439504838, free models 42439504836 and public sharing 42439504832 passed.
+- The PR shows 37 check runs, 31 success and 6 skipped. The skipped six have the same names as on `f062bcce`: offline footprint, published release evidence, production benchmark, schemas, legacy-desktop-access and CodeRabbit. The Vercel status is success (deployment `5XVbKA8oTJDrmvm2fiUDmBPuyq9y`, 02:42 UTC).
+- SE-1's shard 1/12 sample is in CI11 Remaining. This push's own shard 1/12 result is a CI12 sample and goes to CI12.
+
+Deferred:
+- CI12 to CI15, the diagnoses of `f062bcce`'s four attempt-1 failures, and spec 7.2 item 1's "Windows 6" (CI10 Remaining).
+- The merge plan's "Each of these four first-attempt failures is being diagnosed" line, until CI12 to CI15 land. The PR body's wording is the owner's.
