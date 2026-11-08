@@ -48,6 +48,8 @@ Typecheck: root `tsconfig.json` (api) clean with `tsgo --noEmit`. No package's s
 
 **CI only:** nothing new needs a service. The Codium lane picks up the new test file; it has not run in CI yet. **Never exercised anywhere:** the real Worker on Cloudflare receiving the API's calls (A39's smoke test covers the Worker under `wrangler dev --local` in CI), a real desktop or phone connecting, and the Supabase session of a real phone.
 
+**Status on 8 Nov 2026.** A40 went up with the A36–A43 batch (head `aa35701e`). `test/remote-ticket-api.test.ts` passed in Vector Codium run 41942473092, Codium tests job 126966439936 (29 pass). That run failed only in Remote relay job 126966440346, and the next run, 41958430737 (head `31820732`), was green.
+
 ## Owner steps
 
 In `docs/vector/owner-actions/remote.md`: the ticket key pair (step 3, the private half in `VECTOR_REMOTE_TICKET_SIGNING_KEY`), `VECTOR_REMOTE_RELAY_URL` (step 7), and `VECTOR_REMOTE_ENABLED=true` (step 8), all in Vercel Production only. Remote is listed only after the outside security review and once A41 and A42 ship.

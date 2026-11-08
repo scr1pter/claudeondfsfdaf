@@ -1,6 +1,6 @@
 # Codium implementation notes
 
-Updated October 30, 2026. These notes describe the committed build on `codium`; they do not replace the contract or the owner's tier decisions.
+Updated November 8, 2026. These notes describe the committed build on `codium`; they do not replace the contract or the owner's tier decisions.
 
 ## Recovered state
 
@@ -1811,3 +1811,85 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   the repository twice (up to 15 minutes each) between `card` and `start`, and the binding alone already shuts out a
   copy read during that time. One cost: re-running only the capture job (a new proof) is refused; re-running the
   workflow mints a new ticket. Codex's V31 wiring is unchanged (the proof never leaves the capture job).
+
+## Lane status (8 Nov 2026)
+
+From read-only GitHub queries (cited by run and job id only) and local git reads on 8 Nov 2026. This is package D1's
+record: it changes docs only (no code, test or workflow) and has no notes file of its own. Earlier sections are
+unchanged.
+
+- **Latest green run.** Vector Codium run 42138157347 (push, head `5a079cbd`) passed all 14 jobs; its Codium tests job
+  127631456285 finished at 2026-11-06T00:45:50Z.
+  - Typecheck jobs: api 127631456479, schema 127631456592, core 127631456275, engine 127631456220, app 127631456492,
+    desktop 127631456686, web 127631456454, cloud 127631456623, relay 127631456255, ops-worker 127631456407.
+  - Codium tests 127631456285: the picker's 248 of 248 files passed on the step that sets `VECTOR_TEST_REDIS_URL` and
+    `VECTOR_TEST_POSTGRES_URL`, then the HttpApi exerciser gates and `check:generated` passed.
+  - Codium browser specs 127631456384; Remote relay dry run and local smoke 127631456398; Ops Worker dry run and
+    miniflare smoke 127631455750.
+  - Before this record was committed, the remote's `codium` was `5a079cbd` and its only `codium*` branch, and no later
+    Vector Codium run existed.
+- **The P7 failures it closed.** Run 42134490728 (head `d5975d28`, the P7 review): Codium tests job 127619053399 passed
+  246 of 248 files, failing the Valkey cases of `test/on-call.test.ts` and `test/ship-desk.test.ts`; Ops Worker job
+  127619054092 failed its miniflare smoke because the Workers runtime refused the string export `KILL_KEY` of
+  `packages/ops-worker/src/index.ts` ("Incorrect type for map entry 'KILL_KEY'") and did not start. `025d75da` removed
+  that export and fixed both Valkey tests. Its run 42136600777 passed the Ops Worker job (127626223269, the first
+  passing miniflare smoke), but Codium tests job 127626223012 passed 247 of 248, failing
+  `packages/core/test/vault/vault.test.ts`. `5a079cbd` changed only that test, so its prune count no longer depends on
+  the vault's random chunking key, and its run is the green one above.
+- **P6 and P5.** P6 run 41942473092 (head `aa35701e`) failed only in Remote relay job 126966440346, at its
+  `wrangler dev --local` smoke step; its other 11 jobs passed, Codium tests job 126966439936 with 223 of 223 files.
+  `31820732` kept the relay entry's `CONTROL_OBJECT` string module-private, and its run 41958430737 was green. P5 run
+  41759865557 (head `0cef8b91`) was green.
+- **Batched pushes.** A29–A35 (`f254efc5` to `298cc87f`) went up with the P5 head `0cef8b91`, A36–A43 (`12481086` to
+  `fbc8ef1f`, A36 last) with the P6 head `aa35701e`, and A44–A50 (`305e45c9` to `01781909`) with the P7 head `d5975d28`.
+  No Vector Codium run has one of those package commits as its head: after run 41272142017 on `d13d91e3`, the runs are
+  on `0cef8b91`, `aa35701e`, `31820732`, `d5975d28`, `025d75da` and `5a079cbd`. Earlier records that say "Nothing was
+  pushed" or "has not run in CI" describe their own day; the runs above are the first that include those packages.
+- **test.yml and typecheck.yml.** Both run only on pushes to main, pull requests (typecheck.yml: to main) and
+  workflow_dispatch. test.yml's latest run on codium is 41268039624 (workflow_dispatch, head `295ab95e`, 1 Nov,
+  success), so no A29–A50 commit has run in test.yml. Its unit jobs run `bun turbo test` without the engine (the engine
+  has its own shards), and `turbo.json` at `295ab95e` defines test tasks only for engine, core, app, ui and session-ui;
+  unit (windows) job 124734865943 shows only the ui, core, app and session-ui test tasks. So
+  `packages/client/test/import-boundaries.test.ts` and `packages/sdk/js/test/server-startup.test.ts` did not run there,
+  and the "Not run anywhere" bullet of `codium-a21-contract-notes.md` still holds; it is left unchanged, although its
+  last clause leaves out workflow_dispatch. typecheck.yml has never run on codium (no run listed for the branch).
+- **vector-codium-e2e.yml has never run.** The file is on codium only (not on main) and is dispatch only. GitHub has no
+  workflow registered under that file name (get_workflow answers 404) and no run of it. Running it needs the owner's
+  `codium-test` environment (§8.2 steps 2 and 6).
+- **The A30 drafts.** They exist only on the owner's Mac: branch `codium-legal` at `94a5004e`, unpushed
+  (`codium-a30-legal-notes.md`, "Where the work is"). This clone has no such object and the remote no such branch. The
+  lane does not recreate them.
+- **Owner step 9 stopped after A28.** The last merge of codium into self-evolving is `d4402136` ("Merge codium A26-A28
+  into self-evolving", parents `c3f7bed3` and `d13d91e3`), and `git merge-base origin/self-evolving origin/codium` is
+  `d13d91e3`. The 29 commits after it, `f254efc5` (A29) to `5a079cbd`, are not in self-evolving (`git cherry` marks all
+  29 `+`). Nothing was merged; the merge stays the owner's step (§8.2 step 9). A read-only
+  `git merge-tree --write-tree --name-only` of self-evolving `f062bcce` and codium `5a079cbd` (the remote heads on 8
+  Nov), with a throwaway object directory so no ref moved and no object entered the shared store, reports content
+  conflicts in 7 files:
+  - `packages/app/src/components/settings-v2/general.tsx`
+  - `packages/app/src/components/settings-v2/memory-model.ts`
+  - `packages/app/src/components/settings-v2/settings-memory.css`
+  - `packages/app/src/components/settings-v2/settings-registry.ts`
+  - `packages/app/src/context/settings.tsx`
+  - `packages/engine/src/server/routes/instance/httpapi/handlers/memory.ts`
+  - `packages/engine/src/tool/task.ts`
+- **Phase reviews still to run.** P3 covered A17–A20 (`14bc7d42..a5cad27a`, `codium-p3-repairs.md`), P5 A29–A35, P6
+  A37–A43 and P7 A44 and A47–A50 ("P7 review decisions" above). No phase review covers A21–A28 (P4;
+  `codium-p4-repairs.md` does not exist yet), A36, A45 or A46; the next packages close them. A15 (`73cd78a4`) and A16
+  (`071dfe37`) lie between P2's `d04a2808` and P3's range, so no recorded phase-review range includes them; each record
+  names its own independent review (line 3 of `codium-a15-catalog-notes.md` and `codium-a16-callers-notes.md`). The
+  order under "Next phase order and external gates" (A10–A14) is the order of its own day.
+- **Records refreshed on 8 Nov 2026.** Eight records got one dated status line each: `codium-a17-admission-notes.md`,
+  `codium-a17-context-decision.md`, `codium-a18-models-status-notes.md`, `codium-a36-playbooks-server-notes.md`,
+  `codium-a40-remote-api-notes.md`, `codium-a44-vault-api-notes.md`, `codium-a45-desktop-vault-notes.md` and
+  `codium-a48-release-guard-notes.md`. `codium-a46-ops-worker-notes.md` got a dated status sub-list under "Not done",
+  and `codium-a21-contract-notes.md` was checked and left unchanged (above). A job log read through the lane's GitHub
+  tools holds at most its last ~5,000 lines, so the files the picker runs before the middle of `packages/engine`
+  (`packages/app`, `packages/core` and `packages/desktop` among them) are not visible in the P6 and P7 Codium tests
+  logs; the A36 and A45 lines say so and leave the file-level result unconfirmed.
+- **D1 readings.** The brief's A46 item named run 42138157347 for the passing miniflare smoke; it first passed one run
+  earlier, in 42136600777 (job 127626223269), and the A46 status names both. The A44 line's Postgres path is an
+  inference from the step's environment and `test/brain-vault-fixture.ts` (`vaultBackend` picks `PostgresVaultBackend`
+  when `VECTOR_TEST_POSTGRES_URL` is set), since the job log names no Postgres marker for that file, and the line says
+  so. Deferred: the other stale lines of earlier records, review coverage for A15 and A16, `MODEL-PLANS.md`, and A51
+  onward. This record's own push and its Vector Codium run are recorded by the next package.

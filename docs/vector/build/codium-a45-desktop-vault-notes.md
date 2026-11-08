@@ -84,6 +84,9 @@ Typecheck: engine, core, desktop (`tsgo -b`) and app (`tsgo -b`) are clean. The 
 ## CI only, or not exercised anywhere
 
 - The Codium CI lane picks up the four new test files; none has run in CI yet. None needs a service.
+- **Status on 8 Nov 2026.** Pushed with the A44–A50 batch (head `d5975d28`). Vector Codium run 42138157347 of `5a079cbd`
+  was green (Codium tests job 127631456285). The file-level result for the four files is unconfirmed: the job logs read
+  hold only their last ~5,000 lines, and these files are not in them.
 - `packages/engine/test/server/httpapi-exercise/index.ts` gained `memory.backup` and `memory.restore`; the exerciser runs
   only in CI.
 - `packages/app/src/browser-bundle.test.ts` walks the app bundle; the new app files import only `@vectordevai/schema/vault`

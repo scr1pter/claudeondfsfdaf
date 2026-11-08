@@ -110,6 +110,11 @@ types) and are clean.
   every case against `brain-vault.sql` on the disposable Postgres, as `service_role`, instead of the in-memory
   emulation. That is the only check of the SQL itself and of the 20 parallel reservations under real row locks. This Mac
   has no Postgres, so it has not run anywhere yet.
+- **Status on 8 Nov 2026.** Pushed with the A44–A50 batch (head `d5975d28`). `test/brain-vault-api.test.ts` first ran in
+  CI in Vector Codium run 42134490728, after the P7 review changed it: Codium tests job 127619053399 shows 23 pass, on
+  the step that sets `VECTOR_TEST_POSTGRES_URL`, so (per `vaultBackend` in `test/brain-vault-fixture.ts`) against
+  `brain-vault.sql` on the job's Postgres; the log itself does not name the backend. That job failed on two other files.
+  The file passed again (23) in the green run 42138157347, job 127631456285.
 - **Never exercised anywhere:** a real R2 bucket accepting the signed PUT, HEAD and DELETE (the signer is checked against
   AWS's published example in A37's `test/r2-presign.test.ts`, and the fake bucket checks each signature), a real
   Supabase project, and a real Resend send.
