@@ -13985,3 +13985,241 @@ supersedes are named here, not edited.
     unapplied, so there is no mutation for them.
   - Nothing was sent to a model, no paid run started, no workflow was
     dispatched, and no dependency changed.
+
+## 2026-11-08 · Round-three research and addendum B (docs)
+
+Round three of the VectorScope research and addendum B, added as the
+reviewed documents. Built at `41a64e5e` on `vectorscope-engine`. Documents
+only: no code, test, fixture, workflow, dependency, pin, addendum A line or
+@vector-owned file changed, and no owner question was decided. No eval
+result, ledger, sealed output or session record is committed (§0.5, I-13).
+
+- **What landed.**
+  - `vectorscope-research/round-three/REPORT-3.md`: Phase A, the lane
+    findings in their verified, corrected form, the code facts of §7.5 and
+    the claim limits of §8.
+  - The five lane notes beside it (`notes-greptile.md`, `notes-peers.md`,
+    `notes-prediction.md`, `notes-benchmarks.md`, `notes-tokenomics.md`),
+    under their own names, because the documents cite each other by name.
+  - `vectorscope-upgrade-addendum-b.md`:
+    - §1, the twelve Now packages in build order: VS-33b, VS-21e, VS-40a,
+      VS-22d, VS-37c, VS-38a, VS-35b, VS-46c, VS-46d, VS-44c, VS-48a and
+      VS-32b;
+    - §2, runner-wiring R1 to R7 and the Later items L1 to L11;
+    - §3, the items that are not packages;
+    - §4, sequencing;
+    - §5, owner questions Q35 to Q46;
+    - §6 and §7, the completeness check and the critique responses.
+  - One sentence in the Evidence bullet of `vectorscope-upgrade.md:7`, in
+    the form `ab5e92e8` used for round two. It names
+    `round-three/REPORT-3.md` and addendum B, pending Q45.
+- **Status.**
+  - Every addendum B item is a proposal pending Q45. The Now packages are
+    built as proposals, off by default, while Q45 is open, as addendum A's
+    packages were built with Q18 open.
+  - Q18 is unchanged and covers only VS-32 to VS-49.
+  - Q45 lists VS-21e and VS-22d (which amend Q15-scope packages) and the
+    runner-wiring items (R4 amends VS-27's wiring) apart from the items
+    that amend Q18-scope packages. An answer to Q18 does not answer Q45.
+  - No default flips; that stays VS-31's.
+- **Names.**
+  - VS-27d is dropped. Its omitted-finding sentence becomes R4, which reads
+    `StrictResult.dropped` directly (addendum B §7 point 7).
+  - VS-40b is renamed VS-40a (§7 point 13).
+  - Q37 is withdrawn as an owner question and is now a research item
+    (§3, reading branch protection). Its number is kept, so Q38 to Q44 do
+    not move.
+  - Q45 and Q46 are new. Q46 asks whether a risk-triggered action may reach
+    the PR author, a sub-question of Q28.
+- **Proposed amendments to addendum A, recorded pending Q45.** Addendum A
+  is not edited. The exact texts are in addendum B §3.
+  - The CRBugBench "PR size" bullet (addendum A line 978, §3 VS-22).
+    CRBugBench `e8e585e` has no licence, so its tasks may not be used. Its
+    numstat may inform the size curve only under a Q26-style ruling.
+  - VS-40 item 4, the fan-out hold (addendum A line 525), restricted to
+    review against security. The hold saves nothing between the review and
+    security passes, which run on different agents. It stays a candidate
+    for review plus lens passes.
+  - The false line at addendum A line 982: "**Batch.** The OpenRouter batch
+    refusal is now vendor-backed". No OpenRouter batch refusal exists in
+    `privacy.ts`, because `BATCH_ENDPOINT` is read only on the Anthropic
+    format. The amendment points to VS-33b, which closes the gap.
+- **Outside the contract.** `packages/web/public/models/api.json`
+  (`255cfd83`) lists Sonnet 5.5 `cache_read: 0.2`; Anthropic's list price
+  is $0.10 (addendum B §3, T3-7). The error is flagged to that file's owner
+  and is not fixed here.
+- **Edits to the reviewed sources.** Each source matched its reviewed
+  SHA-256 prefix and line count before it was copied. Every edit is an
+  exact single-occurrence replacement, and `diff` against the source shows
+  only the lines listed under "Edited lines".
+
+  | Source              | SHA-256 prefix     | Lines     | Committed as                        |
+  | ------------------- | ------------------ | --------- | ----------------------------------- |
+  | REPORT-3.md         | `decda0be9d4d8def` | 454 → 454 | `round-three/REPORT-3.md`           |
+  | ADDENDUM-B.md       | `0ab0abffb537c81c` | 453 → 453 | `vectorscope-upgrade-addendum-b.md` |
+  | notes-benchmarks.md | `b1395905c92a8fb6` | 295 → 297 | `round-three/notes-benchmarks.md`   |
+  | notes-greptile.md   | `2a53878ca55430e1` | 219 → 221 | `round-three/notes-greptile.md`     |
+  | notes-peers.md      | `5b99af84c15e2998` | 432 → 434 | `round-three/notes-peers.md`        |
+  | notes-prediction.md | `b1cd140d2507aca9` | 422 → 424 | `round-three/notes-prediction.md`   |
+  | notes-tokenomics.md | `411df7f7fa42118c` | 342 → 344 | `round-three/notes-tokenomics.md`   |
+
+- **Edited lines.**
+  - REPORT-3, 4 lines: line 3 (the "Files:" line, now repository paths);
+    25 (`verdicts.json`); 82 and 402 (`phaseA/REPORT.md`, `phaseA/raw/`).
+  - Addendum B, 6 lines: line 3 (the "Files:" line; "If approved it would
+    land as" became "committed as a proposal pending Q45 (§5)"); 9, 416,
+    444 and 446 (`verdicts.json`); 155 (Phase A's scratch `measure.ts`).
+  - Each note: one status line under its title, "Lane note as written
+    before the adversarial verify pass; REPORT-3 states each finding in its
+    verified, corrected form." Every later line moves down by 2. No
+    document cites a note by line number.
+  - `notes-benchmarks.md` line 41 (source line 39): the sibling lane's
+    ReviewBench clone `vectorscope-research-3/src/rb`.
+  - Every session-record mention now carries the same phrase, "(... a
+    session record kept outside the repository, I-13)", or "session
+    records" for Phase A's report with its raw outputs.
+  - Left as written:
+    - addendum B line 43, which already says "since Phase A's records stay
+      outside the repository under I-13";
+    - `notes-benchmarks.md` §0's note on the deleted `scratchpad/r3bench/`
+      (line 40), as the WP-0 instruction asks, and its note on the unopened
+      `tokens.tk` (line 42);
+    - REPORT-3 §2.2 item 10 (line 111, the deleted scratch npm cache);
+    - the repository paths (REPORT-3 lines 278 and 400 to 401, where
+      `src/libs` is lvgl's own path; addendum B lines 26, 85, 121 and 162,
+      the last naming VS-38a's future scratch clone);
+    - the worktree path `/home/user/wt/vectorscope` (REPORT-3 line 5,
+      addendum B line 5, `notes-prediction.md` lines 5 and 424,
+      `notes-tokenomics.md` line 5), as round two's committed notes
+      already do.
+  - Nothing was reformatted. The documents are committed as written, per
+    the WP-0 instruction not to reformat them. Prettier 3.6.2 would
+    rewrite 168, 106, 32, 22, 34, 23 and 58 source lines (REPORT-3,
+    addendum B, then the benchmarks, greptile, peers, prediction and
+    tokenomics notes; 337, 213, 71, 47, 88, 48 and 122 lines removed plus
+    added). Round two's committed `round-two/REPORT.md` and addendum A are
+    not prettier-clean either: 101 and 61 source lines (212 and 151
+    removed plus added). Prettier ran on this entry only.
+- **Critique decisions.**
+  - Accepted: the HEAD baseline of `upstream-free.test.ts` ran on the clean
+    tree at `41a64e5e` (`git status --porcelain` empty), before any file was
+    copied or edited, and the after-run ran once all nine paths were staged.
+  - Accepted: a contingency for the provider-default test. It fails
+    identically before and after (below), so it is recorded as
+    pre-existing and environmental, not counted as a pass, and not skipped
+    or loosened.
+  - Accepted: word-boundary credential patterns and a long-run check of
+    `[A-Za-z0-9]{32,}` outside URL spans; one phrase for every
+    session-record note, the `src/rb` clone included; the full owner
+    question list; the lead sentence on what is committed; the §0.3
+    wording; the commit body's list of the twelve Now proposals.
+  - Corrected: the plain `sk-` substring count in the seven sources is 12,
+    not 13 (the critique's own list sums to 12): risk-aware 3, Risk-Diffs
+    2, risk-score 2, and risk-weighted, risk-triggered, risk-assessment,
+    Risk-tiered and risk-aligned 1 each. With a word boundary it is 0. The
+    critique's prettier figures are lines removed plus added; both forms
+    are given above.
+  - Rejected: that addendum B has no "Phase A's records stay outside the
+    repository under I-13" text. Line 43 (VS-33b's "Unset byte-identity"
+    bullet) holds it verbatim (`grep -F` finds it once), so line 43 stays
+    as written.
+- **Review findings, round one** (two findings, none blocking; one fixed,
+  one needing no change). Both came before any commit, so the text above
+  describes the state after the fixes. No document changed in this round;
+  only this entry did.
+  1. The done criterion, "the upstream-free test passes", rested on a
+     local run in which 1 of the file's 12 tests fails. Fixed in the
+     record: test.yml at `41a64e5e` runs the whole file green on both
+     systems (Evidence notes give the run and job ids), so the local
+     failure belongs to this container and not to the code. The after-run
+     on CI needs the commit, so it waits for the orchestrator's test.yml
+     dispatch (Deferred), and WP-0 closes on that run.
+  2. Each note's status line sits under its H1 title and a blank line, not
+     above the title. No change: the title stays each file's first line,
+     and "prepend" is read as the first line of the body, the reading the
+     finding names as the likely intent. "Every later line moves down by
+     2" stays true.
+- **Outside the repository (I-13).** These stay in the session scratchpad
+  and are not committed:
+  - Phase A's report, raw outputs (24 files) and scripts, including
+    `measure.ts`, which VS-38a starts from;
+  - `verdicts.json`. Recounted for this entry: 74 verdicts (16 confirmed,
+    53 weakened, 5 unverifiable, 0 refuted; greptile 12, prediction 17,
+    benchmarks 15, peers 15, tokenomics 15) and 46 missed items, as
+    REPORT-3 and addendum B §7 point 9 state;
+  - the lane clones (`src/`);
+  - the downloaded vendor data (`dl/`).
+- **§0.3 and pin.**
+  - §0.3 lists what every behaviour-changing package carries. This change
+    alters no behaviour, so items 1 to 5 (key, D3 parity, evidence scope,
+    replay variant, desktop half) do not apply. This dated entry is
+    written in the place of item 6.
+  - `REVIEW_PIPELINE_SOURCES`: old `66cc83db55a87db9`, new
+    `66cc83db55a87db9`. `REVIEW_PIPELINE_REVISION` stays 1.
+- **Evidence.**
+
+  | Check                                                    | HEAD (`41a64e5e`, clean tree) | After (nine paths staged) |
+  | -------------------------------------------------------- | ----------------------------- | ------------------------- |
+  | `upstream-free.test.ts` (engine)                         | 12 tests: 11 pass, 1 fail     | 12 tests: 11 pass, 1 fail |
+  | `upstream-free.test.ts` (engine), cleared environment    | not run                       | 12 pass                   |
+  | `upstream-free.test.ts` in test.yml, Linux and Windows   | 12 pass each (42402074052)    | after the commit          |
+  | root `bun turbo typecheck --concurrency=1`               | n/a                           | 23 of 23 tasks pass       |
+  | holder scan (UTF-8, UTF-16LE, UTF-16BE) and heading term | 0                             | 0                         |
+  | email regex                                              | 0                             | 0                         |
+  | credential and token patterns                            | 0                             | 0                         |
+  | `git diff --cached --check`                              | n/a                           | clean                     |
+  | `diff` against the reviewed sources                      | n/a                           | only the edited lines     |
+  | prettier on this entry                                   | n/a                           | clean                     |
+
+- **Evidence notes.**
+  - The failing test is "a GitHub token does not take the default model
+    from an OpenAI key": it gets `amazon-bedrock` as the default provider
+    in this container, as recorded in the VS-25b entry (and, for
+    `local-run.test.ts`, the VS-21b and VS-25a entries). It fails the same
+    way on the clean tree, and this change touches no provider. WP-0's
+    gate, "tracked paths and binary contents keep the upstream holder only
+    in license notices" and the UTF-16 detection test, passes both times.
+  - At the commit gate the file also ran with the container's ambient
+    environment cleared (`env -i` with only `PATH`, a scratch `HOME`, and
+    the scratch `TMPDIR` and XDG roots; no variable was read or printed),
+    with the nine paths staged: 12 tests, 12 pass, the provider-default
+    test included. So the one local failure comes from the container's
+    environment, not from the code or this change.
+  - On CI the whole file passes at `41a64e5e`. test.yml run 42402074052
+    (dispatched at `41a64e5e`, conclusion success) ran it in "engine
+    (linux, shard 1/4)", job 128491899204, and "engine (windows, shard
+    1/6)", job 128491899274: 12 tests, 12 pass in each, the provider-default
+    test included (228 ms and 623 ms). The CI run for the change itself
+    needs the commit: the orchestrator dispatches it, its run id goes
+    here, and WP-0 is done when that run shows the file's 12 tests passing.
+  - The scans ran on the seven sources, on `vectorscope-upgrade.md` at
+    HEAD and after, and on the nine changed paths, with this log scanned on
+    this entry only. The heading term is the first word of the notice
+    heading, which is the holder itself. The HEAD log's own six pattern
+    hits (one quoted security-pass code example, four 64-hex digests and a
+    40-character identifier) are older committed text and untouched.
+  - The seven documents are UTF-8 with LF line endings, end with a newline,
+    and have no tabs or trailing whitespace. Each is mode 644.
+  - No TypeScript changed, so no package typecheck applies. The root
+    typecheck (`bun turbo typecheck --concurrency=1`) ran at the commit
+    gate with the nine paths staged: 23 of 23 tasks pass (21 from the turbo
+    cache).
+- **Owner questions left undecided:** Q9, Q13, Q15, Q18, Q19, Q24, Q26,
+  Q27, Q28, Q30, Q31, Q35, Q36, Q38 to Q44, Q45 and Q46. Q37 is withdrawn
+  but keeps its number. Addendum B also cites Q1, Q7, Q8, Q21 and Q29 for
+  Later items, the README setup and Q40's dependency; none was decided.
+- **Deferred:**
+  - applying the §3 amendments to addendum A (Q45);
+  - the `api.json` fix (that file's owner);
+  - the D6 follow-up re-run of Phase A's projections with the shared-prefix
+    measurement (Q35);
+  - the branch-protection research item (formerly Q37);
+  - test.yml and typecheck.yml on the branch, which the orchestrator
+    dispatches after the commit. WP-0's done criterion rests on that
+    test.yml run: `upstream-free.test.ts` must pass all 12 tests there, as
+    it does at `41a64e5e`.
+- **Not verified.**
+  - WP-0 re-checked no external source, link or quote. The documents rest
+    on the verify pass and the two critiques.
+  - Search-extract claims keep REPORT-3's labels.
+  - No paid run, no model request, no workflow dispatch.
