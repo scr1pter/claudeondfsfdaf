@@ -14223,3 +14223,430 @@ result, ledger, sealed output or session record is committed (§0.5, I-13).
     on the verify pass and the two critiques.
   - Search-extract claims keep REPORT-3's labels.
   - No paid run, no model request, no workflow dispatch.
+
+## 2026-11-08 · VS-33b Batch and stored-file paths on every ZDR route (core)
+
+Addendum B §1.1, Now window: an uncalled pure path refusal and a body-shape
+check in core `review/privacy.ts`. Built at `7a2aaf4f` (WP-0's docs commit,
+equal to `origin/vectorscope`, clean tree). The lane note's "head
+`41a64e5e`" was stale: that is the commit before WP-0. VS-33b is a proposal
+pending Q45 (b), off by default, and nothing calls the new code. `run.ts`,
+`ai-review.ts`, `provider.ts`, `session/llm.ts`, `posting.ts`, `types.ts`,
+`config.ts`, `format.ts`, `script/vectorscope-eval/*`, addendum A and the
+@vector-owned `workflow.ts`, `command.ts`, `github.*`, `github-*.ts` and
+`vectorscope.astro` are untouched. It implements the WP-1 plan as corrected
+by its critique: all eight critique points were taken (below). Review
+round one's five findings were then fixed: the path rule is now
+spec-literal (below, "Review round one"). The commit gate re-ran the
+tests and typechecks (Evidence) before the commit.
+
+- **What landed.**
+  - **`zdrPathRefusal(path: unknown): RouteRefusal | undefined`**, a new pure
+    export in core `review/privacy.ts`, placed after `zdrFeatureRefusal`. It
+    reads the path as `anthropicPathRefusal` does (a URL to its pathname,
+    other text cut at `?` or `#`, trailing slashes dropped). It returns
+    `"batch"` when `BATCH_ENDPOINT` or the new `BATCH_OR_FILES_PATH`
+    matches, `"unreadable-body"` for a path that is not text, and undefined
+    otherwise.
+  - **`BATCH_OR_FILES_PATH = /\/v1\/(?:batches|files)(?:\/|$)/`**, a new
+    module constant after `BATCH_ENDPOINT`: the paths §1.1 names,
+    OpenRouter's `/api/v1/batches`, OpenAI's `/v1/batches` and `/v1/files`,
+    and their subpaths, after any base URL. (The first build used a wider
+    segment rule; review finding 1 narrowed it, decision (b).)
+  - **`zdrBodyRefusal`** now returns `"batch"` first, right after the object
+    check, for a body with a top-level `requests` array or a `callback_url`
+    that is set (`given`). `zdrRequestBody` inherits it unchanged.
+  - **Comments:** a header paragraph for VS-33b, two bullets of the
+    `ROUTE_REFUSALS` producer comment, and one sentence of the
+    `zdrBodyRefusal` doc. "contract §1.2's thirteen, then VS-33's six"
+    stays, because the list is unchanged.
+  - **Tests:** one new describe at the end of core
+    `test/review/privacy.test.ts`, "zdrPathRefusal and the batch body
+    (VS-33b)", with 8 tests (below), and two import lines (`zdrPathRefusal`,
+    and `join` from `node:path`). No existing line changed or was removed.
+  - **Pin:** `model-evidence.ts` (below).
+- **Tests.**
+
+  | #   | Test                                                                              | What it pins                                                                                                                                                                                                                                   |
+  | --- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | T1  | refuses OpenRouter's and OpenAI's Batch and Files paths, after any base URL       | 11 paths: §1.1's refused table, `/api/v1/files`, `/v1/files/`, and a gateway's base path before `/v1/`                                                                                                                                         |
+  | T2  | refuses every path BATCH_ENDPOINT names, as the Anthropic format does             | the existing table's eight Anthropic, Vertex and Bedrock batch paths are `"batch"` from both `zdrPathRefusal` and `zdrFeatureRefusal`                                                                                                          |
+  | T3  | allows every other path, near-misses included                                     | 15 paths: §1.1's allowed table, `/v1/batchesx`, `/v1/filesystem`, `/api/v1/batchesx`, a batch path only in the query or the fragment, a `files.` host, a base path with `files` and `batches` segments, `""` and `/`                           |
+  | T4  | leaves the Anthropic format's own path check as it was                            | `/v1/batches`, `/v1/batches/b-1`, `/v1/files` and `/v1/files/file_1/content` stay `"anthropic-non-zdr-feature"` on the Anthropic format while `zdrPathRefusal` gives `"batch"`; `/v1/messages` passes both (§1.1 item 2)                       |
+  | T5  | cannot read a path that is not text                                               | `undefined`, `null`, `3`, `{}`, an array and a `URL` object are `"unreadable-body"`                                                                                                                                                            |
+  | T6  | refuses OpenRouter's batch body before any other check                            | the batch bodies, and `callback_url` as a URL, null and `""`; four ordering contrasts (a `:free` model, a preset, `plugins`, a server tool), each refused for another reason without the batch fields; an array body stays `"unreadable-body"` |
+  | T7  | reads only a top-level requests list or callback_url, never text or nested fields | 9 bodies pass and get `provider` added: the two words in message text, a content part and a Responses `input_text`; the keys in a tool's parameters and in `metadata`; both keys set to undefined; `requests` as `{}`, `"x"` and null          |
+  | T8  | refuses nothing in the repository's recorded requests                             | see decision (h) and "Unset byte-identity"                                                                                                                                                                                                     |
+
+- **Decisions.**
+  - (a) **A separate export, not `BATCH_ENDPOINT`** (addendum B §7 item 1).
+    `BATCH_ENDPOINT` is read only inside `anthropicPathRefusal`, so paths
+    added there would not reach OpenRouter or OpenAI-compatible requests,
+    and `/v1/batches` on the Anthropic format would move from
+    `"anthropic-non-zdr-feature"` to `"batch"`.
+  - (b) **The `/v1/` paths §1.1 names, after any base URL.** The rule is
+    `/\/v1\/(?:batches|files)(?:\/|$)/`, which covers `/api/v1/batches`,
+    `/v1/batches` and `/v1/files` with their subpaths, and a gateway's base
+    path before `/v1/`. Every row of §1.1's tables holds, near-misses
+    included.
+    - History: the first build matched a `batches` or `files` segment under
+      any base path, or at the start of a relative path
+      (`/(?:^|\/)(?:batches|files)(?:\/|$)/`), so that Azure OpenAI's
+      `/openai/batches` and `/openai/files` (recalled, not re-read) and a
+      relative `batches` would fail closed (I-3). It also refused a model
+      server whose base path has such a segment, and any other `files`
+      segment, such as `/v1/vector_stores/<id>/files`. This entry recorded
+      that widening and its fallback.
+    - Review finding 1 said the widening is a scope decision for the
+      orchestrator, not the package. The fix round did not accept it, so
+      the rule is now the recorded fallback. T1's two Azure rows and two
+      relative rows are gone. The gateway row stays, because
+      `/openai/v1/batches` still contains `/v1/batches` and is still
+      refused, so the finding's advice to drop it did not apply. T3 gained
+      a model server whose base path has `files` and `batches` segments,
+      which the segment rule would refuse (M12). The paths no longer refused
+      are under "Noticed for R1".
+  - (c) **The normalisation is repeated, not shared.** It is one line,
+    copied from `anthropicPathRefusal`, so that function stays
+    byte-identical (§1.1 item 2). No import was added, so the file stays
+    pure and browser-safe (`packages/app/src/browser-bundle.test.ts` lists
+    it and passes).
+  - (d) **A deny list.** Every other path is undefined, and `decideRoute` and
+    the body checks decide the rest. A path that is not text is
+    `"unreadable-body"`, as in `anthropicPathRefusal`.
+  - (e) **The body rule.** `requests` must be an array, as §1.1 says ("a
+    top-level `requests` array"). OpenRouter's batch body carries its
+    requests as a list, and a `requests` that is not a list cannot carry a
+    batch, so refusing every `requests` would widen the spec with no batch
+    shape behind it. `callback_url` uses `given`, as
+    `ANTHROPIC_NON_ZDR_FIELDS` does. The field means nothing outside a
+    batch, so any value is refused, null and `""` included, and only an
+    unset key or one set to undefined passes, as everywhere in the file.
+    The check runs right after the object check, before the model,
+    routing, plugin and tool checks, so a batch body is `"batch"` whatever
+    else it sets. T7 pins the non-array `requests`, and M11 shows it.
+  - (f) **Files are refused as `"batch"`.** §1.1 says OpenAI's Batch API
+    reads its input from stored files and VectorScope never uploads one.
+    `format.ts`'s note, "Vector does not send batch requests on zero data
+    retention routes.", covers it, so `format.ts` is unchanged (D14).
+  - (g) **Case and percent-encoding are not folded**, as in
+    `anthropicPathRefusal`, but the effect is not the same.
+    `anthropicPathRefusal` ends in an allow list (`MESSAGES_ENDPOINT`), so
+    an odd spelling fails closed as `"anthropic-non-zdr-feature"`.
+    `zdrPathRefusal` is a deny list, so `/v1/Batches`, `/V1/FILES` and
+    `/v1/%62atches` are undefined: they fail open (scratch run below). The
+    I-2 argument holds: the transport passes the URL the SDK built, and
+    untrusted text never chooses one. The JSDoc states the asymmetry.
+    Decoding or lowercasing would depart from "normalises the pathname as
+    `anthropicPathRefusal` does", so neither is added. A relative
+    `batches`, `files/f-1` or `v1/batches` is undefined too, since decision
+    (b) narrowed the rule. A full URL with backslashes is refused, because
+    the URL parser turns them into slashes (`https://x.example\v1\batches`
+    gives `"batch"`).
+    - Review finding 3 (optional hardening) probed `/v1/Batches`,
+      `/v1/%62atches`, `/v1/batches%2F`, `/v1/batches;x` and the relative
+      `\v1\batches`. All five are undefined after the fix too (scratch
+      `/tmp/vector-vectorscope/wp1/review/spellings.ts`). The code is left
+      as it is, for two reasons. First, §1.1 fixes the normalisation as
+      `anthropicPathRefusal`'s, so folding spellings widens the spec, the
+      same kind of scope decision as finding 1, and the fix round did not
+      take that decision. Second, the finding's first step, testing
+      `BATCH_ENDPOINT` against `pathname.toLowerCase()`, would stop it
+      matching Vertex's `batchPredictionJobs`: in the scratch run the raw
+      path matches and the lowercased one does not. A fold therefore needs
+      its own case-insensitive pattern, which is more than a cheap fix. The
+      spellings are under "Noticed for R1", as the finding's alternative
+      asks.
+  - (h) **T8 checks only VS-33b's change.**
+    - It globs `{core,llm,http-recorder}/test/fixtures/recordings/**/*.json`:
+      core's own cassettes and those of the two workspace packages core
+      depends on (`packages/core/package.json:57` and `:94`). Engine's are
+      left out, because core has no engine dependency (the AGENTS.md
+      direction rule).
+    - It asserts that no recorded URL is refused by `zdrPathRefusal` and
+      that no recorded JSON body is `"batch"` from `zdrBodyRefusal`. It
+      checks every JSON body, not only the bodies sent to the three model
+      endpoints, because a "not batch" assertion holds for any format. The
+      batch check comes before the model checks, so the test passes one
+      model ID for all of them.
+    - Floors, so an empty walk cannot pass: some checked body goes to
+      openrouter.ai, and some to `/v1/messages`.
+    - The full pass of `zdrBodyRefusal` over all 63 recorded bodies,
+      engine's included, is scratch-run evidence below, not an assertion.
+      So a later llm or engine cassette with, say, a `:free` model or a
+      web-search tool cannot turn core's test red. A later llm or
+      http-recorder cassette with a Batch or Files URL, or a body with a
+      top-level `requests` list or `callback_url`, can. Review finding 5
+      asked for that coupling to be stated. The test comment now says that
+      such a failure means the new recording must be checked against
+      VS-33b, and that the test must not be loosened. The coupling is kept,
+      because core's own cassettes hold one request, which cannot meet the
+      floors.
+    - Bodies are parsed from their recorded text (`body?: string`). The test
+      reads 43 small files and no git, so it stays bounded on Windows.
+    - On CI, by the critique's reading of turbo (not re-checked),
+      `@vectordevai/core#test` hashes core's files and its `^build`
+      dependencies, and llm has no build task. So an llm-only cassette
+      change may replay T8 from the turbo cache, while any change to core
+      runs it fresh.
+- **Noticed for R1, not changed.**
+  - `zdrFeatureRefusal` called without a path passes an Anthropic Message
+    Batches body (`requests` of `params`, no `messages`): undefined in the
+    scratch run. With `/v1/messages/batches` it is `"batch"`, and
+    `zdrBodyRefusal` gives `"batch"` for the same body. R1's backstop must
+    pass the path, as the function's doc already requires, or apply the
+    batch body shape on the Anthropic format too.
+  - The batch body check exists only inside `zdrBodyRefusal`, next to its
+    OpenRouter-only rules: `idRefusal` on `:free` and `:online` IDs,
+    `openRouterModelRouting`'s `models`, `route` and preset fields,
+    `plugins`, `provider.options` and the server-tool allow list. §1.1 item
+    4 and R1 speak of "the body-shape check" on direct OpenAI-compatible
+    routes, which get no body check today, but no separate check exists.
+    R1 must either factor the two-key check out of `zdrBodyRefusal` (it then
+    has two uses, so AGENTS.md allows the helper) or call `zdrBodyRefusal`
+    there and accept its OpenRouter-specific refusals.
+  - Outside this deny list, all undefined in the scratch run, and none
+    called by Vector:
+    - OpenAI Uploads (`/v1/uploads`);
+    - vector-store file batches (`/v1/vector_stores/<id>/file_batches`:
+      `_batches` is not a `batches` segment);
+    - Gemini API Batch (`models/<m>:batchGenerateContent`);
+    - stored chat-completion and Responses retrieval
+      (`/v1/chat/completions/<id>`, `/v1/responses/<id>`);
+    - the Responses body fields `store` and `background`, which
+      `zdrBodyRefusal` passes;
+    - since decision (b) narrowed the rule (scratch
+      `/tmp/vector-vectorscope/wp1/review/spellings.ts`): Azure OpenAI's
+      `/openai/batches` and `/openai/files/f-1`, the relative `batches`,
+      `files/f-1` and `v1/batches`, and vector-store files
+      (`/v1/vector_stores/<id>/files`);
+    - the spellings review finding 3 probed: `/v1/Batches`, `/V1/FILES`,
+      `/v1/%62atches`, `/v1/batches%2F`, `/v1/batches;x` and the relative
+      `\v1\batches`.
+
+    `zdrFeatureRefusal`'s doc already leaves Google paths to VS-23b/c.
+    R1's transport must reject or normalise the last two groups before it
+    calls `zdrPathRefusal`: lowercase the path, decode percent-escapes,
+    turn backslashes into slashes and cut `;` parameters. It may instead
+    widen the rule if the orchestrator takes the scope decision that
+    decision (b) leaves open. Either way, `BATCH_ENDPOINT` and
+    `anthropicPathRefusal` stay as they are.
+
+- **Unset byte-identity.**
+  - **No caller.** `git grep` outside `privacy.ts` and its test: `config.ts`
+    imports only `NOT_A_NAME` and `readZdrAttestation`, `format.ts` only the
+    `RouteRefusal` type, and `format.test.ts` only `ROUTE_REFUSALS`. No code
+    names `zdrPathRefusal`, `zdrBodyRefusal`, `zdrRequestBody`,
+    `zdrFeatureRefusal` or `decideRoute`. The only other `callback_url` in
+    core `src` is a query parameter of OpenRouter's OAuth URL
+    (`oauth/openrouter.ts:127`), not a model request body.
+  - **The 48 existing tests pass unchanged.** `git diff -U0` of the test
+    file has 165 added lines and 0 removed.
+  - **`cmp`-identical between `git show HEAD:` and the working tree:**
+    `anthropicPathRefusal` (`privacy.ts:577-582` at HEAD, with its comment
+    on line 576), `BATCH_ENDPOINT`, `MESSAGES_ENDPOINT`, and the Anthropic
+    path table
+    (the `zdrFeatureRefusal` describe through its "refuses every other
+    Anthropic endpoint, and Batch as batch" test, 73 lines). The 5 lines
+    removed from `privacy.ts` are all comment lines, in the producer
+    comment and the `zdrBodyRefusal` doc.
+  - **Recorded requests, scratch runs** (`/tmp/vector-vectorscope/wp1-plan/baseline.ts`
+    at HEAD, `/tmp/vector-vectorscope/wp1/baseline.ts` after):
+    - 46 cassettes, 63 recorded requests, each with a JSON text body;
+    - all 63 bodies pass `zdrBodyRefusal` in full, at HEAD and after;
+    - all 63 URLs are undefined from `zdrPathRefusal` after;
+    - 50 of the 63 go to a Chat Completions, Responses or Messages
+      endpoint: core 1, engine 6, llm 43.
+
+    T8's narrowed walk covers 43 cassettes and 57 requests (core 1, llm 52,
+    http-recorder 4), 8 of them to openrouter.ai and 9 to `/v1/messages`.
+
+  - **Fidelity caveat.** Phase A's 105 bodies stay outside the repository
+    (I-13). They come from `@ai-sdk/openai-compatible` against a fake server
+    with no Anthropic Messages endpoint. The repository cassettes come from
+    the llm package's native protocol encoders and the core and engine
+    session runners, not from the OpenRouter SDK or `Review.run`. Both sets
+    show only that VS-33b refuses nothing on those bodies that it did not
+    refuse before, not that production wire bodies comply. R1 closes that.
+  - **§1.1 wording slip, noticed and not edited.** Addendum B line 43 says
+    the bodies show "that the change refuses nothing it refused before on
+    that format". The intended reading is "nothing it did not refuse
+    before". Addendum B is committed and its amendments wait for Q45, so
+    this entry only records the slip.
+  - **Addendum A's batch line.** The §3 amendment to that line (line 982
+    of addendum A) stays unapplied until Q45. Its proposed text
+    ("VectorScope does not yet refuse it ... Addendum B's VS-33b closes the
+    gap") stays accurate, because nothing calls the refusal before R1.
+
+- **Critique decisions** (eight points, all accepted).
+  1. T8 is narrowed to VS-33b's own change and to core's dependencies, and
+     the full pass is scratch evidence: decision (h).
+  2. The header and the `zdrBodyRefusal` doc say what exists: "zdrBodyRefusal
+     refuses OpenRouter's batch body first", and "The batch body check
+     exists only inside zdrBodyRefusal, with its OpenRouter rules, so a
+     direct OpenAI-compatible route still gets no body check until R1 gives
+     it one." The check stays inline (one use). R1's two options are under
+     "Noticed for R1".
+  3. The deny-list asymmetry is stated in decision (g) and in the JSDoc.
+     The rule is anchored as `(?:^|\/)`, T1 has two relative rows, and M12
+     shows the anchor. No decoding or lowercasing. (Superseded by review
+     finding 1: the rule is now `/\/v1\/(?:batches|files)(?:\/|$)/`, T1's
+     relative rows are gone, and M12 is now the segment rule, caught by
+     T3.)
+  4. `requests` stays array-only, with the reason in decision (e), three T7
+     rows and M11.
+  5. The JSDoc is scoped to OpenRouter and OpenAI-compatible requests and
+     the paths `BATCH_ENDPOINT` names. The other endpoints and body fields
+     are under "Noticed for R1"; none is built.
+  6. T8 parses the recorded text. The root idiom it follows is
+     `packages/core/test/local-mode/guard.test.ts:1079-1080`, and
+     `anthropicPathRefusal` is `privacy.ts:577-582` at HEAD (576 is its
+     comment).
+  7. Before the mutations, the edited files were copied to
+     `/tmp/vector-vectorscope/wp1/edited-privacy.ts` and
+     `edited-privacy.test.ts`. Each mutation was restored from that copy
+     and checked with `cmp` against it (not HEAD), and each run went alone
+     through the lock with `--timeout 30000`.
+  8. The §1.1 wording slip is recorded above, and Q18 is listed as VS-33a's
+     own approval.
+- **Review round one** (five findings, all non-blocking; four fixed in
+  code or text, one recorded).
+  1. `BATCH_OR_FILES_PATH` refused more than §1.1 names. Fixed: the rule is
+     the recorded spec-literal fallback, decision (b). The gateway row stays
+     in T1, because it still matches. T3 gained the model-server row, and
+     M12 and M15 are new.
+  2. The header said "on any route" while the JSDoc limits the function to
+     OpenRouter and OpenAI-compatible requests. Fixed: the header now says
+     "on an OpenRouter or OpenAI-compatible route as "batch" (the Anthropic
+     format keeps anthropicPathRefusal)". The `ROUTE_REFUSALS` producer
+     bullet had the same "on any route" and now says the same. The JSDoc
+     now names `/v1/batches` and `/v1/files` after any base URL, and lists
+     the spellings that are not refused.
+  3. Case and encoding spellings fail open. Not changed in code. The reason
+     is in decision (g), and the spellings are under "Noticed for R1".
+  4. The entry did not name I-1 or I-12. Fixed: the "Invariants" bullet
+     below.
+  5. T8's cross-package cassettes can turn core red. Kept, with the test
+     comment the finding proposed: decision (h).
+- **Invariants.**
+  - I-3: closes the Batch and Files gap for OpenRouter and
+    OpenAI-compatible paths, under `/v1/` as §1.1 names them. It fails
+    closed except for the spellings and the paths without `/v1/` listed in
+    decision (g) and "Noticed for R1".
+  - I-1: there is no caller, so behaviour is byte-identical when unset.
+  - I-12: the pin moves from `66cc83db55a87db9` to `dfeeef20fd190c79`, and
+    the revision stays 1.
+- **§0.3.**
+  1. Key: none. The refusals apply only under `privacy: "zdr"` once VS-23b
+     and VS-23c call them.
+  2. D3 parity: no runner changed, so no parity suite applies.
+  3. Evidence scope: no `EVIDENCE_POLICY_KEYS` or `EvidenceScope` change.
+     The pin moves, and the revision stays 1.
+  4. Replay variant: none. `engine:privacy-zdr` stays pending until VS-23c.
+  5. Desktop half: none. Both runners will use the same pure module.
+  6. This entry.
+- **Pin.** `REVIEW_PIPELINE_SOURCES`: old `66cc83db55a87db9`, new
+  `dfeeef20fd190c79`, the digest `model-evidence.test.ts` printed after the
+  review fixes' last `privacy.ts` edit. The first build's digest,
+  `0ed53df7fc50254c`, was never committed. `REVIEW_PIPELINE_REVISION`
+  stays 1: no runner applies the change (addendum B header).
+  `promptsDigest` and the policy digest goldens do not move.
+- **Evidence.** Each test file ran alone from `packages/core` (the bundle
+  test from `packages/app`) through `/home/user/.tools/vector-serial` with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and TMPDIR and XDG roots under
+  `/tmp/vector-vectorscope/wp1/`.
+
+  | Check                                                    | HEAD (`7a2aaf4f`, clean tree) | After                                                 |
+  | -------------------------------------------------------- | ----------------------------- | ----------------------------------------------------- |
+  | `privacy.test.ts`                                        | 48 pass, 705 `expect()`       | 56 pass, 810 `expect()`                               |
+  | `model-evidence.test.ts`                                 | 30 pass, 393 `expect()`       | 30 pass, 393 `expect()`, pin updated                  |
+  | `format.test.ts`                                         | 51 pass, 271 `expect()`       | 51 pass, 271 `expect()`                               |
+  | `config.test.ts`                                         | 73 pass, 535 `expect()`       | 73 pass, 535 `expect()`                               |
+  | app `browser-bundle.test.ts`                             | not run                       | 4 pass                                                |
+  | core `bun typecheck`                                     | not run                       | passes                                                |
+  | root `bun turbo typecheck --concurrency=1`               | not run                       | 23 of 23 tasks pass (commit gate)                     |
+  | scratch: recorded bodies through `zdrBodyRefusal`        | 63 of 63 pass                 | 63 of 63 pass                                         |
+  | scratch: recorded URLs through `zdrPathRefusal`          | n/a                           | 63 of 63 undefined                                    |
+  | `cmp` of the unchanged functions, regexes and path table | n/a                           | identical                                             |
+  | `privacy.test.ts` lines removed                          | n/a                           | 0 (165 added)                                         |
+  | prettier `--check` on the three source and test files    | clean                         | clean                                                 |
+  | oxlint on the three files                                | not run                       | 8 warnings, all on unchanged lines; none on a new one |
+  | `git diff --check`                                       | n/a                           | clean                                                 |
+  | mutations caught                                         | n/a                           | 15 of 15                                              |
+
+- **Evidence notes.**
+  - Before the pin was set, `model-evidence.test.ts` gave 29 pass and 1 fail
+    ("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION"),
+    printing the new digest.
+  - Prettier rewrapped one new test line (the `callback_url` loop in T6)
+    before the final runs.
+  - The oxlint warnings are `privacy.ts`'s `record` cast, the
+    `privacy.test.ts` `attested` list at line 402 (line 400 at HEAD), and
+    six in `model-evidence.ts`, all on lines this package did not touch.
+  - The scratch run of the gaps (`/tmp/vector-vectorscope/wp1/noticed.ts`)
+    gives the values quoted under decision (g) and "Noticed for R1".
+  - After the review fixes, every row of the table above was run again
+    except the HEAD column, prettier and `git diff --check` included. The
+    first build had 813 `expect()` calls: T1 lost 4 paths and T3 gained 1.
+    The added and removed line counts of the test file did not change,
+    because T1's comment and four rows went and the gateway comment, the
+    T3 row and its comment, and two T8 comment lines came. Both
+    `baseline.ts` scratch runs gave the same counts as before (63 of 63
+    for each pass; T8's walk 43 cassettes, 57 requests, 8 to openrouter.ai,
+    9 to `/v1/messages`). The spellings and the narrowed paths come from
+    `/tmp/vector-vectorscope/wp1/review/spellings.ts`. The pre-fix files
+    are kept as `/tmp/vector-vectorscope/wp1/review-before-*`.
+- **Mutations.** Each was applied alone to the edited file, its test file
+  run, then the file restored from the copy and checked with `cmp`. All
+  fifteen were run again on the review-fixed files, restored from
+  `/tmp/vector-vectorscope/wp1/review/edited-privacy.ts` and
+  `edited-privacy.test.ts` (`/tmp/vector-vectorscope/wp1/review/mutate.sh`).
+  M3 now mutates the `/v1/` rule, M12 replaces the first build's anchor
+  mutation, and M15 is new.
+
+  | #   | Mutation                                                | Caught by   |
+  | --- | ------------------------------------------------------- | ----------- |
+  | M1  | drop the `BATCH_OR_FILES_PATH` clause                   | T1, T4      |
+  | M2  | drop the `BATCH_ENDPOINT` clause                        | T2          |
+  | M3  | drop the `(?:\/\|$)` boundary                           | T3          |
+  | M4  | skip the query and fragment split in `zdrPathRefusal`   | T3          |
+  | M5  | a non-string path returns undefined                     | T5          |
+  | M6  | drop the `requests` clause                              | T6          |
+  | M7  | drop the `callback_url` clause                          | T6          |
+  | M8  | move the batch line after `idRefusal`                   | T6          |
+  | M9  | search the serialized body for "requests"               | T7          |
+  | M10 | `Object.hasOwn` in place of `given`                     | T7          |
+  | M11 | `given(fields, "requests")` in place of `Array.isArray` | T7          |
+  | M12 | the first build's `batches` or `files` segment rule     | T3          |
+  | M13 | T8's glob points at a folder that does not exist        | T8 (floors) |
+  | M14 | the batch line also refuses any body that sets `stream` | T8          |
+  | M15 | drop `files` from the rule                              | T1, T4      |
+
+- **Owner questions left undecided** (none new):
+  - Q45 (b), VS-33b's own approval;
+  - Q18, VS-33a's approval. VS-33b's is Q45 (b), and an answer to Q18 does
+    not answer Q45;
+  - Q13, for R1 (the VS-23c call);
+  - Q1, Q16, Q20 and Q21, the privacy questions that bear on this module.
+- **Deferred.**
+  - R1 (Q13 or the `self-evolving` merge): the VS-23c call of
+    `zdrPathRefusal`; the batch body check on direct OpenAI-compatible
+    routes, by one of the two options above; the Anthropic batch body on a
+    `zdrFeatureRefusal` call without a path; the Anthropic Messages fake
+    server; and OpenRouter SDK bodies in the route audit.
+  - The scope decision that decision (b) leaves open (whether paths without
+    `/v1/` are refused), and the spelling fold of decision (g): R1's
+    transport, or a widening the orchestrator decides.
+  - The §3 amendment of addendum A's batch line, and the §1.1 wording slip
+    (Q45).
+  - test.yml and typecheck.yml on the branch, which the orchestrator
+    dispatches after the commit. Their run ids go here.
+- **Not verified.**
+  - OpenRouter's `batch-api.mdx` was not re-read. The entry rests on round
+    three's T3-5 (verified, weakened) and REPORT-3 §7.5 item 2.
+  - The Azure OpenAI paths and OpenAI's use of Files for batch input are
+    recalled.
+  - Production wire bodies (R1).
+  - Turbo's cache hashing (decision (h)).
+  - Windows CI, until it is dispatched.
+  - No paid run, no model request, no workflow dispatch.

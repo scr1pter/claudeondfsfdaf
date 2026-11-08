@@ -15,6 +15,12 @@
 // an OpenAI one with `verify: "api"` unless Q20 approves an admin credential. Only that admission's Vertex metadata call
 // can give "durable-cache", so nothing here does.
 //
+// VS-33b (addendum B §1.1) has no caller either. zdrPathRefusal refuses a Batch or stored-file path on an OpenRouter or
+// OpenAI-compatible route as "batch" (the Anthropic format keeps anthropicPathRefusal), and zdrBodyRefusal refuses
+// OpenRouter's batch body first. VS-23c's backstop is to call zdrPathRefusal on every OpenRouter and OpenAI-compatible
+// request (runner-wiring R1). The batch body check exists only inside zdrBodyRefusal, with its OpenRouter rules, so a
+// direct OpenAI-compatible route still gets no body check until R1 gives it one.
+//
 // ZDR reduces retention; it cannot rule it out (invariant I-3). A provider may keep content its safety systems flag
 // (Anthropic up to two years), legal holds override any agreement, and account settings Vector cannot see, such as
 // OpenRouter's logging and Safety Retention, still apply. An entry in `zdrAttested` is the owner's statement about
@@ -36,12 +42,13 @@ export type ReviewPrivacy = NonNullable<ReviewConfig["privacy"]>
 
 // Why a route or a request is refused: contract §1.2's thirteen, then VS-33's six.
 // - decideRoute gives the route refusals and "extended-cache-unattested";
-// - zdrBodyRefusal gives "server-tool" and "provider-options" for a body sent to OpenRouter, and
-//   "anthropic-non-zdr-feature" for an Anthropic Messages feature in one;
+// - zdrBodyRefusal gives "server-tool" and "provider-options" for a body sent to OpenRouter,
+//   "anthropic-non-zdr-feature" for an Anthropic Messages feature in one, and "batch" for OpenRouter's batch body;
 // - zdrFeatureRefusal gives "grounding-tool" for a Google request, and "anthropic-non-zdr-feature" (or "batch") for an
 //   Anthropic one;
-// - the transport backstop (VS-23c) also refuses a Batch request ("batch") and a request whose session cannot be told
-//   ("unattributed-request");
+// - zdrPathRefusal gives "batch" for a Batch or stored-file path on an OpenRouter or OpenAI-compatible route;
+// - the transport backstop (VS-23c) also refuses a Batch request, through zdrPathRefusal, and a request whose session
+//   cannot be told ("unattributed-request");
 // - VS-23b's admission gives "durable-cache" for a Vertex project whose cache config may keep prompts.
 export const ROUTE_REFUSALS = [
   "free-model",
@@ -241,11 +248,15 @@ export function extendedCacheOnly(ids: readonly unknown[]): boolean {
  * (below), and so is a file stored with OpenRouter, which only its sandbox tools read. OpenRouter also serves Anthropic's
  * Messages API (`/api/v1/messages`), so the Messages features zdrFeatureRefusal refuses there are refused here too, as
  * "anthropic-non-zdr-feature": `mcp_servers`, `container`, `thread`, and a tool that code execution may call. Per-provider
- * `provider.options` may carry retention settings, so any but an empty object is "provider-options".
+ * `provider.options` may carry retention settings, so any but an empty object is "provider-options". A Batch API body,
+ * OpenRouter's shape with a top-level `requests` list or a `callback_url`, is "batch" before any other check (VS-33b).
  */
 export function zdrBodyRefusal(body: unknown, modelID: string): RouteRefusal | undefined {
   const fields = record(body)
   if (!fields) return "unreadable-body"
+  // OpenRouter's Batch API body: a top-level `requests` list, each request with its own `params`, and a `callback_url`.
+  // It has no top-level messages or tools for the checks below to refuse.
+  if (Array.isArray(fields.requests) || given(fields, "callback_url")) return "batch"
   const named = idRefusal([modelID, fields.model])
   if (named) return named
   const routing = openRouterModelRouting(fields, undefined)
@@ -330,6 +341,25 @@ export function zdrFeatureRefusal(request: {
   return undefined
 }
 
+/**
+ * Why an OpenRouter or OpenAI-compatible request may not go to this path on a ZDR route: "batch" for a Batch API or a
+ * stored file, which the provider keeps beyond the request. Every path BATCH_ENDPOINT names (Anthropic's Message
+ * Batches, Vertex `batchPredictionJobs` and Bedrock model invocation jobs) is "batch", and so are `/v1/batches` and
+ * `/v1/files` with their subpaths, after any base URL (BATCH_OR_FILES_PATH). `path` is the request's URL or path, read
+ * as anthropicPathRefusal reads it; one that is not text is "unreadable-body".
+ * It is a deny list, unlike anthropicPathRefusal's allow list: every other path is undefined, and decideRoute and the
+ * body checks decide the rest. So an unusual spelling of a Batch path (another case, percent-encoding, a `;` parameter,
+ * backslashes, or no `/v1/`) is not refused; the transport passes the URL the SDK built, which untrusted text never
+ * chooses.
+ * Nothing calls it yet. VS-23c's backstop is to call it on every OpenRouter and OpenAI-compatible request (runner-wiring
+ * R1); the Anthropic format keeps anthropicPathRefusal, through zdrFeatureRefusal.
+ */
+export function zdrPathRefusal(path: unknown): RouteRefusal | undefined {
+  if (typeof path !== "string") return "unreadable-body"
+  const pathname = (URL.canParse(path) ? new URL(path).pathname : path.split(/[?#]/)[0]).replace(/\/+$/, "")
+  return BATCH_ENDPOINT.test(pathname) || BATCH_OR_FILES_PATH.test(pathname) ? "batch" : undefined
+}
+
 // OpenRouter's `:online` variant turns on its web plugin, which sends the query to a search provider, wherever it sits
 // in a stacked variant (`:online:nitro`, `:nitro:online`). From OpenRouter's model variants as recalled: its docs could
 // not be read here, so VS-23c's fake server checks the wire.
@@ -369,6 +399,12 @@ const MESSAGES_ENDPOINT =
   /\/v1\/messages(?:\/count_tokens)?$|\/publishers\/anthropic\/models\/[^/:]+:(?:rawPredict|streamRawPredict)$|\/model\/[^/]+\/invoke(?:-with-response-stream)?$/
 const BATCH_ENDPOINT =
   /\/v1\/messages\/batches(?:\/|$)|\/batchPredictionJobs(?:[/:]|$)|\/model-invocation-jobs?(?:\/|$)/
+// The Batch and Files paths addendum B §1.1 names, with their subpaths, after any base URL, for zdrPathRefusal:
+// OpenRouter's Batch API (`/api/v1/batches`), which keeps data 30 days and cannot run when privacy settings require ZDR
+// (its batch-api.mdx as round three read it, T3-5), and OpenAI's (`/v1/batches`) with the Files API it reads its input
+// from (`/v1/files`). Vector never uploads a file, so every Files path is refused as Batch input. Only a `/v1/` path
+// matches: Azure OpenAI's `/openai/batches` and a relative `batches` do not (runner-wiring R1).
+const BATCH_OR_FILES_PATH = /\/v1\/(?:batches|files)(?:\/|$)/
 // Web search and web fetch from 20260209 on filter results with code execution unless `allowed_callers` is ["direct"]
 // (Anthropic's server tools page, "ZDR and allowed_callers", accessed 2026-11-06).
 const FILTERING_WEB_TOOL = /^web_(?:search|fetch)_(\d{8})$/

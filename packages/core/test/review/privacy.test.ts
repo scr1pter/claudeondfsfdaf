@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { join } from "node:path"
 import { openRouterModelRouting } from "@vectordevai/core/free-model-catalog"
 import {
   decideRoute,
@@ -7,6 +8,7 @@ import {
   ROUTE_REFUSALS,
   zdrBodyRefusal,
   zdrFeatureRefusal,
+  zdrPathRefusal,
   zdrRequestBody,
   type RouteModel,
   type RouteRefusal,
@@ -1343,5 +1345,168 @@ describe("zdrFeatureRefusal", () => {
     zdrFeatureRefusal({ format: "anthropic", body })
     zdrFeatureRefusal({ format: "google", body })
     expect(body).toEqual(copy)
+  })
+})
+
+// VS-33b (addendum B §1.1): Batch and stored-file paths on every ZDR route, and OpenRouter's batch body. Nothing calls
+// zdrPathRefusal yet; VS-23c's backstop is to call it (runner-wiring R1).
+describe("zdrPathRefusal and the batch body (VS-33b)", () => {
+  const MODEL = "anthropic/claude-sonnet-5"
+  const messages = [{ role: "user", content: "Review this." }]
+  const VERTEX = "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+  const BEDROCK = "https://bedrock.us-east-1.amazonaws.com"
+  const claude = (path: string) =>
+    zdrFeatureRefusal({ format: "anthropic", body: { model: "claude-sonnet-5", max_tokens: 1024, messages }, path })
+  const batch = (body: unknown) => {
+    expect(zdrBodyRefusal(body, MODEL)).toBe("batch")
+    expect(zdrRequestBody(body, MODEL)).toBeUndefined()
+  }
+
+  test("refuses OpenRouter's and OpenAI's Batch and Files paths, after any base URL", () => {
+    for (const path of [
+      "/api/v1/batches",
+      "/api/v1/batches/b-1",
+      "https://openrouter.ai/api/v1/batches?x=1",
+      "/api/v1/batches/",
+      "/api/v1/files",
+      "/v1/batches",
+      "/v1/batches/b-1/cancel",
+      "/v1/files",
+      "/v1/files/",
+      "/v1/files/f-1/content",
+      // A gateway's base path before `/v1/`.
+      "https://gateway.example/openai/v1/batches#x",
+    ])
+      expect(zdrPathRefusal(path)).toBe("batch")
+  })
+
+  test("refuses every path BATCH_ENDPOINT names, as the Anthropic format does", () => {
+    for (const path of [
+      "/v1/messages/batches",
+      "/v1/messages/batches/b1/results",
+      "https://api.anthropic.com/v1/messages/batches?x=1",
+      `${VERTEX}/batchPredictionJobs`,
+      `${VERTEX}/batchPredictionJobs/123:cancel`,
+      `${BEDROCK}/model-invocation-job`,
+      `${BEDROCK}/model-invocation-job/j1/stop`,
+      `${BEDROCK}/model-invocation-jobs`,
+    ]) {
+      expect(zdrPathRefusal(path)).toBe("batch")
+      expect(claude(path)).toBe("batch")
+    }
+  })
+
+  test("allows every other path, near-misses included", () => {
+    // A deny list: decideRoute and the body checks decide the route.
+    for (const path of [
+      "/api/v1/chat/completions",
+      "/api/v1/responses",
+      "/api/v1/messages",
+      "/v1/chat/completions",
+      "/v1/responses",
+      "https://openrouter.ai/api/v1/chat/completions",
+      "/v1/batchesx",
+      "/v1/filesystem",
+      "/api/v1/batchesx",
+      "/v1/chat/completions?next=/v1/batches",
+      "https://openrouter.ai/api/v1/chat/completions#/v1/files",
+      "https://files.example/v1/chat/completions",
+      // A model server whose base path has a `files` or `batches` segment: only `/v1/batches` and `/v1/files` are named.
+      "https://models.example/files/batches/v1/chat/completions",
+      "",
+      "/",
+    ])
+      expect(zdrPathRefusal(path)).toBeUndefined()
+  })
+
+  test("leaves the Anthropic format's own path check as it was", () => {
+    // Addendum B §1.1 item 2: anthropicPathRefusal's allow list still names these "anthropic-non-zdr-feature".
+    for (const path of ["/v1/batches", "/v1/batches/b-1", "/v1/files", "/v1/files/file_1/content"]) {
+      expect(claude(path)).toBe("anthropic-non-zdr-feature")
+      expect(zdrPathRefusal(path)).toBe("batch")
+    }
+    expect(claude("/v1/messages")).toBeUndefined()
+    expect(zdrPathRefusal("/v1/messages")).toBeUndefined()
+  })
+
+  test("cannot read a path that is not text", () => {
+    // R1 passes a URL's text (`href`), not the URL object.
+    for (const path of [undefined, null, 3, {}, ["/v1/batches"], new URL("https://openrouter.ai/api/v1/batches")])
+      expect(zdrPathRefusal(path)).toBe("unreadable-body")
+  })
+
+  test("refuses OpenRouter's batch body before any other check", () => {
+    batch({ requests: [] })
+    batch({ requests: [{ custom_id: "r-1", params: { model: MODEL, messages } }] })
+    batch({ requests: [], callback_url: "https://hooks.example/batch" })
+    for (const callback_url of ["https://hooks.example/batch", null, ""])
+      batch({ model: MODEL, messages, callback_url })
+    // Each of these names another reason without the batch fields, and "batch" with them.
+    const web = { type: "openrouter:web_search" }
+    expect(zdrBodyRefusal({ model: "acme/coder:free" }, MODEL)).toBe("free-model")
+    batch({ model: "acme/coder:free", requests: [] })
+    expect(zdrBodyRefusal({ model: MODEL, preset: "reviews" }, MODEL)).toBe("router-or-preset")
+    batch({ model: MODEL, preset: "reviews", callback_url: "x" })
+    expect(zdrBodyRefusal({ model: MODEL, plugins: [] }, MODEL)).toBe("plugins")
+    batch({ model: MODEL, plugins: [], requests: [] })
+    expect(zdrBodyRefusal({ model: MODEL, messages, tools: [web] }, MODEL)).toBe("server-tool")
+    batch({ model: MODEL, messages, tools: [web], callback_url: "x" })
+    // A body that is not an object is still unreadable.
+    expect(zdrBodyRefusal([{ requests: [] }], MODEL)).toBe("unreadable-body")
+  })
+
+  test("reads only a top-level requests list or callback_url, never text or nested fields", () => {
+    const properties = { requests: { type: "array" }, callback_url: { type: "string" } }
+    const fn = { type: "function", function: { name: "read", parameters: { type: "object", properties } } }
+    for (const body of [
+      { model: MODEL, messages: [{ role: "user", content: "Count the requests per second, then set callback_url." }] },
+      { model: MODEL, messages: [{ role: "user", content: [{ type: "text", text: "requests and callback_url" }] }] },
+      { model: MODEL, input: [{ role: "user", content: [{ type: "input_text", text: "requests" }] }] },
+      { model: MODEL, messages, tools: [fn] },
+      { model: MODEL, messages, metadata: { requests: [], callback_url: "x" } },
+      { model: MODEL, messages, requests: undefined, callback_url: undefined },
+      // Only a list is OpenRouter's batch shape.
+      { model: MODEL, messages, requests: {} },
+      { model: MODEL, messages, requests: "x" },
+      { model: MODEL, messages, requests: null },
+    ]) {
+      expect(zdrBodyRefusal(body, MODEL)).toBeUndefined()
+      expect(zdrRequestBody(body, MODEL)).toEqual({ ...body, provider: { zdr: true, data_collection: "deny" } })
+    }
+  })
+
+  test("refuses nothing in the repository's recorded requests", async () => {
+    // The cassettes of core and of the packages it depends on (llm, http-recorder). They come from llm's protocol
+    // encoders and core's session runner, not from the OpenRouter SDK or Review.run, so this shows only that VS-33b
+    // refuses no recorded path or body, not that production wire bodies comply (runner-wiring R1). Phase A's bodies,
+    // from @ai-sdk/openai-compatible against a fake server with no Anthropic Messages endpoint, stay outside the
+    // repository (I-13). A failure here from an llm or http-recorder cassette, even with core unchanged, means that new
+    // recording sends a Batch or Files URL, or a body with a top-level `requests` list or `callback_url`: check it
+    // against VS-33b, and do not loosen this test.
+    const root = join(import.meta.dir, "..", "..", "..")
+    const files = await Array.fromAsync(
+      new Bun.Glob("{core,llm,http-recorder}/test/fixtures/recordings/**/*.json").scan({ cwd: root }),
+    )
+    const requests = (
+      await Promise.all(
+        files.map(async (file) => {
+          const cassette: { interactions?: { request: { url: string; body?: string } }[] } = await Bun.file(
+            join(root, file),
+          ).json()
+          return (cassette.interactions ?? []).map((interaction) => ({ file, ...interaction.request }))
+        }),
+      )
+    ).flat()
+    // Bodies are recorded as text. The batch check comes before the model checks, so the model ID does not matter.
+    const bodies = requests.flatMap((request) =>
+      request.body?.startsWith("{") ? [{ ...request, json: JSON.parse(request.body) as unknown }] : [],
+    )
+    expect(requests.filter((request) => zdrPathRefusal(request.url)).map((request) => request.file)).toEqual([])
+    expect(
+      bodies.filter((request) => zdrBodyRefusal(request.json, MODEL) === "batch").map((request) => request.file),
+    ).toEqual([])
+    // Floors, so an empty walk cannot pass.
+    expect(bodies.some((request) => new URL(request.url).hostname === "openrouter.ai")).toBe(true)
+    expect(bodies.some((request) => new URL(request.url).pathname === "/v1/messages")).toBe(true)
   })
 })
