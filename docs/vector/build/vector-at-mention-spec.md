@@ -561,8 +561,8 @@ The file must have **no imports**, so `api/` can import it as `../../packages/co
 | `RUN_LOGIN_DAYS` / `RUNS_KEPT` | `90` / `200` per account |
 | `SESSION_DAYS` / `BUNDLE_DAYS` | `7` / `1` |
 | `MINT_STATUS` / `MintStatus` | a readonly tuple of `"ok" \| "not-bound" \| "suspended" \| "update-required" \| "binding-unavailable" \| "not-in-plan" \| "service-off" \| "source-unavailable" \| "runner" \| "hours" \| "at-once" \| "scheduled" \| "denied" \| "needs-app" \| "unavailable"`; `type MintStatus = (typeof MINT_STATUS)[number]` |
-| `OUTCOME` / `Outcome` | a readonly tuple of `"changes" \| "no-changes" \| "draft" \| "failed" \| "refused" \| "cancelled"`; `type Outcome = (typeof OUTCOME)[number]`, the `Outcome` of 2.8 (settle), 2.12 and 2.16 |
-| `STOP_CODES` / `StopCode` | a readonly tuple of the codes 2.9.2 names that end in a draft, the wait rows included (they end in a draft as busy); `type StopCode = (typeof STOP_CODES)[number]`. `"deadline"` (the heartbeat and local-deadline row) and the default row's codes are not stop codes, so `RunSummary.stop` (2.12) is a `StopCode`, `"deadline"`, or another code from the default row |
+| `OUTCOME` / `Outcome` | a readonly tuple of `"changes" \| "no-changes" \| "draft" \| "failed" \| "refused" \| "cancelled"`; `type Outcome = (typeof OUTCOME)[number]`, the `Outcome` of 2.8 (settle) and 2.16. 2.12's `RunSummary.outcome` is the subset `"changes" \| "no-changes" \| "draft" \| "failed"` (`BUNDLE_OUTCOMES`): `"refused"` and `"cancelled"` are settle outcomes with no bundle |
+| `STOP_CODES` / `StopCode` | a readonly tuple of the codes 2.9.2 names that end in a draft, the wait rows included (they end in a draft as busy); `type StopCode = (typeof STOP_CODES)[number]`. `"deadline"` (the heartbeat and local-deadline row) and the default row's codes are not stop codes. `RunSummary.stop` (2.12) is closed: a `StopCode` or `"deadline"`. The default row records no stop, and every row whose reason is "Codium is unavailable for this binding" records `MODEL_PLAN_BLOCKED` (P6) |
 
 ## 2.2 Mentions (amendment 4)
 
@@ -994,6 +994,8 @@ The engine's agent phase (and the Codium review path) maps the session's final e
 | heartbeat `stop: true`, or the local deadline (`dl − 180 s`) | draft | "the run reached its time limit" |
 | any other error code (for example 401 `CODIUM_SIGN_IN_REQUIRED`, 400 `MODEL_PLAN_CONTEXT`, a passed-through 503 `PERSISTENT_STORE_UNAVAILABLE` or `CLOUD_AGENTS_UNAVAILABLE`), or any 5xx | draft when changes were made; otherwise one comment | "Vector stopped early" |
 
+What the bundle records (2.12): the row's code as `stop`, except that the six "unavailable for this binding" codes are all recorded as `MODEL_PLAN_BLOCKED`, because `summary.json` is a downloadable run artifact (P6). `MODEL_PLAN_RUN_LIMIT` also records the gateway's `limit` (`ceiling`, `hours` or `at-once`), so publish can tell the ceiling line from the used-up line. The heartbeat and deadline row records `"deadline"`. The default row records no stop: its outcome (`draft` or `failed` with no `stop`) is what says "Vector stopped early". Only Codium gateway errors are mapped; an own-key run's errors always take the default row (INV-K1).
+
 ## 2.10 OIDC rules per audience (`api/_lib/github-oidc.ts`, amendment 2)
 
 `githubOidcAudiences` gains `mint: GithubAgents.AUDIENCE.mint` and `bind: GithubAgents.AUDIENCE.bind`. (Amendment 2 asked for one `run` audience; two per-endpoint audiences keep its intent and are recorded at the top of the deviations file.)
@@ -1218,17 +1220,23 @@ The webhook goes to `https://vectordev.ai/api/github/webhook` with `VECTOR_GITHU
 ## 2.12 Run bundle (agent job → publish job)
 
 The engine, as the agent user, writes `vector-out/`; the sandbox copies the two bundle files out (2.11.3 step 8) and they are uploaded as the artifact `vector-run-<run_id>-<attempt>` for 1 day. The bundle holds exactly:
-- `patch.diff`: `git add -A && git diff --cached --binary <baseSha>`, at most `PATCH_LIMITS.bytes`;
+- `patch.diff`: `git add -A && git diff --cached --binary <baseSha>`, both outside `vector-out/`, staged in a private index read from `<baseSha>` (never the agent's `.git/index`), at most `PATCH_LIMITS.bytes`. Over a limit (more than `files` paths, a new blob over `fileBytes`, or a patch over `bytes`), it is empty and the summary is `failed` with `refused` naming the limit; it is never truncated. Untracked repositories of their own, names git refuses to stage, gitlinks and links that leave the tree (INV-S12) are left out and listed in `dropped`;
 - `summary.json`, of at most `summaryBytes`, with this strict schema:
 
 ```ts
-type RunSummary = { v: 1; mode: "codium" | "own-key"; outcome: Outcome
-  stop?: string                                   // a 2.9.2 code, or "deadline"
+type RunSummary = { v: 1; mode: "codium" | "own-key"
+  outcome: "changes" | "no-changes" | "draft" | "failed"   // from the patch: changes → changes, or draft after a stop;
+                                                            // none → no-changes, or failed after a stop or a refusal
+  stop?: StopCode | "deadline"                    // absent for the default row; unavailable rows record MODEL_PLAN_BLOCKED
+  limit?: "ceiling" | "hours" | "at-once"         // only with stop MODEL_PLAN_RUN_LIMIT
+  refused?: "files" | "fileBytes" | "bytes"       // only with outcome failed; publish words the comment (V21)
   // Echoes only. Publish computes each from trusted sources and refuses the bundle when an echo differs (INV-S17).
   kind: "issue" | "pr" | "dispatch" | "schedule"; thread: string
   baseSha: string; headRef?: string; pr?: number; issue?: number; scheduleId?: string
-  title: string; body: string; comment: string    // markers escaped with escapeVectorMarkers; body ≤ BODY_MAX_CHARS
-  draft: boolean; heldBack: string[] }
+  title: string; body: string; comment: string    // markers escaped with escapeVectorMarkers; title one line of at most
+                                                  // 256 characters; body and comment ≤ BODY_MAX_CHARS each
+  draft: boolean                                  // true exactly for outcome draft
+  heldBack: string[]; dropped: string[] }         // paths under .github/ in the patch; paths left out of it
 ```
 
 **Publish treats the whole bundle as untrusted:** an injected agent can rewrite it before the sandbox ends its processes.
