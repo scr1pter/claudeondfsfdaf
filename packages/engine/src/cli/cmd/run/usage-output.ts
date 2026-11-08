@@ -19,7 +19,8 @@ export function toolForOutput(part: ToolPart) {
   return { ...part, state: { ...part.state, metadata: taskMetadata(part.state.metadata) } }
 }
 
-function taskMetadata(value: unknown): unknown {
+/** Lifecycle records keep dollars and counts but lose aggregate token figures and their proof, wherever nested. */
+export function taskMetadata(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(taskMetadata)
   if (!value || typeof value !== "object") return value
   const item = value as Record<string, unknown>

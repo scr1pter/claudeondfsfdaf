@@ -1906,6 +1906,14 @@ unchanged.
   failing) to the P6 addendum, the package that appends the A36 review to `codium-p6-repairs.md`, since A41 is in P6's
   range; both are under "P4 review decisions" below and stay open here until those packages record them. P4c adds a
   dated line here with the Vector Codium run id and conclusion for P4b's own commit, once that run has completed.
+- **8 Nov 2026 (P4c).** Run 42450985342 (push, head `c7b6376a`, P4b's commit) was queued when P4c began and completed
+  with success, 14 of 14 jobs; its Codium tests job 128639976336 passed every step, and the last part of its log shows
+  the last HttpApi exerciser gate at `pass=309 fail=0` followed by `check:generated` (the picker's file count was not
+  read). Job ids are in `codium-p4-repairs.md` ("CI before P4c"); `origin/codium` was still `c7b6376a` when it was
+  read. P4c repaired F43 (a sanitized export kept a lifecycle record's aggregate tokens) and F46 (a client edit through
+  `PATCH` part.update could relabel step usage) and records its readings and hand-offs under "P4 review decisions"
+  below. Its changes were left uncommitted for the lane lead, so its commit, push
+  and Vector Codium run are recorded by the package that pushes them.
 
 ## P4 review decisions (8 Nov 2026)
 
@@ -2016,3 +2024,70 @@ P4b's readings, from its review of A23 and A24 (`4fde1a49..b4c05481` and the A24
   range and past the P6 review, so it goes to the P6 addendum (the package that appends the A36 review to
   `codium-p6-repairs.md`). Its regression test: both switches on, the desktop `notify` rejects on two status reads whose
   share left differs (19% then 18% left), and exactly one `sendPhoneAlert` call (one `phoneAlerts.send`) is expected.
+
+P4c's readings, from its review of A25 (`b4c05481..295ab95e`; findings F35 to F56 in `codium-p4-repairs.md`, section
+"A25 output boundaries"):
+
+- **A sanitized export strips the lifecycle record's aggregate tokens whatever its proof (F43).** C10 and the A25
+  decision say editable lifecycle metadata never authorizes printed aggregate tokens, so `sanitizeLegacy` passes
+  `metadata.subagent` through `taskMetadata`, the walker run JSON uses; a proven `info.tokens` stays beside it. Only
+  `metadata.subagent` is walked: the rest of session metadata is the caller's (any client sets it through
+  `PATCH /session/:id`), and walking the whole object would strip figures under unrelated root `usage` or `tasks` keys
+  and add a `metadata` key a session lacked. The walker keeps its name and only gains `export`, so the self-evolving
+  merge, which edits the same function (its `workflow` branch) and `sanitizeLegacy` (`...data,`), still merges both
+  files cleanly. The raw export is a backup under D-2 and is unchanged.
+- **Hand-off to self-evolving: a sanitized legacy export there carries `ancillaryUsage`.** At `origin/self-evolving`
+  `a03b9718`, `sanitizeLegacy` starts its result with `...data,` ("The privacy, guest-input and usage markers travel
+  with the archive"), so its output keeps the archive's `ancillaryUsage`: `SessionEvent.AncillaryUsage` records of
+  title and memory model calls, with `billing` and `tokens`. After the codium-into-self-evolving merge, Codium title
+  and memory tokens would print in a sanitized export. The self-evolving lane or the owner's step-9 merge resolution
+  must leave `ancillaryUsage` (or at least its `tokens`) out of the sanitized output. The new `export-sanitize.test.ts`
+  case "ancillary usage stays out, so Codium title and memory tokens never reach a sanitized export" passes on codium
+  and fails on a merged tree that keeps the spread, so the merge sees it. Self-evolving's `setPublicMetadata` keeps
+  clients from replacing `metadata.subagent` there, but F43's strip is still needed on that branch for genuine records
+  that copied flagless Codium tokens. The codium lane does not change self-evolving.
+- **`vector stats` keeps its own-text formatter beside Codium (F40), an accepted A25 reading.** Label plan §2's table
+  reads `Cost unknown + Codium`, `free + Codium` or `ChatGPT plan + Codium` when the own work beside Codium is
+  unpriced, free or plan work; stats prints `$0.00 + Codium`. §2 also keeps each surface's own-text formatter and wraps
+  it with `withCodium`. Stats' formatter has always printed `$X.XX`, so an own-unpriced session without Codium reads
+  `$0.00` too (the "No Codium: unchanged" row), and §3.6's `vector stats` row gives the mixed form as
+  `$12.40 + Codium`. Printing "Cost unknown" only beside Codium would split one formatter by Codium presence, and
+  changing it for every session is outside C9. Stats could detect the unknown case from `unpriced` and the session
+  counts; free and plan work cannot be told apart in stored data. It is A25's surface, not copy for P4d.
+- **`part.update` refuses edits to step usage (F46), repaired.** The brief's check that "a client-supplied provenance
+  flag cannot relabel own-key usage as Codium or the reverse" is read to cover a step-finish part's `billing` flag and
+  its figures sent through `PATCH /session/:id/message/:messageID/part/:partID`, not only the session proof flags (F45),
+  since the engine trusts token provenance only from its own writes. Readings: (1) the guard is in the HttpApi handler,
+  not in `Session.updatePart` or the projector, because the engine's processor writes steps through
+  `Session.updatePart`, and replay and import, which reach the projector, already invalidate the proof; (2) usage is
+  `type`, `billing`, `cost`, `unpriced` (absent and `false` read alike) and `tokens`, so an edit to a step's `reason` or
+  `snapshot` still passes; (3) a part sent under another session or message than the one it is stored under is refused
+  whatever its type, since the projector never moves a stored row and an accepted move only re-routed figures; (4)
+  creating a step-finish part through `PATCH` is refused and creating any other part is not; (5) `BadRequest` was
+  already in the endpoint's declared errors, so no HttpApi shape changed and no client or SDK was regenerated. A review
+  of P4c's uncommitted first draft found this entry reading the edit path as "accepted for now" with a fix that needed
+  regeneration; both were withdrawn before commit.
+- **A run with no readings is unmeasured (F48).** When the guard read and the session read before the run both fail,
+  `measuredRun` has no Codium evidence (the before count is unknown, and a modern row carries `codiumSteps`, so the
+  legacy fallback does not apply), and the run is recorded once as unmeasured whatever its model, as before A25. No
+  change: C8 rules out a dollar event for a known Codium-only run, and this run is not known to be one.
+- **The A25 notes' `975b523b` run is unverifiable (F54).** The brief says the commit "does not exist on the remote".
+  GitHub still serves the object, but no branch holds it and the lane clone lacks it; its change, author and author
+  date match `d505d566`, which was committed again onto `4bc40a87` after run 41261226062 was created, and the commit
+  API gives no parent to compare its tree with codium's A24 source. The notes' line 3 stays as written, under a dated
+  status paragraph, and the claim is not repeated.
+- **Privacy hand-off to the lead (F44), open.** `--sanitize` keeps the lifecycle record's text fields (`title`,
+  `resultSummary`, `reason`, `error`, `successCriteria`, `ownedPaths`, `dependsOn`, `resultRef`, `batchID`,
+  `notification.text`, `mailbox[].text`) and other client metadata. It predates Codium and C10 covers only Codium
+  figures, so it is a separate task, not a P4 repair. Its target: in `sanitizeLegacy`, after `taskMetadata`, redact
+  those string fields of `metadata.subagent` with the existing `redact()` (or pass non-lifecycle metadata through
+  `data("session-metadata", ...)`), with an `export-sanitize.test.ts` case asserting a steer prompt's text is absent.
+  P4c's attempt to queue it as a task suggestion timed out without a task id, so it stays with the lead's queue.
+- **The brief's server file (F56).** The brief names `packages/server/src/handlers/session.ts`; A25 changed
+  `packages/server/src/handlers/event.ts`. Both were read and neither needed a change.
+- **The WP31 note guard is on self-evolving (F38).** `TaskNotify.render` at `a03b9718` (`task/notify.ts:180` there)
+  prints tokens only with `tokensOwnOnly === true`. The A25 notes' other WP31 obligations (combined own and delegated
+  proof in workflow usage, `WorkflowOwner.get.report`, `WorkflowReport` text and `workflow.tokens`) were not audited
+  here and stay with the integration.
+- **Range.** `git log b4c05481..295ab95e` also holds the test-only `44c35f1c` and `9c5bc861`, which P4b reviewed with
+  the other A24 follow-ups; P4c read `d505d566` and `4bc40a87` only for the A25 notes' claims.

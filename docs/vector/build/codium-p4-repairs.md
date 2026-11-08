@@ -675,3 +675,370 @@ Files touched by P4b's repair: `packages/core/src/spend-guard.ts`, `packages/cor
 Edits to `api/_lib/model-plan-*.ts`: none.
 
 Shared label files touched: none.
+
+## A25 output boundaries
+
+P4c reviews A25, the range `b4c05481..295ab95e` (112 files, `git diff --stat b4c05481 295ab95e`): `d505d566` (usage
+refresh clock), `4bc40a87` (benchmark docs), `fa16befa` (desktop and command usage boundaries), `ced763c3` (trusted
+token accounting provenance) and `295ab95e` (task completion usage output). `git log --oneline b4c05481..295ab95e`
+holds seven commits: the test-only `44c35f1c` and `9c5bc861` lie in the range too, and P4b reviewed them with
+`d505d566` and `4bc40a87` as the A24 follow-ups (its commit message, F27, F30 and F31); P4c reads those four only for
+the A25 notes' claims (F54, F55). It reads spec §5 A25, label plan §2, §3.6, §3.7, §3.9 and C8 to C10,
+`codium-a25-output-notes.md`, the "A25: output boundaries and historical aggregate provenance" section of
+`codium-deviations.md` and `evidence/codium-a25-after-ced763c3.json`. Each finding was checked against the code at
+`c7b6376a` (`origin/codium` on 8 Nov 2026, P4b's commit, fetched again before these records were written). Findings
+continue from F35. Line numbers are at `c7b6376a` unless a finding says otherwise. No service, account, deployment or
+provider was called (the GitHub reads were read-only commit, branch, run and job queries), no Codex-owned file (spec
+§0.5) was touched, and `api/_lib/model-plan-*.ts` was not edited.
+
+**F35. A22's obligation to A25 (C9, the other half of P4a's F15): `vector stats` filters Codium.** Met.
+`aggregateSessionStats` (`packages/engine/src/cli/cmd/stats.ts:176-289`) reads V1 assistant messages and, for a
+session with no V1 messages, its V2 assistant and compaction rows, routes each step by `Billing.of`, and sums own
+figures only from steps with `Billing.hasOwnIdentity`. The all-time path keeps the session's dollar total less observed
+flagless Codium dollars, floored at the identified own subtotal, and uses the session's token totals only with
+`tokensOwnOnly === true` and no more observed Codium steps than `codiumSteps`; the `--days` path sums identified own
+steps only; per-model rows carry `billing` and no Codium figure. Tests: `test/cli/stats.test.ts:144` (both paths) and
+`:174` (V2 stored billing and Codium compaction).
+
+**F36. `run --format json` step_finish.** Not confirmed. `stepForOutput` (`cli/cmd/run/usage-output.ts:5-14`) returns
+a part unchanged only when it has no Codium flag and `billingByMessage` says `"own"`; that map is filled from each
+assistant `message.updated` with `Billing.of`, else `Billing.hasOwnIdentity` (`cli/cmd/run.ts:1054-1058`). Codium and
+unidentified steps lose `tokens`, and Codium ones read `billing: "codium"`, `cost: 0`, `unpriced: true`. Root
+(`run.ts:1198`) and subagent (`:1148`) steps both go through it. Test: `test/cli/run/usage-output.test.ts:5`.
+
+**F37. `run --format json` tool_use.** Not confirmed. `toolForOutput` (`usage-output.ts:17-20`) passes the metadata
+of completed and errored `task` parts through `taskMetadata` (`:22-42`), which drops `usage.tokens`, `usage.total` and
+`usage.tokensOwnOnly` in single records, batch arrays, batch objects and nested `subagent` records, and keeps dollars
+and counts. No other tool's metadata carries usage tokens: the token counts in `tool/memory.ts` are the size of memory
+text (label plan D-8). Test: `usage-output.test.ts:28`.
+
+**F38. The task completion note.** Not confirmed. `renderNote` (`packages/engine/src/tool/task.ts:304-351`) prints
+`tokens="…"` only when `usage.tokensOwnOnly === true` and the child is not Codium-only (`:322`). That usage comes from
+`SubagentLifecycle.observe`, which reads the session row through `sessions.get` and sets
+`tokensOwnOnly: info.tokensOwnOnly === true` (`tool/subagent-lifecycle.ts:167`), never from metadata. `renderOutput`
+(`task.ts:285-299`) prints no usage. At `origin/self-evolving` `a03b9718`, WP31's `TaskNotify.render` carries the same
+guard (`packages/engine/src/task/notify.ts:180` there), so the note half of the A25 notes' WP31 obligation is met on
+that branch. Tests: `test/tool/task.test.ts`, the `295ab95e` cases among them.
+
+**F39. `vector tasks`.** Not confirmed. The task manager builds `Task.Info.usage` from the session row, with
+`tokensOwnOnly: session.tokensOwnOnly === true` (`packages/engine/src/task/manager.ts:179-188`). `taskForOutput`
+(`cli/cmd/tasks.ts:145-151`) drops `tokens` and `total` from JSON without that proof, and `CodiumUsage.taskText`
+(`packages/core/src/codium-usage.ts:18-53`) prints no aggregate token figure without it. Test:
+`test/cli/tasks.test.ts:65`.
+
+**F40. `vector stats` Total Cost beside Codium.** Not confirmed as a defect; one reading. `displayStats`
+(`stats.ts:432-438`) prints `CodiumUsage.withCodium("$X.XX", codiumResponses)`, so own work at $0 beside Codium reads
+`$0.00 + Codium`, where label plan §2's table reads `Cost unknown + Codium` (own unpriced only), `free + Codium` or
+`ChatGPT plan + Codium`. Stats could tell the unknown case apart (V1 step-finish parts and V2 rows carry `unpriced`, the
+session row `unpricedSteps` and `codiumSteps`, and `CodiumUsage.ownUnpricedSteps` exists) but never counts it. Only an
+unpriced step carries a flag, so a free step and a plan step look alike in stored data. The reading, in "P4 review
+decisions", keeps stats' own-text formatter: it is A25's (C9) surface, not label copy for P4d.
+
+**F41. ACP.** Not confirmed. `buildUsage` (`packages/engine/src/acp/usage.ts:90-106`) returns nothing for a Codium
+message; `turnUsage` (`:122-151`) sums only messages with `Billing.hasOwnIdentity`; `promptResponse` falls back to
+`buildUsage` only with own identity (`acp/service.ts:851-853`); `usage_update` is skipped when the latest assistant
+message or the context sample is not own (`service.ts:639-644`, `usage.ts:256-258`); `totalSessionCost` (`:153-171`)
+answers nothing when any step is unpriced or Codium. Tests: `test/acp/usage.test.ts`,
+`test/acp/service-session.test.ts`.
+
+**F42. `export --sanitize`: messages, parts and totals.** Not confirmed. `sanitizeLegacy`
+(`cli/cmd/export.ts:168-246`) drops `info.tokens` and `info.subagentTokens` without their proof (`:179-180`), drops the
+tokens of Codium and unidentified assistant messages and step-finish parts and marks Codium ones `billing: "codium"`
+(`withoutTokens`, `:248-256`), and replaces non-empty text, reasoning and tool metadata with a redaction marker
+(`data()`, `:17-20`). It returns only `info` and `messages`, so on codium the archive's `ancillaryUsage` (title and
+memory model calls, with their `billing` and `tokens`) stays out. Native sessions go through `sanitizePublic`, the
+public preview. Tests: the seven earlier cases of `test/cli/export-sanitize.test.ts`. The self-evolving side of
+`ancillaryUsage` is a hand-off under "P4 review decisions".
+
+**F43. A sanitized export kept a lifecycle record's aggregate tokens and their proof.** Confirmed, repaired.
+
+- `const info = { ...data.info }` (`export.ts:178`) kept `info.metadata` as it was. On a child session,
+  `metadata.subagent` is the lifecycle record, and `SubagentLifecycle.settle` (`subagent-lifecycle.ts:209-215`,
+  through `outcome` and `observe`) writes its `usage` with the session's `tokens`, `total` and `tokensOwnOnly` copied
+  at completion. So a sanitized export whose `info.tokens` were dropped for missing proof printed the same aggregate in
+  `metadata.subagent.usage`, with the serialized proof bit. A child holding flagless Codium tokens from before A22 (its
+  record says `tokensOwnOnly: false`, or has no proof field when written before A25) printed them, and so did a record
+  whose proof bit a client set through session metadata (`PATCH /session/:id` passes metadata through,
+  `httpapi/handlers/session.ts:271`).
+- Contract: label plan C10 ("the legacy `--sanitize` path drops Codium tokens"), the A25 decision "editable lifecycle
+  metadata never authorizes printed aggregate tokens", and run JSON's handling of the same record (F37).
+- Shown against the previous source (table below): the four new lifecycle cases fail with `tokens.input` 987654 and
+  `total` 987686 in `metadata.subagent.usage`, and `tokensOwnOnly` beside them where the record had one.
+- **Repair:** `sanitizeLegacy` replaces `metadata.subagent`, when present, with `taskMetadata(metadata.subagent)`
+  (`export.ts:185-188` after the repair), the walker run JSON already uses, now exported from
+  `cli/cmd/run/usage-output.ts` under its own name. The record keeps its dollars, counts and other fields and loses
+  `tokens`, `total` and `tokensOwnOnly` wherever nested. Other metadata keys are left as they are, and a session
+  without `metadata.subagent` gains no `metadata` key. The stripping is unconditional, as in run JSON: a proven
+  `info.tokens` stays beside it, so no proven figure is lost. The raw export (a backup under D-2) and stored rows are
+  unchanged, and the walker copies, so the source archive is not mutated.
+- **Regression tests** in `packages/engine/test/cli/export-sanitize.test.ts`: "a lifecycle record's aggregate tokens
+  never reach a sanitized export: %s" (four cases: a forged true proof on a proven and on an unproven session, an
+  unproven record holding flagless Codium tokens, and a record written before the proof existed; each expects the
+  record reduced to `{cost, toolUses, steps, codiumSteps}`, the root `usage` and `unrelated` keys kept as they were, no
+  `987654` or `987686` in the output, no `tokensOwnOnly` in the metadata, the source unchanged, and `info.tokens` kept
+  only with session proof); "a session without metadata gains no metadata key"; and "ancillary usage stays out, so
+  Codium title and memory tokens never reach a sanitized export", which passes on codium before and after the repair
+  and guards the self-evolving merge (see "P4 review decisions").
+
+**F44. A sanitized export keeps the lifecycle record's text.** Not repaired; handed to the lead. `--sanitize` is
+described as "redact sensitive transcript and file data" (`export.ts:272`), yet after the repair the record keeps its
+text fields: `title` (the task description), `resultSummary`, `reason`, `error`, `successCriteria[]`, `ownedPaths[]`,
+`dependsOn[]`, `resultRef`, `batchID`, `notification.text` and `mailbox[].text` (`SubagentRecord`,
+`packages/engine/src/agent/subagent-kind.ts:50-82`), and any other metadata key a client set. This predates Codium
+(`sanitize()` already spread `data.info` at `b4c05481`), and C10 covers only Codium figures, so it is outside P4. The
+separate task: in `sanitizeLegacy`, after `taskMetadata`, redact the string fields of `metadata.subagent` (with
+`notification.text` and every `mailbox[].text`) using the existing `redact()`, or pass non-lifecycle metadata through
+`data("session-metadata", ...)`, with an `export-sanitize.test.ts` case asserting a steer prompt's text is absent.
+P4c's attempt to queue it as a task suggestion timed out without returning a task id, so the hand-off stays open with
+the lead.
+
+**F45. Token provenance is trusted only from the engine.** Not confirmed.
+
+- No serialized flag promotes a row: `sessionRow` writes both flags false whatever the event says
+  (`packages/core/src/session/projector.ts:126-128`); the Updated projector strips both from its update (`:416-417`);
+  a Created event with any nonzero accounting calls `contribute(false)` (`:376-393`).
+- Only `SessionAccounting.initializeEmpty` (`packages/core/src/session/accounting.ts:12-37`) sets them true, for
+  sequence 0 with no accounting, messages, parts, inputs, children, events or sequence rows, from the non-replayed
+  commit callbacks at `packages/core/src/session.ts:308` and `packages/engine/src/session/session.ts:703`.
+- Replay, import and fork invalidate: `projector.ts:169, 247, 351, 439, 469, 478, 545`; archive import writes
+  `tokensOwnOnly: false` (`share/archive.ts:360`). The session PATCH payload has no accounting field
+  (`httpapi/groups/session.ts:59-68`).
+- Outputs: Created and Updated snapshots take the flags and figures from the committed row
+  (`session/accounting-output.ts:11-51`, used at `packages/server/src/handlers/event.ts:52`, the engine's
+  `httpapi/handlers/event.ts:103` and `event-v2-bridge.ts:40`); forwarded remote snapshots lose them
+  (`control-plane/workspace.ts:431`); the app reads tokens from loaded accounting facts, not lifecycle metadata
+  (`features/background-tasks/subagent-model.ts:666-668`).
+- Tests: core `test/session-token-provenance.test.ts`, engine `test/event-v2-accounting.test.ts` and
+  `test/server/httpapi-event.test.ts`. The billing flag on a part edited through the HttpApi is a separate path, F46.
+
+**F46. A client edit through `PATCH` part.update could relabel step usage.** Confirmed, repaired.
+
+- `part.update` (`httpapi/groups/session.ts:488-499`, handler `handlers/session.ts:526-540`) took a whole
+  `SessionV1.Part` and checked only that its ids equal the path's. The `PartUpdated` projector (`projector.ts:540-566`)
+  reads the stored part by id and upserts it setting `data` only, so the row keeps its `message_id` and `session_id`;
+  it routes `previous` by the stored row's message and `next` by the payload's `messageID`, and `applyUsage`
+  (`:160-170`) keeps the proof only when both are own-only (`knownOwnOnly`, `:77-79`, reads a Codium flag and an own
+  provider identity both as known).
+- So an authorized client could (a) add `billing: "codium"` to an own step, which moved its cost and tokens out of the
+  own totals and raised `codium_steps`; (b) drop `billing` from a Codium step on its Codium message, which added its
+  figures to the own totals and dropped the proof; (c) send the same Codium part under an own message's id without
+  `billing`, where both sides read as own-only, so the proof survived and the figures counted as proven own tokens.
+  The raw message API returns each Codium step's tokens (`GET /session/:id/message`, `handlers/session.ts:151-190`;
+  label plan D-2), so the figures in (c) can be engine-recorded Codium tokens, which then printed as proven own tokens
+  in `export --sanitize`, `vector stats` and `vector tasks`. The same route also created step-finish parts and moved a
+  part's figures to another session.
+- Contract: the brief's check that token provenance is trusted only from the engine and "a client-supplied provenance
+  flag cannot relabel own-key usage as Codium or the reverse".
+- Shown against the previous source (the handler as at `c7b6376a`, the new test in place, the status assertion
+  replaced by a print of the response and the session's totals in a throwaway copy of the test, deleted after the run;
+  a session with an own step of 200 input tokens at $0.12 and a Codium step of 987654): every edit was accepted with
+  status 200. (a) left `cost` 0, input tokens 0, `codiumSteps` 2, proof true; (b) input tokens 987854, `cost` 0.12, no
+  Codium step, proof false; (c) input tokens 987854, no Codium step, proof **true**; a new step-finish part added a
+  second own step (400 tokens, $0.24); turning the Codium step into a text part took its Codium step back.
+- **Repair:** the HttpApi handler `updatePart` (`handlers/session.ts:530-560` after the repair, `stepUsage` at
+  `:597`; the engine's processor writes through `Session.updatePart` and is unaffected) reads the stored part by id
+  and returns `BadRequest` when the stored row is in another session or under another message than the payload names,
+  or when the stored part or the payload is a step-finish and their usage differs (`stepUsage`: `type`, `billing`,
+  `cost`, `unpriced` read as `=== true`, and `tokens`, compared with `isDeepStrictEqual`). So a step-finish part can
+  no longer be created, relabelled, re-priced, moved or turned into another part type through the route, while an
+  edit to a step's `reason` or `snapshot` and every other part edit pass as before. `BadRequest` is already among the
+  endpoint's declared errors (`groups/session.ts:493`), so no HttpApi shape changed and neither the client nor the SDK
+  needs regenerating; P4c's first draft said otherwise and read the path as "accepted for now", and a review of that
+  uncommitted draft withdrew both.
+- **Regression tests** in the new `packages/engine/test/server/httpapi-part-usage.test.ts`: five "refuses … leaving the
+  session's totals and parts as stored" cases ((a), (b), (c), a step-finish part the engine never recorded, and a
+  stored step turned into a text part), each expecting 400, the session's `cost`, `tokens`, `codiumSteps`,
+  `unpricedSteps` and `tokensOwnOnly` unchanged and both stored parts as written; "refuses a step sent under another
+  session's message" (400, both sessions' totals unchanged); and "accepts an edit that leaves a step's usage as
+  stored" (200 for a `reason` edit on the own and the Codium step, totals unchanged). Against the previous source the
+  six refusal cases fail (status 200) and the accepting case passes.
+- Unchanged by the repair: desktop admission reads the session model (`desktop/src/main/scheduled-agents.ts:577`,
+  `parallel-workspaces.ts:2231`), so no relabel ever opened a dollar window; `measuredCost`
+  (`desktop/src/main/run-usage.ts:89-101`) keeps the guard's own spend as a floor whenever the guard reports any.
+
+**F47. The provenance migration is additive.** Not confirmed.
+`packages/core/src/database/migration/20261101020803_session_token_provenance.ts:8-9` adds `tokens_own_only` and
+`subagent_tokens_own_only` as `integer DEFAULT false NOT NULL` with no backfill, matching `session/sql.ts:60-61` and
+`database/schema.gen.ts:232-233`, registered at `migration.gen.ts:51`; `20260611035744_credential.ts:15` uses the same
+`DEFAULT false` form. `origin/self-evolving` carries the same file (blob `f4e31afc`). Checks here:
+`bun script/migration.ts --check` (exit 0, "No schema changes, nothing to migrate", tree unchanged) and
+`test/database-migration.test.ts -t "token provenance starts unknown"`.
+
+**F48. Desktop Codium-only runs append no dollar-ledger event.** Not confirmed; one reading. `recordRunCost`
+returns without appending when cost and tokens are both at most 0 (`packages/desktop/src/main/spend-limits.ts:265-269`);
+`measuredRun` (`run-usage.ts:103-148`) gives a Codium-only run own cost 0 and no tokens; the card's `actualCost` stays
+unset for Codium at $0 (`parallel-workspaces.ts:2633-2634`). Tests: `spend-limits.test.ts:783` and `:813`,
+`run-usage.test.ts`, `parallel-workspaces.spend.test.ts`, `scheduled-agents.test.ts`, `agent-task-model.test.ts`. The
+reading (a run with no readings) is in "P4 review decisions".
+
+**F49. The `vector run` footer and `--max-cost`.** Not confirmed. `formatSpend` and `formatContext`
+(`cli/cmd/run/session-data.ts:143-169`) wrap own spend with `withCodium` and show a Codium context as its percentage
+only; the context reading at `:863-867` passes tokens only for Codium or own identity, so an unidentified step shows
+no token figure. Test: `test/cli/run/session-data.test.ts`. The `--max-cost` help snapshot from `295ab95e` is
+checked in test.yml only.
+
+**F50. `vector models --verbose` and `vector memory doc`.** Not confirmed. `modelForOutput`
+(`cli/cmd/models.ts:154-160`) prints `billing: "codium"` in place of Codium's zero rates; `memory-doc.ts:388-418`
+prints `Runs on <model> (Codium).`, `Spent: Codium` and `{ billing: "codium" }` JSON with no tokens or cost;
+`session/distill.ts:190,259` leaves Codium estimates and results without figures. Tests:
+`test/cli/models-codium.test.ts`, `test/session/distill.test.ts`, core `test/brain/distill.test.ts`.
+
+**F51. Review JSON.** Not confirmed for JSON. `reviewForOutput` (`cli/cmd/review-output.ts:13-56`) treats a review as
+Codium by its model prefix even when the outcome's kind reads `"unknown"` (P4b's F18). Test: `test/cli/review.test.ts`.
+The human review footer is P4d's (A26).
+
+**F52. TUI.** Not confirmed. `util/locale.ts:87-162` (`spend` and its siblings take `codiumSteps` and
+`ownUnpricedSteps`), `util/session.ts:59-130`, `feature-plugins/sidebar/context.tsx:18-100` and
+`routes/session/task-presentation.ts`. Tests: `test/task-presentation.test.ts`, `test/util/locale-spend.test.ts`,
+`test/util/session.test.ts`, `test/feature-plugins/sidebar-context.test.tsx`.
+
+**F53. App files changed in `ced763c3`.** Not confirmed. `utils/session-cost.ts`,
+`features/background-tasks/subagent-model.ts:521-555` (loaded own facts, Codium steps counted apart) and
+`task-board-model.ts:134-139` (task tokens only with row proof). Tests: `src/utils/session-cost.test.ts`,
+`src/features/background-tasks/subagent-model.test.ts`, `task-board-model.test.ts`.
+
+**F54. The A25 notes' line 3: "the complete 10-job run at `975b523b` passed before A25 publication".** Unverifiable.
+
+- `975b523b` is on no branch: `list_branches` shows no `codium-fixtures` (the branch run 41261226062 names) and no
+  branch at that commit, and the lane clone has no such object (`git cat-file -t 975b523b` fails).
+- GitHub's commit API still serves the object: subject "test(codium): freeze the usage refresh clock boundary", author
+  and committer date 2026-11-01T01:26:17Z, and a 2-line change to
+  `packages/app/e2e/regression/account-settings.spec.ts`. `d505d566` has the same subject, author, author date and
+  patch, with committer date 01:33:36Z and parent `4bc40a87`, so it was committed again after run 41261226062 (Vector
+  Codium, workflow_dispatch, head `975b523b`) was created at 01:28:22Z.
+- The commit API answer carries no parent field, so the tree outside that change cannot be compared with codium's
+  A24 source through the lane's tools. The notes' sentence is therefore unverifiable; the run's own result does not
+  confirm it, and it is not repeated here.
+
+**F55. The A25 notes' "A25 remains open until …" (in the `fa16befa` paragraph).** Superseded by later paragraphs of
+the same notes, which the runs confirm by id:
+
+| Run         | Workflow      | Head       | Result                                                                                                                                     |
+| ----------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 41263609099 | Vector Codium | `fa16befa` | success                                                                                                                                    |
+| 41266218814 | Vector Codium | `ced763c3` | failure: of 10 jobs only Codium tests 124729456887 failed, at "Run the Codium test files"; its exerciser and generated-client steps passed |
+| 41266232332 | test.yml      | `ced763c3` | failure; the benchmark job 124729499411 succeeded                                                                                          |
+| 41267412463 | Vector Codium | `295ab95e` | success, 10 of 10; Codium tests 124733000253 passed every step                                                                             |
+| 41268039624 | test.yml      | `295ab95e` | success                                                                                                                                    |
+
+The evidence file matches the notes: `workflowRun` 41266232332, `job` 124729499411, `artifact` 13067119453 and the
+`archiveSha256`; medians recomputed here are 114.9/135.3, 113.7/201.3 and 80.9/136.9 ms (first/stable) for the
+unvisited task, the new session page and the child session, with 9 of 9 passed, retry 0, blank 0 and unknown 0. The
+notes link the runs under the repository name GitHub's run records give; the lane reads them as
+`scr1pter/vectordev.ai` (P4b's F31).
+
+**F56. The brief's file list.** It names `packages/server/src/handlers/session.ts`; A25 changed
+`packages/server/src/handlers/event.ts` (4 lines: the row projection of F45). Both were read: `session.ts:345` maps
+`codiumSteps` (P4b's F21), and the V2 get answers through `SessionInfo.fromRow`
+(`packages/core/src/session/info.ts:33-34`), which takes the proof from the row.
+
+## CI before P4c
+
+- **Run 42450985342** (Vector Codium, push, head `c7b6376a`, P4b's commit): queued when P4c began, completed with
+  success at 05:58:34Z, 14 of 14 jobs. Codium tests 128639976336; Codium browser specs 128639976225; typecheck jobs
+  desktop 128639976324, app 128639976353, engine 128639976396, ops-worker 128639976448, web 128639976492, api
+  128639976501, relay 128639976504, cloud 128639976545, core 128639976552, schema 128639976558; Ops Worker dry run and
+  miniflare smoke 128639976342; Remote relay dry run and local smoke 128639976350. The Codium tests job passed every
+  step, a new "Build the phone app" step among them. Its log has 9,281 lines; P4c read the last 260, which show the
+  last HttpApi exerciser gate at `pass=309 fail=0 skip=0 missing=0 extra=0` and then `bun run check:generated`. The
+  picker's file count and the first two exerciser gates are earlier in the log and were not read; their steps report
+  success.
+- **A25's own runs**, checked by id, are in F55's table.
+
+## Tests run here (P4c)
+
+Every run went through `/home/user/.tools/vector-serial` from the package directory with `--timeout 30000`, one file at
+a time, with XDG, `VECTOR_TEST_HOME` and `TMPDIR` roots under `/tmp/vector-codium/p4c/`. Desktop runs use
+`bun --no-env-file test`, app runs add `--isolate`. All exited 0 after the repair.
+
+| Package | File                                                                      | Result                  |
+| ------- | ------------------------------------------------------------------------- | ----------------------- |
+| engine  | `test/cli/export-sanitize.test.ts`                                        | 13 pass (6 new)         |
+| engine  | `test/cli/run/usage-output.test.ts`                                       | 2 pass                  |
+| engine  | `test/cli/run/session-data.test.ts`                                       | 18 pass                 |
+| engine  | `test/cli/stats.test.ts`                                                  | 7 pass                  |
+| engine  | `test/cli/tasks.test.ts`                                                  | 3 pass                  |
+| engine  | `test/cli/models-codium.test.ts`                                          | 2 pass                  |
+| engine  | `test/cli/review.test.ts`                                                 | 25 pass                 |
+| engine  | `test/acp/usage.test.ts`                                                  | 17 pass                 |
+| engine  | `test/acp/service-session.test.ts`                                        | 40 pass                 |
+| engine  | `test/session/usage.test.ts`                                              | 16 pass                 |
+| engine  | `test/session/distill.test.ts`                                            | 4 pass                  |
+| engine  | `test/tool/task.test.ts`                                                  | 116 pass                |
+| engine  | `test/event-v2-accounting.test.ts`                                        | 2 pass                  |
+| engine  | `test/server/httpapi-event.test.ts`                                       | 3 pass                  |
+| engine  | `test/server/httpapi-part-usage.test.ts` (new)                            | 7 pass                  |
+| engine  | `test/server/httpapi-session.test.ts`                                     | 26 pass                 |
+| engine  | `test/server/httpapi-sdk.test.ts`                                         | 19 pass                 |
+| core    | `test/session-token-provenance.test.ts`                                   | 19 pass                 |
+| core    | `test/event.test.ts`                                                      | 46 pass                 |
+| core    | `test/codium-usage.test.ts`                                               | 1 pass                  |
+| core    | `test/brain/distill.test.ts`                                              | 17 pass                 |
+| core    | `test/database-migration.test.ts`, `-t "token provenance starts unknown"` | 1 pass, 19 filtered out |
+| desktop | `src/main/run-usage.test.ts`                                              | 24 pass                 |
+| desktop | `src/main/spend-limits.test.ts`                                           | 38 pass                 |
+| desktop | `src/main/agent-task-model.test.ts`                                       | 8 pass                  |
+| desktop | `src/main/parallel-workspaces.spend.test.ts`                              | 10 pass                 |
+| desktop | `src/main/scheduled-agents.test.ts`                                       | 67 pass                 |
+| tui     | `test/task-presentation.test.ts`                                          | 6 pass                  |
+| tui     | `test/util/locale-spend.test.ts`                                          | 8 pass                  |
+| tui     | `test/util/session.test.ts`                                               | 10 pass                 |
+| tui     | `test/feature-plugins/sidebar-context.test.tsx`                           | 2 pass                  |
+| app     | `src/utils/session-cost.test.ts`                                          | 14 pass                 |
+| app     | `src/features/background-tasks/subagent-model.test.ts`                    | 69 pass                 |
+| app     | `src/features/background-tasks/task-board-model.test.ts`                  | 13 pass                 |
+
+`bun script/migration.ts --check` from `packages/core`: exit 0, and `git status` showed only P4c's three files.
+
+**Against the previous source** (`export.ts` as at `c7b6376a`, the new test file in place): 9 pass, 4 fail; the four
+lifecycle cases fail, the no-metadata and ancillary cases pass. For F46 (`handlers/session.ts` as at `c7b6376a`,
+restored afterwards and compared with `cmp`): `httpapi-part-usage.test.ts` 1 pass, 6 fail, the six refusal cases
+failing on status 200 and the accepting case passing; the throwaway probe's totals are in F46. **Mutation checks**
+(the source changed in place, the test run, the file then copied back and compared with `cmp`): (1) without the
+`metadata.subagent` line in `export.ts`, the four lifecycle cases fail; (2) without `delete usage.total` in
+`taskMetadata`, the four lifecycle cases and `usage-output.test.ts`'s task JSON case fail; (3) with the walker over
+the whole metadata object (`metadata: taskMetadata(data.info.metadata)`), the four lifecycle cases fail on the root
+`usage` key and the no-metadata case fails on the `undefined` key; for F46, (4) with the stored-row session and message check disabled,
+"refuses a step sent under another session's message" fails (the Codium-under-own-message case is still refused,
+because removing its flag also changes its usage); (5) with the usage comparison disabled, the own-relabel, flag
+removal, never-recorded step-finish and step-to-text cases fail.
+
+Typecheck: `bun typecheck` in `packages/engine`, `packages/core`, `packages/desktop` and `packages/server`, exit 0. The
+full `TURBO_CACHE_DIR=/home/user/.cache/vector-typecheck bun turbo typecheck --concurrency=1` from the worktree root:
+25 of 25 tasks successful (22 from cache), and again after a comment-only edit to `taskMetadata`'s doc line, 25 of
+25 (24 from cache; the two engine files above were rerun, 13 and 2 pass, and engine `bun typecheck` exit 0).
+`prettier --check` (through the lock) on the three source and test files and on this record: clean. No public schema
+or HttpApi changed, so no generator ran.
+
+After the F46 repair and the review round (the `export-sanitize.test.ts` table rows now carry their expected
+`info.tokens` in place of an `if`/`else`): `export-sanitize.test.ts` 13 pass, `httpapi-part-usage.test.ts` 7 pass,
+`httpapi-session.test.ts` 26 pass, `httpapi-sdk.test.ts` 19 pass; engine `bun typecheck` exit 0, and the full
+`bun turbo typecheck --concurrency=1` from the worktree root 25 of 25 tasks successful (24 from cache);
+`prettier --check` on the changed source and test files clean, and the three records add no formatting issue to those
+already at `c7b6376a`. F46's repair changes behaviour only: `BadRequest` was already declared for `part.update`, so no generator
+ran; the HttpApi exerciser (its `part.update` case edits a text part) and `check:generated` run in CI.
+
+**Merge prediction.** A read-only `git merge-tree --write-tree --name-only` of `origin/self-evolving` `a03b9718` with
+`c7b6376a`, and with a probe commit of P4c's tree (both with a throwaway object directory, so no ref moved and no
+object entered the shared store), reports the same 7 content conflicts as D1's list. `export.ts` and
+`usage-output.ts`, which self-evolving also edits, merge cleanly, and the merged `sanitizeLegacy` holds both
+self-evolving's `...data,` and P4c's `metadata.subagent` line. The same probe repeated with the F46 repair (a temporary
+index and object directory, so neither the worktree index nor the shared store changed) reports the same 7 conflicts;
+`handlers/session.ts`, which self-evolving edits elsewhere (its audience checks and imports), merges cleanly and the
+merged file holds both its `SessionAudienceHttp` checks and P4c's `stepUsage` guard.
+
+**CI only:** the Valkey and Postgres cases, `bun run test:httpapi`, `bun run check:generated`, the browser specs, the
+help snapshots (test.yml, not dispatched) and the full picker run. P4c's changes were left uncommitted for the lane
+lead; the commit, its push and its Vector Codium run are recorded by the package that pushes it.
+
+Files touched by P4c's repairs: `packages/engine/src/cli/cmd/export.ts` and
+`packages/engine/src/cli/cmd/run/usage-output.ts` (F43; both also edited on self-evolving) and
+`packages/engine/src/server/routes/instance/httpapi/handlers/session.ts` (F46; also edited on self-evolving, in other
+functions); tests `packages/engine/test/cli/export-sanitize.test.ts` and the new
+`packages/engine/test/server/httpapi-part-usage.test.ts`. `packages/engine/src/tool/task.ts`: not touched. No schema,
+HttpApi shape or generated file changed, and no configuration was added, so `MODEL-PLANS.md` and `.env.example` are
+unchanged.
+
+Edits to `api/_lib/model-plan-*.ts`: none.
+
+Shared label files touched: none.
