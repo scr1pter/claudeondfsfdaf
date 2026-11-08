@@ -1438,23 +1438,24 @@ describe("task sizing", () => {
     { git: true },
   )
 
-  it.instance(
-    "a run that ends on a question and a courtesy line is not judged until the user answers",
-    () =>
-      Effect.gen(function* () {
-        const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
-        const closings = [
-          "Migrated the router. Should I also remove the old API? Let me know!",
-          "Migrated the router. Want me to proceed with phase 2? 🙂",
-          "Migrated the router. Shall I continue with the input layer? Just say the word.",
-          "Migrated the router. Should I keep the old API, or remove it? (I'd lean toward removing it.)",
-          // A question that is not the reply's last sentence still asks (the verifier's probes).
-          "Migrated the router. Should I also remove the old API? I'll wait for your answer.",
-          "Migrated the router. Should I also remove the old API? Once you confirm, I'll proceed.",
-          "Migrated the router. Which do you prefer for the old API: remove it or keep a shim? I'd go with the shim.",
-          "Should I also remove the old API?\n\n**Summary of changes:**\n- router.ts migrated",
-        ]
-        for (const closing of closings) {
+  const questionClosings = [
+    "Migrated the router. Should I also remove the old API? Let me know!",
+    "Migrated the router. Want me to proceed with phase 2? 🙂",
+    "Migrated the router. Shall I continue with the input layer? Just say the word.",
+    "Migrated the router. Should I keep the old API, or remove it? (I'd lean toward removing it.)",
+    // A question that is not the reply's last sentence still asks (the verifier's probes).
+    "Migrated the router. Should I also remove the old API? I'll wait for your answer.",
+    "Migrated the router. Should I also remove the old API? Once you confirm, I'll proceed.",
+    "Migrated the router. Which do you prefer for the old API: remove it or keep a shim? I'd go with the shim.",
+    "Should I also remove the old API?\n\n**Summary of changes:**\n- router.ts migrated",
+  ]
+  // Each closing is a test of its own: in one test the eight took most of the 30 s deadline on a Windows runner (CI12).
+  questionClosings.forEach((closing) =>
+    it.instance(
+      `a run that ends on a question and a courtesy line is not judged until the user answers: ${JSON.stringify(closing)}`,
+      () =>
+        Effect.gen(function* () {
+          const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
           const chat = yield* sessions.create({ title: "Pinned" })
           yield* llm.tool("write", { filePath: path.join(directory, "router.ts"), content: "export {}\n" })
           yield* llm.text(closing)
@@ -1465,13 +1466,15 @@ describe("task sizing", () => {
           yield* llm.text("VERDICT: PASS")
           yield* send(prompt, chat.id, "no")
           expect((yield* sessions.children(chat.id)).length, closing).toBe(1)
-        }
-        const judged = (yield* llm.inputs).filter(isJudge)
-        expect(judged).toHaveLength(closings.length)
-        // The judge is told what the agent asked and what the user answered.
-        expect(JSON.stringify(judged[0]?.messages)).toContain("Should I also remove the old API?")
-      }),
-    { git: true },
+          const judged = (yield* llm.inputs).filter(isJudge)
+          expect(judged).toHaveLength(1)
+          // The judge is told what the agent asked and what the user answered.
+          expect(JSON.stringify(judged[0]?.messages), closing).toContain(closing.slice(0, closing.indexOf("?") + 1))
+          if (closing.includes("Should I also remove the old API?"))
+            expect(JSON.stringify(judged[0]?.messages)).toContain("Should I also remove the old API?")
+        }),
+      { git: true },
+    ),
   )
 
   it.instance(
@@ -1650,16 +1653,19 @@ describe("task sizing", () => {
     { git: true },
   )
 
-  it.instance(
-    "after a judged Thorough migration whose report ends on a closing line, a new request is Work and not judged again",
-    () =>
-      Effect.gen(function* () {
-        const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
-        for (const closing of [
-          "Migrated the router. Let me know if this works for you.",
-          "Migrated the router. I recommend running the e2e suite before you merge.",
-          "Migrated the router. Let me know if you'd like me to make any other changes.",
-        ]) {
+  const workClosings = [
+    "Migrated the router. Let me know if this works for you.",
+    "Migrated the router. I recommend running the e2e suite before you merge.",
+    "Migrated the router. Let me know if you'd like me to make any other changes.",
+  ]
+  // Each closing is a test of its own: in one test the three, two requests each, took most of the 30 s deadline on a
+  // Windows runner (CI12).
+  workClosings.forEach((closing) =>
+    it.instance(
+      `after a judged Thorough migration whose report ends on a closing line, a new request is Work and not judged again: ${JSON.stringify(closing)}`,
+      () =>
+        Effect.gen(function* () {
+          const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
           for (const text of ["fix the typo in README", UNRELATED]) {
             const chat = yield* sessions.create({ title: "Pinned" })
             yield* llm.tool("write", { filePath: path.join(directory, "router.ts"), content: "export {}\n" })
@@ -1678,7 +1684,18 @@ describe("task sizing", () => {
             expect(judgeRequests(all), `${closing} ${text}`).toBe(0)
             expect((yield* sessions.children(chat.id)).length, `${closing} ${text}`).toBe(1)
           }
-        }
+        }),
+      { git: true },
+      // Several fake-server turns, the judge's among them.
+      30_000,
+    ),
+  )
+
+  it.instance(
+    "an offer with a question mark after a Thorough migration still waits: the answer stays Thorough and is judged",
+    () =>
+      Effect.gen(function* () {
+        const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
         // An offer with a question mark still waits: the answer stays Thorough and is judged.
         const chat = yield* sessions.create({ title: "Pinned" })
         yield* llm.tool("write", { filePath: path.join(directory, "router.ts"), content: "export {}\n" })
@@ -1700,17 +1717,20 @@ describe("task sizing", () => {
     30_000,
   )
 
-  it.instance(
-    "thanks or hi after a Thorough report that ends on a closing line is one quick-lane request",
-    () =>
-      Effect.gen(function* () {
-        const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
-        for (const closing of [
-          "Migrated the router. Let me know if this works for you.",
-          "Migrated the router. Let me know if you'd like me to make any other changes.",
-          "Migrated the router. You can confirm by running `bun dev`.",
-          "Migrated the router. Let me know how it goes.",
-        ]) {
+  const quickClosings = [
+    "Migrated the router. Let me know if this works for you.",
+    "Migrated the router. Let me know if you'd like me to make any other changes.",
+    "Migrated the router. You can confirm by running `bun dev`.",
+    "Migrated the router. Let me know how it goes.",
+  ]
+  // Each closing is a test of its own: in one test the four, two messages each, took most of the 30 s deadline on a
+  // Windows runner (CI12).
+  quickClosings.forEach((closing) =>
+    it.instance(
+      `thanks or hi after a Thorough report that ends on a closing line is one quick-lane request: ${JSON.stringify(closing)}`,
+      () =>
+        Effect.gen(function* () {
+          const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
           for (const text of ["thanks", "hi"]) {
             const chat = yield* sessions.create({ title: "Pinned" })
             yield* llm.tool("write", { filePath: path.join(directory, "router.ts"), content: "export {}\n" })
@@ -1726,7 +1746,18 @@ describe("task sizing", () => {
             expect(bodies[0]?.reasoning_effort, `${closing} ${text}`).toBe("none")
             expect(result.info.role === "assistant" && result.info.size, `${closing} ${text}`).toBe("chat")
           }
-        }
+        }),
+      { git: true },
+      // Several fake-server turns, the judge's among them.
+      30_000,
+    ),
+  )
+
+  it.instance(
+    "a thanks to an offer with a question mark after a Thorough report answers it, at the work's size",
+    () =>
+      Effect.gen(function* () {
+        const { llm, prompt, sessions, directory } = yield* setup({ sizing: { judge: "thorough" } })
         // A thanks to an offer with a question mark answers it, at the work's size.
         const chat = yield* sessions.create({ title: "Pinned" })
         yield* llm.tool("write", { filePath: path.join(directory, "router.ts"), content: "export {}\n" })

@@ -1832,3 +1832,177 @@ The push waited for SE-1's PR checks on `e0bfa00b`, since a new push cancels an 
 Deferred:
 - CI12 to CI15, the diagnoses of `f062bcce`'s four attempt-1 failures, and spec 7.2 item 1's "Windows 6" (CI10 Remaining).
 - The merge plan's "Each of these four first-attempt failures is being diagnosed" line, until CI12 to CI15 land. The PR body's wording is the owner's.
+
+## 2026-11-08 CI12 - Windows engine shard 1/12 timeouts in run 42159471110
+
+Status (SE-3): the four timeouts are diagnosed. The two task-sizing closing-line tests and the question test that sat next to them are split into one test per closing line. The prompt cancel test takes the vectorscope lane's 15 s limit. Only test files change: packages/engine/test/session/task-size.test.ts and packages/engine/test/session/prompt.test.ts. No product code, no test.yml line and no other deadline changes. Both files pass on Linux. It is committed with this entry; the push, its PR checks and the new tests' Windows durations are still to come (Remaining). The task-manage timeout and the error between tests belong to SE-4, which extends this entry. Times are UTC.
+
+What failed: run [42159471110](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110), attempt 1, on `f062bcce` (merge ref `da97e8ce`), engine (windows, shard 1/12), job `127701423223`. Result: 749 pass, 26 skip, 4 fail and 1 error between tests, of 779 tests across 46 files, in 1,488.62 s. The step took 24:49 (2026-11-06 04:07:32-04:32:21), under its 45-minute limit. The four timeouts:
+- prompt.test.ts "finalizes assistant when cancelled before processor creation completes": 3,000.49 ms, at its own 3,000 ms deadline.
+- task-size.test.ts "task sizing > after a judged Thorough migration whose report ends on a closing line, a new request is Work and not judged again": 30,004.65 ms (30 s deadline).
+- task-size.test.ts "task sizing > thanks or hi after a Thorough report that ends on a closing line is one quick-lane request": 30,020.78 ms (30 s).
+- task-manage.test.ts "isolated task merge and discard > an agent merges and discards only its direct children, after approving the diff": 30,016.24 ms (30 s). SE-4 owns it.
+- Near miss: "task sizing > a run that ends on a question and a courtesy line is not judged until the user answers" passed at 26,968.20 ms, 89.9% of its deadline.
+- Repeats: in CI10's run 41943664010 (shard 9/12, job `126970413963`, 2026-11-05), the prompt test failed at 3,012.75 ms, and the question test and both closing-line tests failed at 30,001.81, 30,000.58 and 30,012.09 ms.
+- Attempt 2, job `127713925306`, same code: 753 pass, 26 skip, 0 fail, in 827.97 s. Its step took 13:48 (04:38:47-04:52:35).
+
+Diagnosis from the logs. Method: each job log was read whole with the read-only GitHub tools (tail_lines above original_length) and saved byte for byte under /tmp/vector-selfev/se3/logs/. One script did all the parsing. Before computing anything, it checked each job against Bun's own summary: pass, skip and fail counts, the test and file totals, and that the per-test sum is below the reported seconds. Every job passed the check.
+- The whole shard was 1.80x slower on attempt 1 (1,488.62 s against 827.97 s). Per test, attempt 1 over attempt 2, both passing and both above 500 ms: n = 367, median 2.00, Q1 1.58, Q3 2.44, min 0.70, max 4.16. A timed-out test's body keeps running after Bun moves on (see "error between tests" below). So the same ratio was computed again leaving out the tests that started inside each timeout's estimated leftover window, estimated as the attempt-2 duration times Q3 minus the deadline. The result was n = 362 with the same quartiles. The capped tests do not drive the numbers.
+- Per file, the summed test time on attempt 1 / attempt 2 / Linux engine 1/4 job `127701423004`:
+  - task-size: 480.82 / 308.70 / 152.48 s, a ratio of 1.56. Over the 47 tests that passed in both and lie outside the leftover windows it is 1.565, and per test the median is 1.60 (Q1 1.53, Q3 1.67, range 1.20-1.99, n = 50).
+  - prompt: 433.93 / 201.55 / 139.95 s. The ratio is 2.15, or 2.150 over 121 clean tests.
+  - task-manage: 117.51 / 58.17 / 37.74 s. The ratio is 2.02, or 2.231 over 48 clean tests.
+- Share of the deadline on the normal runner (attempt 2), and the slowdown that breaks each test:
+
+  | Test | Attempt 2 | Share | Breaks at | Linux 1/4 | Windows / Linux |
+  |---|---|---|---|---|---|
+  | closing line, Work | 20,670.27 ms | 68.9% | 1.45x | 10,019.72 ms | 2.06x |
+  | closing line, quick lane | 20,531.33 ms | 68.4% | 1.46x | 9,731.09 ms | 2.11x |
+  | task-manage merge/discard | 18,946.82 ms | 63.2% | 1.58x | 4,777.99 ms | 3.97x |
+  | prompt cancel (3 s) | 1,568.60 ms | 52.3% | 1.91x | 915.81 ms | 1.71x |
+  | question | 19,592.41 ms | 65.3% | 1.53x | 8,926.77 ms | 2.19x |
+
+  On attempt 2, these four 30 s tests are the only ones in the shard above half of their deadline. The next is "an approval or build it after a Thorough plan from Plan mode ..." at 13,562.29 ms (45.2%). It passed at 1.50x on attempt 1.
+- Verdict: confirmed. "The 30-s tests use 63-69% of their deadline on a normal runner, so any runner about 1.45x slower fails them" holds:
+  - The attempt-1 runner was about 2x slower per test.
+  - Each failed test's normal share was above one over its own file's slowdown. Task-size slowed 1.56-1.60x, which puts the line at about 63-64%; task-manage slowed 2.23x (line about 45%); prompt slowed 2.15-2.35x (line about 43-47%).
+  - The one test above its file's line that survived is the question test. At 65.3% it breaks at 1.53x, and it ran at 1.38x: inside task-size's range, but below its Q1. It survived narrowly, and it timed out in CI10's run.
+  - The failing tests' ratios are lower bounds, because they were cut at their deadline: at least 1.45, 1.46, 1.58 and 1.91. None is above the shard's Q3, so nothing points to a slowdown peculiar to these tests.
+- Prompt: the 3 s limit mostly covered the instance's one-time start, not the test's own work. The CI logs give only whole-test times, so the split was measured on Linux and is carried to Windows as an inference.
+  - Linux, with temporary marks in the test body, in a full run of prompt.test.ts (145 pass, 1 skip). The patch is /tmp/vector-selfev/se3/instrument/cancel-timing.patch, sha256 5fc3fb559ed8193239ab805b4696bfde95381aa940524d75d5c361f688d24fbb. It was removed with `git apply -R`, and the file is back to blob `9b30c6ca`.
+    - The test took 948.5 ms and its body 820.8 ms, so the it.instance setup and teardown around the body took 127.7 ms.
+    - In the body, the first prompt and its `prompt.loop` took 736.9 ms from the session's creation to processor creation. The second round took 69.4 ms from the end of the first cancel, its checks included. Each cancel took 4-5 ms.
+    - One-time cost: 127.7 + (736.9 - 69.4) = 795.2 ms, 83.8% of the test. The test's own two cancel rounds and checks take the other 153 ms.
+  - The it.instance wrapper alone is cheap on Windows too. The file's shortest instance test, "assertNotBusy succeeds when idle", sends no prompt. It took 140.17 ms on attempt 2, 146.29 and 156.86 ms on the SE-1 and SE-2 runs, 142.36 ms on Linux 1/4 and 122.30 ms locally. So most of each instance's one-time cost is its first prompt starting the instance's services. The vectorscope comment's "about 2 s booting each instance" is that whole one-time cost. These logs do not measure it on Windows directly.
+  - If the Linux share holds on Windows, about 1.3 s of the cancel test's 1,568.60 ms on attempt 2 is one-time cost (0.838 x 1,568.60 = 1,314 ms).
+  - The cancel test takes about as long as the file's median test: on attempt 2, 1,568.60 ms against a median of 1,539.3 ms (123 passing tests); on Linux, 915.81 against 917.7 ms.
+  - On attempt 1 the file's median test took 3,613.9 ms (2.35x), and 99 of its 122 passing tests took more than 3 s. The sibling cancel tests, under the 30 s default, took 3,170.25-4,148.99 ms.
+  - Prompt's clean per-test ratio has median 2.27 (Q1 2.01, Q3 2.60, n = 116), against the shard's 2.00 and task-size's 1.60. Boot-heavy short tests slowed more than the long multi-turn ones.
+- Extra samples, from the docs-only pushes:
+  - SE-1's job `128605501418` (run 42439504860, `e0bfa00b`): 753/26/0 in 1,024.32 s (1.24x attempt 2; per-test median 1.27, Q1 1.15, Q3 1.44, n = 370), step 17:05. Work closing 23,313.94 ms (77.7%), quick closing 22,829.58 (76.1%), question 21,096.17 (70.3%), task-manage 18,269.97 (60.9%), prompt cancel 2,109.10 (70.3% of 3 s).
+  - SE-2's job `128617790824` (run 42443602737, `245f730f`): 753/26/0 in 1,040.95 s (1.26x; median 1.29, Q1 1.16, Q3 1.49, n = 371), step 17:21 (2026-11-08 03:54:15-04:11:36). Work 23,874.77 ms (79.6%), quick 22,372.88 (74.6%), question 20,637.04 (68.8%), task-manage 18,446.96 (61.5%), prompt 2,235.94 (74.5%).
+  - Both passed, on runners about 1.25x slower than attempt 2. The closing-line tests used three quarters of their deadline there.
+- Cascade: the test right after each timeout ran at:
+  - prompt: 3.00x and then 2.82x;
+  - task-size: 1.71x and 1.79x, after the quick-lane test, which itself timed out at 1.46x or more;
+  - task-manage: 2.20x.
+  Each is inside its own file's range (prompt's maximum is 3.18, task-size's 1.99), so no slowdown spread beyond the timed-out tests.
+- The error between tests: "# Unhandled error between tests" at 04:32:17.266 (log line 1476), 0.98 s after the task-manage test timed out at 04:32:16.28. The error is TaskManager.Error code "invalid" from "Command failed: git ... rev-parse --git-path index". Its stack runs through `TaskManager.discard` called from task-manage.test.ts:1343, inside the timed-out test, which starts at line 1292.
+  - Hypothesis confirmed: this is that test's leftover body.
+  - test/lib/effect.ts runs each body with `Effect.runPromise` and no abort signal, so a body that Bun timed out keeps running after Bun moves on. Its failure is then reported between tests.
+  - SE-4 finishes it.
+- Cause work on Linux, with temporary test-only instrumentation, never committed: /tmp/vector-selfev/se3/instrument/timing.patch, sha256 9527b9d7bed2796221be16d25d680903e5ba5d8e24d39c5a29a2716f95f34772. It timed each `send` in task-size.test.ts and each fake-server hit in test/lib/llm-server.ts, with GIT_TRACE on. The three original tests ran once with VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER=true, as Windows CI does (9,676.8, 9,007.9 and 8,313.4 ms), and once with the watcher on (9,557.1, 8,709.9 and 8,414.0 ms).
+  - Question test: 16 sends, 360 git processes. The first Thorough send took 1,875 ms, 1,380 ms of it before the first model hit (the instance's cold start). Later Thorough sends took 402-492 ms, and each "no" with its judge took 385-599 ms.
+  - Work closing test: 14 sends, 484 git processes. Thorough sends with a judge took 530-663 ms after the first; plain sends took 360-551 ms.
+  - Quick closing test: 18 sends, 467 git processes. Thorough sends with a judge took 496-626 ms after the first; thanks or hi took 129-180 ms with 9 git processes each.
+  - Each send ran 9-45 git processes (ls-files, diff-files, write-tree, diff). In all, 1,115 git processes ran in 27.0 s of test time, started a median 11.5 ms apart.
+  - The gap before each judge request (n = 24) was 170-317 ms, median 233. It held 6-18 git processes, which started across a median 192 ms. No gap is a fixed 50 ms, 300 ms, 1.5 s or 5 s wait. The judge is a foreground task with no note window, and the file sets QUIET/HOLD to 50/300 ms.
+  - The same kind of send in one instance took 0.21-1.06x as long at the end as at the start. One "hi" went from 143 to 266 ms in the watcher-on run, but that shape's median is 137.5 ms. Nothing grows from run to run.
+  - The instrumentation was removed with `git apply -R`. task-size.test.ts and llm-server.ts were checked against their HEAD blobs (`695e7d48`, `a100a165`), and `git diff --quiet` and `git status --porcelain` were empty before any edit. GIT_TRACE reached git through the environment, so no git helper was edited.
+- Defect decision: none found. There is no hang, no leak and no wait whose length does not depend on work. The cost is the number of full judged Thorough runs per test (8, 6 + 1 and 8 + 1), with about 20-45 git processes per send, which Windows spawns far more slowly (Windows/Linux 2.06-2.19x here, 3.97x for task-manage's isolation; spec 7.1 R9). Fewer git calls per step would be a pure speed-up, so it is a follow-up and not done here. The harness not interrupting a timed-out body is also a follow-up; it is outside these two files.
+
+Repair (test files only; nothing in test.yml and no other deadline):
+- task-size.test.ts: 3 tests become 17 (8 + 3 + 1 + 4 + 1); the file goes from 54 tests to 68.
+  - Each closing list moves out of its test, verbatim, into a named list: `questionClosings`, `workClosings` and `quickClosings`.
+  - `<list>.forEach((closing) => it.instance(...))` registers one test per closing, in place, under the old name plus `: ${JSON.stringify(closing)}`. The old name stays a searchable prefix, and the eighth closing's "\n" stays on one log line. The lists are named so that no statement starts with `[`. `forEach` is used rather than `map` so that no unused array is built. The repo's other generated tests use a top-level `for` over an array literal (test/server/free-model-guest.test.ts:448, test/server/httpapi-workflow.test.ts:349). Here the lists are named because a list is shared by its tests.
+  - The tests are not split per (closing, text) pair, because each it.instance boots an instance.
+  - Each body is the original loop body, verbatim, at the same indentation, after the same `setup({ sizing: { judge: "thorough" } })`. The inner `for (const text of ...)` loops stay inside their test. Every expect keeps its message argument (`closing`, or `${closing} ${text}`).
+  - The question tests have no explicit timeout, as before. The Work and quick-lane splits and both tails keep `{ git: true }`, the "Several fake-server turns, the judge's among them." comment and 30_000.
+- The two question-mark tails are tests of their own. Each keeps its original comment and lines verbatim, with `{ git: true }`, the comment and 30_000.
+- The question test's `expect(judged).toHaveLength(closings.length)` becomes `toHaveLength(1)` in each split.
+- Strengthening, not a loosening. Under the comment "The judge is told what the agent asked and what the user answered.", the original checked the judge's messages once, on `judged[0]`, which was closing 1: `toContain("Should I also remove the old API?")`. Each question split now makes two checks:
+  - For every closing (added after review): the judge's messages contain the closing up to and including its first "?", with the closing as the message argument: `toContain(closing.slice(0, closing.indexOf("?") + 1))`. Every closing in the list has a "?". All 8 pass.
+  - The original old-API check, verbatim, behind `if (closing.includes("Should I also remove the old API?"))`, on originals 1, 5, 6 and 8. All four pass.
+  - On those four, the new check implies the old one. The old one stays, so the original assertion is still there to read in the diff. One review finding asked to keep it; another suggested dropping the condition. Keeping it costs 4 expect() calls.
+- Bun's expect() total goes from 688 to 706 (+18):
+  - question: 18 to 36 (+7 `toHaveLength(1)`, +3 old-API checks, +8 per-closing checks);
+  - Work closing: 34 to 34;
+  - quick closing: 33 to 33.
+  - Before the per-closing check was added, the total was 698 (+10), as predicted then.
+- prompt.test.ts: one hunk, applied byte for byte from `6e2f1d04` on origin/vectorscope, the vectorscope lane's diagnosis of the same limit on engine (windows, shard 3/6). `3_000,` becomes `15_000,` after the two-line comment "A hang still fails fast, but Windows runners spend about 2 s booting each instance here, and the sibling / cancel tests take 3 to 5 s there, so 3 s timed out on a passing run." Nothing else in prompt.test.ts changes.
+
+Old name to new names (describe "task sizing"; each new name is the old name plus ": " and the closing as JSON, except the two tails):
+- "a run that ends on a question and a courtesy line is not judged until the user answers" becomes 8 tests:
+  - `: "Migrated the router. Should I also remove the old API? Let me know!"`
+  - `: "Migrated the router. Want me to proceed with phase 2? 🙂"`
+  - `: "Migrated the router. Shall I continue with the input layer? Just say the word."`
+  - `: "Migrated the router. Should I keep the old API, or remove it? (I'd lean toward removing it.)"`
+  - `: "Migrated the router. Should I also remove the old API? I'll wait for your answer."`
+  - `: "Migrated the router. Should I also remove the old API? Once you confirm, I'll proceed."`
+  - `: "Migrated the router. Which do you prefer for the old API: remove it or keep a shim? I'd go with the shim."`
+  - `: "Should I also remove the old API?\n\n**Summary of changes:**\n- router.ts migrated"`
+- "after a judged Thorough migration whose report ends on a closing line, a new request is Work and not judged again" becomes 3 tests plus a tail:
+  - `: "Migrated the router. Let me know if this works for you."`
+  - `: "Migrated the router. I recommend running the e2e suite before you merge."`
+  - `: "Migrated the router. Let me know if you'd like me to make any other changes."`
+  - Its tail: "an offer with a question mark after a Thorough migration still waits: the answer stays Thorough and is judged".
+- "thanks or hi after a Thorough report that ends on a closing line is one quick-lane request" becomes 4 tests plus a tail:
+  - `: "Migrated the router. Let me know if this works for you."`
+  - `: "Migrated the router. Let me know if you'd like me to make any other changes."`
+  - ``: "Migrated the router. You can confirm by running `bun dev`."``
+  - `: "Migrated the router. Let me know how it goes."`
+  - Its tail: "a thanks to an offer with a question mark after a Thorough report answers it, at the work's size".
+
+Validation (Linux container, 2026-11-08; packages/engine cwd, one file per command through the lock, --timeout 30000, fresh XDG roots under /tmp/vector-selfev, JUnit report for per-test times):
+- Before, at HEAD `245f730f`:
+  - task-size.test.ts: 54 pass, 0 skip, 0 fail, 688 expect() calls, 153.55 s (156.30 s in a first run without the report). The originals took 9,633.0 ms (Work closing), 8,261.5 ms (quick closing) and 8,902.3 ms (question).
+  - prompt.test.ts: 145 pass, 1 skip, 0 fail, 674 expect() calls, 153.23 s. The cancel test took 1,160.6 ms.
+- After:
+  - task-size.test.ts, final file: 68 pass, 0 skip, 0 fail, 706 expect() calls, 152.15 s. Linux runs the 2 posix tests, so there are 0 skips, as before. On Windows CI, expect 66 run and 2 skipped (before: 52 and 2). Shard 1/12 should then report 793 tests across 46 files, with 26 skipped (before: 779 and 26).
+    - Question splits, in list order: 1,811.1, 2,029.7, 1,677.2, 1,850.6, 1,912.8, 1,819.1, 1,818.2 and 1,909.4 ms.
+    - Work splits: 2,929.0, 3,300.4 and 3,142.9 ms; its tail 1,992.6 ms.
+    - Quick-lane splits: 2,453.4, 2,560.9, 2,644.0 and 2,776.1 ms; its tail 1,856.6 ms.
+    - The 17 take 38.48 s against 26.80 s for the 3 originals, +11.7 s for 14 more instance boots and cold first sends. The longest is 11.0% of its deadline.
+    - The first run after the split, before the per-closing check was added: 68 pass, 698 expect() calls, 150.79 s, the 17 in 38.43 s, the longest 11.1% of its deadline.
+  - prompt.test.ts: 145 pass, 1 skip, 0 fail, 674 expect() calls, 156.72 s. The cancel test took 1,125.4 ms.
+- Mutations: one file per run with a `-t` filter. The mutated file's sha256 is recorded, and each file was put back with `git apply -R` and checked against its HEAD blob. Each first failing expect is the one Bun reported, at 1.4-3.2 s per test; none failed by reaching a deadline. M1 to M3b were run again on the final test file, with the same mutated sha256 and the same pass and fail counts. The line numbers below are from that run: the per-closing check moved every line after 1471 down by one.
+  - M1, "a statement-only block asks": packages/core/src/task-size.ts:273 becomes `... endsWith("?")) || sentences(block).length > 1`. Mutated sha256 810d6c1c404a9b35c3c58082448af01323a912cdb7589e234f739d3ab4045fe8. With the filter on the closing-line splits, 7 of 7 fail, 0 pass.
+    - The Work splits fail first at :1681 `toEqual(expect.arrayContaining(WORK))`, message "<closing> fix the typo in README".
+    - The quick-lane splits fail first at :1744 `toHaveLength(1)`, message "<closing> thanks" (received 2).
+  - M2, "work that asks is judged at once": packages/engine/src/session/prompt.ts:1055 is deleted. Mutated sha256 f50207ba13f7d4df6c2e44a9ad18b844107a43140b7ec885087427c714ef2144. With the filter on the question splits and the Work tail, 9 of 9 fail.
+    - The 8 question splits fail at :1464 `children(...).length, closing).toBe(0)`, received 1, each with its closing as the message.
+    - The Work tail fails at :1704 `toBe(0)`.
+  - M3, "a question does not keep the work open": packages/engine/src/session/task-size.ts:328 is deleted. Mutated sha256 3282547e49b23d09295761a2bb39e6758562c48bcad29d0e1dc5aede52399de3. With the filter on the tails: 1 fails and 1 passes.
+    - The quick-lane tail fails at :1771, where the tools were `["escalate"]`.
+    - The Work tail passes. Temporary logging (removed, file back to blob `62176bff`) showed why: under M3 the answer "yes, also update the docs" is classified Standard ("work", not open), but `settled()` (task-size.ts:534) reads `TaskSize.asks` itself and still brings the run to the judge at the work's size.
+  - M3b, the sharper mutation of the same rule: line 328 deleted, and the asks term removed from line 534. Mutated sha256 b0db0060fbfa14ad13274422f0407db994a9ea1b8c45d6555eddaf4c3a75e267. Both tails fail:
+    - the Work tail at :1712 `size).toBe("thorough")`, received "standard";
+    - the quick-lane tail at :1771.
+    - With M2 failing it too, every one of the 17 split tests fails under at least one mutation of the rule it checks.
+  - M4 and M4b test the per-closing check, with the filter on the question splits. The judge's brief (prompt.ts `judgeBrief`) sends the agent's text twice: in the block "Where the agent stopped to ask or offer something, and the user's answer", and as "The agent's closing report". In this test both hold the closing.
+    - M4: prompt.ts:4720 `exchange.asked,` is deleted. Mutated sha256 5483677ec0f60c3922456287dd5dc255e1468243340251324847e04e84477532. All 8 still pass, because the closing still reaches the judge as the report. The original old-API check passes under M4 too, so it never pinned the exchange block either.
+    - M4b: line 4720 deleted, and line 4736's `work.report.slice(-4000) || "(no report)",` becomes `"(no report)",`. Mutated sha256 8a664453041c0edc37df2441719f2fa10495d670493db47068549070ef0f1c21. All 8 fail at :1472, the per-closing check, each with its closing as the message.
+    - So the check proves that the judge is shown what the agent asked. It does not prove which block shows it.
+  - The patches are in /tmp/vector-selfev/se3/mutations/ (m1 4b5982f0..., m2 011b9924..., m3 c87fcf39..., m3b 4c465374..., m4 0d51f053..., m4b bfd00356...).
+- prompt.test.ts byte for byte:
+  - The sha256 of the changed lines in `git diff -U0` equals that of `git show 6e2f1d04 -U0` (3e7e59ae1daf1204bbbf3d270a563d06b2210bf39495cc8967d0a3c55503ffc9).
+  - The diff stat is +3/-1. The patch saved from vectorscope has sha256 78770816cd0275557d85fb6127101e8821bce015b88b5c612fadd1aa4be51e08. The file's blob is now `9b30c6ca`.
+- prettier:
+  - prompt.test.ts passes `--check`.
+  - task-size.test.ts is not prettier-clean at HEAD. Its 8 pre-existing hunks, at HEAD lines 502-1195, are the same in number and content after the edit, and none falls in the edited ranges. Checked again on the final file.
+  - Lint: oxlint (the repo's .oxlintrc.json, type-aware) gives task-size.test.ts 17 warnings and prompt.test.ts 24 warnings, before and after, with the same rules. The final task-size.test.ts gives the same 17.
+  - `git diff --check` is clean.
+- Typecheck, on the final files: `bun typecheck` in packages/engine passes. `bun turbo typecheck --concurrency=1` from the worktree root: 23 of 23 tasks successful (22 from the cache). Both passed before the per-closing check as well.
+- Name scan: `bun test --timeout 30000 test/compliance/upstream-free.test.ts` after this entry was written, and again after the review fixes, with the same results.
+  - 11 pass. The "tracked paths and binary contents keep the upstream holder only in license notices" case, which reads this file, is among them.
+  - The 1 failure is the container-only "a GitHub token does not take the default model from an OpenAI key", as in SE-2.
+  - With a clean environment (`env -i` with HOME, PATH and the XDG roots): 12 pass.
+- Merge-tree, in memory (`git merge-tree --write-tree --name-only --no-messages`), against the same fetched tips for before and after. Tips: main `4299d743`, self-evolving `245f730f`, vectorscope `26d3e756`, codium `3082bb2c`, vector-at-mention `d5444dc4`, hands `ad4e8be5`.
+  - vector-at-mention moved from `85f22a2c` during the check (2 and 2 there too), so every count was taken again against `d5444dc4`.
+  - "After" merges a temporary commit object of this working tree on `245f730f`. It was taken again after the review fixes (`f039786c`, then `4acee422` after the last edit but this one), against the same tips, with the same counts and file lists. It is attached to no branch, and no branch or index moved.
+  - Against self-evolving, before and after: vectorscope 11 and 11, codium 7 and 7, vector-at-mention 2 and 2, hands 68 and 68. The file lists are identical. Against main the counts are 0, 16, 0 and 25.
+  - Vectorscope's rise from 10 to 11 since the measured facts comes from its own `26d3e756` (task.test.ts), not from SE-3. No branch touches task-size.test.ts. Hands' prompt.test.ts hunks end before line ~1920, and vectorscope's hunk in that file is this one.
+- SE-2's PR checks on `245f730f` were judged before this entry was written (2026-11-08, about 04:28), all green on attempt 1:
+  - test 42443602737: 21 jobs success and 3 manual jobs skipped;
+  - Verify 42443602747, with the packet capture `128617790794`;
+  - typecheck 42443602724, free models 42443602725 and public sharing 42443602770;
+  - 37 check runs, 31 success and 6 skipped (the same six names as before), plus the Vercel status (success, deployment `5FnrzNVN9PEFZVZrj6MDFBSygMqw`, 03:40 UTC).
+  - Its unit (windows) `128617790604` and engine (windows, shard 12/12) `128617790875` passed, and are samples for CI13 and CI14.
+
+Remaining (left to CI and to later packages):
+- Push through the hook, then judge the new head's test, Verify, typecheck, free models and public sharing runs without re-running. The commit is this entry's own.
+- SE-4 records the push's engine (windows, shard 1/12) result in this entry as a dated update, whether or not the run has finished when SE-4 starts: the 17 split tests' durations, the prompt cancel test, the shard total and the step time.
+  - Prediction: each split uses at most about a quarter of its deadline on a normal Windows runner. Each split's Linux time, multiplied by its parent test's Windows/Linux ratio, gives at most about 6.9 s for a Work split, 6.1 s for a quick-lane split and 4.4 s for a question split (from the first run after the split; the final run gives 6.8, 5.9 and 4.4 s). A runner would then have to be about 4x slower than attempt 2 to time one out; attempt 1 was 2.00x per test. The extra boots add about 25 s to the shard.
+- SE-4: the task-manage timeout and the error between tests (CI12 is extended by SE-4).
+- Follow-ups, not done: fewer git processes per step on Windows (about 20-45 per send here; the R9 family; isolation git-call reductions are deferred), and a harness that interrupts a body Bun has timed out.
+- No macOS runner. Spec 7.2 item 1's "Windows 6" stays CI10's to correct.
