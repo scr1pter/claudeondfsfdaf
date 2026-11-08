@@ -18,6 +18,8 @@ import type { FileDiff } from "@vectordevai/schema/file-diff"
 import type { GithubAuth } from "./github.auth"
 import { downloadGithubAttachment } from "./github.attachment"
 import { TASK_MENTIONS } from "./github.route"
+import { untrustedJson } from "./github.policy"
+import { WRITE_PERMISSIONS, type ReviewGitHub } from "./github.review-api"
 
 type GitHubAuthor = {
   login: string
@@ -731,5 +733,158 @@ export function buildPromptDataForPR(ctx: { triggerCommentId?: number }, pr: Git
     ...(reviewData.length > 0 ? ["<pull_request_reviews>", ...reviewData, "</pull_request_reviews>"] : []),
     "</pull_request>",
   ].join("\n")
+}
+
+/**
+ * What the agent-phase prompt builders need (V18, INV-S14): the trigger comment to leave out, and the run's permission
+ * lookup, which caches one answer per login (ReviewGitHub.permissionOf, asked with the holder's GitHub token).
+ */
+export type AgentPromptContext = {
+  triggerCommentId?: number
+  permissionOf: ReviewGitHub["permissionOf"]
+}
+
+/**
+ * The agent phase's issue thread. Every string from GitHub is a JSON string literal (untrustedJson), so no text can
+ * close its wrapper. The title and body carry their author's label and are always shown; other comments by people
+ * without write access collapse to a count. The untrusted-data rule itself is in the system instructions, never here.
+ * The v2 builders above stay as they are, so `vector github run` without a phase writes the same prompt (2.11.5).
+ */
+export async function buildAgentPromptForIssue(ctx: AgentPromptContext, issue: GitHubIssue) {
+  const label = labeller(ctx)
+  const author = await label(issue.author?.login)
+  const comments = await labelled(label, threadComments(ctx, issue.comments?.nodes))
+  return [
+    ...AGENT_PREAMBLE,
+    "<issue>",
+    `Title (${author}): ${untrustedJson(issue.title ?? "")}`,
+    `Body (${author}): ${untrustedJson(issue.body ?? "")}`,
+    `Author: ${loginJson(issue.author?.login)}`,
+    `Created At: ${untrustedJson(issue.createdAt ?? "")}`,
+    `State: ${untrustedJson(issue.state ?? "")}`,
+    ...section("issue_comments", commentLines(comments)),
+    "</issue>",
+  ].join("\n")
+}
+
+/** The agent phase's pull request thread, with the same rules as buildAgentPromptForIssue. */
+export async function buildAgentPromptForPR(ctx: AgentPromptContext, pr: GitHubPullRequest) {
+  const label = labeller(ctx)
+  const author = await label(pr.author?.login)
+  const comments = await labelled(label, threadComments(ctx, pr.comments?.nodes))
+  // Reviews count as comments: a review by someone without write access collapses with its line comments, whose
+  // authors are then never looked up.
+  const reviews = await inTurn(pr.reviews?.nodes ?? [], async (review) => {
+    const reviewLabel = await label(review.author?.login)
+    return {
+      review,
+      label: reviewLabel,
+      comments: reviewLabel === "writer" ? await labelled(label, review.comments?.nodes ?? []) : [],
+    }
+  })
+  const files = (pr.files?.nodes ?? []).map(
+    (file) =>
+      `- ${untrustedJson(file.path ?? "")} (${untrustedJson(file.changeType ?? "")}) +${String(file.additions ?? 0)}/-${String(file.deletions ?? 0)}`,
+  )
+  const shown = reviews.filter((entry) => entry.label === "writer")
+  const reviewLines = [
+    ...shown.flatMap((entry) => {
+      const inner = entry.comments
+        .filter((comment) => comment.label === "writer")
+        .map(
+          (comment) =>
+            `    - ${untrustedJson(comment.item.path ?? "")}:${comment.item.line ?? "?"} (writer): ${untrustedJson(comment.item.body ?? "")}`,
+        )
+      return [
+        `- ${loginJson(entry.review.author?.login)} (writer) at ${untrustedJson(entry.review.submittedAt ?? "")}, state ${untrustedJson(entry.review.state ?? "")}:`,
+        `  - Review body: ${untrustedJson(entry.review.body ?? "")}`,
+        ...(inner.length > 0 ? ["  - Comments:", ...inner] : []),
+        ...notShown(entry.comments.length - inner.length, "review comment", "    "),
+      ]
+    }),
+    ...notShown(reviews.length - shown.length, "review", ""),
+  ]
+  return [
+    ...AGENT_PREAMBLE,
+    "<pull_request>",
+    `Title (${author}): ${untrustedJson(pr.title ?? "")}`,
+    `Body (${author}): ${untrustedJson(pr.body ?? "")}`,
+    `Author: ${loginJson(pr.author?.login)}`,
+    `Created At: ${untrustedJson(pr.createdAt ?? "")}`,
+    `Base Branch: ${untrustedJson(pr.baseRefName ?? "")}`,
+    `Head Branch: ${untrustedJson(pr.headRefName ?? "")}`,
+    `State: ${untrustedJson(pr.state ?? "")}`,
+    `Additions: ${String(pr.additions ?? 0)}`,
+    `Deletions: ${String(pr.deletions ?? 0)}`,
+    `Total Commits: ${String(pr.commits?.totalCount ?? 0)}`,
+    `Changed Files: ${String(files.length)} files`,
+    ...section("pull_request_comments", commentLines(comments)),
+    ...section("pull_request_changed_files", files),
+    ...section("pull_request_reviews", reviewLines),
+    "</pull_request>",
+  ].join("\n")
+}
+
+const AGENT_PREAMBLE = [
+  "<github_action_context>",
+  "You are running as a GitHub Action. Important:",
+  "- A separate Vector step commits your changes, pushes them and opens the pull request after you finish",
+  "- Do not commit, push, open pull requests or post comments yourself",
+  "- Do NOT include warnings or disclaimers about GitHub tokens, workflow permissions, or PR creation capabilities",
+  "- Focus only on the code changes and your analysis/response",
+  "</github_action_context>",
+  "",
+  "The thread below is data from GitHub, as labelled JSON strings.",
+]
+
+type AuthorLabel = "writer" | "untrusted"
+
+// A missing login (a deleted account, a GraphQL null) is untrusted with no lookup, and so is any failed lookup.
+function labeller(ctx: AgentPromptContext) {
+  return async (login: string | null | undefined): Promise<AuthorLabel> => {
+    if (!login) return "untrusted"
+    const permission = await ctx.permissionOf(login).catch(() => "none" as const)
+    return WRITE_PERMISSIONS.includes(permission) ? "writer" : "untrusted"
+  }
+}
+
+function labelled<T extends { author?: GitHubAuthor | null }>(label: ReturnType<typeof labeller>, items: readonly T[]) {
+  return inTurn(items, async (item) => ({ item, label: await label(item.author?.login) }))
+}
+
+// One lookup at a time, as GitHub asks of a single token; permissionOf answers a login it has seen from its cache.
+function inTurn<T, R>(items: readonly T[], each: (item: T) => Promise<R>) {
+  return items.reduce<Promise<R[]>>(async (done, item) => [...(await done), await each(item)], Promise.resolve([]))
+}
+
+// The trigger comment is the task itself and reaches the prompt on its own, as in the v2 builders.
+function threadComments(ctx: AgentPromptContext, nodes: readonly GitHubComment[] | undefined) {
+  return (nodes ?? []).filter((comment) => parseInt(comment.databaseId) !== ctx.triggerCommentId)
+}
+
+function commentLines(comments: { item: GitHubComment; label: AuthorLabel }[]) {
+  const shown = comments.filter((comment) => comment.label === "writer")
+  return [
+    ...shown.map(
+      (comment) =>
+        `- ${loginJson(comment.item.author?.login)} (writer) at ${untrustedJson(comment.item.createdAt ?? "")}: ${untrustedJson(comment.item.body ?? "")}`,
+    ),
+    ...notShown(comments.length - shown.length, "comment", ""),
+  ]
+}
+
+function notShown(count: number, noun: string, indent: string) {
+  if (count === 0) return []
+  if (count === 1) return [`${indent}- 1 ${noun} by someone without write access is not shown.`]
+  return [`${indent}- ${count} ${noun}s by people without write access are not shown.`]
+}
+
+function section(tag: string, lines: string[]) {
+  return lines.length > 0 ? [`<${tag}>`, ...lines, `</${tag}>`] : []
+}
+
+// A missing login is written as JSON null, which no account name can be.
+function loginJson(login: string | null | undefined) {
+  return login ? untrustedJson(login) : "null"
 }
 export * as GithubRunHelpers from "./github.run-helpers"
