@@ -137,6 +137,11 @@ jobs:
         run: |
           bun install --frozen-lockfile --ignore-scripts
           if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Test the Windows packaged Main pin reader
+        timeout-minutes: 2
+        run: |
+          bun --no-env-file test --timeout 30000 --only-failures ./scripts/verify-computer-helper-windows.test.ts
+          if ($LASTEXITCODE -ne 0) { throw "Windows packaged Main pin reader tests failed." }
       - name: Build only the x64 native diagnostic artifacts
         timeout-minutes: 15
         run: |
@@ -523,6 +528,7 @@ jobs:
       # store mocks survive mock.restore(); desktop main's src/main/computer-*.test.ts files join by their name.
       # The two native workflow-contract tests also run here on both systems, so a workflow edit that breaks them fails
       # ordinary CI instead of first failing the release workflow's Linux Test (desktop).
+      # The Windows final-location verifier also runs here, including its real ASAR reader separator regression.
       # Bun's node:http never reports a client that leaves, so the bridge is also bundled and checked under Node.
       - name: Run desktop computer-use tests
         if: ${{ !cancelled() }}
@@ -530,7 +536,7 @@ jobs:
         working-directory: packages/desktop
         run: |
           status=0
-          for file in ./scripts/computer-helper-identity.test.ts ./scripts/computer-overlay-workflow.test.ts ./scripts/computer-workflow.test.ts ./test/computer/*.test.ts ./src/main/computer-*.test.ts ./src/main/config-skew.test.ts ./src/main/ipc-security.test.ts ./src/main/keep-awake.test.ts; do
+          for file in ./scripts/computer-helper-identity.test.ts ./scripts/computer-overlay-workflow.test.ts ./scripts/computer-workflow.test.ts ./scripts/verify-computer-helper-windows.test.ts ./test/computer/*.test.ts ./src/main/computer-*.test.ts ./src/main/config-skew.test.ts ./src/main/ipc-security.test.ts ./src/main/keep-awake.test.ts; do
             echo "Desktop computer-use test: $file"
             GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --only-failures "$file" || status=1
           done

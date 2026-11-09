@@ -732,6 +732,37 @@ test("x64 unit diagnostics require explicit native dispatch and keep independent
   expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
 })
 
+test("Windows unit and diagnostic lanes exercise the packed Main pin reader before native builds", () => {
+  const all = record(main.document.jobs)
+  const unit = record(all.unit)
+  expect(record(record(unit.strategy).matrix).settings).toContainEqual({ name: "windows", host: "windows-latest" })
+  const desktop = steps(unit).find((step) => step.name === "Run desktop computer-use tests")!
+  expect(desktop["working-directory"]).toBe("packages/desktop")
+  expect(desktop.if).toBe("${{ !cancelled() }}")
+  expect(String(desktop.run)).toMatch(/for file in [^\n]*\.\/scripts\/verify-computer-helper-windows\.test\.ts(?: |;)/)
+
+  const diagnostic = record(all["computer-helper-windows-units"])
+  expect(diagnostic["runs-on"]).toBe("windows-2025")
+  expect(record(record(diagnostic.defaults).run)["working-directory"]).toBe("packages/desktop")
+  const current = steps(diagnostic)
+  const reader = current.find((step) => step.name === "Test the Windows packaged Main pin reader")!
+  expect(reader.if).toBeUndefined()
+  expect(reader["continue-on-error"]).toBeUndefined()
+  expect(reader["timeout-minutes"]).toBe(2)
+  expect(String(reader.run)).toContain(
+    "bun --no-env-file test --timeout 30000 --only-failures ./scripts/verify-computer-helper-windows.test.ts",
+  )
+  expect(String(reader.run)).toContain(
+    'if ($LASTEXITCODE -ne 0) { throw "Windows packaged Main pin reader tests failed." }',
+  )
+  expect(current.indexOf(reader)).toBeGreaterThan(
+    current.findIndex((step) => step.name === "Install frozen dependencies without lifecycle scripts"),
+  )
+  expect(current.indexOf(reader)).toBeLessThan(
+    current.findIndex((step) => step.name === "Build only the x64 native diagnostic artifacts"),
+  )
+})
+
 test("x64 diagnostics reuse bounded native checks and isolated scenarios without release evidence", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
   expect(diagnostic["runs-on"]).toBe("windows-2025")

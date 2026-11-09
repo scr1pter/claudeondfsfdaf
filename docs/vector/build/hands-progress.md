@@ -1378,3 +1378,11 @@ For H5: the fix itself; finding the call inside a coarse stage (for example guar
 lane-status.json is outside the worktree and owned by the orchestrator; H4 left it unchanged, and its hands entry still describes the staged Stop as an unlocated native_failure. The checkpoint paragraph is unchanged because the summary status has not changed.
 
 Not proven: the C++ compile and native unit cases (CI only), the named stage and cause, the fix (H5), which call inside a stage threw, the ARM64 compile of this code, isolated capture and ARM64 isolated scenarios. No release credit.
+
+## H3b continuation: Windows packaged-pin regression on Windows lanes
+
+Continuation resumed on 9 November 2026 from `4aede6ac67ac43b1ab2502103e150e24caf26447`. All 73 source checkpoints remain implemented; this entry closes a validation-wiring gap, not another source package. The existing `verify-computer-helper-windows.test.ts` now runs in the ordinary desktop computer-use test loop on both Linux and Windows. The focused Windows x64 diagnostic also runs it before native compilation, with a two-minute limit and an explicit failure on a nonzero test exit. A workflow contract verifies both paths and the step order. The measured macOS helper inputs and lock are unchanged.
+
+Local checks ran serially from `packages/desktop`, with Bun 1.3.14: `computer-workflow.test.ts` passed 29 tests / 1,874 assertions; `computer-overlay-workflow.test.ts` passed 6 / 104; `verify-computer-helper-windows.test.ts` passed 17 / 81. Desktop `bun typecheck` and `git diff --check` passed. Actual Windows execution of the new test wiring remains pending CI at the pushed source.
+
+The preceding full run `42466499054` at `4aede6ac` did not reach staged Windows Stop: its pinned Electron download failed. It also contains ordinary-regression and optional-native failures, so it is not a successful release validation. Focused x64 diagnostic `42723937386` and pre-integration production benchmark `42724172551` were dispatched at that exact source; their results are not claimed here while they are running. This continuation will reconcile the Hands branch with current main while retaining both computer-use privacy boundaries and the newer multi-agent/accounting behavior. No release, deployment, signing credential or OS permission was changed.
