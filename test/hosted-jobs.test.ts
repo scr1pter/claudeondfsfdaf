@@ -1064,7 +1064,7 @@ describe.skipIf(!valkeyURL)("the jobs' scripts on Valkey", () => {
     (await client!.send(String(command[0]), command.slice(1).map(String))) ?? null
   // Bun's client speaks RESP3, where ZSCORE answers a double; the store's REST API answers the score as a string.
   const zscore = async (args: (string | number)[]) => {
-    const score = await zscore([...args])
+    const score = await send(["ZSCORE", ...args])
     return score === null ? null : String(score)
   }
   const { ENQUEUE, REFUND, SLOT, RECUR, MODELS } = HOSTED_JOB_SCRIPTS

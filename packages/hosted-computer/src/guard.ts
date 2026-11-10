@@ -132,6 +132,10 @@ export class BrowserGuard {
           const tree = await this.pipe.send<{ frameTree?: { frame?: { id?: string } } }>("Page.getFrameTree", {}, sessionId)
           const session = this.sessions.get(sessionId)
           if (session && tree.frameTree?.frame?.id) session.mainFrame = tree.frameTree.frame.id
+        } catch {
+          // The target went away while it was being set up ("Session with given id not found"): there is nothing left
+          // to guard, and an event handler that threw would take hostd down with an unhandled rejection.
+          this.sessions.delete(sessionId)
         } finally {
           await this.pipe.send("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {})
         }

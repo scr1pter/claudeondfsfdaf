@@ -58,8 +58,11 @@ load_firewall() {
   nft -c -f "$ruleset" || { rm -f "$ruleset"; return 1; }
   nft -f "$ruleset" || { rm -f "$ruleset"; return 1; }
   rm -f "$ruleset"
-  nft list chain inet vector output | grep -q 'policy drop' || return 1
-  nft list chain inet vector output | grep -q 'tcp dport 443 accept' || return 1
+  # Read back whole, not piped into `grep -q`: under boot.sh's pipefail, grep leaving at its first match can kill nft
+  # with SIGPIPE mid-listing and fail a firewall that loaded.
+  local listed
+  listed=$(nft list chain inet vector output) || return 1
+  [[ $listed == *'policy drop'* && $listed == *'tcp dport 443 accept'* ]] || return 1
 }
 
 # mount_scratch: memory disks for scratch space, hostd's sockets and state, the browser and the recorder. The agent can
@@ -89,7 +92,9 @@ mount_data() {
   [[ $(stat -c %s "$image") -eq $DATA_BYTES ]] || return 1
   chmod 0600 "$image"
   mountpoint -q "$target" || mount -o loop,nosuid,nodev,discard "$image" "$target" || return 1
-  findmnt -no OPTIONS "$target" | grep -q nosuid || return 1
+  local options
+  options=$(findmnt -no OPTIONS "$target") || return 1
+  [[ ,$options, == *,nosuid,* ]] || return 1
 }
 
 # prepare_folders: the agent's work and home, the browser's folders, hostd's and the viewer's state, the X cookie.
