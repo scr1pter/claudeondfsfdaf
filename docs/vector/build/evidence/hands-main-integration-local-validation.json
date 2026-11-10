@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "hands-main-integration-local-validation",
-  "recordedAt": "2026-11-10T01:14:02.304932+00:00",
+  "recordedAt": "2026-11-10T01:41:26.891929+00:00",
   "source": {
     "repository": "scr1pter/claudeondfsfdaf",
     "worktree": "/workspace/vector-hands-finish",
@@ -24,11 +24,11 @@
     ]
   },
   "summary": {
-    "suites": 48,
-    "pass": 1095,
+    "suites": 51,
+    "pass": 1120,
     "skip": 4,
     "fail": 1,
-    "assertions": 10055,
+    "assertions": 10157,
     "outcome": "one-local-failure-remains; not an all-green validation"
   },
   "tests": {
@@ -301,6 +301,27 @@
           "fail": 0,
           "assertions": 235,
           "log": "merge-terminal-spawn-final.log"
+        },
+        "test/config/subagent-config.test.ts": {
+          "pass": 16,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 53,
+          "log": "subagent-config-final.log"
+        },
+        "test/server/session-stop.test.ts": {
+          "pass": 4,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 20,
+          "log": "server-session-stop-final.log"
+        },
+        "test/server/task-batch-promotion.test.ts": {
+          "pass": 5,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 29,
+          "log": "server-task-batch-promotion-final.log"
         }
       }
     },
