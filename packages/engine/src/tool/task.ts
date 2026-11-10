@@ -115,7 +115,7 @@ function workflowDisplay(workflow: SubagentRecord["workflow"]) {
   return { ...workflow, progress }
 }
 function busyNote(active: number, limit: number) {
-  return `${active} subagents are running or waiting in this conversation (it runs at most ${limit} at once). Each one spends on the user's provider keys, so tell the user how many are working.`
+  return `${active} subagents are running or waiting in this conversation (it runs at most ${limit} at once). Each one spends on the user's provider keys or Vector Codium plan, so tell the user how many are working.`
 }
 
 function queuedNote(running: number) {

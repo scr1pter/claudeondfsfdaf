@@ -1443,6 +1443,8 @@ export interface Interface {
     query: string[],
   ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderV2.ID, primaryID?: ModelV2.ID) => Effect.Effect<Model | undefined>
+  /** The actual qualified Codium floor for an explicitly permitted Brain helper; never a fallback. */
+  readonly getBrainModel: () => Effect.Effect<Model | undefined>
   /**
    * The Vector Codium model Codium Auto runs one user message on, from the message's size and the context it adds to
    * (CodiumAuto.resolve). Fails like getModel when Codium cannot run, and with a Codium notice when the account's plan
@@ -2878,6 +2880,13 @@ const layer = Layer.effect(
       return chosen ? listed?.models[chosen.id] : undefined
     })
 
+    const getBrainModel = Effect.fn("Provider.getBrainModel")(function* () {
+      if (Config.local().enabled) return undefined
+      const listed = (yield* refreshCodium({ wait: true }))[planID]
+      const chosen = CodiumAuto.brain(yield* modelPlans.catalog(yield* freeCredentials.get("vector")))
+      return chosen ? listed?.models[chosen.id] : undefined
+    })
+
     const getSmallModel = Effect.fn("Provider.getSmallModel")(function* (
       providerID: ProviderV2.ID,
       primaryID?: ModelV2.ID,
@@ -3090,6 +3099,7 @@ const layer = Layer.effect(
       preconnect,
       closest,
       getSmallModel,
+      getBrainModel,
       codiumAuto,
       defaultModel,
       savedModel,

@@ -19,6 +19,7 @@ import { BACKUP_TAB } from "./memory-backup-model"
 import { SettingsMemorySearchModel } from "./memory-search-model"
 import { SettingsMemorySkills } from "./memory-skills"
 import { SettingsMemoryWorkflow } from "./memory-workflow"
+import { SettingsMemoryBrain } from "./memory-brain"
 import { downloadResearch, type ReportFormat } from "@/features/research/report-download"
 import {
   ABOUT,
@@ -165,7 +166,8 @@ export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirect
           <h2 class="settings-v2-page-title">What Vector remembers</h2>
           <p class="settings-v2-page-subtitle">
             The rules you and your team wrote, what you told Vector about yourself, what it learned while working, and
-            the documents you gave it. All of it stays on this computer. A request carries your rules and only the
+            the documents you gave it. It is stored locally by default. Features you choose can send selected context
+            to your model, an owner-started GitHub run, or an encrypted backup when those features are available. A request carries your rules and only the
             memory that bears on it, so memory saves tokens instead of adding them, and a greeting carries none.
           </p>
         </div>
@@ -234,6 +236,8 @@ export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirect
       </Show>
 
       <Show when={tab() === "memory"}>
+        <SettingsMemoryBrain client={client} directory={directory()} settings={settings.latest}
+          onSettings={(next) => setSettings(next)} onReview={() => setTab("documents")} />
         <div class="settings-v2-card settings-v2-card--wide">
           <div class="settings-v2-card-head">
             <div class="settings-v2-card-copy">

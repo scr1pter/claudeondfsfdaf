@@ -9876,6 +9876,12 @@
                   "skillDrafter": {
                     "$ref": "#/components/schemas/MemorySkillDrafter"
                   },
+                  "codiumHelpers": {
+                    "$ref": "#/components/schemas/MemoryCodiumHelpers"
+                  },
+                  "distillation": {
+                    "type": "boolean"
+                  },
                   "workflow": {
                     "$ref": "#/components/schemas/MemoryWorkflowLearning"
                   },
@@ -11634,6 +11640,92 @@
         ]
       }
     },
+    "/memory/bootstrap": {
+      "post": {
+        "tags": ["memory"],
+        "operationId": "memory.bootstrap.prepare",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A local scan and bounded document suggestions preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryBootstrap"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.",
+        "summary": "Prepare a repository Brain bootstrap",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.bootstrap.prepare({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/memory/documents/{documentID}/distill": {
       "get": {
         "tags": ["memory"],
@@ -11798,7 +11890,7 @@
             }
           }
         },
-        "description": "Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.",
+        "description": "Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.",
         "summary": "Find more with a model",
         "requestBody": {
           "content": {
@@ -39722,6 +39814,10 @@
         "type": "string",
         "enum": ["off", "local-only", "always"]
       },
+      "MemoryCodiumHelpers": {
+        "type": "string",
+        "enum": ["ask", "on", "off"]
+      },
       "MemoryWorkflowLearning": {
         "type": "string",
         "enum": ["apply", "observe", "off"]
@@ -39749,6 +39845,12 @@
           },
           "skillDrafter": {
             "$ref": "#/components/schemas/MemorySkillDrafter"
+          },
+          "codiumHelpers": {
+            "$ref": "#/components/schemas/MemoryCodiumHelpers"
+          },
+          "distillation": {
+            "type": "boolean"
           },
           "workflow": {
             "$ref": "#/components/schemas/MemoryWorkflowLearning"
@@ -39986,6 +40088,14 @@
           },
           "pricedWeight": {
             "type": "number"
+          },
+          "codium": {
+            "type": "string",
+            "enum": ["only", "mixed"]
+          },
+          "ownUnpriced": {
+            "type": "boolean",
+            "enum": [true]
           },
           "tokens": {
             "type": "number"
@@ -40957,6 +41067,45 @@
           }
         },
         "required": ["enabled", "sections"],
+        "additionalProperties": false
+      },
+      "MemoryBootstrap": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["ready"]
+          },
+          "queued": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "maxTokens": {
+            "type": "number"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "estimate": {
+                  "$ref": "#/components/schemas/MemoryDistillEstimate"
+                }
+              },
+              "required": ["id", "title", "estimate"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["type", "queued", "pending", "maxTokens", "documents"],
         "additionalProperties": false
       },
       "MemoryDistillResult": {

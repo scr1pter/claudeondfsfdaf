@@ -46,6 +46,12 @@ export function helper(catalog: ModelPlans.Catalog) {
   return usable(catalog, auto.floor) ?? usable(catalog, auto.default)
 }
 
+/** A Brain helper requires a real qualified floor, never Auto's substituted default or an arbitrary paid model. */
+export function brain(catalog: ModelPlans.Catalog) {
+  if (!catalog.enabled || !catalog.plan) return undefined
+  return catalog.models.find((model) => model.role === "floor" && usable(catalog, model.id) === model)
+}
+
 function usable(catalog: ModelPlans.Catalog, id: string) {
   return catalog.models.find(
     (model) => model.id === id && model.id !== ModelPlanStatus.AUTO_ID && !model.locked && !model.manualOnly,

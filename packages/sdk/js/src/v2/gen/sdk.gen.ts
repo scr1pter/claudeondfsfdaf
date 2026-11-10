@@ -225,6 +225,9 @@ import type {
   McpStatusResponses,
   MemoryBackupErrors,
   MemoryBackupResponses,
+  MemoryBootstrapPrepareErrors,
+  MemoryBootstrapPrepareResponses,
+  MemoryCodiumHelpers,
   MemoryCreateErrors,
   MemoryCreateResponses,
   MemoryDistillEstimateErrors,
@@ -4887,6 +4890,8 @@ export class Settings extends HeyApiClient {
       modelLearner?: MemoryModelLearner
       skills?: MemorySkillLearning
       skillDrafter?: MemorySkillDrafter
+      codiumHelpers?: MemoryCodiumHelpers
+      distillation?: boolean
       workflow?: MemoryWorkflowLearning
       workflowExplore?: boolean
     },
@@ -4906,6 +4911,8 @@ export class Settings extends HeyApiClient {
             { in: "body", key: "modelLearner" },
             { in: "body", key: "skills" },
             { in: "body", key: "skillDrafter" },
+            { in: "body", key: "codiumHelpers" },
+            { in: "body", key: "distillation" },
             { in: "body", key: "workflow" },
             { in: "body", key: "workflowExplore" },
           ],
@@ -5686,6 +5693,49 @@ export class Documents extends HeyApiClient {
   }
 }
 
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Prepare a repository Brain bootstrap
+   *
+   * Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.
+   */
+  public prepare<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      model?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "model" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      MemoryBootstrapPrepareResponses,
+      MemoryBootstrapPrepareErrors,
+      ThrowOnError
+    >({
+      url: "/memory/bootstrap",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Distill extends HeyApiClient {
   /**
    * Estimate finding more with a model
@@ -5730,7 +5780,7 @@ export class Distill extends HeyApiClient {
   /**
    * Find more with a model
    *
-   * Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
+   * Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
    */
   public run<ThrowOnError extends boolean = false>(
     parameters: {
@@ -6836,6 +6886,11 @@ export class Memory extends HeyApiClient {
   private _documents?: Documents
   get documents(): Documents {
     return (this._documents ??= new Documents({ client: this.client }))
+  }
+
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
   }
 
   private _distill?: Distill

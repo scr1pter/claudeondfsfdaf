@@ -160,6 +160,8 @@ export const BrainStateTable = sqliteTable("brain_state", {
   // defaults apply, and exploration is off.
   skill_learning: text().$type<BrainSchema.SkillLearning>(),
   skill_drafter: text().$type<BrainSchema.SkillDrafter>(),
+  codium_helpers: text().$type<BrainSchema.CodiumHelpers>(),
+  knowledge_distill: integer({ mode: "boolean" }),
   workflow_learning: text().$type<BrainSchema.WorkflowLearning>(),
   workflow_explore: integer({ mode: "boolean" }),
 })
