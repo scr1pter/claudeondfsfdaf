@@ -120,6 +120,29 @@ size_t run_capture_tests() {
     ++groups;
   };
   test([] {
+    struct Case { int64_t setup, rpc; CaptureReadPhase expected; };
+    constexpr std::array cases{
+      Case{0, 0, CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_lt25},
+      Case{24, 24, CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_lt25},
+      Case{24, 25, CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_from25to49},
+      Case{24, 49, CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_from25to49},
+      Case{24, 50, CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_ge50},
+      Case{24, 51, CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_ge50},
+      Case{25, 24, CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_lt25},
+      Case{26, 24, CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_lt25},
+      Case{25, 25, CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_from25to49},
+      Case{25, 49, CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_from25to49},
+      Case{25, 50, CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_ge50},
+      Case{25, 51, CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_ge50},
+      Case{51, 25, CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_from25to49}};
+    for (const auto& value : cases)
+      check(capture_item_ticket_expiry(value.setup, value.rpc) == value.expected, "capture.ticket-expiry-timing-boundaries");
+    const auto original = CaptureReadPhase::window_item_full_ticket_expired;
+    check(capture_item_ticket_expiry({}, {}) == original && capture_item_ticket_expiry({}, 25) == original &&
+      capture_item_ticket_expiry(25, {}) == original && capture_item_ticket_expiry(-1, 25) == original &&
+      capture_item_ticket_expiry(25, -1) == original, "capture.ticket-expiry-unknown-observations-stay-original");
+  });
+  test([] {
     Fixture fixture; auto helper = ordinary_window().owner.process.token;
     fixture.availability = WindowsAvailabilityObservation{helper, {true, false, true}, false};
     const auto result = fixture.take(fixture.args());

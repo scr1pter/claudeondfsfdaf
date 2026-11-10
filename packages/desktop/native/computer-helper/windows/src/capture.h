@@ -49,12 +49,19 @@ enum class CaptureReadPhase {
   window_factory_context, window_factory_retired, window_item_ticket, window_item_create, window_item_expired_cancelled, window_item_expired_denied,
   window_item_expired_other, window_item_current_cancelled, window_item_current_denied,
   window_item_current_other, window_item_current, window_item_acquisition_expired,
-  window_item_full_ticket_expired, window_item_truncated_ticket_expired, window_item_context, window_item_retired,
+  window_item_full_ticket_expired,
+  window_item_full_expired_setup_lt25_rpc_lt25, window_item_full_expired_setup_lt25_rpc_from25to49,
+  window_item_full_expired_setup_lt25_rpc_ge50, window_item_full_expired_setup_ge25_rpc_lt25,
+  window_item_full_expired_setup_ge25_rpc_from25to49, window_item_full_expired_setup_ge25_rpc_ge50,
+  window_item_truncated_ticket_expired, window_item_context, window_item_retired,
   window_item_size, window_pool, window_session, window_start_ticket, window_start,
   window_start_current, window_first_frame, window_content_size, window_texture,
   window_description, window_staging, window_copy, window_map, window_crop,
   window_current, surface_after, context_after, count
 };
+// RPC span includes the unchanged immediate pre/post checks; no claim of pure OS execution time.
+// Unknown or invalid observations preserve the original full-ticket-expired diagnostic.
+CaptureReadPhase capture_item_ticket_expiry(std::optional<int64_t> setup_ms, std::optional<int64_t> rpc_span_ms) noexcept;
 using CaptureReadObserver = void (*)(CaptureReadPhase);
 struct CaptureBackend {
   std::function<std::vector<CaptureDisplay>()> displays;

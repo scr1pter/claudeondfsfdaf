@@ -140,6 +140,16 @@ std::optional<std::pair<size_t, size_t>> receipt_cost(const CaptureReceipt& rece
 }
 }
 
+CaptureReadPhase capture_item_ticket_expiry(std::optional<int64_t> setup_ms, std::optional<int64_t> rpc_span_ms) noexcept {
+  if (!setup_ms || !rpc_span_ms || *setup_ms < 0 || *rpc_span_ms < 0) return CaptureReadPhase::window_item_full_ticket_expired;
+  if (*setup_ms < 25) {
+    if (*rpc_span_ms < 25) return CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_lt25;
+    return *rpc_span_ms < 50 ? CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_from25to49 : CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_ge50;
+  }
+  if (*rpc_span_ms < 25) return CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_lt25;
+  return *rpc_span_ms < 50 ? CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_from25to49 : CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_ge50;
+}
+
 bool capture_surface_geometry(const CaptureSurface& surface) noexcept {
   if (surface.bounds.valid()) return true;
   const auto canonical = [](const WindowsRect& value) {
