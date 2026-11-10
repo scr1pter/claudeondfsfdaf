@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { runInNewContext } from "node:vm"
@@ -946,6 +946,54 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
   for (const value of Object.values(release))
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
+})
+
+test("the x64 diagnostic logs its closed failed and skipped report rows even after an optional failure", () => {
+  const current = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
+  const isolated = current.findIndex((step) => step.name === "Run explicitly isolated Windows scenarios")
+  const summary = current.find((step) => step.name === "Summarize x64 native diagnostic rows")!
+  expect(current.indexOf(summary)).toBeGreaterThan(isolated)
+  expect(summary.if).toBe("${{ always() }}")
+  expect(summary["timeout-minutes"]).toBe(2)
+  expect(summary["continue-on-error"]).toBeUndefined()
+  expect(summary.shell).toBe("bash")
+  const source = /^node --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+  expect(source).toBeString()
+  const temporary = mkdtempSync(path.join(tmpdir(), "vector-native-diagnostic-summary-"))
+  const output = path.join(temporary, "summary.md")
+  try {
+    const files = ["computer-win32-core.json", "computer-win32-direct-node.json", "computer-win32-privileged.json"]
+    for (const file of files)
+      writeFileSync(
+        path.join(temporary, file),
+        JSON.stringify({
+          checks: [
+            { name: "unit", status: "passed", stdout: "PRIVATE UNIT OUTPUT" },
+            { name: "privileged.capture-color-patch", status: "failed", reason: "native_operation_failed" },
+            { name: "privileged.secure-field-refusal", status: "skipped", reason: "noninteractive_desktop" },
+          ],
+          image: "PRIVATE SCREENSHOT",
+          stderr: "PRIVATE NATIVE ERROR",
+        }),
+      )
+    writeFileSync(path.join(temporary, "unrelated.json"), JSON.stringify({ text: "PRIVATE UNRELATED FILE" }))
+    const result = spawnSync("node", ["--input-type=module", "-e", source!], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, RUNNER_TEMP: temporary, GITHUB_STEP_SUMMARY: output },
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toBe(readFileSync(output, "utf8"))
+    for (const file of files)
+      expect(result.stdout).toContain(
+        `\n${file}: passed=1, failed=1, skipped=1\n- FAILED privileged.capture-color-patch: native_operation_failed\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`,
+      )
+    expect(result.stdout).not.toMatch(/PRIVATE|image|stderr|unit:|\"checks\"/)
+  } finally {
+    rmSync(temporary, { recursive: true, force: true })
+  }
 })
 
 test("successful direct Windows checks forward only deduplicated fixed Caller context receipts", () => {

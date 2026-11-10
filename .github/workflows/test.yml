@@ -217,6 +217,26 @@ jobs:
         run: |
           node ./native/build/selftest-direct-node/run.mjs --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-direct-node.json"
           if ($LASTEXITCODE -ne 0) { throw "The separate direct Node diagnostic failed." }
+      - name: Summarize x64 native diagnostic rows
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          for (const name of ["computer-win32-core.json", "computer-win32-direct-node.json", "computer-win32-privileged.json"]) {
+            const file = path.join(process.env.RUNNER_TEMP, name)
+            if (!existsSync(file)) continue
+            const report = JSON.parse(readFileSync(file, "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
+          }
+          NODE
       - name: Preserve the bounded x64 diagnostic report
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
