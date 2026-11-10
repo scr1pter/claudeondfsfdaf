@@ -98,6 +98,21 @@ size_t run_uia_input_tests() {
     provider.close(); require(fixture.closed == 1, "uia-input.owns-observer-cleanup");
   });
   test([] {
+    Fixture fixture; const auto menus = fixture.backend.menu_shortcuts;
+    fixture.backend.menu_shortcuts = [&fixture, menus](const auto& root) {
+      auto result = menus(root); fixture.state.keyboard_focusable = false; return result;
+    };
+    auto provider = fixture.provider(); const auto before = provider.focused(fixture.window, fixture.session);
+    require(provider.menus(before, fixture.session).has_value(), "uia-input.focusability-race-reads-real-provider-menus");
+    const auto after = provider.focused(fixture.window, fixture.session);
+    require(before.keyboard_focusable && !after.keyboard_focusable && before.focused && after.focused &&
+        provider.fresh(before, 50) && provider.fresh(after, 50), "uia-input.focusability-race-has-two-coherent-focused-observations");
+    require(provider.same(before, before) && provider.same(after, after), "uia-input.focusability-race-preserves-identical-observations");
+    require(!provider.same(before, after) && !provider.same(after, before), "uia-input.focusability-cannot-change-during-menu-read");
+    auto upgraded = after; upgraded.keyboard_focusable = true;
+    require(!provider.fresh(upgraded, 50), "uia-input.negative-focusability-witness-cannot-be-upgraded");
+  });
+  test([] {
     const auto actual = parse_uia_menu_shortcuts({UiaMenuShortcut{{L"Debug", L"Start"}, L"F5", L""}, UiaMenuShortcut{{L"View"}, L"", L"Alt+V"}, UiaMenuShortcut{{L"Zoom"}, L"Ctrl++", L""}});
     require(actual && actual->size() == 3 && (*actual)[0].combo == std::vector<std::wstring>{L"f5"} && (*actual)[2].combo == std::vector<std::wstring>{L"Control", L"+"}, "uia-input-observed-semantic-menu-keys");
     require(!parse_uia_menu_shortcuts({UiaMenuShortcut{{L"Unsafe"}, L"Ctrl+KeyS", L""}}) && !parse_uia_menu_shortcuts({UiaMenuShortcut{{L"Unsafe"}, L"", L"Alt, F"}}), "uia-input-no-physical-or-sequential-menu-guess");
