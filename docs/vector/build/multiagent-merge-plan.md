@@ -1,20 +1,21 @@
-# Merging self-evolving into main: the plan
+# Self-evolving integration: current state and historical merge plan
 
-Updated 8 November 2026. First written on 5 November 2026 for your approval. Nothing has been merged into main and nothing has been pushed to main.
+Updated 9 November 2026 (Pacific). First written on 5 November 2026 for your approval. Pull request [#20](https://github.com/scr1pter/claudeondfsfdaf/pull/20) has merged into main. This document retains its earlier integration decisions and evidence; the dated historical sections are not instructions to merge that pull request again.
 
-- `f062bcce` ("fix(merge): CI after main merge") is the last code commit on `self-evolving`, and every check ran on it. When this plan was updated, the commits after it changed only documents.
-- `main` is at `4299d743` ("docs(validation): record complete main-branch consolidation").
-- `f062bcce` is 159 commits ahead of main and 0 behind. Main's newer work is already merged into it (next section).
-- When this plan was first written, `self-evolving` was at `98c6423a` and main at `1d853606`. Where a section describes that time, it says so.
+- Verified main: `0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c`, "Merge pull request #20 from scr1pter/self-evolving". It includes `self-evolving` at `a68c0488191d42d26324dcac50ce94dfbfc44fba`, including the later Windows test splits and lock-contention diagnostics.
+- Main's full test [run 42515544563](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42515544563), on that exact main revision, failed engine Linux shard 1/4 ([job 128837628648](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42515544563/job/128837628648)) and engine Windows shard 1/12 ([job 128837628888](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42515544563/job/128837628888)). The inspected latest named checks were 27 successful, 4 skipped and 2 failed. Main is not a green release candidate on this evidence.
+- Follow-up [PR #23](https://github.com/scr1pter/claudeondfsfdaf/pull/23), from `finish-checks`, is a draft based on main `0dcbb8e2`. The inspected head was `00b50f72b90ed1885b50098ed2e9eaf0cbeedf5a`. At 02:14 UTC on 10 November (9 November Pacific), its [checks](https://github.com/scr1pter/claudeondfsfdaf/pull/23/checks) reported 23 passed, 6 pending and 0 failed. That is an in-progress snapshot, not a completed green gate or merge approval.
+- Desktop 1.99.113 remains a release draft. A source merge, website deployment and desktop/CLI publication are separate events; the owner and release gates below remain applicable.
+- Historical starting points: main `4299d743` contained the tokenomics/research consolidation, and `f062bcce` was the last code revision used by the original pre-merge recommendation. The old 159-ahead/0-behind count and its CI results apply to that earlier pair, not to current main.
 
-## Main moved on 5 November 2026
+## Historical integration: main moved on 5 November 2026
 
 After this plan was first written, main took 243 more commits (`4299d743`):
 
 - the tokenomics agent's consolidation: spend accounting, run budgets, guard spend, prompt cache boundaries, usage uncertainty, title limits, task-wait cancellation, stats and benchmark evidence;
 - research pull request #16: local OCR, scoped claims, document exports, and the combined research and revocation migrations.
 
-Merging main into `self-evolving` then had 33 conflicting files. Main was merged into `self-evolving` in the commit "Merge main into self-evolving", and every conflict was resolved. Main's tokenomics and research code is kept as main has it, and the multi-agent and Codium behaviour is added around it. Where this plan says the merge is clean or has no conflicts, it describes main before 5 November. Pull request #20 was opened on 6 November at 01:42 UTC. The merge (`b7ba4fa9`), its review fix (`c879dffd`) and a CI fix (`f062bcce`) were then added to it. Main is still not changed.
+Merging main into `self-evolving` then had 33 conflicting files. Main was merged into `self-evolving` in the commit "Merge main into self-evolving", and every conflict was resolved. Main's tokenomics and research code is kept as main has it, and the multi-agent and Codium behaviour is added around it. Where this plan says the merge was clean or had no conflicts, it describes main before 5 November. Pull request #20 was opened on 6 November at 01:42 UTC. The merge (`b7ba4fa9`), its review fix (`c879dffd`) and a CI fix (`f062bcce`) were then added to it. Main had not changed at that historical checkpoint; PR #20 has since merged as recorded above.
 
 The brain migrations run in date order: facets, revocation (main), learned skills and workflow (`self-evolving`), research claims (main). None was renumbered, and none had shipped in a release, so every existing brain.db upgrades.
 
@@ -30,19 +31,25 @@ Judgement calls, in plain words:
 - **Stopped launch notes.** Main's rule is unchanged: a note from a stopped launch does not restart work. It now sits in the one place `self-evolving` delivers helper notes from (TaskNotify), because the code main changed no longer exists in the task tool.
 - **Context display.** The sidebar keeps "N% of context used", the Codium wording. Main's test now checks that text. The app's ledger shows main's "cumulative chat usage" note when the engine has recorded this chat's own totals. Otherwise it says the bar is the latest turn's mix. Main's app test now gives its sample session the "own totals recorded" flags that the merged engine sets. It checks the same numbers.
 - **Helper forks.** A step's forks now settle inside main's cancel-proof step recording, so a cancel cannot settle them as aborted.
-- **Tests adjusted to the other side's rules, none weakened.** Main's brain migration test also expects the research claims migration, which main's own CI misses today (run 42130320793). A Codium compaction test now counts the earlier no-usage turn as one unpriced step, under main's rule that missing usage is not zero. Main's nested-activity CLI test shortens the helper note window to fit its 1-second idle limit. That test still fails without main's fix.
+- **Tests adjusted to the other side's rules, none weakened.** Main's brain migration test also expects the research claims migration, which main's own CI missed on `4299d743` (run 42130320793). A Codium compaction test now counts the earlier no-usage turn as one unpriced step, under main's rule that missing usage is not zero. Main's nested-activity CLI test shortens the helper note window to fit its 1-second idle limit. That test still fails without main's fix.
 
-## Recommendation
+## Current recommendation
 
-Merge `self-evolving` into main now, through pull request #20, and leave Codium's pages as they are. The pull request is open and mergeable, with main `4299d743` as its base. Main is already part of `self-evolving`, so the merge adds no change of its own: the merged files are exactly the branch tip's. On `f062bcce` that is 1,071 changed files, with 217,518 lines added and 15,209 removed. The pull request page also counts the later edits to this plan, so its count of lines added differs a little. The result is `self-evolving` with main's tokenomics, research and restored model catalog inside it. Nothing goes on sale: Stripe is not connected, Codium sales are off, and no model route has been accepted, so every plan button on the pricing page says "Coming soon". The website still changes the moment main moves. It gets a new four-plan pricing page, a new account card, new docs pages marked "Coming in desktop 1.99.113", and new sign-in checks that today's desktop and CLI use. Desktop and CLI users get nothing new until you publish 1.99.113.
+Keep PR #20's completed merge and main's tokenomics/research behavior as the integration baseline. First finish the CI follow-up on its own reviewed head: PR #23 is still a draft and its inspected checks are pending. A green result on an earlier head or a different merge base does not clear it. Record the final head, base, required checks and skipped checks before deciding whether it is ready for review or merge; after any approved integration, check the resulting main revision as well.
 
-Every check has now run on `f062bcce`. Four jobs failed on the first attempt and passed when re-run unchanged: a Windows unit job, two Windows engine shards and the 30-minute packet capture. Their causes are being found (see "CI evidence"). Until then, a later run can fail the same way.
+Keep feature implementation with its existing owners. The dependency order from the earlier plan remains useful: the runtime foundation is now on main; VectorScope can integrate against it; Codium still needs its track-A and owner gates; @vector owns its remaining build and the VS-05 dependency; Hands owns its main integration and remaining computer-use work. Recompute conflicts from the exact heads proposed for each merge. The historical counts below are not present-day merge predictions.
 
-What is left for you before you press merge: check that the newest run of the pull request's checks is green (every later push re-runs them), look at the preview, decide whether to allow the timeline benchmark, which has never run, and check Vercel's cron limit and `CRON_SECRET` (Owner checks 1–4). The pull request's checklist also lists the two owner questions. Both keep the safe default until you answer. Then merge with "Create a merge commit".
+Do not treat this coordination update as a desktop release, a Codium launch, a completed performance benchmark or approval of unfinished feature PRs. The release candidate still needs its source-bound CI, generated-contract checks, platform checks and the owner decisions in the release draft. The deployment inventory below describes what the integration was expected to change; verify the deployed revision before claiming those production checks passed.
 
-After this merge, merge VectorScope, then Codium once track A finishes, then @vector and Hands. Each of those branches then fixes some conflicts on its own side: VectorScope 10 files, Codium 7, @vector 2, and Hands the most, about 68.
+## Ongoing-agent boundaries and coordination
 
-## Conflicts
+- Existing Hands, @vector, Codium and multi-agent agents retain ownership of their feature implementation, fixes and branch reviews. The release coordinator (the root agent in this task) owns the release tracker, evidence reconciliation and approval readiness, and does not start a competing implementation in those lanes.
+- Draft PRs remain unfinished work. This coordination task does not merge them, publish a release, enable sales or model routes, or replace a lane's review with a tracker status.
+- Every gate names its source head and base, its run or artifact, and its result. Distinguish implemented, locally checked, CI checked, merged, deployed and published. A pending or skipped check is not passed; a green old head is not evidence for a new one.
+- Refresh branch and PR snapshots when their owners push. If scope or a shared interface changes, return the integration question to the affected lane owners before claiming readiness. Preserve the tokenomics/research accounting, migrations and generated-contract obligations when joining the work.
+- Keep the historical records below for their original revisions. Use current Git/PR evidence and the release tracker for the next action; branch count alone does not establish how many agents are running.
+
+## Historical conflict projections (8 November 2026)
 
 ### This merge
 
@@ -56,22 +63,24 @@ At that time, main and `self-evolving` both changed 37 of the same files. Here i
 
 On `f062bcce`, the pull request changes 1,071 files in main: 217,518 lines added and 15,209 removed. Main is already part of `self-evolving`, so the merged result is the branch tip's files. Apart from documents changed since, such as this plan, they are exactly `f062bcce`'s, the commit every check ran on.
 
-### The other branches, after this merge lands
+### Other branches, projected before PR #20 merged
 
-These are the files each branch would have to fix when it later merges main. I worked them out on 8 November with in-memory merges and changed no branch. Main is already part of `self-evolving`, so "after self-evolving lands" means merging with `self-evolving` as it is today.
+These were the files each branch was projected to fix when it later merged main. They were worked out on 8 November with in-memory merges and changed no branch. In that snapshot, main was `4299d743` and was already part of `self-evolving`, so "after self-evolving lands" meant merging with that day's `self-evolving` tip. PR #20 is now merged and the other branches may have advanced; refresh these projections before an integration decision.
 
-| Branch | Conflicts with main today | Conflicts after self-evolving lands | Files after self-evolving lands |
-| --- | --- | --- | --- |
-| `codium` (track A, built to A50; A51 onward not started) | 16 | 7 | `settings-v2/general.tsx`, `settings-v2/memory-model.ts`, `settings-v2/settings-memory.css`, `settings-v2/settings-registry.ts`, `context/settings.tsx`, the engine's memory handler `httpapi/handlers/memory.ts`, `engine/src/tool/task.ts` |
-| `vectorscope` (Phases 0–1, and the first window of its upgrade, VS-21a to VS-49a) | 0 | 10 | `pull-requests/ai-review.ts` and its test, `core/src/review/types.ts`, `core/test/brain/migration-knowledge.test.ts`, `cli/cmd/review.render.ts`, `engine/src/review/run.ts`, the CLI help snapshot, `egress-inventory.test.ts`, `upstream-free.test.ts`, `local-run.test.ts` |
-| `vector-at-mention` (@vector; built to V17, last code commit 1 November, progress notes 8 November) | 0 | 2 | `engine/src/index.ts`, `engine/src/cli/vector-account.ts` |
-| `hands` (Codex; last commit 6 November) | 25 | 68 | Mostly the engine's session, prompt, permission and shell code and its server handlers, the app's composer, prompt input and background tasks pane, `bun.lock`, the generated SDK and `openapi.json`, `test.yml`, `local-run.test.ts` and the release copy |
+| Branch at the historical snapshot                                                                   | Conflicts with main `4299d743` | Projected conflicts after the runtime merge | Projected files at that snapshot                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `codium` (track A, built to A50; A51 onward not started)                                            | 16                             | 7                                           | `settings-v2/general.tsx`, `settings-v2/memory-model.ts`, `settings-v2/settings-memory.css`, `settings-v2/settings-registry.ts`, `context/settings.tsx`, the engine's memory handler `httpapi/handlers/memory.ts`, `engine/src/tool/task.ts`                                  |
+| `vectorscope` (Phases 0–1, and the first window of its upgrade, VS-21a to VS-49a)                   | 0                              | 10                                          | `pull-requests/ai-review.ts` and its test, `core/src/review/types.ts`, `core/test/brain/migration-knowledge.test.ts`, `cli/cmd/review.render.ts`, `engine/src/review/run.ts`, the CLI help snapshot, `egress-inventory.test.ts`, `upstream-free.test.ts`, `local-run.test.ts` |
+| `vector-at-mention` (@vector; built to V17, last code commit 1 November, progress notes 8 November) | 0                              | 2                                           | `engine/src/index.ts`, `engine/src/cli/vector-account.ts`                                                                                                                                                                                                                     |
+| `hands` (Codex; last commit 6 November)                                                             | 25                             | 68                                          | Mostly the engine's session, prompt, permission and shell code and its server handlers, the app's composer, prompt input and background tasks pane, `bun.lock`, the generated SDK and `openapi.json`, `test.yml`, `local-run.test.ts` and the release copy                    |
 
-Codium's 16 conflicts with main today are `test.yml` and 15 files that main changed after `1d853606`: compaction, spend, stats, memory and title code with three of their tests, and the context, prompt and helper displays in the app and the terminal.
+Codium's 16 conflicts with main at that snapshot were `test.yml` and 15 files that main changed after `1d853606`: compaction, spend, stats, memory and title code with three of their tests, and the context, prompt and helper displays in the app and the terminal.
 
-Codium's 7 conflicts and VectorScope's 10 exist no matter which branch goes first. Someone has to join those files once.
+In that historical projection, Codium's 7 conflicts and VectorScope's 10 existed whichever branch went first. Those shared files needed joining once; current heads need a fresh calculation.
 
-## What goes live the moment main moves
+## Deployment behavior and historical pre-merge inventory
+
+This section retains the inventory used to review PR #20 before it merged. Its "today" and "new" comparisons refer to that pre-merge snapshot. They do not certify the current production deployment, current branch progress or current owner configuration.
 
 A push to main deploys the website and the API to vectordev.ai through Vercel. Vercel has already built a preview of `f062bcce`, the last code commit, without errors (deployment `27EEvRhGjE5DktpQJXa6J2TKTk6m`, ready on 6 November at 03:58 UTC). The link is on the pull request's Vercel status. Vercel builds a new preview for each later commit.
 
@@ -138,11 +147,13 @@ Merging does not ship the desktop or the CLI. A desktop release starts only from
 
 It is missing. `packages/app/AGENTS.md` asks for a production benchmark before and after any change to session or timeline code. This build changed 17 such files, adding about 1,070 lines: the session page, the composer and its docks, and the timeline's message and workflow parts. The build contract left the run to you, "only when he allows it". No run of the manual "production app benchmark" job exists for `self-evolving`; every CI run skipped it. The `vector-title-2026-10` benchmark belongs to main's early-title fix, not to this build. The savings from cache sharing in forks were shown only against a fake provider. The release notes also say the footprint numbers in `docs/benchmarks` are out of date.
 
-## Order with the other builds
+## Historical order with the other builds (8 November 2026)
 
-**Recommended: merge `self-evolving` first, with Codium's public pages left as they are.**
+This was the recommended order before PR #20 merged. Step 1 is complete. The recorded work-package counts and conflict counts below belong to that snapshot; current owners and the release tracker determine the remaining actions.
 
-1. **`self-evolving` now**, through pull request #20, once the checks on its newest commit pass and you approve.
+**The original recommendation was to merge `self-evolving` first, with Codium's public pages left as they were.**
+
+1. **`self-evolving` first**, through pull request #20 after its checks and approval. This integration is now complete.
 2. **`vectorscope` next.** Phases 0 and 1 are done, apart from VS-05, which waits for @vector. Since 6 November it has also built the first window of its upgrade: 26 slices from VS-21a to VS-49a. They are mostly new modules and eval tools. The review runner gains only hooks that stay off unless an eval sets them. VS-08 to VS-12, and wiring the upgrade into real reviews, wait for this merge. It has 10 conflicts to fix on its own branch. It also carries the `bun.lock` desktop version fix.
 3. **`codium` when track A finishes.** A00–A50 are built; A51 onward has not started. It brings the legal drafts, founding members, roadmap vote, Remote, Vault and Playbooks, and each of those needs your own go-ahead. It also brings the Ops tools (A46–A50: On Call, Release Guard and Ship Desk). Codium's own plan lists them on the site only once the GitHub App is registered and the ops Worker is deployed. It has 7 conflicts after this merge, against 16 with main today. It deserves its own merge plan.
 4. **`vector-at-mention` (@vector)** when its build finishes. V16 and V17 are done; V18 onward has not started. It has 2 conflicts after this merge (none with main today), and VectorScope's VS-05 waits for it.
@@ -158,9 +169,9 @@ Why this order:
 
 If you don't want the new pricing page live yet, there is another way. Keep main's current `/codium` page in a small commit on `self-evolving` before merging. That needs one more review and CI run, and the current page also sells nothing.
 
-## CI evidence for `f062bcce`, the last code commit
+## Historical CI evidence for `f062bcce`
 
-These are the pull request's runs for `f062bcce`. GitHub runs them on the pull request merged with main, which has the same files as `f062bcce`.
+These are the pull request's runs for the earlier `f062bcce` revision. GitHub ran them on the pull request merged with its then-main base, which had the same files as `f062bcce`. Later commits and main's current CI are separate evidence; the opening snapshot records the current failures and pending follow-up.
 
 - **test, [run 42159471110](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110).** The first attempt failed 3 of the 21 jobs that ran (3 more are manual jobs and were skipped):
   - unit (windows), [job 127701423000](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110/job/127701423000): one test, "util.effect-flock > enforces mutual exclusion under process contention". It failed after 14,085 ms; its own limit is 60 seconds.
@@ -168,6 +179,7 @@ These are the pull request's runs for `f062bcce`. GitHub runs them on the pull r
   - engine (windows, shard 1/12), [job 127701423223](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110/job/127701423223): four tests ran out of time. They are two task-sizing tests, "isolated task merge and discard > an agent merges and discards only its direct children, after approving the diff", and the session prompt test "finalizes assistant when cancelled before processor creation completes". Bun also reported one error between tests, from a git command that failed; its cause is part of the diagnosis.
 
   The second attempt re-ran those 3 jobs unchanged, and all passed: [127713924142](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110/job/127713924142), [127713925314](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110/job/127713925314) and [127713925306](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110/job/127713925306). The other 18 jobs passed on the first attempt: the desktop engine bundle under Node, unit tests on Linux, end-to-end tests on Linux and Windows, engine Linux shards 1–4 and engine Windows shards 2–11.
+
 - **Verify, [run 42159471068](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471068).** The first attempt's 30-minute packet capture, [job 127701422434](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471068/job/127701422434), failed. It found 4 DNS packets (UDP port 53) to the capture's own sink resolver, `198.18.0.53`. The packets were sent in the capture's first seconds (03:57:52 and 03:57:53 UTC). In the job's log, the line "sudo: unable to resolve host" and the failure report right after it are both at 04:28 UTC, 30 minutes after the packets. The second attempt's capture, [job 127713927586](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471068/job/127713927586), passed. The website build and the air gap check passed on the first attempt.
 - **Each of these four first-attempt failures is being diagnosed.** This plan will say what caused each one once that is known.
 - **typecheck, [run 42159471067](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471067).** All 4 jobs passed (app, cloud, desktop, engine).
@@ -176,18 +188,20 @@ These are the pull request's runs for `f062bcce`. GitHub runs them on the pull r
 - **The production app benchmark has never run.** It was skipped here too ([job 127713925663](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42159471110/job/127713925663)).
 - **No macOS runner.** CI has no macOS runner at all. On a Mac, the multi-agent build has been checked only by running single test files on the Mac the build was made on.
 - **The previous head, `c879dffd`, was red.** Its test [run 42154724940](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42154724940) failed 6 of the 21 jobs that ran: engine Linux shards 1/4 and 2/4, and engine Windows shards 2/12, 3/12, 5/12 and 9/12. The failing tests were the egress inventory, the tool-parameter and CLI help snapshots, a workflow-learn spend test and three source-independence tests. `f062bcce` fixed each of them.
-- **Main itself is red today.** Main's test [run 42130320793](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793) on `4299d743` failed 8 of its 17 jobs, in 7 distinct tests. Two of the 17 are manual jobs, which were skipped. Each line names the commit on `self-evolving` that changes the test:
+- **Historical main failure.** Main's test [run 42130320793](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793) on `4299d743` failed 8 of its 17 jobs, in 7 distinct tests. Two of the 17 are manual jobs, which were skipped. Each line names the commit on `self-evolving` that changes the test:
   - "Brain knowledge migration > a brain from the first migration upgrades in place and keeps what it held": unit Linux ([job 127604984888](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604984888)) and unit Windows ([job 127604984522](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604984522)). Changed in the merge, `b7ba4fa9`.
   - "tool parameters > JSON Schema (wire shape) > terminal": engine Linux 1/4 ([job 127604985254](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604985254)) and Windows 5/6 ([job 127604985083](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604985083)). Changed in `f062bcce`.
   - "Vector Local's connection inventory > every file that writes an address is a call site in the source registry or says why it needs none": engine Linux 3/4 ([job 127604984932](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604984932)) and Windows 3/6 ([job 127604985008](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604985008)). Changed in `f062bcce`.
   - "vector CLI help-text snapshots > every documented command emits stable help text": engine Linux 2/4 ([job 127604984923](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604984923)) and Windows 4/6 ([job 127604985158](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604985158)). Changed in `f062bcce`.
   - three "Vector's own git and the V2 runner under Vector Local" tests in `local-run.test.ts`: engine Linux 2/4 only ([job 127604984923](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42130320793/job/127604984923)). Changed in `c95a27a7`, which is not on main.
 
-  Main has 6 Windows engine shards; `self-evolving` has 12. Main's typecheck and Verify are green on `4299d743`, and the production checks passed after its deployment on 5 November.
+  At that checkpoint main had 6 Windows engine shards and `self-evolving` had 12. Main's typecheck and Verify were green on `4299d743`, and the production checks passed after its deployment on 5 November. These results do not replace the checks on `0dcbb8e2` or the later follow-up.
 
 ## Owner checks
 
-### Before merging
+### Historical PR #20 pre-merge checklist
+
+The checklist below is retained from the pre-merge plan. PR #20 is merged; unchecked owner and operational items are not marked complete merely because the merge happened.
 
 The pull request's own checklist reads:
 
@@ -201,12 +215,12 @@ The pull request's own checklist reads:
 
 In more detail:
 
-1. **Done.** Pull request #20 is open from `self-evolving` into main, and every check has run on `f062bcce`: test, typecheck, Verify, and the free models and sharing checks. Four jobs passed only on their second attempt (see "CI evidence"). Each later push re-runs them; merge only when the newest run is green. Don't merge it yet.
+1. **Integration done; historical checks retained.** Pull request #20 has merged from `self-evolving` into main. The earlier `f062bcce` results record test, typecheck, Verify, and the free models and sharing checks; four jobs passed only on their second attempt (see "Historical CI evidence"). Use the opening snapshot and current source-bound checks for the remaining follow-up, not another merge of PR #20.
 2. Open the pull request's Vercel preview. Look at `/codium`, at `/account` (signed in), and at the docs pages `/docs/subagents`, `/docs/workflows`, `/docs/permissions` and `/docs/brain`. Decide whether you are happy for the four-plan page with "Coming soon" buttons to go public now.
 3. Decide on the timeline benchmark. If you allow it, run test.yml's "production app benchmark (manual)" job on main (before) and on `self-evolving` (after), then compare. It runs on GitHub, not on your Mac.
 4. In Vercel, check two things. First, that your plan allows a job that runs every minute; main already has one that runs every 10 minutes. Second, that `CRON_SECRET` is set.
 
-### Right after merging
+### Post-merge operational checks (completion still needs evidence)
 
 5. Watch the production deployment, and check that the "Vector production checks" run goes green.
 6. On vectordev.ai, check four things. `/codium` loads and its buttons say "Coming soon". You can sign in on `/account`. `/models` still serves the restored catalog. `/docs/workflows` exists.
@@ -228,10 +242,10 @@ In more detail:
 - **The site changes at once for everyone.** That means new pricing and account pages, new docs, and changed sign-in checks for 1.99.111 and 1.99.112 users. Old clients are covered by tests only. Check 7 covers them for real.
 - **The scheduled jobs start immediately.** They do nothing while Stripe has no key. If a Stripe key is ever added before you are ready, they start acting on Stripe data.
 - **Four checks failed once on `f062bcce`.** A Windows unit job, two Windows engine shards and the packet capture each failed on the first attempt and passed when re-run unchanged. Their causes are being found. Passing on a re-run does not show the cause, so a later run can fail the same way.
-- **Main is red today.** Its own test run on `4299d743` fails 7 tests in 8 of its 17 jobs. `self-evolving` changes each of those tests (see "CI evidence").
+- **Current main is not green.** The inspected test run on `0dcbb8e2` failed two engine shards. The draft PR #23 follow-up is pending on the head named above. The older `4299d743` failures remain in "Historical CI evidence" and must not be used as the current status.
 - **Session and timeline performance has not been measured.**
 - **The Mac is checked only by hand.**
-- **The other branches have conflicts to fix afterwards.** Hands has the most: 68 files, mostly in the engine and the composer. VectorScope has 10, Codium 7 and @vector 2.
+- **Other branches need fresh integration checks.** The 8 November projections were Hands 68 files, VectorScope 10, Codium 7 and @vector 2. They describe those old tips, not today's merge result.
 - **Main's `bun.lock` still says the desktop is 1.99.111.** The merge keeps that. It is harmless, because install rewrites it, and the VectorScope merge or the release preparation fixes it. Don't fix it by hand in this merge.
 - **Merging by squash or rebase would cause trouble.** `codium` shares the A00–A28 commits with `self-evolving`. A squash or rebase would break that link and turn Codium's and VectorScope's later merges into many more conflicts.
 
@@ -256,8 +270,8 @@ In more detail:
 - **A failure that happens only on a Mac.** `isolation-terminal.test.ts` has one existing case that fails on a Mac because of the `/var` and `/private/var` paths. Linux CI covers that case. This build did not cause it.
 - **A leftover in the sync checkout (5 November, on the earlier build Mac; not checked since).** The push checkout, `~/.cache/vector-sync-evolve`, has one uncommitted line in `bun.lock` from an install: the desktop version. It was left alone.
 
-## How to merge, and how to undo
+## Historical merge method and rollback considerations
 
-- **Merge.** Use the pull request's "Create a merge commit" button. Don't squash or rebase it (see Risks).
+- **PR #20 merged.** Its integration is complete. For subsequent approved feature integrations, preserve the shared commit lineage described in Risks; this paragraph is not approval to merge a draft PR.
 - **Undo the website.** Vercel can switch production back to the previous deployment within a minute.
 - **Undo the code.** Revert the merge commit on main. Merging again later then needs that revert undone first, so prefer the Vercel switch for a website problem and fix forward on `self-evolving`.

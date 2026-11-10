@@ -4,6 +4,8 @@ Desktop 1.99.113 brings learned skills, workflow insights (learned workflow defa
 
 The site deploys from main, so every docs paragraph about these features starts with `release113.since` ("Coming in desktop 1.99.113:" until `publishedDesktopVersion` reaches 1.99.113, then "From desktop 1.99.113:"). `packages/web/test/release-113-docs.test.ts` holds the pages to it.
 
+**Source and release checkpoint, 9 November 2026.** The multi-agent and learned-skills source was merged through pull request #20 at `0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c` on 8 November. That source includes the earlier tokenomics and research consolidation. The desktop manifest and the website's `publishedDesktopVersion` still say **1.99.112**, and the desktop still requires standalone CLI **1.99.99**. This is a source integration, not publication of desktop or CLI 1.99.113. The owner's current implementation request covers routine isolated candidate preparation and free checks. The draft packet below records outstanding acceptance evidence and the actual privacy, paid-measurement and protected-publication decisions; preparing it does not mark those decisions approved. Recheck the selected candidate and production artifacts before making a release decision.
+
 ## Release notes (draft)
 
 **Title:** Learned skills, workflow insights and the prompt guard
@@ -144,3 +146,184 @@ In a signed-in 1.99.113, on a scratch repository:
 ### CLI
 
 `vector tasks` and its new actions, `vector workflow`, `vector run --workflow` and `--stop-helpers`, the Ctrl+C handling, and the TUI's `<leader>k`, `/stop-all`, the Esc toggle, Ctrl+B for batches, the new `/tasks` actions and `/workflow` reach the terminal with the next CLI release. Windows WSL servers keep the engine version the desktop requires until a later desktop release requires that CLI.
+
+## Owner-review and acceptance packet — draft, 9 November 2026
+
+This packet prepares the decisions and evidence for an owner review. Every empty
+approval field and every `Not run` result below is outstanding. The feature
+checklists above remain applicable. Source integration, a green test run, a
+website deployment and a published desktop installer are separate events.
+Routine coding, isolated release-candidate preparation and free checks proceed
+under the current implementation request; this packet adds no permission step
+for that reversible work.
+
+Other agents currently own Hands/computer use, @vector, Codium and the
+multi-agent/self-evolving implementation. This packet does not authorize edits,
+merges or test interruptions in those workstreams. A candidate that takes later
+feature merges needs its own refreshed checks and acceptance record.
+
+### Candidate and review record
+
+| Field                                                                         | Owner or release coordinator records                                                                                                            |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source checkpoint used to prepare this packet                                 | `0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c`; documentation/source inspection only                                                                |
+| Exact release-candidate commit, including selected feature merges             | Pending                                                                                                                                         |
+| Intended desktop version / compatible standalone CLI / plugin version         | Candidate target 1.99.113; record the compatible CLI/plugin during preparation. Current manifests are desktop 1.99.112 and required CLI 1.99.99 |
+| Immutable model-catalog revision and digest                                   | Pending; verify against the candidate's embedded catalog                                                                                        |
+| Linux and Windows general-CI runs, attempt and conclusion                     | Pending for the selected candidate; do not substitute an older branch run                                                                       |
+| Verify, generated clients/SDKs, API coverage and desktop Node-bundle evidence | Pending for the selected candidate                                                                                                              |
+| Mac and Windows RC artifact hashes, OS versions and acceptance operator       | Pending                                                                                                                                         |
+| Privacy-copy reviewer, decision and date                                      | Pending; proposed text below is not approved or published policy                                                                                |
+| Final release reviewer, decision and date                                     | Pending; publication is a separate decision after the evidence is complete                                                                      |
+
+### Proposed privacy disclosure — draft for owner and legal review
+
+The following is proposed feature-specific wording, not a legal conclusion or a
+change to the published privacy policy. It must be reconciled with the existing
+provider, account, sharing and usage-check-in disclosures before publication.
+
+> Vector stores learned skills and workflow insights in `brain.db` on the
+> computer running its engine. By default, skill drafts wait for your review,
+> the optional model drafter runs only when Vector Local is enabled, and
+> workflow exploration is off. You can inspect and manage these features in
+> Settings → Memory. Local storage describes where the records are kept: when
+> an eligible learned skill is listed or loaded for a task, its description or
+> procedure can become context sent to the model used for that task, subject
+> to Vector's memory and permission controls.
+>
+> You can turn the model drafter off, leave it at Only with Vector Local, or
+> select Always. Always permits a separate helper request to your configured
+> model provider, which may be outside this computer when Vector Local is off.
+> The helper uses an available small model from that provider, falling back to
+> the task's model when no small model is available. Its input is a filtered
+> trace of one eligible run: the check command and, when present, up to 600
+> characters of the redacted failing output; allowed helper commands; and the
+> repository-relative names of files read or changed. A judge-only trace may
+> identify that the run was judged instead of carrying a check failure. The
+> drafter does not attach the full conversation or file bodies as its input,
+> and it has no tools. File names, paths and command arguments can still reveal
+> information about your work; filtering and redaction are not a promise that
+> all sensitive information has been removed.
+>
+> The drafter is withheld for guest sessions, held traces, models marked as
+> able to train on prompts, and runs stopped or warned by the budget guard.
+> These checks use Vector's configuration and model metadata; they are not a
+> guarantee about a provider's retention practices. Helper usage is charged
+> to the run that launched it. Turning off the model drafter still permits
+> deterministic skill drafts while skill learning remains enabled; turning
+> skill learning off prevents new skill drafts. Choosing Share writes an
+> approved skill to `.vector/skills/<name>/SKILL.md` in the repository; Vector
+> does not commit it for you. That explicit export omits the stored error
+> excerpt, session identifiers, usage statistics and evidence. Commit or
+> otherwise distribute that file only when you intend to share its procedure.
+
+Source checks supporting this draft:
+
+| Source                                                                                 | Behavior checked                                                                                                                                      |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core/src/brain/brain.ts`, `learnSettings`                                    | `learning: true`, `skills: "review"`, `skillDrafter: "local-only"`, `workflow: "apply"`, `workflowExplore: false` when unset                          |
+| `packages/core/src/brain/skill.ts`, `LIMIT`, `request`, `safePath`, `lock`             | Trace fields, 600-character failure cap, allowed commands and repository-relative paths; returned steps constrained to the observed trace             |
+| `packages/engine/src/session/skill-learn.ts`, `run`, `drafts`, `drafter`, `modelDraft` | Eligibility/hold checks, Local/default/Always behavior, small-model fallback, tool-free helper, original-run spend settlement                         |
+| `packages/engine/src/session/system.ts`; `skill/learned.ts`; `session/prompt.ts`       | Eligible skill descriptions are listed; loaded procedures fill a request where personal memory may go, while the stored transcript uses a placeholder |
+| `packages/app/src/components/settings-v2/memory-skills-model.ts`                       | Review-first/auto/off and drafter choices; explicit sharing exclusions                                                                                |
+
+This draft deliberately does not promise zero data egress, zero retention,
+perfect secret removal, a security certification or a reduction in model cost.
+The draft is not evidence that any provider configuration or optional feature
+has been enabled on an owner's machine.
+
+### Default-behavior decisions — no boxes accepted yet
+
+An owner may keep the recorded defaults or request a separate product change
+from that workstream's owner. Preparing this list changes no setting.
+
+- [ ] Accept skill learning at **Review first**, with the model drafter **Only
+      with Vector Local**; record any requested alternative and its disclosure.
+- [ ] Accept learned workflow defaults at **Apply**, only where the existing
+      rules permit them and the user has not made an explicit choice, with
+      **workflow exploration off**. Do not describe these as proven general savings.
+- [ ] Accept per-conversation helper limits of **8 running / 32 per request /
+      $25 at catalog prices**; guests **4 / 8 / $5**. Acknowledge that several
+      conversations can exceed those counts in aggregate, and that these controls
+      are not an invoice guarantee.
+- [ ] Accept **no automatic resume after restart**, steer-by-default follow-ups,
+      and a desktop queue that drains only while a Vector window is open.
+- [ ] Accept the existing workflow approval policy and ceilings: an ask by
+      default, up to 100 agents, 60 steps per agent and 120 minutes; no broader
+      grant is created by this packet.
+- [ ] Decide whether to retain helper terminal access. Current behavior is
+      retained; Stop including helpers also closes their terminals. Any different
+      behavior belongs to the multi-agent owner.
+- [ ] Decide whether to retain refusal of unmarked settings imported from a
+      shared ancestor folder that is not a Git repository. No import is enabled here.
+- [ ] Acknowledge prompt-file checks are an ask/hold with documented coverage
+      gaps, not a complete execution sandbox. Owner commands and a passwordless
+      `vector serve` are not a boundary against arbitrary local programs; use the
+      existing server-password and optional sandbox controls as appropriate.
+- [ ] Accept that saving settings may stop background commands, linked worktree
+      folders are shared immediately, and kept worktrees must be merged or discarded
+      before downgrading. Confirm an appropriate recovery copy before RC testing.
+
+Owner name: **Pending**. Decision/date: **Pending**. Requested changes and
+responsible workstream, if any: **Pending**.
+
+### Synthetic release-candidate acceptance record
+
+Use only a disposable repository, fabricated documents and a dedicated test
+profile, OS account or test machine. Arrange an exclusive test window with the
+active workstream owners before any stop, restart, crash or settings-save test.
+Do not interrupt their current sessions or use a company's real corpus. New paid
+provider measurements still require the budget and credential approval below;
+synthetic inputs alone do not make those calls free.
+
+For every row, record the exact candidate, artifact hash, OS, operator, date and
+redacted evidence link. Leave an unavailable check `Not run`, never `Pass`.
+
+| ID    | Synthetic scenario and required observation                                                                                                                                                                                                                            | Mac result | Windows result |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | -------------- |
+| RC-01 | Install the selected beta RC over a supported prior build in the disposable profile; confirm version, sign-in, existing synthetic session and settings, and update-channel identity.                                                                                   | Not run    | Not run        |
+| RC-02 | Fix a fabricated failing check in an eligible Standard run with at least three completed tool calls and a changed file. The draft waits for review; Approve makes it available. Reject/delete leaves it unavailable.                                                   | Not run    | Not run        |
+| RC-03 | With the drafter Off, observe a deterministic draft without a drafter call; with the default and Vector Local off, observe no model-drafter call. Inspect the allowed trace and exercise Always using a fake provider; live paid calls use the measurement gate below. | Not run    | Not run        |
+| RC-04 | From Vector's own terminal, attempt the documented owner approval command and confirm refusal. Share one approved synthetic skill deliberately, inspect the exact file and exclusions, and confirm renewed repository trust is requested.                              | Not run    | Not run        |
+| RC-05 | Inspect Workflow insights with explicit user choices and fabricated unknown-cost evidence. Explicit choices remain effective; unknown cost stays unknown; exploration remains off.                                                                                     | Not run    | Not run        |
+| RC-06 | Launch synthetic independent helper work, lower the configured helper ceiling and observe queue/budget behavior. Stop including helpers stops descendants and their terminals while preserving completed work.                                                         | Not run    | Not run        |
+| RC-07 | In the isolated test instance only, interrupt the engine while two helpers run. Reopen: both are reported interrupted; neither resumes before the user's explicit action; Resume all continues the intended work.                                                      | Not run    | Not run        |
+| RC-08 | Run two isolated helpers against one fabricated file. Review/merge one, then require an explicit conflict for the other's stale merge. Confirm unrelated files and the primary checkout are preserved.                                                                 | Not run    | Not run        |
+| RC-09 | Run a small synthetic workflow through its normal product permission ask, stop it, restart the isolated instance and resume it. Verify its plan, ceilings, job notes and final state.                                                                                  | Not run    | Not run        |
+| RC-10 | Run a short synthetic background command, observe its completion note, and test the documented settings-save warning/stop behavior in the disposable profile.                                                                                                          | Not run    | Not run        |
+| RC-11 | Send a follow-up while work runs, then exercise Queue, session navigation and a reload. Confirm the documented steer/queue behavior, with no duplicate send; record the window-open limitation.                                                                        | Not run    | Not run        |
+| RC-12 | Erase synthetic learned/research data through the supported owner controls; inspect the resulting lists and recall. Exercise any downgrade only after disposing of kept worktrees and preserve the documented older-build erase limitations.                           | Not run    | Not run        |
+
+### Preparation, measurements and publication
+
+Routine preparation and free checks are covered by the current implementation
+request. Record their evidence as they finish; keep the paid, privacy and
+protected-publication decisions distinct.
+
+- [ ] Schedule an exclusive window for the free before/after production
+      session/timeline benchmark on exact source revisions, run it with synthetic
+      or fake-provider inputs and no paid inference, and record the run IDs and
+      comparison. No additional permission is needed merely to run this free check.
+      The older title benchmark does not cover these session/timeline changes.
+- [ ] Obtain approval for any paid live fork-cache or matched multi-agent measurement: provider,
+      model/reasoning, task and quality gate, maximum total spend, responsible
+      operator and permitted credential entry all **Pending**. Use a newly approved
+      credential/budget arrangement; do not reuse the previous tokenomics study's
+      chat-supplied key or spending authorization. Fake-provider cache checks do not
+      establish live savings.
+- [ ] Approve the final privacy wording and any public feature/cost claims.
+      Reviewer/name/date and the exact text revision are **Pending**.
+- [ ] Prepare an isolated release-candidate commit, including the version,
+      lockfile and changelog when the selected scope is coherent; verify compatible
+      CLI/plugin availability and the catalog, then run the relevant generators and
+      free checks. This reversible preparation needs no additional permission.
+      Existing published versions may satisfy compatibility; no new npm publication
+      is implied. Preparation/version bump is **not run** by this documentation edit.
+- [ ] Approve the actual desktop publish workflow and protected environment
+      separately. Record run/attempt, immutable artifacts, production download and
+      updater-feed verification before marking 1.99.113 published. Publishing the
+      website or merging source does not satisfy these checks.
+
+Packet preparation was source inspection and documentation only. This update
+executes no RC test, native application, model call, paid benchmark, workflow
+dispatch, account change, invitation, version bump or publication.

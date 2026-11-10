@@ -1,0 +1,239 @@
+{
+  "version": "1.99.113",
+  "evidence": {
+    "ref": "main",
+    "path": "docs/vector/owner-actions/release-199113.md"
+  },
+  "purpose": "Read-only coordination and evidence collection; no merge, approval, publication or active-agent-count inference.",
+  "lanes": [
+    {
+      "id": "main",
+      "branches": ["main"],
+      "scope113": "included",
+      "owner": "release coordinator",
+      "notes": [
+        "Shared source after PR #20; source merged is not desktop published.",
+        "Current published desktop is checked separately from source version labels."
+      ]
+    },
+    {
+      "id": "coordination",
+      "branches": ["release-coordination"],
+      "scope113": "included",
+      "owner": "release coordinator",
+      "notes": [
+        "Owns this observer, release evidence, owner-review preparation and the portable learning-test fixture only.",
+        "Does not replace the current feature agents or merge their draft PRs."
+      ]
+    },
+    {
+      "id": "runtime",
+      "branches": ["self-evolving"],
+      "scope113": "included",
+      "owner": "existing multiagent/self-evolving agent",
+      "notes": [
+        "Implementation ownership remains with its current agent. Readiness is assessed on the integrated main/candidate."
+      ]
+    },
+    {
+      "id": "release-fixes",
+      "branches": ["finish-checks"],
+      "scope113": "included",
+      "owner": "existing final-check agent",
+      "notes": [
+        "Draft PR #23 remains owned by its author. Do not edit, merge, ready, rerun or cancel it automatically."
+      ]
+    },
+    {
+      "id": "hands",
+      "branches": ["hands", "hands-ui-check", "hands-diagnostics"],
+      "scope113": "separate",
+      "owner": "existing computer-use agent",
+      "notes": [
+        "Unversioned separate release candidate. Helper branches support one product lane.",
+        "No automatic assignment of Hands to 1.99.113; native and package acceptance remain separate."
+      ]
+    },
+    {
+      "id": "codium",
+      "branches": ["codium"],
+      "scope113": "separate",
+      "owner": "existing Codium agent",
+      "notes": [
+        "Hosted/billing/phone/remote/vault/ops work remains on its own launch plan.",
+        "A00-A28 shared runtime integration does not qualify production provider routes or enable sales."
+      ]
+    },
+    {
+      "id": "github-agent",
+      "branches": ["vector-at-mention"],
+      "scope113": "separate",
+      "owner": "existing @vector agent",
+      "notes": [
+        "GitHub workflow delivery and owner App setup remain its own workstream; CLI version pin is provisional."
+      ]
+    },
+    {
+      "id": "vectorscope",
+      "branches": ["vectorscope"],
+      "scope113": "separate",
+      "owner": "existing Vectorscope workstream; ownership not verified in this account",
+      "notes": [
+        "Approved D14 excludes new user-facing upgrades from 1.99.113. Source helpers/evaluation work is not reviewer-quality acceptance."
+      ]
+    },
+    {
+      "id": "workspaces",
+      "branches": ["cloud-workspaces"],
+      "scope113": "separate",
+      "owner": "existing cloud-workspaces PR author",
+      "notes": [
+        "Disabled pilot; infrastructure/operator acceptance is separate from local fixture success. Codium sales are not a prerequisite."
+      ]
+    },
+    {
+      "id": "setup",
+      "branches": ["owner-setup"],
+      "scope113": "separate",
+      "owner": "owner-supervised setup session",
+      "notes": ["Instructions are not evidence any external service was configured. Slack bot remains future work."]
+    }
+  ],
+  "requiredChecks": {
+    "main": [
+      "unit (linux)",
+      "unit (windows)",
+      "engine (linux, shard 1/4)",
+      "engine (linux, shard 2/4)",
+      "engine (linux, shard 3/4)",
+      "engine (linux, shard 4/4)",
+      "engine (windows, shard 1/12)",
+      "engine (windows, shard 2/12)",
+      "engine (windows, shard 3/12)",
+      "engine (windows, shard 4/12)",
+      "engine (windows, shard 5/12)",
+      "engine (windows, shard 6/12)",
+      "engine (windows, shard 7/12)",
+      "engine (windows, shard 8/12)",
+      "engine (windows, shard 9/12)",
+      "engine (windows, shard 10/12)",
+      "engine (windows, shard 11/12)",
+      "engine (windows, shard 12/12)",
+      "e2e (linux)",
+      "e2e (windows)",
+      "desktop engine bundle (node)",
+      "typecheck (app)",
+      "typecheck (cloud)",
+      "typecheck (engine)",
+      "typecheck (desktop)",
+      "Website build",
+      "Air gap (Vector Local, no network)",
+      "Vector Local desktop packet capture (30 minutes)"
+    ],
+    "release-fixes": [
+      "unit (linux)",
+      "unit (windows)",
+      "engine (linux, shard 1/4)",
+      "engine (linux, shard 2/4)",
+      "engine (linux, shard 3/4)",
+      "engine (linux, shard 4/4)",
+      "engine (windows, shard 1/12)",
+      "engine (windows, shard 2/12)",
+      "engine (windows, shard 3/12)",
+      "engine (windows, shard 4/12)",
+      "engine (windows, shard 5/12)",
+      "engine (windows, shard 6/12)",
+      "engine (windows, shard 7/12)",
+      "engine (windows, shard 8/12)",
+      "engine (windows, shard 9/12)",
+      "engine (windows, shard 10/12)",
+      "engine (windows, shard 11/12)",
+      "engine (windows, shard 12/12)",
+      "e2e (linux)",
+      "e2e (windows)",
+      "desktop engine bundle (node)",
+      "typecheck (app)",
+      "typecheck (cloud)",
+      "typecheck (engine)",
+      "typecheck (desktop)",
+      "Website build",
+      "Air gap (Vector Local, no network)",
+      "Vector Local desktop packet capture (30 minutes)"
+    ],
+    "coordination": null,
+    "runtime": null,
+    "hands": null,
+    "codium": null,
+    "github-agent": null,
+    "vectorscope": null,
+    "workspaces": null,
+    "setup": null
+  },
+  "checkPolicyNotes": [
+    "These 28 common exact-name contexts are an explicit observation list, not the complete release/signing/publication policy.",
+    "Skipped, neutral, cancelled, absent, inaccessible and stale-head results are never treated as passing.",
+    "Other lane-specific required-check policies remain unknown until their owners supply reviewed policies."
+  ],
+  "externalGates": [
+    {
+      "id": "candidate-source",
+      "lane": "main",
+      "kind": "owner",
+      "description": "Choose and record the reviewed release candidate SHA, scope, catalog digest and supported platforms; approve any scope change."
+    },
+    {
+      "id": "privacy-legal",
+      "lane": "main",
+      "kind": "owner",
+      "description": "Review the concrete draft disclosure and residual-risk decisions in release-199113.md; no legal approval is inferred."
+    },
+    {
+      "id": "mac-rc",
+      "lane": "main",
+      "kind": "native",
+      "description": "Authenticated real Mac release-candidate acceptance with source/artifact identity and actual outcome evidence."
+    },
+    {
+      "id": "windows-rc",
+      "lane": "main",
+      "kind": "native",
+      "description": "Authenticated real Windows release-candidate acceptance with source/artifact identity and actual outcome evidence."
+    },
+    {
+      "id": "release-artifacts",
+      "lane": "main",
+      "kind": "owner",
+      "description": "Version/lock/changelog, generated SDK parity, exact-candidate CI, packaging/signing and protected publication approval."
+    },
+    {
+      "id": "live-cost-claims",
+      "lane": "main",
+      "kind": "measurement",
+      "description": "Separate funded real-provider fork/heavy-team comparisons before claiming current runtime savings; no old API key or allowance reused by this observer."
+    },
+    {
+      "id": "hands-platforms",
+      "lane": "hands",
+      "kind": "native",
+      "description": "Native Windows Stop/capture/UIA and ARM64/package/real-device acceptance supplied by Hands owner."
+    },
+    {
+      "id": "codium-routes-sales",
+      "lane": "codium",
+      "kind": "service",
+      "description": "Qualified provider routes, protected billing tests, complete hosted integration and explicit launch approval supplied by Codium owner."
+    },
+    {
+      "id": "github-app",
+      "lane": "github-agent",
+      "kind": "service",
+      "description": "Owner-supervised App registration, installation, scoped credentials, complete workflow/publish journey and compatible CLI publication."
+    },
+    {
+      "id": "workspace-host",
+      "lane": "workspaces",
+      "kind": "service",
+      "description": "Dedicated host, runsc/quota/network isolation, TLS, backups, real sign-in/cross-device and authorized publication acceptance."
+    }
+  ]
+}
