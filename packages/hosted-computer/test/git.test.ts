@@ -131,7 +131,14 @@ describe("git through hostd", () => {
     }
     // Nothing on disk holds the token: not the mirror, not the agent's working copy.
     for (const file of [...allFiles(w.mirrorDir), ...allFiles(w.workDir)]) {
-      const bytes = readFileSync(file)
+      // Git's own temporary files (a `tmp_pack_*` being renamed into place) can go between listing and reading.
+      let bytes: Buffer
+      try {
+        bytes = readFileSync(file)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
+        throw error
+      }
       expect({ file, found: bytes.includes(TOKEN) }).toEqual({ file, found: false })
     }
   })

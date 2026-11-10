@@ -1043,7 +1043,8 @@ describe.skipIf(!valkeyURL)("the ledger's scripts on Valkey", () => {
     expect(await open("s1", 0, now + 10 * MINUTE)).toEqual(["ok", 15])
     expect(JSON.parse(String(await send(["HGET", settle, "hb-s1-0"])))).toMatchObject({ endedAt: now + 10 * MINUTE })
     expect(await send(["HGET", meter, "r:hb-s1-0"])).toBe(`10:${now + 30 * MINUTE}`)
-    expect(await open("s1", 1, now + 20 * MINUTE)).toEqual(["hours"])
+    // At twenty minutes the first block's 10 and the running one's 10 have spent a 20-minute cap: nothing is left.
+    expect(await open("s1", 1, now + 20 * MINUTE, { cap: 20 })).toEqual(["hours"])
     expect(await open("s1", 0, now + 20 * MINUTE)).toEqual(["moved"])
     expect(await send(["EVAL", HOSTED_ENTITLEMENT_SCRIPTS.MINUTES, 1, meter, now + 11 * MINUTE])).toEqual([0, 25])
     // METER counts once, in the period it settled in.
@@ -1090,7 +1091,8 @@ describe.skipIf(!valkeyURL)("the ledger's scripts on Valkey", () => {
     expect(await send(["HLEN", running])).toBe(0)
     expect(await zscore([hostedLapseKey(), id])).toBeNull()
     expect(await zscore([hostedSettleDueKey(), id])).toBe(String(lapsedAt))
-    expect(await open("s3", -1, lapsedAt)).toEqual(["ok", 5])
+    // Both blocks' reservations have lapsed by then; the 10 metered minutes leave 20, so s3 gets all it asks for.
+    expect(await open("s3", -1, lapsedAt)).toEqual(["ok", 15])
     expect(
       await send([
         "EVAL",

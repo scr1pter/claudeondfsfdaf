@@ -38,6 +38,10 @@ report("system components are root's and not writable by others", writable === "
 // ── Boot ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 const boot = sh("/opt/vector/boot.sh", ["--run-host", "vector-check.invalid", "--session", session], { timeout: 120_000 })
 report("boot.sh finishes", boot.status === 0, boot.stderr)
+// When boot stops, the services' own logs say why (each check's detail keeps 400 characters: the end of each log).
+if (boot.status !== 0)
+  for (const file of existsSync("/run/vector/log") ? readdirSync("/run/vector/log") : [])
+    report(`boot log ${file}`, false, readFileSync(`/run/vector/log/${file}`, "utf8").slice(-400))
 report("boot.sh refuses extra arguments", sh("/opt/vector/boot.sh", ["--run-host", "a.invalid", "--session", session, "--x"]).status !== 0)
 
 const output = sh("nft", ["list", "chain", "inet", "vector", "output"]).stdout
@@ -137,12 +141,17 @@ const browserArgs = asUser(10004, "", ["/usr/bin/chromium-browser", "--headless=
 const browser = spawn(browserArgs[0], browserArgs.slice(1), { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"], env: { HOME: profile, PATH: "/usr/bin:/bin" } })
 const pipe = new bundle.CdpPipe((chunk) => browser.stdio[3].write(chunk))
 browser.stdio[4].on("data", (chunk) => pipe.feed(chunk))
+let step = "guard start"
 try {
   const guard = new bundle.BrowserGuard(pipe, readFileSync("/opt/vector/credential-guard.js", "utf8"))
   await guard.start()
+  step = "create target"
   const { targetId } = await pipe.send("Target.createTarget", { url: "about:blank" })
+  step = "attach"
   const { sessionId } = await pipe.send("Target.attachToTarget", { targetId, flatten: true })
+  step = "page enable"
   await pipe.send("Page.enable", {}, sessionId)
+  step = "checks"
   await pipe.send("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId)
   const blocked = await pipe.send("Page.navigate", { url: "https://hosted-run.vectordev.ai/" }, sessionId)
   report("the browser policy blocks the run-API host", String(blocked.errorText ?? "").includes("BLOCKED_BY_ADMINISTRATOR"), blocked.errorText)
@@ -153,7 +162,7 @@ try {
   await pipe.send("Runtime.evaluate", { expression: "document.getElementById('q').focus()" }, sessionId)
   report("the guard lets an ordinary field through", (await guard.focusedSecret()) === undefined)
 } catch (error) {
-  report("the browser checks ran", false, error.message)
+  report("the browser checks ran", false, `${step}: ${error.message}`)
 } finally {
   browser.kill("SIGKILL")
 }

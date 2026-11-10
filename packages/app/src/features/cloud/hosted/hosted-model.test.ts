@@ -288,7 +288,7 @@ describe("Done by Morning", () => {
 })
 
 describe("copy (P1, H3, H4)", () => {
-  const directory = path.dirname(new URL(import.meta.url).pathname)
+  const directory = import.meta.dir
   const sources = [
     ...readdirSync(directory)
       .filter((file) => /\.tsx?$/.test(file) && !file.endsWith(".test.ts"))
