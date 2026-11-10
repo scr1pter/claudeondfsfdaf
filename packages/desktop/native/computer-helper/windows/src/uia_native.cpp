@@ -613,6 +613,7 @@ bool WindowsUiaObserver::same(const UiaObservation& left, const UiaObservation& 
   return same_windows_window(left.window, right.window) && left.security.pid == right.security.pid && left.security.password == right.security.password &&
       left.security.control_type == right.security.control_type && left.security.bounds == right.security.bounds && left.security.enabled == right.security.enabled &&
       left.security.focused == right.security.focused && left.security.read_only == right.security.read_only && left.security.value_pattern == right.security.value_pattern &&
+      left.security.keyboard_focusable == right.security.keyboard_focusable &&
       left.security.text_pattern == right.security.text_pattern && left.security.text_read_only == right.security.text_read_only &&
       backend_.equal(left.root, right.root) && backend_.equal(left.element, right.element);
 }
