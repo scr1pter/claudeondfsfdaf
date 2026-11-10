@@ -216,13 +216,14 @@ describe("independent overlay source admission", () => {
     expect(reader.match(/GetCurrentPatternAs/g)).toHaveLength(1)
     expect(reader).toContain("GetCurrentPatternAs(pattern, IID_PPV_ARGS(capability.put())); current_call();")
     expect(reader).toContain("classify_uia_pattern_support(probed, static_cast<bool>(capability))")
+    expect(implementation.match(/classify_uia_pattern_support\(/g)).toHaveLength(2)
     const refused = reader.slice(reader.indexOf("if (!support)"), reader.indexOf("return *support;"))
     expect(refused).toContain(
       "probed == S_OK && !capability ? phases.probe_empty : probed == E_NOINTERFACE ? phases.probe_no_interface : phases.probe_invalid",
     )
     expect(refused).toContain("unavailable();")
     expect(refused).not.toMatch(/current_call|GetCurrentPatternAs|return/)
-    expect(implementation).toContain("if (status == S_OK && interface_present) return true;")
+    expect(implementation).toContain("if (status == S_OK) return interface_present;")
     expect(implementation).toContain("if (status == UIA_E_NOTSUPPORTED && !interface_present) return false;")
     expect(reader).not.toMatch(/get_CurrentValue|get_DocumentRange|GetAttributeValue|GetText/)
     const security = implementation.slice(
@@ -237,7 +238,7 @@ describe("independent overlay source admission", () => {
     expect(security).toContain("result.value_pattern = value_pattern; result.text_pattern = text_pattern;")
     expect(security).not.toContain("GetCachedPropertyValueEx(UIA_IsValuePatternAvailablePropertyId, FALSE")
     expect(security).not.toContain("GetCachedPropertyValueEx(UIA_IsTextPatternAvailablePropertyId, FALSE")
-    expect(implementation).toContain("if (status == S_OK && interface_present) return true;")
+    expect(implementation).toContain("if (status == S_OK) return interface_present;")
     expect(implementation).toContain("if (status == UIA_E_NOTSUPPORTED && !interface_present) return false;")
   })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {

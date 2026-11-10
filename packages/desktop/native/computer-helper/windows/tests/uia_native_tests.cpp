@@ -55,11 +55,11 @@ size_t run_uia_native_tests() {
     require(classify_uia_pattern_support(UIA_E_NOTSUPPORTED, false) == false, "uia-native.typed-pattern-documented-negative-capability");
     for (const auto status : std::array<HRESULT, 6>{S_FALSE, E_FAIL, E_NOINTERFACE, E_ACCESSDENIED, static_cast<HRESULT>(UIA_E_ELEMENTNOTAVAILABLE), static_cast<HRESULT>(UIA_E_TIMEOUT)})
       for (const bool present : {false, true}) require(!classify_uia_pattern_support(status, present), "uia-native.typed-pattern-unknown-outcomes-refused");
-    require(!classify_uia_pattern_support(S_OK, false) && !classify_uia_pattern_support(UIA_E_NOTSUPPORTED, true),
-        "uia-native.typed-pattern-contradictory-outcomes-refused");
+    require(classify_uia_pattern_support(S_OK, false) == false, "uia-native.typed-pattern-successful-null-is-documented-absence");
+    require(!classify_uia_pattern_support(UIA_E_NOTSUPPORTED, true), "uia-native.typed-pattern-contradictory-outcomes-refused");
   });
   test([] {
-    const auto absent = classify_uia_pattern_support(UIA_E_NOTSUPPORTED, false), present = classify_uia_pattern_support(S_OK, true);
+    const auto absent = classify_uia_pattern_support(S_OK, false), present = classify_uia_pattern_support(S_OK, true);
     require(absent.has_value() && present.has_value(), "uia-native.typed-pattern-proof-required-before-password-classification");
     for (const int type : {50000, 50011, 50032}) {
       require(classify_uia_password(type, {}, *absent, *absent) == false, "uia-native.documented-pattern-absence-permits-only-nontext-password-fallback");
