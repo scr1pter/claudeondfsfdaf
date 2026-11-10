@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
@@ -233,7 +233,9 @@ describe("Windows helper signing and final byte pin", () => {
 async function fixture(
   signature = { status: "NotSigned", publisher: null as string | null, thumbprint: null as string | null },
 ) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "vector-helper-win-final-"))
+  // The verifier canonicalizes its app root. Windows temp paths may use an 8.3 alias, so bind fixture paths to
+  // the same actual directory before asserting which exact executable the verifier admitted.
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vector-helper-win-final-")))
   const app = path.join(directory, "unpacked Windows app")
   const helper = path.join(app, "resources/computer/vector-computer.exe")
   const bytes = pe()
@@ -268,10 +270,13 @@ async function fixture(
     }),
   )
   const calls: { command: string; args: readonly string[]; environment: NodeJS.ProcessEnv; timeoutMs: number }[] = []
+  const powershell = path.win32.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32/WindowsPowerShell/v1.0/powershell.exe",
+  )
   const run: NativeCommand = async (command, args, settings) => {
     calls.push({ command, args, environment: settings.env, timeoutMs: settings.timeoutMs })
-    if (command.toLowerCase().endsWith("powershell.exe"))
-      return { code: 0, stdout: JSON.stringify(signature), stderr: "" }
+    if (command === powershell) return { code: 0, stdout: JSON.stringify(signature), stderr: "" }
     if (command !== helper) throw new Error("Unexpected executable")
     if (args[0] === "--version")
       return {
@@ -304,6 +309,7 @@ async function fixture(
     directory,
     app,
     helper,
+    powershell,
     bytes,
     manifest,
     calls,
@@ -382,6 +388,10 @@ describe("Windows final-location executable admission", () => {
       ).toBe("NotSigned")
       expect(value.calls.map((call) => call.args[0])).toEqual(["-NoLogo", "--version", "--self-test=packaged"])
       const observed = value.calls[0]!
+      expect(observed.command).toBe(value.powershell)
+      expect(path.win32.isAbsolute(observed.command)).toBe(true)
+      expect(path.isAbsolute(value.helper)).toBe(true)
+      expect(value.calls.slice(1).map((call) => call.command)).toEqual([value.helper, value.helper])
       expect(observed.environment.VECTOR_VERIFY_COMPUTER_HELPER_PATH).toBe(value.helper)
       const script = Buffer.from(observed.args.at(-1)!, "base64").toString("utf16le")
       expect(script).toContain("Get-AuthenticodeSignature -LiteralPath $env:VECTOR_VERIFY_COMPUTER_HELPER_PATH")
@@ -412,12 +422,8 @@ describe("Windows final-location executable admission", () => {
       ).rejects.toThrow("configured publisher")
       expect(value.calls.some((call) => call.args[0] === "--version")).toBe(false)
       expect(
-        (
-          await verifyComputerHelperWindows(
-            { ...value.input, expectSigning: "authenticode", publisher },
-            dependencies,
-          )
-        ).signature.publisher,
+        (await verifyComputerHelperWindows({ ...value.input, expectSigning: "authenticode", publisher }, dependencies))
+          .signature.publisher,
       ).toBe(publisher)
       expect(value.calls.some((call) => call.args[0] === "--self-test=packaged")).toBe(true)
     } finally {
@@ -448,7 +454,7 @@ describe("Windows final-location executable admission", () => {
           directory: value.directory,
           expectedSourceDigest: async () => value.manifest.sourceDigest,
           run: async (command, args, settings) =>
-            command.toLowerCase().endsWith("powershell.exe")
+            command === value.powershell
               ? {
                   code: 0,
                   stdout: JSON.stringify({ status: "HashMismatch", publisher: null, thumbprint: null }),
