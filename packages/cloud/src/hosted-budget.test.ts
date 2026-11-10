@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import {
   BUDGET_FACTOR,
+  CLI_ENV,
   budgetPlan,
   cycleEnd,
   readBudget,
@@ -9,8 +13,10 @@ import {
   runBudget,
   VECTOR_ORIGIN,
   VERCEL_CLI_VERSION,
+  vercelCli,
   type Cli,
   type Settings,
+  type Spawn,
 } from "./hosted-budget"
 
 // WP A56: the hosted team's budget workflow (M9: the Vercel hosted team's budget is never lowered within a cycle). The
@@ -335,6 +341,67 @@ describe("the workflow", () => {
     expect(actions.length).toBeGreaterThan(0)
     expect(actions.filter((action) => !/@[a-f0-9]{40}$/.test(action))).toEqual([])
     expect(VERCEL_CLI_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  test("the CLI is installed once with no install scripts and no secret, then run with the token alone (P8 review)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "vector-cli-test-"))
+    try {
+      const calls: { command: string; args: string[]; env: Record<string, string> }[] = []
+      let version = VERCEL_CLI_VERSION
+      const spawn: Spawn = async (command, args, env) => {
+        calls.push({ command, args, env })
+        if (command === "npm") {
+          mkdirSync(path.join(dir, "node_modules", "vercel"), { recursive: true })
+          writeFileSync(path.join(dir, "node_modules", "vercel", "package.json"), JSON.stringify({ version }))
+          return { code: 0, stdout: "" }
+        }
+        return { code: 0, stdout: "{}" }
+      }
+      const env = {
+        PATH: "/usr/bin",
+        HOME: "/home/runner",
+        VERCEL_TOKEN: "fixture-billing-token",
+        VECTOR_HOSTED_VERCEL_TOKEN: "fixture-hosted-token",
+        VECTOR_HOSTED_BUDGET_READ_SECRET: "fixture-read-secret",
+        VERCEL_ORG_ID: "team_fixture",
+        DOCKER_CONFIG: "/tmp/docker",
+        GITHUB_TOKEN: "fixture-github-token",
+      }
+      const cli = vercelCli("fixture-billing-token", { spawn, dir, env })
+      expect(await cli(["billing", "budgets", "inspect", "--json"])).toEqual({ code: 0, stdout: "{}" })
+      expect(await cli(["whoami"])).toEqual({ code: 0, stdout: "{}" })
+      const [install, ...runs] = calls
+      expect(install!.command).toBe("npm")
+      expect(install!.args).toContain("--ignore-scripts")
+      expect(install!.args).toContain(`vercel@${VERCEL_CLI_VERSION}`)
+      expect(install!.args.join(" ")).not.toMatch(/npx|--yes/)
+      expect(install!.env.npm_config_ignore_scripts).toBe("true")
+      // npm never sees a token or secret: only where to find programs and its own folders.
+      expect(Object.keys(install!.env).sort()).toEqual([
+        "HOME",
+        "PATH",
+        "npm_config_cache",
+        "npm_config_ignore_scripts",
+        "npm_config_update_notifier",
+        "npm_config_userconfig",
+      ])
+      expect(JSON.stringify(install!.env)).not.toContain("fixture-")
+      // Installed once; each call runs that install's CLI with the token and the names it needs, nothing else.
+      expect(runs.map((run) => run.command)).toEqual([path.join(dir, "node_modules", ".bin", "vercel"), path.join(dir, "node_modules", ".bin", "vercel")])
+      for (const run of runs) {
+        expect(run.env.VERCEL_TOKEN).toBe("fixture-billing-token")
+        for (const name of Object.keys(run.env)) expect([...CLI_ENV, "VERCEL_TOKEN", "NO_COLOR", "CI"]).toContain(name)
+        expect(JSON.stringify(run.env)).not.toMatch(/fixture-(?:hosted-token|read-secret|github-token)/)
+      }
+      // An install that does not report the pinned version runs nothing.
+      version = "0.0.1"
+      calls.length = 0
+      const wrong = vercelCli("fixture-billing-token", { spawn, dir, env })
+      expect(await wrong(["whoami"])).toEqual({ code: 1, stdout: "" })
+      expect(calls.map((call) => call.command)).toEqual(["npm"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   test("the environment check refuses an unprotected or missing hosted-production", async () => {

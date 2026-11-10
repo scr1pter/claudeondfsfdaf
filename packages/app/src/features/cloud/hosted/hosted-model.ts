@@ -270,7 +270,7 @@ const END_REASONS: Record<string, string> = {
   frozen: "Your plan is on hold.",
   switch: "Vector paused the cloud computer for now.",
   abuse: "It passed a fair-use limit.",
-  failed: "The computer could not start. Nothing was used.",
+  failed: "The computer could not start. Only the time it ran counts.",
   closing: "Your account is being deleted.",
   lapsed: "Vector could not keep the job running.",
 }
@@ -579,6 +579,7 @@ const JOB_REASONS: Record<string, string> = {
   paused: "A payment needed attention when it was due to start.",
   late: "It could not start in time to deliver by then.",
   refused: "Your plan did not allow it when it was due to start.",
+  failed: "The cloud computer could not start, so Vector stopped trying.",
 }
 
 /** Why a job was cancelled, missed or ended without a report, in a sentence. */
@@ -587,12 +588,15 @@ export function jobReasonLine(job: Pick<HostedJob, "reason">) {
   return JOB_REASONS[job.reason] ?? END_REASONS[job.reason]
 }
 
-/** The report's verdict line: a second lab checked each criterion, or why it could not. */
+/**
+ * The report's verdict line. The pass or fail per criterion is what Vector's agent reported after asking a judge model:
+ * the server checks that it asked, not what the judge answered, so the line never says another lab checked the work
+ * (P8 review).
+ */
 export function verdictLine(report: HostedReport) {
-  if (!report.judged) return "No model from another lab was available to check this report."
+  if (!report.judged) return "This report has no pass or fail for each criterion."
   const passed = report.results.filter((result) => result.pass).length
-  const by = report.judge ? ` by ${report.judge.model}` : ""
-  return `Checked${by}: ${passed} of ${report.results.length} criteria met.`
+  return `Vector reports ${passed} of ${report.results.length} criteria met.`
 }
 
 /**

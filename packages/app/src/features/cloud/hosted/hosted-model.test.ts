@@ -181,7 +181,9 @@ describe("sessions", () => {
 
   test("end reasons read as sentences", () => {
     expect(reasonLine({ state: "ended", reason: "idle" })).toBe("Nothing happened for 10 minutes.")
-    expect(reasonLine({ state: "ended", reason: "failed" })).toContain("Nothing was used")
+    // A computer that started but did not boot ran and was charged (M8): the line never says nothing was used.
+    expect(reasonLine({ state: "ended", reason: "failed" })).toBe("The computer could not start. Only the time it ran counts.")
+    expect(jobReasonLine({ reason: "failed" })).toBe("The cloud computer could not start, so Vector stopped trying.")
     expect(reasonLine({ state: "ended" })).toBeUndefined()
   })
 })
@@ -241,8 +243,10 @@ describe("Done by Morning", () => {
     const decoded = decodeJob(job())!
     expect(decoded.report?.links).toEqual([{ title: "Page", url: "https://example.com/signup" }])
     expect(decoded.report?.pullRequest).toBe("https://github.com/acme/site/pull/7")
-    expect(verdictLine(decoded.report!)).toBe("Checked by Claude Sonnet 5.5: 1 of 2 criteria met.")
-    expect(verdictLine({ ...decoded.report!, judged: false })).toContain("No model from another lab")
+    // The agent reports the results; the server never sees the judge's answer, so no line says another lab checked them.
+    expect(verdictLine(decoded.report!)).toBe("Vector reports 1 of 2 criteria met.")
+    expect(verdictLine({ ...decoded.report!, judged: false })).toBe("This report has no pass or fail for each criterion.")
+    expect(verdictLine(decoded.report!)).not.toMatch(/lab|checked/i)
     expect(decodeJob(job({ report: { ...job().report, pullRequest: "https://evil.example/pull/1" } }))?.report?.pullRequest).toBeUndefined()
     expect(decodeJob(job({ id: "jb_x" }))).toBeUndefined()
     const jobs = decodeJobs({ queue: "paused", plan: { perNight: 3, atOnce: 1, recurringPerDay: 5 }, jobs: [job(), {}] })!

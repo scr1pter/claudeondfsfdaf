@@ -12,12 +12,15 @@ import { hostedMinutesKey } from "../api/_lib/hosted-entitlement"
 import { handleHostedHeartbeat, handleHostedSessions } from "../api/_lib/hosted-api"
 import {
   HOSTED_JOB_SCRIPTS,
+  START_RETRY_MS,
+  START_TRIES,
   applyHostedJobsTransition,
   chooseJudge,
   doneByMorningConfigured,
   eraseAccountHostedJobs,
   hostedJobKey,
   hostedJobsNightKey,
+  hostedJobRecordingKey,
   hostedJobsRecurringDayKey,
   hostedRecurringDueKey,
   hostedSessionModelsKey,
@@ -33,6 +36,7 @@ import {
 import { handleHostedJob, handleHostedJobApprove, handleHostedJobReport, handleHostedJobs } from "../api/_lib/hosted-jobs-api"
 // The two routes' registrations: the reaper's job runner and the heartbeat's recording hook.
 import "../api/_lib/hosted-jobs-runtime"
+import { readLine } from "../api/_lib/hosted-ledger"
 import { computerName } from "../api/_lib/hosted-provider"
 import { readSessionRecord, stopHostedSession } from "../api/_lib/hosted-sessions"
 import { configuredPlanModels } from "../api/_lib/model-plan-config"
@@ -43,6 +47,7 @@ import {
   HOUR,
   MINUTE,
   R2_HOST,
+  daemonBeat,
   hostedSessionEnvironment,
   hostedWorld,
   invoke,
@@ -208,7 +213,7 @@ function heartbeat(w: HostedWorld, session: string, token: string, body: Record<
   return invoke((request, response) => handleHostedHeartbeat(request, response, w.options), {
     method: "POST",
     authorization: token,
-    body: { activeAt: w.fakes.clock.now, ...body },
+    body: daemonBeat(session, { activeAt: w.fakes.clock.now, ...body }),
     query: { id: session },
   })
 }
@@ -429,6 +434,56 @@ describe("running the queue (the reaper's pass)", () => {
     expect(await record(w, job.id)).toMatchObject({ state: "missed", reason: "hours" })
     expect(w.provider.calls).toEqual([])
     expect(alerts.map((alert) => alert.title)).toEqual(["Done by Morning: a job could not start in time"])
+  })
+
+  test("a computer that keeps failing to boot is charged once, then the job is missed, never retried every minute (P8 review)", async () => {
+    const w = await world()
+    const job = await queued(w)
+    // Every boot fails 30 seconds in, after the computer started: that session's minute is charged (M8).
+    w.provider.boot = async (name: string) => {
+      w.provider.calls.push(`boot ${name}`)
+      w.advance(30_000)
+      throw new Error("broken image")
+    }
+    expect(await runQueue(w)).toMatchObject({ started: 0, missed: 1 })
+    for (let minute = 0; minute < 120; minute++) {
+      w.advance(MINUTE)
+      await runQueue(w)
+    }
+    expect(await record(w, job.id)).toMatchObject({ state: "missed", reason: "failed", startTries: 1 })
+    expect(w.provider.calls.filter((call) => call.startsWith("start"))).toHaveLength(1)
+    const sessions = [...w.fakes.store.zset(codiumKey("hosted", "sessions", ACCOUNT_ID)).keys()]
+    expect(sessions).toHaveLength(1)
+    expect(await readLine(ACCOUNT_ID, `hb-${sessions[0]}-0`, w.options)).toMatchObject({ kind: "block", units: 1 })
+    expect(alerts.map((alert) => alert.title)).toEqual(["Done by Morning: a job could not start"])
+  })
+
+  test("a start the provider refuses is tried again after 5 and 15 minutes, then the job is missed, nothing charged", async () => {
+    const w = await world()
+    const job = await queued(w)
+    w.provider.fail.start = true
+    const starts = () => w.provider.calls.filter((call) => call.startsWith("start")).length
+    expect(await runQueue(w)).toMatchObject({ started: 0, waiting: 1 })
+    expect(await record(w, job.id)).toMatchObject({ state: "queued", startTries: 1 })
+    w.advance(4 * MINUTE)
+    await runQueue(w)
+    expect(starts()).toBe(1)
+    w.advance(MINUTE)
+    await runQueue(w)
+    expect([starts(), (await record(w, job.id)).startTries]).toEqual([2, 2])
+    w.advance(14 * MINUTE)
+    await runQueue(w)
+    expect(starts()).toBe(2)
+    w.advance(MINUTE)
+    expect(await runQueue(w)).toMatchObject({ missed: 1 })
+    expect(await record(w, job.id)).toMatchObject({ state: "missed", reason: "failed", startTries: 3 })
+    expect(starts()).toBe(START_TRIES)
+    w.advance(HOUR)
+    await runQueue(w)
+    expect(starts()).toBe(START_TRIES)
+    for (const session of w.fakes.store.zset(codiumKey("hosted", "sessions", ACCOUNT_ID)).keys())
+      expect((await readLine(ACCOUNT_ID, `hb-${session}-0`, w.options))?.units ?? 0).toBe(0)
+    expect(START_RETRY_MS).toEqual([5 * MINUTE, 15 * MINUTE])
   })
 
   test("a job waits until its start; one still queued at its deliver-by time is missed, never started late", async () => {
@@ -858,7 +913,13 @@ describe("recordings (30 days, owner only)", () => {
     expect(link.searchParams.get("response-cache-control")).toBe("private, no-store")
     expect(Number(link.searchParams.get("X-Amz-Expires"))).toBe(900)
     expectCounts(detail.body)
+    // A segment newer than the session's minutes allow (one a minute) gets no link and moves nothing, so a report can
+    // never push the real segments out of the last ten (P8 review).
+    const early = await heartbeat(w, session, token, { segments: [{ n: 999_999, bytes: 1 }, { n: 12, bytes: 500 }] })
+    expect(early.body.recording.uploads).toEqual([])
+    expect(w.fakes.store.hash(hostedJobRecordingKey(job.id)).get(String(999_999 % Hosted.RECORDING_SEGMENTS))).toBeUndefined()
     // A segment that falls out of the last ten gets no link; a newer one replaces the oldest slot.
+    w.advance(12 * MINUTE)
     const window = await heartbeat(w, session, token, { segments: [{ n: 12, bytes: 500 }] })
     expect(window.body.recording.uploads.map((item: { n: number }) => item.n)).toEqual([12])
     const stale = await heartbeat(w, session, token, { segments: [{ n: 1, bytes: 500 }] })

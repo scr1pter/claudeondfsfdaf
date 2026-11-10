@@ -2744,3 +2744,51 @@ sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
 - **Dispatch needs the default branch.** GitHub lists a `workflow_dispatch` workflow under Actions only once the file
   is on the default branch, so "owner can dispatch" holds after `codium` reaches `main` (A60), with the settings above
   in place.
+
+## P8 review decisions (9 Nov 2026)
+
+- **A53: an ended plan's disk retention is not charged while no download exists.** §4.4 keeps an ended plan's disks 14
+  days "for download" and A51 charges those days to the final period (`chargeRetention`). No route lets an ended plan
+  download its disk (A53 and A56 list the download-only start as not built), so the subscriber paid for something they
+  could not use, and after a downgrade to a plan without a cloud computer the new plan's pool paid it. The provisioner
+  now keeps the disks the same 14 days (a returning subscriber still gets them back) without calling
+  `chargeRetention`: Vector pays that storage (16 GB × 14 days per computer at the snapshot rate, well under a dollar).
+  `chargeRetention` stays in the ledger for the package that builds the download-only start, which should call it
+  again. The budget figure now counts those kept disks.
+- **A53/A54: heartbeats are signed by hostd.** The run token cannot tell hostd from the agent, because the provider's
+  proxy adds it for every process on the computer. hostd now makes a 32-byte key before the agent exists, sends it
+  (`hostdKey`) until a heartbeat is answered, and signs every heartbeat (`mac`: HMAC-SHA256 over
+  `Hosted.hostdMacInput(session, body without mac)`). The server registers the first key it sees for a session with
+  SET NX (`hosted:hostd:<sid>`) and refuses any beat that is unsigned, signed with another key, or offers another key
+  (403 `HOSTED_RUN_REFUSED`). The job is handed out only in an answer, so the agent, which hostd starts from that answer,
+  can never register first. The contract names no such key; this is the smallest change that keeps §4.2's fair-use checks
+  (busy processor, idle, done, hand-over) and A55's recordings trustworthy. A hostd that restarts mid-session loses its
+  key and its beats are refused, so the session stops by heartbeat loss, as it would with hostd gone.
+- **A55: a recording segment cannot be newer than the session's minutes allow.** A reported segment number above
+  (minutes since the session's first block started) + 1 + 2 × take-overs is ignored (the recorder makes one segment a
+  minute and each take-over skips at most two numbers). `takeovers` is a new optional count on the session record.
+- **A55/A56: judged reports are worded as Vector's report.** The server checks that the session asked the judge it named
+  after step 1, but never sees the judge's answer: the agent posts the results. Until the server asks the judge itself
+  (or keeps the judge's completion from the gateway), the screens say "Vector reports N of M criteria met" and the
+  composer says "the report says whether each one was met"; nothing says a model from another lab checked the work. A
+  report with no judge says "This report has no pass or fail for each criterion."
+- **A55: start failures end a job.** A computer that started and then failed (the boot step, or a start the provider
+  could not answer that turned out to have run) misses the job at once with reason `failed`; a start the provider failed
+  is tried again 5 and then 15 minutes after each failure, and the third failure misses the job. The phone alert says
+  "Done by Morning: a job could not start" for these. The session end reason `failed` now says "The computer could not
+  start. Only the time it ran counts." (it said nothing was used, which was not true when a computer ran).
+- **A53: a start whose outcome is unknown is charged to its stop.** When creating or resuming the computer throws, the
+  provider is asked to stop it: a computer that was running is charged from the block's start to that stop (M8), none is
+  charged nothing, and when the stop cannot be made either the session is left stopping with its block open, so the
+  reaper's stop closes it when the computer stops (or it lapses and is charged in full).
+- **A53: the budget figure.** It now adds each roster account's egress at its plan's fair-use cap for every day left in
+  the cycle (at `egressGbCostMicro()`), and the disks of every computer Vector still knows for accounts off the roster
+  (ended plans, lost and open disputes). Billing periods are stepped by 28 days, so a period that starts before the cycle
+  ends is never missed. The answer gains `retained` and `egressGb` (owner-side only).
+- **A56/A58: the Vercel CLI without npx.** The finding preferred pinning `vercel` in bun.lock and installing with
+  `--frozen-lockfile --ignore-scripts`. That would add the CLI's whole dependency tree to the monorepo's lockfile, which
+  this step could not fetch or verify here. `vercelCli` instead installs `vercel@65.3.1` once per run with npm into a new
+  temporary folder, `--ignore-scripts` and `npm_config_ignore_scripts=true`, with only PATH, HOME and TMPDIR in npm's
+  environment, checks the installed version, and runs that install's `vercel` with the token and only PATH, HOME,
+  TMPDIR, DOCKER_CONFIG, VERCEL_ORG_ID and VERCEL_PROJECT_ID. The CLI's dependencies are still resolved at run time
+  without a lockfile; pinning them in a lockfile is left to whoever can update bun.lock with network access.

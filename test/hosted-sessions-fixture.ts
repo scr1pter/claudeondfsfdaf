@@ -1,7 +1,7 @@
-import { generateKeyPairSync } from "node:crypto"
+import { createHash, createHmac, generateKeyPairSync } from "node:crypto"
 import { Readable } from "node:stream"
 import type { EntitlementSnapshot } from "../packages/schema/src/codium-entitlements"
-import type { Hosted } from "../packages/schema/src/hosted"
+import { Hosted } from "../packages/schema/src/hosted"
 import { mintCliToken } from "../api/_lib/cli-token"
 import { codiumKey } from "../api/_lib/codium-keys"
 import { effectiveCaps } from "../api/_lib/codium-snapshot"
@@ -435,4 +435,19 @@ export function invoke(
     }
     void handler(request, response as unknown as ApiResponse).catch(reject)
   })
+}
+
+/** The cloud computer daemon's own key for a session in these tests (fixed per session), base64url of 32 bytes. */
+export function hostdKey(session: string) {
+  return createHash("sha256").update(`hostd-fixture:${session}`).digest("base64url")
+}
+
+/**
+ * A heartbeat body as the daemon sends it (P8 review): its key, which the first beat registers, and `mac`, the HMAC of
+ * `Hosted.hostdMacInput(session, body)` with that key. Pass `key` to sign as someone else.
+ */
+export function daemonBeat(session: string, body: Record<string, unknown>, key = hostdKey(session)) {
+  const signed = { ...body, hostdKey: key }
+  const mac = createHmac("sha256", Buffer.from(key, "base64url")).update(Hosted.hostdMacInput(session, signed)).digest("base64url")
+  return { ...signed, mac }
 }

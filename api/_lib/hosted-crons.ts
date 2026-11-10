@@ -9,7 +9,6 @@ import { readSwitch } from "./codium-switches.js"
 import { hostedAccess, readHostedMinutes } from "./hosted-entitlement.js"
 import {
   chargeNightly,
-  chargeRetention,
   drainHostedSettles,
   eraseAccountHostedLedger,
   periodCharges,
@@ -30,6 +29,7 @@ import {
   HOSTED_DISK_GB_MAX,
   HOSTED_SIZES,
   SNAPSHOT_GB_DAY_COST_MICRO,
+  egressGbCostMicro,
   wholeMinutes,
   weightedMinuteCostMicro,
   VCPU_HOUR_MICRO,
@@ -39,10 +39,14 @@ import {
   START_STALE_MS,
   TOKEN_REFRESH_MS,
   endHostedSession,
+  eraseSessionArchives,
+  hostedArchivesKey,
   hostedBeatKey,
   hostedComputersKey,
   hostedDiskDueKey,
   hostedEgressKey,
+  hostedHandoffAlertKey,
+  hostedHostdKey,
   hostedJobKey,
   hostedLeaseKey,
   hostedLiveKey,
@@ -409,23 +413,15 @@ export async function applyHostedTransition(t: Transition, options: SessionOptio
 
   if (to.state === "frozen" || liveHosted(to)) return
   if (from && !liveHosted(from) && from.state !== "frozen") return
-  // The plan no longer keeps the disks: set when they are deleted, once (the first date stands).
+  // The plan no longer keeps the disks: set when they are deleted, once (the first date stands). §4.4 keeps an ended
+  // plan's disks 14 days for download and WP A51 charges that to the final period (`chargeRetention`), but no route lets
+  // an ended plan download its disk yet (a download-only start is not built), so nothing is charged for it: the disks
+  // are kept the 14 days at Vector's cost, for a subscriber who comes back (P8 review; codium-deviations.md).
   const computers = await accountComputers(t.account, fetcher)
   if (!computers.length) return
-  let until: number
-  if (to.state === "ended" && to.reason === "disputed") until = now + Hosted.LOST_DISPUTE_DISK_DAYS * DAY
-  else {
-    until = Infinity
-    for (const computer of computers) {
-      const granted = await chargeRetention(
-        t.account,
-        { computer: computerName(t.account, computer), gb: HOSTED_DISK_GB_MAX, days: Hosted.ENDED_DISK_DAYS },
-        { fetcher, clock },
-      )
-      until = Math.min(until, granted.until)
-    }
-  }
-  await store(["ZADD", hostedDiskDueKey(), "NX", Math.max(now, Math.floor(until)), t.account], fetcher)
+  const until =
+    now + (to.state === "ended" && to.reason === "disputed" ? Hosted.LOST_DISPUTE_DISK_DAYS : Hosted.ENDED_DISK_DAYS) * DAY
+  await store(["ZADD", hostedDiskDueKey(), "NX", until, t.account], fetcher)
 }
 
 /** The account's sessions whose computer may be running. */
@@ -467,26 +463,35 @@ export async function eraseAccountHosted(account: string, options: SessionOption
     clock,
   })
   await eraseAccountHostedLedger(account, { fetcher, clock })
-  const ids = await store(["ZRANGE", hostedSessionsKey(account), 0, -1], fetcher)
+  const listed = await store(["ZRANGE", hostedSessionsKey(account), 0, -1], fetcher)
+  const ids = (Array.isArray(listed) ? listed : []).filter((id): id is string => typeof id === "string")
+  // The packed files in the media bucket, while the records still say which sessions had them (P8 review).
+  await eraseSessionArchives(account, ids, options)
   const keys: string[] = []
-  for (const id of Array.isArray(ids) ? ids : []) {
-    if (typeof id !== "string") continue
-    keys.push(hostedSessionKey(id), hostedJobKey(id), hostedBeatKey(id), hostedModelKey(id))
-  }
-  for (let index = 0; index < keys.length; index += 200) await store(["DEL", ...keys.slice(index, index + 200)], fetcher)
+  for (const id of ids)
+    keys.push(hostedSessionKey(id), hostedJobKey(id), hostedBeatKey(id), hostedModelKey(id), hostedHostdKey(id), hostedHandoffAlertKey(id))
+  for (let index = 0; index < keys.length; index += 240) await store(["DEL", ...keys.slice(index, index + 240)], fetcher)
   for (const computer of await accountComputers(account, fetcher)) {
     await store(["HDEL", hostedNamesKey(), computerName(account, computer)], fetcher)
     await store(["HDEL", hostedUsageKey(), computerName(account, computer)], fetcher)
   }
   await store(
-    ["DEL", hostedSessionsKey(account), hostedLeaseKey(account), hostedComputersKey(account), hostedSuspendKey(account), hostedTrueUpKey(account)],
+    [
+      "DEL",
+      hostedSessionsKey(account),
+      hostedLeaseKey(account),
+      hostedComputersKey(account),
+      hostedSuspendKey(account),
+      hostedTrueUpKey(account),
+      hostedArchivesKey(account),
+    ],
     fetcher,
   )
   for (const key of [hostedSuspendedKey(), hostedRecentKey(), hostedDiskDueKey()])
     await store(["ZREM", key, account], fetcher)
   await store(["HDEL", hostedRosterKey(), account], fetcher)
   await store(["HDEL", hostedBudgetKey(), account], fetcher)
-  return { computers: names.length, sessions: Math.floor(keys.length / 4) }
+  return { computers: names.length, sessions: ids.length }
 }
 
 // ── Nightly ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -571,7 +576,12 @@ export async function runHostedNightly(options: CronOptions = {}): Promise<Night
       try {
         const reading = parseReading(readings.get(computer.name))
         const next = await chargeComputer(account, computer, reading, day, { fetcher, clock })
-        if (next.charged) result.charged++
+        if (next.charged) {
+          result.charged++
+          // Stored at once: should the true-up below fail, tomorrow's egress still starts from this reading, so the
+          // bytes charged tonight are never charged again under tomorrow's line (P8 review).
+          await store(["HSET", hostedUsageKey(), computer.name, JSON.stringify(next.reading)], fetcher)
+        }
         const trued = await trueUpComputer(account, computer, next.reading, { fetcher, clock })
         result.trued += trued.lines
         await store(["HSET", hostedUsageKey(), computer.name, JSON.stringify(trued.reading)], fetcher)
@@ -632,7 +642,11 @@ function parseReading(raw: string | undefined): Reading | undefined {
   }
 }
 
-/** One computer's nightly charge: a day of storage while the plan is live, and its egress since the last reading. */
+/**
+ * One computer's nightly charge: a day of storage while the plan is live, and its egress since the last reading. A
+ * listing with no egress figure (the provider's is optional) still charges the day's storage and keeps the last egress
+ * reading, so the next figure charges everything since (P8 review).
+ */
 async function chargeComputer(
   account: string,
   computer: ComputerInfo,
@@ -641,10 +655,10 @@ async function chargeComputer(
   options: { fetcher: typeof fetch; clock: () => number },
 ) {
   const egressNow = computer.egressBytes
-  if (reading?.egressDay === day || egressNow === undefined)
-    return { charged: false, reading: reading ?? { egressBytes: egressNow ?? 0 } }
+  const before = reading?.egressBytes ?? 0
+  if (reading?.egressDay === day) return { charged: false, reading }
   // A cumulative figure that went down means the computer was made again: everything it reports is new.
-  const egressBytes = egressNow >= (reading?.egressBytes ?? 0) ? egressNow - (reading?.egressBytes ?? 0) : egressNow
+  const egressBytes = egressNow === undefined ? 0 : egressNow >= before ? egressNow - before : egressNow
   const snapshot = await readSnapshot(account, options.fetcher)
   const storageGbDays = liveHosted(snapshot) ? HOSTED_DISK_GB_MAX : 0
   if (storageGbDays > 0 || egressBytes > 0)
@@ -653,7 +667,7 @@ async function chargeComputer(
       { computer: computer.name, day, storageGbDays, egressGb: egressBytes / 1_000_000_000 },
       options,
     )
-  return { charged: true, reading: { ...reading, egressBytes: egressNow, egressDay: day } }
+  return { charged: true, reading: { ...reading, egressBytes: egressNow ?? before, egressDay: day } }
 }
 
 /**
@@ -820,8 +834,11 @@ function planMinutes(plan: PlanId) {
  * The worst-case cost of the hosted team for the rest of the billing cycle (`GET /api/hosted/admin/budget`, read by the
  * budget workflow of WP A56, which sets max(current budget, spend + 1.3 × this)): for every account whose plan
  * includes a cloud computer, the hours left this period and the full hours of every period that starts before the
- * cycle ends, at the worst-case cost of a weighted minute, plus every computer's disk at its worst-case size until the
- * cycle ends. Owner-side only: never shown to a subscriber (P1).
+ * cycle ends (stepping by 28 days, the shortest month, so no period is missed), at the worst-case cost of a weighted
+ * minute, plus each day's egress at the plan's fair-use cap and every computer the plan allows with its disk at the
+ * worst-case size; and the disks Vector keeps for accounts whose plan no longer has a cloud computer (an ended plan's 14
+ * days, a lost dispute's 30, a dispute still open), until the cycle ends. Owner-side only: never shown to a subscriber
+ * (P1).
  */
 export async function hostedBudget(input: { cycleEnd: number }, options: { fetcher?: typeof fetch; clock?: () => number } = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -829,8 +846,12 @@ export async function hostedBudget(input: { cycleEnd: number }, options: { fetch
   const now = clock()
   const roster = await hashEntries(hostedRosterKey(), fetcher)
   const cached = await hashEntries(hostedBudgetKey(), fetcher)
+  const days = Math.max(0, Math.ceil((input.cycleEnd - now) / DAY))
+  const egressCap = Math.max(...Object.values(HOSTED_ABUSE.egressGbPerDay))
+  const counted = new Set<string>()
   let minutes = 0
   let computers = 0
+  let egressGb = 0
   for (const [account, raw] of roster) {
     let entry: { plan?: unknown; periodEnd?: unknown }
     try {
@@ -839,6 +860,7 @@ export async function hostedBudget(input: { cycleEnd: number }, options: { fetch
       continue
     }
     if (!isPlanId(entry.plan)) continue
+    counted.add(account)
     const cap = planMinutes(entry.plan)
     const periodEnd = Number(entry.periodEnd)
     let left = cap
@@ -849,18 +871,26 @@ export async function hostedBudget(input: { cycleEnd: number }, options: { fetch
     } catch {}
     minutes += left
     // Every period that starts before the cycle ends brings the plan's full hours.
-    for (let end = Number.isFinite(periodEnd) ? periodEnd : now; end < input.cycleEnd; end += 30 * DAY) minutes += cap
+    for (let end = Number.isFinite(periodEnd) ? periodEnd : now; end < input.cycleEnd; end += 28 * DAY) minutes += cap
     computers += ENTITLEMENTS[entry.plan].hosted?.computers ?? 0
+    const perDay = (HOSTED_ABUSE.egressGbPerDay as Partial<Record<PlanId, number>>)[entry.plan] ?? egressCap
+    egressGb += perDay * days
   }
-  const days = Math.max(0, Math.ceil((input.cycleEnd - now) / DAY))
-  const storageMicro = Math.ceil(computers * HOSTED_DISK_GB_MAX * days * SNAPSHOT_GB_DAY_COST_MICRO)
+  // Disks kept for accounts off the roster: each computer Vector still knows the account had.
+  const names = await hashEntries(hostedNamesKey(), fetcher)
+  let retained = 0
+  for (const account of names.values()) if (!counted.has(account)) retained++
+  const storageMicro = Math.ceil((computers + retained) * HOSTED_DISK_GB_MAX * days * SNAPSHOT_GB_DAY_COST_MICRO)
   const computeMicro = minutes * weightedMinuteCostMicro()
+  const egressMicro = Math.ceil(egressGb * egressGbCostMicro())
   return {
     computedAt: now,
     cycleEnd: input.cycleEnd,
     accounts: roster.size,
     minutes,
     computers,
-    worstCaseUsd: Math.ceil((computeMicro + storageMicro) / 10_000) / 100,
+    retained,
+    egressGb,
+    worstCaseUsd: Math.ceil((computeMicro + storageMicro + egressMicro) / 10_000) / 100,
   }
 }

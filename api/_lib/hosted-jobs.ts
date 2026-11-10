@@ -15,6 +15,7 @@ import {
   HOSTED_SESSION_SCRIPTS,
   hostedSessionsConfigured,
   hostedSessionsKey,
+  hostedStartFailure,
   readSessionRecord,
   readSuspension,
   startHostedSession,
@@ -35,7 +36,8 @@ import { sendServerAlert } from "./web-push.js"
 
 /*
  * Done by Morning (contract WP A55): jobs queued before bed with success criteria, run one session each on the person's
- * cloud computer (WP A53), and ended by a report that a model from another lab checked against each criterion.
+ * cloud computer (WP A53), and ended by a report with a pass or fail per criterion that the agent sends after asking a
+ * judge model from another lab.
  *
  * One entry. Every job, whoever queues it (the desktop, the phone, the CLI, a recurring job's run), comes in through
  * `enqueueHostedJob(trigger)` (§4.17). The plan's caps come from the snapshot only (S1): jobs a night and recurring jobs
@@ -49,10 +51,12 @@ import { sendServerAlert } from "./web-push.js"
  * pool at no less than cost (M8, WP A51). Recordings and reports cost Vector a few cents (contract §1.4).
  *
  * Honesty. A job aims to deliver by its time and promises nothing (H3): one that cannot start before that time is
- * missed, never started late. The second lab's pass or fail is claimed only when the server picked a judge from a lab
- * the session's own model requests did not use and saw the session ask that judge after it reported. Anything that
- * would go live waits as a pull request the person approves: the server opens nothing, merges nothing and writes to no
- * repository (S9). Approve answers the pull request's address for the person's own client to open.
+ * missed, never started late. The report's pass or fail per criterion is the agent's own: the server names a judge from
+ * a lab the session's own model requests did not use and takes the results only after it saw the session ask that
+ * judge, but it never sees the judge's answer, so the screens say Vector reports the results, never that another lab
+ * checked them (P8 review, until the server asks the judge itself). Anything that would go live waits as a pull request
+ * the person approves: the server opens nothing, merges nothing and writes to no repository (S9). Approve answers the
+ * pull request's address for the person's own client to open.
  *
  * Recordings. A job's session uploads the last `Hosted.RECORDING_SEGMENTS` one-minute segments of its screen as it
  * runs (into as many rotating slots in the media bucket), so a session that ends abruptly still has them. Only the
@@ -87,6 +91,13 @@ const ACCOUNT_INDEX_MS = 40 * DAY
 const CLAIM_MS = 2 * MINUTE
 /** A running job whose session never got linked (a store fault mid-start) is given up after this long. */
 const START_LINK_MS = 10 * MINUTE
+/**
+ * A start that failed at the provider is tried again this long after each failure (from the failure, not from the job's
+ * start), and the job is missed (`failed`) at the `START_TRIES`th; a computer that ran and failed misses it at once, so
+ * a provider fault or a broken image costs a job's plan at most a few charged minutes (P8 review).
+ */
+export const START_RETRY_MS = [5 * MINUTE, 15 * MINUTE] as const
+export const START_TRIES = 3
 /** A recurring run more than this late (the queue was waiting) is skipped, not queued. */
 const RECURRING_LATE_MS = 2 * HOUR
 /** A recurring run aims to deliver this long after its job's minutes. */
@@ -213,6 +224,8 @@ const JobRecord = Schema.Struct({
   /** Why it has not started yet (the queue waiting, paused, every computer busy). */
   waiting: Schema.optional(Schema.String),
   startingAt: Schema.optional(Schema.Number),
+  /** Starts that failed at the provider so far (`START_TRIES`). */
+  startTries: Schema.optional(Schema.Int),
   session: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.Number),
   endedAt: Schema.optional(Schema.Number),
@@ -1051,24 +1064,34 @@ async function startDueJob(
         options,
       )
     } catch (error) {
-      const reason = startRefusal(error)
+      // A computer that ran and failed (it was stopped and charged) misses the job; so does the last of START_TRIES
+      // starts that failed at the provider. Anything else waits, as a busy queue does.
+      const failure = hostedStartFailure(error)
+      const refusal = failure === "ran" ? "failed" : startRefusal(error)
       await store(["SREM", hostedJobsRunningKey(record.account), id], fetcher).catch(() => undefined)
       await store(["ZREM", hostedJobsLiveKey(), id], fetcher).catch(() => undefined)
       const back = await updateJobRecord(
         id,
-        (value) =>
-          value.state === "running" && value.session === undefined
-            ? reason
-              ? { ...value, state: "missed", reason, endedAt: clock(), startingAt: undefined }
-              : { ...value, state: "queued", startingAt: undefined, waiting: "busy" }
-            : undefined,
+        (value) => {
+          if (value.state !== "running" || value.session !== undefined) return undefined
+          const startTries = (value.startTries ?? 0) + (failure ? 1 : 0)
+          const reason = refusal ?? (failure && startTries >= START_TRIES ? "failed" : undefined)
+          const tries = startTries ? { startTries } : {}
+          return reason
+            ? { ...value, ...tries, state: "missed", reason, endedAt: clock(), startingAt: undefined }
+            : { ...value, ...tries, state: "queued", startingAt: undefined, waiting: "busy" }
+        },
         { fetcher, clock },
       )
       if (back.state === "queued") {
-        await store(["ZADD", hostedJobsDueKey(), back.startAfter, id], fetcher)
+        const tries = back.startTries ?? 0
+        const at = failure
+          ? Math.min(back.deliverBy, clock() + START_RETRY_MS[Math.min(tries, START_RETRY_MS.length) - 1]!)
+          : back.startAfter
+        await store(["ZADD", hostedJobsDueKey(), at, id], fetcher)
         return "waiting"
       }
-      if (back.state !== "missed" || back.reason !== reason) return "gone"
+      if (back.state !== "missed" || back.endedAt === undefined || back.session !== undefined) return "gone"
       await alertJob(back, options)
       return "missed"
     }
@@ -1097,8 +1120,8 @@ async function pruneRunning(account: string, fetcher: typeof fetch) {
 }
 
 /**
- * A running job's outcome once its session ended: `reported` when the agent sent its report (with the second lab's pass
- * or fail when it came), else `incomplete` with the session's end reason. Answers true when it ended the job.
+ * A running job's outcome once its session ended: `reported` when the agent sent its report (with its pass or fail per
+ * criterion when they came), else `incomplete` with the session's end reason. Answers true when it ended the job.
  */
 async function settleRunningJob(id: string, options: JobOptions) {
   const fetcher = options.fetcher ?? fetch
@@ -1144,7 +1167,9 @@ async function alertJob(record: JobRecord, options: JobOptions) {
       : record.state === "incomplete"
         ? "Done by Morning: a job did not finish"
         : record.state === "missed"
-          ? "Done by Morning: a job could not start in time"
+          ? record.reason === "failed"
+            ? "Done by Morning: a job could not start"
+            : "Done by Morning: a job could not start in time"
           : undefined
   if (!title) return
   const send =
@@ -1381,7 +1406,8 @@ export function chooseJudge(
  * 1. `{summary, links?, pullRequest?}`: the work. The server picks the judge (another lab than every model the session
  *    used) and answers `{judge: {model}}`, or `{judge: null}` when none can be picked: the report then stands unjudged.
  * 2. `{judge, results: [{pass, note?}]}`, one per criterion, in order: accepted only for the judge the server named,
- *    and only once the session asked that model after step 1 (the gateway's log).
+ *    and only once the session asked that model after step 1 (the gateway's log). The results are what the agent says
+ *    the judge answered: the server does not see that answer (P8 review), so they are shown as Vector's report.
  */
 export async function recordJobReport(claims: HostedRunClaims, id: string, input: unknown, options: JobOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -1509,7 +1535,8 @@ function numberList(value: unknown, max: number) {
  * Done by Morning's part of a session's heartbeat (WP A53's `registerHostedHeartbeatHook`). For a session that runs a
  * job, the answer carries `recording`: one signed PUT for each finished segment the computer reported that falls in the
  * last `Hosted.RECORDING_SEGMENTS` (each into slot n mod 10), and segments it says it uploaded are checked by size
- * before they count. Any other session's answer is left as it is.
+ * before they count. Only the daemon's signed beats reach this (hosted-sessions.ts `requireDaemonBeat`), and a segment
+ * number past what the session's time allows is ignored. Any other session's answer is left as it is.
  */
 export async function jobHeartbeat(context: {
   record: SessionRecord
@@ -1526,8 +1553,13 @@ export async function jobHeartbeat(context: {
   if (!job || job.session !== record.id || job.account !== record.account || job.state !== "running") return
   answer.recording = { uploads: [] }
   const body = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {}
-  const reported = segmentList(body.segments)
-  const uploaded = numberList(body.uploadedSegments, Hosted.RECORDING_SEGMENTS)
+  // The recorder makes one segment a minute, and each take-over skips at most two numbers (the cut segment and the
+  // restart): no real segment is newer than this, so a report can never move the window past the recording and push
+  // the real segments out of it (P8 review).
+  const newestPossible =
+    Math.floor((now - (record.startedAt ?? record.createdAt)) / MINUTE) + 1 + 2 * (record.takeovers ?? 0)
+  const reported = segmentList(body.segments).filter((segment) => segment.n <= newestPossible)
+  const uploaded = numberList(body.uploadedSegments, Hosted.RECORDING_SEGMENTS).filter((n) => n <= newestPossible)
   if (!reported.length && !uploaded.length) return
   const slots = await readSlots(job.id, fetcher)
   const key = hostedJobRecordingKey(job.id)

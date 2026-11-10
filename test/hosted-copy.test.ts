@@ -10,7 +10,7 @@ import {
 } from "../api/_lib/hosted-api"
 import { computerName } from "../api/_lib/hosted-provider"
 import { ledgerBackend, type LedgerBackend } from "./hosted-fixture"
-import { ACCOUNT_ID, hostedSessionEnvironment, hostedWorld, invoke } from "./hosted-sessions-fixture"
+import { ACCOUNT_ID, daemonBeat, hostedSessionEnvironment, hostedWorld, invoke } from "./hosted-sessions-fixture"
 
 // WP A53: what the cloud computer tells people and computers carries copy fields and numeric fields named as counts,
 // shares and times only, never an amount (P1); its copy never mentions GitHub or Actions and makes no promise (H3,
@@ -136,7 +136,7 @@ describe("hosted answers carry copy fields and counts only (P1)", () => {
         await call((q, r) => handleHostedHeartbeat(q, r, w.options), {
           method: "POST",
           authorization: w.provider.token(computerName(ACCOUNT_ID, 1))!,
-          body: { cpu: 5, archiveBytes: 1024 },
+          body: daemonBeat(id, { cpu: 5, archiveBytes: 1024 }),
           query: { id },
         })
       ).body,

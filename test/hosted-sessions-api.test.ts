@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { RedisClient } from "bun"
+import { createHash } from "node:crypto"
 import { Hosted } from "../packages/schema/src/hosted"
 import { codiumKey } from "../api/_lib/codium-keys"
 import { switchKey } from "../api/_lib/codium-switches"
@@ -15,9 +16,12 @@ import {
 import { hostedAccount, hostedRunningKey, readLine } from "../api/_lib/hosted-ledger"
 import { bootArguments, computerName, hostedComputerKey } from "../api/_lib/hosted-provider"
 import { vercelProvider, type VercelSandboxSdk } from "../api/_lib/hosted-provider-vercel"
+import { reapHostedSessions } from "../api/_lib/hosted-crons"
 import {
   HOSTED_SESSION_SCRIPTS,
+  START_STALE_MS,
   assertHostedSessionLive,
+  hostedHostdKey,
   hostedJobKey,
   hostedLeaseKey,
   hostedViewerKey,
@@ -35,6 +39,8 @@ import {
   MINUTE,
   R2_HOST,
   VIEWER_PUBLIC_X,
+  daemonBeat,
+  hostdKey,
   hostedSessionEnvironment,
   hostedWorld,
   invoke,
@@ -84,7 +90,7 @@ function beat(w: HostedWorld, id: string, body: Record<string, unknown>, options
   return invoke((request, response) => handleHostedHeartbeat(request, response, w.options), {
     method: "POST",
     authorization: token,
-    body,
+    body: daemonBeat(id, body),
     query: { id },
     ...(options.headers ? { headers: options.headers } : {}),
   })
@@ -155,6 +161,83 @@ describe("starting a session", () => {
     expect(line?.units ?? 0).toBe(0)
     w.provider.fail.start = false
     expect((await start(w)).status).toBe(201)
+  })
+
+  test("a store fault right after the first block was held charges nothing and starts no computer (P8 review)", async () => {
+    const w = await hostedWorld(ledger)
+    let failed = 0
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const command = typeof init?.body === "string" && init.body.startsWith("[") ? (JSON.parse(init.body) as unknown[]) : []
+      // The first compare-and-set of an existing session record: the update that follows openBlock.
+      if (command[0] === "EVAL" && command[1] === HOSTED_SESSION_SCRIPTS.SAVE && command[4] !== "" && failed++ === 0)
+        return new Response("unavailable", { status: 500 })
+      return w.fetcher(input, init)
+    }) as typeof fetch
+    const answer = await invoke((request, response) => handleHostedSessions(request, response, { ...w.options, fetcher }), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: { size: "standard", jobMinutes: 60, prompt: PROMPT },
+    })
+    expect(answer.status).toBe(503)
+    expect(failed).toBeGreaterThan(0)
+    expect(w.provider.calls.some((call) => call.startsWith("start"))).toBe(false)
+    const ids = [...w.fakes.store.zset(codiumKey("hosted", "sessions", ACCOUNT_ID)).keys()]
+    expect(await readSessionRecord(ids[0]!, w.fetcher)).toMatchObject({ state: "ended", reason: "failed" })
+    expect(w.fakes.store.hash(hostedRunningKey(ACCOUNT_ID)).size).toBe(0)
+    expect((await readLine(ACCOUNT_ID, `hb-${ids[0]}-0`, w.options))?.units ?? 0).toBe(0)
+    // Ten minutes on, the reaper finds nothing left to charge.
+    w.fakes.clock.advance(START_STALE_MS + MINUTE)
+    await reapHostedSessions(w.options)
+    expect((await readLine(ACCOUNT_ID, `hb-${ids[0]}-0`, w.options))?.units ?? 0).toBe(0)
+  })
+
+  test("a start whose outcome the provider could not tell charges up to the stop when a computer did start (M8)", async () => {
+    const w = await hostedWorld(ledger)
+    const start = w.provider.start.bind(w.provider)
+    // The provider makes the computer, then its answer times out 90 seconds in.
+    w.provider.start = async (config) => {
+      await start(config)
+      w.fakes.clock.advance(90_000)
+      throw new Error("timed out")
+    }
+    const answer = await invoke((request, response) => handleHostedSessions(request, response, w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: { size: "standard", jobMinutes: 60, prompt: PROMPT },
+    })
+    expect(answer.status).toBe(503)
+    const name = computerName(ACCOUNT_ID, 1)
+    expect(w.provider.computers.get(name)!.status).toBe("stopped")
+    const ids = [...w.fakes.store.zset(codiumKey("hosted", "sessions", ACCOUNT_ID)).keys()]
+    expect(await readSessionRecord(ids[0]!, w.fetcher)).toMatchObject({ state: "ended", reason: "failed" })
+    expect(await readLine(ACCOUNT_ID, `hb-${ids[0]}-0`, w.options)).toMatchObject({ kind: "block", units: 2 })
+    expect(w.fakes.store.hash(hostedLeaseKey(ACCOUNT_ID)).size).toBe(0)
+  })
+
+  test("when the provider can answer neither the start nor the stop, the reaper stops the computer and charges what ran", async () => {
+    const w = await hostedWorld(ledger)
+    const start = w.provider.start.bind(w.provider)
+    w.provider.start = async (config) => {
+      await start(config)
+      w.provider.fail.stop = true
+      throw new Error("timed out")
+    }
+    const answer = await invoke((request, response) => handleHostedSessions(request, response, w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: { size: "standard", jobMinutes: 60, prompt: PROMPT },
+    })
+    expect(answer.status).toBe(503)
+    const ids = [...w.fakes.store.zset(codiumKey("hosted", "sessions", ACCOUNT_ID)).keys()]
+    // Left stopping with its block open: nothing is closed at the start while a computer may be running.
+    expect(await readSessionRecord(ids[0]!, w.fetcher)).toMatchObject({ state: "stopping", reason: "failed" })
+    expect(w.fakes.store.hash(hostedRunningKey(ACCOUNT_ID)).size).toBe(1)
+    w.fakes.clock.advance(3 * MINUTE)
+    w.provider.fail.stop = false
+    await reapHostedSessions(w.options)
+    expect(await readSessionRecord(ids[0]!, w.fetcher)).toMatchObject({ state: "ended", reason: "failed" })
+    expect(w.provider.computers.get(computerName(ACCOUNT_ID, 1))!.status).toBe("stopped")
+    expect(await readLine(ACCOUNT_ID, `hb-${ids[0]}-0`, w.options)).toMatchObject({ kind: "block", units: 3 })
   })
 
   test("a computer that started but could not boot is stopped, and what it ran is charged", async () => {
@@ -417,6 +500,40 @@ describe("the computer's heartbeat (S3, S7)", () => {
     expect(booted.body.job).toBeUndefined()
     expect(w.fakes.store.get(hostedJobKey(session.id))).toBeUndefined()
     expect((await beat(w, session.id, {})).body.job).toBeUndefined()
+  })
+
+  test("only the daemon's signed reports count: the agent can neither register a key nor report for it (P8 review)", async () => {
+    const w = await hostedWorld(ledger)
+    const session = await started(w)
+    // The run token alone is what any process on the computer gets from the provider's proxy.
+    const raw = (body: Record<string, unknown>) =>
+      invoke((request, response) => handleHostedHeartbeat(request, response, w.options), {
+        method: "POST",
+        authorization: w.provider.token(computerName(ACCOUNT_ID, 1))!,
+        body,
+        query: { id: session.id },
+      })
+    const unsigned = await raw({ cpu: 0, activeAt: w.fakes.clock.now })
+    expect([unsigned.status, unsigned.body.error.code]).toEqual([403, "HOSTED_RUN_REFUSED"])
+    expect(unsigned.body.job).toBeUndefined()
+    expect(await readBeat(session.id, w.fetcher)).toBeUndefined()
+    // The daemon's first beat registers its key and gets the job; the agent starts only after that.
+    const first = await beat(w, session.id, { cpu: 95 })
+    expect(first.body.job).toMatchObject({ prompt: PROMPT })
+    expect(w.fakes.store.get(hostedHostdKey(session.id))).toBe(hostdKey(session.id))
+    const busySince = (await readBeat(session.id, w.fetcher))!.busySince
+    expect(busySince).toBe(w.fakes.clock.now)
+    // A key of the agent's own, offered or not, signs nothing the server takes.
+    const agentKey = createHash("sha256").update("agent").digest("base64url")
+    w.fakes.clock.advance(5_000)
+    const offered = await raw(daemonBeat(session.id, { cpu: 0, done: true }, agentKey))
+    expect([offered.status, offered.body.error.code]).toEqual([403, "HOSTED_RUN_REFUSED"])
+    const { hostdKey: _key, ...quiet } = daemonBeat(session.id, { cpu: 0 }, agentKey)
+    expect((await raw(quiet)).status).toBe(403)
+    // A signed body changed after signing fails too.
+    expect((await raw({ ...daemonBeat(session.id, { cpu: 95 }), cpu: 0 })).status).toBe(403)
+    // So the busy processor the daemon reported stands, and nothing the agent sent was kept.
+    expect(await readBeat(session.id, w.fetcher)).toMatchObject({ busySince, cpu: 95, done: false })
   })
 
   test("the daemon's image generation and hand-over reason are kept; anything else is dropped (WP A54)", async () => {

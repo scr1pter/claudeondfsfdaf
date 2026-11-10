@@ -74,7 +74,8 @@ jobs:
         with:
           bun-version-file: package.json
 
-      # The script needs no dependency; it runs the Vercel CLI it pins (VERCEL_CLI_VERSION) through npx.
+      # The script needs no dependency. It installs the Vercel CLI it pins (VERCEL_CLI_VERSION) with npm into a temporary
+      # folder, install scripts off and no secret in npm's environment, then runs it with the token alone.
       - name: Raise the budget
         env:
           VERCEL_TOKEN: ${{ secrets.VECTOR_HOSTED_BUDGET_VERCEL_TOKEN }}

@@ -30,6 +30,8 @@ import {
 } from "../api/_lib/codium-tombstone"
 import { hostedJobKey, hostedJobsAccountKey, hostedJobsNightKey, hostedRecurringKey } from "../api/_lib/hosted-jobs"
 import {
+  archiveKey,
+  hostedArchivesKey,
   hostedComputersKey,
   hostedEgressKey,
   hostedPagesKey,
@@ -922,6 +924,48 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect(leftovers(w).filter((entry) => !entry.kept)).toEqual([])
     expect(w.fakes.store.get(snapshotKey(ACCOUNT))).toBeUndefined()
     expect(await readSnapshot(ACCOUNT, w.fetcher)).toBeUndefined()
+  })
+
+  test("the cloud computer's packed files are deleted from the media bucket, retried while it refuses (P8 review)", async () => {
+    restore()
+    restore = deletionEnvironment({
+      VECTOR_R2_MEDIA_ACCESS_KEY_ID: "FIXTUREMEDIAKEY00001",
+      VECTOR_R2_MEDIA_SECRET_ACCESS_KEY: "fixture/media/secret/for/deletion/0000",
+    })
+    const base = deletionWorld()
+    const deleted: string[] = []
+    let mediaDown = true
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.origin === R2_ORIGIN && url.pathname.startsWith("/vector-media/")) {
+        if (init?.method !== "DELETE") return new Response(null, { status: 405 })
+        if (mediaDown) return new Response("unavailable", { status: 503 })
+        deleted.push(decodeURIComponent(url.pathname.slice("/vector-media/".length)))
+        return new Response(null, { status: 204 })
+      }
+      return base.fetcher(input, init)
+    }) as typeof fetch
+    const w: World = { ...base, fetcher }
+    await seedEverything(w)
+    // An upload link for the session's packed files was signed, so the object may be in the bucket.
+    w.fakes.store.members(hostedArchivesKey(ACCOUNT)).add(SESSION)
+
+    const answer = await deleteRoute(w)
+    expect(answer.status).toBe(503)
+    expect(answer.body.error).toMatchObject({ code: "ACCOUNT_ERASE_PENDING", stage: "erase" })
+    expect((await readTombstone(ACCOUNT, w.fetcher))?.failed).toContain("computer")
+    expect(w.services.identities).toEqual([])
+    // The session's records stay until its files are gone, so a retry still knows which files to delete.
+    expect(w.fakes.store.members(hostedArchivesKey(ACCOUNT)).has(SESSION)).toBe(true)
+
+    mediaDown = false
+    advance(w, deletionRetryMs(1))
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, deleted: 1 })
+    expect(deleted).toEqual([archiveKey(ACCOUNT, SESSION)])
+    expect(deleted[0]).toMatch(new RegExp(`^hosted/test/[a-f0-9]{32}/${SESSION}/files\\.tar\\.gz$`))
+    expect(deleted[0]).not.toContain(ACCOUNT)
+    expect(w.services.identities).toEqual([ACCOUNT])
+    expect(w.fakes.store.live(hostedArchivesKey(ACCOUNT))).toBeUndefined()
   })
 
   test("Worker outage: the request answers pending, the tombstone stays, and the cron retries until it finishes", async () => {

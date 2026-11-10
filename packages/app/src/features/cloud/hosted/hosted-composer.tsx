@@ -421,7 +421,7 @@ export function DialogRunOnCloudComputer(props: { computer: HostedComputer; prom
         </label>
         <Show when={mode() === "morning"}>
           <label class="hosted-field">
-            <span>Success criteria, one per line (a model from another lab checks each one)</span>
+            <span>Success criteria, one per line (the report says whether each one was met)</span>
             <textarea rows={3} value={criteria()} onInput={(event) => setCriteria(event.currentTarget.value)} />
           </label>
           <label class="hosted-field hosted-field--inline">
@@ -480,7 +480,7 @@ export function DialogRunOnCloudComputer(props: { computer: HostedComputer; prom
 
 // ── Done by Morning ────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The queue and its reports: a second lab's pass or fail per criterion, the recording, and Approve. */
+/** The queue and its reports: the pass or fail Vector reports per criterion, the recording, and Approve. */
 export function DialogHostedJobs(props: { computer: HostedComputer }) {
   const platform = props.computer.platform
   const [jobs, { refetch }] = createResource(async () => {

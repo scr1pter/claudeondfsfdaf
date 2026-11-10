@@ -5,7 +5,8 @@
 //
 // The worst case comes from Vector's own API (`GET /api/hosted/admin/budget?cycleEnd=<ms>`, read with
 // VECTOR_HOSTED_BUDGET_READ_SECRET): every Max and Ultra account's cloud computer hours left this period, the full hours
-// of every period that starts before the cycle ends, and every computer's disk, at the provider's worst-case rates.
+// of every period that starts before the cycle ends, each day's egress at the plan's fair-use cap, and every computer's
+// disk (kept ones of ended plans too), at the provider's worst-case rates.
 // The current budget and the cycle's spend come from the Vercel CLI (`vercel billing budgets inspect --json`), run
 // with a token from a member with the Billing role, scoped to the hosted team.
 //
@@ -21,6 +22,9 @@
 // Anything it cannot read fails the run without changing anything.
 
 import { spawn } from "node:child_process"
+import { mkdtemp, readFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 /** The Vercel CLI the workflow runs, exactly (published 26 Oct 2026). */
 export const VERCEL_CLI_VERSION = "65.3.1"
@@ -242,22 +246,80 @@ export async function runBudget(input: {
     : { status: "raised", message: "The hosted team's budget was raised to cover the worst case." }
 }
 
-/** The real CLI: `npx --yes vercel@<version>`, its output captured and never echoed. */
-export function vercelCli(token: string): Cli {
-  return (args) =>
-    new Promise((resolve) => {
-      const child = spawn("npx", ["--yes", `vercel@${VERCEL_CLI_VERSION}`, ...args], {
-        env: { ...process.env, VERCEL_TOKEN: token, NO_COLOR: "1", CI: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      })
-      let stdout = ""
-      child.stdout.on("data", (chunk: Buffer) => {
-        if (stdout.length < 1_000_000) stdout += chunk.toString("utf8")
-      })
-      child.stderr.resume()
-      child.on("error", () => resolve({ code: 1, stdout: "" }))
-      child.on("close", (code) => resolve({ code: code ?? 1, stdout }))
+/** A process run: its exit code and its output (capped), the error stream discarded. */
+export type Spawn = (command: string, args: string[], env: Record<string, string>) => Promise<{ code: number; stdout: string }>
+
+const realSpawn: Spawn = (command, args, env) =>
+  new Promise((resolve) => {
+    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] })
+    let stdout = ""
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (stdout.length < 1_000_000) stdout += chunk.toString("utf8")
     })
+    child.stderr.resume()
+    child.on("error", () => resolve({ code: 1, stdout: "" }))
+    child.on("close", (code) => resolve({ code: code ?? 1, stdout }))
+  })
+
+/** What the CLI may see of the job's environment besides its token: the image job's project link and Docker's folder. */
+export const CLI_ENV = ["PATH", "HOME", "TMPDIR", "DOCKER_CONFIG", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID"] as const
+/** What npm may see while it installs the CLI: no token, no secret. */
+export const INSTALL_ENV = ["PATH", "HOME", "TMPDIR"] as const
+
+function pick(env: Record<string, string | undefined>, names: readonly string[]) {
+  const picked: Record<string, string> = {}
+  for (const name of names) if (typeof env[name] === "string") picked[name] = env[name]!
+  return picked
+}
+
+/**
+ * The real CLI (P8 review: no `npx`, whose install would run its dependencies' install scripts with the token in their
+ * environment). `vercel@<version>` is installed once per run into a new temporary folder by npm, with install scripts
+ * off and only PATH, HOME and TMPDIR in npm's environment, and must report the pinned version; then each call runs that
+ * install's `vercel` with the token and only `CLI_ENV`. Its output is captured and never echoed.
+ */
+export function vercelCli(
+  token: string,
+  deps: { spawn?: Spawn; dir?: string; env?: Record<string, string | undefined> } = {},
+): Cli {
+  const run = deps.spawn ?? realSpawn
+  const env = deps.env ?? process.env
+  let installed: Promise<string | undefined> | undefined
+  const install = async () => {
+    const dir = deps.dir ?? (await mkdtemp(path.join(env.RUNNER_TEMP || tmpdir(), "vector-vercel-cli-")))
+    const result = await run(
+      "npm",
+      [
+        "install",
+        "--prefix",
+        dir,
+        "--ignore-scripts",
+        "--no-save",
+        "--no-audit",
+        "--no-fund",
+        "--omit=dev",
+        "--loglevel=error",
+        `vercel@${VERCEL_CLI_VERSION}`,
+      ],
+      {
+        ...pick(env, INSTALL_ENV),
+        npm_config_ignore_scripts: "true",
+        npm_config_cache: path.join(dir, ".npm-cache"),
+        npm_config_userconfig: path.join(dir, ".npmrc"),
+        npm_config_update_notifier: "false",
+      },
+    )
+    if (result.code !== 0) return undefined
+    const manifest = await readFile(path.join(dir, "node_modules", "vercel", "package.json"), "utf8")
+      .then((text) => JSON.parse(text) as { version?: unknown })
+      .catch(() => undefined)
+    return manifest?.version === VERCEL_CLI_VERSION ? path.join(dir, "node_modules", ".bin", "vercel") : undefined
+  }
+  return async (args) => {
+    const bin = await (installed ??= install())
+    if (!bin) return { code: 1, stdout: "" }
+    return run(bin, args, { ...pick(env, CLI_ENV), VERCEL_TOKEN: token, NO_COLOR: "1", CI: "1" })
+  }
 }
 
 if (import.meta.main) {

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto"
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { Option, Schema } from "effect"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
 import { Hosted } from "../../packages/schema/src/hosted.js"
@@ -70,6 +70,9 @@ import { runTokenRevoked } from "./codium-provisioners.js"
  * - `hosted:lease:<account>`     HASH computer number → `<sid>:<until>`: computers at once, by lease;
  * - `hosted:job:<sid>`           the job prompt, until the computer's daemon collects it;
  * - `hosted:beat:<sid>`          the daemon's last report; `hosted:model:<sid>` the session's last model request;
+ * - `hosted:hostd:<sid>`         the daemon's own key, registered by its first heartbeat (signed heartbeats only);
+ * - `hosted:archives:<account>`  SET of sessions an upload link for packed files was signed for (account deletion);
+ * - `hosted:handoff-alert:<sid>` a hand-over alert went out in the last 10 minutes (WP A56's phone alert);
  * - `hosted:viewer:<jti>`        viewer tokens issued (5 minutes);
  * - `hosted:computers:<account>` SET of computer numbers the account has had; `hosted:names` HASH name → account;
  * - `hosted:suspend:<account>`, `hosted:suspended`  fair-use or owner holds on the account's cloud computer;
@@ -104,6 +107,9 @@ export const hostedLiveKey = () => codiumKey("hosted", "live")
 export const hostedLeaseKey = (account: string) => codiumKey("hosted", "lease", account)
 export const hostedJobKey = (id: string) => codiumKey("hosted", "job", id)
 export const hostedBeatKey = (id: string) => codiumKey("hosted", "beat", id)
+export const hostedHostdKey = (id: string) => codiumKey("hosted", "hostd", id)
+export const hostedArchivesKey = (account: string) => codiumKey("hosted", "archives", account)
+export const hostedHandoffAlertKey = (id: string) => codiumKey("hosted", "handoff-alert", id)
 export const hostedModelKey = (id: string) => codiumKey("hosted", "model", id)
 export const hostedViewerKey = (jti: string) => codiumKey("hosted", "viewer", jti)
 export const hostedComputersKey = (account: string) => codiumKey("hosted", "computers", account)
@@ -152,6 +158,8 @@ const SessionRecord = Schema.Struct({
   /** When the computer's current run token expires. */
   tokenUntil: Schema.optional(Schema.Number),
   takeover: Schema.optional(Takeover),
+  /** How many take-overs the session had (each restarts the recorder, which skips a segment number: WP A55). */
+  takeovers: Schema.optional(Schema.Int),
   releasedAt: Schema.optional(Schema.Number),
   wrapBy: Schema.optional(Schema.Number),
   stoppedAt: Schema.optional(Schema.Number),
@@ -524,20 +532,26 @@ export async function startHostedSession(
   }
   const deadline = block.startedAt + start.jobMinutes * 60_000
   const tokenUntil = tokenExpiry(block.stopBy, deadline)
-  record = await updateSessionRecord(
-    id,
-    (current) => ({
-      ...current,
-      deadline,
-      block: block.block,
-      blockStartedAt: block.startedAt,
-      startedAt: block.startedAt,
-      endsAt: block.endsAt,
-      stopBy: block.stopBy,
-      tokenUntil,
-    }),
-    { fetcher, clock },
-  )
+  try {
+    record = await updateSessionRecord(
+      id,
+      (current) => ({
+        ...current,
+        deadline,
+        block: block.block,
+        blockStartedAt: block.startedAt,
+        startedAt: block.startedAt,
+        endsAt: block.endsAt,
+        stopBy: block.stopBy,
+        tokenUntil,
+      }),
+      { fetcher, clock },
+    )
+  } catch (error) {
+    // Nothing was asked of the provider yet: the block closes at its own start, so nothing is charged (P8 review).
+    await failSession({ ...record, block: block.block }, block.startedAt, options).catch(() => undefined)
+    throw error
+  }
   await renewLease(record, block.stopBy + LEASE_SLACK_MS, clock(), fetcher).catch(() => undefined)
   let started: Awaited<ReturnType<typeof startHostedComputer>>
   try {
@@ -548,9 +562,10 @@ export async function startHostedSession(
       options,
     )
   } catch (error) {
-    // The provider did not start it (or not that we know of): nothing ran on the hold, so nothing is charged. Should a
-    // computer have started anyway, the reconciler stops it, since its session holds no block any more.
-    await failSession(record, block.startedAt, options).catch(() => undefined)
+    // Whether a computer started is not known from the error (a timeout may hide one that did): failSession asks the
+    // provider to stop it and charges up to that stop when one was running, nothing when none was (M8).
+    const ran = await failSession(record, block.startedAt, options).catch(() => "unknown" as const)
+    markStartFailure(error, ran === "ran" ? "ran" : "start")
     throw error
   }
   try {
@@ -558,6 +573,7 @@ export async function startHostedSession(
   } catch (error) {
     // The computer ran: it is stopped and its minutes are charged, as every minute a computer runs is (M8).
     await endHostedSession(record, "failed", options).catch(() => undefined)
+    markStartFailure(error, "ran")
     throw error
   }
   record = await updateSessionRecord(
@@ -583,13 +599,55 @@ async function abandonSession(record: SessionRecord, fetcher: typeof fetch, cloc
   await store(["DEL", hostedJobKey(record.id)], fetcher).catch(() => undefined)
 }
 
-/** A start whose computer did not start: its block is closed at its own start (nothing charged), and it ends. */
-async function failSession(record: SessionRecord, endedAt: number, options: SessionOptions) {
+/**
+ * How a start failed after its first block was held (the Done by Morning queue reads it, WP A55): `start` when the
+ * provider was asked and no computer is known to have run, `ran` when one ran (it was stopped and charged).
+ */
+export type StartFailure = "start" | "ran"
+const startFailures = new WeakMap<object, StartFailure>()
+
+function markStartFailure(error: unknown, failure: StartFailure) {
+  if (error && typeof error === "object") startFailures.set(error, failure)
+}
+
+/** How a start that threw `error` failed, when it got as far as the provider; undefined otherwise. */
+export function hostedStartFailure(error: unknown): StartFailure | undefined {
+  return error && typeof error === "object" ? startFailures.get(error) : undefined
+}
+
+/**
+ * A start whose computer may not have started (M8, P8 review): the provider is asked to stop it first. When it answers
+ * that a computer was running, the block closes at that stop, so every minute it ran is charged (`ran`); when none was,
+ * at the block's own start, so nothing is (`none`). When the provider cannot answer, the session is left stopping with
+ * its block open: the reaper's stop closes the block when the computer stops, or the block lapses and is charged in
+ * full (`unknown`).
+ */
+async function failSession(record: SessionRecord, startedAt: number, options: SessionOptions) {
   const fetcher = options.fetcher ?? fetch
   const clock = options.clock ?? Date.now
+  let stopped: Awaited<ReturnType<typeof stopHostedComputer>>
+  try {
+    stopped = await stopHostedComputer(record.account, record.computer, options)
+  } catch {
+    await updateSessionRecord(
+      record.id,
+      (value) =>
+        value.state === "ended" || value.state === "stopping" ? undefined : { ...value, state: "stopping", reason: "failed" },
+      { fetcher, clock },
+    )
+    return "unknown" as const
+  }
+  const ran = stopped === "stopped" || stopped === "stopping"
+  const endedAt = ran ? clock() : startedAt
   await closeBlock(record.account, { session: record.id, block: record.block, endedAt }, { fetcher, clock })
-  await stopHostedComputer(record.account, record.computer, options).catch(() => undefined)
+  if (ran)
+    await updateSessionRecord(
+      record.id,
+      (value) => (value.stoppedAt === undefined ? { ...value, stoppedAt: endedAt } : undefined),
+      { fetcher, clock },
+    ).catch(() => undefined)
   await finishEnd(record.id, "failed", options)
+  return ran ? ("ran" as const) : ("none" as const)
 }
 
 // ── Stopping ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -795,7 +853,12 @@ export async function takeOverHostedSession(account: string, id: unknown, option
     (value) => {
       if (value.state === "takeover") return undefined
       if (value.state !== "running") throw notRunning(value)
-      return { ...value, state: "takeover", takeover: { since: now, until: now + Hosted.TAKEOVER_MS } }
+      return {
+        ...value,
+        state: "takeover",
+        takeover: { since: now, until: now + Hosted.TAKEOVER_MS },
+        takeovers: (value.takeovers ?? 0) + 1,
+      }
     },
     options,
   )
@@ -852,6 +915,36 @@ export async function issueViewer(account: string, id: unknown, mode: unknown, o
 /** Where a session's packed files live in the media bucket. */
 export function archiveKey(account: string, id: string) {
   return `hosted/${stripeMode()}/${hostedAccount(account).slice(0, 32)}/${id}/files.tar.gz`
+}
+
+/**
+ * Deletes the packed files of `account`'s sessions from the media bucket (account deletion, P5; P8 review): every
+ * session an upload link was signed for (`hosted:archives:<account>`) and every one among `ids` whose record says its
+ * files were asked for. The bucket's 2-day rule is not relied on (the owner may not have set it). A bucket that answers
+ * anything but 2xx or 404 throws, so the deletion is retried. Run before the session records are deleted. Answers how
+ * many objects were deleted or already gone.
+ */
+export async function eraseSessionArchives(account: string, ids: readonly string[], options: SessionOptions = {}) {
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
+  const signed = await store(["SMEMBERS", hostedArchivesKey(account)], fetcher)
+  const sessions = new Set((Array.isArray(signed) ? signed : []).map(String))
+  for (const id of ids) {
+    if (sessions.has(id) || !Hosted.SESSION_ID.test(id)) continue
+    const record = await readSessionRecord(id, fetcher)
+    if (record?.account === account && record.download) sessions.add(id)
+  }
+  let erased = 0
+  for (const id of sessions) {
+    if (!Hosted.SESSION_ID.test(id)) continue
+    // Files may be in the bucket: the deletion waits until it can reach it.
+    if (!r2Configured("media")) throw unavailable()
+    const target = presignR2("media", { method: "DELETE", key: archiveKey(account, id), expiresIn: 60, now: clock() })
+    const answer = await fetcher(target.url, { method: "DELETE", redirect: "error", signal: AbortSignal.timeout(10_000) })
+    if (!answer.ok && answer.status !== 404) throw unavailable()
+    erased++
+  }
+  return erased
 }
 
 function publicOrigin() {
@@ -1081,6 +1174,31 @@ export function utcHour(at: number) {
 }
 
 /**
+ * Whether a heartbeat comes from the computer's daemon (P8 review). The provider's proxy adds the session's run token
+ * to every request for the run-API host, whichever process on the computer sends it, so the token alone cannot tell
+ * the daemon (root) from the agent. The daemon makes its own key before anything else runs and sends it with its first
+ * beats (`hostdKey`); the first one registers it for the session (SET NX), and the job, without which no agent starts,
+ * is handed out only to beats signed with it. Every beat must carry `mac`, the HMAC of `hostdMacInput(session, body)`
+ * with that key: anything else is refused, so the agent can neither report for the daemon (CPU, activity, done, the
+ * hand-over, recording segments) nor register a key of its own.
+ */
+async function requireDaemonBeat(id: string, input: Record<string, unknown>, keepMs: number, fetcher: typeof fetch) {
+  const refuse = () => new ApiError(403, "HOSTED_RUN_REFUSED", "This report is not from the cloud computer's daemon.")
+  const { mac, ...signed } = input
+  if (typeof mac !== "string" || !Hosted.HOSTD_MAC.test(mac)) throw refuse()
+  const offered = typeof signed.hostdKey === "string" && Hosted.HOSTD_KEY.test(signed.hostdKey) ? signed.hostdKey : undefined
+  let key = await store(["GET", hostedHostdKey(id)], fetcher)
+  if (typeof key !== "string" && offered) {
+    await store(["SET", hostedHostdKey(id), offered, "NX", "PX", keepMs], fetcher)
+    key = await store(["GET", hostedHostdKey(id)], fetcher)
+  }
+  if (typeof key !== "string" || !Hosted.HOSTD_KEY.test(key) || (offered !== undefined && offered !== key)) throw refuse()
+  const expected = createHmac("sha256", Buffer.from(key, "base64url")).update(Hosted.hostdMacInput(id, signed)).digest()
+  const given = Buffer.from(mac, "base64url")
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw refuse()
+}
+
+/**
  * The computer's daemon reports (`POST /api/hosted/sessions/<id>/heartbeat` on the run-API host, with the session's run
  * token): its CPU, its agent's last activity, page loads and egress (cumulative), whether it booted, finished or packed
  * the files the person asked for. The answer tells it the session's state, who has control, its deadline, whether the
@@ -1099,6 +1217,12 @@ export async function recordHeartbeat(
   if (!record || record.account !== claims.account) throw notFound()
   const beat = parseHeartbeat(input)
   const now = clock()
+  await requireDaemonBeat(
+    id,
+    input as Record<string, unknown>,
+    Math.max(60_000, record.deadline + TIMEOUT_GRACE_MS + DAY_MS - now),
+    fetcher,
+  )
   const answer: Hosted.HeartbeatAnswer = {
     state: record.state,
     control: record.state === "takeover" ? "person" : "agent",
@@ -1180,6 +1304,8 @@ export async function recordHeartbeat(
       // The person asked for the files and the computer has not packed them yet (WP A54).
       answer.pack = true
     } else {
+      // Noted before the link goes out, so account deletion finds the object even if no later beat confirms it.
+      await store(["SADD", hostedArchivesKey(record.account), id], fetcher)
       const put = presignR2("media", {
         method: "PUT",
         key,

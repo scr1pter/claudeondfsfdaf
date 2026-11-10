@@ -136,7 +136,7 @@ describe("§4.4's cloud computer row", () => {
     expect((await start(w)).status).toBe(201)
   })
 
-  test("ended: sessions stop at once; the disks are kept 14 days for download, paid from the final period, then deleted", async () => {
+  test("ended: sessions stop at once; the disks are kept 14 days, at Vector's cost while no download exists, then deleted", async () => {
     const w = await hostedWorld(ledger)
     const session = await running(w)
     w.advance(3 * MINUTE)
@@ -146,12 +146,13 @@ describe("§4.4's cloud computer row", () => {
     expect(w.fakes.store.hash(hostedRosterKey()).has(ACCOUNT_ID)).toBe(false)
     const due = w.fakes.store.zset(hostedDiskDueKey()).get(ACCOUNT_ID)!
     expect(due).toBe(w.fakes.clock.now + Hosted.ENDED_DISK_DAYS * DAY)
+    // No route lets an ended plan download its disk yet, so the final period is charged nothing for keeping it
+    // (P8 review; codium-deviations.md).
     const key = w.fakes.store.get(codiumKey("account", ACCOUNT_ID))!
     const start = (JSON.parse(key) as { key: { start: number } }).key.start
-    expect(await readLine(ACCOUNT_ID, `hr-${NAME()}-sub_renewing-${start}`, w.options)).toMatchObject({
-      kind: "retention",
-      units: Hosted.ENDED_DISK_DAYS,
-    })
+    expect(await readLine(ACCOUNT_ID, `hr-${NAME()}-sub_renewing-${start}`, w.options)).toBeUndefined()
+    const rows = (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
+    expect(rows.some((row) => row.kind === "retention")).toBe(false)
     // Again (the sweep's catch-up) changes nothing: one charge, the first date.
     await applyHostedTransition({ account: ACCOUNT_ID, to: w.snapshot(), cause: "ended" }, w.options)
     expect(w.fakes.store.zset(hostedDiskDueKey()).get(ACCOUNT_ID)).toBe(due)
@@ -174,12 +175,14 @@ describe("§4.4's cloud computer row", () => {
     expect(w.provider.computers.has(NAME())).toBe(true)
   })
 
-  test("a move to a plan without a cloud computer is an end for the disks", async () => {
+  test("a move to a plan without a cloud computer is an end for the disks, charged nothing to the new plan's pool", async () => {
     const w = await hostedWorld(ledger)
     const session = await running(w)
     await transition(w, { plan: "vector-50" }, "downgrade")
     expect((await state(w, session.id)).state).toBe("ended")
     expect(w.fakes.store.zset(hostedDiskDueKey()).get(ACCOUNT_ID)).toBe(w.fakes.clock.now + Hosted.ENDED_DISK_DAYS * DAY)
+    const rows = (await ledger.rows()).filter((row) => row.account === hostedAccount(ACCOUNT_ID))
+    expect(rows.some((row) => row.kind === "retention")).toBe(false)
   })
 
   test("frozen: everything stops at once; the disks are kept with no date while the dispute is open", async () => {

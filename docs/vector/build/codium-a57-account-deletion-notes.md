@@ -112,3 +112,8 @@ a production-sized store.
 - No screen change: the website and the desktop already show the server's message, which now says deletion has started
   when a step is pending.
 - `bun.lock` was not touched. Nothing was pushed or deployed.
+
+**Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. P8's review (`codium-p8-repairs.md`)
+found that the `computer` part left the sessions' packed files (`hosted/<mode>/<hash>/<session>/files.tar.gz`) to the
+bucket's 2-day rule. `eraseAccountHosted` now deletes them first (`eraseSessionArchives`) and a bucket refusal keeps the
+deletion pending; `test/account-delete.test.ts` covers it.

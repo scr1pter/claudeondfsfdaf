@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { Hosted } from "../packages/schema/src/hosted"
 import { codiumKey } from "../api/_lib/codium-keys"
+import { HOSTED_ABUSE } from "../api/_lib/codium-limits"
 import { switchKey } from "../api/_lib/codium-switches"
 import { hostedMinutesKey } from "../api/_lib/hosted-entitlement"
 import { handleHostedBudget, handleHostedCron, handleHostedHeartbeat, handleHostedSessions } from "../api/_lib/hosted-api"
@@ -33,6 +34,7 @@ import {
   DAY,
   HOUR,
   MINUTE,
+  daemonBeat,
   hostedSessionEnvironment,
   hostedWorld,
   invoke,
@@ -73,7 +75,7 @@ async function beat(w: HostedWorld, id: string, body: Record<string, unknown> = 
   const answer = await invoke((request, response) => handleHostedHeartbeat(request, response, w.options), {
     method: "POST",
     authorization: w.provider.token(computerName(ACCOUNT_ID, computer))!,
-    body: { activeAt: w.fakes.clock.now, ...body },
+    body: daemonBeat(id, { activeAt: w.fakes.clock.now, ...body }),
     query: { id },
   })
   return answer
@@ -378,6 +380,65 @@ describe("nightly, drift and the budget", () => {
     expect(again).toMatchObject({ charged: 0, trued: 0 })
   })
 
+  test("a true-up that fails after the night's charges never makes the next night charge the same egress again (P8 review)", async () => {
+    const w = await hostedWorld(ledger)
+    const session = await start(w)
+    await run(w, session.id, 9)
+    const { handleHostedSessionAction } = await import("../api/_lib/hosted-api")
+    await invoke((request, response) => handleHostedSessionAction(request, response, "stop", w.options), {
+      method: "POST",
+      authorization: w.desktopToken(),
+      body: {},
+      query: { id: session.id },
+    })
+    Object.assign(w.provider.computers.get(NAME())!, { activeCpuMs: 30_000, durationMs: 9 * MINUTE, egressBytes: 2e9 })
+    w.fakes.store.hash(codiumKey("hosted", "usage")).set(NAME(), JSON.stringify({ egressBytes: 0, activeCpuMs: 0, durationMs: 0 }))
+    // The ledger refuses to record the true-up on the first night only.
+    let refuse = true
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (refuse && url.endsWith("/rest/v1/rpc/vector_hosted") && String(init?.body).includes('"action":"trued"'))
+        return new Response("unavailable", { status: 503 })
+      return w.fetcher(input, init)
+    }) as typeof fetch
+    w.advance(DAY)
+    const first = await runHostedNightly({ ...w.options, fetcher })
+    const day1 = new Date(w.fakes.clock.now - DAY).toISOString().slice(0, 10)
+    expect(first).toMatchObject({ day: day1, charged: 1, failed: 1 })
+    expect(await readLine(ACCOUNT_ID, `he-${NAME()}-${day1}`, w.options)).toMatchObject({ kind: "egress", units: 2 })
+    // One more GB the next day: only that GB is charged under the next day's line.
+    refuse = false
+    w.provider.computers.get(NAME())!.egressBytes = 3e9
+    w.advance(DAY)
+    const second = await runHostedNightly({ ...w.options, fetcher })
+    const day2 = new Date(w.fakes.clock.now - DAY).toISOString().slice(0, 10)
+    expect(second).toMatchObject({ day: day2, charged: 1, failed: 0 })
+    expect(await readLine(ACCOUNT_ID, `he-${NAME()}-${day2}`, w.options)).toMatchObject({ kind: "egress", units: 1 })
+  })
+
+  test("a computer listed with no egress figure still pays its day of storage, and its egress is charged later (P8 review)", async () => {
+    const w = await hostedWorld(ledger)
+    const session = await start(w)
+    await beat(w, session.id, { done: true })
+    await reap(w)
+    // The provider's egress figure is optional; this listing has none.
+    Object.assign(w.provider.computers.get(NAME())!, { egressBytes: undefined })
+    w.fakes.store.hash(codiumKey("hosted", "usage")).set(NAME(), JSON.stringify({ egressBytes: 5e8 }))
+    w.advance(DAY)
+    expect(await runHostedNightly(w.options)).toMatchObject({ charged: 1, failed: 0 })
+    const day1 = new Date(w.fakes.clock.now - DAY).toISOString().slice(0, 10)
+    expect(await readLine(ACCOUNT_ID, `hs-${NAME()}-${day1}`, w.options)).toMatchObject({ kind: "storage", units: HOSTED_DISK_GB_MAX })
+    expect(await readLine(ACCOUNT_ID, `he-${NAME()}-${day1}`, w.options)).toBeUndefined()
+    // Run again the same night: nothing more.
+    expect(await runHostedNightly(w.options)).toMatchObject({ charged: 0 })
+    // The next listing has the figure: everything since the last reading is charged once.
+    w.provider.computers.get(NAME())!.egressBytes = 2e9
+    w.advance(DAY)
+    await runHostedNightly(w.options)
+    const day2 = new Date(w.fakes.clock.now - DAY).toISOString().slice(0, 10)
+    expect(await readLine(ACCOUNT_ID, `he-${NAME()}-${day2}`, w.options)).toMatchObject({ kind: "egress", units: 1.5 })
+  })
+
   test("a computer running a session is not trued up that night", async () => {
     const w = await hostedWorld(ledger)
     const first = await start(w)
@@ -413,9 +474,14 @@ describe("nightly, drift and the budget", () => {
     const cycleEnd = snapshot.periodEnd + 5 * DAY
     const answer = await hostedBudget({ cycleEnd }, w.options)
     // 20 h left this period (nothing used) and 20 h of the next, which starts before the cycle ends.
-    expect(answer).toMatchObject({ accounts: 1, minutes: 2 * 20 * 60, computers: 1 })
+    expect(answer).toMatchObject({ accounts: 1, minutes: 2 * 20 * 60, computers: 1, retained: 0 })
     const days = Math.ceil((cycleEnd - w.fakes.clock.now) / DAY)
-    const expected = 2400 * costMinuteMicro("standard") + Math.ceil(HOSTED_DISK_GB_MAX * days * Math.ceil(80_000 / 28))
+    // Egress too, at Max's fair-use cap of 5 GB every day, at the default $0.15 a GB (P8 review).
+    expect(answer.egressGb).toBe(HOSTED_ABUSE.egressGbPerDay["vector-100"] * days)
+    const expected =
+      2400 * costMinuteMicro("standard") +
+      Math.ceil(HOSTED_DISK_GB_MAX * days * Math.ceil(80_000 / 28)) +
+      Math.ceil(5 * days * 150_000)
     expect(answer.worstCaseUsd).toBe(Math.ceil(expected / 10_000) / 100)
     const route = (authorization: string, cycle = String(cycleEnd)) =>
       invoke((request, response) => handleHostedBudget(request, response, w.options), {
@@ -428,5 +494,30 @@ describe("nightly, drift and the budget", () => {
     expect((await route(BUDGET_SECRET)).body).toEqual(answer)
     expect(hostedAccount(ACCOUNT_ID)).toHaveLength(64)
     expect(w.fakes.store.get(hostedComputerKey(NAME()))).toBeUndefined()
+  })
+
+  test("the budget steps periods by the shortest month and counts the disks kept for ended plans (P8 review)", async () => {
+    const w = await hostedWorld(ledger)
+    const snapshot = w.snapshot()
+    w.fakes.store.hash(hostedRosterKey()).set(
+      ACCOUNT_ID,
+      JSON.stringify({ plan: "vector-100", state: "active", periodStart: snapshot.periodStart, periodEnd: snapshot.periodEnd }),
+    )
+    // A 28-day period after this one still starts before a cycle that ends 29 days after this period does.
+    const cycleEnd = snapshot.periodEnd + 29 * DAY
+    expect((await hostedBudget({ cycleEnd }, w.options)).minutes).toBe(3 * 20 * 60)
+    // An ended plan's two computers keep their disks 14 days off the roster: their storage counts until the cycle ends.
+    const ENDED = "5e4d3c2b-1a09-4f8e-9d7c-6b5a4f3e2d1c"
+    w.fakes.store.hash(codiumKey("hosted", "names")).set(computerName(ENDED, 1), ENDED)
+    w.fakes.store.hash(codiumKey("hosted", "names")).set(computerName(ENDED, 2), ENDED)
+    w.fakes.store.hash(codiumKey("hosted", "names")).set(NAME(), ACCOUNT_ID)
+    const answer = await hostedBudget({ cycleEnd }, w.options)
+    expect(answer).toMatchObject({ computers: 1, retained: 2 })
+    const days = Math.ceil((cycleEnd - w.fakes.clock.now) / DAY)
+    const expected =
+      3 * 20 * 60 * costMinuteMicro("standard") +
+      Math.ceil(3 * HOSTED_DISK_GB_MAX * days * Math.ceil(80_000 / 28)) +
+      Math.ceil(5 * days * 150_000)
+    expect(answer.worstCaseUsd).toBe(Math.ceil(expected / 10_000) / 100)
   })
 })

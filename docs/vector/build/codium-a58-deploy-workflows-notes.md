@@ -105,3 +105,8 @@ refuses otherwise.
 - No rollback dispatch: rolling a Worker back means dispatching an older commit of `main` from a protected branch, or
   `wrangler rollback` by the owner.
 - Nothing was pushed, deployed or run. bun.lock was not touched.
+
+**Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. The image job's registry login runs
+`vercelCli`, which since P8's review (`codium-p8-repairs.md`) installs the pinned CLI with npm, install scripts off and
+no secret in npm's environment, instead of `npx --yes`. Images built from now on carry hostd's signed heartbeats, which
+the server requires; a computer from an older image is refused.

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createHmac } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { request } from "node:http"
 import { tmpdir } from "node:os"
@@ -6,6 +7,7 @@ import path from "node:path"
 import { agentCommand, agentEnv, browserCommand, cpuReader, createAgentApi, parseArgs, parseEgressCounter, type ApiDeps } from "../src/hostd"
 import { GitError } from "../src/git"
 import { HeartbeatError, RunApi, type Transport } from "../src/run-api"
+import { Hosted } from "@vectordevai/schema/hosted"
 
 // WP A54: hostd takes boot.sh's two arguments and nothing else; starts the agent as uid 10001 with no privilege and no
 // secret in its environment; starts the browser with its sandbox on and the debugging pipe for hostd alone; reports
@@ -83,12 +85,47 @@ describe("reports to Vector (S7)", () => {
 
   test("a heartbeat goes to the session's own path on the run-API host with no browser header and no credential", async () => {
     const t = capture()
-    const api = new RunApi("hosted-run.vectordev.ai", SESSION, t.transport)
+    const key = Buffer.alloc(32, 7)
+    const api = new RunApi("hosted-run.vectordev.ai", SESSION, t.transport, "vector-hostd", key)
     expect(await api.heartbeat({ booted: true, generation: 2 })).toMatchObject({ state: "running" })
     const sent = t.sent[0]!
     expect(sent).toMatchObject({ method: "POST", host: "hosted-run.vectordev.ai", path: `/api/hosted/sessions/${SESSION}/heartbeat` })
     expect(Object.keys(sent.headers).sort()).toEqual(["accept", "content-length", "content-type", "user-agent"])
-    expect(JSON.parse((sent.body as Buffer).toString())).toEqual({ booted: true, generation: 2 })
+    const { mac, ...signed } = JSON.parse((sent.body as Buffer).toString())
+    expect(signed).toEqual({ booted: true, generation: 2, hostdKey: key.toString("base64url") })
+    expect(mac).toBe(createHmac("sha256", key).update(Hosted.hostdMacInput(SESSION, signed)).digest("base64url"))
+  })
+
+  test("every heartbeat is signed with hostd's own key, which it sends only until a beat is answered (P8 review)", async () => {
+    let status = 503
+    const sent: Record<string, unknown>[] = []
+    const transport: Transport = async (input) => {
+      sent.push(JSON.parse((input.body as Buffer).toString()))
+      const body = status === 200 ? { state: "running", control: "agent", deadline: 1, browser: true, viewerKey: "k".repeat(43) } : {}
+      return { status, body: Buffer.from(JSON.stringify(body)) }
+    }
+    const api = new RunApi("hosted-run.vectordev.ai", SESSION, transport)
+    await expect(api.heartbeat({ cpu: 1 })).rejects.toBeInstanceOf(HeartbeatError)
+    status = 200
+    await api.heartbeat({ cpu: 2 })
+    await api.heartbeat({ cpu: 3, hostdKey: "x".repeat(43), mac: "y".repeat(43) })
+    // The key went out until the server answered once, the same key each time, and never again after.
+    expect(sent.map((body) => typeof body.hostdKey)).toEqual(["string", "string", "undefined"])
+    expect(sent[0]!.hostdKey).toBe(sent[1]!.hostdKey)
+    expect(Hosted.HOSTD_KEY.test(String(sent[0]!.hostdKey))).toBe(true)
+    const key = Buffer.from(String(sent[0]!.hostdKey), "base64url")
+    for (const body of sent) {
+      const { mac, ...signed } = body
+      expect(Hosted.HOSTD_MAC.test(String(mac))).toBe(true)
+      expect(mac).toBe(createHmac("sha256", key).update(Hosted.hostdMacInput(SESSION, signed)).digest("base64url"))
+    }
+    // A report can never carry a key or signature of its own.
+    expect(sent[2]).toMatchObject({ cpu: 3 })
+    expect(sent[2]!.mac).not.toBe("y".repeat(43))
+    // Each RunApi makes a key of its own.
+    const other = new RunApi("hosted-run.vectordev.ai", SESSION, transport)
+    await other.heartbeat({})
+    expect(sent[3]!.hostdKey).not.toBe(sent[0]!.hostdKey)
   })
 
   test("a refusal carries its status and code", async () => {

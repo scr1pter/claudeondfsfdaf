@@ -242,6 +242,29 @@ export type Heartbeat = {
    */
   segments?: { n: number; bytes: number }[]
   uploadedSegments?: number[]
+  /**
+   * The daemon's own key (32 random bytes, base64url), sent until a heartbeat answered 200 (P8 review). The first beat
+   * that carries one registers it for the session; the job is handed out only to beats signed with it, so the agent
+   * (which starts after that) can never register its own.
+   */
+  hostdKey?: string
+  /** HMAC-SHA256 of `hostdMacInput(session, body without mac)` with the daemon's key, base64url (`HOSTD_MAC`). */
+  mac?: string
+}
+
+/** The daemon's key and a heartbeat's signature, as base64url (32 bytes each: 43 characters). */
+const BASE64URL_43 = /^[A-Za-z0-9_-]{43}/
+export const HOSTD_KEY = {
+  test: (value: string) => typeof value === "string" && value.length === 43 && BASE64URL_43.test(value),
+} as const
+export const HOSTD_MAC = HOSTD_KEY
+
+/**
+ * What a heartbeat's `mac` signs (P8 review): the session id and the body's JSON, `mac` left out. The server signs the
+ * body it parsed again with `JSON.stringify`, which gives back the text the daemon made with `JSON.stringify`.
+ */
+export function hostdMacInput(session: string, body: Readonly<Record<string, unknown>>) {
+  return "vector-hostd-beat-v1\n" + session + "\n" + JSON.stringify(body)
 }
 
 /** What the daemon is told on each heartbeat. */
@@ -272,11 +295,12 @@ export type HeartbeatAnswer = {
 
 /**
  * A queued job (Done by Morning): the person queues it with success criteria and a time it aims to be delivered by; it
- * waits in the queue until its start, runs as one session on the person's cloud computer, and ends with a report that a
- * model from another lab checked against each criterion. Its states:
+ * waits in the queue until its start, runs as one session on the person's cloud computer, and ends with a report with
+ * a pass or fail per criterion, which the agent sends after asking a judge model from another lab (the server checks
+ * that it asked, not what the judge said). Its states:
  * - `queued`      waiting for its start, a free computer and the plan's jobs at once;
- * - `running`     its session runs (and, once the agent reported, waits for the second lab's pass or fail);
- * - `reported`    the report is in (checked by a second lab, or saying why it could not be);
+ * - `running`     its session runs (and, once the agent reported, waits for its pass or fail per criterion);
+ * - `reported`    the report is in (with a pass or fail per criterion, or without when no judge could be named);
  * - `incomplete`  the session ended with no report;
  * - `cancelled`   the person cancelled it, or the plan's queue was cancelled (ended plan, dispute, account deletion);
  * - `missed`      it could not start before the time it aimed to deliver by.
@@ -358,7 +382,10 @@ export type RecurringView = {
   nextAt: number
 }
 
-/** A report as its owner sees it. `judge` names the model from another lab that checked it, when one could. */
+/**
+ * A report as its owner sees it. `judge` names the model from another lab the agent was told to ask, when one could be
+ * named; `results` are what the agent reported for each criterion (the server does not see the judge's answer).
+ */
 export type ReportView = {
   summary: string
   links: { title?: string; url: string }[]

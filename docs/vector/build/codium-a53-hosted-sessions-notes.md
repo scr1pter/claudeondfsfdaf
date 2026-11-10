@@ -131,3 +131,11 @@ process to rule out an import-cycle failure (`codium-provisioners.ts` now import
 - `computer` stays unlisted: listing waits on Vercel's written OK, the computer-use build, the brand name and the
   security review (contract §1.2).
 - bun.lock was not touched. Nothing was pushed or deployed.
+
+**Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. P8's review (`codium-p8-repairs.md`)
+changed A53 in seven places: the nightly job stores the egress reading as soon as it charged (no double charge after a
+failed true-up) and charges storage when a listing has no egress figure; the budget figure adds egress at the fair-use
+caps and the disks kept for ended plans, and steps periods by 28 days; an ended plan's 14 days of disk retention are no
+longer charged while no download-only start exists; a store fault after the first block charges nothing; a start whose
+outcome the provider could not tell is charged up to the computer's stop; every heartbeat must be signed by hostd's own
+key (`hosted:hostd:<sid>`); account deletion deletes the sessions' packed files (`hosted:archives:<account>`).

@@ -110,3 +110,10 @@ cycles). `bun run build` in `packages/hosted-computer` and `node --check` on the
 - `overnight` stays unlisted: it lists only with `computer` (contract §1.2).
 - No generators were run: no engine route, SDK input or config schema changed.
 - Nothing was pushed or deployed. bun.lock was not touched.
+
+**Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. P8's review (`codium-p8-repairs.md`)
+changed A55: a job whose computer ran and failed is missed at once (`failed`), and a start that failed at the provider is
+tried again 5 and 15 minutes later and missed at the third failure (`START_TRIES`); a recording segment newer than the
+session's minutes allow is ignored; and the report's pass or fail per criterion is shown as Vector's report, since the
+server checks that the judge was asked, not what it answered. "Checked by a model from another lab" above is no longer
+what the screens say.

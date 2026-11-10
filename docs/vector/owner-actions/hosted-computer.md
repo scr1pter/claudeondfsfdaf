@@ -143,6 +143,7 @@ Preview environment that tests in Stripe test mode):
    `GET /api/hosted/admin/budget?cycleEnd=<ms>`, the hosted team's worst case for the rest of the billing cycle.
 4. **Files for download.** Session downloads use the `vector-media` bucket (`VECTOR_R2_MEDIA_*`). Add a lifecycle rule
    that deletes objects under `hosted/` after 2 days (the links last 24 hours), and keep it away from `playbooks/`.
+   Account deletion also deletes an account's packed files itself, so a missing rule never keeps them (P8 review).
 5. **Listing.** `computer` is ready to list once the provider, the ledger and both keys are set. List it only after the
    computer-use build, the brand name and the outside security review of isolation and the viewer (contract §1.2),
    starting with `VECTOR_HOSTED_ALLOW_ACCOUNTS` set to your own account.
@@ -220,7 +221,8 @@ recordings is Done by Morning's (A55, below). Showing the hand-over reason and t
 ## Done by Morning (WP A55)
 
 Jobs queued before bed with success criteria, each run as one session on the subscriber's cloud computer, ending with a
-report that a model from another lab checked against each criterion. How it works is in
+report with a pass or fail per criterion. The agent sends those after asking a judge model from another lab; the server
+checks that it asked, not what the judge said, so the screens show them as Vector's report (P8 review). How it works is in
 [MODEL-PLANS.md](../MODEL-PLANS.md#the-cloud-computers-ledger). Nothing here has been tried against a real computer,
 bucket or phone yet.
 
@@ -262,7 +264,9 @@ this shows until `computer` is listed (or for `VECTOR_HOSTED_ALLOW_ACCOUNTS`), a
 subscribers could spend: once a day (06:17 UTC) and whenever you dispatch it, it sets
 max(current budget, spend this cycle + 1.3 × Vector's worst case for the rest of the cycle). The worst case is
 `GET /api/hosted/admin/budget?cycleEnd=<ms>`: every Max and Ultra account's cloud computer hours left, the full hours of
-every period that starts before the cycle ends, and every computer's disk, at the provider's worst-case rates. It never
+every period that starts before the cycle ends, each day's egress at the plan's fair-use cap, every computer's disk and
+the disks kept for ended plans, at the provider's worst-case rates. The CLI is installed by npm into a temporary folder
+with install scripts off and no secret in npm's environment, then run with the token alone (P8 review). It never
 lowers the budget (lower it yourself if you want to), never sets more than your ceiling, never turns on pausing and never
 changes the spend webhook. Its log says only raised, unchanged, capped or failed, because this repository's Actions logs
 are public. A capped or failed run fails, so you see it; a failure changes nothing.

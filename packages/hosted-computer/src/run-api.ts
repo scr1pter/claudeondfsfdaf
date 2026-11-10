@@ -1,14 +1,20 @@
+import { createHmac, randomBytes } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { stat } from "node:fs/promises"
 import { request as httpsRequest } from "node:https"
-import type { Hosted } from "@vectordevai/schema/hosted"
+import { Hosted } from "@vectordevai/schema/hosted"
 
 /*
  * hostd's calls to Vector (contract WP A54): the session's heartbeat through the run-API host, and the PUT of packed
- * files to the signed link a heartbeat answer carries. hostd holds no credential: the provider's egress proxy adds the
- * session's run token to requests for the run-API host, and to nothing else (WP A52). A request carries only the
- * headers listed here, so never `Origin`, `Sec-Fetch-*` or a cookie, which the run-API host refuses (S7); that is why
- * this uses node:https directly and not fetch, which adds `sec-fetch-mode` on its own.
+ * files to the signed link a heartbeat answer carries. hostd holds no credential from Vector: the provider's egress
+ * proxy adds the session's run token to requests for the run-API host, and to nothing else (WP A52). A request carries
+ * only the headers listed here, so never `Origin`, `Sec-Fetch-*` or a cookie, which the run-API host refuses (S7); that
+ * is why this uses node:https directly and not fetch, which adds `sec-fetch-mode` on its own.
+ *
+ * The proxy adds the run token for any process on the computer, the agent's too, so hostd signs its heartbeats (P8
+ * review): it makes a key of its own when it starts, before the agent exists, keeps it in its memory only (hostd runs
+ * as root; the agent cannot read it), sends it with its beats until one is answered (the server registers the first),
+ * and signs every beat with it (`Hosted.hostdMacInput`). The server takes no report it did not sign.
  */
 
 export type Transport = (request: {
@@ -51,18 +57,36 @@ export const httpsTransport: Transport = (input) =>
 export type Report = Hosted.Heartbeat
 
 export class RunApi {
+  /** hostd's own key for this session's heartbeats (memory only). */
+  private readonly key: Buffer
+  /** Whether a heartbeat was answered, so the server has the key. */
+  private registered = false
+
   constructor(
     private readonly runHost: string,
     private readonly session: string,
     private readonly transport: Transport = httpsTransport,
     private readonly userAgent = "vector-hostd",
+    key: Buffer = randomBytes(32),
   ) {
     if (!HOST.test(runHost)) throw new Error("The run-API host is not a host name.")
+    if (key.length !== 32) throw new Error("hostd's key is 32 bytes.")
+    this.key = key
+  }
+
+  /** The report as signed: the key while it is not registered yet, and `mac` over the rest. */
+  private sign(report: Report): Report {
+    const { hostdKey: _key, mac: _mac, ...fields } = report
+    const signed: Report = { ...fields, ...(this.registered ? {} : { hostdKey: this.key.toString("base64url") }) }
+    const mac = createHmac("sha256", this.key)
+      .update(Hosted.hostdMacInput(this.session, signed as Record<string, unknown>))
+      .digest("base64url")
+    return { ...signed, mac }
   }
 
   /** One heartbeat: the report out, the session's answer back. Throws on anything but 200 with a JSON object. */
   async heartbeat(report: Report): Promise<Hosted.HeartbeatAnswer> {
-    const body = Buffer.from(JSON.stringify(report))
+    const body = Buffer.from(JSON.stringify(this.sign(report)))
     const answer = await this.transport({
       method: "POST",
       host: this.runHost,
@@ -77,6 +101,7 @@ export class RunApi {
       timeoutMs: 15_000,
     })
     if (answer.status !== 200) throw new HeartbeatError(answer.status, answer.body)
+    this.registered = true
     const value = JSON.parse(answer.body.toString("utf8")) as Hosted.HeartbeatAnswer
     if (!value || typeof value !== "object" || typeof value.state !== "string") throw new Error("malformed answer")
     return value

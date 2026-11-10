@@ -14,14 +14,14 @@ import {
 } from "../packages/app/src/features/cloud/hosted/hosted-model"
 import { hostedRoute, viewerLinkAllowed, type HostedRequest } from "../packages/app/src/features/cloud/hosted/hosted-requests"
 import { handleHostedHeartbeat, handleHostedSessionAction, handleHostedSessions, handleHostedStatus } from "../api/_lib/hosted-api"
-import { HANDOFF_ALERT_TITLE, handoffAlertHook } from "../api/_lib/hosted-handoff"
+import { HANDOFF_ALERT_GAP_MS, HANDOFF_ALERT_TITLE, handoffAlertHook } from "../api/_lib/hosted-handoff"
 import { HOSTED_JOB_SCRIPTS, type JobOptions } from "../api/_lib/hosted-jobs"
 import { handleHostedJobs } from "../api/_lib/hosted-jobs-api"
 import { computerName } from "../api/_lib/hosted-provider"
 import { registerHostedHeartbeatHook } from "../api/_lib/hosted-sessions"
 import { configuredPlanModels } from "../api/_lib/model-plan-config"
 import { ledgerBackend, type LedgerBackend } from "./hosted-fixture"
-import { ACCOUNT_ID, HOUR, hostedSessionEnvironment, hostedWorld, invoke, type HostedWorld } from "./hosted-sessions-fixture"
+import { ACCOUNT_ID, HOUR, daemonBeat, hostedSessionEnvironment, hostedWorld, invoke, type HostedWorld } from "./hosted-sessions-fixture"
 
 // WP A56: the cloud computer's clients against the real routes. Every request the desktop and the phone may send
 // (packages/app/src/features/cloud/hosted/hosted-requests.ts) is accepted by its route, and every answer is read by
@@ -81,7 +81,7 @@ function beat(w: HostedWorld, id: string, body: Record<string, unknown>) {
   return invoke((req, res) => handleHostedHeartbeat(req, res, w.options), {
     method: "POST",
     authorization: w.provider.token(computerName(ACCOUNT_ID, 1))!,
-    body,
+    body: daemonBeat(id, body),
     query: { id },
   })
 }
@@ -189,7 +189,7 @@ describe("a hand-over to the person (WP A54 → A56)", () => {
     expect(decodeSessions((await send(w, { kind: "sessions" })).body)[0]?.handoff).toBeUndefined()
   })
 
-  test("sends one title-only phone alert per new hand-over, none during a take-over (P7)", async () => {
+  test("sends one title-only phone alert per new hand-over, at most one per session in ten minutes, none during a take-over (P7)", async () => {
     const w = await hostedWorld(ledger)
     const session = await startOne(w)
     await beat(w, session.id, { booted: true })
@@ -199,6 +199,14 @@ describe("a hand-over to the person (WP A54 → A56)", () => {
     w.advance(30_000)
     await beat(w, session.id, { handoff: "credential" })
     expect(alerts).toHaveLength(1)
+    // A hand-over that flaps (gone, back, another reason) within ten minutes alerts no more (P8 review).
+    for (const handoff of [undefined, "credential", undefined, "payment_details"]) {
+      w.advance(30_000)
+      await beat(w, session.id, handoff ? { handoff } : {})
+    }
+    expect(alerts).toHaveLength(1)
+    w.advance(HANDOFF_ALERT_GAP_MS)
+    await beat(w, session.id, {})
     w.advance(30_000)
     await beat(w, session.id, { handoff: "payment_details" })
     expect(alerts).toHaveLength(2)

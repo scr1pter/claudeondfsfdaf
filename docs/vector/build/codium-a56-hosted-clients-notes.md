@@ -120,3 +120,9 @@ no A56 file imports any of it.
 - The phone does not start or queue jobs (the ceiling needs an account token).
 - No Settings page for the cloud computer: the composer, the bar and the dialogs are its desktop surfaces.
 - bun.lock was not touched. Nothing was pushed, deployed or run against a real service.
+
+**Status, 9 Nov 2026 (P8 review).** The sections above describe their own day. P8's review (`codium-p8-repairs.md`)
+changed A56: hand-over alerts go out at most once per session in 10 minutes (`HANDOFF_ALERT_GAP_MS`); the verdict line
+says "Vector reports N of M criteria met" and the composer no longer says a model from another lab checks each criterion;
+and `vercelCli` no longer uses `npx`: it installs the pinned CLI with npm, install scripts off and no secret in npm's
+environment, and runs it with the token alone.
