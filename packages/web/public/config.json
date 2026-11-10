@@ -2039,7 +2039,7 @@
         },
         "computer": {
           "$ref": "#/$defs/ComputerConfig",
-          "description": "Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must be Vector 1.99.112 or later. Company rules restrict access; they do not grant user consent."
+          "description": "Company-policy only: read from managed files, macOS MDM or Windows machine policy. Ignored in user, project, environment and remote org config. Every engine reading the managed file must use a compatible Vector build that includes Hands. Company rules restrict access; they do not grant user consent."
         },
         "local": {
           "$ref": "#/$defs/LocalConfig",

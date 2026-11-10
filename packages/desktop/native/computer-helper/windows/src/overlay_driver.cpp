@@ -202,7 +202,7 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
     throw;
   }
   stage = OverlayDriverStage::stop_hit; UiaElement element;
-  try { element = uia.hit(root, point(request)); }
+  try { require(static_cast<bool>(uia.overlay_hit), L"stop_target_invalid"); element = uia.overlay_hit(root, point(request)); }
   catch (...) {
     // As for root, sample before cleanup and never label late retired work with its mutable phase.
     try {

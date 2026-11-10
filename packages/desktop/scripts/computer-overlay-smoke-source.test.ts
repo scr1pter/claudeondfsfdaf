@@ -151,7 +151,9 @@ describe("independent overlay source admission", () => {
     expect(rootFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
     expect(rootFailure).toContain("if (available && diagnostic)")
     const hitFailure = driver.slice(
-      driver.indexOf("try { element = uia.hit(root, point(request)); }"),
+      driver.indexOf(
+        'try { require(static_cast<bool>(uia.overlay_hit), L"stop_target_invalid"); element = uia.overlay_hit(root, point(request)); }',
+      ),
       driver.indexOf("for (size_t depth = 0; element && depth < 8; ++depth)"),
     )
     expect(hitFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
@@ -293,6 +295,45 @@ describe("independent overlay source admission", () => {
     expect(parent).toContain("note(WindowsUiaPhase::parent_wrap); return wrap(std::move(parent));")
     expect(parent.match(/GetParentElementBuildCache/g)).toHaveLength(1)
   })
+  test("the Stop driver uses a native point query with exact-root guards inside its original actor ticket", async () => {
+    const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+    const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
+    const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
+    const resolver = implementation.slice(
+      implementation.indexOf("UiaElement overlay_hit("),
+      implementation.indexOf("UiaElement hit("),
+    )
+    expect(resolver.match(/ElementFromPointBuildCache/g)).toHaveLength(1)
+    expect(resolver.match(/NormalizeElementBuildCache/g)).toHaveLength(1)
+    expect(resolver).toContain("backend.current = current_call")
+    expect(resolver).toContain("resolve_uia_overlay_point(root, point, backend)")
+    expect(resolver).not.toMatch(
+      /native->call|\.wait|sleep|now_ms|GetTickCount|get_CurrentName|get_CurrentValue|GetText/,
+    )
+    expect(implementation).toContain(
+      "backend.overlay_hit = [native](const auto& root, POINT point) { return native->call([native, root, point] { return native->overlay_hit(root, point); }); };",
+    )
+    expect(implementation).toContain("ticket->deadline = now_ms() + 50")
+    expect(implementation).toContain("actor_->quarantined = true")
+    const guard = implementation.slice(
+      implementation.indexOf("UiaElement resolve_uia_overlay_point("),
+      implementation.indexOf("std::wstring sanitize_uia("),
+    )
+    expect(guard).toContain("depth < 32")
+    expect(guard).toContain("state.runtime_id == scope.runtime_id")
+    expect(guard).toContain("if (!same(cursor, root)) unavailable()")
+    expect(guard).toContain("raw_state.pid != scope.pid")
+    expect(guard).toContain("selected_state.pid != scope.pid")
+    expect(guard).toContain("security.password")
+    expect(guard).toContain("security.bounds != selected_state.bounds")
+    expect(guard).toContain("std::find(visited.begin(), visited.end(), state.runtime_id)")
+    expect(guard.indexOf("if (!reached) unavailable();")).toBeLessThan(guard.indexOf("backend.security(selected)"))
+    expect(guard).not.toMatch(/children\(|\.name\(|\.value\(|sleep|wait_for|deadline\s*=/)
+    expect(driver).toContain("element = uia.overlay_hit(root, point(request));")
+    expect(driver).not.toContain("element = uia.hit(root, point(request));")
+    expect(driver).toContain("GetTickCount64() - started < 50")
+    expect(driver).toContain("uia.belongs(element, window)")
+  })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))
     expect(graph.entries.map((entry) => entry.path)).toContain("packages/desktop/src/main/computer-overlay.ts")
@@ -312,8 +353,10 @@ describe("independent overlay source admission", () => {
     const graph = await computerOverlaySourceGraph(value.desktop)
     const consumed = graph.entries.find((entry) => entry.path === "packages/desktop/src/main/dependency.ts")!
     expect(Buffer.from(consumed.bytes).toString("utf8")).toContain('from "original-fs"')
+    const compilerDirectory = process.cwd()
     const built = await Bun.build({
       entrypoints: [value.entry],
+      root: value.desktop,
       target: "node",
       format: "esm",
       outdir: path.join(value.root, "out"),
@@ -323,7 +366,12 @@ describe("independent overlay source admission", () => {
       allowUnresolved: ["original-fs"],
     })
     expect(built.success).toBe(true)
-    await verifyComputerOverlayBundleGraph(built.metafile, value.desktop, graph, COMPUTER_OVERLAY_ENTRYPOINTS[0].input)
+    await verifyComputerOverlayBundleGraph(
+      built.metafile,
+      compilerDirectory,
+      graph,
+      path.relative(compilerDirectory, path.join(value.desktop, COMPUTER_OVERLAY_ENTRYPOINTS[0].input)),
+    )
     await writeFile(value.dependency, 'import "unadmitted-electron-builtin"\n')
     await expect(computerOverlaySourceGraph(value.desktop)).rejects.toThrow("unresolved import")
   })
@@ -359,8 +407,10 @@ describe("independent overlay source admission", () => {
   test("the pinned Bun compiler produces admissible real input metadata", async () => {
     const value = await fixture()
     const graph = await computerOverlaySourceGraph(value.desktop)
+    const compilerDirectory = process.cwd()
     const result = await Bun.build({
       entrypoints: [value.entry],
+      root: value.desktop,
       target: "node",
       format: "esm",
       outdir: path.join(value.root, "out"),
@@ -370,7 +420,12 @@ describe("independent overlay source admission", () => {
     })
     expect(result.success).toBe(true)
     expect(result.outputs).toHaveLength(1)
-    await verifyComputerOverlayBundleGraph(result.metafile, value.desktop, graph, COMPUTER_OVERLAY_ENTRYPOINTS[0].input)
+    await verifyComputerOverlayBundleGraph(
+      result.metafile,
+      compilerDirectory,
+      graph,
+      path.relative(compilerDirectory, path.join(value.desktop, COMPUTER_OVERLAY_ENTRYPOINTS[0].input)),
+    )
   })
   test("actual compiler workspace metadata must match independently admitted bytes", async () => {
     const value = await fixture(),

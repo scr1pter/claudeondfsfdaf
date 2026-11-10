@@ -1,5 +1,6 @@
 #include "uia_native.h"
 #include <uiautomation.h>
+#include <map>
 #include <stdexcept>
 
 namespace vector::computer {
@@ -30,6 +31,33 @@ struct Fixture {
     backend.close = [this] { ++closed; };
   }
 };
+struct PointFixture {
+  UiaElement root = std::make_shared<WindowsUiaElement>(1), selected = std::make_shared<WindowsUiaElement>(2), raw = selected, normalized = selected;
+  std::map<uint64_t, UiaPointMetadata> facts;
+  std::map<uint64_t, UiaElement> parents;
+  UiaSecurity security;
+  UiaPointBackend backend;
+  uint64_t elapsed = 0;
+  bool alive = true, equality = true;
+  size_t points = 0, normalizations = 0, metadata_reads = 0, parent_reads = 0, security_reads = 0;
+  std::function<void(std::string_view)> on;
+  void operation(std::string_view name) { if (on) on(name); }
+  PointFixture() {
+    facts[1] = {101, {1}, WindowsRect{0, 0, 100, 100}}; facts[2] = {101, {2}, WindowsRect{10, 10, 20, 20}}; parents[2] = root;
+    security.pid = 101; security.control_type = 50000; security.password = false; security.enabled = true; security.bounds = facts[2].bounds;
+    backend.current = [this] { if (!alive || elapsed >= 50) throw Failure{L"no_ui_tree", L"fixture ticket retired"}; };
+    backend.point = [this](POINT point) { ++points; require(point.x == 15 && point.y == 15, "uia-native.overlay-actual-point"); operation("point"); return raw; };
+    backend.normalize = [this](const UiaElement& value) { ++normalizations; require(value == raw, "uia-native.overlay-normalizes-actual-hit"); operation("normalize"); return normalized; };
+    backend.metadata = [this](const UiaElement& value) {
+      ++metadata_reads; operation("metadata"); const auto found = facts.find(value->identity);
+      if (found == facts.end()) throw Failure{L"no_ui_tree", L"fixture metadata absent"}; return found->second;
+    };
+    backend.parent = [this](const UiaElement& value) { ++parent_reads; operation("parent"); const auto found = parents.find(value->identity); return found == parents.end() ? UiaElement{} : found->second; };
+    backend.equal = [this](const UiaElement& left, const UiaElement& right) { operation("equal"); return equality && left == right; };
+    backend.security = [this](const UiaElement& value) { ++security_reads; require(value == normalized, "uia-native.overlay-selected-security-only"); operation("security"); return security; };
+  }
+  UiaElement resolve() { return resolve_uia_overlay_point(root, POINT{15, 15}, backend); }
+};
 template<class Body> void refusal(Body body) {
   try { body(); } catch (const Failure& failure) { require(failure.code == L"no_ui_tree", "uia-native.fixed-refusal"); return; }
   throw std::runtime_error("uia-native.missing-refusal");
@@ -37,6 +65,81 @@ template<class Body> void refusal(Body body) {
 }
 size_t run_uia_native_tests() {
   size_t groups = 0; const auto test = [&](const std::function<void()>& body) { body(); ++groups; };
+  test([] {
+    PointFixture fixture;
+    // Thousands of unrelated nodes cannot turn a native point lookup into a subtree scan.
+    for (uint64_t id = 10; id < 5010; ++id) fixture.facts[id] = {101, {static_cast<int>(id)}, WindowsRect{0, 0, 100, 100}};
+    require(fixture.resolve() == fixture.selected && fixture.points == 1 && fixture.normalizations == 1 && fixture.parent_reads == 1 &&
+        fixture.metadata_reads == 4 && fixture.security_reads == 1, "uia-native.overlay-point-work-follows-ancestry-not-subtree-size");
+  });
+  test([] {
+    PointFixture fixture; fixture.raw = std::make_shared<WindowsUiaElement>(3); fixture.facts[3] = {101, {3}, WindowsRect{10, 10, 20, 20}}; fixture.parents[3] = fixture.selected;
+    require(fixture.resolve() == fixture.selected && fixture.parent_reads == 2, "uia-native.overlay-raw-child-normalizes-only-to-observed-parent");
+    fixture.parents[3] = fixture.root; refusal([&] { fixture.resolve(); });
+  });
+  test([] {
+    PointFixture fixture; fixture.facts[2].pid = 202; refusal([&] { fixture.resolve(); });
+    require(fixture.security_reads == 0 && fixture.parent_reads == 0, "uia-native.overlay-foreign-point-refused-before-security");
+  });
+  test([] {
+    PointFixture fixture; fixture.parents[2] = std::make_shared<WindowsUiaElement>(3); fixture.facts[3] = {101, {3}, WindowsRect{0, 0, 100, 100}};
+    refusal([&] { fixture.resolve(); }); require(fixture.security_reads == 0, "uia-native.overlay-same-process-different-root-refused");
+    fixture.parents[3] = fixture.root; fixture.facts[3].pid = 202; refusal([&] { fixture.resolve(); });
+  });
+  test([] {
+    PointFixture fixture; fixture.parents[2] = fixture.selected; refusal([&] { fixture.resolve(); });
+    require(fixture.parent_reads == 1 && fixture.security_reads == 0, "uia-native.overlay-cycle-refused-without-security-or-content");
+    fixture.parents[2] = fixture.root; fixture.equality = false; refusal([&] { fixture.resolve(); });
+    fixture.equality = true; fixture.facts[2].runtime_id = fixture.facts[1].runtime_id; refusal([&] { fixture.resolve(); });
+  });
+  test([] {
+    PointFixture fixture; fixture.on = [&](std::string_view operation) {
+      if (operation == "metadata" && fixture.metadata_reads == 3) fixture.facts[2].runtime_id = {3};
+    };
+    refusal([&] { fixture.resolve(); }); require(fixture.security_reads == 0, "uia-native.overlay-normalization-cannot-change-runtime-identity");
+  });
+  test([] {
+    PointFixture fixture;
+    auto cursor = fixture.selected;
+    for (uint64_t id = 3; id < 38; ++id) {
+      const auto parent = std::make_shared<WindowsUiaElement>(id); fixture.parents[cursor->identity] = parent;
+      fixture.facts[id] = {101, {static_cast<int>(id)}, WindowsRect{0, 0, 100, 100}}; cursor = parent;
+    }
+    fixture.parents[cursor->identity] = fixture.root; refusal([&] { fixture.resolve(); });
+    require(fixture.parent_reads == 32 && fixture.security_reads == 0, "uia-native.overlay-ancestry-depth-is-bounded");
+  });
+  test([] {
+    for (const auto bounds : {std::optional<WindowsRect>{}, std::optional<WindowsRect>{WindowsRect{10, 10, 0, 20}},
+        std::optional<WindowsRect>{WindowsRect{20, 20, 20, 20}}, std::optional<WindowsRect>{WindowsRect{WindowsRect::bound, 0, 20, 20}}}) {
+      PointFixture fixture; fixture.facts[2].bounds = bounds; refusal([&] { fixture.resolve(); }); require(fixture.security_reads == 0, "uia-native.overlay-invalid-or-offpoint-metadata-refused");
+    }
+    PointFixture fixture; fixture.facts[2].runtime_id.clear(); refusal([&] { fixture.resolve(); });
+    fixture.facts[2].runtime_id.assign(65, 1); refusal([&] { fixture.resolve(); });
+    fixture.facts[2].runtime_id = {2}; fixture.facts[1].pid = 0; refusal([&] { fixture.resolve(); });
+  });
+  test([] {
+    PointFixture fixture; fixture.security.password = true; refusal([&] { fixture.resolve(); });
+    fixture.security = UiaSecurity{}; refusal([&] { fixture.resolve(); });
+    fixture.security.pid = 101; fixture.security.password = false; fixture.security.enabled = true; fixture.security.bounds = WindowsRect{10, 10, 21, 20};
+    refusal([&] { fixture.resolve(); }); fixture.security.bounds = fixture.facts[2].bounds; fixture.security.pid = 202; refusal([&] { fixture.resolve(); });
+  });
+  test([] {
+    for (const auto late : {"point", "normalize", "metadata", "parent", "equal", "security"}) {
+      PointFixture fixture; fixture.on = [&](std::string_view operation) { if (operation == late) fixture.elapsed = 50; };
+      refusal([&] { fixture.resolve(); }); require(fixture.points <= 1 && fixture.normalizations <= 1, "uia-native.overlay-late-work-cannot-retry-or-renew-ticket");
+    }
+    PointFixture fixture; fixture.on = [&](std::string_view operation) { if (operation == "parent") fixture.alive = false; };
+    refusal([&] { fixture.resolve(); }); require(fixture.security_reads == 0, "uia-native.overlay-cancelled-ancestry-cannot-publish");
+  });
+  test([] {
+    for (const auto failed : {"point", "normalize", "metadata", "parent", "equal", "security"}) {
+      PointFixture fixture; fixture.on = [&](std::string_view operation) { if (operation == failed) throw Failure{L"no_ui_tree", L"fixture unknown native result"}; };
+      refusal([&] { fixture.resolve(); });
+    }
+    PointFixture fixture; fixture.raw.reset(); refusal([&] { fixture.resolve(); });
+    fixture.raw = fixture.selected; fixture.normalized.reset(); refusal([&] { fixture.resolve(); });
+    fixture.normalized = fixture.selected; fixture.backend.current = {}; refusal([&] { fixture.resolve(); });
+  });
   test([] {
     VARIANT value{}; value.vt = VT_BOOL; value.boolVal = VARIANT_FALSE;
     require(classify_uia_keyboard_focusable(S_OK, value) == false, "uia-native.keyboard-negative-default-never-authorizes-focus");

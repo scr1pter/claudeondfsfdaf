@@ -858,3 +858,51 @@ Each item keeps the contract's intent (sections 1.5 K, 2.9, 4.2 D23; INV-C8; E13
 6. **Windows focusability candidate and diagnostic scope.** Actual diagnostic `42736218703` at `2c9446f9` located the healthy root refusal at `uia-security-keyboard`; it did not prove whether the query failed or returned an unsupported variant. The candidate at `dc2b0065` reads only `UIA_IsKeyboardFocusablePropertyId` with `ignoreDefaultValue=FALSE`, using UI Automation's documented false default. Failed HRESULTs, non-boolean variants and noncanonical boolean values still refuse. `SetFocus` and `AXRaise` require positive focusability at both service and native boundaries. Other property/password/ownership checks remain strict. Structural fallback still requires its separate native witness type; a false UIA property cannot manufacture it. Official Microsoft documentation is quoted and linked beside the native query. Candidate native confirmation remains pending.
 7. **Bounded diagnostic refinements.** The optional UIA phase state is owned through the actor/queued work as a shared atomic enum; production callers omit it. The never-shipped driver refines a failed root only while the actor is positively healthy; late/retired work retains its coarse failure. No raw HRESULT, provider text or user values enter the report. Capture setup/RPC-span timing categories reuse existing success-path samples and add one closing sample only for the existing expired/cancelled/full-ticket failure. They do not renew the 50/750 ms budgets, retry, warm capture, accept late pixels or change outcomes.
 8. **Parallel validation refs.** `hands-diagnostics` isolates Windows diagnostic iterations while main integration proceeds on `hands`. Temporary `hands-ui-check` runs corrected browser scenarios without canceling the still-running full integration baseline. These refs are validation aids; the reviewed implementation is copied/committed on `hands`, and no merge to main or public release is implied.
+
+## Windows validation takeover — 9 November 2026 (Pacific)
+
+1. **Keep the integrated base.** Continue on `hands` from `2171efc6`, preserving main
+   `0dcbb8e2`. The later diagnostics patches `50c48233`, `792e4fed`, `4b3977b1` and
+   `ead16339` are reconciled in order. Earlier native diagnostics through
+   `04d4e56c` were already present. Do not replace the newer integration or
+   release workflows with the divergent diagnostics branch.
+2. **A smoke-only native point resolver.** The ordinary `WindowsUiaBackend.hit`
+   breadth-first implementation remains unchanged. Only the never-shipped Stop
+   driver uses `overlay_hit`: one native point query and Control View
+   normalization, followed by bounded runtime-identity/PID/bounds checks and
+   exact-root ancestry. A foreign result is refused rather than searched under.
+   This intentionally uses native point-selection semantics instead of the
+   ordinary traversal's geometric sibling-ambiguity checks. It is not a new
+   computer-tool wire operation or an alternate user-consent path.
+3. **Keep the actual authority fence.** The new guard runs inside the original
+   single 50 ms actor ticket. Unknown, foreign, stale, late, cyclic, secure or
+   malformed results refuse. It reads no name/value/document content before
+   membership proof; full selected-element classification precedes the existing
+   Stop label, bounds, foreground, refresh and input-post checks. No retry,
+   deadline renewal or guessed-root fallback is added. Unit fixtures exercise
+   the real guard; source checks do not establish actual Windows execution.
+4. **Compiler fixtures use the compiler's coordinate base.** Bun 1.3.14 emits
+   metafile input names relative to the build process's current directory even
+   when `root` is explicit. The two temporary compiler fixtures now capture that
+   directory and express the same fixed entrypoint against it. The original
+   compiler metadata, independently admitted source bytes/hash checks and
+   production verifier remain intact. The initial root-only correction was
+   insufficient; a controlled runtime probe established the path-base mismatch.
+5. **The wait fixture arranges the real selected agent.** The observed completion
+   failure had a completed child and returned task manager, then stalled in cold
+   `Agent.get` before truncation. The real prompt resolves its agent before
+   offering tools. The fixture now resolves and asserts the actual `build` agent
+   before starting the held child. It retains the original Promise bridge,
+   service wiring, two-second wait and all existing assertions. Temporary stage
+   probes were used for attribution and are not part of the final fixture.
+6. **Regenerate the public schema.** The engine's configuration annotation already
+   describes a compatible Hands-enabled build, while the published schema still
+   named 1.99.112, which shipped without Hands. Run the existing schema generator;
+   do not change the generator, published version or generated text by hand.
+7. **Cold capture remains unproven.** Diagnostic `42750149004` at `ead16339`
+   observed successful `CreateForWindow` return after the full 50 ms ticket had
+   expired, with setup under 25 ms and RPC span at least 50 ms. No cause or safe
+   source correction is established. Keep this failure visible; do not warm,
+   retry, reorder, accept late pixels or extend its 50/750 ms limits to turn the
+   test green. Native Stop, cold capture, packaging and owner-device/signing
+   gates require their own actual evidence.

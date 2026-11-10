@@ -463,6 +463,38 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     }
     return {};
   }
+  UiaElement overlay_hit(const UiaElement& root, POINT point) {
+    // Unlike the ordinary app-scoped BFS, this smoke-only path asks UIA for its actual point
+    // target. It never searches underneath a foreign result or substitutes a guessed root.
+    // https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation-elementfrompointbuildcache
+    // https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomationtreewalker-normalizeelementbuildcache
+    UiaPointBackend backend; backend.current = current_call;
+    backend.point = [this](POINT location) {
+      note(WindowsUiaPhase::hit_setup); current_call(); winrt::com_ptr<IUIAutomationElement> element;
+      if (automation_->ElementFromPointBuildCache(location, structural_.get(), element.put()) != S_OK || !element) unavailable();
+      current_call(); return wrap(std::move(element));
+    };
+    backend.normalize = [this](const UiaElement& value) {
+      current_call(); winrt::com_ptr<IUIAutomationElement> element;
+      if (walker_->NormalizeElementBuildCache(native(value), structural_.get(), element.put()) != S_OK || !element) unavailable();
+      current_call(); return wrap(std::move(element));
+    };
+    backend.metadata = [this](const UiaElement& value) {
+      // wrap() intentionally reuses stable native identities; its original cached properties may
+      // predate this hit. Refresh metadata rather than treating those old bounds as current proof.
+      winrt::com_ptr<IUIAutomationElement> element; Variant pid; RECT bounds{};
+      if (native(value)->BuildUpdatedCache(structural_.get(), element.put()) != S_OK || !element) unavailable();
+      current_call();
+      if (element->GetCachedPropertyValueEx(UIA_ProcessIdPropertyId, TRUE, &pid.value) != S_OK || pid.value.vt != VT_I4 || pid.value.lVal <= 0 ||
+          element->get_CachedBoundingRectangle(&bounds) != S_OK) unavailable();
+      current_call(); return UiaPointMetadata{static_cast<DWORD>(pid.value.lVal), value->native_->runtime_id,
+          WindowsRect{bounds.left, bounds.top, int64_t(bounds.right) - bounds.left, int64_t(bounds.bottom) - bounds.top}};
+    };
+    backend.parent = [this](const auto& value) { return parent(value); };
+    backend.equal = [this](const auto& left, const auto& right) { return equal(left, right); };
+    backend.security = [this](const auto& value) { return security(value); };
+    return resolve_uia_overlay_point(root, point, backend);
+  }
   UiaElement hit(const UiaElement& root, POINT point) {
     note(WindowsUiaPhase::hit_setup); struct Node { UiaElement element; size_t depth; };
     std::deque<Node> queue{{root, 0}}; std::vector<uint64_t> visited; UiaElement result; size_t selected_depth = 0; bool ambiguous = false;
@@ -588,6 +620,7 @@ WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic
   backend.parent = [native](const auto& element) { return native->call([native, element] { return native->parent(element); }); };
   backend.focused = [native](const auto& root) { return native->call([native, root] { return native->focused(root); }); };
   backend.hit = [native](const auto& root, POINT point) { return native->call([native, root, point] { return native->hit(root, point); }); };
+  backend.overlay_hit = [native](const auto& root, POINT point) { return native->call([native, root, point] { return native->overlay_hit(root, point); }); };
   backend.equal = [native](const auto& left, const auto& right) { return native->call([native, left, right] { return native->equal(left, right); }); };
   backend.belongs = [native](const auto& element, const auto& window) { return native->call([native, element, window] { return native->belongs(element, window); }); };
   backend.perform = [native](const auto& element, auto action) { return native->call([native, element, action = std::wstring(action)] { return native->perform(element, action); }); };
@@ -604,6 +637,44 @@ WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic
     try { return native->call([native, element, root] { return native->menu_target(element, root); }); } catch (...) { return {}; }
   };
   return backend;
+}
+
+UiaElement resolve_uia_overlay_point(const UiaElement& root, POINT point, const UiaPointBackend& backend) {
+  if (!root || !backend.current || !backend.point || !backend.normalize || !backend.metadata || !backend.parent || !backend.equal || !backend.security) unavailable();
+  const auto read = [&](const UiaElement& value) {
+    backend.current(); if (!value) unavailable(); const auto state = backend.metadata(value); backend.current();
+    if (!state.pid || state.runtime_id.empty() || state.runtime_id.size() > 64 || !state.bounds || !state.bounds->valid() || !state.bounds->contains(point)) unavailable();
+    return state;
+  };
+  const auto same = [&](const UiaElement& left, const UiaElement& right) {
+    backend.current(); if (!left || !right) unavailable(); const auto result = backend.equal(left, right); backend.current(); return result;
+  };
+  const auto parent = [&](const UiaElement& value) {
+    backend.current(); const auto result = backend.parent(value); backend.current(); return result;
+  };
+  const auto scope = read(root);
+  backend.current(); const auto raw = backend.point(point); backend.current(); const auto raw_state = read(raw);
+  if (raw_state.pid != scope.pid) unavailable();
+  backend.current(); const auto selected = backend.normalize(raw); backend.current(); const auto selected_state = read(selected);
+  if (selected_state.pid != scope.pid) unavailable();
+  // Normalization must preserve the actual point target or its immediate Control View parent.
+  // A same-process result in another window is never sufficient proof of membership.
+  if (same(raw, selected)) { if (raw_state.runtime_id != selected_state.runtime_id) unavailable(); }
+  else if (!same(parent(raw), selected)) unavailable();
+  auto cursor = selected; auto state = selected_state; std::vector<std::vector<int>> visited; bool reached = false;
+  for (size_t depth = 0; cursor && depth < 32; ++depth) {
+    backend.current(); if (state.pid != scope.pid || std::find(visited.begin(), visited.end(), state.runtime_id) != visited.end()) unavailable();
+    visited.push_back(state.runtime_id);
+    if (state.runtime_id == scope.runtime_id) { if (!same(cursor, root)) unavailable(); reached = true; break; }
+    cursor = parent(cursor); if (!cursor) unavailable(); state = read(cursor);
+  }
+  if (!reached) unavailable();
+  // No name, value or document content is requested while membership is still unknown. The full
+  // native classifier preserves unknown-password refusals before the driver can inspect a label.
+  backend.current(); const auto security = backend.security(selected); backend.current();
+  if (security.pid != scope.pid || security.password || !security.enabled || !security.bounds || !security.bounds->valid() ||
+      security.bounds != selected_state.bounds || !security.bounds->contains(point)) unavailable();
+  return selected;
 }
 
 std::wstring sanitize_uia(std::wstring_view text, size_t maximum) {

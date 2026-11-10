@@ -6,6 +6,26 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
+**Takeover, 9 November 2026 (Pacific).** The owner asked Codex to finish the
+computer-use work after its previous agent ran out of usage. Continue on the
+main-integrated `hands` branch. The four later native diagnostics patches are
+now reconciled there; the divergent diagnostics workflow is not the base.
+The Windows native unit/version/protocol checks already passed in the inspected
+hosted runs. The open native failure is the staged physical Stop proof, latest
+`stop-hit-retired` / `core_failure:no_ui_tree`, plus cold capture ticket expiry.
+This is not evidence that the ordinary app Stop/cancel handler failed.
+
+The current candidate adds a bounded, smoke-only point resolver while retaining
+the ordinary hit traversal and the original authority/deadline checks. Local
+source admission (19 tests), report/receipt parsing (39 tests) and the real wait
+fixture (3 tests) passed. Desktop, engine and web package typechecks passed,
+serially. The public configuration schema is regenerated from its authoritative
+source. The [takeover evidence](./evidence/hands-takeover-2026-11-09.json) retains
+the initial failures and their diagnoses. Exact-head native CI and final package
+evidence remain pending. The earlier paragraphs
+below retain their original source/run scope; the [takeover deviations](./hands-deviations.md#windows-validation-takeover--9-november-2026-pacific)
+explain the changes without assigning a Hands release version.
+
 Focused UI run [42738183066](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42738183066) at `24b21a02` passed on both hosts: Windows 67 passed; Linux 66 passed and one Plan-focus scenario passed on retry. Both queue/refusal/order scenarios now pass with explicit queue shortcuts and accurate claimed-message lookup. The Plan fixture now waits for the menu's deferred trigger-focus restoration before focusing the composer; neither focus assertion nor the real permission event/700 ms arming clock is relaxed. A separate seeded-timeline fixture now exposes the current capabilities route; its strict console assertions remain. Hosted confirmation of these final two fixture corrections remains pending.
 
 The unchanged POSIX whole-process-tree stop test passed in hosted Linux job `129560520686` (163.47 ms, `42734559743`, source `2229637c`). No cleanup assertion or production kill behavior was changed. The earlier local container failure remains in the scoped local record rather than being rewritten as a local pass.

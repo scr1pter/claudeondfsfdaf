@@ -68,6 +68,23 @@ struct UiaSecurity {
 };
 struct UiaName { std::wstring text; bool complete = false; };
 struct UiaChildren { std::vector<UiaElement> elements; bool truncated = false; };
+// Metadata-only operations for the never-shipped Stop driver's native point resolver. The system
+// implementation runs these directly inside one existing actor ticket, never through nested calls.
+struct UiaPointMetadata {
+  DWORD pid = 0;
+  std::vector<int> runtime_id;
+  std::optional<WindowsRect> bounds;
+};
+struct UiaPointBackend {
+  std::function<void()> current;
+  std::function<UiaElement(POINT)> point;
+  std::function<UiaElement(const UiaElement&)> normalize;
+  std::function<UiaPointMetadata(const UiaElement&)> metadata;
+  std::function<UiaElement(const UiaElement&)> parent;
+  std::function<bool(const UiaElement&, const UiaElement&)> equal;
+  std::function<UiaSecurity(const UiaElement&)> security;
+};
+UiaElement resolve_uia_overlay_point(const UiaElement& root, POINT point, const UiaPointBackend&);
 struct UiaMenuShortcut { std::vector<std::wstring> path; std::wstring accelerator; std::wstring access; };
 struct UiaObservation {
   WindowsWindow window;
@@ -89,6 +106,8 @@ struct WindowsUiaBackend {
   std::function<UiaElement(const UiaElement&)> parent;
   std::function<UiaElement(const UiaElement&)> focused;
   std::function<UiaElement(const UiaElement&, POINT)> hit;
+  // Smoke-driver only; ordinary ui.hittest and pointer guards retain the app-scoped BFS above.
+  std::function<UiaElement(const UiaElement&, POINT)> overlay_hit;
   std::function<bool(const UiaElement&, const UiaElement&)> equal;
   std::function<bool(const UiaElement&, const WindowsWindow&)> belongs;
   std::function<bool(const UiaElement&, std::wstring_view)> perform;
