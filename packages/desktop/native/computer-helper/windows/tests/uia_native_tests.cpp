@@ -44,7 +44,7 @@ size_t run_uia_native_tests() {
     for (const auto status : {E_FAIL, E_ACCESSDENIED, E_UNEXPECTED})
       require(!classify_uia_keyboard_focusable(status, value), "uia-native.keyboard-query-failure-not-defaulted");
     for (const auto kind : {VT_EMPTY, VT_NULL, VT_UNKNOWN, VT_I4, VT_BSTR}) {
-      value.vt = kind; require(!classify_uia_keyboard_focusable(S_OK, value), "uia-native.keyboard-malformed-type-not-defaulted");
+      value.vt = static_cast<VARTYPE>(kind); require(!classify_uia_keyboard_focusable(S_OK, value), "uia-native.keyboard-malformed-type-not-defaulted");
     }
     value.vt = VT_BOOL; value.boolVal = 1;
     require(!classify_uia_keyboard_focusable(S_OK, value), "uia-native.keyboard-noncanonical-boolean-not-positive");
