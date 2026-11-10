@@ -1,0 +1,63 @@
+{
+  "kind": "Sanitized numeric usage projection from provider receipts",
+  "costBasis": "usage-derived, not invoice reconciled",
+  "reasoningTokensAreSubsetOfOutput": true,
+  "cacheWritesAndReadsAreSubsetsOfInput": true,
+  "allChargesRetained": true,
+  "cases": {
+    "codex-first": {
+      "providerRequests": 28,
+      "measuredUsd": 0.9333972,
+      "tokens": {
+        "inputTokens": 1659392,
+        "cachedInputTokens": 1567067,
+        "cacheWriteTokens": 92241,
+        "cacheWrite30mTokens": 92241,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 84,
+        "outputTokens": 54592,
+        "reasoningTokens": 12919,
+        "totalTokens": 1713984
+      },
+      "allRequestedModel": "gpt-6.1-sol",
+      "allRequestedHigh": true,
+      "allHttp200": true
+    },
+    "vector-first": {
+      "providerRequests": 37,
+      "measuredUsd": 0.6540243,
+      "tokens": {
+        "inputTokens": 1520842,
+        "cachedInputTokens": 1453448,
+        "cacheWriteTokens": 67283,
+        "cacheWrite30mTokens": 67283,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 111,
+        "outputTokens": 34025,
+        "reasoningTokens": 7445,
+        "totalTokens": 1554867
+      },
+      "allRequestedModel": "gpt-6.1-sol",
+      "allRequestedHigh": true,
+      "allHttp200": true
+    },
+    "vector-repair": {
+      "providerRequests": 17,
+      "measuredUsd": 0.295553,
+      "tokens": {
+        "inputTokens": 1387917,
+        "cachedInputTokens": 1364085,
+        "cacheWriteTokens": 23781,
+        "cacheWrite30mTokens": 23781,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 51,
+        "outputTokens": 9959,
+        "reasoningTokens": 4404,
+        "totalTokens": 1397876
+      },
+      "allRequestedModel": "gpt-6.1-sol",
+      "allRequestedHigh": true,
+      "allHttp200": true
+    }
+  }
+}

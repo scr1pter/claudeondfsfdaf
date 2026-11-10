@@ -1,0 +1,56 @@
+{
+  "kind": "heavy-missing-codex-continuation-plan-v1",
+  "originalPlanSha256": "b84c72848d9fea3d33e7fce8f3e1121938be1e8d5e53cc8023497060935f8857",
+  "originalSourceRevision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+  "runtime": "codex",
+  "vectorRerunAllowed": false,
+  "originalReviewFlagsRetained": true,
+  "explicitPriorArmReviewContinuation": true,
+  "originalPairRemainsIncomplete": true,
+  "profileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+  "fundingPhase": "heavy-matched-teams-high-v1",
+  "fundingAuthorizationPlanSha256": "5f75ba025ae3d4f3cde51b4d85586df63fee00e76fdcc300dc1ecd530a0e4c6e",
+  "cumulativeActorCapsUsd": {
+    "foundry-vector": 24.73654725,
+    "foundry-codex": 20.31968465
+  },
+  "studyHardCapUsd": 48,
+  "requiredExactPreAdmissionBaseline": {
+    "attempts": 1189,
+    "measuredUsd": 27.0914679,
+    "foundry-vector": 17.6761006,
+    "foundry-codex": 6.4715992
+  },
+  "monetaryRoundoffToleranceUsd": 1e-08,
+  "maxCalls": 300,
+  "maxSeconds": 7200,
+  "maxSameSessionRepairs": 1,
+  "softUsd": 13.84808545,
+  "armAdmissionReservationUsd": 5.73,
+  "nativeAutonomousIdentities": 7,
+  "controllerOrCredentialFilesReadByPlan": false,
+  "automaticNextPair": false,
+  "qualityComparisonMet": false,
+  "efficiencyClaimMet": false,
+  "continuationInstrumentFiles": {
+    "README.md": "3bbc89737b43d4187d30f1fe2a61b56f91c4e2842d9cc259e7dd91b180dade6f",
+    "codex_arm.py": "5a9c7c0fdfa1fa6a53b3be087a5f4ceba525fdeaf15cd922d6df6922cd6ad00f",
+    "test_codex_arm.py": "4ee22ba04b096aadd5fddb628e103132f8a392eff1307573c5c2a3842258805c"
+  },
+  "atUtc": "2026-11-03T04:33:06.432827+00:00",
+  "planSha256": "b945e5a5d4dbd6b074b47b4099e1df2952047bb0e8ec93e2bd2bd86c5b994189",
+  "recordedBeforeCodexAdmission": true,
+  "instrumentGitRevision": "0cfa2105ae0605c35a69f3ff5f836bf298613912",
+  "evaluationVersion": "project-list-navigation-v2; all original76 checks retained",
+  "overlayManifestSha256": "1100a3ef3fad5f043c1228e16809944ff974025f42decb6310d43864104db9d7",
+  "originalVectorCounts": {
+    "requests": 300,
+    "usd": 6.7876388,
+    "originalPassed": 64,
+    "correctedUnchangedPassed": 74,
+    "total": 76,
+    "correctedNotRun": 0
+  },
+  "sourceAndContextPinsUnchanged": true,
+  "privatePathsExcluded": true
+}

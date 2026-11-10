@@ -6,6 +6,8 @@ import { Icon } from "@vectordevai/ui/icon"
 import { useLanguage } from "@/context/language"
 import { cloudPermissionScope, permissionStatements } from "./cloud-permission-scope"
 import { canAlwaysAllowPermission } from "@/context/permission-policy"
+import { readWorkflowAsk, reasonLine } from "@/features/background-tasks/workflow-model"
+import { WorkflowPlanView } from "@/features/background-tasks/workflow-dialog"
 import { terminalPermissionScope } from "./terminal-permission-scope"
 
 export function SessionPermissionDock(props: {
@@ -24,6 +26,14 @@ export function SessionPermissionDock(props: {
   const cloudScope = () => cloudPermissionScope(props.request)
   const statements = () => permissionStatements(props.request)
   const terminalScope = () => terminalPermissionScope(props.request)
+  // A workflow ask carries its plan. Always allow shows only for a plan within the configured defaults ("run"); any
+  // other pattern asks every time, and the reason line says why (G.3, I15).
+  const workflow = () => readWorkflowAsk(props.request)
+  const canAlways = () => {
+    const ask = workflow()
+    if (ask) return ask.canAlways
+    return canAlwaysAllowPermission(props.request.permission, props.request.always)
+  }
 
   return (
     <DockPrompt
@@ -43,7 +53,7 @@ export function SessionPermissionDock(props: {
             <Button variant="ghost" size="normal" onClick={() => props.onDecide("reject")} disabled={props.responding}>
               {language.t("ui.permission.deny")}
             </Button>
-            <Show when={canAlwaysAllowPermission(props.request.permission, props.request.always)}>
+            <Show when={canAlways()}>
               <Button
                 variant="secondary"
                 size="normal"
@@ -65,6 +75,31 @@ export function SessionPermissionDock(props: {
           <span data-slot="permission-spacer" aria-hidden="true" />
           <div data-slot="permission-hint">{toolDescription()}</div>
         </div>
+      </Show>
+
+      <Show when={workflow()}>
+        {(ask) => (
+          <>
+            <Show when={ask().plan}>
+              {(plan) => (
+                <div data-slot="permission-row">
+                  <span data-slot="permission-spacer" aria-hidden="true" />
+                  <WorkflowPlanView plan={plan()} delegated={ask().delegated} />
+                </div>
+              )}
+            </Show>
+            <Show when={reasonLine(ask())}>
+              {(line) => (
+                <div data-slot="permission-row">
+                  <span data-slot="permission-spacer" aria-hidden="true" />
+                  <div data-slot="permission-hint" data-component="workflow-permission-reason">
+                    {line()}
+                  </div>
+                </div>
+              )}
+            </Show>
+          </>
+        )}
       </Show>
 
       <Show when={cloudScope()}>
@@ -164,7 +199,7 @@ export function SessionPermissionDock(props: {
         )}
       </For>
 
-      <Show when={!cloudScope() && props.request.patterns.length > 0}>
+      <Show when={!cloudScope() && !workflow() && props.request.patterns.length > 0}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />
           <div data-slot="permission-patterns">

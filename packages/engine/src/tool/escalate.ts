@@ -20,10 +20,10 @@ type Metadata = {
 }
 
 /**
- * The request's size as the session runtime sized it this step, and whether the user capped it at Work ("no
- * subagents", "don't be thorough"); the model cannot supply either.
+ * The request's size as the session runtime sized it this step; whether the user said "no subagents" (`capped`), and
+ * whether they kept it at Work ("no subagents" or "don't be thorough", `held`). The model cannot supply any of them.
  */
-export type TaskSizeContext = { readonly tier: TaskSize.Tier; readonly capped?: boolean }
+export type TaskSizeContext = { readonly tier: TaskSize.Tier; readonly capped?: boolean; readonly held?: boolean }
 
 export const EscalateTool = Tool.define<typeof Parameters, Metadata, never>(
   "escalate",
@@ -43,11 +43,12 @@ export const EscalateTool = Tool.define<typeof Parameters, Metadata, never>(
               "This request is now Work: the repository's tools and the whole conversation are offered from your next step. Do what the user asked.",
             metadata: { from: "chat", to: "standard" },
           }
-        if (current.capped)
+        if (current.capped || current.held)
           return {
             title: "Not raised",
-            output:
-              "The user asked not to use subagents or go thorough for this request. Do the work yourself with the tools you have.",
+            output: current.capped
+              ? "The user asked not to use subagents or go thorough for this request. Do the work yourself with the tools you have."
+              : "The user asked not to go thorough for this request. Carry on with the tools you have.",
             metadata: {},
           }
         if (current.tier === "thorough")
@@ -63,7 +64,7 @@ export const EscalateTool = Tool.define<typeof Parameters, Metadata, never>(
           title: "Thorough task",
           // The request's size note was written for its old size and stays as it was, so the prompt cache keeps it; this
           // result is what tells the model the size changed.
-          output: `This request is now Thorough: subagents (task and task_manage) and the to-do list are offered from your next step, at high reasoning effort. This replaces the size note on the request. Reason noted: ${params.reason.slice(0, 200)}`,
+          output: `This request is now Thorough from your next step: high reasoning effort for you and the subagents you launch. This replaces the size note on the request. Reason noted: ${params.reason.slice(0, 200)}`,
           metadata: { from: current.tier, to: "thorough" },
         }
       }),

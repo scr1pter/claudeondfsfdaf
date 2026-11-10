@@ -313,13 +313,19 @@ export const ResearchPlanTool = Tool.define<
               ],
               ...(ctx.callID ? { tool: { messageID: MessageID.make(ctx.messageID), callID: ctx.callID } } : {}),
             })
-            .pipe(Effect.catchTag("QuestionRejectedError", () => Effect.succeed(undefined)))
-          const reply = answers?.[0]?.[0]?.trim()
+            .pipe(
+              Effect.catchTag("QuestionRejectedError", (error) =>
+                Effect.succeed(error.timedOut ? ("timed-out" as const) : undefined),
+              ),
+            )
+          const reply = answers === "timed-out" ? undefined : answers?.[0]?.[0]?.trim()
           if (!reply)
             return {
               title: "Plan not approved",
               output:
-                "The user dismissed the plan card, so nothing was searched or read. Ask what they would like changed, or wait for them.",
+                answers === "timed-out"
+                  ? Question.TIMED_OUT
+                  : "The user dismissed the plan card, so nothing was searched or read. Ask what they would like changed, or wait for them.",
               metadata: {
                 plan: proposed,
                 approved: false,

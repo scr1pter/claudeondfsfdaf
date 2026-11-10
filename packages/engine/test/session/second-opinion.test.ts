@@ -6,6 +6,7 @@ import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -21,6 +22,8 @@ import { SessionRunState } from "@/session/run-state"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { TaskNotify } from "@/task/notify"
+import { TaskLimits } from "@/task/limits"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { Provider } from "@/provider/provider"
@@ -174,6 +177,9 @@ const it = testEffect(
       Ripgrep.node,
       Provider.node,
       SpendGuard.node,
+      TaskNotify.node,
+      TaskLimits.node,
+      FreeModelGuests.node,
     ]),
     [[RuntimeFlags.node, RuntimeFlags.layer({})]],
   ),

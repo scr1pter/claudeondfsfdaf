@@ -10,6 +10,7 @@ import { Config } from "@/config/config"
 import { Identifier } from "../../src/id/id"
 import { Process } from "@/util/process"
 import path from "path"
+import { utimes } from "node:fs/promises"
 import { testEffect } from "../lib/effect"
 import { writeFileStringScoped } from "../lib/filesystem"
 import { TestConfig } from "../fixture/config"
@@ -319,6 +320,46 @@ describe("Truncate", () => {
 
         expect(yield* fs.exists(old)).toBe(false)
         expect(yield* fs.exists(recent)).toBe(true)
+      }),
+    )
+
+    // Background command logs (5.H): `shell-<shl_ id>.log`, up to 64 MiB each.
+    it.live("deletes a background command's log once its command started and last wrote over 7 days ago", () =>
+      Effect.gen(function* () {
+        const svc = yield* Truncate.Service
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.makeDirectory(Truncate.DIR, { recursive: true })
+        const log = (age: number) =>
+          path.join(Truncate.DIR, `shell-${Identifier.create("shl", "ascending", Date.now() - age)}.log`)
+        // Sets when the file was last written.
+        const aged = (file: string, age: number) =>
+          Effect.promise(() => utimes(file, (Date.now() - age) / 1000, (Date.now() - age) / 1000))
+
+        const old = log(10 * DAY_MS)
+        const recent = log(3 * DAY_MS)
+        // A command that started long ago and wrote yesterday is still in use.
+        const writing = log(10 * DAY_MS)
+        // A command this process still runs keeps its log, however long it has been quiet.
+        const held = log(10 * DAY_MS)
+        const foreign = path.join(Truncate.DIR, "shell-notes.log")
+        for (const file of [old, recent, writing, held, foreign]) yield* writeFileStringScoped(file, "output")
+        yield* aged(old, 9 * DAY_MS)
+        yield* aged(writing, DAY_MS)
+        yield* aged(held, 9 * DAY_MS)
+        yield* aged(foreign, 30 * DAY_MS)
+        const release = Truncate.hold(held)
+
+        yield* svc.cleanup()
+        expect(yield* fs.exists(old)).toBe(false)
+        expect(yield* fs.exists(recent)).toBe(true)
+        expect(yield* fs.exists(writing)).toBe(true)
+        expect(yield* fs.exists(held)).toBe(true)
+        expect(yield* fs.exists(foreign)).toBe(true)
+
+        // Once the command ends, its log ages out like any other.
+        release()
+        yield* svc.cleanup()
+        expect(yield* fs.exists(held)).toBe(false)
       }),
     )
   })

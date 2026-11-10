@@ -14,7 +14,7 @@ import { ConfigPlugin } from "@/config/plugin"
 import { CurrentWorkingDirectory } from "@/config/tui-cwd"
 import { PluginLoader } from "@/plugin/loader"
 import { TuiConfig } from "../../src/config/tui"
-import { TestInstance } from "../fixture/fixture"
+import { resetPromptTrust, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Config.node, FSUtil.node])))
@@ -28,6 +28,8 @@ const cleanState = Effect.gen(function* () {
   const fs = yield* FSUtil.Service
   delete process.env.VECTOR_AGENT_CONFIG
   delete process.env.VECTOR_TUI_CONFIG
+  // The global files these tests write are the owner's own config, not a change made after an approval.
+  resetPromptTrust()
   yield* Effect.forEach(globalConfigFiles, (file) => fs.remove(file, { force: true }).pipe(Effect.ignore), {
     discard: true,
   })
@@ -761,6 +763,32 @@ it.instance("ignores unknown keybind names without dropping valid overrides from
       const config = yield* getTuiConfig(test.directory)
       expect(config.keybinds.get("session.delete")?.[0]?.key).toBe("ctrl+d")
       expect(config.keybinds.get("not_a_real_keybind")).toEqual([])
+    }),
+  ),
+)
+
+// 4.3: "Stop including helpers" (session.interrupt.all) defaults to <leader>k. A config written for another version that
+// names a keybind this one does not know still loads, and keeps its other overrides.
+it.instance("resolves session_interrupt_all and still loads an older config with an unknown keybind", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+
+      const defaults = yield* getTuiConfig(test.directory)
+      expect(defaults.keybinds.get("session.interrupt.all")?.[0]?.key).toBe("<leader>k")
+
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), {
+        keybinds: {
+          app_exit: "ctrl+q",
+          session_interrupt_all: "ctrl+alt+s",
+          session_retired_keybind: "ctrl+y",
+        },
+      })
+      const config = yield* getTuiConfig(test.directory)
+      expect(config.keybinds.get("app.exit")?.[0]?.key).toBe("ctrl+q")
+      expect(config.keybinds.get("session.interrupt.all")?.[0]?.key).toBe("ctrl+alt+s")
+      expect(config.keybinds.get("session_retired_keybind")).toEqual([])
     }),
   ),
 )

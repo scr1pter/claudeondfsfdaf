@@ -531,6 +531,16 @@ export const Assistant = Schema.Struct({
   variant: Schema.optional(Schema.String),
   // The size Vector gave the request this message answers, when it sized it.
   size: Schema.optional(TaskSize.Tier),
+  // A learned workflow default this request ran with, and why. `variant` stays the user's own pick.
+  workflow: Schema.optional(
+    Schema.Struct({
+      effort: Schema.optional(Schema.Literal("default")),
+      split: Schema.optional(Schema.Literal("solo")),
+      subagentModel: Schema.optional(Schema.Literal("small")),
+      source: Schema.Literals(["learned", "explore"]),
+      reason: Schema.String,
+    }),
+  ),
   finish: Schema.optional(Schema.String),
   // Copied into this session by a fork. Its spend was counted in the original session, so it carries no cost and
   // usage totals skip it; its tokens stay so the context in use is still shown.

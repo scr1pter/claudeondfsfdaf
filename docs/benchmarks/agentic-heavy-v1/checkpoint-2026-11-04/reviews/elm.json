@@ -1,0 +1,807 @@
+{
+  "kind": "safe-blinded-static-report-projection",
+  "sourceReportSha256": "9cc5f2252f2af8b6eb8c0dae8a85a54a9e257503feff41a564e3f3f6e50c65ed",
+  "projection": "Only absolute evidence paths mapped to published locations and renamed publishedPath; scores/rationales remain unchanged. Windows path separators normalized.",
+  "opaqueAlias": "elm",
+  "publishedSubmission": "vector-delivery",
+  "report": {
+    "label": "elm",
+    "reviewType": "independent blinded static source and native screenshot review",
+    "lockedBeforeWillow": true,
+    "scope": {
+      "read": "All executable source, configuration, dependency lock, authored tests and nine native screenshot PNGs within elm; package BUILD_SPEC and both rubrics.",
+      "excluded": "review-provenance.json and authored verdict/verification/report prose; no parent folders, Git, alias map, external tooling, runtime/API/browser/build execution.",
+      "claims": "Scores describe static design and delivered visual evidence. Authored tests were read but not run; no gate pass, delivery completion or production-readiness claim is inferred."
+    },
+    "code": {
+      "max": 48,
+      "total": 36,
+      "axes": [
+        {
+          "axis": 1,
+          "name": "Real architecture",
+          "score": 3,
+          "rationale": "Real typed React/Bun application with a shared HTTP handler and SQLite setup. Domain components are separated; business persistence uses an unversioned generic JSON entity table, with relationships and most constraints enforced in application code.",
+          "evidence": [
+            {
+              "relative": "source/package.json",
+              "line": 7,
+              "publishedPath": "../submissions/vector-delivery/source/package.json"
+            },
+            {
+              "relative": "source/tsconfig.json",
+              "line": 14,
+              "publishedPath": "../submissions/vector-delivery/source/tsconfig.json"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 124,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 206,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 2,
+          "name": "Authentication",
+          "score": 3,
+          "rationale": "Argon2id password hashing/verification, random 64-character persisted expiring sessions, server-side logout, and correct local cookie flags are present. No executed authentication result is claimed; abuse throttling is absent.",
+          "evidence": [
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 266,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 333,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 363,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 383,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 405,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 3,
+          "name": "Workspace/role boundaries",
+          "score": 4,
+          "rationale": "Central scoped entity lookup, membership checks on every business entry, role checks repeated inside the write transaction after asynchronous bodies, and author/manager deletion guards are unusually thorough. Original ownership has database guards.",
+          "evidence": [
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 92,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 280,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 52,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 215,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 221,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 545,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 644,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 4,
+          "name": "Inventory transactions",
+          "score": 3,
+          "rationale": "Integer input and resulting-stock bounds, synchronous immediate transactions, immutable movement routes, and guarded product deletion are implemented. Product/movement consistency is application-level rather than relationally constrained.",
+          "evidence": [
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 159,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 298,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 307,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 321,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 5,
+          "name": "Fulfillment idempotency",
+          "score": 4,
+          "rationale": "A workspace/key primary key and saved response coexist with all-stock validation, decrements, linked movements, order state and activity within one immediate transaction. Failed validation precedes key persistence, supporting retry structurally.",
+          "evidence": [
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 149,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 224,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 391,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 399,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 413,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 6,
+          "name": "Financial correctness",
+          "score": 3,
+          "rationale": "Bounded integer cents, stored order/item and invoice bill-to snapshots, transactional counters, duplicate-invoice detection and guarded invoice transitions are present. Number and invoice uniqueness rely on serialized application writes rather than dedicated business-table unique constraints.",
+          "evidence": [
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 88,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 356,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 431,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 449,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 215,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 7,
+          "name": "Projects/collaboration",
+          "score": 3,
+          "rationale": "Durable projects/tasks/comments, composed filters, valid dates/member assignees, atomic patches and author permissions are present. Cascades are manual scans, and removing membership leaves existing task assignee IDs unresolved.",
+          "evidence": [
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 110,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 123,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 146,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 474,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 533,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 480,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 8,
+          "name": "CSV and file handling",
+          "score": 3,
+          "rationale": "Strict quoted-field parsing, atomic prevalidated imports, formula-neutralized exports, raw multipart checks, opaque owned paths and byte reads are implemented. Metadata/file crash consistency is incomplete: deletion commits before unlink, and upload writes a file before database commit.",
+          "evidence": [
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 154,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 551,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 619,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 640,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 669,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 675,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 9,
+          "name": "API correctness",
+          "score": 2,
+          "rationale": "Consistent JSON errors and strict allowed-field/integer/enum validation are present. Most lists load every entity and filter in memory without response limits; startup has no versioned schema migration mechanism. These limit resource predictability and future data evolution.",
+          "evidence": [
+            {
+              "relative": "source/server/index.ts",
+              "line": 60,
+              "publishedPath": "../submissions/vector-delivery/source/server/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 28,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 171,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 239,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            },
+            {
+              "relative": "source/server/routes/index.ts",
+              "line": 664,
+              "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+            }
+          ]
+        },
+        {
+          "axis": 10,
+          "name": "Client state and live updates",
+          "score": 3,
+          "rationale": "Server-backed resources have generation guards, retry UI, scoped main remounts and a serialized 1.5-second session/revision poll. This is credible live-update design, but meeting the three-second gate was not measured; each change refetches every mounted resource.",
+          "evidence": [
+            {
+              "relative": "source/src/api.tsx",
+              "line": 26,
+              "publishedPath": "../submissions/vector-delivery/source/src/api.tsx"
+            },
+            {
+              "relative": "source/src/App.tsx",
+              "line": 41,
+              "publishedPath": "../submissions/vector-delivery/source/src/App.tsx"
+            },
+            {
+              "relative": "source/src/App.tsx",
+              "line": 60,
+              "publishedPath": "../submissions/vector-delivery/source/src/App.tsx"
+            },
+            {
+              "relative": "source/src/App.tsx",
+              "line": 77,
+              "publishedPath": "../submissions/vector-delivery/source/src/App.tsx"
+            }
+          ]
+        },
+        {
+          "axis": 11,
+          "name": "Maintainability and useful tests",
+          "score": 2,
+          "rationale": "There are substantive tests for rollback, tenant denial, concurrency and restart, but none was executed in this review. Very long compressed JSX/CSS lines and a 707-line business router make changes harder to inspect; frontend/backend domain types are duplicated.",
+          "evidence": [
+            {
+              "relative": "source/server/core/core.test.ts",
+              "line": 146,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/core.test.ts"
+            },
+            {
+              "relative": "source/server/tests/api.ts",
+              "line": 101,
+              "publishedPath": "../submissions/vector-delivery/source/server/tests/api.ts"
+            },
+            {
+              "relative": "source/tests/integration.ts",
+              "line": 140,
+              "publishedPath": "../submissions/vector-delivery/source/tests/integration.ts"
+            },
+            {
+              "relative": "source/src/Projects.tsx",
+              "line": 20,
+              "publishedPath": "../submissions/vector-delivery/source/src/Projects.tsx"
+            },
+            {
+              "relative": "source/src/styles.css",
+              "line": 4,
+              "publishedPath": "../submissions/vector-delivery/source/src/styles.css"
+            },
+            {
+              "relative": "source/src/types.ts",
+              "line": 5,
+              "publishedPath": "../submissions/vector-delivery/source/src/types.ts"
+            }
+          ]
+        },
+        {
+          "axis": 12,
+          "name": "Operational honesty",
+          "score": 3,
+          "rationale": "Typecheck/build/start scripts point to real tools and source, the server binds loopback and serves one origin, and README states the local prototype boundaries. Static review cannot verify install/build/restart. DATA_DIR defaults to a sibling and rejects source-contained directories, differing from the supplied default .foundry-data contract.",
+          "evidence": [
+            {
+              "relative": "source/package.json",
+              "line": 7,
+              "publishedPath": "../submissions/vector-delivery/source/package.json"
+            },
+            {
+              "relative": "source/server/index.ts",
+              "line": 70,
+              "publishedPath": "../submissions/vector-delivery/source/server/index.ts"
+            },
+            {
+              "relative": "source/server/core/index.ts",
+              "line": 45,
+              "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+            },
+            {
+              "relative": "source/README.md",
+              "line": 7,
+              "publishedPath": "../submissions/vector-delivery/source/README.md"
+            }
+          ]
+        }
+      ]
+    },
+    "visual": {
+      "max": 40,
+      "total": 23,
+      "axes": [
+        {
+          "axis": 1,
+          "name": "Coherent Foundry identity",
+          "score": 3,
+          "rationale": "A consistent navy, warm orange and sage palette, custom Foundry mark, matching icons and restrained cards carry across all captured domains.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-overview.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-overview.png"
+            },
+            {
+              "relative": "screenshots/desktop-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-overview.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-overview.png"
+            }
+          ]
+        },
+        {
+          "axis": 2,
+          "name": "Information hierarchy",
+          "score": 3,
+          "rationale": "Six clear business cards lead the overview; real-value charts and activity follow. Fine-print labels and excess vertical whitespace reduce information efficiency.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-overview.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-overview.png"
+            },
+            {
+              "relative": "screenshots/mobile-overview.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-overview.png"
+            }
+          ]
+        },
+        {
+          "axis": 3,
+          "name": "Navigation and workspace context",
+          "score": 3,
+          "rationale": "Desktop selected navigation, workspace selector, breadcrumb and owner context are clear. Mobile keeps breadcrumb and a navigation toggle, but role and workspace selection are behind the collapsed navigation.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 4,
+          "name": "Tables and forms",
+          "score": 2,
+          "rationale": "Desktop customer rows align cleanly, with search and primary actions separated. Mobile screenshots clip later columns/actions; no form/dialog screenshots were supplied, and desktop inventory is loading.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-customers.png"
+            },
+            {
+              "relative": "screenshots/desktop-inventory.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-inventory.png"
+            },
+            {
+              "relative": "screenshots/mobile-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-inventory.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-inventory.png"
+            }
+          ]
+        },
+        {
+          "axis": 5,
+          "name": "Order-to-invoice workflow",
+          "score": 2,
+          "rationale": "The captured order row has a human-readable number, customer and fulfilled badge. The mobile amount is clipped; invoice snapshots, quantity editing and transition dialogs are absent from the screenshot set.",
+          "evidence": [
+            {
+              "relative": "screenshots/mobile-orders.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-orders.png"
+            }
+          ]
+        },
+        {
+          "axis": 6,
+          "name": "Project board and collaboration",
+          "score": 2,
+          "rationale": "Three named columns and composed filter controls provide a coherent board frame. Desktop capture has no task cards, and mobile shows only a clipped portion of one card; comments and detailed collaboration are not visually evidenced.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-project-board.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-project-board.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 7,
+          "name": "Interaction finish",
+          "score": 2,
+          "rationale": "A visible loading indicator and a designed empty column exist. Most success/error/disabled/destructive/dialog states are not captured, so interaction completeness cannot be established from these PNGs.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-inventory.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-inventory.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 8,
+          "name": "Mobile composition",
+          "score": 1,
+          "rationale": "Overview and board stay within 390px frames, and overview cards reflow. Customer/inventory/order PNGs are 544/499/503px wide with the shell ending at390px and a blank right strip; important table columns and actions are clipped. This is visible capture evidence, not a measured browser overflow test.",
+          "evidence": [
+            {
+              "relative": "screenshots/mobile-overview.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-overview.png"
+            },
+            {
+              "relative": "screenshots/mobile-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-inventory.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-inventory.png"
+            },
+            {
+              "relative": "screenshots/mobile-orders.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-orders.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 9,
+          "name": "Accessibility",
+          "score": 2,
+          "rationale": "Major headings and visible labels are clear, but small pale secondary text and small row actions weaken readability and touch use. Source provides native dialogs, associated labels and focus restoration; keyboard, dialog and contrast passes were not executed or pictured.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-customers.png"
+            },
+            {
+              "relative": "screenshots/mobile-overview.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-overview.png"
+            },
+            {
+              "relative": "screenshots/mobile-project-board.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-project-board.png"
+            }
+          ]
+        },
+        {
+          "axis": 10,
+          "name": "Overall craft and originality",
+          "score": 3,
+          "rationale": "The warm editorial business identity is coherent and more considered than default dashboard styling. Sparse/loading desktop evidence and difficult mobile tables prevent a stronger craft judgment.",
+          "evidence": [
+            {
+              "relative": "screenshots/desktop-overview.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-overview.png"
+            },
+            {
+              "relative": "screenshots/desktop-inventory.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-inventory.png"
+            },
+            {
+              "relative": "screenshots/desktop-project-board.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/desktop-project-board.png"
+            },
+            {
+              "relative": "screenshots/mobile-customers.png",
+              "publishedPath": "../submissions/vector-delivery/screenshots/mobile-customers.png"
+            }
+          ]
+        }
+      ]
+    },
+    "findings": [
+      {
+        "id": "elm-1",
+        "severity": "medium",
+        "type": "observed-static-limitation",
+        "title": "File deletion and database deletion are not crash-atomic",
+        "detail": "Attachment metadata and activity commit before removeOwnedFile. An unlink error can return500 after logical deletion; a crash can leave unreferenced blobs. Upload similarly cannot atomically commit a filesystem write and SQLite metadata.",
+        "evidence": [
+          {
+            "relative": "source/server/routes/index.ts",
+            "line": 139,
+            "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+          },
+          {
+            "relative": "source/server/routes/index.ts",
+            "line": 621,
+            "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+          },
+          {
+            "relative": "source/server/routes/index.ts",
+            "line": 645,
+            "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+          }
+        ]
+      },
+      {
+        "id": "elm-2",
+        "severity": "medium",
+        "type": "observed-static-limitation",
+        "title": "Unbounded JSON-entity scans",
+        "detail": "listEntities selects and parses all matching records. Searches, uniqueness checks, cascades, exports and summary calculations repeatedly scan arrays. Small supplied data may be fine; scale and resource exhaustion remain unmeasured risks.",
+        "evidence": [
+          {
+            "relative": "source/server/core/index.ts",
+            "line": 171,
+            "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+          },
+          {
+            "relative": "source/server/routes/index.ts",
+            "line": 68,
+            "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+          },
+          {
+            "relative": "source/server/routes/index.ts",
+            "line": 664,
+            "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+          }
+        ]
+      },
+      {
+        "id": "elm-3",
+        "severity": "medium",
+        "type": "observed-static-limitation",
+        "title": "Dense source weakens reviewability",
+        "detail": "Domain components are compressed into long JSX lines and nearly all base styling lives on one line. This impedes narrow diffs, debugging and accessible-state maintenance despite meaningful authored tests.",
+        "evidence": [
+          {
+            "relative": "source/src/Projects.tsx",
+            "line": 20,
+            "publishedPath": "../submissions/vector-delivery/source/src/Projects.tsx"
+          },
+          {
+            "relative": "source/src/Sales.tsx",
+            "line": 23,
+            "publishedPath": "../submissions/vector-delivery/source/src/Sales.tsx"
+          },
+          {
+            "relative": "source/src/styles.css",
+            "line": 4,
+            "publishedPath": "../submissions/vector-delivery/source/src/styles.css"
+          }
+        ]
+      },
+      {
+        "id": "elm-4",
+        "severity": "low",
+        "type": "observed-static-limitation",
+        "title": "Removed-member task assignment remains dangling",
+        "detail": "Membership deletion removes only the membership and active selection. Existing tasks retain assigneeId; the client then displays Unassigned and unrelated edits can reject the previous nonmember assignee.",
+        "evidence": [
+          {
+            "relative": "source/server/core/index.ts",
+            "line": 480,
+            "publishedPath": "../submissions/vector-delivery/source/server/core/index.ts"
+          },
+          {
+            "relative": "source/server/routes/index.ts",
+            "line": 113,
+            "publishedPath": "../submissions/vector-delivery/source/server/routes/index.ts"
+          },
+          {
+            "relative": "source/src/Projects.tsx",
+            "line": 37,
+            "publishedPath": "../submissions/vector-delivery/source/src/Projects.tsx"
+          }
+        ]
+      },
+      {
+        "id": "elm-5",
+        "severity": "medium",
+        "type": "visual-evidence-limitation",
+        "title": "Mobile table captures exceed requested width",
+        "detail": "Native PNG dimensions are customers544x844, inventory499x844 and orders503x844; shell ends at390px with blank area to the right and clipped important columns. Whether this is document overflow or capture behavior was not measured.",
+        "evidence": [
+          {
+            "relative": "screenshots/mobile-customers.png",
+            "publishedPath": "../submissions/vector-delivery/screenshots/mobile-customers.png"
+          },
+          {
+            "relative": "screenshots/mobile-inventory.png",
+            "publishedPath": "../submissions/vector-delivery/screenshots/mobile-inventory.png"
+          },
+          {
+            "relative": "screenshots/mobile-orders.png",
+            "publishedPath": "../submissions/vector-delivery/screenshots/mobile-orders.png"
+          }
+        ]
+      }
+    ],
+    "screenshots": [
+      {
+        "relative": "screenshots/desktop-overview.png",
+        "width": 1440,
+        "height": 1523,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/desktop-customers.png",
+        "width": 1440,
+        "height": 960,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/desktop-inventory.png",
+        "width": 1440,
+        "height": 960,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/desktop-project-board.png",
+        "width": 1440,
+        "height": 960,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-overview.png",
+        "width": 390,
+        "height": 2103,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-customers.png",
+        "width": 544,
+        "height": 844,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-inventory.png",
+        "width": 499,
+        "height": 844,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-orders.png",
+        "width": 503,
+        "height": 844,
+        "viewedNative": true
+      },
+      {
+        "relative": "screenshots/mobile-project-board.png",
+        "width": 390,
+        "height": 1000,
+        "viewedNative": true
+      }
+    ],
+    "residualRisks": [
+      "Build/typecheck/start/restart and browser keyboard/live-update timing are unexecuted.",
+      "No runtime security or concurrency vulnerability was demonstrated.",
+      "No rate limiting, crash-recovery reconciliation or schema migration strategy is established by the inspected source.",
+      "Screenshots do not establish functionality; desktop inventory and task-card/collaboration visual coverage are limited."
+    ]
+  }
+}

@@ -1,7 +1,8 @@
-import { expect } from "bun:test"
+import { beforeEach, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Effect } from "effect"
+import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { cliIt, type RunResult, type SpawnOpts } from "../../lib/cli-process"
 
 // `vector memory doc` as a user runs it: the real CLI in a process of its own, with its own home and data folder,
@@ -20,10 +21,19 @@ Clients MUST retry at most 3 times after a 429 response.
 Uploads are limited to 50 MB per file.
 `
 
+// The CLI runs as the owner runs it in their own terminal: without the agent marker, which every child of a process
+// that resolved Vector Local otherwise inherits. Its owner-only commands refuse under the marker.
+beforeEach(() => {
+  ChildEnvironment.inherit({ agent: false })
+})
+
 // A repository in the fixture's home, and `vector memory doc …` run in it. The test process keeps its databases in
 // memory, which a child would inherit; each CLI run here is a process of its own, so they share files in the home.
 const repository = (
-  fixture: { readonly home: string; readonly vector: { readonly spawn: (args: string[], opts?: SpawnOpts) => Effect.Effect<RunResult> } },
+  fixture: {
+    readonly home: string
+    readonly vector: { readonly spawn: (args: string[], opts?: SpawnOpts) => Effect.Effect<RunResult> }
+  },
   files: Record<string, string>,
 ) =>
   Effect.promise(async () => {
@@ -75,7 +85,9 @@ cliIt.concurrent(
       fixture.vector.expectExit(extracted, 0, "vector memory doc extract")
       const structured = JSON.parse(extracted.stdout) as { title: string; records: { kind: string; card: string }[] }
       expect(structured.title).toBe("Auth spec")
-      expect(structured.records.some((record) => record.kind === "requirement" && record.card.includes("retry"))).toBe(true)
+      expect(structured.records.some((record) => record.kind === "requirement" && record.card.includes("retry"))).toBe(
+        true,
+      )
       const listed = yield* repo.doc(["list", "--json"])
       fixture.vector.expectExit(listed, 0, "vector memory doc list")
       expect(JSON.parse(listed.stdout)).toEqual([])
@@ -146,7 +158,8 @@ cliIt.concurrent(
   (fixture) =>
     Effect.gen(function* () {
       const repo = yield* repository(fixture, {
-        "limits.md": "# Limits\n\n## 1 Uploads\n\nUploads are limited to at most 50 MB per file by `MAX_UPLOAD_BYTES`.\n",
+        "limits.md":
+          "# Limits\n\n## 1 Uploads\n\nUploads are limited to at most 50 MB per file by `MAX_UPLOAD_BYTES`.\n",
         "upload.ts": "// Upload limits.\nexport const MAX_UPLOAD_BYTES = 64 * 1024 * 1024\n",
       })
       yield* Effect.promise(() => Bun.$`git init -q`.cwd(repo.root).quiet())
@@ -161,7 +174,10 @@ cliIt.concurrent(
       fixture.vector.expectExit(links, 0, "vector memory links")
       const linked = JSON.parse(links.stdout) as { kind: string; anchor?: { method: string; symbol?: string } }[]
       expect(linked).toContainEqual(
-        expect.objectContaining({ kind: "constraint", anchor: expect.objectContaining({ method: "constant", symbol: "MAX_UPLOAD_BYTES" }) }),
+        expect.objectContaining({
+          kind: "constraint",
+          anchor: expect.objectContaining({ method: "constant", symbol: "MAX_UPLOAD_BYTES" }),
+        }),
       )
       // A file named through a link to the repository spells the root another way than git does, as Windows' short
       // temporary folder name (RUNNER~1) did on CI, and it is still found by its name in the repository.
@@ -170,7 +186,10 @@ cliIt.concurrent(
       const viaAlias = yield* run(["links", path.join(alias, "upload.ts"), "--json"])
       fixture.vector.expectExit(viaAlias, 0, "vector memory links through a linked folder")
       expect(JSON.parse(viaAlias.stdout)).toContainEqual(
-        expect.objectContaining({ kind: "constraint", anchor: expect.objectContaining({ symbol: "MAX_UPLOAD_BYTES" }) }),
+        expect.objectContaining({
+          kind: "constraint",
+          anchor: expect.objectContaining({ symbol: "MAX_UPLOAD_BYTES" }),
+        }),
       )
       const listed = yield* run(["review"])
       fixture.vector.expectExit(listed, 0, "vector memory review")
@@ -179,7 +198,11 @@ cliIt.concurrent(
       const drift = items.find((item) => item.kind === "drift")!
       const kept = yield* run(["review", "resolve", drift.id, "keep-code", "--json"])
       fixture.vector.expectExit(kept, 0, "vector memory review resolve")
-      expect(JSON.parse(kept.stdout)).toMatchObject({ type: "item", item: { status: "resolved" }, entry: { kind: "decision" } })
+      expect(JSON.parse(kept.stdout)).toMatchObject({
+        type: "item",
+        item: { status: "resolved" },
+        entry: { kind: "decision" },
+      })
       const after = yield* run(["review"])
       expect(`${after.stdout}${after.stderr}`).toContain("Nothing needs a look.")
       const unknown = yield* run(["review", "resolve", "vnothing", "dismiss"])
@@ -198,7 +221,10 @@ cliIt.concurrent(
       const run = (args: string[], flag: boolean) =>
         fixture.vector.spawn(["memory", "doc", ...args], {
           cwd: repo.root,
-          env: { VECTOR_AGENT_DB: path.join(fixture.home, "vector.db"), ...(flag ? { VECTOR_KNOWLEDGE_DISTILL: "1" } : {}) },
+          env: {
+            VECTOR_AGENT_DB: path.join(fixture.home, "vector.db"),
+            ...(flag ? { VECTOR_KNOWLEDGE_DISTILL: "1" } : {}),
+          },
           timeoutMs: 60_000,
         })
       const added = yield* repo.doc(["add", "billing.md", "--json"])
@@ -213,7 +239,12 @@ cliIt.concurrent(
       // The estimate sends nothing.
       const estimate = yield* run(["distill", id, ...model, "--json"], true)
       fixture.vector.expectExit(estimate, 0, "vector memory doc distill estimate")
-      expect(JSON.parse(estimate.stdout)).toMatchObject({ enabled: true, model: "lmstudio/test-model", sections: 1, output: 4000 })
+      expect(JSON.parse(estimate.stdout)).toMatchObject({
+        enabled: true,
+        model: "lmstudio/test-model",
+        sections: 1,
+        output: 4000,
+      })
       expect(yield* fixture.llm.calls).toBe(0)
 
       yield* fixture.llm.tool("StructuredOutput", {
@@ -221,22 +252,33 @@ cliIt.concurrent(
           {
             kind: "requirement",
             text: "Refunds are approved by a support lead",
-            quote: "Refunds are approved by a support lead and paid back to the original card within ten business days.",
+            quote:
+              "Refunds are approved by a support lead and paid back to the original card within ten business days.",
           },
           { kind: "constraint", text: "Refunds are paid within 5 days", quote: "Refunds are paid within 5 days." },
         ],
       })
       const sent = yield* run(["distill", id, ...model, "--yes", "--json"], true)
       fixture.vector.expectExit(sent, 0, "vector memory doc distill --yes")
-      const result = JSON.parse(sent.stdout) as { records: { id: string; status: string }[]; dropped: { quote: number } }
+      const result = JSON.parse(sent.stdout) as {
+        records: { id: string; status: string }[]
+        dropped: { quote: number }
+      }
       expect(result.records.map((record) => record.status)).toEqual(["proposed"])
       expect(result.dropped.quote).toBe(1)
       expect(yield* fixture.llm.calls).toBe(1)
 
-      fixture.vector.expectExit(yield* run(["approve", id, "--suggestions"], true), 0, "vector memory doc approve --suggestions")
+      fixture.vector.expectExit(
+        yield* run(["approve", id, "--suggestions"], true),
+        0,
+        "vector memory doc approve --suggestions",
+      )
       const shown = yield* run(["show", id, "--records", "--json"], true)
       const records = JSON.parse(shown.stdout) as { id: string; status: string; origin: string }[]
-      expect(records.find((record) => record.id === result.records[0]!.id)).toMatchObject({ status: "active", origin: "distilled" })
+      expect(records.find((record) => record.id === result.records[0]!.id)).toMatchObject({
+        status: "active",
+        origin: "distilled",
+      })
     }),
   120_000,
 )

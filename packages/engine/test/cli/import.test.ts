@@ -184,3 +184,44 @@ cliIt.live(
     }),
   30_000,
 )
+
+cliIt.live(
+  "an owner-only conversation keeps its marker on local export and refuses the portable format",
+  ({ vector, home }) =>
+    Effect.gen(function* () {
+      const env = { VECTOR_AGENT_DB: path.join(home, "private.db") }
+      const server = yield* vector.serve({ env })
+      const session = yield* Effect.promise(() =>
+        fetch(`${server.url}/session`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: "Private fixture" }),
+        }).then((response) => response.json()),
+      )
+      const exported = yield* vector.spawn(["export", session.id], { env })
+      expect(exported.exitCode, exported.stderr).toBe(0)
+      // A local archive's owner-only marker can only tighten what an import may disclose.
+      const file = path.join(home, "private.json")
+      yield* Effect.promise(() =>
+        Bun.write(file, JSON.stringify({ ...JSON.parse(exported.stdout), privacy: "owner-only" })),
+      )
+      const imported = yield* vector.spawn(["import", file], { env })
+      expect(imported.exitCode, imported.stderr).toBe(0)
+      const importedID = imported.stdout.match(/Imported session: (ses_\S+)/)?.[1]
+      expect(importedID).toBeDefined()
+      const local = yield* vector.spawn(["export", importedID!], { env })
+      expect(local.exitCode, local.stderr).toBe(0)
+      expect(JSON.parse(local.stdout).privacy).toBe("owner-only")
+      const portable = yield* vector.spawn(["export", "--public", importedID!], { env })
+      expect(portable.exitCode).not.toBe(0)
+      expect(portable.stdout + portable.stderr).toContain("cannot be exported in the portable format")
+      const sanitized = yield* vector.spawn(["export", "--sanitize", importedID!], { env })
+      const native = "engine" in JSON.parse(local.stdout)
+      if (native) expect(sanitized.exitCode).not.toBe(0)
+      else {
+        expect(sanitized.exitCode, sanitized.stderr).toBe(0)
+        expect(JSON.parse(sanitized.stdout).privacy).toBe("owner-only")
+      }
+    }),
+  30_000,
+)

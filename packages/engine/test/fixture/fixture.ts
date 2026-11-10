@@ -1,6 +1,7 @@
 import { $ } from "bun"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import * as fs from "fs/promises"
+import { rmSync } from "fs"
 import os from "os"
 import path from "path"
 import { Effect, Context, Layer } from "effect"
@@ -248,4 +249,14 @@ export async function trustWorkspace(directory: string) {
     path.join(directory, ".vector"),
   ])
   await WorkspaceTrust.approve(Global.Path.state, snapshot)
+}
+
+/**
+ * Forgets the prompt-trust baseline (section 8.3), so the next instance start records the global prompt files as they
+ * are, as the first start after an upgrade does. Every test file in a process shares one state folder, so without this
+ * a baseline an earlier test recorded would hold the global config, instructions or skills folder this test writes by
+ * hand as an unapproved change.
+ */
+export function resetPromptTrust() {
+  rmSync(path.join(Global.Path.state, "prompt-trust.json"), { force: true })
 }

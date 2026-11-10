@@ -1,17 +1,35 @@
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useSpring } from "@vectordevai/ui/motion-spring"
-import { type Accessor, createEffect, createMemo, createResource, onCleanup } from "solid-js"
+import { type Accessor, createEffect, createMemo, createResource, createSignal, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { PromptInputState } from "@/components/prompt-input"
 import { useSync } from "@/context/sync"
+import { backgroundTasksPane } from "@/features/background-tasks/background-tasks-state"
+import { useBackgroundTasks } from "@/features/background-tasks/use-background-tasks"
 import { getSessionHandoff, setSessionHandoff } from "@/pages/session/handoff"
 import type { SessionComposerController } from "./session-composer-state"
+import {
+  dismissInterrupted,
+  interruptedDockState,
+  loadInterruptedDismissed,
+  saveInterruptedDismissed,
+} from "./session-interrupted-dock"
 
 export type SessionComposerFollowupDock = {
-  items: { id: string; text: string }[]
+  items: { id: string; text: string; failed?: boolean }[]
   sending?: string
+  paused?: string
   onSend: (id: string) => void
   onDelete: (id: string) => void
+  onResume?: () => void
+}
+
+export type SessionComposerInterruptedDock = {
+  count: number
+  resumable: number
+  resuming: boolean
+  onResumeAll: () => void
+  onDismiss: () => void
 }
 
 export type SessionComposerRevertDock = {
@@ -106,6 +124,63 @@ export function createSessionComposerRegionController(input: {
     const id = input.sessionID()
     return id ? sync().session.get(id)?.parentID : undefined
   })
+
+  // Helpers a restart interrupted, on the root's page (5.I.4). The session page mounts this controller inside its
+  // Background tasks provider; outside one (no board) there is no dock.
+  const tasks = useBackgroundTasks()
+  const [dismissed, setDismissed] = createSignal<readonly string[]>([])
+  const [resuming, setResuming] = createSignal(false)
+  createEffect(
+    on(
+      () => tasks?.rootID(),
+      (root) => setDismissed(root ? loadInterruptedDismissed(root) : []),
+    ),
+  )
+  const helperID = (agent: { task?: { id: string }; sessionID?: string }) => agent.task?.id ?? agent.sessionID
+  const interruptedState = createMemo(() => {
+    if (!tasks) return undefined
+    const id = input.sessionID()
+    const resume = tasks.capabilities().taskResume
+    return interruptedDockState({
+      root: !!id && tasks.rootID() === id,
+      helpers: tasks.interrupted().flatMap((agent) => {
+        const helper = helperID(agent)
+        return helper ? [{ id: helper, resumable: resume && agent.task?.controls.resume === true }] : []
+      }),
+      dismissed: dismissed(),
+    })
+  })
+  const interrupted = (): SessionComposerInterruptedDock | undefined => {
+    const state = interruptedState()
+    if (!state || !tasks) return undefined
+    return {
+      count: state.ids.length,
+      resumable: state.resumable.length,
+      resuming: resuming(),
+      onResumeAll: () => {
+        if (resuming()) return
+        const ids = new Set(state.resumable)
+        const agents = tasks.interrupted().filter((agent) => ids.has(helperID(agent) ?? ""))
+        if (!agents.length) return
+        setResuming(true)
+        void tasks.resume(agents).finally(() => setResuming(false))
+      },
+      onDismiss: () => {
+        const root = tasks.rootID()
+        if (!root) return
+        setDismissed(saveInterruptedDismissed(root, dismissInterrupted(dismissed(), state)))
+      },
+    }
+  }
+
+  // "Talk to this subagent" on a subagent's own page: its card in Background tasks, where the Talk form is.
+  const talkToChild = () => {
+    const id = input.sessionID()
+    const card = tasks?.cards().find((item) => item.agents.some((agent) => agent.sessionID === id))
+    const phase = card?.phases.find((item) => item.agents.some((agent) => agent.sessionID === id))
+    if (card) backgroundTasksPane.revealCard(card.key, phase?.key)
+    else backgroundTasksPane.open()
+  }
   const open = createMemo(() => store.ready && input.state.dock() && !input.state.closing())
   const progress = useSpring(
     () => (open() ? 1 : 0),
@@ -227,6 +302,8 @@ export function createSessionComposerRegionController(input: {
     setDockRef: input.setDockRef,
     parentID,
     child: () => !!parentID(),
+    interrupted,
+    talkToChild,
     showComposer: () => !input.state.blocked() || !!parentID(),
     handoffPrompt: () => getSessionHandoff(input.sessionKey())?.prompt,
     promptReady: () => input.prompt.ready() || promptReady(),

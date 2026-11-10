@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import path from "path"
 import fs from "fs/promises"
 import { WriteTool } from "../../src/tool/write"
@@ -16,6 +16,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { FileState } from "../../src/tool/file-state"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-write-session"),
@@ -46,6 +47,11 @@ const it = testEffect(
     ]),
   ),
 )
+
+// Records that the session read the file as it is now, as the read tool does.
+const seen = Effect.fn("WriteToolTest.seen")(function* (p: string, sessionID: string = ctx.sessionID) {
+  return FileState.record(sessionID, p, yield* FileState.stamp(p))
+})
 
 const init = Effect.fn("WriteToolTest.init")(function* () {
   const info = yield* WriteTool
@@ -104,6 +110,7 @@ describe("tool.write", () => {
         const test = yield* TestInstance
         const filepath = path.join(test.directory, "existing.txt")
         yield* Effect.promise(() => fs.writeFile(filepath, "old content", "utf-8"))
+        yield* seen(filepath)
         const result = yield* run({ filePath: filepath, content: "new content" })
 
         expect(result.output).toContain("Wrote file successfully")
@@ -120,6 +127,7 @@ describe("tool.write", () => {
         const filepath = path.join(test.directory, "existing.cs")
         const bom = String.fromCharCode(0xfeff)
         yield* Effect.promise(() => fs.writeFile(filepath, `${bom}using System;\n`, "utf-8"))
+        yield* seen(filepath)
 
         yield* run({ filePath: filepath, content: "using Up;\n" })
 
@@ -137,6 +145,7 @@ describe("tool.write", () => {
           const filepath = path.join(test.directory, "formatted.cs")
           const bom = String.fromCharCode(0xfeff)
           yield* Effect.promise(() => fs.writeFile(filepath, `${bom}using System;\n`, "utf-8"))
+          yield* seen(filepath)
 
           yield* run({ filePath: filepath, content: "using Up;\n" })
 
@@ -167,10 +176,55 @@ describe("tool.write", () => {
         const test = yield* TestInstance
         const filepath = path.join(test.directory, "file.txt")
         yield* Effect.promise(() => fs.writeFile(filepath, "old", "utf-8"))
+        yield* seen(filepath)
         const result = yield* run({ filePath: filepath, content: "new" })
 
         expect(result.metadata).toHaveProperty("filepath", filepath)
         expect(result.metadata).toHaveProperty("exists", true)
+      }),
+    )
+  })
+
+  describe("read before write", () => {
+    it.instance("write overwrite without a read is refused, and allowed after a read", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "existing.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "old content", "utf-8"))
+        let asked = false
+
+        const exit = yield* run(
+          { filePath: filepath, content: "new content" },
+          { ...ctx, ask: () => Effect.sync(() => void (asked = true)) },
+        ).pipe(Effect.exit)
+        expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
+          reason: "unread",
+          message: `${filepath} has not been read in this conversation, so it was not changed. Read it first.`,
+        })
+        expect(asked).toBe(false)
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("old content")
+
+        yield* seen(filepath)
+        const result = yield* run({ filePath: filepath, content: "new content" })
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("new content")
+        // Its own write is the session's record, so a second write needs no new read.
+        expect(FileState.known(ctx.sessionID, filepath, [])).toEqual(result.metadata.fileState)
+        yield* run({ filePath: filepath, content: "newer content" })
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("newer content")
+      }),
+    )
+
+    it.instance("a write over a file changed outside since the read is refused", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "existing.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "old content", "utf-8"))
+        yield* seen(filepath)
+        yield* Effect.promise(() => fs.writeFile(filepath, "edited in an editor", "utf-8"))
+
+        const exit = yield* run({ filePath: filepath, content: "new content" }).pipe(Effect.exit)
+        expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({ reason: "changed" })
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("edited in an editor")
       }),
     )
   })
@@ -261,6 +315,7 @@ describe("tool.write", () => {
         const readonlyPath = path.join(test.directory, "readonly.txt")
         yield* Effect.promise(() => fs.writeFile(readonlyPath, "test", "utf-8"))
         yield* Effect.promise(() => fs.chmod(readonlyPath, 0o444))
+        yield* seen(readonlyPath)
         const exit = yield* run({ filePath: readonlyPath, content: "new content" }).pipe(Effect.exit)
         expect(exit._tag).toBe("Failure")
       }),

@@ -10,6 +10,7 @@ import { Hash } from "@vectordevai/core/util/hash"
 import { Config } from "@/config/config"
 import { Global } from "@vectordevai/core/global"
 import { Info } from "@vectordevai/schema/file-diff"
+import { TaskPlace } from "@/task/place"
 
 export const Patch = Schema.Struct({
   hash: Schema.String,
@@ -93,6 +94,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Snapshot.state")(function* (ctx) {
+        const isolated = TaskPlace.isTaskDirectory(ctx.directory) || TaskPlace.isTaskDirectory(ctx.worktree)
         const state = {
           directory: ctx.directory,
           worktree: ctx.worktree,
@@ -193,6 +195,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
         const locked = <A, E, R>(fx: Effect.Effect<A, E, R>) => lock(state.gitdir).withPermits(1)(fx)
 
         const enabled = Effect.fnUntraced(function* () {
+          if (isolated) return false
           if (state.vcs !== "git") return false
           return (yield* config.get()).snapshot !== false
         })
@@ -878,12 +881,13 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
-        yield* cleanup().pipe(
-          Effect.catchCause((cause) => Effect.logError("cleanup loop failed", { cause: Cause.pretty(cause) })),
-          Effect.repeat(Schedule.spaced(Duration.hours(1))),
-          Effect.delay(Duration.minutes(1)),
-          Effect.forkScoped,
-        )
+        if (!isolated)
+          yield* cleanup().pipe(
+            Effect.catchCause((cause) => Effect.logError("cleanup loop failed", { cause: Cause.pretty(cause) })),
+            Effect.repeat(Schedule.spaced(Duration.hours(1))),
+            Effect.delay(Duration.minutes(1)),
+            Effect.forkScoped,
+          )
 
         return { cleanup, track, patch, restore, revert, diff, diffFull }
       }),

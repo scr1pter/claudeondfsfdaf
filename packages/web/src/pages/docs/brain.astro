@@ -1,7 +1,7 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
 import { brainBudgetRows, brainCommandRows, memoryRoleRows } from "../../data/docs-content"
-import { release111 } from "../../data/vector-releases"
+import { release111, release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -26,6 +26,7 @@ export const prerender = true
             <div><dt>Rules</dt><dd>The repository's <code>.vector/RULES.md</code> and your own <code>RULES.md</code> in Vector's config folder, beside the <code>AGENTS.md</code> that <a href="/docs/vector-agent#repository-rules">Repository rules</a> describes. Only you write rules; Vector never adds one on its own.</dd></div>
             <div><dt>Your memory</dt><dd><code>MEMORY.md</code> in the same folder, and what you ask Vector to remember about you. It applies in every repository.</dd></div>
             <div><dt>What Vector learned</dt><dd>Short lessons, decisions and preferences the agent saved while it worked, each with the evidence it was saved from.</dd></div>
+            <div><dt>Learned skills</dt><dd>{release113.since} the steps that turned a failing check green in this repository, drafted from your own runs. A learned skill is guidance the agent may load, never a rule. See <a href="#learned-skills">Learned skills</a>.</dd></div>
             <div><dt>Documents</dt><dd>Specs, PDFs, runbooks and API descriptions you add, and the repository's own docs. See <a href="/docs/documents">Documents and code links</a>.</dd></div>
             <div><dt>A repository's <code>BRAIN.md</code></dt><dd>Memory a repository ships with it. Vector uses it once you trust the repository; until then it waits for your review.</dd></div>
           </dl>
@@ -105,6 +106,98 @@ export const prerender = true
             but never decides it alone. A session a guest is in, or that took in outside content, credits nothing.
           </p>
 
+          <h2 id="learned-skills">Learned skills</h2>
+          <p>
+            {release113.since} when a Standard or Thorough request turns a failing check green, with at least three tool
+            calls and a changed file, Vector drafts the steps as a skill for this repository: the check, the files the run
+            read and changed, and the read-only commands that helped. A learned skill is guidance the agent may load,
+            never a rule. Plain code drafts it, at no cost and with no model call. A skill names only commands from two
+            short allowed lists: one check (a test, lint, typecheck, build, check or verify command, never one that
+            deploys, publishes, releases, pushes, uploads, installs or migrates) and read-only helpers
+            (<code>ls</code>, <code>cat</code>, <code>head</code>, <code>tail</code>, <code>wc</code>, <code>grep</code>,
+            <code>rg</code> and <code>git diff</code>, <code>status</code>, <code>log</code> and <code>show</code>, on
+            files inside the repository). A skill draft holds commands from a short allowed list, file names and a short
+            redacted error excerpt from your own run. Secrets are refused.
+          </p>
+          <p>
+            {release113.since} a draft waits for you under <strong>Settings → Memory → Skills</strong>, which says why
+            it was drafted and shows its steps, checks, commands and the error it fixed as plain text. Approve, edit or
+            reject it; a draft you leave is dropped after 60 days. With <strong>Apply automatically after a second
+            matching success</strong>, a draft goes live on its own only when another session that took in no outside
+            content did the same thing, and then only with what both runs agree on. A draft a model worded, one whose
+            error text reads like instructions, and a new version of a skill you approved or edited always wait for you.
+            The agent asks before it loads a skill Vector put in use on its own (the <code>learned_skill</code>
+            permission), and every command in a skill still goes through your permission rules.
+          </p>
+          <p>
+            {release113.since} the agent sees each skill in use as one line and loads its steps when they bear on the
+            request. The steps reach the model as data, with a note that your request and rules come first, and the
+            session's transcript keeps only a placeholder. A learned skill's steps stay out of public session shares and
+            exports, and out of requests to models that may train on your prompts. Sessions with an invited guest teach
+            nothing, and guests never see learned skills. Sessions that read the web, used MCP tools, took a subagent's
+            report or read an outside document only draft skills held for your review.
+          </p>
+          <p>
+            {release113.since} a skill earns credit only when its own check passes after it was loaded. A load whose
+            check never ran earns nothing, and a skill loaded five times without its check ever running after it, and
+            never passing, fades from the agent's list. A skill whose failures reach two and outnumber its successes is
+            archived, as is one loaded less than twice in 90 days, and one whose files are mostly gone is set aside until
+            they return. Reverting a run takes back the credit it gave and withdraws the drafts it made.
+          </p>
+          <p>
+            {release113.since} every edit, approval and rollback keeps the earlier text as a version. In Settings,
+            <strong>Undo latest version</strong> takes back the version in use for a week after it went live, and
+            <strong>Versions</strong> restores any earlier one as a new version. <strong>Forget</strong> deletes every
+            version and keeps only a hash of the skill's name, so Vector does not draft it again. Erasing memory, a
+            session's memory or one skill in Vector 1.99.113 or later erases its skills, skill versions, skill uses and
+            workflow records, and rolls back skill text that session taught. An erase of all or of a repository's memory
+            from an older Vector build is finished the next time this version opens that memory; erasing one session from
+            an older build does not reach skills.
+          </p>
+          <p>
+            {release113.since} a skill reaches your team only when you choose Share. Sharing writes one file in
+            <code>.vector/skills/</code> that you commit yourself. It carries no error excerpt, session ids, stats or
+            evidence, and Vector checks it against your personal memory first. The file changes the repository's
+            settings, so Vector asks you to trust them again once your running sessions finish. See
+            <a href="/docs/skills-and-commands#learned">Skills and custom commands</a>.
+          </p>
+          <p>
+            {release113.since} learned skills and workflow insights are stored only in <code>brain.db</code> on this
+            computer. Vector sends them nowhere, except that the optional skill drafter, when you set it to Always, sends
+            one run's commands, file names and a short redacted error excerpt to your model provider. By default it runs
+            only with Vector Local on. Turn skills off, or choose when a model may word drafts, in Settings → Memory →
+            Skills. A run with <code>--pure</code> drafts nothing and lists no learned skill.
+          </p>
+          <p>
+            {release113.since} <code>vector memory skills</code> lists them, and <code>vector memory skills show</code>,
+            <code>approve</code>, <code>reject</code>, <code>edit</code>, <code>rollback</code>, <code>undo</code>,
+            <code>archive</code>, <code>restore</code>, <code>forget</code>, <code>share</code>, <code>learning</code>
+            and <code>drafter</code> do what Settings does. Every command that changes a skill or how Vector learns them
+            refuses to run from an agent's shell or from Vector's own terminal: run it in a terminal outside Vector, or
+            use Settings. The shell asks every time before a command that removes the marker this checks, so an agent
+            does not approve its own drafts by accident or on a page's say-so; a program that clears its environment
+            unseen still can, which only the opt-in shell sandbox stops. A <code>vector run</code> an agent starts
+            learns as a subagent does: its drafts wait for your review and never count as a second run. When you serve
+            Vector with <code>vector serve</code>, set <code>VECTOR_SERVER_PASSWORD</code>:
+            without one, every program on this computer, the agent's shell included, counts as you to the server.
+          </p>
+
+          <h2 id="workflow-insights">Workflow insights</h2>
+          <p>
+            {release113.since} for each repository and size of work, Vector records which effort, subagent split and
+            subagent model got the build agent's checks passing, and at what cost. Workflow insights record numbers only:
+            size, effort, subagent count, model id, outcome, steps, tokens and cost. They record no prompt or file text.
+          </p>
+          <p>
+            {release113.since} where at least 6 checked runs of each setting show that a cheaper one passes as often
+            for at least 20% less, it becomes the learned default when you leave effort on Default. Your own picks always
+            win. Learned defaults only drop Thorough's extra effort, skip subagents or use a cheaper subagent model; spend
+            caps are unchanged. A reply a learned default shaped says <strong>Learned default · Why</strong>.
+            <strong>Settings → Memory → Workflow insights</strong> shows each size's runs, the learned default and why,
+            and offers Apply, Observe only and Off, and a reset; <code>vector memory workflow</code> does the same. See
+            <a href="/docs/tokenomics#learned-defaults">Vector Tokenomics Engine</a>.
+          </p>
+
           <h2 id="subagents-and-review">Subagents and Vectorscope</h2>
           <p>
             In desktop 1.99.110, a subagent started by a Thorough request begins with up to 200 tokens of the cards and
@@ -161,6 +254,13 @@ export const prerender = true
             <strong>Export and import</strong> saves what Vector keeps as Markdown to read or JSON to bring to another
             computer, for you, this repository or both. <em>Imported items wait for your approval</em>, and
             <strong>Approve all</strong> puts them in use in one click.
+          </p>
+          <p>
+            {release113.since} <strong>Skills</strong> lists the skills Vector learned here: drafts waiting for your
+            review, those in use with how their loads fared, and those archived or shared. <strong>Workflow
+            insights</strong> shows what each size of work passed with and cost here, and the learned default.
+            Erasing a repository's memory or everything also erases its skills, its workflow insights and the app's model
+            recommendations for it.
           </p>
 
           <h2 id="terminal">In the terminal</h2>

@@ -48,14 +48,14 @@ const root = path.join(import.meta.dir, "../..")
 const worker = path.join(import.meta.dir, "../fixture/effect-flock-worker.ts")
 
 function run(msg: Msg) {
-  return new Promise<{ code: number; stdout: Buffer; stderr: Buffer }>((resolve) => {
+  return new Promise<{ code: number; signal: NodeJS.Signals | null; stdout: Buffer; stderr: Buffer }>((resolve) => {
     const proc = spawn(process.execPath, [worker, JSON.stringify(msg)], { cwd: root })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     proc.stdout?.on("data", (data) => stdout.push(Buffer.from(data)))
     proc.stderr?.on("data", (data) => stderr.push(Buffer.from(data)))
-    proc.on("close", (code) => {
-      resolve({ code: code ?? 1, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
+    proc.on("close", (code, signal) => {
+      resolve({ code: code ?? 1, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
     })
   })
 }
@@ -454,14 +454,37 @@ describe("util.effect-flock", () => {
           const out = await Promise.all(
             Array.from({ length: n }, () => run({ key: "eflock:stress", dir, done, active, holdMs: 30 })),
           )
+          // Read before the first expect, so that its message can say whether a failed worker finished its body. A
+          // read error, a missing done.log included, is named there and thrown after the first two expects.
+          const lines = await fs.readFile(done, "utf8").then(
+            (text) =>
+              text
+                .split("\n")
+                .map((x) => x.trim())
+                .filter(Boolean),
+            (err: NodeJS.ErrnoException) => err,
+          )
 
-          expect(out.map((x) => x.code)).toEqual(Array.from({ length: n }, () => 0))
+          expect(
+            out.map((x) => x.code),
+            // Each failed worker's own report. run() reports a signal exit as code 1, so the signal is named too.
+            [
+              Array.isArray(lines)
+                ? `${lines.length} of ${n} workers wrote done.log`
+                : `done.log could not be read: ${lines.message}`,
+              ...out.flatMap((x, i) =>
+                x.code === 0
+                  ? []
+                  : [
+                      `worker ${i} exited with code ${x.code}, signal ${x.signal}`,
+                      `stdout: ${x.stdout.toString()}`,
+                      `stderr: ${x.stderr.toString()}`,
+                    ],
+              ),
+            ].join("\n"),
+          ).toEqual(Array.from({ length: n }, () => 0))
           expect(out.map((x) => x.stderr.toString()).filter(Boolean)).toEqual([])
-
-          const lines = (await fs.readFile(done, "utf8"))
-            .split("\n")
-            .map((x) => x.trim())
-            .filter(Boolean)
+          if (!Array.isArray(lines)) throw lines
           expect(lines.length).toBe(n)
         } finally {
           await fs.rm(tmp, { recursive: true, force: true })
@@ -493,7 +516,10 @@ describe("util.effect-flock", () => {
 
           const done = path.join(tmp, "done.log")
           const result = await run({ key: "eflock:crash", dir, done, holdMs: 10 })
-          expect(result.code).toBe(0)
+          expect(
+            result.code,
+            `worker exited with code ${result.code}, signal ${result.signal}\nstderr: ${result.stderr.toString()}`,
+          ).toBe(0)
           expect(result.stderr.toString()).toBe("")
         } finally {
           await stopWorker(proc).catch(() => {})

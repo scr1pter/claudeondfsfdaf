@@ -8,6 +8,7 @@ import { SessionID } from "@vectordevai/schema/session-id"
 import { Database } from "./database/database"
 import { makeGlobalNode } from "./effect/app-node"
 import { SessionTable } from "./session/sql"
+import { SessionAudience } from "./session/audience"
 
 /**
  * The session trees an invited guest has acted in. Only the workspace owner can accept the "May train on your prompts"
@@ -44,7 +45,9 @@ export const layerFor = (file: string | undefined) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      const { db } = yield* Database.Service
+      const database = yield* Database.Service
+      const db = database.db
+      const audience = SessionAudience.make(database)
       const memory = new Set<SessionID>()
       // Read on every check, never cached: another engine on the same database may have marked a session since. A
       // missing or unreadable file, or a line that is not a session ID, marks nothing.
@@ -69,6 +72,7 @@ export const layerFor = (file: string | undefined) =>
       })
       return Service.of({
         mark: Effect.fn("FreeModelGuests.mark")(function* (sessionID) {
+          yield* audience.markGuest(sessionID).pipe(Effect.orDie)
           const chain = yield* lineage(sessionID)
           const root = chain[chain.length - 1]
           memory.add(root)
@@ -82,6 +86,7 @@ export const layerFor = (file: string | undefined) =>
         }),
         marked: Effect.fn("FreeModelGuests.marked")(function* (sessionID) {
           if (!sessionID) return false
+          if (yield* audience.hasGuestInput(sessionID)) return true
           const chain = yield* lineage(sessionID)
           if (chain.some((id) => memory.has(id))) return true
           const current = yield* saved

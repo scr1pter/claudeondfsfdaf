@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
+import { createTestRenderer } from "@opentui/core/testing"
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { VectorClient } from "@vectordevai/sdk/v2"
+import { registerVectorKeymap } from "@vectordevai/tui/keymap"
+import { RunFooter } from "@/cli/cmd/run/footer"
 import { runInteractiveMode } from "@/cli/cmd/run/runtime"
+import type { LifecycleInput } from "@/cli/cmd/run/runtime.lifecycle"
 import type { SessionTurnInput } from "@/cli/cmd/run/stream.transport"
-import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
+import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
+import type { FooterApi, RunProvider, StreamCommit } from "@/cli/cmd/run/types"
+import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 type SessionMessage = NonNullable<Awaited<ReturnType<VectorClient["session"]["messages"]>>["data"]>[number]
 
@@ -364,5 +371,259 @@ describe("run interactive runtime", () => {
     )
 
     expect(turns.map((turn) => [turn.prompt.text, turn.budget])).toEqual([["say hi", { usd: 2, steps: 60 }]])
+  })
+})
+
+// The split footer's helper commands and notice (5.I.6). Its own Esc interrupt keeps stopping only the main turn.
+describe("run interactive runtime helpers", () => {
+  function task(id: string, extra: Record<string, unknown> = {}) {
+    return {
+      id,
+      parentSessionID: "ses-1",
+      source: "subagent" as const,
+      title: "Work",
+      status: "running" as const,
+      startedAt: 1,
+      elapsedMs: 1,
+      ownedPaths: [],
+      dependsOn: [],
+      resultAvailable: false,
+      attempt: 1,
+      controls: { inspect: true, message: true, stop: true },
+      background: true,
+      ...extra,
+    }
+  }
+
+  async function mount(sdk: VectorClient) {
+    spyOn(sdk.config, "providers").mockImplementation(() => ok({ providers: [provider], default: {} }))
+    spyOn(sdk.app, "agents").mockImplementation(() => ok([]))
+    spyOn(sdk.experimental.resource, "list").mockImplementation(() => ok({}))
+    spyOn(sdk.command, "list").mockImplementation(() => ok([]))
+    const output = footer()
+    const commits: StreamCommit[] = []
+    spyOn(output, "append").mockImplementation((commit) => {
+      commits.push(commit)
+    })
+    const ready = defer<LifecycleInput>()
+    const running = runInteractiveMode(
+      {
+        sdk,
+        directory: "/tmp",
+        sessionID: "ses-1",
+        sessionTitle: "Session",
+        resume: false,
+        replay: false,
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-5" },
+        variant: undefined,
+        files: [],
+        thinking: false,
+        backgroundSubagents: true,
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          ready.resolve(input)
+          return {
+            footer: output,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => ({
+            runPromptTurn: async () => {},
+            selectSubagent: () => {},
+            replayOnResize: async () => false,
+            close: async () => {},
+          }),
+          formatUnknownError: (error: unknown) => String(error),
+        }),
+      },
+    )
+    const input = await ready.promise
+    const system = async (match: string) => {
+      for (let index = 0; index < 100 && !commits.some((commit) => commit.text.includes(match)); index++)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      return commits.filter((commit) => commit.kind === "system").map((commit) => commit.text)
+    }
+    return {
+      input,
+      commits,
+      system,
+      async close() {
+        output.close()
+        await running
+      },
+    }
+  }
+
+  test("an interrupt stops only the main turn and then says how many helpers still run", async () => {
+    const sdk = new VectorClient()
+    const abort = spyOn(sdk.session, "abort").mockImplementation(() => ok(true))
+    const stop = spyOn(sdk.experimental.session, "stop").mockImplementation(() =>
+      ok({ aborted: true, tasks: [], shells: 0, excluded: 0, skipped: 0 }),
+    )
+    const list = spyOn(sdk.experimental.task, "list").mockImplementation(() =>
+      ok({
+        tasks: [
+          task("ses-a"),
+          task("ses-b"),
+          task("ses-fg", { background: false }),
+          task("ses-done", { status: "completed" }),
+        ],
+        truncated: false,
+      }),
+    )
+    const app = await mount(sdk)
+    try {
+      expect(app.input.onInterruptAll).toBeDefined()
+      expect(app.input.onResumeInterrupted).toBeDefined()
+      app.input.onInterrupt?.()
+      expect(await app.system("still running")).toContain(
+        '2 helpers still running · "Stop including helpers" in the command palette stops them',
+      )
+      expect(abort).toHaveBeenCalledTimes(1)
+      expect(abort.mock.calls[0]?.[0]).toEqual({ sessionID: "ses-1" })
+      expect(stop).not.toHaveBeenCalled()
+      expect(list.mock.calls[0]?.[0]).toEqual({ sessionID: "ses-1", active: "true", shells: "true" })
+    } finally {
+      await app.close()
+    }
+  })
+
+  test("an interrupt that leaves no helper says nothing more", async () => {
+    const sdk = new VectorClient()
+    spyOn(sdk.session, "abort").mockImplementation(() => ok(true))
+    const list = spyOn(sdk.experimental.task, "list").mockImplementation(() =>
+      ok({ tasks: [task("ses-fg", { background: false })], truncated: false }),
+    )
+    const app = await mount(sdk)
+    try {
+      app.input.onInterrupt?.()
+      for (let index = 0; index < 50 && list.mock.calls.length === 0; index++)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(list).toHaveBeenCalledTimes(1)
+      expect(app.commits.filter((commit) => commit.text.includes("helper"))).toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test("Stop including helpers uses route 1 with helpers, and Resume interrupted helpers resumes them", async () => {
+    const sdk = new VectorClient()
+    spyOn(sdk.experimental.capabilities, "get").mockImplementation(() =>
+      ok({ backgroundSubagents: true, sessionStop: true, taskResume: true }),
+    )
+    const stop = spyOn(sdk.experimental.session, "stop").mockImplementation(() =>
+      ok({ aborted: true, tasks: [task("ses-a"), task("ses-b")], shells: 1, excluded: 0, skipped: 0 }),
+    )
+    spyOn(sdk.experimental.task, "list").mockImplementation(() =>
+      ok({
+        tasks: [
+          task("ses-i", {
+            status: "stopped",
+            interrupted: { at: 1, cause: "crash" },
+            controls: { inspect: true, message: false, stop: false, resume: true },
+          }),
+        ],
+        truncated: false,
+      }),
+    )
+    const resume = spyOn(sdk.experimental.task, "resume").mockImplementation(() => ok({ tasks: [task("ses-i")] }))
+    const app = await mount(sdk)
+    try {
+      app.input.onInterruptAll?.()
+      expect(await app.system("Stopped 2 helpers")).toContain("Stopped 2 helpers and 1 background command.")
+      expect(stop.mock.calls[0]?.[0]).toEqual({ sessionID: "ses-1", helpers: true })
+      app.input.onResumeInterrupted?.()
+      expect(await app.system("Resumed")).toContain("Resumed 1 interrupted helper; each reports when it finishes.")
+      expect(resume.mock.calls[0]?.[0]).toEqual({ sessionID: "ses-1", taskIDs: ["ses-i"] })
+    } finally {
+      await app.close()
+    }
+  })
+
+  test("on an engine without route 3 Resume interrupted helpers says to update it", async () => {
+    const sdk = new VectorClient()
+    spyOn(sdk.experimental.capabilities, "get").mockImplementation(() => ok({ backgroundSubagents: true }))
+    const resume = spyOn(sdk.experimental.task, "resume")
+    const app = await mount(sdk)
+    try {
+      app.input.onResumeInterrupted?.()
+      for (let index = 0; index < 100 && !app.commits.some((commit) => commit.kind === "error"); index++)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      expect(app.commits.find((commit) => commit.kind === "error")?.text).toBe(
+        "Could not resume the helpers: This server's engine predates 1.99.113 and cannot resume interrupted helpers; update it.",
+      )
+      expect(resume).not.toHaveBeenCalled()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe("run split footer interrupt", () => {
+  test("--mini keeps its two-press interrupt: one Esc only arms it, the second fires it", async () => {
+    const setup = await createTestRenderer({
+      width: 80,
+      height: 24,
+      screenMode: "split-footer",
+      footerHeight: 6,
+      externalOutputMode: "capture-stdout",
+      consoleMode: "disabled",
+      kittyKeyboard: true,
+    })
+    const tuiConfig = createTuiResolvedConfig()
+    const keymap = createDefaultOpenTuiKeymap(setup.renderer)
+    const offKeymap = registerVectorKeymap(keymap, setup.renderer, tuiConfig)
+    const interrupts: string[] = []
+    const footer = new RunFooter(setup.renderer, {
+      directory: "/tmp",
+      findFiles: async () => [],
+      agents: [],
+      resources: [],
+      sessionID: () => "ses-1",
+      agentLabel: "Build",
+      modelLabel: "gpt-5",
+      model: undefined,
+      variant: undefined,
+      first: true,
+      theme: RUN_THEME_FALLBACK,
+      keymap,
+      tuiConfig,
+      backgroundSubagents: true,
+      diffStyle: "auto",
+      onPermissionReply: () => {},
+      onQuestionReply: () => {},
+      onQuestionReject: () => {},
+      onInterrupt: () => interrupts.push("turn"),
+      onInterruptAll: () => interrupts.push("all"),
+      onEditorOpen: async () => undefined,
+    })
+    try {
+      const press = async () => {
+        setup.mockInput.pressEscape()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        await setup.renderOnce()
+      }
+      await setup.renderOnce()
+      // Idle: Esc interrupts nothing.
+      await press()
+      expect(interrupts).toEqual([])
+      footer.event({ type: "turn.send", queue: 0 })
+      await setup.renderOnce()
+      await press()
+      expect(interrupts).toEqual([])
+      await press()
+      expect(interrupts).toEqual(["turn"])
+    } finally {
+      footer.destroy()
+      offKeymap()
+      setup.renderer.destroy()
+    }
   })
 })

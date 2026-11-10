@@ -22,6 +22,28 @@ export const TrustStatus = Schema.Struct({
   approvable: Schema.Boolean,
 }).annotate({ identifier: "ProjectTrustStatus" })
 
+/** A held prompt file and its fingerprint now, none for a file that is gone. An approval names these back. */
+export const PromptTrustFile = Schema.Struct({
+  path: Schema.String,
+  fingerprint: Schema.optional(Schema.String),
+}).annotate({ identifier: "PromptTrustFile" })
+
+/** The prompt files outside the repository that changed since the owner last approved them, which Vector holds. */
+export const PromptTrustStatus = Schema.Struct({
+  held: Schema.Array(Schema.String),
+  files: Schema.Array(PromptTrustFile),
+}).annotate({ identifier: "PromptTrustStatus" })
+
+/** The held files the owner was shown, as GET returned them: only these are approved, and only unchanged. */
+export const PromptTrustApproval = Schema.Struct({
+  files: Schema.Array(PromptTrustFile),
+}).annotate({ identifier: "PromptTrustApproval" })
+
+export const PromptTrustApproved = Schema.Struct({
+  /** How many held files the approval let in. */
+  approved: Schema.Finite,
+}).annotate({ identifier: "PromptTrustApproved" })
+
 /**
  * A change to a key a company lock keeps (Config.lockedIn): nothing was written. `keys` names each one, top-level or as
  * `local.<key>`.
@@ -94,6 +116,31 @@ export const ConfigApi = HttpApi.make("config")
             summary: "Trust project",
             description:
               "Approve the project's config and .vector content as they are now, so Vector loads them. Any later change to anything that can run needs approval again.",
+          }),
+        ),
+        HttpApiEndpoint.get("promptTrust", `${root}/prompt-trust`, {
+          query: WorkspaceRoutingQuery,
+          success: described(PromptTrustStatus, "Held prompt files"),
+          error: HttpApiError.Forbidden,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "config.promptTrust.get",
+            summary: "Get held prompt files",
+            description:
+              "The prompt files outside this repository (global agents, commands, skills and instruction files, and the prompt settings of global config) that changed since the owner last approved them. Vector does not load them until the owner approves. Owner only.",
+          }),
+        ),
+        HttpApiEndpoint.post("approvePromptTrust", `${root}/prompt-trust/approve`, {
+          query: WorkspaceRoutingQuery,
+          payload: PromptTrustApproval,
+          success: described(PromptTrustApproved, "Prompt files approved"),
+          error: [HttpApiError.Forbidden, HttpApiError.Conflict],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "config.promptTrust.approve",
+            summary: "Approve held prompt files",
+            description:
+              "Approve the held prompt files the owner was shown, as GET returned them, and reload the instance so Vector loads them. When the files held now are not exactly those, unchanged, nothing is approved and the request fails with 409: read the list again. Owner only.",
           }),
         ),
         HttpApiEndpoint.get("providers", `${root}/providers`, {

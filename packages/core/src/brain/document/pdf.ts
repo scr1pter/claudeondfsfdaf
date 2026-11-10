@@ -14,6 +14,7 @@ import type { BrainSchema } from "../schema"
 import { budget, refuse, type BrainLimits } from "./limits"
 import type { Draft, Read, ReadRefusal } from "./read"
 import { BrainText } from "./text"
+import { BrainOcr } from "./ocr"
 
 // PDF text through pdf.js (bundled in unpdf), from bytes only: nothing is rendered, no font is loaded into the system,
 // no URL is fetched, and the document's JavaScript and forms never run (pdf.js 6 has no script engine without a
@@ -87,7 +88,11 @@ export function read(bytes: Uint8Array, limits: BrainLimits.Limits, signal?: Abo
   return turn
 }
 
-async function readOne(bytes: Uint8Array, limits: BrainLimits.Limits, signal?: AbortSignal): Promise<Read | ReadRefusal> {
+async function readOne(
+  bytes: Uint8Array,
+  limits: BrainLimits.Limits,
+  signal?: AbortSignal,
+): Promise<Read | ReadRefusal> {
   const decoded = budget(limits.streams)
   decoding.budget = decoded
   const result = await open(bytes, limits, decoded, signal).finally(() => {
@@ -112,9 +117,13 @@ async function open(bytes: Uint8Array, limits: BrainLimits.Limits, decoded: Brai
           "This file is password protected. Vector doesn't ask for document passwords; add an unprotected copy.",
         )
       : refuse("invalid", "This PDF is damaged and could not be read.")
-  return extract(opened.document, limits, decoded, signal)
+  const ocr = await BrainOcr.open(bytes, limits, signal)
+  return extract(opened.document, limits, decoded, signal, ocr)
     .catch(() => refuse("invalid", "This PDF is damaged and could not be read."))
-    .finally(() => opened.document.loadingTask.destroy())
+    .finally(async () => {
+      await ocr?.close()
+      await opened.document.loadingTask.destroy()
+    })
 }
 
 // pdf.js decodes a content stream, a font or an object stream whole before it reads one, so a small file can ask for
@@ -232,6 +241,7 @@ async function extract(
   limits: BrainLimits.Limits,
   decoded: BrainLimits.Budget,
   signal?: AbortSignal,
+  ocr?: BrainOcr.Session,
 ): Promise<Read> {
   const warnings = new Set<BrainSchema.DocumentWarning>()
   const meta = await document.getMetadata().catch(() => undefined)
@@ -244,6 +254,7 @@ async function extract(
   const pages: Line[][] = []
   const unread: number[] = []
   const links: string[] = []
+  const recognized = new Map<number, readonly Draft[]>()
   const state = { chars: 0 }
   // Once the decoders are over their cap the read is refused, and once it is told to stop it is not wanted, so no
   // further page is opened.
@@ -265,9 +276,25 @@ async function extract(
     })
     const visible = kept.reduce((sum, item) => sum + item.str.replace(/\s/g, "").length, 0)
     if (visible < SCANNED) {
-      unread.push(number)
+      const result = await ocr?.read(number)
+      if (result?.type === "read") {
+        warnings.add("ocr")
+        if (result.truncated) warnings.add("truncated")
+        recognized.set(
+          number,
+          BrainText.read(result.text).drafts.map((draft) => ({ ...draft, page: number })),
+        )
+        state.chars += result.text.length
+      } else {
+        unread.push(number)
+        warnings.add("ocr-incomplete")
+      }
       pages.push([])
       page.cleanup()
+      if (state.chars > limits.chars) {
+        warnings.add("truncated")
+        break
+      }
       continue
     }
     // Weight lives with the font, which pdf.js resolves while building a page's drawing operations. Fonts are shared
@@ -328,6 +355,8 @@ async function extract(
   const running = repeated(pages)
   const drafts = pages.flatMap((lines, index) => {
     const number = index + 1
+    const ocr = recognized.get(number)
+    if (ocr) return ocr
     const kept = lines.filter((line) => !running.has(line) && !pageNumber(line))
     const blocks = layout(
       columns(kept),

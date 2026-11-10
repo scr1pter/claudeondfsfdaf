@@ -53,9 +53,13 @@ function archive(
     messages?: unknown[]
     metadata?: Record<string, unknown>
     ancillaryUsage?: unknown[]
+    privacy?: "owner-only"
+    guestInput?: true
   } = {},
 ) {
   return Schema.decodeUnknownSync(SessionArchive.Legacy)({
+    ...(input.privacy ? { privacy: input.privacy } : {}),
+    ...(input.guestInput ? { guestInput: input.guestInput } : {}),
     info: {
       id: "ses_export",
       slug: "export",
@@ -217,6 +221,8 @@ describe("sanitizeLegacy Codium usage", () => {
 
   test("ancillary usage stays out, so Codium title and memory tokens never reach a sanitized export", () => {
     const source = archive({
+      privacy: "owner-only",
+      guestInput: true,
       ancillaryUsage: [
         {
           timestamp: 1,
@@ -231,9 +237,12 @@ describe("sanitizeLegacy Codium usage", () => {
       ],
     })
     expect(source.ancillaryUsage).toHaveLength(1)
+    const before = structuredClone(source)
     const sanitized = sanitizeLegacy(source)
-    expect(Object.keys(sanitized)).toEqual(["info", "messages"])
+    expect(sanitized).toMatchObject({ privacy: "owner-only", guestInput: true })
+    expect(sanitized).not.toHaveProperty("ancillaryUsage")
     expect(JSON.stringify(sanitized)).not.toContain("987654")
+    expect(source).toEqual(before)
   })
 })
 

@@ -1,0 +1,26 @@
+{
+  "kind": "headless-node-prequalification-v1",
+  "requirementsSha256": "a85c62de50f23145bfc3ee6db261db08c565889ff8df0a7808bae1143b968351",
+  "evaluatorSha256": "2a2abb4a47accc790b62af406003a48c09e6b92ba5c7c4b84bea55f19ca84999",
+  "ownedProcessSha256": "efd2e2a3d6371be359ba03dc9c5df1c51ac7dbd46703337b9ffd6dc53a7b0589",
+  "referenceChecksPassed": 54,
+  "checksTotal": 54,
+  "referenceBusinessPassed": 50,
+  "businessTotal": 50,
+  "emptyBusinessPassed": 0,
+  "negativeControlsRejected": 5,
+  "negativeControlsTotal": 5,
+  "sourceAndProcessTestsPassed": 12,
+  "runtimeQualified": false,
+  "bunUsed": false,
+  "chromeUsed": false,
+  "providerCalls": 0,
+  "originalRequirementsUnchanged": true,
+  "privateReferenceOutsideTaskRoot": true,
+  "privateQualificationProofSha256": "2fd79dee8eb8037d7ca71643d763e8b73e2119662cf4e9181b337fa7459be2f5",
+  "pending": [
+    "owner release of exclusive R1 runtime lease",
+    "Bun full positive/empty/negative qualification",
+    "new prompt/native-adapter qualification against frozen R1 structure"
+  ]
+}

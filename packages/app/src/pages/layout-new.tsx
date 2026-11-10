@@ -15,6 +15,7 @@ import { createStore } from "solid-js/store"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { DebugBar } from "@/components/debug-bar"
 import { Titlebar } from "@/components/titlebar"
+import { PromptTrustBanner } from "@/components/prompt-trust-banner"
 import { useCommand } from "@/context/command"
 import { useLayout } from "@/context/layout"
 import { usePlanMode } from "@/context/plan-mode"
@@ -4004,6 +4005,10 @@ export default function NewLayout(props: ParentProps) {
     >
       <div data-vector-pointer-glow aria-hidden="true" />
       <Titlebar />
+      <PromptTrustBanner
+        client={() => (activeProjectPath() ? serverSDK().createClient({ directory: activeProjectPath() }) : undefined)}
+        listen={(fn) => serverSDK().event.listen(fn)}
+      />
       <main
         data-vector-main-stage
         class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict"

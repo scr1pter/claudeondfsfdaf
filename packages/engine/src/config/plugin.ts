@@ -15,18 +15,25 @@ export type Origin = {
   scope: Scope
 }
 
-export async function load(dir: string) {
-  const plugins: ConfigPluginV1.Spec[] = []
+/** The plugins a config folder loads on its own: each script directly in its plugin folder. */
+export const ENTRIES = "{plugin,plugins}/*.{ts,js}"
+/** What those plugins may import from folders beside them, which the prompt guard's hold fingerprints too. */
+export const HELPERS = "{plugin,plugins}/!(node_modules)/**/*.{ts,js,mjs,cjs,mts,cts,json}"
 
-  for (const item of await Glob.scan("{plugin,plugins}/*.{ts,js}", {
-    cwd: dir,
-    absolute: true,
-    dot: true,
-    symlink: true,
-  })) {
-    plugins.push(pathToFileURL(item).href)
-  }
-  return plugins
+/**
+ * The plugins under a config folder. With `allowed` (PromptTrust.allowed), a held plugin is left out, and so is every
+ * plugin of a folder whose helper modules are held, since any of them may import one.
+ */
+export async function load(dir: string, allowed?: (file: string) => boolean) {
+  const options = { cwd: dir, absolute: true, dot: true, symlink: true }
+  const entries = await Glob.scan(ENTRIES, options)
+  const folder = (file: string) => path.relative(dir, file).split(path.sep)[0]
+  const held = allowed
+    ? new Set((await Glob.scan(HELPERS, options)).filter((file) => !allowed(file)).map(folder))
+    : new Set<string>()
+  return entries
+    .filter((item) => (!allowed || allowed(item)) && !held.has(folder(item)))
+    .map((item): ConfigPluginV1.Spec => pathToFileURL(item).href)
 }
 
 export function pluginSpecifier(plugin: ConfigPluginV1.Spec): string {

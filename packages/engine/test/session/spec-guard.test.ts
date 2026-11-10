@@ -52,6 +52,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Auth } from "@/auth"
 import { provideInstance, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { seen } from "../lib/file-state"
 import { TestLLMServer } from "../lib/llm-server"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { MessageID, type SessionID } from "../../src/session/schema"
@@ -424,6 +425,7 @@ it.instance(
         title: "Pinned",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
+      yield* seen(chat.id, ...names.map((name) => path.join(dir, "src", "limits", `${name}.ts`)))
       for (const [index, name] of names.entries())
         yield* llm.tool("edit", {
           filePath: path.join(dir, "src", "limits", `${name}.ts`),

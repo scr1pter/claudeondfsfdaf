@@ -14,6 +14,7 @@ import {
 import {
   ExperimentalPaths,
   SessionListQuery as ExperimentalSessionListQuery,
+  TaskChangesQuery,
   ToolListQuery,
 } from "../../src/server/routes/instance/httpapi/groups/experimental"
 import { InstancePaths, VcsDiffQuery } from "../../src/server/routes/instance/httpapi/groups/instance"
@@ -53,6 +54,7 @@ const openApiDriftRoutes = [
   { method: "get", path: FilePaths.list, query: FileQuery },
   { method: "get", path: ExperimentalPaths.session, query: ExperimentalSessionListQuery },
   { method: "get", path: ExperimentalPaths.tool, query: ToolListQuery },
+  { method: "get", path: ExperimentalPaths.taskChanges, query: TaskChangesQuery },
   { method: "get", path: InstancePaths.vcsDiff, query: VcsDiffQuery },
   { method: "get", path: "/api/session/:sessionID/message", query: SessionMessagesQuery },
 ] satisfies Array<{ method: Method; path: string; query: QuerySchema }>
@@ -77,6 +79,7 @@ const booleanSdkQueryParams = [
   { method: "get", path: ExperimentalPaths.session, name: "roots" },
   { method: "get", path: ExperimentalPaths.session, name: "archived" },
   { method: "get", path: SessionPaths.list, name: "roots" },
+  { method: "get", path: ExperimentalPaths.taskChanges, name: "diff" },
 ] satisfies Array<{ method: Method; path: string; name: string }>
 
 const queryParamPatterns = [

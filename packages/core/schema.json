@@ -1,11 +1,15 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "679441f9-823a-48fe-81bf-0f6208723b25",
+  "id": "d3291447-ae22-4c11-ba89-94887ee18a08",
   "prevIds": [
-    "42176d8b-eeee-4eec-99a8-d3054b576da5"
+    "f985c9de-b5cb-45b9-9ee2-cf84b2b1344c"
   ],
   "ddl": [
+    {
+      "name": "background_job",
+      "entityType": "tables"
+    },
     {
       "name": "workspace",
       "entityType": "tables"
@@ -15,11 +19,27 @@
       "entityType": "tables"
     },
     {
+      "name": "session_audience",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_lineage",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_private_directory",
+      "entityType": "tables"
+    },
+    {
       "name": "public_session_consent",
       "entityType": "tables"
     },
     {
       "name": "session_public_share",
+      "entityType": "tables"
+    },
+    {
+      "name": "workflow_checkpoint",
       "entityType": "tables"
     },
     {
@@ -89,6 +109,206 @@
     {
       "name": "session_share",
       "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_session_id",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "background",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attempt",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_runtime",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_pid",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_boot",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_machine",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "started_at",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_at",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reported_at",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "metadata",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "background_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "background_job"
     },
     {
       "type": "text",
@@ -189,6 +409,86 @@
       "name": "time_completed",
       "entityType": "columns",
       "table": "data_migration"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_audience"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "owner_only",
+      "entityType": "columns",
+      "table": "session_audience"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "guest_input",
+      "entityType": "columns",
+      "table": "session_audience"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_lineage"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_id",
+      "entityType": "columns",
+      "table": "session_lineage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "fork",
+      "entityType": "columns",
+      "table": "session_lineage"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "session_private_directory"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_private_directory"
     },
     {
       "type": "text",
@@ -359,6 +659,66 @@
       "name": "state",
       "entityType": "columns",
       "table": "session_public_share"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attempt",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "digest",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
     },
     {
       "type": "integer",
@@ -1802,6 +2162,21 @@
     },
     {
       "columns": [
+        "parent_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_background_job_parent_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "background_job"
+    },
+    {
+      "columns": [
         "project_id"
       ],
       "tableTo": "project",
@@ -1829,6 +2204,21 @@
       "name": "fk_session_public_share_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_public_share"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_workflow_checkpoint_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "workflow_checkpoint"
     },
     {
       "columns": [
@@ -2012,6 +2402,16 @@
     },
     {
       "columns": [
+        "session_id",
+        "parent_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_lineage_pk",
+      "entityType": "pks",
+      "table": "session_lineage"
+    },
+    {
+      "columns": [
         "email",
         "url"
       ],
@@ -2045,6 +2445,15 @@
         "id"
       ],
       "nameExplicit": false,
+      "name": "background_job_pk",
+      "table": "background_job",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
       "name": "workspace_pk",
       "table": "workspace",
       "entityType": "pks"
@@ -2056,6 +2465,24 @@
       "nameExplicit": false,
       "name": "data_migration_pk",
       "table": "data_migration",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_audience_pk",
+      "table": "session_audience",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "directory"
+      ],
+      "nameExplicit": false,
+      "name": "session_private_directory_pk",
+      "table": "session_private_directory",
       "entityType": "pks"
     },
     {
@@ -2074,6 +2501,15 @@
       "nameExplicit": false,
       "name": "session_public_share_pk",
       "table": "session_public_share",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "workflow_checkpoint_pk",
+      "table": "workflow_checkpoint",
       "entityType": "pks"
     },
     {
@@ -2201,6 +2637,66 @@
       "name": "session_share_pk",
       "table": "session_share",
       "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "directory",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "background_job_status_directory_idx",
+      "entityType": "indexes",
+      "table": "background_job"
+    },
+    {
+      "columns": [
+        {
+          "value": "parent_session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "background_job_parent_idx",
+      "entityType": "indexes",
+      "table": "background_job"
+    },
+    {
+      "columns": [
+        {
+          "value": "parent_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_lineage_parent_idx",
+      "entityType": "indexes",
+      "table": "session_lineage"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_private_directory_session_idx",
+      "entityType": "indexes",
+      "table": "session_private_directory"
     },
     {
       "columns": [

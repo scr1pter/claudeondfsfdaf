@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { chipLabel, learnedFrom, record, watchLearned } from "./learned"
+import { SKILL_ID, chipLabel, learnedFrom, record, watchLearned } from "./learned"
 
 describe("what Vector learned, for the chip under a reply", () => {
   test("keeps each event's entries under the message it learned from, once however often the stream replays it", () => {
@@ -60,5 +60,26 @@ describe("what Vector learned, for the chip under a reply", () => {
         { text: "c", status: "quarantined", typed: true },
       ]),
     ).toBe("Learned 3 things, 2 waiting for your review")
+  })
+
+  test("names a drafted skill, and says whether it waits for review", () => {
+    expect(chipLabel([{ text: "learned-bun-typecheck-src", status: "proposed", typed: false, skill: true }])).toBe(
+      "Drafted a skill for your review: learned-bun-typecheck-src",
+    )
+    expect(chipLabel([{ text: "learned-bun-typecheck-src", status: "active", typed: false, skill: true }])).toBe(
+      "Learned a skill: learned-bun-typecheck-src",
+    )
+    expect(
+      chipLabel([
+        { text: "learned-bun-test", status: "proposed", typed: false, skill: true },
+        { text: "Use tables.", status: "active", typed: true },
+      ]),
+    ).toBe("Learned 2 things, 1 waiting for your review")
+  })
+
+  test("tells a skill's id from a memory entry's", () => {
+    expect(SKILL_ID.test("s4k2q7m")).toBe(true)
+    expect(SKILL_ID.test("m4k2q")).toBe(false)
+    expect(SKILL_ID.test("s4k2q7mx")).toBe(false)
   })
 })

@@ -1,4 +1,5 @@
 import { Config } from "@/config/config"
+import { PromptTrust } from "@/config/prompt-trust"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { Provider } from "@/provider/provider"
 import * as InstanceState from "@/effect/instance-state"
@@ -8,7 +9,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi } from "../api"
-import { ConfigLockedError } from "../groups/config"
+import { ConfigLockedError, PromptTrustApproval } from "../groups/config"
 import { markInstanceForDisposal } from "../lifecycle"
 
 /** The refusal for a change to keys a company lock keeps, in the words the app shows. */
@@ -64,6 +65,34 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
       return yield* trust()
     })
 
+    // Held prompt files are the owner's own paths, and approving them loads what an agent may have written, so neither is
+    // a guest's, whatever the server lets a guest read.
+    const owner = Effect.fn("ConfigHttpApi.owner")(function* () {
+      if ((yield* RequestPrincipal).kind !== "owner") return yield* new HttpApiError.Forbidden({})
+    })
+
+    const promptTrust = Effect.fn("ConfigHttpApi.promptTrust")(function* () {
+      yield* owner()
+      const files = yield* PromptTrust.status(yield* PromptTrust.current(configSvc))
+      return { held: files.map((file) => file.path), files }
+    })
+
+    // Approves the held prompt files the owner was shown, unchanged, then reloads the instance so it loads them. A file
+    // held or changed after the list was read is never approved unseen: the request fails and the owner reads again.
+    const approvePromptTrust = Effect.fn("ConfigHttpApi.approvePromptTrust")(function* (ctx: {
+      payload: typeof PromptTrustApproval.Type
+    }) {
+      yield* owner()
+      const result = yield* PromptTrust.approve({
+        config: configSvc,
+        sources: yield* PromptTrust.current(configSvc),
+        shown: ctx.payload.files,
+      })
+      if (result.refused) return yield* new HttpApiError.Conflict({})
+      yield* markInstanceForDisposal(yield* InstanceState.context)
+      return { approved: result.approved.length }
+    })
+
     const providers = Effect.fn("ConfigHttpApi.providers")(function* () {
       const providers = yield* providerSvc.list()
       return {
@@ -78,6 +107,8 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
       .handle("update", update)
       .handle("trust", trust)
       .handle("approveTrust", approveTrust)
+      .handle("promptTrust", promptTrust)
+      .handle("approvePromptTrust", approvePromptTrust)
       .handle("providers", providers)
   }),
 )

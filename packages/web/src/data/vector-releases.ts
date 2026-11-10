@@ -21,7 +21,7 @@ export const upcomingRelease = {
 // The desktop release the download page offers today. Not every entry in release199 was published as a
 // desktop or npm release (1.99.9 has notes but no installers), so the releases page marks this one Latest.
 // Update it in the same change that publishes the next desktop installers.
-export const publishedDesktopVersion = "1.99.111"
+export const publishedDesktopVersion = "1.99.112"
 
 // Vector Brain arrives in desktop 1.99.110. The site deploys from main, so until the download page offers that release
 // the landing page and the investor page say it is coming in it, and from then on that it is new in it. The readme and
@@ -74,6 +74,20 @@ export function release112Copy(published: string) {
 }
 
 export const release112 = release112Copy(publishedDesktopVersion)
+
+// Learned skills, workflow insights and the prompt guard arrive in desktop 1.99.113. Their docs say they are coming in it
+// until the download page offers it, and from then on that they are in it. test/release-113-docs.test.ts holds the
+// pages to this.
+export const release113Version = "1.99.113"
+
+export function release113Copy(published: string) {
+  const [major = 0, minor = 0, patch = 0] = published.split(".").map(Number)
+  if (major > 1 || (major === 1 && (minor > 99 || (minor === 99 && patch >= 113))))
+    return { since: "From desktop 1.99.113:", stage: "Desktop 1.99.113", shipped: true }
+  return { since: "Coming in desktop 1.99.113:", stage: "Coming in 1.99.113", shipped: false }
+}
+
+export const release113 = release113Copy(publishedDesktopVersion)
 
 export const releaseSeries: VectorRelease[] = [
   {
@@ -744,9 +758,7 @@ export const release199: VectorRelease[] = [
   {
     version: "1.99.112",
     title: "Agent terminals and browser controls, research cleanup, and first-launch help",
-    availability: "Coming in desktop 1.99.112; installers are not published yet.",
     summary:
       "The agent can manage its own terminals and browser tabs, with terminal activity visible in Vector. Asking Vector to save or keep completed research uses Keep in brain, and erasing memory also forgets Deep research runs. Vector Local explains which information it could not read and lets you try again. On macOS, Vector reads its stored credential from Keychain once per launch. A first-launch guide helps new users get started, Settings stays open when the shell list is unavailable, and keyboard shortcuts and the shell picker are available in Settings. Website privacy and account handling are updated. The required CLI remains 1.99.99, so terminal and older WSL engine features still require a separately published CLI. Deep research remains a preview. This release is not yet code-signed, so a new install may show an operating-system warning on first launch.",
   },
-
 ]

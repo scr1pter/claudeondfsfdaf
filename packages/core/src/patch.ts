@@ -22,6 +22,23 @@ export interface FileUpdate {
   readonly bom: boolean
 }
 
+/** Recover only a missing opening marker; a complete body must pass the strict parser first. */
+export function recoverEnvelope(patchText: string) {
+  const cleaned = stripHeredoc(patchText.trim())
+  const lines = cleaned.split("\n")
+  if (lines.some((line) => line.trim() === "*** Begin Patch")) return { patchText, recoveredMissingBegin: false }
+  const first = lines[0]?.replace(/\r$/, "").match(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/)
+  if (
+    !first?.[1]?.trim() ||
+    lines.at(-1)?.trim() !== "*** End Patch" ||
+    lines.filter((line) => line.trim() === "*** End Patch").length !== 1
+  )
+    return { patchText, recoveredMissingBegin: false }
+  const recovered = "*** Begin Patch\n" + cleaned
+  parse(recovered)
+  return { patchText: recovered, recoveredMissingBegin: true }
+}
+
 export function parse(patchText: string): ReadonlyArray<Hunk> {
   const lines = stripHeredoc(patchText.trim()).split("\n")
   const begin = lines.findIndex((line) => line.trim() === "*** Begin Patch")

@@ -1,0 +1,47 @@
+import { createRequire } from 'node:module';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import assert from 'node:assert/strict';
+const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE);
+const artifacts = join(process.env.DATA_DIR, 'browser-verification');
+mkdirSync(artifacts, { recursive: true });
+const state = JSON.parse(readFileSync(join(artifacts, 'state.json'), 'utf8'));
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, headless: true, args: ['--no-sandbox'] });
+const errors = [];
+try {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, reducedMotion: 'reduce' });
+  await context.addCookies(state.cookies.split('; ').map(c => ({ name: c.split('=')[0], value: c.split('=')[1], url: state.base, httpOnly: true, sameSite: 'Lax' })));
+  const page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
+  await page.goto(state.base + '/overview'); await page.getByRole('region', { name: 'Revenue', exact: true }).getByText('$616.50', { exact: true }).waitFor();
+  await page.screenshot({ path: join(artifacts, '06-overview-desktop.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: join(artifacts, '07-overview-mobile.png'), fullPage: true, animations: 'disabled' });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert.ok(await page.locator('.sidebar').evaluate(el => el.getBoundingClientRect().right <= 0));
+  await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
+  await page.screenshot({ path: join(artifacts, '08-navigation-mobile.png'), fullPage: true, animations: 'disabled' });
+  assert.equal(await page.locator('.sidebar').evaluate(el => el.getBoundingClientRect().left), 0);
+  await page.getByRole('link', { name: 'Customers', exact: true }).click();
+  await page.getByRole('button', { name: 'Open customer Aster Studio', exact: true }).waitFor();
+  await page.screenshot({ path: join(artifacts, '09-customers-mobile.png'), fullPage: true, animations: 'disabled' });
+  await page.getByRole('button', { name: 'New customer', exact: true }).click(); const d = page.getByRole('dialog', { name: 'New customer', exact: true });
+  await page.screenshot({ path: join(artifacts, '10-form-mobile.png'), fullPage: true, animations: 'disabled' });
+  const bounds = await d.boundingBox(); assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page.getByRole('link', { name: 'Projects', exact: true }).click(); await page.getByRole('button', { name: 'Open project Studio launch', exact: true }).click();
+  await page.screenshot({ path: join(artifacts, '05-project-board-desktop.png'), fullPage: true, animations: 'disabled' });
+  const task = page.getByRole('button', { name: 'Open task Prepare the launch kits', exact: true }); await task.click();
+  await page.getByRole('dialog', { name: 'Task details', exact: true }).getByText('The first delivery is confirmed. <img src=x onerror=alert(1)>', { exact: true }).waitFor();
+  await page.getByRole('link', { name: 'Download attachment launch-notes.txt', exact: true }).waitFor(); await page.keyboard.press('Escape');
+  // Use native confirmation, then verify the UI and server removed the record.
+  await page.getByRole('link', { name: 'Customers', exact: true }).click(); await page.getByRole('button', { name: 'New customer', exact: true }).click();
+  await page.getByRole('dialog', { name: 'New customer', exact: true }).getByLabel('Name', { exact: true }).fill('Disposable browser check'); await page.getByRole('button', { name: 'Create customer', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'detached' }); page.once('dialog', d => d.accept()); await page.getByRole('button', { name: 'Delete customer Disposable browser check', exact: true }).click();
+  await page.getByRole('button', { name: 'Open customer Disposable browser check', exact: true }).waitFor({ state: 'detached' });
+  await page.getByRole('link', { name: 'Invoices', exact: true }).click(); await page.getByRole('button', { name: 'Open invoice INV-000001', exact: true }).click();
+  await page.getByText('Paid', { exact: true }).last().waitFor(); await page.screenshot({ path: join(artifacts, '04-invoice-desktop.png'), fullPage: true, animations: 'disabled' }); await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
+  assert.equal(await page.getByRole('alert').count(), 0); assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ ok: true, checks: ['Restarted browser session and direct frontend routes', 'Persisted task comments and attachments', 'Stable desktop/mobile screenshots and contained mobile forms', 'Native-confirmed browser deletion', 'Browser sign-out without errors'], pageErrors: errors.length }, null, 2));
+} finally { await browser.close(); }

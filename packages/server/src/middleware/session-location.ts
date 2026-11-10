@@ -1,5 +1,7 @@
 import { Database } from "@vectordevai/core/database/database"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "../request-owner"
 import { LocationServiceMap } from "@vectordevai/core/location-services"
 import { Location } from "@vectordevai/core/location"
 import { AbsolutePath } from "@vectordevai/core/schema"
@@ -33,6 +35,7 @@ export const sessionLocationLayer = Layer.effect(
     const { db } = yield* Database.Service
     const locations = yield* LocationServiceMap.Service
     const guests = yield* FreeModelGuests.Service
+    const audience = yield* SessionAudience.Service
 
     return SessionLocationMiddleware.of((effect) =>
       Effect.gen(function* () {
@@ -58,6 +61,14 @@ export const sessionLocationLayer = Layer.effect(
             message: `Session not found: ${sessionID}`,
           })
         const principal = yield* RequestPrincipal
+        const owner = yield* RequestOwner.owner
+        const request = yield* Effect.serviceOption(HttpServerRequest.HttpServerRequest)
+        const counts = Option.isSome(request) && RequestOwner.counts(request.value, route.route.path)
+        if (
+          !owner &&
+          ((!counts && (yield* audience.isPrivate(sessionID))) || (yield* audience.isPrivateDirectory(row.directory)))
+        )
+          return yield* new ForbiddenError({ message: "This session's raw content is available only to the owner." })
         const sessionAllowed = allowsSession(principal, sessionID)
         const guestDirectory = guestWorkspaceDirectory(principal, row.workspaceID ?? undefined)
         if (!sessionAllowed && guestDirectory !== row.directory)
@@ -66,9 +77,13 @@ export const sessionLocationLayer = Layer.effect(
         // requests off models that may train (FreeModelGuests). It is recorded before the handler runs.
         // Read optionally so the routes keep needing no request service of their own (embedded callers pass one
         // argument). A request whose method cannot be read counts as a change.
-        const request = yield* Effect.serviceOption(HttpServerRequest.HttpServerRequest)
         const method = Option.isSome(request) ? request.value.method : undefined
-        if (principal.kind === "guest" && method !== "GET" && method !== "HEAD") yield* guests.mark(sessionID)
+        if (!owner && method !== "GET" && method !== "HEAD") {
+          yield* audience
+            .markGuest(sessionID)
+            .pipe(Effect.mapError((cause) => new ForbiddenError({ message: cause.message })))
+          yield* guests.mark(sessionID)
+        }
 
         return yield* effect.pipe(
           Effect.provide(

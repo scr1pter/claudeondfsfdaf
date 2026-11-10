@@ -1,0 +1,30 @@
+{
+  "kind": "harbor-native-wrapper-validation-v1",
+  "providerCalls": 0,
+  "BunRuns": 0,
+  "ChromeRuns": 0,
+  "paidExecutionPerformed": false,
+  "pureTestMethodsPassed": 10,
+  "sourceCandidate": "5a20e7faf764db2d6b4969a4fd028d091b986a90",
+  "qualifiedTaskSourceSha256": "e4c04a7e174fc9d2980551c36cadfa5c2d295263db0a66a05e045c8902bf6663",
+  "qualifiedRecordSha256": "9849f5f80857e7a15f24cd2ba04f974d8a9a9dc6d1b8e3b00273b5a45f98c322",
+  "entrypointFiles": {
+    "README.md": "cfcf054cff6566a07afa397b0d3c874c87a596b58b9c2b89a578c757a95f6bc6",
+    "runner.py": "92cc02a9dcd2657773848f5e5a8e1039f961ad3b8113cf47a0cbb414e6a27088",
+    "test_runner.py": "8b6bd1326f0ce57a7abcaa55e3878ef2a7f5e0d159bfbf6ec6bd8175587ad0f7"
+  },
+  "profileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+  "nativeInstrumentSha256": "31357229ddb010df9eb764aa3b8dee5a001eff7122b2b1ed2a08c84beaa736dd",
+  "commonInstrumentSha256": "cb3ac98c0f31560f341ace4d489af1abf0d844393113a572c24f733d08304d96",
+  "browserDriverSha256": "611a66e2df0ae7bd5ec21b5d39fe33e48bc3afb3901ccdbca7d84c7cc05780c0",
+  "fullTaskManifestSha256": "a7344daea1d3cf591051b265d668ebba03545f6ef0b87cc25d93cfb97a579433",
+  "planOnlyExitCode": 0,
+  "planSha256": "f20f8559930fb8256b2a4be2773e6a053c31f4c9e40cfc31b299bd2d8fe1a017",
+  "missingControllerAndReceiptFilesNotRead": true,
+  "runtimeOutputNotCreated": true,
+  "exclusiveClaimControlPassed": true,
+  "readOnlyPeerFindingsResolved": true,
+  "studyCapUsd": 48,
+  "qualityComparisonMet": false,
+  "efficiencyClaimMet": false
+}

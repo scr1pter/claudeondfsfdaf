@@ -1,0 +1,2 @@
+# Preserve the exact generated source bytes bound by source-manifest.json.
+codex-partial-source/** -text

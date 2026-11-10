@@ -1,0 +1,51 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`workflow tool parameters and guide advertises one shallow object with string specs and no recursive workflow grammar 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "action": {
+      "description": "run (default), validate without starting agents, resume a run, or read the guide.",
+      "enum": [
+        "run",
+        "validate",
+        "resume",
+        "guide",
+      ],
+      "type": "string",
+    },
+    "inputs": {
+      "description": "Values for declared workflow inputs; each value is at most 8 KiB of JSON.",
+      "type": "object",
+    },
+    "name": {
+      "description": "Trusted saved workflow name; use either name or spec.",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "type": "string",
+    },
+    "retry_failed": {
+      "description": "resume: retry failed nodes (default true).",
+      "type": "boolean",
+    },
+    "run_id": {
+      "description": "Required for resume: the workflow run session ID.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string",
+    },
+    "spec": {
+      "description": "WorkflowSpec v1 as JSON text, at most 32 KiB of UTF-8; use either spec or name.",
+      "maxLength": 32768,
+      "type": "string",
+    },
+    "title": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string",
+    },
+  },
+  "type": "object",
+}
+`;
+
+exports[`workflow tool parameters and guide keeps the fixed description near 900 characters without embedding the guide 1`] = `"Run a bounded workflow of subagents from JSON, or a trusted saved workflow name. Use action:"guide" for the grammar and three examples, then action:"validate" to review its plan without starting agents. action:"run" (default) starts approved work in the background; action:"resume" requires run_id and can accept an edited spec or inputs. retry_failed defaults to true. Model-written specs are limited to 32 KiB and each input to 8 KiB. Use files, changed_files or from instead of large literal lists. Stages can fan out, depend on results and verify work; budgets, permissions and agent/model policies still apply. Workflows start from the main agent, require background subagents, and are unavailable for guests or Light/capped requests. Stop and inspect runs through task_manage. Partial results survive limits and interruption; restart never resumes automatically. Workflows describe fixed data flow, never executable code."`;

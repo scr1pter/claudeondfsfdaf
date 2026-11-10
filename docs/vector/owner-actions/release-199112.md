@@ -1,14 +1,17 @@
 # Desktop 1.99.112: preparation and publication checklist
 
 Prepared on 28 October 2026 from `main` at `b3669a6b`. The owner authorized this
-desktop release in the handoff. This record does not assert publication.
+desktop release in the handoff. Desktop 1.99.112 was published from `main` at
+`dfc98974` by release run #96, which completed on 30 October 2026 (UTC); see
+[Publication result](#publication-result).
 
 ## Source and changes
 
 The preparation bumps only the desktop version to 1.99.112, adds that version to
 the unsigned release allowlist, and supplies the shared website/desktop changelog
-entry. The required CLI remains 1.99.99. `publishedDesktopVersion` stays at
-1.99.111 until the new downloads and update feeds have been verified.
+entry. The required CLI remains 1.99.99. `publishedDesktopVersion` stayed at
+1.99.111 until the new downloads and update feeds had been verified, and was
+advanced to 1.99.112 in the publication change recorded below.
 
 The candidate contains the approved release-112 merge: agent terminal/browser
 controls, Deep research cleanup when memory is erased, explicit research keep
@@ -67,6 +70,92 @@ Verify all six download targets and the four stable feeds (`latest.yml`,
 Only then update `publishedDesktopVersion`, remove this entry's `availability`,
 advance the shipped-version copy fixtures, and regenerate the changelog. Preserve
 the distinction between desktop publication and the separately published CLI.
+
+## Publication result
+
+Desktop 1.99.112 is published. The evidence below was read from GitHub's run, job
+and log records. This sandbox cannot reach vectordev.ai or the release blob store,
+so the download, account-gate and feed results are what the release workflow
+verified in CI, not local fetches. No GitHub release entry is used as evidence:
+since run #95 the workflow publishes only to Vector's own download store. Who
+approved the `production-release` environment was not observed and is not
+recorded here.
+
+- Workflow: [Vector desktop release, run #96](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/40781089625)
+  (`40781089625`), attempt 1, `workflow_dispatch` from `main` at
+  `dfc98974329f17c6814a923ac12ebe38b6673f38`, conclusion success. Inputs:
+  `tag=v1.99.112`, `allow_unsigned=true`, `prerelease=false`.
+- All 25 jobs of attempt 1 succeeded: release metadata validation, the release
+  credential preflight, the immutable release catalog, the typecheck and test jobs
+  (including desktop), the desktop and website smoke builds, the Linux, macOS and
+  Windows desktop app builds, and the publish job.
+- Publish job `123153528239`, "Publish release and update feeds", ran from
+  2026-10-30T01:53:02Z to 01:58:55Z. Every step succeeded: download of the exact
+  release catalog, immutable platform artifact digests, the verified macOS,
+  Windows and Linux artifact downloads, asset validation and checksums, the model
+  catalog published beside the installers, staging, the smoke test of the staged
+  release, the stable downgrade guard, the production account gate, the commit of
+  the download and update pointers, and "Verify committed release pointers and
+  production downloads".
+- That last step logged: "Verified committed stable desktop manifest"; "Verified
+  committed" `releases/vector-updates/latest-mac.yml`, `latest.yml`,
+  `latest-linux.yml` and `latest-linux-arm64.yml`; "Verified production account
+  gate" for `mac-arm64`, `mac-x64`, `windows-x64`, `windows-arm64`, `linux-x64` and
+  `linux-arm64`; and "Verified production API redirect for checksums". The step
+  passes only when each committed pointer is byte-identical to the immutable
+  staged `vector-v1.99.112` object and every staged and committed feed advertises
+  `version: 1.99.112`.
+- Catalog: the existing catalog was kept, as the owner chose. Catalog job
+  `123143384093`, "Prepare one immutable release catalog", in the same run logged
+  that it loaded the release catalog from the catalog fork at
+  `52edfd113616e57761c70fd5d01ac578d645211c` with source and embedded SHA-256
+  `a96b465110dd2fcc38e0dcca1a4115e12ea43ddaafdb0ebf587e15026767bf14`. The publish
+  job only downloaded that catalog and ran with the same
+  `VECTOR_RELEASE_CATALOG_SHA256`.
+- General CI: [test run #313](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/40781041233)
+  (`40781041233`), a push on `main` at the same
+  `dfc98974329f17c6814a923ac12ebe38b6673f38`, concluded success. All 15 jobs of
+  attempt 1 succeeded, including the four Linux and six Windows engine shards,
+  which run `local-fit.test.ts` with no platform skip, managed-policy case
+  included. This is the fresh full Linux/Windows CI on the integrated candidate
+  that the timer-fixture repair below required, and it supersedes runs
+  40768433585 and 40769076055 listed under Evidence checked.
+
+Site changes made after this verification, from a clean `main` at `dfc98974`:
+
+- `publishedDesktopVersion` is 1.99.112, and the 1.99.112 entry no longer has an
+  `availability` line. Its title and summary, the What's new text that shipped,
+  are unchanged.
+- The docs changelog lists 1.99.112's notes word for word, and the `release112`
+  labels read "From desktop 1.99.112:".
+- The shipped-version fixtures move on: `shipped` in
+  `packages/web/test/release-copy.test.ts` and `lastShipped` in
+  `test/no-project-wording.test.ts` are 1.99.112.
+- Tests made stricter, beyond the 1.99.111 precedent: the release-copy stale
+  patterns now also flag 1.99.111 and 1.99.112 called prepared or not published,
+  as the 1.99.108 publication did; a new release-copy test requires the docs
+  changelog to list the current download's notes word for word; and
+  `docs-research-keep.test.ts` requires the 1.99.112 label to read as shipped.
+- `bun scripts/build-changelog.ts` regenerated `public/changelog.json`
+  (115 releases, newest v1.99.112) with no byte change, because the feed never
+  carried `availability`.
+
+Local checks on this change, run one file at a time after the last edit:
+`packages/web/test/release-copy.test.ts` 11 passed, 1 skipped (the existing
+dark-workspace condition), 0 failed; `packages/web/test/docs-research-keep.test.ts`
+2 passed; `test/no-project-wording.test.ts` 2 passed; web `bun typecheck`
+(`astro check`) 0 errors and 0 warnings. With 1.99.112 removed from the docs
+changelog list and the `availability` line restored, three release-copy tests
+failed as expected, and both files were then put back. The full typecheck runs in
+the pre-push hook, and general CI runs `release-copy.test.ts` again. The site
+deploys from `main`, so vectordev.ai shows 1.99.112 as published only after this
+change lands there.
+
+Not part of this publication: the npm CLI and the CLI that desktop requires stay
+at 1.99.99, nothing was published to npm, and no 1.99.113 work is included. The
+installers are unsigned. macOS and Windows installation and owner acceptance
+still need real machines. The follow-ups below remain open, because 1.99.112
+shipped the kept catalog.
 
 ## Remaining follow-ups
 

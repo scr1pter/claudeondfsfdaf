@@ -598,6 +598,11 @@ export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: Ses
   return filterCompacted(yield* stream(sessionID))
 })
 
+/** The history as it stood before `point`: the session's earlier messages, as filterCompacted showed them then. */
+export const filterCompactedBeforeEffect = Effect.fnUntraced(function* (sessionID: SessionID, point: MessageID) {
+  return filterCompacted((yield* stream(sessionID)).filter((msg) => msg.info.id < point))
+})
+
 // filterCompacted reorders messages for model consumption
 // ([compaction-user, summary, ...retained tail..., continue-user]), so array
 // position is not chronological. Derive each binding by max id (MessageID

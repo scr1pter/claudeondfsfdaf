@@ -1,0 +1,247 @@
+{
+  "version": "outbox-gold-publication-provenance-v1",
+  "classification": "constructed complete-product calibration control; not a paid coding-arm deliverable",
+  "publicationTiming": "Published only after the coordinator confirmed both Task 3 paid arms completed and settled.",
+  "privateUntilAllTask3PaidArmsCompleted": true,
+  "curationActions": [
+    "strict original snapshot inventory and raw-byte hash comparison",
+    "byte-for-byte copy of source and original source manifest",
+    "sanitization review",
+    "publication metadata and local Git-blob verifier authoring"
+  ],
+  "curatorExecutedBunAppsBrowsersProvidersOrTests": false,
+  "curatorInspectedPaidOutputsOrCandidateSource": false,
+  "sourceFiles": 15,
+  "sourceSha256": "8d5b30a010beefa5b87b594240014420ccdac3956d88508ab55ae2fae1300e34",
+  "sourceManifestFileSha256": "bb0f5082b571813758ae338509f192d3e48dfb985750e2c8c9172c28390cbcfd",
+  "runtimeProjectionSha256": "fef0795777b1f0872e6d1fdf6204a4b47b6cca0e670d43be602ebfc1f931a780",
+  "productionCandidateFrozenBeforeFinalQualification": true,
+  "productionCandidateFrozenRef": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "frozenTaskCommit": "770dbe484ab2479f8ff41edc9b22a9f98c2a911f",
+  "qualificationRecordV1Sha256": "321c40a864657777c65e04c9fe906b66f8d2d0f79b9f1339b1e161c641f06d62",
+  "qualificationRecordV2Sha256": "23febcdda9b4e693f7fdd709e68bfaeda315edf9bda50e3b466b8ee1d39a17b3",
+  "runtimeVersions": {
+    "bun": "1.3.14",
+    "node": "24.22.0",
+    "python": "3.12.14",
+    "chromeMajor": 156,
+    "playwright": "1.59.1",
+    "typescript": "5.8.2"
+  },
+  "calibrationModelOrCloudCalls": 0,
+  "executedBeforePublication": {
+    "seedAndReference": {
+      "typecheck": "passed",
+      "build": "passed",
+      "publicSmokeTests": 1,
+      "publicSmokeAssertions": 7
+    },
+    "reports": [
+      {
+        "label": "reference-positive-attempt-3",
+        "reportSha256": "22cd472fe7bfa7ff19c9047e07e60736b9c0e4b44a04fc79b7571ef947448821",
+        "verdict": "passed",
+        "passed": 26,
+        "failed": 0,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      },
+      {
+        "label": "seed-negative-attempt-5",
+        "reportSha256": "004a9ce0fad8676e93b7d53e55f42786090ec744558bed7d8827d7c680b3ff90",
+        "verdict": "product_failure",
+        "passed": 4,
+        "failed": 22,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      },
+      {
+        "label": "mutant-retry-key-rotation-attempt-1",
+        "reportSha256": "efd722d9c41bb9f5670f63a44b826e3520b47293eb07a6274bf261aa4c43b94e",
+        "verdict": "product_failure",
+        "passed": 23,
+        "failed": 3,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      },
+      {
+        "label": "mutant-false-cancel-after-accept-attempt-1",
+        "reportSha256": "91ac8cdfb1c97f276b0cdf4986a1d5ac9dcf86fa03dc65f37e73abd602f87bf9",
+        "verdict": "product_failure",
+        "passed": 24,
+        "failed": 2,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      },
+      {
+        "label": "mutant-forget-queued-on-restart-attempt-1",
+        "reportSha256": "b84e465f6fba4725aa86a3b03cf4b236de33c929410da86ef39e9f88ae196d98",
+        "verdict": "product_failure",
+        "passed": 24,
+        "failed": 2,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      },
+      {
+        "label": "mutant-false-delivered-after-failure-attempt-1",
+        "reportSha256": "fee28f9578a03e4066fd758d6cb0c34fbd117608fb491a6bc8fb16442da34e0d",
+        "verdict": "product_failure",
+        "passed": 20,
+        "failed": 6,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      },
+      {
+        "label": "mutant-under-count-replays-attempt-1",
+        "reportSha256": "86ed5f26668484b18e62245f6f72318283880d0369e34e38c0b5a955659048b9",
+        "verdict": "product_failure",
+        "passed": 21,
+        "failed": 5,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      },
+      {
+        "label": "reference-positive-envelope-profile-attempt-1",
+        "reportSha256": "4af3c633ee1d195ae7cc9eabd847c421fc5fcea1ebbd39013826eeaefa5cfaec",
+        "verdict": "passed",
+        "passed": 26,
+        "failed": 0,
+        "notRun": 0,
+        "inventoryRows": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "instrumentError": null
+      }
+    ],
+    "protectedProvider": {
+      "passed": 10,
+      "checks": 10,
+      "sourceUnchanged": true,
+      "reportSha256": "5da6174c05267b4d76379a9d5b07d064fe7e8bb44a97f98ae503af73ef82d7fd",
+      "providerSourceSha256": "b69416cb8ee8a664b1489a93dd5583ce8e9a455a33fc279ff8088bb3c71fef11"
+    },
+    "purePythonControls": {
+      "passed": 63,
+      "failed": 0,
+      "errors": 0,
+      "evidenceSha256": "d1a7f0626268485d85c21823f32cf0a06a66a8619775a72aa7758dd2d0428855"
+    },
+    "browserTransportNodeControls": {
+      "passed": 10,
+      "failed": 0
+    },
+    "seedAndReferenceJavaScriptSyntax": "passed"
+  },
+  "actualEnvelopeBrowserHelperRawFileSha256": {
+    "client.cjs": "d1a98eaa5bb9931787313c518b53642b2de2412c3ca61d02ac07126c43efef4a",
+    "policy.cjs": "57a7acd1b1974d508e8967c1d9cc949b002bf1677aa455dec2279a202f99418e",
+    "policy.test.cjs": "9fed02c44067c603573dc070907bd051638d902c3960914149505dc151faa5a4",
+    "proxy.cjs": "293c56d7d75a97dab3b59223bfc9bf606691a459ba664c70ce1de566324834a9",
+    "proxy.test.cjs": "9b4a237caf4dad4afdd7132bbc48ba5f6a45df6db38432a4953007f4343586da",
+    "README.md": "b1fb9481b97c209983951110c9e5e31e5a57b539f2ec7869271a9c0e27a8ea27",
+    "server.cjs": "fde108c85e85b7a0ddb39d54b14e90b52d2b8db4f34cadfe6da0d132d6660f3b",
+    "smoke.cjs": "2226b54783ff1e953a20995eb9bab181ddf37b2b4d6ba5d99c5866cf29e1741c"
+  },
+  "browserHelperVariants": {
+    "artifact": "browser-profile-variants-v1.json",
+    "sha256": "9eb75bcbe5ea60b9b841a4b7a9d6df19dee51040d1aa857718227fd6072919d4",
+    "rawDifferentFiles": [
+      "README.md",
+      "server.cjs",
+      "smoke.cjs"
+    ],
+    "allFilesExactlyEqualAfterCrLfToLfNormalization": true,
+    "physicallyIdenticalClaimed": false,
+    "bothRawProfilesFullGoldGatePassed": true,
+    "unchangedMutantsRepeated": false
+  },
+  "retainedEarlierFreeAttempts": [
+    {
+      "label": "seed-negative-attempt-1",
+      "reportSha256": "661cdcbe7181e1840a0b2e03e5dd0bd8ab80b3fa3c6da0d0cd7be6158d534c7e",
+      "verdict": "product_failure",
+      "passed": 2,
+      "failed": 24,
+      "notRun": 0
+    },
+    {
+      "label": "seed-negative-attempt-2",
+      "reportSha256": "7b990ed832d016c66acfd828edcddd11fd01278081994d51886787d4fe88b2d0",
+      "verdict": "product_failure",
+      "passed": 3,
+      "failed": 23,
+      "notRun": 0
+    },
+    {
+      "label": "seed-negative-attempt-3",
+      "reportSha256": "c2a6f189d0f39b7cff78d396bfa9b34c354ae0a7e4be3eb392149ce33e5cfb80",
+      "verdict": "instrument_failure",
+      "passed": 2,
+      "failed": 16,
+      "notRun": 8
+    },
+    {
+      "label": "seed-negative-attempt-4",
+      "reportSha256": "8d75a801d781cf86f843f391abb08a5511112e6627bf43de941a3360ebc9d7c4",
+      "verdict": "product_failure",
+      "passed": 4,
+      "failed": 22,
+      "notRun": 0
+    },
+    {
+      "label": "reference-positive-attempt-1",
+      "reportSha256": "9e080c0cc279669378218d36cc0471e2babbe626c9d5f9e372259123514c52f1",
+      "verdict": "passed",
+      "passed": 26,
+      "failed": 0,
+      "notRun": 0
+    },
+    {
+      "label": "reference-positive-attempt-2",
+      "reportSha256": "8066e11abc696f25753f6a57d65d443688ee02d55404a051bee4ce1dfff64f0a",
+      "verdict": "passed",
+      "passed": 26,
+      "failed": 0,
+      "notRun": 0
+    }
+  ],
+  "supersededIssues": {
+    "seed-negative-attempt-1": "Proxy-only Chrome background denials were incorrectly attributed to app traffic; retained and superseded.",
+    "seed-negative-attempt-2": "Transient profile locks were misclassified as product I/O errors; retained and superseded.",
+    "seed-negative-attempt-3": "Native folder lookup depended on virtual evaluation home; explicit instrument_failure retained.",
+    "seed-negative-attempt-4": "Valid prior projection; superseded only by explicit Unicode/verbatim clarification and final projection binding."
+  },
+  "bounds": [
+    "The browser driver supplies bounded semantic observations; it is not a complete DOM or pixel/layout oracle.",
+    "Attempt-count UI presence is bounded text evidence; API counts are independently compared with actual protected-provider attempts.",
+    "Proxy-only denied traffic is unattributed Chrome/background traffic; it is not a product-failure signal.",
+    "This finite task uses one Bun process and synthetic local provider effects, not a clustered or real-cloud delivery system."
+  ],
+  "sanitization": {
+    "sourceBytesRedactedOrChanged": false,
+    "sourcePrivateUserPathCredentialOrMachineValueFindings": 0,
+    "networkHostnameCodeIsNotMachineIdentity": true,
+    "rawLogsProfilesDatabasesPaidOutputsOrMachinePathsIncluded": false
+  }
+}

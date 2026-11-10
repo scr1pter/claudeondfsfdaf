@@ -5,6 +5,7 @@ import { ToolRegistry, type ToolComponent, type ToolProps } from "@vectordevai/s
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { showToast } from "@/utils/toast"
+import { downloadResearch, type ReportFormat } from "./report-download"
 import {
   CITE_PREFIX,
   GUEST,
@@ -141,22 +142,15 @@ function ResearchReportCard(props: ToolProps & { plain?: ToolComponent }) {
     return typeof body === "string" ? body : JSON.stringify(body, null, 2)
   }
 
-  const download = (id: string, format: "markdown" | "json") =>
+  const download = (id: string, format: ReportFormat) =>
     act(async () => {
-      const text = await exported(id, format)
       const run = data()?.run
-      const name = reportPath(run?.question ?? "research", run?.created_at ?? Date.now())
-        .split("/")
-        .at(-1)!
-        .replace(/\.md$/, format === "json" ? ".json" : ".md")
-      const url = URL.createObjectURL(
-        new Blob([text], { type: format === "json" ? "application/json" : "text/markdown;charset=utf-8" }),
-      )
-      const link = document.createElement("a")
-      link.href = url
-      link.download = name
-      link.click()
-      URL.revokeObjectURL(url)
+      await downloadResearch(sdk().client, {
+        runID: id,
+        question: run?.question ?? "research",
+        created: run?.created_at ?? Date.now(),
+        format,
+      })
     }, "Exported the research")
 
   return (
@@ -216,7 +210,7 @@ function ResearchReportCard(props: ToolProps & { plain?: ToolComponent }) {
               disabled={busy()}
               onClick={() => download(runID()!, "markdown")}
             >
-              Export
+              Export Markdown
             </button>
             <button
               type="button"
@@ -225,6 +219,22 @@ function ResearchReportCard(props: ToolProps & { plain?: ToolComponent }) {
               onClick={() => download(runID()!, "json")}
             >
               Export JSON
+            </button>
+            <button
+              type="button"
+              data-slot="research-button"
+              disabled={busy()}
+              onClick={() => download(runID()!, "docx")}
+            >
+              Export Word
+            </button>
+            <button
+              type="button"
+              data-slot="research-button"
+              disabled={busy()}
+              onClick={() => download(runID()!, "pdf")}
+            >
+              Export PDF
             </button>
             <button
               type="button"

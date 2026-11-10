@@ -33,6 +33,8 @@ import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModelGuests, GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "@vectordevai/server/request-owner"
 
 const originalEnv = {
   VECTOR_AUTH_CONTENT: process.env.VECTOR_AUTH_CONTENT,
@@ -53,6 +55,7 @@ const workspaceLayer = (experimentalWorkspaces: boolean) =>
       InstanceStore.node,
       Ripgrep.node,
       FreeModelGuests.node,
+      SessionAudience.node,
     ]),
     [
       [RuntimeFlags.node, RuntimeFlags.layer({ experimentalWorkspaces })],
@@ -1128,12 +1131,130 @@ describe("workspace CRUD", () => {
 })
 
 describe("session warp and invited guests", () => {
-  it.live("sessionWarp tells a remote workspace that an invited guest worked in the session", () => {
+  it.live("a private ancestor without isolation metadata refuses warp before any network request", () => {
+    const calls: string[] = []
+    const transfers: (string | undefined)[] = []
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest
+          calls.push(request.url)
+          if (new URL(request.url, "http://localhost").pathname === "/private-source/sync/history") {
+            // The source refuses only the conversation the warp names (it omits restricted ones from replication).
+            transfers.push(request.headers[RequestOwner.TRANSFER_HEADER])
+            if (
+              request.headers[RequestOwner.REPLICATION_HEADER] !== "1" ||
+              !request.headers[RequestOwner.TRANSFER_HEADER]
+            )
+              return HttpServerResponse.jsonUnsafe([])
+            return HttpServerResponse.jsonUnsafe(
+              { message: "Private session history cannot be replicated." },
+              { status: 403 },
+            )
+          }
+          return HttpServerResponse.jsonUnsafe({ sessionID: "ok" })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessions = yield* SessionNs.Service
+            const audience = yield* SessionAudience.Service
+            const instance = yield* requireInstance
+            const targetType = unique("private-warp-target")
+            const target = workspaceInfo(instance.project.id, targetType, { directory: "remote-target-dir" })
+            yield* insertWorkspace(target)
+            registerAdapter(instance.project.id, targetType, remoteAdapter(`${url}/private-target`).adapter)
+            const root = yield* sessions.create({ title: "Owner conversation" })
+            const child = yield* sessions.create({ parentID: root.id })
+            yield* audience.fenceIsolation({ sessionID: child.id, actor: "owner" })
+            expect(root.metadata?.subagent).toBeUndefined()
+            const refused = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: root.id })
+              .pipe(Effect.exit)
+            expectExitContains(refused, "WorkspacePrivateTransferError", "privacy restriction")
+            expect(calls).toEqual([])
+            const publicSession = yield* sessions.create({})
+            yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: publicSession.id })
+            expect(calls.some((url) => url.includes("/sync/replay"))).toBe(true)
+            expect(calls.some((url) => url.includes("/sync/steal"))).toBe(true)
+            const previousType = unique("private-warp-source")
+            const previous = workspaceInfo(instance.project.id, previousType)
+            yield* insertWorkspace(previous)
+            registerAdapter(instance.project.id, previousType, remoteAdapter(`${url}/private-source`).adapter)
+            const remoteSession = yield* sessions.create({})
+            yield* attachSessionToWorkspace(remoteSession.id, previous.id)
+            const start = calls.length
+            const denied = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: remoteSession.id })
+              .pipe(Effect.exit)
+            expectExitContains(denied, "WorkspacePrivateTransferError", "source engine refused")
+            expect(calls.slice(start)).toEqual(["/private-source/sync/history"])
+            expect(transfers).toEqual([remoteSession.id])
+          }),
+        { git: true },
+      )
+    })
+  })
+
+  // The source side of `/sync/history`'s per-conversation check: an ordinary conversation in the same repository that
+  // listed the worktrees shows a private task folder, so a warp of it is refused here as replication leaves it out.
+  it.live("a local conversation whose history shows a private task folder refuses warp before any request", () => {
+    const calls: string[] = []
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest
+          calls.push(request.url)
+          return HttpServerResponse.jsonUnsafe({ sessionID: "ok" })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        (directory) =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessions = yield* SessionNs.Service
+            const audience = yield* SessionAudience.Service
+            const instance = yield* requireInstance
+            const targetType = unique("shows-private-target")
+            const target = workspaceInfo(instance.project.id, targetType, { directory: "remote-target-dir" })
+            yield* insertWorkspace(target)
+            registerAdapter(instance.project.id, targetType, remoteAdapter(`${url}/shows-private-target`).adapter)
+            const root = yield* sessions.create({})
+            const child = yield* sessions.create({ parentID: root.id })
+            const work = path.join(directory, "task-worktree-fixture")
+            yield* audience.fenceIsolation({ sessionID: child.id, actor: "owner", directory: work })
+            const listing = yield* sessions.create({})
+            yield* sessions.setTitle({ sessionID: listing.id, title: `git worktree list: ${work}` })
+            expect(yield* audience.isPrivate(listing.id)).toBe(false)
+            expect(yield* audience.hasGuestInput(listing.id)).toBe(false)
+            const refused = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: listing.id })
+              .pipe(Effect.exit)
+            expectExitContains(refused, "WorkspacePrivateTransferError", "private task data")
+            expect(calls).toEqual([])
+            const ordinary = yield* sessions.create({})
+            yield* sessions.setTitle({ sessionID: ordinary.id, title: "an ordinary title" })
+            yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: ordinary.id })
+            expect(calls.some((call) => call.includes("/sync/replay"))).toBe(true)
+            expect(calls.some((call) => call.includes("/sync/steal"))).toBe(true)
+          }),
+        { git: true },
+      )
+    })
+  })
+
+  it.live("sessionWarp refuses guest-bearing families before any request and still moves public owner sessions", () => {
     const steals: FetchCall[] = []
+    const calls: string[] = []
     return Effect.gen(function* () {
       yield* HttpServer.serveEffect()(
         Effect.gen(function* () {
           const req = yield* HttpServerRequest.HttpServerRequest
+          calls.push(req.url)
           const bodyText = yield* req.text
           if (new URL(req.url, "http://localhost").pathname === "/warp-target/sync/steal")
             steals.push({
@@ -1157,15 +1278,18 @@ describe("session warp and invited guests", () => {
             const target = workspaceInfo(instance.project.id, targetType, { directory: "remote-target-dir" })
             yield* insertWorkspace(target)
             registerAdapter(instance.project.id, targetType, remoteAdapter(`${url}/warp-target`).adapter)
-            // The remote engine keeps its own marks, so only the steal can tell it a guest worked in the session.
+            // A steal-time marker arrives after replayed events, so it cannot preserve guest-input provenance.
             const shared = yield* sessionSvc.create({})
             yield* guests.mark(shared.id)
-            yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: shared.id })
+            const refused = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: shared.id })
+              .pipe(Effect.exit)
+            expectExitContains(refused, "WorkspacePrivateTransferError", "guest input")
+            expect(calls).toEqual([])
             // The owner's own session is not marked as a guest's.
             const own = yield* sessionSvc.create({})
             yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: own.id })
             expect(steals.map((call) => [call.json, call.headers.get(GUEST_REQUEST_HEADER)])).toEqual([
-              [{ sessionID: shared.id }, "1"],
               [{ sessionID: own.id }, null],
             ])
           }),

@@ -1,0 +1,22 @@
+{
+  "name": "foundry-heavy",
+  "classification": "heavy application development replication; prior task already observed",
+  "promptFile": "instrument/BUILD_SPEC.md",
+  "workspacePromptFile": "BUILD_SPEC.md",
+  "seedDirectory": "instrument/seed",
+  "evaluatorCommand": [
+    "{python}", "{task}/evaluate.py", "--app", "{app}", "--out", "{out}",
+    "--bun", "{bun}", "--node", "{node}",
+    "--playwright-module", "{playwright_module}", "--chrome", "{chrome}"
+  ],
+  "evaluatorReport": "evaluation.json",
+  "evaluatorTimeoutSeconds": 1500,
+  "expectedApiGroups": 32,
+  "expectedBrowserChecks": 40,
+  "expectedPrerequisiteChecks": 4,
+  "expectedTotalChecks": 76,
+  "generatedDirectories": ["dist"],
+  "protectedFiles": ["bun.lock"],
+  "setupCommand": ["{bun}", "--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts"],
+  "additionalPrompt": "Read BUILD_SPEC.md as the authoritative public task. Build the complete connected product from the empty scaffold. Use the fixed matched native team and preserve all required verification. Optional raw-browser environment hints in the historical specification are absent in this study: use only the supplied common browser client. No prior delivered implementation, independent evaluator or other application may be inspected."
+}

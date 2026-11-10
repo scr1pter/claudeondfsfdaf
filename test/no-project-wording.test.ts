@@ -9,7 +9,7 @@ import { release199, upcomingRelease } from "../packages/web/src/data/vector-rel
 // workspace. "Project" stays only as another product's own noun (a Vercel, Supabase or GitLab project), in code
 // identifiers, keys, paths and anchors, and in release notes that already shipped.
 const root = path.resolve(import.meta.dir, "..")
-const lastShipped = [1, 99, 111]
+const lastShipped = [1, 99, 112]
 
 // The word on its own, not part of an identifier, key, path, CSS class or anchor such as project.id or #project-rules.
 const word = /(?<![\w\-./:#@$[{=])projects?(?![\w\-/\]=}(])(?!\.\w)(?!:\S)/gi

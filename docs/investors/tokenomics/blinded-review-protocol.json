@@ -1,0 +1,19 @@
+{
+  "kind": "prospective-team-review-protocol-v1",
+  "registered_before_review_of_paid_generated_source": true,
+  "applies_to": "Additional headless matched-team studies",
+  "reviewer_count": 2,
+  "blinding": "Each reviewer receives randomly labelled A/B source copies and the task requirements, without runtime identities, costs, native transcripts or the other reviewer's scores.",
+  "rubric": "The six 8-point dimensions frozen in each study's 48-point source rubric.",
+  "required_evidence": "Scores for each dimension, concrete source file and line references, material issues and review limits. Functional checks remain separate.",
+  "comparison_gate": {
+    "both_arms_all_required_checks_pass": true,
+    "both_current_owned_arms_settled_and_reconciled": true,
+    "matched_native_execution_review_passes": true,
+    "same_reviewers_and_rubric_for_both_sides": true,
+    "vector_no_lower_on_every_dimension_for_each_reviewer": true,
+    "no_unresolved_material_vector_specific_regression": true
+  },
+  "aggregation": "Average total review scores may be reported descriptively. An average or higher total never overrides a lower dimension observed by either reviewer.",
+  "limits": "Two static reviews and the specified functional checks do not prove universal quality, security certification, statistical significance or production reliability. Keep disagreements and original observations. No outcome is relabelled to create a cost victory."
+}

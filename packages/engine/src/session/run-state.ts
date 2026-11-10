@@ -1,10 +1,14 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
+import { disposing } from "@/effect/instance-registry"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
+import { TaskPlace } from "@/task/place"
+import { TaskJobs } from "@/task/jobs"
+import { InstanceRef } from "@/effect/instance-ref"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
-import { Effect, Latch, Layer, Scope, Context } from "effect"
+import { Effect, Latch, Layer, Scope, Context, Option } from "effect"
 import { Session } from "./session"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
@@ -101,13 +105,20 @@ const layer = Layer.effect(
     // writes.
     const settleIdle = Effect.fnUntraced(function* (sessionID: SessionID) {
       yield* status.set(sessionID, { type: "idle" })
-      if (yield* background.get(sessionID)) return
-      const record = yield* sessions.get(sessionID).pipe(
-        Effect.map(SubagentLifecycle.read),
-        Effect.catchCause(() => Effect.succeed(undefined)),
+      // While Vector goes away, TaskRecovery owns the record (D.3).
+      if (disposing(yield* InstanceState.directory)) return
+      const info = yield* sessions.get(sessionID).pipe(Effect.option)
+      if (
+        yield* Option.isSome(info)
+          ? TaskJobs.atLauncher(info.value)(background.get(sessionID))
+          : background.get(sessionID)
       )
+        return
+      const record = Option.isSome(info) ? SubagentLifecycle.read(info.value) : undefined
       if (record?.status !== "queued" && record?.status !== "running") return
       yield* SubagentLifecycle.settle(sessions, sessionID, { status: "cancelled" })
+      // The user stopped it, so the agent resumes it only after the user writes again (D.3).
+      yield* SubagentLifecycle.update(sessions, sessionID, { stop: { by: "user", at: Date.now() } }, record.attempt)
     })
 
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
@@ -140,7 +151,19 @@ const layer = Layer.effect(
         .pipe(Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
     })
 
-    return Service.of({ assertNotBusy, cancel, ensureRunning, startRunning, startShell })
+    const within = <A, E, R>(id: SessionID, effect: Effect.Effect<A, E, R>) =>
+      sessions.get(id).pipe(
+        Effect.option,
+        Effect.andThen(() => TaskPlace.within(id)(effect)),
+      )
+
+    return Service.of({
+      assertNotBusy: (id) => within(id, assertNotBusy(id)),
+      cancel: (id) => within(id, cancel(id)),
+      ensureRunning: (id, interrupted, work) => within(id, ensureRunning(id, interrupted, work)),
+      startRunning: (id, interrupted, work) => within(id, startRunning(id, interrupted, work)),
+      startShell: (id, interrupted, work, ready) => within(id, startShell(id, interrupted, work, ready)),
+    })
   }),
 )
 
@@ -148,7 +171,8 @@ const cancelAttachedJobs = Effect.fn("SessionRunState.cancelAttachedJobs")(funct
   background: BackgroundJob.Interface,
   sessionID: SessionID,
 ) {
-  const jobs = yield* background.list()
+  const entries = yield* TaskJobs.all(background)
+  const jobs = entries.map((entry) => entry.info)
   // Stopping a session stops its own job and the foreground work it was waiting on. A background subagent was handed
   // off and keeps running, with everything under it: it is stopped on its own, or with the session when that is
   // deleted. A subagent that already finished can still have work of its own running, so the
@@ -170,8 +194,9 @@ const cancelAttachedJobs = Effect.fn("SessionRunState.cancelAttachedJobs")(funct
   }
   grow()
   yield* Effect.forEach(
-    jobs.filter((job) => job.status === "running" && linked(job)),
-    (job) => background.cancel(job.id),
+    entries.filter(({ info }) => info.status === "running" && linked(info)),
+    ({ info, place }) =>
+      place ? background.cancel(info.id).pipe(Effect.provideService(InstanceRef, place)) : background.cancel(info.id),
     { concurrency: "unbounded", discard: true },
   )
 })

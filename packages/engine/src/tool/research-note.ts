@@ -1,4 +1,5 @@
 import { ResearchStore } from "@vectordevai/core/research/store"
+import { ResearchClaim } from "@vectordevai/core/research/claim"
 import { Research } from "@vectordevai/schema/research"
 import { Effect, Schema } from "effect"
 import { ResearchRun } from "./research-run"
@@ -28,6 +29,10 @@ export const Parameters = Schema.Struct({
   }),
   stance: Schema.optional(Research.Stance).annotate({
     description: "supports (default), contradicts or context",
+  }),
+  measurement: Schema.optional(Research.Measurement).annotate({
+    description:
+      "Optional quantitative finding. Copy the number, unit and every supplied scope field from this quote. Do not convert amounts or guess missing dates/populations.",
   }),
 })
 
@@ -62,6 +67,8 @@ export const ResearchNoteTool = Tool.define<typeof Parameters, Metadata, Researc
             quote: params.quote,
             ...(params.page ? { page: params.page } : {}),
             ...(params.stance ? { stance: params.stance } : {}),
+            ...(params.measurement ? { measurement: params.measurement } : {}),
+            publicOnly: ctx.agent !== ResearchRun.LEAD,
           })
           if (noted.type === "refused")
             return {
@@ -72,9 +79,11 @@ export const ResearchNoteTool = Tool.define<typeof Parameters, Metadata, Researc
           const note = noted.note
           return {
             title: `${note.id}: ${note.claim.slice(0, 60)}`,
-            output: note.support
-              ? `Saved ${note.id} (${note.source}${note.page ? ` p.${note.page}` : ""}, ${note.stance}). Cite it as [${note.id}].`
-              : `Saved ${note.id} (${note.source}, ${note.stance}) as a paraphrase: the quote is in ${note.source} but does not state the whole claim, so on its own it cannot make a section High confidence. Narrow the claim to what the quote says, or quote the words that say it. Cite it as [${note.id}].`,
+            output:
+              (note.support
+                ? `Saved ${note.id} (${note.source}${note.page ? ` p.${note.page}` : ""}, ${note.stance}). Cite it as [${note.id}].`
+                : `Saved ${note.id} (${note.source}, ${note.stance}) as a paraphrase: the quote is in ${note.source} but does not state the whole claim, so on its own it cannot make a section High confidence. Narrow the claim to what the quote says, or quote the words that say it. Cite it as [${note.id}].`) +
+              (noted.comparisons?.length ? `\n${noted.comparisons.map(ResearchClaim.summary).join("\n")}` : ""),
             metadata: { runID: found.run.id, note: note.id, source: note.source, support: note.support },
           }
         }).pipe(Effect.orDie),

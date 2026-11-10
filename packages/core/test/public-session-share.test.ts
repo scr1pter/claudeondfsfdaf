@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
+import path from "node:path"
 import { Context, DateTime, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { eq } from "drizzle-orm"
 import { PublicSession } from "@vectordevai/schema/public-session"
@@ -20,10 +21,12 @@ import { ModelV2 } from "../src/model"
 import { ProviderV2 } from "../src/provider"
 import { SessionMessage } from "../src/session/message"
 import { SessionSchema } from "../src/session/schema"
+import { SessionAudience } from "../src/session/audience"
 import { SessionTable, SessionInputTable, SessionMessageTable, MessageTable, PartTable } from "../src/session/sql"
 import { BrainSchema } from "../src/brain/schema"
 import { AbsolutePath } from "../src/schema"
 import { testEffect } from "./lib/effect"
+import { tmpdir } from "./fixture/tmpdir"
 import { adjust } from "effect/testing/TestClock"
 
 const token = `vct_${Buffer.from(JSON.stringify({ sub: "synthetic-owner" })).toString("base64url")}.synthetic`
@@ -149,13 +152,68 @@ const setup = Effect.gen(function* () {
   const archives = yield* SessionArchive.Service
   return yield* archives.import({ archive: source, location: { directory: AbsolutePath.make("/tmp") } })
 })
+const ownerSetup = (engine: "v1" | "v2" = "v2") =>
+  Effect.gen(function* () {
+    const archives = yield* SessionArchive.Service
+    const id = SessionSchema.ID.create()
+    const info = {
+      id,
+      projectID: "global",
+      title: "Owner history",
+      time: { created: 1, updated: 2 },
+    }
+    const messages = ["Owner question", "Owner follow-up"].map((text, index) => ({
+      id: SessionMessage.ID.create(),
+      text,
+      time: { created: index + 1 },
+    }))
+    return yield* archives.import({
+      archive:
+        engine === "v2"
+          ? {
+              format: "vector-session",
+              version: 1,
+              engine,
+              info: {
+                ...info,
+                cost: 0,
+                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                location: { directory: "/tmp" },
+              },
+              messages: messages.map((message) => ({ ...message, type: "user" })),
+            }
+          : {
+              info: { ...info, slug: "owner-fixture", directory: "/tmp", version: "fixture" },
+              messages: messages.map((message) => ({
+                info: {
+                  id: message.id,
+                  sessionID: id,
+                  role: "user",
+                  time: message.time,
+                  agent: "build",
+                  model: { providerID: "vector", modelID: "fixture" },
+                },
+                parts: [
+                  {
+                    id: SessionV1.PartID.ascending(),
+                    messageID: message.id,
+                    sessionID: id,
+                    type: "text",
+                    text: message.text,
+                  },
+                ],
+              })),
+            },
+      location: { directory: AbsolutePath.make("/tmp") },
+    })
+  })
 const consent = { version: 1, public: true, updates: true } as const
 const publish = (sessionID: SessionSchema.ID, updates = true) => ({
   sessionID,
   consent: { ...consent, updates },
   expiresAt: Date.now() + 60_000,
 })
-const edit = (sessionID: SessionSchema.ID) =>
+const edit = (sessionID: SessionSchema.ID, text = "New visible question") =>
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     yield* events.publish(SessionEvent.MessageImported, {
@@ -164,11 +222,306 @@ const edit = (sessionID: SessionSchema.ID) =>
       message: SessionMessage.User.make({
         id: SessionMessage.ID.create(),
         type: "user",
-        text: "New visible question",
+        text,
         time: { created: DateTime.makeUnsafe(3) },
       }),
     })
   })
+
+it.effect("private conversations keep owner-local archives but cannot be published", () =>
+  Effect.gen(function* () {
+    const session = yield* ownerSetup()
+    const shares = yield* PublicSessionShare.Service
+    const remote = yield* Remote
+    const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
+    yield* audience.fenceIsolation({ sessionID: session.sessionID, actor: "owner" })
+    expect((yield* shares.preview(session)).messages).toHaveLength(2)
+    expect((yield* shares.export(session)).privacy).toBe("owner-only")
+    expect((yield* shares.publish(publish(session.sessionID)).pipe(Effect.flip)).code).toBe("INVALID")
+    expect(remote.requests).toEqual([])
+  }),
+)
+
+for (const engine of ["v1", "v2"] as const) {
+  it.effect(`${engine} local exports preserve private history through known and unknown-source imports`, () =>
+    Effect.gen(function* () {
+      const archives = yield* SessionArchive.Service
+      const shares = yield* PublicSessionShare.Service
+      const remote = yield* Remote
+      const database = yield* Database.Service
+      const audience = SessionAudience.make(database)
+      const original = yield* ownerSetup(engine)
+      yield* audience.fenceIsolation({ sessionID: original.sessionID, actor: "owner" })
+      const exported = yield* archives.export(original)
+      expect(exported.privacy).toBe("owner-only")
+      const events = yield* EventV2.Service
+      const observed: boolean[] = []
+      const off = yield* events.listen((event) => {
+        if (event.type !== SessionV1.Event.Created.type) return Effect.void
+        const data = event.data as typeof SessionV1.Event.Created.data.Type
+        return audience.isPrivate(data.sessionID).pipe(
+          Effect.tap((value) => Effect.sync(() => observed.push(value))),
+          Effect.asVoid,
+        )
+      })
+      yield* Effect.addFinalizer(() => off)
+      const encoded =
+        "engine" in exported
+          ? Schema.encodeSync(SessionArchive.Native)(exported)
+          : Schema.encodeSync(SessionArchive.Legacy)(exported)
+      const known = yield* archives.import({
+        archive: { ...encoded, privacy: undefined },
+        location: { directory: AbsolutePath.make("/tmp") },
+      })
+      expect(yield* audience.isPrivate(known.sessionID)).toBe(true)
+      const foreignID = SessionSchema.ID.create()
+      expect(yield* audience.knows(foreignID)).toBe(false)
+      const portable = structuredClone(encoded)
+      // The decoded archive type is readonly; edit the cloned wire object through a plain record view.
+      const info: Record<string, unknown> = portable.info
+      info.id = foreignID
+      delete info.parentID
+      delete info.metadata
+      const imported = yield* archives.import({ archive: portable, location: { directory: AbsolutePath.make("/tmp") } })
+      expect(yield* audience.isPrivate(imported.sessionID)).toBe(true)
+      expect(observed).toEqual([true, true])
+      expect((yield* shares.preview(imported)).messages).toHaveLength(2)
+      expect((yield* shares.export(imported)).privacy).toBe("owner-only")
+      expect((yield* shares.publish(publish(imported.sessionID)).pipe(Effect.flip)).code).toBe("INVALID")
+      expect(remote.requests).toEqual([])
+    }),
+  )
+
+  it.effect(
+    `${engine} local exports preserve guest provenance before known and unknown-source import notifications`,
+    () =>
+      Effect.gen(function* () {
+        const archives = yield* SessionArchive.Service
+        const database = yield* Database.Service
+        const audience = SessionAudience.make(database)
+        const original = yield* ownerSetup(engine)
+        yield* audience.markGuest(original.sessionID)
+        const exported = yield* archives.export(original)
+        expect(exported.guestInput).toBe(true)
+        const encoded =
+          "engine" in exported
+            ? Schema.encodeSync(SessionArchive.Native)(exported)
+            : Schema.encodeSync(SessionArchive.Legacy)(exported)
+        const events = yield* EventV2.Service
+        const observed: boolean[] = []
+        const off = yield* events.listen((event) => {
+          if (event.type !== SessionV1.Event.Created.type) return Effect.void
+          const data = event.data as typeof SessionV1.Event.Created.data.Type
+          return audience.hasGuestInput(data.sessionID).pipe(
+            Effect.tap((value) => Effect.sync(() => observed.push(value))),
+            Effect.asVoid,
+          )
+        })
+        yield* Effect.addFinalizer(() => off)
+        const known = { ...encoded }
+        delete known.guestInput
+        const adopted = yield* archives.import({ archive: known, location: { directory: AbsolutePath.make("/tmp") } })
+        const portable = structuredClone(encoded)
+        const info: Record<string, unknown> = portable.info
+        info.id = SessionSchema.ID.create()
+        delete info.parentID
+        delete info.metadata
+        expect(yield* audience.knows(portable.info.id)).toBe(false)
+        const imported = yield* archives.import({
+          archive: portable,
+          location: { directory: AbsolutePath.make("/tmp") },
+        })
+        expect(observed).toEqual([true, true])
+        for (const session of [adopted, imported]) {
+          expect(yield* audience.hasGuestInput(session.sessionID)).toBe(true)
+          expect(yield* audience.canIsolate(session.sessionID, "owner")).toBe(false)
+          expect((yield* archives.export(session)).guestInput).toBe(true)
+        }
+      }),
+  )
+}
+
+// A terminal export beside the desktop app's engine: the export only reads, so it never waits on, or holds back, that
+// engine's writes (a write lock would make each side wait for SQLite's busy timeout and then fail). It runs outside the
+// file's shared layer so that its archive service reads this database file.
+test("a local export reads beside another engine's open write transaction", () =>
+  Effect.gen(function* () {
+    const directory = yield* Effect.acquireRelease(Effect.promise(tmpdir), (value) =>
+      Effect.promise(() => value[Symbol.asyncDispose]()),
+    )
+    const file = path.join(directory.path, "vector.db")
+    yield* Effect.gen(function* () {
+      const session = yield* ownerSetup("v1")
+      const archives = yield* SessionArchive.Service
+      // A second connection, as another engine on the same data folder has.
+      const sqlite = yield* Effect.promise(() => import("bun:sqlite"))
+      const other = yield* Effect.acquireRelease(
+        Effect.sync(() => new sqlite.Database(file)),
+        (connection) => Effect.sync(() => connection.close()),
+      )
+      other.exec("BEGIN IMMEDIATE")
+      const exported = yield* archives.export(session).pipe(Effect.timeout("3 seconds"))
+      other.exec("ROLLBACK")
+      expect(exported.messages).toHaveLength(2)
+    }).pipe(
+      Effect.provide(
+        AppNodeBuilder.build(LayerNode.group([SessionArchive.node, Database.node, EventV2.node]), [
+          [Database.node, makeGlobalNode({ service: Database.Service, layer: Database.layerFromPath(file), deps: [] })],
+        ]),
+      ),
+    )
+  }).pipe(Effect.scoped, Effect.runPromise))
+
+// A live share keeps updating while the desktop app's engine writes beside it. Its capture reads the history and its
+// privacy flag in one snapshot and builds, encodes and scans the archive after that, so it takes no write lock: it never
+// waits on another engine's write transaction (which, once SQLite's busy timeout ran out, failed the update), and never
+// holds that engine's writes back for a whole archive build.
+test("a live share captures its update beside another engine's open write transaction", () =>
+  Effect.gen(function* () {
+    const directory = yield* Effect.acquireRelease(Effect.promise(tmpdir), (value) =>
+      Effect.promise(() => value[Symbol.asyncDispose]()),
+    )
+    const file = path.join(directory.path, "vector.db")
+    yield* Effect.gen(function* () {
+      const session = yield* ownerSetup()
+      const shares = yield* PublicSessionShare.Service
+      const remote = yield* Remote
+      yield* shares.publish(publish(session.sessionID))
+      yield* edit(session.sessionID, "LIVE_UPDATE_BESIDE_ANOTHER_WRITER")
+      const started = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()))
+      remote.state.updateStarted = started.resolve
+      remote.state.holdUpdate = release.promise
+      // A second connection, as another engine on the same data folder has.
+      const sqlite = yield* Effect.promise(() => import("bun:sqlite"))
+      const other = yield* Effect.acquireRelease(
+        Effect.sync(() => new sqlite.Database(file)),
+        (connection) => Effect.sync(() => connection.close()),
+      )
+      other.exec("BEGIN IMMEDIATE")
+      const sending = yield* shares.flush(session.sessionID).pipe(Effect.forkChild)
+      // The update is on the network while the other engine still holds its write transaction.
+      yield* Effect.promise(() => started.promise).pipe(Effect.timeout("3 seconds"))
+      other.exec("ROLLBACK")
+      release.resolve()
+      yield* Fiber.join(sending)
+      expect(JSON.stringify(remote.requests)).toContain("LIVE_UPDATE_BESIDE_ANOTHER_WRITER")
+    }).pipe(
+      Effect.provide(
+        AppNodeBuilder.build(
+          LayerNode.group([
+            PublicSessionShare.node,
+            SessionArchive.node,
+            Database.node,
+            EventV2.node,
+            FreeModels.credentialsNode,
+            remoteNode,
+          ]),
+          [
+            [PublicSessionShare.node, sharingNode],
+            [
+              FreeModels.credentialsNode,
+              Layer.succeed(FreeModels.CredentialsService, { get: () => Effect.succeed(token) }),
+            ],
+            [
+              Database.node,
+              makeGlobalNode({ service: Database.Service, layer: Database.layerFromPath(file), deps: [] }),
+            ],
+          ],
+        ),
+      ),
+    )
+  }).pipe(Effect.scoped, Effect.runPromise))
+
+it.effect("public transcripts without local provenance are permanently guest-bearing on import", () =>
+  Effect.gen(function* () {
+    const session = yield* setup
+    const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
+    expect(yield* audience.hasGuestInput(session.sessionID)).toBe(true)
+    expect(yield* audience.canIsolate(session.sessionID, "owner")).toBe(false)
+  }),
+)
+
+restarted.effect("private ancestors are never uploaded by auto update, restart retry or finalizer", () =>
+  Effect.gen(function* () {
+    const session = yield* ownerSetup()
+    const remote = yield* Remote
+    const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
+    const requests = yield* Effect.gen(function* () {
+      const shares = Context.get(
+        yield* Layer.build(PublicSessionShare.layerWith({ fetch: remote.fetch })),
+        PublicSessionShare.Service,
+      )
+      yield* shares.publish({ ...publish(session.sessionID), remember: true })
+      const count = remote.requests.length
+      yield* audience.register({ sessionID: "ses_private_shared_child", parentID: session.sessionID })
+      yield* audience.fenceIsolation({ sessionID: "ses_private_shared_child", actor: "owner" })
+      yield* edit(session.sessionID, "PRIVATE_ANCESTOR_AFTER_ISOLATION")
+      yield* adjust("2 seconds")
+      expect((yield* shares.flush(session.sessionID).pipe(Effect.flip)).code).toBe("INVALID")
+      expect(remote.requests).toHaveLength(count)
+      return count
+    }).pipe(Effect.scoped)
+    expect(remote.requests).toHaveLength(requests)
+    yield* Effect.gen(function* () {
+      const shares = Context.get(
+        yield* Layer.build(PublicSessionShare.layerWith({ fetch: remote.fetch })),
+        PublicSessionShare.Service,
+      )
+      yield* adjust("2 seconds")
+      expect((yield* shares.auto(session).pipe(Effect.flip))?.code).toBe("INVALID")
+    }).pipe(Effect.scoped)
+    expect(remote.requests).toHaveLength(requests)
+    expect(JSON.stringify(remote.requests)).not.toContain("PRIVATE_ANCESTOR_AFTER_ISOLATION")
+  }),
+)
+
+it.live("an in-flight public send releases SQLite and can only send its captured pre-fence body", () =>
+  Effect.gen(function* () {
+    const session = yield* ownerSetup()
+    const shares = yield* PublicSessionShare.Service
+    const remote = yield* Remote
+    const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
+    yield* shares.publish(publish(session.sessionID))
+    yield* edit(session.sessionID, "PUBLIC_BEFORE_FENCE")
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()))
+    remote.state.updateStarted = started.resolve
+    remote.state.holdUpdate = release.promise
+    const sending = yield* shares.flush(session.sessionID).pipe(Effect.forkChild)
+    yield* Effect.promise(() => started.promise)
+    // Holding a slow network response must not hold the SQLite writer lock or block isolation/Stop.
+    yield* audience.fenceIsolation({ sessionID: session.sessionID, actor: "owner" }).pipe(Effect.timeout("2 seconds"))
+    yield* edit(session.sessionID, "PRIVATE_AFTER_FENCE")
+    release.resolve()
+    yield* Fiber.join(sending)
+    expect(JSON.stringify(remote.requests)).toContain("PUBLIC_BEFORE_FENCE")
+    expect(JSON.stringify(remote.requests)).not.toContain("PRIVATE_AFTER_FENCE")
+    expect((yield* shares.flush(session.sessionID).pipe(Effect.flip)).code).toBe("INVALID")
+  }),
+)
+
+it.effect("public body capture refuses another family's private directory in ordinary tool output", () =>
+  Effect.gen(function* () {
+    const session = yield* setup
+    const shares = yield* PublicSessionShare.Service
+    const remote = yield* Remote
+    const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
+    const directory = path.join(path.parse(process.cwd()).root, "private-vector-task", "ses_other")
+    yield* audience.fenceIsolation({ sessionID: "ses_other", actor: "owner", directory })
+    yield* edit(session.sessionID, `git worktree list output: ${directory}`)
+    expect(yield* audience.isPrivate(session.sessionID)).toBe(false)
+    expect((yield* shares.publish(publish(session.sessionID)).pipe(Effect.flip)).code).toBe("INVALID")
+    expect(remote.requests).toEqual([])
+  }),
+)
 
 it.effect("native import is passive, remapped, complete, and notifications see the complete commit", () =>
   Effect.gen(function* () {
@@ -216,10 +569,18 @@ it.effect("native import is passive, remapped, complete, and notifications see t
     ).toHaveLength(2)
     // The transcript's "user" is whoever published it, so its text is marked as outside content: memory never takes
     // it as the words of the user who continues the session.
-    const parts = (
-      yield* db.select().from(PartTable).where(eq(PartTable.session_id, converted.sessionID)).all().pipe(Effect.orDie)
-    ).map((row) =>
-      Schema.decodeUnknownSync(SessionV1.Part)({ ...row.data, id: row.id, sessionID: row.session_id, messageID: row.message_id }),
+    const parts = (yield* db
+      .select()
+      .from(PartTable)
+      .where(eq(PartTable.session_id, converted.sessionID))
+      .all()
+      .pipe(Effect.orDie)).map((row) =>
+      Schema.decodeUnknownSync(SessionV1.Part)({
+        ...row.data,
+        id: row.id,
+        sessionID: row.session_id,
+        messageID: row.message_id,
+      }),
     )
     expect(parts.length).toBeGreaterThan(0)
     expect(parts.every((part) => part.type === "text" && part.metadata?.[BrainSchema.OUTSIDE] === "import")).toBe(true)

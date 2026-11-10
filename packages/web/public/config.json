@@ -1213,7 +1213,7 @@
               },
               "size": {
                 "$ref": "#/$defs/TaskSizeTier",
-                "description": "How much harness the command's run gets: chat, light, standard or thorough. When unset, the run is standard unless the user's arguments ask for thorough. Only thorough offers subagents."
+                "description": "How much harness the command's run gets: chat, light, standard or thorough. When unset, the run is standard unless the user's arguments ask for thorough. Standard and thorough may hand work to subagents; light and chat do not."
               }
             },
             "required": [
@@ -1673,6 +1673,98 @@
                 }
               },
               "additionalProperties": false
+            },
+            "subagents": {
+              "type": "object",
+              "properties": {
+                "usd": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "steps": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer",
+                  "maximum": 9007199254740991
+                },
+                "warnAt": {
+                  "minimum": 0,
+                  "maximum": 1,
+                  "type": "number"
+                },
+                "unpricedSteps": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer",
+                  "maximum": 9007199254740991
+                },
+                "running": {
+                  "minimum": 1,
+                  "maximum": 16,
+                  "type": "integer",
+                  "description": "Subagents that run at once in one conversation; the rest wait for a free slot (default: 8)"
+                },
+                "per_request": {
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "type": "integer",
+                  "description": "New subagents one request may start, at any depth (default: 32)"
+                }
+              },
+              "additionalProperties": false,
+              "description": "Limits for the subagents one request starts: how many run at once in a conversation (running), how many one request may start (per_request), and the spend ceiling they share (usd, default 25 at catalog prices; only priced and unknown steps count toward it). A repository may only lower running and per_request, and its usd is ignored."
+            },
+            "workflow": {
+              "type": "object",
+              "properties": {
+                "max_agents": {
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "type": "integer",
+                  "description": "Agents one run may start (default: 100)"
+                },
+                "concurrency": {
+                  "minimum": 1,
+                  "maximum": 16,
+                  "type": "integer",
+                  "description": "Agents of one run working at once, also bounded by this computer's processors (default: 16)"
+                },
+                "usd": {
+                  "exclusiveMinimum": 0,
+                  "type": "number",
+                  "description": "Spend ceiling of one run at catalog prices (default: none; the subagent ceiling still applies)"
+                },
+                "tokens": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer",
+                  "maximum": 9007199254740991,
+                  "description": "Tokens one run may use (default: none)"
+                },
+                "steps": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer",
+                  "maximum": 9007199254740991,
+                  "description": "Model steps of one run (default: 40 per agent)"
+                },
+                "per_agent_steps": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer",
+                  "maximum": 9007199254740991,
+                  "description": "Model steps of one agent (default: 60)"
+                },
+                "minutes": {
+                  "minimum": 1,
+                  "maximum": 1440,
+                  "type": "integer",
+                  "description": "Minutes one run may take (default: 120)"
+                },
+                "runs": {
+                  "minimum": 1,
+                  "maximum": 4,
+                  "type": "integer",
+                  "description": "Workflow runs at once in one conversation (default: 1)"
+                }
+              },
+              "additionalProperties": false,
+              "description": "Ceilings of a workflow run. A repository may only lower them."
             }
           },
           "additionalProperties": false,
@@ -1683,11 +1775,69 @@
           "properties": {
             "auto": {
               "type": "boolean",
-              "description": "Size each request, so a greeting gets a direct reply and only work you ask to be thorough, or that the agent finds large, gets subagents (default: true). false gives every request the full harness."
+              "description": "Size each request, so a greeting gets a direct reply and a small action is done directly: Work and Thorough requests may hand work to subagents; Light and Chat do not (default: true). false gives every request the full harness."
             },
             "judge": {
               "$ref": "#/$defs/TaskJudgeMode",
               "description": "When Vector runs LLM-as-a-judge after a run that changed files: off, thorough (large tasks only) or changes (every task that changed files). Default: off for those runs. A prompt's own judge setting overrides it. Deep research's citation judge reads it too, and runs when it is unset: unset or thorough checks Deep reports and Focused ones that cite 8 or more notes, changes checks every report, and off turns it off."
+            },
+            "learn": {
+              "type": "boolean",
+              "description": "Use learned workflow defaults when you leave effort on Default: drop Thorough's extra effort, skip subagents or give them a cheaper model, only where this repository's checked runs passed as often for less (default: true). false keeps the size's defaults. Your own picks always win, and spend caps are unchanged."
+            },
+            "subagents": {
+              "type": "object",
+              "properties": {
+                "fork": {
+                  "type": "boolean",
+                  "description": "Let the agent start subagents from its whole conversation, sharing its prompt cache (default: true)"
+                },
+                "models": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Models a subagent may be given that cost more than the agent's own or run on another provider: \"provider/model\" entries. \"provider/*\" and \"*\" only widen which providers count; the cost rule still applies."
+                },
+                "ask_timeout": {
+                  "minimum": 1,
+                  "maximum": 1440,
+                  "type": "integer",
+                  "description": "Minutes a subagent's permission request or question waits for you before it is declined, never approved (default: it waits)"
+                },
+                "isolation": {
+                  "type": "object",
+                  "properties": {
+                    "lsp": {
+                      "type": "boolean",
+                      "description": "Start language servers in a subagent's own worktree (default: false)"
+                    },
+                    "mcp": {
+                      "type": "boolean",
+                      "description": "Start local MCP servers in a subagent's own worktree (default: false)"
+                    },
+                    "link": {
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Git-ignored directories, such as node_modules, linked into a subagent's own worktree"
+                    },
+                    "max_kept": {
+                      "minimum": 1,
+                      "maximum": 200,
+                      "type": "integer",
+                      "description": "Changed worktrees kept waiting for your review (default: 20)"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "description": "Worktrees of subagents launched with isolation"
+                }
+              },
+              "additionalProperties": false,
+              "description": "How subagents run: forks, per-call models, how long a helper's unanswered request waits, and worktree isolation. Read from your user config; a repository may only turn forks off, narrow models and shorten your ask_timeout."
             }
           },
           "additionalProperties": false,

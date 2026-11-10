@@ -1,0 +1,63 @@
+{
+  "mode": "synthetic production dependencies, no live model calls",
+  "baseline_functions": "same implementation as main 7852605; isolated fixes do not modify these functions",
+  "accounting": [
+    {
+      "probe": "metadata-zero",
+      "actual": {
+        "unpriced": false,
+        "cost": 0,
+        "tokens": {
+          "input": 100,
+          "output": 10,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        }
+      }
+    },
+    {
+      "probe": "missing-priced-usage",
+      "actual": {
+        "unpriced": false,
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        }
+      },
+      "expectedUnpriced": true
+    },
+    {
+      "probe": "title-versus-run-guard",
+      "helperCost": 0.03,
+      "actualGuardSpend": 0.09,
+      "expectedGuardSpend": 0.12,
+      "actualStop": null,
+      "expectedStop": "cap"
+    }
+  ],
+  "positive_controls_passed": 5,
+  "expected_bug_contract_failures": 2,
+  "memory": {
+    "evidence": "production Brain.recall/lines/update + production Brain.recallText; private engine fill path verified by code only",
+    "recalledPersonalIDs": 1,
+    "sameID": true,
+    "initialStatus": "active",
+    "byteStableAfterEdit": false,
+    "byteStableAfterArchive": false,
+    "digests": {
+      "original": "2780d977591d2854bcf7d47a7e3d5a4db6ce6ccf9c55f07a744930cbdf71c98e",
+      "updated": "4e8a47d1b8ef1766e6a4d5147f8f4a272fd1cefa45377f341c5563a7053c4f7c",
+      "afterArchive": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "qualification": "Privacy revocation and forgetting must still remove data; this is not a recommendation to freeze revoked memory."
+  }
+}

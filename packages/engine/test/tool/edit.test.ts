@@ -16,6 +16,9 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
 import { Watcher } from "@vectordevai/core/filesystem/watcher"
+import { FileState } from "../../src/tool/file-state"
+import { Database } from "@vectordevai/core/database/database"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-edit-session"),
@@ -60,9 +63,21 @@ const fail = Effect.fn("EditToolTest.fail")(function* (args: Tool.InferParameter
   throw new Error("expected edit to fail")
 })
 
-const put = Effect.fn("EditToolTest.put")(function* (p: string, content: string) {
+// Writes the file as it was before the session started; the session has not read it.
+const putUnread = Effect.fn("EditToolTest.putUnread")(function* (p: string, content: string) {
   const fs = yield* FSUtil.Service
   yield* fs.writeWithDirs(p, content)
+})
+
+// Records that `sessionID` read the file as it is now, as the read tool does.
+const seen = Effect.fn("EditToolTest.seen")(function* (p: string, sessionID: string = ctx.sessionID) {
+  return FileState.record(sessionID, p, yield* FileState.stamp(p))
+})
+
+// The usual fixture: the file exists and the session has read it.
+const put = Effect.fn("EditToolTest.put")(function* (p: string, content: string) {
+  yield* putUnread(p, content)
+  yield* seen(p)
 })
 
 const load = Effect.fn("EditToolTest.load")(function* (p: string) {
@@ -569,6 +584,161 @@ describe("tool.edit", () => {
         ])
 
         expect(yield* load(filepath)).toBe("top = 1\nmiddle = keep\nbottom = 2\n")
+      }),
+    )
+
+    it.instance("two parallel edits in one step both land", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "file.txt")
+        yield* put(filepath, "a = 0\nb = 0\nc = 0\n")
+
+        yield* Effect.all(
+          [
+            run({ filePath: filepath, oldString: "a = 0", newString: "a = 1" }),
+            run({ filePath: filepath, oldString: "b = 0", newString: "b = 1" }),
+            run({ filePath: filepath, oldString: "c = 0", newString: "c = 1" }),
+          ],
+          { concurrency: "unbounded" },
+        )
+
+        expect(yield* load(filepath)).toBe("a = 1\nb = 1\nc = 1\n")
+      }),
+    )
+
+    it.instance("a same-session change during the ask is re-applied", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "file.txt")
+        yield* put(filepath, "first = 0\nsecond = 0\n")
+        const asking = yield* Deferred.make<void>()
+        const answer = yield* Deferred.make<void>()
+        const held = {
+          ...ctx,
+          ask: () => Deferred.succeed(asking, undefined).pipe(Effect.andThen(Deferred.await(answer))),
+        }
+
+        const first = yield* run({ filePath: filepath, oldString: "first = 0", newString: "first = 1" }, held).pipe(
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(asking)
+        yield* run({ filePath: filepath, oldString: "second = 0", newString: "second = 2" })
+        yield* Deferred.succeed(answer, undefined)
+        const result = yield* Fiber.join(first)
+
+        expect(yield* load(filepath)).toBe("first = 1\nsecond = 2\n")
+        // The result shows the edit as applied to the text the other edit left.
+        expect(result.metadata.diff).toContain("+first = 1")
+        expect(result.metadata.diff).not.toContain("-second = 0")
+      }),
+    )
+  })
+
+  describe("read before write", () => {
+    it.instance("edit without a read is refused", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "unread.txt")
+        yield* putUnread(filepath, "old content")
+        let asked = false
+
+        const exit = yield* run(
+          { filePath: filepath, oldString: "old", newString: "new" },
+          { ...ctx, ask: () => Effect.sync(() => void (asked = true)) },
+        ).pipe(Effect.exit)
+        expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
+          message: `${filepath} has not been read in this conversation, so it was not changed. Read it first.`,
+        })
+        expect(asked).toBe(false)
+        expect(yield* load(filepath)).toBe("old content")
+
+        // After a read the same edit goes through.
+        yield* seen(filepath)
+        yield* run({ filePath: filepath, oldString: "old", newString: "new" })
+        expect(yield* load(filepath)).toBe("new content")
+      }),
+    )
+
+    it.instance("another session writing between read and edit is refused, naming it only to its own family", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        // The family relation as SessionTools binds it to the caller, over a database of its own.
+        const audience = SessionAudience.make(yield* Database.Service)
+        const filepath = path.join(test.directory, "shared.ts")
+        yield* put(filepath, "export const value = 1\n")
+        const helper = {
+          ...ctx,
+          sessionID: SessionID.make("ses_test-edit-helper"),
+          parentID: ctx.sessionID,
+          extra: { subagentTitle: "Bump the value" },
+        }
+        const neighbour = {
+          ...ctx,
+          sessionID: SessionID.make("ses_test-edit-neighbour"),
+          inFamily: (id: string) => audience.inFamily("ses_test-edit-neighbour", id),
+        }
+        yield* audience.register({ sessionID: ctx.sessionID })
+        yield* audience.register({ sessionID: helper.sessionID, parentID: ctx.sessionID })
+        yield* audience.register({ sessionID: neighbour.sessionID })
+        yield* seen(filepath, helper.sessionID)
+        yield* seen(filepath, neighbour.sessionID)
+        yield* run({ filePath: filepath, oldString: "value = 1", newString: "value = 2" }, helper)
+
+        // Another conversation in the same folder is refused without the helper's title or session.
+        const unnamed = yield* run(
+          { filePath: filepath, oldString: "value = 1", newString: "value = 4" },
+          neighbour,
+        ).pipe(Effect.exit)
+        expect(Exit.isFailure(unnamed) && Cause.squash(unnamed.cause)).toMatchObject({
+          reason: "changed",
+          message: `${filepath} changed since you last read it, written by another conversation. Nothing was written; read it again first.`,
+        })
+        expect(yield* load(filepath)).toBe("export const value = 2\n")
+
+        const exit = yield* run(
+          { filePath: filepath, oldString: "value = 1", newString: "value = 3" },
+          { ...ctx, inFamily: (id) => audience.inFamily(ctx.sessionID, id) },
+        ).pipe(Effect.exit)
+        expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
+          reason: "changed",
+          message: `${filepath} changed since you last read it, written by the subagent "Bump the value" (ses_test-edit-helper). Nothing was written; read it again first.`,
+        })
+        expect(yield* load(filepath)).toBe("export const value = 2\n")
+      }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+    )
+
+    it.instance("a change by anyone else during the ask is refused and nothing is written", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "file.txt")
+        yield* put(filepath, "value = 0\n")
+
+        const exit = yield* run(
+          { filePath: filepath, oldString: "value = 0", newString: "value = 1" },
+          { ...ctx, ask: () => Effect.promise(() => fs.writeFile(filepath, "value = 0\nextra = 1\n")) },
+        ).pipe(Effect.exit)
+        expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({ reason: "changed" })
+        expect(yield* load(filepath)).toBe("value = 0\nextra = 1\n")
+      }),
+    )
+
+    it.instance("the edit's metadata carries the file as written, which seeds the session after a restart", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "file.txt")
+        yield* put(filepath, "value = 0\n")
+        const result = yield* run({ filePath: filepath, oldString: "value = 0", newString: "value = 1" })
+        expect(FileState.known(ctx.sessionID, filepath, [])).toEqual(result.metadata.fileState)
+
+        FileState.forget(ctx.sessionID)
+        const messages = [
+          {
+            info: { id: "msg_1", role: "assistant" },
+            parts: [{ type: "tool", tool: "edit", state: { status: "completed", metadata: result.metadata } }],
+          },
+        ] as unknown as Tool.Context["messages"]
+        yield* run({ filePath: filepath, oldString: "value = 1", newString: "value = 2" }, { ...ctx, messages })
+        expect(yield* load(filepath)).toBe("value = 2\n")
       }),
     )
   })

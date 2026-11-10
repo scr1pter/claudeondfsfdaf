@@ -1,0 +1,60 @@
+/* "Learned default · Why": one quiet line under a reply, opened to say why and how to stop. */
+[data-component="workflow-chip"] {
+  width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+[data-component="workflow-chip"] [data-slot="workflow-chip-trigger"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--vx-line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+[data-component="workflow-chip"] [data-slot="workflow-chip-trigger"]:hover,
+[data-component="workflow-chip"][data-open] [data-slot="workflow-chip-trigger"] {
+  color: var(--v2-text-text-base);
+  border-color: var(--vx-line-strong, var(--vx-line));
+}
+
+[data-component="workflow-chip"] [data-slot="workflow-chip-why"] {
+  color: var(--v2-text-text-faint);
+}
+
+[data-component="workflow-chip"] [data-slot="workflow-chip-popover"] {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0 18px;
+}
+
+[data-component="workflow-chip"] [data-slot="workflow-chip-changed"],
+[data-component="workflow-chip"] [data-slot="workflow-chip-reason"] {
+  margin: 0;
+  color: var(--v2-text-text-base);
+  overflow-wrap: anywhere;
+}
+
+[data-component="workflow-chip"] [data-slot="workflow-chip-meta"] {
+  margin: 0;
+  color: var(--v2-text-text-faint);
+  overflow-wrap: anywhere;
+}
+
+[data-component="workflow-chip"] [data-slot="workflow-chip-actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
