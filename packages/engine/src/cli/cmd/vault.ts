@@ -4,6 +4,7 @@ import path from "node:path"
 import * as prompts from "@clack/prompts"
 import { Effect, Option, Schema, Stream } from "effect"
 import { Global } from "@vectordevai/core/global"
+import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { ModelPlans } from "@vectordevai/core/model-plans"
@@ -21,6 +22,7 @@ import { VaultMemory } from "@/brain/vault-memory"
 import { Git } from "@/git"
 import { cmd } from "./cmd"
 import { effectCmd, fail } from "../effect-cmd"
+import { CliOwnerGate } from "../owner-gate"
 import { UI } from "../ui"
 
 // `vector vault`: Brain Vault from the terminal (contract A43). A backup is the Brain's memory (the person's own and
@@ -48,7 +50,9 @@ export function gitRunner(git: Git.Interface): VaultGitHub.Git {
         ...(options?.env ? { env: { ...options.env } } : {}),
         ...(options?.input !== undefined
           ? {
-              stdin: Stream.make(typeof options.input === "string" ? new TextEncoder().encode(options.input) : options.input),
+              stdin: Stream.make(
+                typeof options.input === "string" ? new TextEncoder().encode(options.input) : options.input,
+              ),
             }
           : {}),
       }),
@@ -91,8 +95,16 @@ function encodeKey(vaultKey: Uint8Array) {
 function decodeKey(text: string) {
   if (!text.startsWith(SEALED)) return VaultCrypto.fromBase64Url(text)
   const sealing = credentialKey()
-  if (!sealing) throw new Error("This computer's vault key is sealed by the desktop app. Run vector vault from Vector's desktop terminal.")
-  return VaultCrypto.open(sealing, VaultCrypto.fromBase64Url(text.slice(SEALED.length)), LOCAL_AAD, "This computer's vault key")
+  if (!sealing)
+    throw new Error(
+      "This computer's vault key is sealed by the desktop app. Open Settings → Memory → Backup in Vector.",
+    )
+  return VaultCrypto.open(
+    sealing,
+    VaultCrypto.fromBase64Url(text.slice(SEALED.length)),
+    LOCAL_AAD,
+    "This computer's vault key",
+  )
 }
 
 async function readLocal(): Promise<Local | undefined> {
@@ -106,7 +118,8 @@ async function readLocal(): Promise<Local | undefined> {
     }
   })()
   const decoded = Schema.decodeUnknownOption(Local)(parsed)
-  if (Option.isNone(decoded)) throw new Error(`${LOCAL_FILE()} is damaged. Restore with your recovery code to set it up again.`)
+  if (Option.isNone(decoded))
+    throw new Error(`${LOCAL_FILE()} is damaged. Restore with your recovery code to set it up again.`)
   return decoded.value
 }
 
@@ -191,18 +204,24 @@ const storeFor = Effect.fnUntraced(function* (input: {
 const memoryFiles = Effect.fnUntraced(function* () {
   const encoder = new TextEncoder()
   const { files, here } = yield* VaultMemory.files(yield* VaultMemory.services())
-  return { files: files.map(({ text, ...file }): VaultBackup.Input => ({ ...file, bytes: encoder.encode(text) })), here }
+  return {
+    files: files.map(({ text, ...file }): VaultBackup.Input => ({ ...file, bytes: encoder.encode(text) })),
+    here,
+  }
 })
 
 const recoveryCode = Effect.fnUntraced(function* () {
   const environment = process.env.VECTOR_VAULT_RECOVERY_CODE
   if (environment) return environment
   if (!process.stdin.isTTY || !process.stdout.isTTY)
-    return yield* fail("Restoring on a new computer needs the vault's recovery code: set VECTOR_VAULT_RECOVERY_CODE or run this in a terminal.")
+    return yield* fail(
+      "Restoring on a new computer needs the vault's recovery code: set VECTOR_VAULT_RECOVERY_CODE or run this in a terminal.",
+    )
   const code = yield* Effect.promise(() =>
     prompts.password({
       message: "Recovery code",
-      validate: (value) => (value && VaultRecovery.valid(value) ? undefined : "That does not read as a recovery code. Check each group."),
+      validate: (value) =>
+        value && VaultRecovery.valid(value) ? undefined : "That does not read as a recovery code. Check each group.",
     }),
   )
   if (prompts.isCancel(code)) return yield* fail("Cancelled.")
@@ -242,8 +261,10 @@ export const VaultCommand = cmd({
 export const VaultBackupCommand = effectCmd({
   command: "backup",
   describe: "back up your memory now, encrypted on this computer",
+  instance: () => process.env[ChildEnvironment.AGENT_MARKER] === undefined,
   builder: (yargs) => githubOption(yargs),
   handler: Effect.fn("Cli.vault.backup")(function* (args) {
+    yield* CliOwnerGate.refuse("change Brain Vault backups")
     const local = yield* promise(readLocal)
     const { store, backend } = yield* storeFor({
       ...(args.github ? { github: args.github } : {}),
@@ -263,7 +284,9 @@ export const VaultBackupCommand = effectCmd({
       const created = yield* promise(() => VaultBackup.create(store))
       opened = created
       wrapped = created.wrapped
-      yield* promise(() => writeLocal({ v: 1, vault: created.vault, key: encodeKey(created.vaultKey), wrapped, backend }))
+      yield* promise(() =>
+        writeLocal({ v: 1, vault: created.vault, key: encodeKey(created.vaultKey), wrapped, backend }),
+      )
       UI.println(UI.Style.TEXT_NORMAL_BOLD + "Your Brain Vault recovery code" + UI.Style.TEXT_NORMAL)
       UI.empty()
       UI.println(`    ${created.code}`)
@@ -275,7 +298,14 @@ export const VaultBackupCommand = effectCmd({
     }
     const done = yield* promise(() => VaultBackup.backup({ store, opened, files }))
     yield* promise(() =>
-      writeLocal({ v: 1, vault: opened.vault, key: encodeKey(opened.vaultKey), wrapped, backend, last: { version: done.snapshot.id, at: done.snapshot.createdAt } }),
+      writeLocal({
+        v: 1,
+        vault: opened.vault,
+        key: encodeKey(opened.vaultKey),
+        wrapped,
+        backend,
+        last: { version: done.snapshot.id, at: done.snapshot.createdAt },
+      }),
     )
     UI.println(
       UI.Style.TEXT_SUCCESS_BOLD +
@@ -285,7 +315,9 @@ export const VaultBackupCommand = effectCmd({
     UI.println(
       UI.Style.TEXT_DIM +
         `Version ${done.snapshot.id}: ${done.uploaded} new piece${done.uploaded === 1 ? "" : "s"} (${bytes(done.uploadedBytes)} sent), ${done.reused} unchanged.` +
-        (done.pruned.length ? ` Removed ${done.pruned.length} older version${done.pruned.length === 1 ? "" : "s"}.` : "") +
+        (done.pruned.length
+          ? ` Removed ${done.pruned.length} older version${done.pruned.length === 1 ? "" : "s"}.`
+          : "") +
         UI.Style.TEXT_NORMAL,
     )
   }),
@@ -313,8 +345,7 @@ export const VaultStatusCommand = effectCmd({
         ? `${listing.snapshots.length} version${listing.snapshots.length === 1 ? "" : "s"}, the newest from ${when(newest.createdAt)}.`
         : "No backup yet.",
     )
-    if (listing.usage)
-      UI.println(`Using ${bytes(listing.usage.usedBytes)} of ${bytes(listing.usage.quotaBytes)}.`)
+    if (listing.usage) UI.println(`Using ${bytes(listing.usage.usedBytes)} of ${bytes(listing.usage.quotaBytes)}.`)
     else if (listing.storedBytes !== undefined) UI.println(`The vault takes ${bytes(listing.storedBytes)} there.`)
     if (listing.readOnly)
       UI.println(
@@ -334,7 +365,8 @@ export const VaultVersionsCommand = effectCmd({
   builder: (yargs) => githubOption(yargs),
   handler: Effect.fn("Cli.vault.versions")(function* (args) {
     const local = yield* promise(readLocal)
-    if (!local && !args.github) return yield* fail("This computer does not back up its Brain yet. Name the backup with --github owner/repo.")
+    if (!local && !args.github)
+      return yield* fail("This computer does not back up its Brain yet. Name the backup with --github owner/repo.")
     const { store } = yield* storeFor({ ...(args.github ? { github: args.github } : {}), ...(local ? { local } : {}) })
     const listing = yield* promise(() => store.list())
     if (listing.snapshots.length === 0) return UI.println(`${store.label} holds no backup yet.`)
@@ -357,7 +389,10 @@ const openFor = Effect.fnUntraced(function* (input: {
   if (!held) return yield* fail(`${input.store.label} holds no vault.`)
   const local = input.local
   if (local && local.vault === held.vault)
-    return { vault: local.vault, vaultKey: yield* promise(async () => decodeKey(local.key)) } satisfies VaultBackup.Opened
+    return {
+      vault: local.vault,
+      vaultKey: yield* promise(async () => decodeKey(local.key)),
+    } satisfies VaultBackup.Opened
   const code = yield* recoveryCode()
   const unlocked = yield* promise(() => VaultBackup.unlock(input.store, code))
   if (input.adopt)
@@ -376,14 +411,19 @@ const openFor = Effect.fnUntraced(function* (input: {
 export const VaultRestoreCommand = effectCmd({
   command: "restore [id]",
   describe: "restore your memory from a backup; what was in use comes back in use",
+  instance: () => process.env[ChildEnvironment.AGENT_MARKER] === undefined,
   builder: (yargs) =>
     githubOption(yargs).positional("id", {
       describe: "a version from vector vault versions (the newest by default)",
       type: "string",
     }),
   handler: Effect.fn("Cli.vault.restore")(function* (args) {
+    yield* CliOwnerGate.refuse("restore memory from Brain Vault")
     const local = yield* promise(readLocal)
-    const { store, backend } = yield* storeFor({ ...(args.github ? { github: args.github } : {}), ...(local ? { local } : {}) })
+    const { store, backend } = yield* storeFor({
+      ...(args.github ? { github: args.github } : {}),
+      ...(local ? { local } : {}),
+    })
     const opened = yield* openFor({ store, local, backend, adopt: true })
     const read = yield* promise(() => VaultBackup.read({ store, opened, ...(args.id ? { version: args.id } : {}) }))
     const services = yield* VaultMemory.services()
@@ -420,17 +460,28 @@ export const VaultRestoreCommand = effectCmd({
     const left = [
       total.known ? `${total.known} already in memory here` : undefined,
       total.refused ? `${total.refused} refused (forgotten here, or past what may wait for review)` : undefined,
-      total.unreadable ? `${total.unreadable} file${total.unreadable === 1 ? "" : "s"} this version of Vector cannot read` : undefined,
+      total.unreadable
+        ? `${total.unreadable} file${total.unreadable === 1 ? "" : "s"} this version of Vector cannot read`
+        : undefined,
     ].filter((item): item is string => item !== undefined)
     if (left.length) UI.println(UI.Style.TEXT_DIM + `Left out: ${left.join(", ")}.` + UI.Style.TEXT_NORMAL)
     if (read.skipped.length)
-      UI.println(UI.Style.TEXT_DIM + "Parts of this backup need a newer Vector; update Vector to restore them too." + UI.Style.TEXT_NORMAL)
+      UI.println(
+        UI.Style.TEXT_DIM +
+          "Parts of this backup need a newer Vector; update Vector to restore them too." +
+          UI.Style.TEXT_NORMAL,
+      )
     if (total.documents)
-      UI.println(UI.Style.TEXT_DIM + "Documents are not part of a restore: add their files again for Vector to read them." + UI.Style.TEXT_NORMAL)
+      UI.println(
+        UI.Style.TEXT_DIM +
+          "Documents are not part of a restore: add their files again for Vector to read them." +
+          UI.Style.TEXT_NORMAL,
+      )
   }),
 })
 
 export const VaultForgetCommand = effectCmd({
+  instance: () => process.env[ChildEnvironment.AGENT_MARKER] === undefined,
   command: "forget [id]",
   describe: "delete one version of your backup, or the whole vault with --everything",
   builder: (yargs) =>
@@ -439,12 +490,19 @@ export const VaultForgetCommand = effectCmd({
       .option("everything", { describe: "delete every version and the vault itself", type: "boolean", default: false })
       .option("yes", { describe: "confirm --everything", type: "boolean", default: false }),
   handler: Effect.fn("Cli.vault.forget")(function* (args) {
+    yield* CliOwnerGate.refuse("delete Brain Vault backups")
     const local = yield* promise(readLocal)
-    if (!local && !args.github) return yield* fail("This computer does not back up its Brain yet. Name the backup with --github owner/repo.")
-    const { store, backend } = yield* storeFor({ ...(args.github ? { github: args.github } : {}), ...(local ? { local } : {}) })
+    if (!local && !args.github)
+      return yield* fail("This computer does not back up its Brain yet. Name the backup with --github owner/repo.")
+    const { store, backend } = yield* storeFor({
+      ...(args.github ? { github: args.github } : {}),
+      ...(local ? { local } : {}),
+    })
     const mine =
       local !== undefined &&
-      (backend.type === "vector" ? local.backend.type === "vector" : local.backend.type === "github" && local.backend.repo === backend.repo)
+      (backend.type === "vector"
+        ? local.backend.type === "vector"
+        : local.backend.type === "github" && local.backend.repo === backend.repo)
     if (args.everything) {
       if (!args.yes)
         return yield* fail(
@@ -454,7 +512,11 @@ export const VaultForgetCommand = effectCmd({
       if (mine) yield* promise(() => fs.rm(LOCAL_FILE(), { force: true }))
       UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Deleted the vault in ${store.label}` + UI.Style.TEXT_NORMAL)
       if (backend.type === "github")
-        UI.println(UI.Style.TEXT_DIM + "Delete the repository on GitHub to remove what its history may keep." + UI.Style.TEXT_NORMAL)
+        UI.println(
+          UI.Style.TEXT_DIM +
+            "Delete the repository on GitHub to remove what its history may keep." +
+            UI.Style.TEXT_NORMAL,
+        )
       return
     }
     if (!args.id) return yield* fail("Name a version from vector vault versions, or use --everything.")

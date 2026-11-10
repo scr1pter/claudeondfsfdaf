@@ -1,0 +1,37 @@
+{
+  "kind": "workflow-runner-postlaunch-keyboard-v2-provenance",
+  "originalTaskDigest": "722a00ba024522e2e88aee585f778dad206b115a30a8d1caded38681cf7cd761",
+  "originalGitRevision": "44f93362a683d39198ead037beb639abc828fb63",
+  "snapshots": {
+    "browser-check.cjs": {
+      "path": "original/browser-check.cjs",
+      "sha256": "c59ce38fc7d08a8585713721875dc56e695351a64dcc042f686ead75387bd30b",
+      "bytes": 12341
+    },
+    "browser-controls.cjs": {
+      "path": "original/browser-controls.cjs",
+      "sha256": "082f7fb36f09e6aad8dfdf509f336c10d37ad538f44109f7deb5a1df26b71625",
+      "bytes": 9610
+    },
+    "test_controls.py": {
+      "path": "original/test_controls.py",
+      "sha256": "c99f8b82ba6bc6b03065e95dc47c5695757cc9eff8ee5f5975f78220478d61cc",
+      "bytes": 8404
+    },
+    "free-validation.json": {
+      "path": "original/free-validation.json",
+      "sha256": "506d6675477b122e3a01760fd6e5e922b183f8020a3a272e551bf5ddada96e51",
+      "bytes": 3607
+    },
+    "manifest.json": {
+      "path": "original/original-manifest.json",
+      "sha256": "295529955b78f74f559ca35a24484c9b361135cdf6bd5f645951d95864453c0c",
+      "bytes": 2278
+    }
+  },
+  "preservation": "Original charged results and first/repair candidate sources are unchanged. These original instrument snapshots were copied byte-for-byte before correction. Existing root manifest is preserved until reviewed v2 freeze.",
+  "paidReceiptsAtRevision": 531,
+  "historicalUsageDerivedUsd": 13.1149153,
+  "newModelCalls": 0,
+  "newPaidUsd": 0
+}

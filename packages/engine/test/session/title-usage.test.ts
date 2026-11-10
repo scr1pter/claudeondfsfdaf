@@ -1,5 +1,5 @@
-import { expect } from "bun:test"
-import { Effect, Exit, Stream } from "effect"
+import { describe, expect, test } from "bun:test"
+import { Effect, Exit, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@vectordevai/core/database/database"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
@@ -13,13 +13,18 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SessionTable, SessionMessageTable } from "@vectordevai/core/session/sql"
-import { LLMEvent, type ProviderMetadata } from "@vectordevai/llm"
+import { SessionV1 } from "@vectordevai/core/v1/session"
+import { LLMEvent, Usage, type ProviderMetadata } from "@vectordevai/llm"
 import type { Provider } from "@/provider/provider"
-import { SessionID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TitleUsage } from "@/session/title-usage"
+import { Session } from "@/session/session"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
+const it = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SpendGuard.node])),
+)
 const sessionID = SessionID.make("ses_title_usage")
 const model: Provider.Model = {
   id: ModelV2.ID.make("title-model"),
@@ -73,6 +78,7 @@ const model: Provider.Model = {
 const setup = Effect.fn("test.titleUsage")(function* (selected = model) {
   const database = yield* Database.Service
   const events = yield* EventV2.Service
+  const guard = yield* SpendGuard.Service
   yield* database.db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -89,12 +95,233 @@ const setup = Effect.fn("test.titleUsage")(function* (selected = model) {
     })
     .run()
   return {
+    events,
+    guard,
     usage: TitleUsage.create({ sessionID, model: selected, publish: events.publish }),
     records: database.db.select().from(EventTable).where(eq(EventTable.type, "session.next.ancillary.usage.2")).all(),
     session: database.db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get(),
     messages: database.db.select().from(SessionMessageTable).all(),
   }
 })
+
+describe("usage uncertainty", () => {
+  test("missing and partial paid usage keep uncertainty while retaining known subtotals", () => {
+    expect(Session.getUsage({ model, usage: new Usage({}) })).toMatchObject({ cost: 0, unpriced: true })
+    expect(Session.getUsage({ model, usage: new Usage({ inputTokens: 1_000 }) })).toMatchObject({
+      cost: 0.01,
+      unpriced: true,
+    })
+    expect(Session.getUsage({ model, usage: new Usage({ inputTokens: 0, outputTokens: 0 }) })).toMatchObject({
+      cost: 0,
+      unpriced: false,
+    })
+    expect(
+      Session.getUsage({ model, usage: new Usage({ inputTokens: 1_000, outputTokens: 10 }), incomplete: true })
+        .unpriced,
+    ).toBe(true)
+  })
+
+  test("inclusive OpenAI usage prices cached input and reasoning once", () => {
+    const priced = { ...model, cost: { input: 2, output: 10, cache: { read: 0.1, write: 2.5 } } }
+    const result = Session.getUsage({
+      model: priced,
+      usage: new Usage({
+        inputTokens: 1_000,
+        outputTokens: 120,
+        reasoningTokens: 20,
+        cacheReadInputTokens: 600,
+        cacheWriteInputTokens: 100,
+      }),
+    })
+    expect(result.tokens).toMatchObject({ input: 300, output: 100, reasoning: 20, cache: { read: 600, write: 100 } })
+    expect(result.cost).toBeCloseTo(0.00211, 10)
+    expect(result.unpriced).toBe(false)
+  })
+
+  test("invalid optional counters and impossible inclusive totals remain uncertain", () => {
+    for (const invalid of [
+      { reasoningTokens: Number.NaN },
+      { cacheReadInputTokens: Number.POSITIVE_INFINITY },
+      { cacheWriteInputTokens: -1 },
+      { cacheReadInputTokens: 600, cacheWriteInputTokens: 500 },
+      { reasoningTokens: 101 },
+    ]) {
+      expect(
+        Session.getUsage({ model, usage: new Usage({ inputTokens: 1_000, outputTokens: 100, ...invalid }) }).unpriced,
+      ).toBe(true)
+    }
+  })
+
+  test.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    "invalid total %s cannot prevent a known cost receipt from being encoded",
+    (totalTokens) => {
+      const usage = Session.getUsage({
+        model,
+        usage: new Usage({ inputTokens: 1_000, outputTokens: 100, totalTokens }),
+      })
+      const receipt = Schema.encodeSync(SessionV1.StepFinishPart)({
+        id: PartID.make("prt_invalid_total"),
+        sessionID,
+        messageID: MessageID.make("msg_invalid_total"),
+        type: "step-finish",
+        reason: "stop",
+        cost: usage.cost,
+        unpriced: usage.unpriced,
+        tokens: usage.tokens,
+      })
+      expect(receipt.tokens.total).toBeUndefined()
+      expect(receipt.tokens.input).toBe(1_000)
+      expect(receipt.tokens.output).toBe(100)
+      expect(receipt.cost).toBeCloseTo(0.012)
+      expect(receipt.unpriced).toBe(true)
+    },
+  )
+
+  test.each([undefined, 1_100])("preserves valid reported total %s without inventing one", (totalTokens) => {
+    const usage = Session.getUsage({
+      model,
+      usage: new Usage({ inputTokens: 1_000, outputTokens: 100, totalTokens }),
+    })
+    expect(usage.tokens.total).toBe(totalTokens)
+    expect(usage.cost).toBeCloseTo(0.012)
+    expect(usage.unpriced).toBe(false)
+  })
+})
+
+for (const purpose of ["title", "memory"] as const) {
+  it.effect(`${purpose} charges its captured active run exactly once`, () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      yield* test.guard.begin(sessionID, { usd: 0.1 })
+      yield* test.guard.record(sessionID, {
+        costKind: "priced",
+        costUsd: 0.09,
+        contextTokens: 0,
+        cachedTokens: 0,
+        continues: false,
+        tools: [],
+        patched: false,
+      })
+      const spend = yield* test.guard.capture(sessionID)
+      const usage = TitleUsage.create({ sessionID, model, purpose, publish: test.events.publish, spend })
+      yield* usage.record(
+        LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 3_000, outputTokens: 0 } }),
+      )
+      yield* usage.finish()
+      yield* usage.finish()
+      expect((yield* test.guard.snapshot(sessionID))?.spentUsd).toBeCloseTo(0.12)
+      expect((yield* test.guard.stopped(sessionID))?.reason).toBe("cap")
+      expect(yield* test.records).toHaveLength(1)
+      expect((yield* test.session)?.cost).toBeCloseTo(0.03)
+      yield* spend.release
+    }),
+  )
+}
+
+it.effect("a late helper preserves its launching cap and never bills the following run", () =>
+  Effect.gen(function* () {
+    const test = yield* setup()
+    yield* test.guard.begin(sessionID, { usd: 0.02 })
+    const spend = yield* test.guard.capture(sessionID)
+    yield* test.guard.end(sessionID)
+    yield* test.guard.begin(sessionID, { usd: 1 })
+    const usage = TitleUsage.create({ sessionID, model, publish: test.events.publish, spend })
+    yield* usage.record(
+      LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 3_000, outputTokens: 0 } }),
+    )
+    expect((yield* spend.stopped)?.reason).toBe("cap")
+    expect((yield* test.guard.snapshot(sessionID))?.spentUsd).toBe(0)
+    expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+    expect((yield* test.session)?.cost).toBeCloseTo(0.03)
+    yield* spend.release
+  }),
+)
+
+it.effect("a complete gateway zero charge stays priced while incomplete usage retains a known bill", () =>
+  Effect.gen(function* () {
+    const test = yield* setup()
+    yield* test.guard.begin(sessionID, { usd: 1, unpricedSteps: 1 })
+    const spend = yield* test.guard.capture(sessionID)
+    const unlisted = { ...model, cost: { input: 0, output: 0, cache: { read: 0, write: 0 }, unpriced: true } }
+    const usage = TitleUsage.create({
+      sessionID,
+      model: unlisted,
+      publish: test.events.publish,
+      spend,
+      costKind: "unknown",
+    })
+    yield* usage.record(
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: "stop",
+        usage: { inputTokens: 10, outputTokens: 1 },
+        providerMetadata: { openrouter: { usage: { cost: 0 } } },
+      }),
+    )
+    expect((yield* test.guard.snapshot(sessionID))?.unpricedSteps).toBe(0)
+    expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+    yield* usage.record(
+      LLMEvent.stepFinish({ index: 1, reason: "stop", providerMetadata: { openrouter: { usage: { cost: 0.03 } } } }),
+    )
+    expect((yield* test.guard.snapshot(sessionID))?.spentUsd).toBeCloseTo(0.03)
+    expect((yield* test.guard.snapshot(sessionID))?.costKind).toBe("priced")
+    expect((yield* test.guard.snapshot(sessionID))?.unpricedSteps).toBe(0)
+    expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+    for (let index = 2; index < 43; index++) {
+      yield* usage.record(
+        LLMEvent.stepFinish({ index, reason: "stop", providerMetadata: { openrouter: { usage: { cost: 0 } } } }),
+      )
+    }
+    expect((yield* test.guard.snapshot(sessionID))?.steps).toBe(43)
+    expect((yield* test.guard.snapshot(sessionID))?.unpricedSteps).toBe(0)
+    expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+    yield* spend.release
+  }),
+)
+
+it.effect("an unknown catalog with explicit zero counters and no measured bill stays unknown to the guard", () =>
+  Effect.gen(function* () {
+    const test = yield* setup()
+    yield* test.guard.begin(sessionID, { usd: 1, unpricedSteps: 1 })
+    const spend = yield* test.guard.capture(sessionID)
+    const usage = TitleUsage.create({
+      sessionID,
+      model: { ...model, cost: { input: 0, output: 0, cache: { read: 0, write: 0 }, unpriced: true } },
+      publish: test.events.publish,
+      spend,
+      costKind: "unknown",
+    })
+    yield* usage.record(LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 0, outputTokens: 0 } }))
+    expect(yield* test.guard.snapshot(sessionID)).toMatchObject({ costKind: "unknown", spentUsd: 0, unpricedSteps: 1 })
+    expect((yield* test.guard.stopped(sessionID))?.reason).toBe("unpriced")
+    yield* spend.release
+  }),
+)
+
+for (const cost of [0, 0.0005]) {
+  it.effect(`a catalog-priced helper persists and guards its provider-reported OpenRouter cost of $${cost}`, () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      yield* test.guard.begin(sessionID, { usd: 1, unpricedSteps: 1 })
+      const spend = yield* test.guard.capture(sessionID)
+      const usage = TitleUsage.create({ sessionID, model, publish: test.events.publish, spend })
+      yield* usage.record(
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          usage: { inputTokens: 1_000, outputTokens: 100 },
+          providerMetadata: { openrouter: { usage: { cost } } },
+        }),
+      )
+      yield* usage.finish()
+      expect((yield* test.records)[0]?.data).toMatchObject({ cost })
+      expect((yield* test.session)?.cost).toBe(cost)
+      expect(yield* test.guard.snapshot(sessionID)).toMatchObject({ spentUsd: cost, unpricedSteps: 0 })
+      expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+      yield* spend.release
+    }),
+  )
+}
 
 it.effect("prices a title using its own model and settles once without transcript messages", () =>
   Effect.gen(function* () {
@@ -215,6 +442,16 @@ it.effect("interrupted generation without terminal usage records unknown spend, 
   }),
 )
 
+it.effect("an interrupted started helper without output still records an unknown attempt", () =>
+  Effect.gen(function* () {
+    const test = yield* setup()
+    yield* test.usage.record(LLMEvent.stepStart({ index: 0 }))
+    yield* test.usage.finish()
+    expect(yield* test.records).toHaveLength(1)
+    expect((yield* test.records)[0]?.data).toMatchObject({ incomplete: true, unpriced: true })
+  }),
+)
+
 it.effect("an explicitly reported zero-token title is distinguishable from missing usage", () =>
   Effect.gen(function* () {
     const test = yield* setup()
@@ -244,6 +481,19 @@ it.effect("retains a Copilot metadata-only title charge without inventing token 
     expect(records[0]?.data).toMatchObject({ cost: 0.03, incomplete: true, unpriced: true })
     expect(records[0]?.data.tokens).toBeUndefined()
     expect(yield* test.session).toMatchObject({ cost: 0.03, unpriced_steps: 1, tokens_input: 0, tokens_output: 0 })
+  }),
+)
+
+it.effect("retains an explicit metadata-only zero bill with unknown token counters", () =>
+  Effect.gen(function* () {
+    const test = yield* setup({ ...model, cost: { ...model.cost, unpriced: true } })
+    yield* test.usage.record(
+      LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openrouter: { usage: { cost: 0 } } } }),
+    )
+    const records = yield* test.records
+    expect(records).toHaveLength(1)
+    expect(records[0]?.data).toMatchObject({ cost: 0, incomplete: true, unpriced: true })
+    expect(records[0]?.data.tokens).toBeUndefined()
   }),
 )
 
@@ -309,7 +559,7 @@ it.effect("a Codium title is recorded once as a Codium step: its record keeps th
 it.effect("a Codium title is never priced from a charge its provider metadata reports", () =>
   Effect.gen(function* () {
     const test = yield* setup(codium)
-    // OpenRouter's reported cost prices another unpriced model's title, and Copilot's AI units price any model's.
+    // OpenRouter's reported cost and Copilot's AI units price any other model's title.
     const reported: ProviderMetadata[] = [
       { openrouter: { usage: { cost: 0.05 } } },
       { copilot: { totalNanoAiu: 4_000_000_000 } },
@@ -329,5 +579,32 @@ it.effect("a Codium title is never priced from a charge its provider metadata re
       { cost: 0, unpriced: true, billing: "codium" },
     ])
     expect(yield* test.session).toMatchObject({ cost: 0, unpriced_steps: 2, codium_steps: 2, tokens_input: 0 })
+  }),
+)
+
+it.effect("a Codium title charges its captured run as a Codium step, never as an unpriced one", () =>
+  Effect.gen(function* () {
+    const test = yield* setup(codium)
+    yield* test.guard.begin(sessionID, { usd: 1, unpricedSteps: 1 })
+    const spend = yield* test.guard.capture(sessionID)
+    const usage = TitleUsage.create({ sessionID, model: codium, publish: test.events.publish, spend })
+    yield* usage.record(
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: "stop",
+        usage: { inputTokens: 200, outputTokens: 6 },
+        providerMetadata: { openrouter: { usage: { cost: 0.05 } } },
+      }),
+    )
+    yield* usage.finish()
+    expect(yield* test.records).toHaveLength(1)
+    expect(yield* test.guard.snapshot(sessionID)).toMatchObject({
+      costKind: "codium",
+      codiumSteps: 1,
+      unpricedSteps: 0,
+      spentUsd: 0,
+    })
+    expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+    yield* spend.release
   }),
 )

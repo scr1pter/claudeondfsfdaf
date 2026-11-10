@@ -13,10 +13,12 @@ import { Instruction } from "@/session/instruction"
 import { SessionDistill } from "@/session/distill"
 import { cmd } from "./cmd"
 import { effectCmd, fail } from "../effect-cmd"
+import { CliOwnerGate } from "../owner-gate"
 import { UI } from "../ui"
 
 // `vector memory doc`: the documents Vector keeps for the repository in the current directory, as Settings > Memory >
-// Documents shows them. Files are read on this computer; nothing here sends a document anywhere.
+// Documents shows them. Files are read on this computer; nothing here sends a document anywhere. Commands that add,
+// change or settle what Vector knows are the owner's (CliOwnerGate); reading and searching stay open to the agent.
 
 export const MemoryDocCommand = cmd({
   command: "doc",
@@ -62,12 +64,14 @@ export const MemoryDocAddCommand = effectCmd({
         default: false,
       })
       .option("wait", {
-        describe: "wait until the document is searchable by keywords, or also by meaning when the search model is in use",
+        describe:
+          "wait until the document is searchable by keywords, or also by meaning when the search model is in use",
         choices: ["keyword", "all"] as const,
         default: "keyword" as const,
       })
       .option("json", { describe: "print JSON", type: "boolean", default: false }),
   handler: Effect.fn("Cli.memory.doc.add")(function* (args) {
+    yield* CliOwnerGate.refuse("add documents")
     const memory = yield* where
     const files = [...(args.files ?? []).map(String), ...(stdinAsked() ? ["-"] : [])]
     if (files.length === 0) return yield* fail("Name a file to add, or - to read Markdown from stdin.")
@@ -114,7 +118,8 @@ export const MemoryDocAddCommand = effectCmd({
             : `${UI.Style.TEXT_SUCCESS_BOLD}${verb(item.result.type)}${UI.Style.TEXT_NORMAL} ${line(item.result.document)}`,
         )
     const refused = results.filter((item) => item.result.type === "refused").length
-    if (refused > 0) return yield* fail(`${refused} of ${results.length} file${results.length === 1 ? " was" : "s were"} not added.`)
+    if (refused > 0)
+      return yield* fail(`${refused} of ${results.length} file${results.length === 1 ? " was" : "s were"} not added.`)
   }),
 })
 
@@ -138,18 +143,28 @@ export const MemoryDocExtractCommand = effectCmd({
     if ("type" in result) return yield* fail(result.message)
     if (args.json) return print(result)
     const kinds = Object.entries(
-      result.records.reduce<Record<string, number>>((all, record) => ({ ...all, [record.kind]: (all[record.kind] ?? 0) + 1 }), {}),
+      result.records.reduce<Record<string, number>>(
+        (all, record) => ({ ...all, [record.kind]: (all[record.kind] ?? 0) + 1 }),
+        {},
+      ),
     )
     UI.println(
       `${UI.Style.TEXT_HIGHLIGHT_BOLD}${result.title}${UI.Style.TEXT_NORMAL}: ${result.format}${result.pages ? `, ${result.pages} pages` : ""}, ${result.sections.length} sections, ${result.passages.length} passages, about ${result.tokens} tokens`,
     )
     UI.println(`Records: ${kinds.length ? kinds.map(([kind, count]) => `${count} ${kind}`).join(", ") : "none"}`)
-    if (result.unread.length) UI.println(`${UI.Style.TEXT_WARNING}Pages with no text (scanned): ${result.unread.join(", ")}${UI.Style.TEXT_NORMAL}`)
-    if (result.warnings.length) UI.println(`${UI.Style.TEXT_WARNING}Warnings: ${result.warnings.join(", ")}${UI.Style.TEXT_NORMAL}`)
-    if (result.hold) UI.println(`${UI.Style.TEXT_WARNING}It would wait for your review: ${result.hold}${UI.Style.TEXT_NORMAL}`)
+    if (result.unread.length)
+      UI.println(
+        `${UI.Style.TEXT_WARNING}Pages with no text (scanned): ${result.unread.join(", ")}${UI.Style.TEXT_NORMAL}`,
+      )
+    if (result.warnings.length)
+      UI.println(`${UI.Style.TEXT_WARNING}Warnings: ${result.warnings.join(", ")}${UI.Style.TEXT_NORMAL}`)
+    if (result.hold)
+      UI.println(`${UI.Style.TEXT_WARNING}It would wait for your review: ${result.hold}${UI.Style.TEXT_NORMAL}`)
     UI.empty()
     for (const record of result.records.slice(0, 40))
-      UI.println(`  ${record.kind}${record.page ? ` p.${record.page}` : ""}: ${record.card}${record.hold ? ` (held: ${record.hold})` : ""}`)
+      UI.println(
+        `  ${record.kind}${record.page ? ` p.${record.page}` : ""}: ${record.card}${record.hold ? ` (held: ${record.hold})` : ""}`,
+      )
     if (result.records.length > 40) UI.println(`  … and ${result.records.length - 40} more; --json prints them all.`)
     UI.empty()
     UI.println(UI.Style.TEXT_DIM + "Nothing was stored. Run vector memory doc add to keep it." + UI.Style.TEXT_NORMAL)
@@ -178,7 +193,17 @@ export const MemoryDocShowCommand = effectCmd({
       .option("records", { describe: "list its records", type: "boolean", default: false })
       .option("kind", {
         describe: "only records of this kind",
-        choices: ["requirement", "constraint", "decision", "contract", "procedure", "term", "entity", "fact", "question"] as const,
+        choices: [
+          "requirement",
+          "constraint",
+          "decision",
+          "contract",
+          "procedure",
+          "term",
+          "entity",
+          "fact",
+          "question",
+        ] as const,
       })
       .option("page", { describe: "show the text Vector read from one page", type: "number" })
       .option("anchors", { describe: "list the code it is linked to", type: "boolean", default: false })
@@ -193,12 +218,19 @@ export const MemoryDocShowCommand = effectCmd({
       const page = yield* memory.knowledge.page(memory.place, id, args.page, { personal: true })
       if (!page) return yield* fail(`Document ${args.id} has no page ${args.page}.`)
       if (args.json) return print(page)
-      if (page.unread) UI.println(`${UI.Style.TEXT_WARNING}Page ${page.page} is a scanned image; Vector read no text on it.${UI.Style.TEXT_NORMAL}`)
+      if (page.unread)
+        UI.println(
+          `${UI.Style.TEXT_WARNING}Page ${page.page} is a scanned image; Vector read no text on it.${UI.Style.TEXT_NORMAL}`,
+        )
       for (const passage of page.passages) {
-        UI.println(`${UI.Style.TEXT_DIM}[${passage.id}] ${passage.section}${passage.page !== undefined && passage.page < page.page ? ` (from p.${passage.page})` : ""}${passage.hold ? ` held: ${passage.hold}` : ""}${UI.Style.TEXT_NORMAL}`)
+        UI.println(
+          `${UI.Style.TEXT_DIM}[${passage.id}] ${passage.section}${passage.page !== undefined && passage.page < page.page ? ` (from p.${passage.page})` : ""}${passage.hold ? ` held: ${passage.hold}` : ""}${UI.Style.TEXT_NORMAL}`,
+        )
         UI.println(passage.text)
         for (const record of passage.records)
-          UI.println(`  ${UI.Style.TEXT_HIGHLIGHT}${record.id}${UI.Style.TEXT_NORMAL} ${record.kind}: ${passage.text.slice(record.start, record.end)}`)
+          UI.println(
+            `  ${UI.Style.TEXT_HIGHLIGHT}${record.id}${UI.Style.TEXT_NORMAL} ${record.kind}: ${passage.text.slice(record.start, record.end)}`,
+          )
         UI.empty()
       }
       return
@@ -214,7 +246,9 @@ export const MemoryDocShowCommand = effectCmd({
       if (args.json) return print(detail.anchors)
       if (detail.anchors.length === 0) return UI.println("Not linked to any code yet.")
       for (const anchor of detail.anchors)
-        UI.println(`${anchor.owner} → ${anchor.path}${anchor.symbol ? ` ${anchor.symbol}` : ""}${anchor.line ? `:${anchor.line}` : ""} (${anchor.status})`)
+        UI.println(
+          `${anchor.owner} → ${anchor.path}${anchor.symbol ? ` ${anchor.symbol}` : ""}${anchor.line ? `:${anchor.line}` : ""} (${anchor.status})`,
+        )
       return
     }
     if (args.held) {
@@ -234,7 +268,9 @@ export const MemoryDocShowCommand = effectCmd({
     if (document.warnings.length) UI.println(`  Warnings: ${document.warnings.join(", ")}`)
     if (document.error) UI.println(`  ${UI.Style.TEXT_DANGER}${document.error}${UI.Style.TEXT_NORMAL}`)
     if (detail.versions.length > 1)
-      UI.println(`  Versions: ${detail.versions.map((version) => `v${version.version} ${day(version.createdAt)} (${version.status})`).join(", ")}`)
+      UI.println(
+        `  Versions: ${detail.versions.map((version) => `v${version.version} ${day(version.createdAt)} (${version.status})`).join(", ")}`,
+      )
     UI.empty()
     for (const section of detail.sections.filter((item) => item.path))
       UI.println(
@@ -281,7 +317,11 @@ export const MemoryDocReadCommand = effectCmd({
   describe: "read a document's outline, a section (3.2 or a heading) or a page (p14), or a record or passage",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "a document's id or number, or a record's or passage's id", type: "string", demandOption: true })
+      .positional("id", {
+        describe: "a document's id or number, or a record's or passage's id",
+        type: "string",
+        demandOption: true,
+      })
       .positional("part", { describe: "a section number or heading, or a page such as p14", type: "string" }),
   handler: Effect.fn("Cli.memory.doc.read")(function* (args) {
     const memory = yield* where
@@ -301,11 +341,14 @@ export const MemoryDocReadCommand = effectCmd({
 export const MemoryDocForgetCommand = effectCmd({
   command: "forget <id>",
   describe: "forget a document and every version of it; Vector will not keep it again on its own",
-  builder: (yargs) => yargs.positional("id", { describe: "the document's id or number", type: "string", demandOption: true }),
+  builder: (yargs) =>
+    yargs.positional("id", { describe: "the document's id or number", type: "string", demandOption: true }),
   handler: Effect.fn("Cli.memory.doc.forget")(function* (args) {
+    yield* CliOwnerGate.refuse("forget documents")
     const memory = yield* where
     const id = yield* resolve(args.id)
-    if ((yield* memory.knowledge.remove(memory.place, id)) === "not-found") return yield* fail(`No document ${args.id} here.`)
+    if ((yield* memory.knowledge.remove(memory.place, id)) === "not-found")
+      return yield* fail(`No document ${args.id} here.`)
     UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Forgot ${id}` + UI.Style.TEXT_NORMAL)
   }),
 })
@@ -315,11 +358,14 @@ export const MemoryDocReindexCommand = effectCmd({
   describe: "read a document again from its file, or every document an older reader read",
   builder: (yargs) => yargs.positional("id", { describe: "the document's id or number", type: "string" }),
   handler: Effect.fn("Cli.memory.doc.reindex")(function* (args) {
+    yield* CliOwnerGate.refuse("read documents again")
     const memory = yield* where
     const id = args.id ? yield* resolve(args.id) : undefined
     const count = yield* memory.knowledge.reindex(memory.place, id)
     if (id && count === 0)
-      return yield* fail(`Vector cannot read ${args.id} again now: it is being read, or its file changed or is gone and no copy was kept.`)
+      return yield* fail(
+        `Vector cannot read ${args.id} again now: it is being read, or its file changed or is gone and no copy was kept.`,
+      )
     const documents = yield* memory.knowledge.documents(memory.place, { personal: true })
     yield* Effect.forEach(
       documents.filter((document) => !id || document.id === id),
@@ -336,7 +382,11 @@ const decide = (action: "approve" | "reject", describe: string, done: string) =>
     describe,
     builder: (yargs) =>
       yargs
-        .positional("id", { describe: "a document's id or number, or a held passage's or record's id", type: "string", demandOption: true })
+        .positional("id", {
+          describe: "a document's id or number, or a held passage's or record's id",
+          type: "string",
+          demandOption: true,
+        })
         .option("suggestions", {
           describe: "for approve: keep every record a model suggested for the document",
           type: "boolean",
@@ -344,17 +394,30 @@ const decide = (action: "approve" | "reject", describe: string, done: string) =>
           hidden: !Flag.VECTOR_KNOWLEDGE_DISTILL,
         }),
     handler: Effect.fn(`Cli.memory.doc.${action}`)(function* (args) {
+      yield* CliOwnerGate.refuse(`${action} what waits for your review`)
       const memory = yield* where
       const id = /^#?\d+$/.test(args.id) ? yield* resolve(args.id) : args.id
       const change = args.suggestions && action === "approve" ? ("keep-suggestions" as const) : action
       if ((yield* memory.knowledge.update(memory.place, id, { action: change })) === "not-found")
         return yield* fail(`Nothing ${args.id} waits for your review here.`)
-      UI.println(UI.Style.TEXT_SUCCESS_BOLD + `${change === "keep-suggestions" ? "Kept the suggestions for" : done} ${id}` + UI.Style.TEXT_NORMAL)
+      UI.println(
+        UI.Style.TEXT_SUCCESS_BOLD +
+          `${change === "keep-suggestions" ? "Kept the suggestions for" : done} ${id}` +
+          UI.Style.TEXT_NORMAL,
+      )
     }),
   })
 
-export const MemoryDocApproveCommand = decide("approve", "let Vector use a document or passage that waited for your review", "Approved")
-export const MemoryDocRejectCommand = decide("reject", "forget a document, or put away a passage or record, that waited for your review", "Rejected")
+export const MemoryDocApproveCommand = decide(
+  "approve",
+  "let Vector use a document or passage that waited for your review",
+  "Approved",
+)
+export const MemoryDocRejectCommand = decide(
+  "reject",
+  "forget a document, or put away a passage or record, that waited for your review",
+  "Rejected",
+)
 
 // `vector memory doc distill <id>`: a model reads the sections the rules found little in, after the estimate, and what
 // it suggests waits for review. Behind VECTOR_KNOWLEDGE_DISTILL, and hidden from help without it.
@@ -375,6 +438,7 @@ export const MemoryDocDistillCommand = effectCmd({
       .option("yes", { describe: "send it; without this only the estimate is shown", type: "boolean", default: false })
       .option("json", { describe: "print JSON", type: "boolean", default: false }),
   handler: Effect.fn("Cli.memory.doc.distill")(function* (args) {
+    yield* CliOwnerGate.refuse("ask a model to read documents")
     const memory = yield* where
     const distill = yield* SessionDistill.Service
     const input = {
@@ -484,7 +548,9 @@ export const MemoryLinksCommand = effectCmd({
       const how = anchor
         ? ` ${UI.Style.TEXT_DIM}(${anchor.method}${anchor.symbol ? ` ${anchor.symbol}` : ""}${anchor.line ? `:${anchor.line}` : ""}, ${anchor.status}${anchor.value ? `, code gives ${anchor.value.raw}` : ""})${UI.Style.TEXT_NORMAL}`
         : ""
-      UI.println(`${UI.Style.TEXT_HIGHLIGHT}${link.owner}${UI.Style.TEXT_NORMAL} ${link.kind} · ${link.title}: ${link.text.replace(/\s+/g, " ").slice(0, 160)}${how}`)
+      UI.println(
+        `${UI.Style.TEXT_HIGHLIGHT}${link.owner}${UI.Style.TEXT_NORMAL} ${link.kind} · ${link.title}: ${link.text.replace(/\s+/g, " ").slice(0, 160)}${how}`,
+      )
     }
   }),
 })
@@ -494,7 +560,9 @@ export const MemoryReviewCommand = effectCmd({
   command: "review",
   describe: "list what needs your look: documents and memory that disagree, code that drifted, and held content",
   builder: (yargs) =>
-    yargs.command(MemoryReviewResolveCommand).option("json", { describe: "print JSON", type: "boolean", default: false }),
+    yargs
+      .command(MemoryReviewResolveCommand)
+      .option("json", { describe: "print JSON", type: "boolean", default: false }),
   handler: Effect.fn("Cli.memory.review")(function* (args) {
     const memory = yield* where
     // The list is only useful with drift as the code is now.
@@ -525,8 +593,10 @@ export const MemoryReviewResolveCommand = effectCmd({
       .positional("winner", { describe: "for keep: the side of the conflict to keep", type: "string" })
       .option("json", { describe: "print JSON", type: "boolean", default: false }),
   handler: Effect.fn("Cli.memory.review.resolve")(function* (args) {
+    yield* CliOwnerGate.refuse("settle what needs your look")
     const memory = yield* where
-    if (args.action === "keep" && !args.winner) return yield* fail("Name the side to keep: vector memory review resolve <id> keep <winner>")
+    if (args.action === "keep" && !args.winner)
+      return yield* fail("Name the side to keep: vector memory review resolve <id> keep <winner>")
     const result = yield* memory.knowledge.resolve(memory.place, args.id, {
       action: args.action,
       ...(args.winner ? { winner: args.winner } : {}),
@@ -534,7 +604,8 @@ export const MemoryReviewResolveCommand = effectCmd({
     if (!result) return yield* fail(`Nothing needs a look as ${args.id}, or not that way.`)
     if (result.type === "refused") return yield* fail(result.message)
     if (args.json) return print(result)
-    if (result.type === "settled") return UI.println(`${args.action === "approve" ? "Approved" : "Rejected"} ${args.id}.`)
+    if (result.type === "settled")
+      return UI.println(`${args.action === "approve" ? "Approved" : "Rejected"} ${args.id}.`)
     UI.println(`${result.item.status === "dismissed" ? "Dismissed" : "Settled"} ${args.id}.`)
     if (result.entry) UI.println(`Saved as a decision: [${result.entry.id}] ${result.entry.text}`)
   }),
@@ -546,6 +617,7 @@ export const MemoryRepoDocsCommand = effectCmd({
   describe: "see or set whether Vector reads this repository's own docs, which are shared like its memory, not private",
   builder: (yargs) => yargs.positional("state", { choices: ["on", "off"] as const }),
   handler: Effect.fn("Cli.memory.repoDocs")(function* (args) {
+    if (args.state) yield* CliOwnerGate.refuse("change whether Vector reads this repository's docs")
     const memory = yield* where
     const settings = args.state
       ? yield* memory.knowledge.configure(memory.place, { repositoryDocs: args.state === "on" })
@@ -613,6 +685,7 @@ export const MemoryModelDownloadCommand = effectCmd({
       .option("yes", { describe: "download without asking first", type: "boolean", default: false })
       .option("json", { describe: "print JSON", type: "boolean", default: false }),
   handler: Effect.fn("Cli.memory.model.download")(function* (args) {
+    yield* CliOwnerGate.refuse("change the search model")
     const memory = yield* where
     const embed = yield* BrainEmbed.Service
     const picked = choice(args)
@@ -623,7 +696,9 @@ export const MemoryModelDownloadCommand = effectCmd({
         `${UI.Style.TEXT_HIGHLIGHT_BOLD}${model.label}${UI.Style.TEXT_NORMAL}: a one-time ${BrainEmbedManifest.megabytes(bytes)} download, then it runs on this computer with no network.`,
       )
       UI.println(`${model.description}`)
-      UI.println(`${model.owner}, ${model.license}. Source: https://huggingface.co/${model.repo}/tree/${model.revision}`)
+      UI.println(
+        `${model.owner}, ${model.license}. Source: https://huggingface.co/${model.repo}/tree/${model.revision}`,
+      )
       if (model.preview) UI.println(`${UI.Style.TEXT_WARNING}${model.preview}${UI.Style.TEXT_NORMAL}`)
       if (picked.variant === "fp32")
         UI.println(
@@ -642,7 +717,9 @@ export const MemoryModelDownloadCommand = effectCmd({
         yield* Effect.sleep("500 millis")
         const status = yield* embed.status()
         if (process.stderr.isTTY && !args.json && status.state === "downloading")
-          process.stderr.write(`\r${Math.round((status.progress ?? 0) * 100)}% of ${BrainEmbedManifest.megabytes(status.total ?? bytes)}`)
+          process.stderr.write(
+            `\r${Math.round((status.progress ?? 0) * 100)}% of ${BrainEmbedManifest.megabytes(status.total ?? bytes)}`,
+          )
       }
     }).pipe(Effect.forkChild)
     const result = yield* embed.download(picked).pipe(
@@ -665,6 +742,7 @@ export const MemoryModelInstallCommand = effectCmd({
       .option("from", { describe: "the folder that holds the model's files", type: "string", demandOption: true })
       .option("json", { describe: "print JSON", type: "boolean", default: false }),
   handler: Effect.fn("Cli.memory.model.install")(function* (args) {
+    yield* CliOwnerGate.refuse("change the search model")
     const memory = yield* where
     const embed = yield* BrainEmbed.Service
     yield* embed
@@ -681,6 +759,7 @@ export const MemoryModelRemoveCommand = effectCmd({
   command: "remove",
   describe: "delete the downloaded search model and the vectors made with it",
   handler: Effect.fn("Cli.memory.model.remove")(function* () {
+    yield* CliOwnerGate.refuse("change the search model")
     const knowledge = yield* BrainKnowledge.Service
     yield* knowledge.removeModel()
     UI.println("Removed. Vector searches documents by keywords and code links until you download the model again.")
@@ -691,9 +770,12 @@ export const MemoryModelPauseCommand = effectCmd({
   command: "pause",
   describe: "hold embedding documents in the background, until you resume it",
   handler: Effect.fn("Cli.memory.model.pause")(function* () {
+    yield* CliOwnerGate.refuse("change the search model")
     const embed = yield* BrainEmbed.Service
     yield* embed.pause(true)
-    UI.println("Paused. What is embedded is still searched by meaning; the rest waits until `vector memory model resume`.")
+    UI.println(
+      "Paused. What is embedded is still searched by meaning; the rest waits until `vector memory model resume`.",
+    )
   }),
 })
 
@@ -701,6 +783,7 @@ export const MemoryModelResumeCommand = effectCmd({
   command: "resume",
   describe: "go on embedding documents in the background",
   handler: Effect.fn("Cli.memory.model.resume")(function* () {
+    yield* CliOwnerGate.refuse("change the search model")
     const embed = yield* BrainEmbed.Service
     yield* embed.pause(false)
     UI.println("Resumed.")
@@ -714,14 +797,18 @@ function modelLines(status: BrainSchema.ModelStatus) {
   const embedded = status.embedded
   const progress =
     embedded && embedded.total > 0
-      ? [`Embedded: ${embedded.done.toLocaleString("en-US")} of ${embedded.total.toLocaleString("en-US")} passages and records in this repository${status.paused ? " (paused)" : ""}.`]
+      ? [
+          `Embedded: ${embedded.done.toLocaleString("en-US")} of ${embedded.total.toLocaleString("en-US")} passages and records in this repository${status.paused ? " (paused)" : ""}.`,
+        ]
       : []
   if (status.state === "absent")
     return [
       "Search by meaning is not downloaded: Vector searches documents by keywords and code links.",
       ...(status.downloads === false
         ? ["Downloads are turned off here. Install the model with `vector memory model install --from <folder>`."]
-        : [`Download the ${BrainEmbedManifest.megabytes(status.options?.[0]?.bytes ?? 0)} model once with \`vector memory model download\`.`]),
+        : [
+            `Download the ${BrainEmbedManifest.megabytes(status.options?.[0]?.bytes ?? 0)} model once with \`vector memory model download\`.`,
+          ]),
       ...(status.error ? [`Last attempt: ${status.error}`] : []),
     ]
   if (status.state === "downloading" || status.state === "verifying")
@@ -794,7 +881,11 @@ const allRecords = Effect.fnUntraced(function* (document: string, kind?: BrainSc
 })
 
 // Why a file was not added, in the CLI's words: a new version is the user's call, made with --replace.
-function refusal(result: { readonly reason: string; readonly message: string; readonly document?: BrainSchema.Document }) {
+function refusal(result: {
+  readonly reason: string
+  readonly message: string
+  readonly document?: BrainSchema.Document
+}) {
   if (result.reason !== "version" || !result.document) return result.message
   return `${result.document.name} is already document #${result.document.ordinal} (v${result.document.version}, added ${day(result.document.createdAt)}). Run again with --replace to read this file as its next version.`
 }
@@ -823,7 +914,9 @@ function reviewLine(item: BrainSchema.ReviewItem) {
   const detail = item.detail
   const text = (value: unknown) => (typeof value === "string" ? value : "")
   const side = (value: unknown) =>
-    value && typeof value === "object" && "id" in value && "text" in value ? `[${text(value.id)}] ${text(value.text)}` : ""
+    value && typeof value === "object" && "id" in value && "text" in value
+      ? `[${text(value.id)}] ${text(value.text)}`
+      : ""
   const head = `${UI.Style.TEXT_HIGHLIGHT}${item.id}${UI.Style.TEXT_NORMAL} ${item.kind}`
   if (item.kind === "drift" && detail.type === "value")
     return `${head}: [${item.a}] says ${text(detail.document)}; the code says ${text(detail.code)} (${text(detail.path)}:${String(detail.line ?? "")})`

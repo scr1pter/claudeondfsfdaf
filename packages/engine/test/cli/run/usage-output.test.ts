@@ -65,3 +65,43 @@ test("task JSON omits editable aggregate quantities including forged proof and n
     expect(toolForOutput(unrelated)).toBe(unrelated)
   }
 })
+
+test("workflow JSON omits aggregate metadata and private checkpoints while preserving the stored part", () => {
+  const part: ToolPart = {
+    id: "part",
+    sessionID: "session",
+    messageID: "message",
+    type: "tool",
+    tool: "workflow",
+    callID: "call",
+    state: {
+      status: "completed",
+      input: {},
+      output: "Report",
+      title: "Workflow",
+      time: { start: 1, end: 2 },
+      metadata: {
+        usage: { total: 987654, tokens: { input: 987654 }, tokensOwnOnly: true, cost: 0.12 },
+        workflow: {
+          role: "run",
+          progress: {
+            stage: "review",
+            tokens: { used: 987654 },
+            runtime: { sessions: { child: { tokensOwnOnly: true, total: 987654 } } },
+          },
+        },
+      },
+    },
+  }
+  const before = JSON.stringify(part)
+  const printed = toolForOutput(part)
+  expect(JSON.stringify(printed)).not.toContain("987654")
+  expect(JSON.stringify(printed)).not.toContain('"runtime"')
+  expect(JSON.stringify(printed)).not.toContain("tokensOwnOnly")
+  if (printed.state.status !== "completed") throw new Error("Workflow output changed state")
+  expect(printed.state.metadata).toMatchObject({
+    usage: { cost: 0.12 },
+    workflow: { role: "run", progress: { stage: "review" } },
+  })
+  expect(JSON.stringify(part)).toBe(before)
+})

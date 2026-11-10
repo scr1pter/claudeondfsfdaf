@@ -1,0 +1,6 @@
+{
+  "id": "identity",
+  "description": "The built-in prompt, unchanged. The control arm: it must change nothing on the deterministic suites.",
+  "agent": "build",
+  "base": "packages/engine/src/session/prompt/anthropic.txt"
+}

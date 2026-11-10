@@ -10,7 +10,8 @@ import * as ConfigMarkdown from "./markdown"
 
 const decodeInfo = Schema.decodeUnknownExit(ConfigCommandV1.Info)
 
-export async function load(dir: string) {
+// `allowed` leaves out a prompt file that changed since the owner last approved it (PromptTrust).
+export async function load(dir: string, allowed: (file: string) => boolean) {
   const result: Record<string, ConfigCommandV1.Info> = {}
   for (const item of await Glob.scan("{command,commands}/**/*.md", {
     cwd: dir,
@@ -18,6 +19,7 @@ export async function load(dir: string) {
     dot: true,
     symlink: true,
   })) {
+    if (!allowed(item)) continue
     const md = await ConfigMarkdown.parse(item).catch(() => undefined)
     if (!md) continue
 

@@ -96,6 +96,8 @@ type RunFooterViewProps = {
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycle: () => void
   onInterrupt: () => boolean
+  onInterruptAll?: () => void
+  onResumeInterrupted?: () => void
   onBackground?: () => void
   onEditorOpen: (input: { value: string }) => Promise<string | undefined>
   onInputClear: () => void
@@ -219,6 +221,15 @@ export function RunFooterView(props: RunFooterViewProps) {
         keymap
           .getCommandBindings({ visibility: "registered", commands: ["session.interrupt"] })
           .get("session.interrupt")?.[0]?.sequence,
+        props.tuiConfig,
+      ) ?? "",
+  )
+  const interruptAllShortcut = useKeymapSelector(
+    (keymap: OpenTuiKeymap) =>
+      formatKeySequence(
+        keymap
+          .getCommandBindings({ visibility: "registered", commands: ["session.interrupt.all"] })
+          .get("session.interrupt.all")?.[0]?.sequence,
         props.tuiConfig,
       ) ?? "",
   )
@@ -533,6 +544,21 @@ export function RunFooterView(props: RunFooterViewProps) {
     bindings: props.tuiConfig.keybinds.get("session.background"),
   }))
 
+  // "Stop including helpers" (5.I.6) has its own key, unbound until the keybind config names one.
+  useBindings(() => ({
+    mode: VECTOR_BASE_MODE,
+    enabled: active().type === "prompt" && route().type === "composer" && props.onInterruptAll !== undefined,
+    commands: [
+      {
+        name: "session.interrupt.all",
+        title: "Stop including helpers",
+        category: "Session",
+        run: () => props.onInterruptAll?.(),
+      },
+    ],
+    bindings: props.tuiConfig.keybinds.get("session.interrupt.all"),
+  }))
+
   useBindings(() => ({
     mode: VECTOR_BASE_MODE,
     enabled: active().type === "prompt" && route().type === "composer" && tabs().length > 0,
@@ -731,6 +757,23 @@ export function RunFooterView(props: RunFooterViewProps) {
                               closePanel()
                             }}
                             onExit={props.onExit}
+                            interruptAllShortcut={interruptAllShortcut()}
+                            onInterruptAll={
+                              props.onInterruptAll
+                                ? () => {
+                                    closePanel()
+                                    props.onInterruptAll?.()
+                                  }
+                                : undefined
+                            }
+                            onResumeInterrupted={
+                              props.onResumeInterrupted
+                                ? () => {
+                                    closePanel()
+                                    props.onResumeInterrupted?.()
+                                  }
+                                : undefined
+                            }
                           />
                         </Match>
                         <Match when={skilling()}>

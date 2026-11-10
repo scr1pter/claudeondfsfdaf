@@ -67,8 +67,10 @@ import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
 import { memoryLearned } from "./memory-learned"
+import { ReplyFooter } from "./reply-footer"
 import { chipTitle, cites, decorateCitations, delivered, segments, type KnowledgeCard } from "./knowledge-citations"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
+import { WorkflowPart, worktreeChip } from "./workflow-part"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -491,6 +493,13 @@ export function getToolInfo(tool: string, input: any = {}): ToolInfo {
         subtitle: input.description,
       }
     }
+    case "workflow":
+      return {
+        icon: "task",
+        title: "Workflow",
+        subtitle:
+          typeof input.title === "string" ? input.title : typeof input.name === "string" ? input.name : undefined,
+      }
     case "bash":
       return {
         icon: "console",
@@ -1420,20 +1429,9 @@ export const ToolRegistry = {
   render: getTool,
 }
 
-/** What the app draws under a finished reply, below its copy button and details. */
-export type ReplyFooterComponent = Component<{ message: AssistantMessage }>
-
-const replyFooter: { component?: ReplyFooterComponent } = {}
-
-/**
- * The app's slot under a reply, such as the "Learned 2 things" chip for what Vector learned from the request it
- * answers. session-ui has no engine client of its own, so the app registers the component that reads one.
- */
-export const ReplyFooter = {
-  register(component: ReplyFooterComponent) {
-    replyFooter.component = component
-  },
-}
+// What the app draws under a finished reply: every registered component, in registration order (reply-footer.ts).
+export { ReplyFooter } from "./reply-footer"
+export type { ReplyFooterComponent } from "./reply-footer"
 
 function ToolFileAccordion(props: { path: string; actions?: JSX.Element; children: JSX.Element }) {
   const value = createMemo(() => props.path || "tool-file")
@@ -1744,10 +1742,10 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
             </Show>
           </div>
         </Show>
-        <Show
-          when={showCopy() && props.message.role === "assistant" && !streaming() ? replyFooter.component : undefined}
-        >
-          {(footer) => <Dynamic component={footer()} message={props.message as AssistantMessage} />}
+        <Show when={showCopy() && props.message.role === "assistant" && !streaming()}>
+          <For each={ReplyFooter.list()}>
+            {(footer) => <Dynamic component={footer} message={props.message as AssistantMessage} />}
+          </For>
         </Show>
       </div>
     </Show>
@@ -2275,6 +2273,8 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
     props.indexed ? props.status === "running" : props.status === "pending" || props.status === "running",
   )
   const stateLabel = createMemo(() => (props.indexed ? taskItemLabel(props.metadata.status, props.status) : undefined))
+  // An isolated child's worktree (5.I.4): "3 files changed · branch" while its changes wait for review, or its state.
+  const worktree = createMemo(() => worktreeChip(props.metadata.isolation))
 
   const href = createMemo(() => sessionLink(childSessionId(), location.pathname, data.sessionHref))
   const clickable = createMemo(() => !!(childSessionId() && (data.navigateToSession || href())))
@@ -2327,6 +2327,13 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
           <Show when={stateLabel()}>
             <span data-slot="task-tool-state">{stateLabel()}</span>
           </Show>
+          <Show when={worktree()}>
+            {(label) => (
+              <span data-slot="basic-tool-tool-arg" data-component="task-tool-worktree">
+                {label()}
+              </span>
+            )}
+          </Show>
           <Show when={props.indexed && typeof props.metadata.error === "string" && props.metadata.error}>
             {(error) => <span data-slot="task-tool-error">{error()}</span>}
           </Show>
@@ -2354,6 +2361,11 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
     />
   )
 }
+
+ToolRegistry.register({
+  name: "workflow",
+  render: WorkflowPart,
+})
 
 ToolRegistry.register({
   name: "bash",

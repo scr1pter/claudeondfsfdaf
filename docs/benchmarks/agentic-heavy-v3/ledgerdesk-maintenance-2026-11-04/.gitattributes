@@ -1,0 +1,3 @@
+# Preserve original snapshot bytes, including CRLF and final empty lines.
+*-source/** -text whitespace=cr-at-eol,-blank-at-eof
+blinded-reviewer-*-locked.json -text

@@ -26,12 +26,14 @@ import { SessionTable } from "@vectordevai/core/session/sql"
 import sessionMetadataMigration from "@vectordevai/core/database/migration/20260511173437_session-metadata"
 import sessionInternalHelpersMigration from "@vectordevai/core/database/migration/20261011044552_session_internal_helpers"
 import classifyEarlyReviewHelpersMigration from "@vectordevai/core/database/migration/20261015171500_classify_early_review_helpers"
+import backgroundJobMigration from "@vectordevai/core/database/migration/20261028021005_background_job"
 import sessionCodiumStepsMigration from "@vectordevai/core/database/migration/20261031070337_session_codium_steps"
 import sessionTokenProvenanceMigration from "@vectordevai/core/database/migration/20261101020803_session_token_provenance"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@vectordevai/core/database/database"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SessionV1 } from "@vectordevai/core/v1/session"
+import { WorkflowCheckpointStore } from "@vectordevai/core/workflow-checkpoint-store"
 import { tmpdir } from "./fixture/tmpdir"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
@@ -130,6 +132,78 @@ describe("DatabaseMigration", () => {
           { name: "session_message_session_time_created_id_idx" },
           { name: "session_message_session_type_seq_idx" },
         ])
+      }),
+    )
+  })
+
+  test("creates the background job table and its indexes, and a deleted session takes its rows along", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* DatabaseMigration.apply(db)
+        // The migration itself, as an existing database runs it.
+        yield* db.run(sql`DROP TABLE background_job`)
+        yield* db.run(sql`DELETE FROM migration WHERE id = ${backgroundJobMigration.id}`)
+        yield* DatabaseMigration.applyOnly(db, [backgroundJobMigration])
+
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'background_job' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+          ),
+        ).toEqual([{ name: "background_job_parent_idx" }, { name: "background_job_status_directory_idx" }])
+        expect(
+          yield* db.all(sql`SELECT name FROM pragma_index_info('background_job_status_directory_idx') ORDER BY seqno`),
+        ).toEqual([{ name: "status" }, { name: "directory" }])
+
+        yield* db.run(
+          sql`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/project', 1, 1, '[]')`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES ('session', 'global', 'session', '/project', 'Parent', 'test', 1, 1)`,
+        )
+        yield* db.run(
+          sql`INSERT INTO background_job (id, type, parent_session_id, directory, status, owner_runtime, owner_pid, owner_boot, owner_machine, started_at, time_created, time_updated) VALUES ('job', 'task', 'session', '/project', 'running', 'process:instance', 1, 1, 'machine', 1, 1, 1)`,
+        )
+        expect(yield* db.get(sql`SELECT background, reported_at FROM background_job WHERE id = 'job'`)).toEqual({
+          background: 0,
+          reported_at: null,
+        })
+
+        yield* db.run(sql`DELETE FROM session WHERE id = 'session'`)
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM background_job`)).toEqual({ count: 0 })
+      }),
+    )
+  })
+
+  test("keeps one workflow checkpoint per run: a stale attempt never replaces it, and its session takes it along", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* DatabaseMigration.apply(db)
+        yield* db.run(
+          sql`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/project', 1, 1, '[]')`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES ('ses_run', 'global', 'run', '/project', 'Run', 'test', 1, 1)`,
+        )
+        const store = WorkflowCheckpointStore.make(db as never)
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 2, data: '{"version":1,"n":2}' })).toBe(true)
+        // An older attempt's late save is refused and leaves the newer checkpoint in place.
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 1, data: '{"version":1,"n":1}' })).toBe(false)
+        expect(yield* store.read("ses_run")).toEqual({
+          sessionID: "ses_run",
+          attempt: 2,
+          digest: WorkflowCheckpointStore.digest('{"version":1,"n":2}'),
+          data: '{"version":1,"n":2}',
+        })
+        // The same text again is a successful no-op; a newer attempt takes over even identical text.
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 2, data: '{"version":1,"n":2}' })).toBe(true)
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 3, data: '{"version":1,"n":2}' })).toBe(true)
+        expect((yield* store.read("ses_run"))?.attempt).toBe(3)
+        yield* db.run(sql`DELETE FROM session WHERE id = 'ses_run'`)
+        expect(yield* store.read("ses_run")).toBeUndefined()
       }),
     )
   })

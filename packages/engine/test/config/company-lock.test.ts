@@ -6,7 +6,7 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { Config } from "../../src/config/config"
 import { Server } from "../../src/server/server"
 import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { disposeAllInstances, resetPromptTrust, tmpdir } from "../fixture/fixture"
 import { useManagedPolicyFixture } from "../fixture/managed-policy"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
 
@@ -33,8 +33,12 @@ const ELSEWHERE = "https://llm.elsewhere.example.com"
 const GITHUB = { source: "github", reason: "Pull requests", added_at: 1, added_by: "cli" as const }
 
 // An earlier test file in the run may leave a global config behind, and a PATCH writes to vector.jsonc before
-// vector.json, the file these tests seed and read.
-beforeEach(() => GLOBAL_FILES.forEach((file) => rmSync(file, { force: true })))
+// vector.json, the file these tests seed and read. What a test seeds there is the owner's config from before any
+// approval, so no earlier test's prompt-trust baseline holds it.
+beforeEach(() => {
+  GLOBAL_FILES.forEach((file) => rmSync(file, { force: true }))
+  resetPromptTrust()
+})
 
 afterEach(async () => {
   ENVIRONMENT.forEach((key) => {

@@ -1,0 +1,84 @@
+{
+  "functionalVerdict": "product_failure",
+  "nativeAuditVerdict": "review_required",
+  "nativeAuditFailureType": "StudyError",
+  "reviewRequired": true,
+  "stopReason": "admission_policy_or_state_failure",
+  "settlementComplete": true,
+  "measuredUsd": 4.6033534,
+  "providerRequests": 300,
+  "autonomousActorsAdmitted": 7,
+  "receiptUsageByNativeRole": {
+    "backend_api": {
+      "forwardedRequests": 25,
+      "reconciledReceipts": 25,
+      "knownMeasuredUsd": 0.3248583
+    },
+    "backend_coordinator": {
+      "forwardedRequests": 83,
+      "reconciledReceipts": 83,
+      "knownMeasuredUsd": 0.8928874
+    },
+    "backend_data": {
+      "forwardedRequests": 29,
+      "reconciledReceipts": 29,
+      "knownMeasuredUsd": 0.4401392
+    },
+    "frontend_worker": {
+      "forwardedRequests": 21,
+      "reconciledReceipts": 21,
+      "knownMeasuredUsd": 0.3220274
+    },
+    "lead": {
+      "forwardedRequests": 108,
+      "reconciledReceipts": 108,
+      "knownMeasuredUsd": 1.5543183
+    },
+    "qa_specialist": {
+      "forwardedRequests": 22,
+      "reconciledReceipts": 22,
+      "knownMeasuredUsd": 0.6372186
+    },
+    "team_judge": {
+      "forwardedRequests": 12,
+      "reconciledReceipts": 12,
+      "knownMeasuredUsd": 0.4319042
+    }
+  },
+  "sourceRevision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+  "allChargesRetained": true,
+  "finalSourceManifestSha256": "b0de879bbdf21c56fb3d1cb90a46116e3db97fa4ccabb0d41d647c5235c9fbfd",
+  "timingScope": "Serialized inference forwards; not unrestricted production throughput",
+  "attempts": [
+    {
+      "index": 1,
+      "process": {
+        "exitCode": 0,
+        "timedOut": false,
+        "stopReason": null,
+        "ownedTreeQuiesced": true,
+        "wallMs": 2330578.0
+      },
+      "gate": {
+        "verdict": "product_failure",
+        "checksPassed": 53,
+        "checksTotal": 54
+      }
+    },
+    {
+      "index": 2,
+      "process": {
+        "exitCode": 1,
+        "timedOut": false,
+        "stopReason": "admission_policy_or_state_failure",
+        "ownedTreeQuiesced": true,
+        "wallMs": 437312.0
+      },
+      "gate": {
+        "verdict": null,
+        "checksPassed": null,
+        "checksTotal": null
+      }
+    }
+  ]
+}

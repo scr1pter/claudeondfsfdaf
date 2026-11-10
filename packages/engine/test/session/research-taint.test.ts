@@ -87,12 +87,13 @@ describe("SessionMemory.taint for research", () => {
     expect(SessionMemory.taint(history({ agent: "build" }))).toBeUndefined()
   })
 
-  test("a task call whose subagent read the web holds its parent as web; otherwise as subagent", () => {
+  // An MCP hold passes up as mcp, not reduced to subagent (5.D.6).
+  test("a task call whose subagent read the web holds its parent as web, one that ran an MCP tool as mcp; otherwise as subagent", () => {
     expect(SessionMemory.taint(history({ tools: [{ tool: "task", metadata: { [SessionMemory.HOLD]: "web" } }] }))).toBe(
       "web",
     )
     expect(SessionMemory.taint(history({ tools: [{ tool: "task", metadata: { [SessionMemory.HOLD]: "mcp" } }] }))).toBe(
-      "subagent",
+      "mcp",
     )
     expect(SessionMemory.taint(history({ tools: [{ tool: "task" }] }))).toBe("subagent")
   })

@@ -51,6 +51,22 @@ function data(validate: (value: any) => void) {
   }
 }
 
+// An unknown learned skill reaches the memory handler and is refused as not found, whatever the route asks of it.
+function skillNotFound(body: unknown) {
+  object(body)
+  check(
+    body.name === "MemoryError" && isRecord(body.data) && body.data.code === "not-found",
+    "a learned skill that is not there should be refused as not found",
+  )
+}
+
+// A task with no isolation record reaches the task manager and is refused as not found. Merge and discard are sent
+// without a body, as the SDK sends them with no option, so a payload refusal cannot pass for this answer.
+function notIsolated(body: unknown) {
+  object(body)
+  check(body.code === "not_found", "a task with no isolated changes should be refused as not found")
+}
+
 function locationData(validate: (value: any) => void) {
   return (body: any) => {
     object(body)
@@ -285,6 +301,42 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  // The first start records the owner's global prompt files as they are (section 8.3), so nothing is held here.
+  http.protected.get("/config/prompt-trust", "config.promptTrust.get").json(
+    200,
+    (body) => {
+      object(body)
+      array(body.held)
+      array(body.files)
+      check(
+        body.held.length === 0 && body.files.length === 0,
+        "the first start records the owner's prompt files as they are, so nothing is held",
+      )
+    },
+    "status",
+  ),
+  http.protected
+    .post("/config/prompt-trust/approve", "config.promptTrust.approve")
+    .mutating()
+    .at((ctx) => ({ path: "/config/prompt-trust/approve", headers: ctx.headers(), body: { files: [] } }))
+    .json(
+      200,
+      (body) => {
+        object(body)
+        check(body.approved === 0, "approving the empty list the owner was shown approves nothing")
+      },
+      "status",
+    ),
+  // A file the owner was never shown is never approved unseen: the list must be read again.
+  http.protected
+    .post("/config/prompt-trust/approve", "config.promptTrust.approve.stale")
+    .mutating()
+    .at((ctx) => ({
+      path: "/config/prompt-trust/approve",
+      headers: ctx.headers(),
+      body: { files: [{ path: "/nowhere/.vector/agents/unseen.md", fingerprint: "0".repeat(64) }] },
+    }))
+    .status(409),
   http.protected.get("/project", "project.list").json(200, array, "status"),
   http.protected.get("/project/current", "project.current").json(
     200,
@@ -895,6 +947,83 @@ const scenarios: Scenario[] = [
       check(typeof body.repositoryDocs === "boolean", "memory settings should say whether repository docs are read")
       check(body.keepOriginals === false, "originals are not kept unless the user turns it on")
     }),
+  http.protected.get("/memory/skills", "memory.skills.list").json(200, (body) => {
+    object(body)
+    check(Array.isArray(body.skills) && body.skills.length === 0, "a new repository has no learned skills")
+    check(
+      isRecord(body.settings) && body.settings.skills === "review" && body.settings.skillDrafter === "local-only",
+      "skills wait for review and drafts are worded locally by default",
+    )
+  }),
+  http.protected
+    .get("/memory/skills", "memory.skills.list.review")
+    .at((ctx) => ({ path: "/memory/skills?filter=review", headers: ctx.headers() }))
+    .json(200, (body) => {
+      object(body)
+      check(Array.isArray(body.skills) && body.skills.length === 0, "no drafts wait in a new repository")
+    }),
+  http.protected
+    .get("/memory/skills/{memoryID}", "memory.skills.get.missing")
+    .at((ctx) => ({ path: route("/memory/skills/{memoryID}", { memoryID: "s0none" }), headers: ctx.headers() }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .patch("/memory/skills/{memoryID}", "memory.skills.update.missing")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/memory/skills/{memoryID}", { memoryID: "s0none" }),
+      headers: ctx.headers(),
+      body: { action: "approve" },
+    }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .delete("/memory/skills/{memoryID}", "memory.skills.forget.missing")
+    .mutating()
+    .at((ctx) => ({ path: route("/memory/skills/{memoryID}", { memoryID: "s0none" }), headers: ctx.headers() }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .get("/memory/skills/{memoryID}/share", "memory.skills.sharePreview.missing")
+    .at((ctx) => ({ path: route("/memory/skills/{memoryID}/share", { memoryID: "s0none" }), headers: ctx.headers() }))
+    .json(400, skillNotFound, "status"),
+  http.protected
+    .post("/memory/skills/{memoryID}/share", "memory.skills.share.missing")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/memory/skills/{memoryID}/share", { memoryID: "s0none" }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .json(400, skillNotFound, "status"),
+  http.protected.get("/memory/workflow", "memory.workflow.get").json(200, (body) => {
+    object(body)
+    check(
+      body.mode === "apply" && body.explore === false,
+      "workflow insights apply learned defaults and do not explore by default",
+    )
+    check(
+      Array.isArray(body.tiers) &&
+        body.tiers.map((item) => (isRecord(item) ? item.tier : undefined)).join(",") === "light,standard,thorough",
+      "workflow insights should list every size",
+    )
+    check(
+      body.tiers.every((item) => isRecord(item) && Array.isArray(item.arms) && item.arms.length === 0),
+      "a new repository has no runs",
+    )
+  }),
+  http.protected
+    .delete("/memory/workflow", "memory.workflow.reset")
+    .mutating()
+    .json(
+      200,
+      (body) => {
+        object(body)
+        check(body.removed === 0, "a repository with no runs forgets none")
+      },
+      "status",
+    ),
+  http.protected
+    .delete("/memory/workflow", "memory.workflow.reset.invalid")
+    .at((ctx) => ({ path: "/memory/workflow?tier=chat", headers: ctx.headers() }))
+    .status(400),
   http.protected.get("/memory/model", "memory.model.get").json(200, (body) => {
     object(body)
     check(body.state === "absent", "no search model is downloaded until the user asks")
@@ -1188,6 +1317,38 @@ const scenarios: Scenario[] = [
   http.protected.get("/experimental/capabilities", "experimental.capabilities.get").json(200, (body) => {
     check(typeof body === "object" && body !== null, "capabilities should be an object")
     check("backgroundSubagents" in body, "capabilities should report background subagents")
+    check(
+      typeof (body as { subagentLimits?: unknown }).subagentLimits === "boolean",
+      "capabilities should report whether task lists carry subagent limits",
+    )
+    check(
+      (body as { workDelegation?: unknown }).workDelegation === true,
+      "capabilities should report that Work requests are offered subagents",
+    )
+    check(
+      (body as { sessionStop?: unknown }).sessionStop === true,
+      "capabilities should report the route that stops a session with its helpers",
+    )
+    check(
+      (body as { taskPromote?: unknown }).taskPromote === true,
+      "capabilities should report the route that moves a session's tasks to the background",
+    )
+    check(
+      (body as { taskResume?: unknown }).taskResume === true,
+      "capabilities should report the route that resumes a session's stopped or interrupted tasks",
+    )
+    check(
+      (body as { taskAttention?: unknown }).taskAttention === true,
+      "capabilities should report that tasks say when they wait on the user",
+    )
+    check(
+      (body as { taskIsolation?: unknown }).taskIsolation === true,
+      "capabilities should report the routes that review, merge and discard isolated tasks",
+    )
+    check(
+      (body as { backgroundShells?: unknown }).backgroundShells === true,
+      "capabilities should report that task lists, stop and wait reach background commands",
+    )
   }),
   http.protected
     .post("/experimental/session/{sessionID}/background", "experimental.session.background")
@@ -1200,6 +1361,83 @@ const scenarios: Scenario[] = [
     .json(200, (body) => {
       check(body === false, "background route should be a no-op without running subagents")
     }),
+  http.protected
+    .post("/experimental/session/{sessionID}/stop", "experimental.session.stop")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Session stop owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/stop", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { helpers: true },
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      check(body.aborted === false, "stopping an idle session should abort no turn")
+      check(body.tasks.length === 0, "an idle session should have no helpers to stop")
+      check(
+        body.shells === 0 && body.excluded === 0 && body.skipped === 0,
+        "an idle session should have no commands or workspaces to count",
+      )
+    }),
+  http.protected.get("/experimental/workflow/saved", "experimental.workflow.saved").json(200, (body) => {
+    object(body)
+    array(body.workflows)
+  }),
+  http.protected
+    .post("/experimental/workflow/validate", "experimental.workflow.validate.invalid")
+    .withLlm()
+    .at((ctx) => ({ path: "/experimental/workflow/validate", headers: ctx.headers(), body: { spec: "{}" } }))
+    .json(200, (body) => {
+      object(body)
+      check(body.ok === false, "invalid workflow must not validate")
+      array(body.issues)
+    }),
+  http.protected
+    .post("/experimental/session/{sessionID}/workflow", "experimental.workflow.start.invalid")
+    .withLlm()
+    .seeded((ctx) => ctx.session({ title: "Invalid workflow owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { spec: "{}" },
+    }))
+    .status(400),
+  http.protected
+    .get("/experimental/session/{sessionID}/workflow", "experimental.workflow.list")
+    .seeded((ctx) => ctx.session({ title: "Workflow board owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.runs)
+      check(body.runs.length === 0, "fresh workflow board must be empty")
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/workflow/{runID}", "experimental.workflow.get.missing")
+    .seeded((ctx) => ctx.session({ title: "Workflow detail owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow/{runID}", {
+        sessionID: ctx.state.id,
+        runID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/experimental/session/{sessionID}/workflow/{runID}/resume", "experimental.workflow.resume.missing")
+    .seeded((ctx) => ctx.session({ title: "Workflow resume owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow/{runID}/resume", {
+        sessionID: ctx.state.id,
+        runID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .get("/experimental/session/{sessionID}/tasks", "experimental.task.list")
@@ -1212,6 +1450,48 @@ const scenarios: Scenario[] = [
       object(body)
       array(body.tasks)
       check(body.tasks.length === 0 && body.truncated === false, "a fresh task board should be empty")
+      object(body.limits)
+      const limits = body.limits as Record<string, unknown>
+      check(
+        ["running", "queued", "maxRunning", "launched", "maxPerRequest"].every(
+          (key) => typeof limits[key] === "number",
+        ),
+        "the task board should carry the conversation's subagent counts and limits",
+      )
+      check(
+        limits.running === 0 && limits.launched === 0 && limits.maxRunning === 8 && limits.maxPerRequest === 32,
+        "a fresh conversation should have no subagents and the default limits",
+      )
+      object(limits.spend)
+      check(
+        typeof (limits.spend as Record<string, unknown>).spentUsd === "number",
+        "the task board should carry the request's subagent spend",
+      )
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/tasks", "experimental.task.list.active")
+    .seeded((ctx) => ctx.session({ title: "Active task board owner" }))
+    .at((ctx) => ({
+      path: `${route("/experimental/session/{sessionID}/tasks", { sessionID: ctx.state.id })}?active=true&descendants=true`,
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      check(body.tasks.length === 0 && body.truncated === false, "a fresh active task board should be empty")
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/tasks", "experimental.task.list.shells")
+    .seeded((ctx) => ctx.session({ title: "Background command board owner" }))
+    .at((ctx) => ({
+      path: `${route("/experimental/session/{sessionID}/tasks", { sessionID: ctx.state.id })}?shells=true`,
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      array(body.shells)
+      check(body.shells.length === 0, "a fresh conversation should have no background commands")
     }),
   http.protected
     .get("/experimental/session/{sessionID}/tasks/{taskID}", "experimental.task.inspect.missing")
@@ -1249,6 +1529,71 @@ const scenarios: Scenario[] = [
       array(body.tasks)
       check(body.tasks.length === 0, "stopping an empty board should not start work")
     }),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/background", "experimental.task.background")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Task background owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/background", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      check(body.tasks.length === 0, "a fresh session should have no task to move to the background")
+    }),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/resume", "experimental.task.resume.missing")
+    .seeded((ctx) => ctx.session({ title: "Task resume owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/resume", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { taskIDs: ["ses_missing"] },
+    }))
+    .status(400),
+  http.protected
+    .get("/experimental/session/{sessionID}/tasks/{taskID}/changes", "experimental.task.changes.missing")
+    .seeded((ctx) => ctx.session({ title: "Task changes owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/{taskID}/changes", {
+        sessionID: ctx.state.id,
+        taskID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(400, notIsolated),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/{taskID}/merge", "experimental.task.merge.missing")
+    .seeded((ctx) => ctx.session({ title: "Task merge owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/{taskID}/merge", {
+        sessionID: ctx.state.id,
+        taskID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(400, notIsolated),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/{taskID}/discard", "experimental.task.discard.missing")
+    .seeded((ctx) => ctx.session({ title: "Task discard owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/{taskID}/discard", {
+        sessionID: ctx.state.id,
+        taskID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(400, notIsolated),
+  http.protected
+    .post("/experimental/session/{sessionID}/tasks/resume", "experimental.task.resume.invalid")
+    .seeded((ctx) => ctx.session({ title: "Task resume owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/tasks/resume", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { taskIDs: [] },
+    }))
+    .status(400),
   http.protected
     .post("/experimental/session/{sessionID}/tasks/wait", "experimental.task.wait.invalid")
     .seeded((ctx) => ctx.session({ title: "Task wait owner" }))

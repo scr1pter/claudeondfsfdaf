@@ -1,4 +1,4 @@
-import { useNavigate } from "@solidjs/router"
+import { useNavigate, useParams } from "@solidjs/router"
 import { useCommand, type CommandOption } from "@/context/command"
 import { useDialog } from "@vectordevai/ui/context/dialog"
 import { previewSelectedLines } from "@vectordevai/session-ui/pierre/selection-bridge"
@@ -23,6 +23,19 @@ import { requireServerKey } from "@/utils/session-route"
 import { announceWorkspaceMode } from "@/utils/workspace-mode"
 import { createSessionOwnership } from "./session-ownership"
 import { BACKGROUND_TASKS_COMMAND, backgroundTasksPane } from "@/features/background-tasks/background-tasks-state"
+import { makeEventListener } from "@solid-primitives/event-listener"
+import { useServerSDK } from "@/context/server-sdk"
+import { ServerConnection } from "@/context/server"
+import { useFollowups } from "@/features/followup/followup-queue"
+import { useBackgroundTasks } from "@/features/background-tasks/use-background-tasks"
+import { helperTargets, stopSession } from "@/features/background-tasks/stop-helpers"
+import { isLive } from "@/features/background-tasks/subagent-model"
+import {
+  appendWorkflowRequest,
+  WORKFLOW_EVENT,
+  type WorkflowOpenDetail,
+} from "@/features/background-tasks/workflow-model"
+import { WORKFLOW_COMMAND } from "@/components/prompt-input/slash-popover"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -601,5 +614,161 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     ...messageCmds(),
     ...mcpCmds(),
     ...permissionsCmds(),
+  ])
+}
+
+/*
+ * Commands that act on the open conversation's helpers (5.I.4): Move to background (Ctrl+Alt+B), Stop including
+ * helpers, Resume interrupted helpers, and /workflow. They need the Background tasks state, which the session page
+ * provides below its own component body, so the page mounts SessionTaskCommands inside its provider.
+ */
+export function SessionTaskCommands() {
+  useSessionTaskCommands()
+  return null
+}
+
+export const useSessionTaskCommands = () => {
+  const command = useCommand()
+  const dialog = useDialog()
+  const language = useLanguage()
+  const prompt = usePrompt()
+  const sdk = useSDK()
+  const serverSDK = useServerSDK()
+  const sync = useSync()
+  const followups = useFollowups()
+  const tasks = useBackgroundTasks()
+  const params = useParams()
+  const sessionCommand = withCategory(language.t("command.category.session"))
+
+  const root = () => {
+    const id = params.id
+    return id && tasks?.rootID() === id ? id : undefined
+  }
+  const agents = () => tasks?.cards().flatMap((card) => card.agents) ?? []
+  const live = () => agents().filter((agent) => isLive(agent.status))
+  const promotable = () => (tasks ? tasks.promotable(live()) : [])
+  const blocked = () => !!tasks?.promoteBlocked(live())
+  const resumable = () =>
+    tasks?.capabilities().taskResume ? tasks.interrupted().filter((agent) => agent.task?.controls.resume === true) : []
+
+  // Move to background frees the main turn from every blocking subagent the engine can move, batches included.
+  const promote = async () => {
+    if (!tasks) return
+    if (blocked()) {
+      showToast({ title: language.t("backgroundTasks.promote.batchUnsupported") })
+      return
+    }
+    if (!promotable().length) {
+      showToast({
+        title: language.t("backgroundTasks.promote.none.title"),
+        description: language.t("backgroundTasks.promote.none.description"),
+      })
+      return
+    }
+    await tasks.promote(live())
+  }
+
+  // "Stop including helpers" from the palette, which works while the main turn is idle too (5.I.2).
+  const stopAll = async () => {
+    const sessionID = tasks?.rootID() ?? params.id
+    if (!sessionID || !tasks) return
+    // Stop pauses the conversation's queue until Resume, as the composer's Stop does (I7).
+    void followups.pause(ServerConnection.key(serverSDK().server), sessionID, "aborted")
+    const result = await stopSession({
+      client: sdk().client,
+      sessionID,
+      capabilities: tasks.capabilities(),
+      targets: helperTargets(agents()),
+    }).catch((error: unknown) => {
+      showToast({
+        variant: "error",
+        title: language.t("prompt.toast.stopHelpersFailed.title"),
+        description: error instanceof Error ? error.message : undefined,
+      })
+      return undefined
+    })
+    if (!result) return
+    if (result.failed > 0)
+      showToast({
+        variant: "error",
+        title: language.t("prompt.toast.stopHelpersFailed.title"),
+        description: language.t("prompt.toast.stopHelpersFailed.description"),
+      })
+    else if (result.excluded > 0)
+      showToast({
+        title: language.t("prompt.toast.workspacesKept.title"),
+        description: language.t("prompt.toast.workspacesKept.description"),
+      })
+  }
+
+  const resumeInterrupted = async () => {
+    const targets = resumable()
+    if (!tasks || !targets.length) return
+    await tasks.resume(targets)
+  }
+
+  const openWorkflow = (name?: string) => {
+    const sessionID = root()
+    if (!sessionID || !tasks?.capabilities().workflows) return
+    const client = sdk().client
+    void import("@/features/background-tasks/workflow-dialog").then((x) =>
+      dialog.show(() => (
+        <x.DialogWorkflow
+          client={client}
+          sessionID={sessionID}
+          name={name}
+          busy={() => sync().data.session_working(sessionID)}
+          compose={(text) => {
+            const target = prompt.capture()
+            const next = appendWorkflowRequest(target.current(), text)
+            target.set(
+              next,
+              next.reduce((end, part) => (part.type === "image" ? end : Math.max(end, part.end)), 0),
+            )
+            requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
+          }}
+        />
+      )),
+    )
+  }
+
+  // `/workflow <name>` sent from the composer (submit.ts) opens the form for that saved workflow.
+  makeEventListener(window, WORKFLOW_EVENT, (event) => {
+    const detail = (event as CustomEvent<WorkflowOpenDetail>).detail
+    if (!detail || detail.sessionID !== root()) return
+    openWorkflow(detail.name)
+  })
+
+  command.register("session-tasks", () => [
+    sessionCommand({
+      id: "backgroundTasks.promote",
+      title: language.t("command.backgroundTasks.promote"),
+      description: language.t("command.backgroundTasks.promote.description"),
+      keybind: "ctrl+alt+b",
+      disabled: !root() || (promotable().length === 0 && !blocked()),
+      onSelect: () => void promote(),
+    }),
+    sessionCommand({
+      id: "session.stopAll",
+      title: language.t("command.session.stopAll"),
+      description: language.t("command.session.stopAll.description"),
+      disabled: !params.id || !tasks,
+      onSelect: () => void stopAll(),
+    }),
+    sessionCommand({
+      id: "backgroundTasks.resumeInterrupted",
+      title: language.t("command.backgroundTasks.resumeInterrupted"),
+      description: language.t("command.backgroundTasks.resumeInterrupted.description"),
+      disabled: !root() || resumable().length === 0,
+      onSelect: () => void resumeInterrupted(),
+    }),
+    sessionCommand({
+      id: WORKFLOW_COMMAND,
+      title: language.t("command.workflow.open"),
+      description: language.t("command.workflow.open.description"),
+      slash: "workflow",
+      disabled: !root() || !tasks?.capabilities().workflows,
+      onSelect: () => openWorkflow(),
+    }),
   ])
 }

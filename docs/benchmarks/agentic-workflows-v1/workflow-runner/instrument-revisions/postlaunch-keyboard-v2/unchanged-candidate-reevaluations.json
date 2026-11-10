@@ -1,0 +1,34 @@
+{
+  "kind": "Identical corrected keyboard v2 re-evaluation; no model calls",
+  "modelCalls": 0,
+  "originalResultsAndChargesRetained": true,
+  "cases": {
+    "codex-first": {
+      "exitCode": 0,
+      "verdict": "passed",
+      "apiPassed": 16,
+      "browserPassed": 8,
+      "sourceUnchanged": true,
+      "sourceFiles": 235,
+      "failedChecks": []
+    },
+    "vector-first": {
+      "exitCode": 0,
+      "verdict": "passed",
+      "apiPassed": 16,
+      "browserPassed": 8,
+      "sourceUnchanged": true,
+      "sourceFiles": 14,
+      "failedChecks": []
+    },
+    "vector-repair": {
+      "exitCode": 0,
+      "verdict": "passed",
+      "apiPassed": 16,
+      "browserPassed": 8,
+      "sourceUnchanged": true,
+      "sourceFiles": 15,
+      "failedChecks": []
+    }
+  }
+}

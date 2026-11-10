@@ -5081,3 +5081,202 @@ describe("ProviderTransform.effortOptions", () => {
     expect(ProviderTransform.smallOptions(free("optional"))).toEqual({ reasoning: { effort: "none" } })
   })
 })
+
+describe("ProviderTransform.toolChoice", () => {
+  const model = (npm: string, apiID: string, providerID = "anthropic") => {
+    const value = {
+      id: `${providerID}/${apiID}`,
+      providerID,
+      api: { id: apiID, url: "https://api.test", npm },
+      capabilities: { reasoning: true },
+      limit: { context: 200_000, output: 64_000 },
+      release_date: "2026-01-01",
+    } as any
+    value.variants = ProviderTransform.variants(value)
+    return value
+  }
+  const opus = model("@ai-sdk/anthropic", "claude-opus-4-6")
+  const sonnet = model("@ai-sdk/anthropic", "claude-sonnet-4-5")
+  const vertex = model("@ai-sdk/google-vertex/anthropic", "claude-sonnet-4-5", "google-vertex-anthropic")
+  const bedrock = model("@ai-sdk/amazon-bedrock", "anthropic.claude-sonnet-4-5", "amazon-bedrock")
+  const gpt = model("@ai-sdk/openai", "gpt-5.2", "openai")
+  const gemini = model("@ai-sdk/google", "gemini-2.5-pro", "google")
+
+  test("Anthropic with thinking on gets auto instead of required", () => {
+    expect(ProviderTransform.toolChoice(opus, opus.variants.high, "required")).toBe("auto")
+    expect(ProviderTransform.toolChoice(sonnet, sonnet.variants.high, "required")).toBe("auto")
+    expect(ProviderTransform.toolChoice(vertex, vertex.variants.high, "required")).toBe("auto")
+    expect(ProviderTransform.toolChoice(bedrock, bedrock.variants.high, "required")).toBe("auto")
+  })
+
+  test("Anthropic without thinking, and other providers, keep required", () => {
+    expect(ProviderTransform.toolChoice(opus, {}, "required")).toBe("required")
+    expect(ProviderTransform.toolChoice(opus, { thinking: { type: "disabled" } }, "required")).toBe("required")
+    expect(ProviderTransform.toolChoice(opus, { effort: "high" }, "required")).toBe("required")
+    expect(ProviderTransform.toolChoice(gpt, gpt.variants.high, "required")).toBe("required")
+    expect(ProviderTransform.toolChoice(gemini, gemini.variants.high, "required")).toBe("required")
+    // A Bedrock model that is not Claude reasons through reasoningConfig too, and takes forced tool use.
+    const nova = model("@ai-sdk/amazon-bedrock", "amazon.nova-pro", "amazon-bedrock")
+    expect(ProviderTransform.toolChoice(nova, nova.variants.high, "required")).toBe("required")
+  })
+
+  test("only required changes", () => {
+    expect(ProviderTransform.toolChoice(opus, opus.variants.high, undefined)).toBeUndefined()
+    expect(ProviderTransform.toolChoice(opus, opus.variants.high, "auto")).toBe("auto")
+    expect(ProviderTransform.toolChoice(opus, opus.variants.high, "none")).toBe("none")
+  })
+
+  test("withoutThinking turns thinking off so the call can be required", () => {
+    const off = ProviderTransform.withoutThinking({ ...opus.variants.high, store: false })
+    expect(off).toEqual({ effort: "high", store: false })
+    expect(ProviderTransform.toolChoice(opus, off, "required")).toBe("required")
+    expect(
+      ProviderTransform.toolChoice(bedrock, ProviderTransform.withoutThinking(bedrock.variants.high), "required"),
+    ).toBe("required")
+  })
+})
+
+describe("ProviderTransform.caches", () => {
+  // The helper as it was in session/prompt.ts before it moved here.
+  const old = (model: any) => ProviderTransform.usesCacheBreakpoints(model) || (model.cost?.cache?.read ?? 0) > 0
+
+  test("equals the helper it replaced", () => {
+    const models = [
+      { providerID: "anthropic", id: "claude-sonnet-4-5", api: { id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" } },
+      {
+        providerID: "openai",
+        id: "gpt-5.2",
+        api: { id: "gpt-5.2", npm: "@ai-sdk/openai" },
+        cost: { cache: { read: 0.1 } },
+      },
+      { providerID: "openai", id: "gpt-4", api: { id: "gpt-4", npm: "@ai-sdk/openai" }, cost: { input: 1, output: 2 } },
+      { providerID: "gateway", id: "anthropic/claude", api: { id: "anthropic/claude", npm: "@ai-sdk/gateway" } },
+      { providerID: "lmstudio", id: "local", api: { id: "local", npm: "@ai-sdk/openai-compatible" } },
+      { providerID: "alibaba", id: "qwen", api: { id: "qwen", npm: "@ai-sdk/alibaba" } },
+    ] as any[]
+    expect(models.map((model) => ProviderTransform.caches(model))).toEqual(models.map(old))
+    expect(models.map((model) => ProviderTransform.caches(model))).toEqual([true, true, false, false, false, true])
+  })
+})
+
+describe("ProviderTransform.schema - restated bounds", () => {
+  const model = (npm: string) => ({ providerID: "p", id: "m", api: { id: "m", npm } }) as any
+  const schema = {
+    type: "object",
+    properties: {
+      tags: { type: "array", items: { type: "string", maxLength: 8 }, minItems: 1, uniqueItems: true },
+      meta: { type: "object", properties: {}, additionalProperties: false },
+      name: { type: "string", minLength: 2 },
+    },
+  } as any
+
+  test("only when asked, and only for a provider that drops the bounds", () => {
+    expect(ProviderTransform.schema(model("@ai-sdk/anthropic"), schema, { restate: true })).toEqual(schema)
+    expect(ProviderTransform.schema(model("@ai-sdk/openai"), schema).properties!.tags).toEqual({
+      type: "array",
+      items: { type: "string" },
+    })
+  })
+
+  test("OpenAI's subset keeps additionalProperties and restates the rest", () => {
+    const result = ProviderTransform.schema(model("@ai-sdk/openai"), schema, { restate: true }) as any
+    expect(result.properties.tags.description).toBe("(minItems: 1, uniqueItems: true)")
+    expect(result.properties.tags.items.description).toBe("(maxLength: 8)")
+    expect(result.properties.name.description).toBe("(minLength: 2)")
+    expect(result.properties.meta.description).toBeUndefined()
+    expect(result.properties.meta.additionalProperties).toBe(false)
+  })
+
+  test("Google's conversion keeps minLength and restates additionalProperties", () => {
+    const result = ProviderTransform.schema(model("@ai-sdk/google"), schema, { restate: true }) as any
+    expect(result.properties.meta.description).toBe("(additionalProperties: false)")
+    expect(result.properties.name.description).toBeUndefined()
+    expect(result.properties.tags.items.description).toBe("(maxLength: 8)")
+  })
+})
+
+describe("ProviderTransform.message - boundary", () => {
+  const anthropic = {
+    providerID: "anthropic",
+    id: "claude-sonnet-4-5",
+    api: { id: "claude-sonnet-4-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+    capabilities: { input: { text: true, image: true, audio: false, video: false, pdf: true } },
+    options: {},
+    headers: {},
+  } as any
+  const marked = (message: any) => message.providerOptions?.anthropic?.cacheControl !== undefined
+  // A fork's request: two system blocks, the inherited history (its last message is index 4), then its own turn.
+  const request = () =>
+    [
+      { role: "system", content: "Stable block" },
+      { role: "system", content: "Session block" },
+      { role: "user", content: [{ type: "text", text: "Fix the build." }] },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "call_1", toolName: "task", input: { fork: true } }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_1",
+            toolName: "task",
+            output: { type: "text", value: "Subagent started." },
+          },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "<fork_assignment>Look at the tests.</fork_assignment>" }] },
+      { role: "assistant", content: [{ type: "text", text: "Reading them." }] },
+      { role: "user", content: [{ type: "text", text: "Continue." }] },
+    ] as ModelMessage[]
+
+  test("the non-final breakpoint goes on the last inherited message, four at most", () => {
+    const result = ProviderTransform.message(request(), anthropic, {}, true, 4) as any[]
+    expect(result.map(marked)).toEqual([true, true, false, false, true, false, false, true])
+  })
+
+  test("without a boundary the last two messages keep their breakpoints, as before", () => {
+    const result = ProviderTransform.message(request(), anthropic, {}) as any[]
+    expect(result.map(marked)).toEqual([true, true, false, false, false, false, true, true])
+  })
+
+  test("a boundary on the last message, a system message or past the end changes nothing it should not", () => {
+    expect((ProviderTransform.message(request(), anthropic, {}, true, 7) as any[]).map(marked)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ])
+    for (const boundary of [0, 99])
+      expect((ProviderTransform.message(request(), anthropic, {}, true, boundary) as any[]).map(marked)).toEqual([
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+      ])
+  })
+
+  test("the boundary follows its message when an empty message before it is dropped", () => {
+    const msgs = request()
+    msgs.splice(3, 0, { role: "assistant", content: "" })
+    const result = ProviderTransform.message(msgs, anthropic, {}, true, 5) as any[]
+    expect(result).toHaveLength(8)
+    expect(result.map(marked)).toEqual([true, true, false, false, true, false, false, true])
+    // The mark that carried it through is not left on the message.
+    expect(Object.getOwnPropertySymbols(result[4])).toEqual([])
+  })
+
+  test("no breakpoints without caching, boundary or not", () => {
+    const result = ProviderTransform.message(request(), anthropic, {}, false, 4) as any[]
+    expect(result.some(marked)).toBe(false)
+  })
+})

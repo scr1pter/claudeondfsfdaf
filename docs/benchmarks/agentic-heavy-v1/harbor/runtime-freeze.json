@@ -1,0 +1,43 @@
+{
+  "kind": "harbor-runtime-freeze-v1",
+  "status": "runtime_qualified",
+  "createdAt": "2026-11-03T05:14:35.264097+00:00",
+  "baselineCommit": "672f833",
+  "files": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    "browser-eval.cjs": "9a9dcf41bac3a111c38d46de0ccc39d473d1e1754241dfb19ecf8e4b26dafc6f",
+    "BUILD_SPEC.md": "59ff8112ef16fc0ea4eab5826342ec50d8fa4982bc6afd5f7365b714c34193ef",
+    "code-quality-rubric.md": "55085be0108319c5ce7f9f709bc472c72a86ecf289cb70780b05e2ca4ca4597e",
+    "evaluate.py": "ef73ed5ad8df0019dfc1b9e2e0258f3a6d13b7efb3c9b0daaeaa1c74a60fc868",
+    "layout-probe.cjs": "998efa6784a81cd802c633d3e704518722e032333317e8fb43696d0760b54f6f",
+    "local-policy.cjs": "c391b39ef9030397140f351e68e3a35298437526103f72dfe0be3723c677fac7",
+    "local-proxy.cjs": "015da088f89ccb3cf2e0568a6946b3df7945faec9780012fbfaf465868d80f90",
+    "local-proxy.test.cjs": "bc1c88be4dc4b58e23f882d083da616378a50c6ce2e07d01eac0fab083a29b3a",
+    "owned_process.py": "42906aeebfee9104c513da7bc2af5d705578f6c4c18a5af884bd19810b037510",
+    "prepare.py": "1c0703a9fe9a10ca50d9e56facf2f784f2d35f19bf2e65b09287091ec90e4490",
+    "provenance.json": "f80035aed7680e2181cd88fbea3c147d03340f4f920179811bc64cc0fedbceb9",
+    "README.md": "5996ee158992bcd5e93539bbfae4f216ce13d863aac9435e7e0ebb5d2dada037",
+    "record_qualification.py": "60326751303a50ff80bd0222ef8600da42ae88a4b88ef8c813ca41695f14fa05",
+    "seed/.gitignore": "b8405ef2c1a9d4252527d1f0f84eaa2676689fb09d82075c2a6eb21131bf5ac3",
+    "seed/bun.lock": "f998df3682b4e1c8f80c6cca3cde577f031694ddadd8cdf5022b7ad104c1ee7e",
+    "seed/package.json": "1af43d3becce68e1beb7db477d7588dd02878b8d3fed8ee62c70f3c53415993f",
+    "seed/tsconfig.json": "aa95408bce20dbb372c19f109cc3e15118868b7f2ea0ce36c6b041f93312e860",
+    "seed/UI_CONTRACT.md": "266b4048213363029ffb12ba363e0534977fe101b3e09f3fa9ff7a58f3127472",
+    "static-freeze.json": "80e31c1d5a642cd5cef871470ac3725175b988e9d98fc390cb3a03185933bae2",
+    "task.json": "19770bd3c3066063abd47a97028c30a3109f7420600eb3df0e194430ee3f7ec8",
+    "test_evaluator.py": "b30398aaec87a4d97689c83faa9ae61ee1e23085d01c6282ea99e2e8007d730e",
+    "test_layout_loader.py": "f226590261b4430bc79719c611eb708b9c4ff13f1c11d9592c51b76dbfc0b62e",
+    "test_prepare.py": "e93f7003de23cc81dcdbdf8822af83491d60ed8190b893ee5ff314a1b1d4ea73",
+    "UI_CONTRACT.md": "266b4048213363029ffb12ba363e0534977fe101b3e09f3fa9ff7a58f3127472",
+    "visual-rubric.md": "88b0623866358f96845284a109d4bbe366ff823ff191e88b25f371ac6f0bbf40"
+  },
+  "aggregateSha256": "e4c04a7e174fc9d2980551c36cadfa5c2d295263db0a66a05e045c8902bf6663",
+  "qualificationReportSha256": "9849f5f80857e7a15f24cd2ba04f974d8a9a9dc6d1b8e3b00273b5a45f98c322",
+  "notes": [
+    "All required64 positive checks passed before this freeze.",
+    "Emptyseed and two damagedreference controls were rejected with zero instrumenterrors.",
+    "No publicproduct contract or check inventory was weakened.",
+    "Referenceimplementation is private and excluded from task and seed.",
+    "Qualificationresult metadata is hashed separately to avoid a selfreferential source hash."
+  ]
+}

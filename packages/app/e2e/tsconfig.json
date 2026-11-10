@@ -34,6 +34,15 @@
     "./regression/settings-workspace.spec.ts",
     "./regression/workspace-global-tabs.spec.ts",
     "./regression/session-timeline-context-resize.spec.ts",
+    "./regression/background-commands.spec.ts",
+    "./regression/background-tasks-controls.spec.ts",
+    "./regression/background-tasks-details.spec.ts",
+    "./regression/followup-steer-queue.spec.ts",
+    "./regression/isolated-subagent.spec.ts",
+    "./regression/stop-helpers.spec.ts",
+    "./regression/subagent-limits.spec.ts",
+    "./regression/workflow-permission.spec.ts",
+    "./regression/workflow-progress.spec.ts",
     "./utils/**/*.ts"
   ]
 }

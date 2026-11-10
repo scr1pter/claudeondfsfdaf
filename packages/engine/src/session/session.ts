@@ -13,6 +13,7 @@ import { Decimal } from "decimal.js"
 import type { ProviderMetadata, Usage } from "@vectordevai/llm"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
 import { Database } from "@vectordevai/core/database/database"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@vectordevai/core/event"
 import { EventTable } from "@vectordevai/core/event/sql"
@@ -53,6 +54,10 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { SessionMessage } from "@vectordevai/schema/session-message"
 import { SessionEvent } from "@vectordevai/schema/session-event"
+import { TaskPlace } from "@/task/place"
+import { TaskJobs } from "@/task/jobs"
+import { InstanceRef } from "@/effect/instance-ref"
+import { SessionCleanup } from "./cleanup"
 import { Billing } from "@vectordevai/schema/billing"
 
 const parentTitlePrefix = "New session - "
@@ -471,7 +476,12 @@ export const costAt = (cost: Provider.Model["cost"] | undefined, contextTokens: 
   // experimentalOver200K is models.dev's 200K stand-in for the exact tiers, so it applies only without them.
   (cost?.experimentalOver200K && !cost.tiers?.length && contextTokens > 200_000 ? cost.experimentalOver200K : cost)
 
-export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?: ProviderMetadata }) => {
+export const getUsage = (input: {
+  model: Provider.Model
+  usage: Usage
+  metadata?: ProviderMetadata
+  incomplete?: boolean
+}) => {
   const safe = (value: number) => {
     if (!Number.isFinite(value)) return 0
     return Math.max(0, value)
@@ -479,29 +489,37 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
   const inputTokens = safe(input.usage.inputTokens ?? 0)
   const outputTokens = safe(input.usage.outputTokens ?? 0)
   const reasoningTokens = safe(input.usage.reasoningTokens ?? 0)
-
   const cacheReadInputTokens = safe(input.usage.cacheReadInputTokens ?? 0)
-  const cacheWriteInputTokens = safe(
-    Number(
-      input.usage.cacheWriteInputTokens ??
-        input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
-        // google-vertex-anthropic returns metadata under "vertex" key
-        // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
-        input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
-        0,
-    ),
-  )
+  const reportedCacheWrite =
+    input.usage.cacheWriteInputTokens ??
+    input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
+    // google-vertex-anthropic returns metadata under "vertex" key
+    // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
+    input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
+    // @ts-expect-error
+    input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
+    // @ts-expect-error
+    input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
+    0
+  const cacheWriteInputTokens = safe(Number(reportedCacheWrite))
+  const valid = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
+  const complete =
+    !input.incomplete &&
+    [input.usage.inputTokens, input.usage.outputTokens].every(valid) &&
+    [input.usage.reasoningTokens, input.usage.cacheReadInputTokens, input.usage.totalTokens].every(
+      (value) => value === undefined || valid(value),
+    ) &&
+    valid(reportedCacheWrite) &&
+    cacheReadInputTokens + cacheWriteInputTokens <= inputTokens &&
+    reasoningTokens <= outputTokens
 
   // AI SDK v6 normalized inputTokens to include cached tokens across all providers
   // (including Anthropic/Bedrock which previously excluded them). Always subtract cache
   // tokens to get the non-cached input count for separate cost calculation.
   const adjustedInputTokens = safe(inputTokens - cacheReadInputTokens - cacheWriteInputTokens)
 
-  const total = input.usage.totalTokens
+  // Omit malformed reported totals so known usage can still pass durable receipt validation.
+  const total = valid(input.usage.totalTokens) ? input.usage.totalTokens : undefined
 
   const tokens = {
     total,
@@ -516,28 +534,28 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
 
   // A Vector Codium step is billed to the account's plan on vectordev.ai, so it is never priced from what the provider
   // metadata reports, and every step is unpriced and marked Codium: totals leave its tokens out and show "Codium".
-  if (Billing.isCodium(input.model.providerID)) return { unpriced: true, billing: "codium" as const, cost: 0, tokens }
+  // No provider-measured bill comes with it either.
+  if (Billing.isCodium(input.model.providerID))
+    return { billed: false, unpriced: true, billing: "codium" as const, cost: 0, tokens }
 
   const costInfo = costAt(input.model.cost, inputTokens)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
-  // OpenRouter reports what it billed for each step. A model the catalog lists no price for, as an OpenRouter model
-  // added by hand often is, takes that amount instead of reading as unpriced.
+  // A valid provider-reported OpenRouter cost takes precedence over a catalog estimate, including a zero charge.
   // @ts-expect-error provider metadata is untyped JSON
   const reported: unknown = input.metadata?.["openrouter"]?.["usage"]?.["cost"]
-  const reportedCost =
-    input.model.cost?.unpriced === true && typeof reported === "number" && Number.isFinite(reported) && reported >= 0
-      ? reported
-      : undefined
+  const reportedCost = typeof reported === "number" && Number.isFinite(reported) && reported >= 0 ? reported : undefined
   const billed =
     (typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0) ||
     reportedCost !== undefined
   return {
-    // The model lists no price and the provider reported no charge, so the cost below is 0 for want of a price.
-    // A step that used no tokens owes nothing either way.
+    // A measured bill is known even when the provider omitted token counters.
+    billed,
+    // Missing counters are not measured zero usage. Keep known subtotals while flagging incomplete usage or rates.
     unpriced:
-      !billed &&
-      input.model.cost?.unpriced === true &&
-      tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write > 0,
+      !complete ||
+      (!billed &&
+        input.model.cost?.unpriced === true &&
+        tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write > 0),
     cost:
       reportedCost !== undefined
         ? reportedCost
@@ -570,16 +588,19 @@ export interface Interface {
   readonly listGlobal: (input?: GlobalListInput) => Effect.Effect<GlobalInfo[]>
   /** Usage across every project, or only sessions in `directory`. */
   readonly usage: (input?: { directory?: string }) => Effect.Effect<UsageSummary>
-  readonly create: (input?: {
-    parentID?: SessionID
-    internal?: string
-    title?: string
-    agent?: string
-    model?: Schema.Schema.Type<typeof Model>
-    metadata?: typeof Metadata.Type
-    permission?: PermissionV1.Ruleset
-    workspaceID?: WorkspaceV2.ID
-  }) => Effect.Effect<Info>
+  readonly create: (
+    input?: {
+      parentID?: SessionID
+      internal?: string
+      title?: string
+      agent?: string
+      model?: Schema.Schema.Type<typeof Model>
+      metadata?: typeof Metadata.Type
+      permission?: PermissionV1.Ruleset
+      workspaceID?: WorkspaceV2.ID
+    },
+    actor?: SessionAudience.Actor,
+  ) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
@@ -654,6 +675,7 @@ const layer: Layer.Layer<
     const sharing = yield* ShareNext.Service
     const { db } = yield* Database.Service
     const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
@@ -664,6 +686,8 @@ const layer: Layer.Layer<
       agent?: string
       model?: Schema.Schema.Type<typeof Model>
       parentID?: SessionID
+      forkOf?: SessionID
+      actor?: SessionAudience.Actor
       internal?: string
       workspaceID?: WorkspaceV2.ID
       directory: string
@@ -671,14 +695,20 @@ const layer: Layer.Layer<
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
     }) {
-      const ctx = yield* InstanceState.context
+      const current = yield* InstanceState.context
+      const id = SessionID.descending(input.id)
+      yield* audience
+        .register({ sessionID: id, parentID: input.parentID, forkOf: input.forkOf, actor: input.actor })
+        .pipe(Effect.orDie)
+      const inherited = input.parentID ? TaskPlace.inherit(id, input.parentID) : undefined
+      const ctx = inherited?.home ?? current
       const result: Info = {
-        id: SessionID.descending(input.id),
+        id,
         slug: Slug.create(),
         version: InstallationVersion,
         projectID: ctx.project.id,
-        directory: input.directory,
-        path: input.path,
+        directory: inherited?.home.directory ?? input.directory,
+        path: inherited ? sessionPath(ctx.worktree, ctx.directory) : input.path,
         workspaceID: input.workspaceID,
         parentID: input.parentID,
         internal: input.internal,
@@ -696,13 +726,15 @@ const layer: Layer.Layer<
       }
       yield* Effect.logInfo("created", result)
 
-      yield* events.publish(
-        SessionV1.Event.Created,
-        { sessionID: result.id, info: result },
-        {
-          commit: (seq) => SessionAccounting.initializeEmpty(db, result.id, seq),
-        },
-      )
+      yield* events
+        .publish(
+          SessionV1.Event.Created,
+          { sessionID: result.id, info: result },
+          {
+            commit: (seq) => SessionAccounting.initializeEmpty(db, result.id, seq),
+          },
+        )
+        .pipe(Effect.onError(() => Effect.sync(() => TaskPlace.drop(result.id))))
 
       return yield* get(result.id).pipe(Effect.orDie)
     })
@@ -710,7 +742,31 @@ const layer: Layer.Layer<
     const get = Effect.fn("Session.get")(function* (id: SessionID) {
       const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
       if (!row) return yield* Effect.fail(new NotFoundError({ message: `Session not found: ${id}` }))
-      return fromRow(row)
+      const info = fromRow(row)
+      // Reused sessions may predate the runtime map. Recover trusted lineage from rows, never display metadata.
+      if (info.parentID && !TaskPlace.get(info.id)) {
+        const family = [info]
+        const seen = new Set<string>([info.id])
+        for (
+          let parentID: SessionID | undefined = info.parentID;
+          parentID && !seen.has(parentID) && !TaskPlace.get(parentID);
+
+        ) {
+          seen.add(parentID)
+          const parent: SessionRow | undefined = yield* db
+            .select()
+            .from(SessionTable)
+            .where(eq(SessionTable.id, parentID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!parent) break
+          family.push(fromRow(parent))
+          parentID = parent.parent_id ? SessionID.make(parent.parent_id) : undefined
+        }
+        for (const child of family.reverse())
+          if (child.parentID && !TaskPlace.get(child.id)) TaskPlace.inherit(child.id, child.parentID)
+      }
+      return info
     })
 
     const list = Effect.fn("Session.list")(function* (input?: ListInput) {
@@ -867,8 +923,10 @@ const layer: Layer.Layer<
           yield* remove(child.id, options)
         }
 
+        yield* SessionCleanup.run(session)
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
         yield* events.remove(sessionID)
+        TaskPlace.drop(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })
       }
@@ -916,19 +974,23 @@ const layer: Layer.Layer<
       } as SessionV1.Part
     })
 
-    const create = Effect.fn("Session.create")(function* (input?: {
-      parentID?: SessionID
-      internal?: string
-      title?: string
-      agent?: string
-      model?: Schema.Schema.Type<typeof Model>
-      metadata?: typeof Metadata.Type
-      permission?: PermissionV1.Ruleset
-      workspaceID?: WorkspaceV2.ID
-    }) {
+    const create = Effect.fn("Session.create")(function* (
+      input?: {
+        parentID?: SessionID
+        internal?: string
+        title?: string
+        agent?: string
+        model?: Schema.Schema.Type<typeof Model>
+        metadata?: typeof Metadata.Type
+        permission?: PermissionV1.Ruleset
+        workspaceID?: WorkspaceV2.ID
+      },
+      actor: SessionAudience.Actor = "owner",
+    ) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
       return yield* createNext({
+        actor,
         parentID: input?.parentID,
         internal: input?.internal,
         directory: ctx.directory,
@@ -946,12 +1008,18 @@ const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
+      const metadata = structuredClone(original.metadata)
+      // A copy of a subagent fork is no fork: it does not inherit its parent's conversation (5.E.3).
+      const subagent = metadata?.subagent
+      if (subagent && typeof subagent === "object" && !Array.isArray(subagent) && "fork" in subagent)
+        delete (subagent as Record<string, unknown>).fork
       const session = yield* createNext({
+        forkOf: original.id,
         directory: ctx.directory,
         path: sessionPath(ctx.worktree, ctx.directory),
         workspaceID: original.workspaceID,
         title,
-        metadata: structuredClone(original.metadata),
+        metadata,
       })
       yield* SessionAccounting.invalidate(db, session.id)
       const msgs = yield* messages({ sessionID: input.sessionID })
@@ -1206,15 +1274,16 @@ const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function*
   background: BackgroundJob.Interface,
   sessionID: SessionID,
 ) {
-  const jobs = yield* background.list()
+  const jobs = yield* TaskJobs.all(background)
   yield* Effect.forEach(
-    jobs.filter((job) => {
+    jobs.filter(({ info: job }) => {
       if (job.status !== "running") return false
       if (job.id === sessionID) return true
       if (job.metadata?.sessionId === sessionID) return true
       return job.metadata?.parentSessionId === sessionID
     }),
-    (job) => background.cancel(job.id),
+    ({ info, place }) =>
+      place ? background.cancel(info.id).pipe(Effect.provideService(InstanceRef, place)) : background.cancel(info.id),
     { concurrency: "unbounded", discard: true },
   )
 })

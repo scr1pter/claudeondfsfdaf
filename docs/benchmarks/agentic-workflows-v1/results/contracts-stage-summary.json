@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "study": "agentic-workflows-v1",
+  "stage": "contracts_candidate_three_task_stage",
+  "status": "complete_measured_stage_cost_target_unmet",
+  "vectorCandidateRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "codexExecution": "Separately pinned CLI; matched model/reasoning/single-agent controls, not the Vector product revision",
+  "executionControls": {
+    "model": "gpt-6.1-sol",
+    "reasoning": "high",
+    "autonomousAgentsPerRuntime": 1,
+    "paidRepairs": 0,
+    "allChargesRetained": true
+  },
+  "costBasis": "Usage-derived actual funded-meter receipts, not invoice-reconciled",
+  "tasks": [
+    {
+      "task": "workflow-runner",
+      "label": "Workflow Runner",
+      "role": "development replication",
+      "report": "contracts-workflow.md",
+      "vector": {
+        "providerRequests": 47,
+        "measuredUsd": 0.7512629,
+        "requiredChecksPassed": 24,
+        "requiredChecksTotal": 24,
+        "fixedStaticScore": 45,
+        "staticMaximum": 48,
+        "establishedCriticalFindings": 0,
+        "paidRepairs": 0
+      },
+      "codex": {
+        "providerRequests": 30,
+        "measuredUsd": 0.8919725,
+        "requiredChecksPassed": 24,
+        "requiredChecksTotal": 24,
+        "fixedStaticScore": 45,
+        "staticMaximum": 48,
+        "establishedCriticalFindings": 0,
+        "paidRepairs": 0
+      },
+      "vectorRecordedTaskScoreNoLower": true,
+      "allRequiredChecksPassedBoth": true
+    },
+    {
+      "task": "evidence-workbench",
+      "label": "Evidence Workbench",
+      "role": "development replication",
+      "report": "contracts-evidence.md",
+      "vector": {
+        "providerRequests": 44,
+        "measuredUsd": 0.7276856,
+        "requiredChecksPassed": 26,
+        "requiredChecksTotal": 26,
+        "fixedStaticScore": 47,
+        "staticMaximum": 48,
+        "establishedCriticalFindings": 0,
+        "paidRepairs": 0
+      },
+      "codex": {
+        "providerRequests": 35,
+        "measuredUsd": 0.7229352,
+        "requiredChecksPassed": 26,
+        "requiredChecksTotal": 26,
+        "fixedStaticScore": 47,
+        "staticMaximum": 48,
+        "establishedCriticalFindings": 0,
+        "paidRepairs": 0
+      },
+      "vectorRecordedTaskScoreNoLower": true,
+      "allRequiredChecksPassedBoth": true
+    },
+    {
+      "task": "delivery-outbox",
+      "label": "Delivery Outbox",
+      "role": "held-out task",
+      "report": "contracts-outbox.md",
+      "vector": {
+        "providerRequests": 36,
+        "measuredUsd": 0.5419832,
+        "requiredChecksPassed": 26,
+        "requiredChecksTotal": 26,
+        "fixedStaticScore": 47,
+        "staticMaximum": 48,
+        "establishedCriticalFindings": 0,
+        "paidRepairs": 0
+      },
+      "codex": {
+        "providerRequests": 23,
+        "measuredUsd": 0.5126617,
+        "requiredChecksPassed": 26,
+        "requiredChecksTotal": 26,
+        "fixedStaticScore": 46,
+        "staticMaximum": 48,
+        "establishedCriticalFindings": 0,
+        "paidRepairs": 0
+      },
+      "vectorRecordedTaskScoreNoLower": true,
+      "allRequiredChecksPassedBoth": true
+    }
+  ],
+  "totals": {
+    "vector": {
+      "providerRequests": 127,
+      "measuredUsd": 2.0209317,
+      "requiredChecksPassed": 76,
+      "staticScore": 139,
+      "staticMaximum": 144
+    },
+    "codex": {
+      "providerRequests": 88,
+      "measuredUsd": 2.1275694,
+      "requiredChecksPassed": 76,
+      "staticScore": 138,
+      "staticMaximum": 144
+    }
+  },
+  "decision": {
+    "qualityPriority": "No lower quality on any task; a stronger task cannot offset a weaker task. Cost is secondary.",
+    "allFunctionalChecksPassed": true,
+    "requiredChecksPerRuntime": 76,
+    "noLowerRecordedStaticScoreOnEveryTask": true,
+    "noCriticalFindingEstablishedOnAnyTask": true,
+    "boundedMeasuredQualityGatePassed": true,
+    "qualityScope": "Only the measured functional gates and fixed blinded source/screenshot rubric. Different material risks and unobserved behavior remain; this is not production quality assurance.",
+    "vectorAggregateCostSavingsUsd": 0.1066377,
+    "vectorAggregateCostSavingsPercent": 5.01218433,
+    "requiredAggregateSavingsPercent": 20,
+    "costTargetMet": false,
+    "overallPreregisteredObjectiveMet": false,
+    "conclusion": "The candidate meets the bounded measured per-task quality gate but saves 5.01218433% aggregate cost, below 20%. The cost target is unmet; neither general cheapness nor a general quality or release guarantee is established."
+  },
+  "perTaskCostPattern": {
+    "vectorCheaperTasks": 1,
+    "vectorMoreExpensiveTasks": 2,
+    "lastTaskVectorAdditionalCostPercent": 5.71946373
+  },
+  "outboxAuditAndContinuation": {
+    "originalCoordinatorFlags": {
+      "vector": "coordinator_review_required",
+      "codex": "coordinator_review_required"
+    },
+    "originalAutomaticBrowserAudits": {
+      "vector": "review_required",
+      "codex": "review_required"
+    },
+    "separateManualDispositions": {
+      "vector": "bounded_manual_review_no_clear_bypass_observed",
+      "codex": "bounded_manual_review_no_clear_bypass_observed"
+    },
+    "manualReviewsDoNotRewriteOriginalFlags": true,
+    "hardFenceOrCompleteAdherenceEstablished": false,
+    "continuation": "Only the missing Codex arm ran under the immutable pre-Vector plan and unchanged task/execution pins; no rerun, refund or repair.",
+    "appSourceCounts": {
+      "vector": 16,
+      "codex": 17
+    },
+    "separatePosthocAuthoredSupportCounts": {
+      "vector": 1,
+      "codex": 3
+    },
+    "historicalSupportExecutionBytesAuthenticated": false,
+    "independentImagesPerRuntime": "Two 390px queued/delivered end states; no independent desktop view"
+  },
+  "materialLimits": {
+    "workflow": "Both default data discovery and conditional process/persistence cleanup risks; Vector native empty-form alert gap, Codex small/low-contrast metadata.",
+    "evidence": "Codex large scalar-array allocation risk; Vector direct-handler/store-only authored lifecycle coverage.",
+    "outbox": "Vector unbounded backlog concurrency; Codex legacy failed-row recovery and open-editor queue/cancel gaps.",
+    "review": "Static exact source plus selected independent screenshots; reviewers did not execute apps or authored tests."
+  },
+  "accountingCheckpoint": {
+    "scope": "Historical study checkpoint at the three-task stage settlement",
+    "beforeStage": {
+      "providerRequests": 674,
+      "measuredUsd": 16.155328
+    },
+    "stage": {
+      "providerRequests": 215,
+      "measuredUsd": 4.1485011
+    },
+    "studyThroughStageSettlement": {
+      "providerRequests": 889,
+      "measuredUsd": 20.3038291
+    },
+    "isCurrentBill": false,
+    "futureActivityExcluded": true
+  },
+  "interpretationLimits": [
+    "Two development replications and one held-out task in a small adaptive study are not independent broad statistical evidence.",
+    "No statistical significance, universal cost reduction, general production quality guarantee, multi-specialist/judge behavior or billions-of-tokens quality claim is established.",
+    "Score totals 139 versus 138 are descriptive only; the quality gate was checked on every task independently and cannot average away a weaker task.",
+    "Outbox manual dispositions are bounded posthoc reviews; source hashes authenticate current support copies, not historical executed bytes."
+  ],
+  "references": [
+    "contracts-workflow.md",
+    "contracts-evidence.md",
+    "contracts-outbox.md"
+  ],
+  "sanitization": {
+    "rawLogsCredentialsPrivatePathsProviderIdentifiersAndPromptsExcluded": true
+  }
+}

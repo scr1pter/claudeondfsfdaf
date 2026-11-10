@@ -1,0 +1,959 @@
+{
+  "kind": "receipt-cost-driver-profile-v1",
+  "arms": [
+    {
+      "kind": "receipt-cost-driver-projection-v1",
+      "provisional": true,
+      "closedWitnessPresent": false,
+      "accounting": {
+        "receiptCount": 79,
+        "knownMeasuredUsd": "1.5835914000000000115",
+        "unknownMeasuredUsdCount": 1,
+        "measuredUsdComplete": false
+      },
+      "closureReconciliation": {
+        "providerCountMatches": false,
+        "allProviderTerminalsObserved": false,
+        "allReceiptsReconciled": true,
+        "measuredUsdKnown": false,
+        "closureAmountMatchesWithinOneTrillionthUsd": false
+      },
+      "coverage": {
+        "providerRequests": 79,
+        "receiptReconciledRequests": 79,
+        "unreconciledReceiptCount": 0,
+        "unreceiptedProviderRequests": 0,
+        "receiptRegistrationAmountDisagreements": 0,
+        "nativeUsageRecords": 69,
+        "uniquelyJoinedNativeRecords": 69,
+        "ambiguousNativeRecords": 0,
+        "unmatchedNativeRecords": 0,
+        "matchedCharges": {
+          "receiptCount": 69,
+          "knownMeasuredUsd": "1.4246172000000000100",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "unmatchedChargesRetained": {
+          "receiptCount": 10,
+          "knownMeasuredUsd": "0.1589742000000000015",
+          "unknownMeasuredUsdCount": 1,
+          "measuredUsdComplete": false
+        }
+      },
+      "joinMethod": "Exact actor/label/batch receipt scope; exact request SHA plus receipt sequence or bounded start; role, exact input/output/total usage, bounded native time, and identity/response ID where available. Only mutually unique edges join.",
+      "native": {
+        "adapter": "codex",
+        "nativeFiles": 5,
+        "nativeAbortedEvents": 6,
+        "inheritedToolRecordsExcludedByTurn": 16,
+        "usageSource": "token_usage_record only; token_count snapshots are not additional requests"
+      },
+      "nativeReportedPriceComparison": {
+        "joinedRecordsWithNativePrice": 0,
+        "nativeReportedUsdNotAuthoritative": null,
+        "receiptAccountingForSameRecords": {
+          "receiptCount": 0,
+          "knownMeasuredUsd": "0",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "providerPriceCorrectnessNotInferred": true
+      },
+      "byRole": {
+        "backend_api": {
+          "receiptCount": 9,
+          "knownMeasuredUsd": "0.271792400000000003",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "backend_coordinator": {
+          "receiptCount": 19,
+          "knownMeasuredUsd": "0.1801026999999999935",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "backend_data": {
+          "receiptCount": 10,
+          "knownMeasuredUsd": "0.1735835000000000059",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "frontend_worker": {
+          "receiptCount": 19,
+          "knownMeasuredUsd": "0.777969700000000004",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "lead": {
+          "receiptCount": 22,
+          "knownMeasuredUsd": "0.1801431000000000051",
+          "unknownMeasuredUsdCount": 1,
+          "measuredUsdComplete": false
+        }
+      },
+      "byTurnCategoryHeuristic": {
+        "no_tools": {
+          "receiptCount": 2,
+          "knownMeasuredUsd": "0.028124400000000001",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "orchestration_only": {
+          "receiptCount": 17,
+          "knownMeasuredUsd": "0.1163305999999999998",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "unknown_tool_semantics": {
+          "receiptCount": 50,
+          "knownMeasuredUsd": "1.2801622000000000092",
+          "unknownMeasuredUsdCount": 0,
+          "measuredUsdComplete": true
+        },
+        "unmatched_charge": {
+          "receiptCount": 10,
+          "knownMeasuredUsd": "0.1589742000000000015",
+          "unknownMeasuredUsdCount": 1,
+          "measuredUsdComplete": false
+        }
+      },
+      "diagnostics": {
+        "interpretation": "All observed native steps, including unjoined steps. Observations and optimization hypotheses only; no automatic dollar savings or QA subtraction.",
+        "exactRepeatedRequests": {
+          "shaGroups": 0,
+          "additionalReceipts": 0
+        },
+        "duplicateSerializedInputItems": {
+          "requestsWithDuplicates": 0,
+          "additionalItems": 0,
+          "toolResultIdentityNotEstablished": true
+        },
+        "readOnlyCalls": 0,
+        "repeatedExactReadInputs": 0,
+        "repeatedToolOutputs": 23,
+        "repeatedOutputNecessityNotEstablished": true,
+        "waitCalls": 0,
+        "timedOutWaitCalls": 0,
+        "waitOutputShapes": [],
+        "timedOutWaitOnlyImmediateFollowups": {},
+        "consecutiveTimedOutWaitOnlyPairs": 0,
+        "maxTimedOutWaitOnlyStreak": 0,
+        "toolCounts": {
+          "exec": 50,
+          "list_agents": 2,
+          "send_message": 11,
+          "spawn_agent": 4
+        },
+        "wrapperLiteralToolHintsHeuristic": {
+          "apply_patch": 18,
+          "exec_command": 36
+        },
+        "terminalWaitCalls": 0,
+        "disconnectedProviderRequests": 9
+      },
+      "charges": [
+        {
+          "chargeIndex": 1,
+          "providerOrdinal": 1,
+          "role": "lead",
+          "measuredUsd": "0.0330085",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 2,
+          "providerOrdinal": 2,
+          "role": "lead",
+          "measuredUsd": "0.0163123",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 3,
+          "providerOrdinal": 3,
+          "role": "lead",
+          "measuredUsd": "0.0045417",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 4,
+          "providerOrdinal": 4,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0053377",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 5,
+          "providerOrdinal": 5,
+          "role": "frontend_worker",
+          "measuredUsd": "0.043893",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 6,
+          "providerOrdinal": 6,
+          "role": "lead",
+          "measuredUsd": "0.0036896000000000003",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 7,
+          "providerOrdinal": 7,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.018098799999999998",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 8,
+          "providerOrdinal": 8,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0170237",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 9,
+          "providerOrdinal": 9,
+          "role": "lead",
+          "measuredUsd": "0.005323100000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 10,
+          "providerOrdinal": 10,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0089432",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 11,
+          "providerOrdinal": 11,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0027959",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 12,
+          "providerOrdinal": 12,
+          "role": "lead",
+          "measuredUsd": "0.0033599000000000003",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 13,
+          "providerOrdinal": 13,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0087197",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 14,
+          "providerOrdinal": 14,
+          "role": "backend_data",
+          "measuredUsd": "0.036240800000000004",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 15,
+          "providerOrdinal": 15,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0033709",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 16,
+          "providerOrdinal": 16,
+          "role": "lead",
+          "measuredUsd": "0.0034699",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 17,
+          "providerOrdinal": 17,
+          "role": "backend_api",
+          "measuredUsd": "0.0371273",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 18,
+          "providerOrdinal": 18,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0048958000000000005",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 19,
+          "providerOrdinal": 19,
+          "role": "backend_data",
+          "measuredUsd": "0.017958099999999998",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 20,
+          "providerOrdinal": 20,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0473613",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 21,
+          "providerOrdinal": 21,
+          "role": "lead",
+          "measuredUsd": "0.0033099",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 22,
+          "providerOrdinal": 22,
+          "role": "backend_api",
+          "measuredUsd": "0.017699200000000002",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 23,
+          "providerOrdinal": 23,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0036254",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 24,
+          "providerOrdinal": 24,
+          "role": "backend_data",
+          "measuredUsd": "0.0038723000000000004",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 25,
+          "providerOrdinal": 25,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0228825",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 26,
+          "providerOrdinal": 26,
+          "role": "lead",
+          "measuredUsd": "0.0140179",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 27,
+          "providerOrdinal": 27,
+          "role": "backend_api",
+          "measuredUsd": "0.0037902",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 28,
+          "providerOrdinal": 28,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0052764",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 29,
+          "providerOrdinal": 29,
+          "role": "backend_data",
+          "measuredUsd": "0.0043763000000000005",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 30,
+          "providerOrdinal": 30,
+          "role": "frontend_worker",
+          "measuredUsd": "0.048311",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 31,
+          "providerOrdinal": 31,
+          "role": "lead",
+          "measuredUsd": "0.005771",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 32,
+          "providerOrdinal": 32,
+          "role": "backend_api",
+          "measuredUsd": "0.0927277",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 33,
+          "providerOrdinal": 33,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.005032399999999999",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 34,
+          "providerOrdinal": 34,
+          "role": "backend_data",
+          "measuredUsd": "0.0500402",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 35,
+          "providerOrdinal": 35,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0360739",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 36,
+          "providerOrdinal": 36,
+          "role": "lead",
+          "measuredUsd": "0.004218200000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 37,
+          "providerOrdinal": 37,
+          "role": "backend_api",
+          "measuredUsd": "0.026452200000000002",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 38,
+          "providerOrdinal": 38,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0060674",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 39,
+          "providerOrdinal": 39,
+          "role": "backend_data",
+          "measuredUsd": "0.0154205",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 40,
+          "providerOrdinal": 40,
+          "role": "frontend_worker",
+          "measuredUsd": "0.049035800000000004",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 41,
+          "providerOrdinal": 41,
+          "role": "lead",
+          "measuredUsd": "0.0314582",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 42,
+          "providerOrdinal": 42,
+          "role": "backend_api",
+          "measuredUsd": "0.005352399999999999",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 43,
+          "providerOrdinal": 43,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0045194",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 44,
+          "providerOrdinal": 44,
+          "role": "backend_data",
+          "measuredUsd": "0.007705700000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 45,
+          "providerOrdinal": 45,
+          "role": "frontend_worker",
+          "measuredUsd": "0.09854710000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 46,
+          "providerOrdinal": 46,
+          "role": "lead",
+          "measuredUsd": "0.0099862",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 47,
+          "providerOrdinal": 47,
+          "role": "backend_api",
+          "measuredUsd": "0.043253",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 48,
+          "providerOrdinal": 48,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0048594",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 49,
+          "providerOrdinal": 49,
+          "role": "backend_data",
+          "measuredUsd": "0.015471200000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 50,
+          "providerOrdinal": 50,
+          "role": "frontend_worker",
+          "measuredUsd": "0.07682910000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 51,
+          "providerOrdinal": 51,
+          "role": "lead",
+          "measuredUsd": "0.0042688000000000005",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 52,
+          "providerOrdinal": 52,
+          "role": "backend_api",
+          "measuredUsd": "0.0264982",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 53,
+          "providerOrdinal": 53,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0046974",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 54,
+          "providerOrdinal": 54,
+          "role": "backend_data",
+          "measuredUsd": "0.0132662",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 55,
+          "providerOrdinal": 55,
+          "role": "frontend_worker",
+          "measuredUsd": "0.17874679999999998",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 56,
+          "providerOrdinal": 56,
+          "role": "lead",
+          "measuredUsd": "0.0036472",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 57,
+          "providerOrdinal": 57,
+          "role": "backend_api",
+          "measuredUsd": "0.0188922",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "no_tools"
+        },
+        {
+          "chargeIndex": 58,
+          "providerOrdinal": 58,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0078134",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 59,
+          "providerOrdinal": 59,
+          "role": "backend_data",
+          "measuredUsd": "0.009232200000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "no_tools"
+        },
+        {
+          "chargeIndex": 60,
+          "providerOrdinal": 60,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0508006",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 61,
+          "providerOrdinal": 61,
+          "role": "lead",
+          "measuredUsd": "0.0082632",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 62,
+          "providerOrdinal": 62,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0044618",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 63,
+          "providerOrdinal": 63,
+          "role": "frontend_worker",
+          "measuredUsd": "0.009876",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 64,
+          "providerOrdinal": 64,
+          "role": "lead",
+          "measuredUsd": "0.007261700000000001",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 65,
+          "providerOrdinal": 65,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0046758",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 66,
+          "providerOrdinal": 66,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0089595",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 67,
+          "providerOrdinal": 67,
+          "role": "lead",
+          "measuredUsd": "0.0061456",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 68,
+          "providerOrdinal": 68,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.032070299999999996",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 69,
+          "providerOrdinal": 69,
+          "role": "frontend_worker",
+          "measuredUsd": "0.018204",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 70,
+          "providerOrdinal": 70,
+          "role": "lead",
+          "measuredUsd": "0.0038571000000000005",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 71,
+          "providerOrdinal": 71,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0319298",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 72,
+          "providerOrdinal": 72,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0253013",
+          "responseStatus": "completed",
+          "clientDisconnected": true,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        },
+        {
+          "chargeIndex": 73,
+          "providerOrdinal": 73,
+          "role": "lead",
+          "measuredUsd": "0.0031543",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 74,
+          "providerOrdinal": 74,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0134503",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 75,
+          "providerOrdinal": 75,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0168209",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 76,
+          "providerOrdinal": 76,
+          "role": "lead",
+          "measuredUsd": "0.0050788000000000005",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "orchestration_only"
+        },
+        {
+          "chargeIndex": 77,
+          "providerOrdinal": 77,
+          "role": "backend_coordinator",
+          "measuredUsd": "0.0056283",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 78,
+          "providerOrdinal": 78,
+          "role": "frontend_worker",
+          "measuredUsd": "0.0231364",
+          "responseStatus": "completed",
+          "clientDisconnected": false,
+          "nativeJoined": true,
+          "turnCategory": "unknown_tool_semantics"
+        },
+        {
+          "chargeIndex": 79,
+          "providerOrdinal": 79,
+          "role": "lead",
+          "measuredUsd": null,
+          "responseStatus": "unknown",
+          "clientDisconnected": false,
+          "nativeJoined": false,
+          "turnCategory": "unmatched_charge"
+        }
+      ],
+      "safety": {
+        "rawNativeIdsPublished": false,
+        "machinePathsPublished": false,
+        "rawPromptsOrToolContentPublished": false,
+        "providerCalls": 0,
+        "nativeDataWrites": 0,
+        "allScopedChargesRetained": true,
+        "automaticSavingsClaim": false
+      }
+    }
+  ],
+  "pairedComparisonClaim": false
+}

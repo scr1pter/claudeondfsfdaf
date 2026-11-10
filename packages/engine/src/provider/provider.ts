@@ -88,6 +88,7 @@ import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
 import { ResponseTerminal } from "./response-terminal"
+import { ResponseStall } from "./response-stall"
 import { ModelSlots } from "@vectordevai/core/local-mode/model-slots"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { Egress } from "@vectordevai/core/local-mode/egress"
@@ -101,54 +102,6 @@ const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 // large prompt can keep it busy between chunks. A provider's own headerTimeout or chunkTimeout replaces these.
 export const LOCAL_HEADER_TIMEOUT = 600_000
 export const LOCAL_CHUNK_TIMEOUT = 120_000
-
-function wrapSSE(res: Response, ms: number, ctl: AbortController) {
-  if (typeof ms !== "number" || ms <= 0) return res
-  if (!res.body) return res
-  if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
-
-  const reader = res.body.getReader()
-  const body = new ReadableStream<Uint8Array>({
-    async pull(ctrl) {
-      const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
-        const id = setTimeout(() => {
-          const err = new ProviderError.ResponseStreamError("SSE read timed out")
-          ctl.abort(err)
-          void reader.cancel(err)
-          reject(err)
-        }, ms)
-
-        reader.read().then(
-          (part) => {
-            clearTimeout(id)
-            resolve(part)
-          },
-          (err) => {
-            clearTimeout(id)
-            reject(err)
-          },
-        )
-      })
-
-      if (part.done) {
-        ctrl.close()
-        return
-      }
-
-      ctrl.enqueue(part.value)
-    },
-    async cancel(reason) {
-      ctl.abort(reason)
-      await reader.cancel(reason)
-    },
-  })
-
-  return new Response(body, {
-    headers: new Headers(res.headers),
-    status: res.status,
-    statusText: res.statusText,
-  })
-}
 
 function timeoutController(ms: number) {
   const ctl = new AbortController()
@@ -2565,6 +2518,15 @@ const layer = Layer.effect(
           ) !== undefined
         const chunkTimeout = options["chunkTimeout"] ?? (hosted ? LOCAL_CHUNK_TIMEOUT : undefined)
         const headerTimeout = options["headerTimeout"] ?? (hosted ? LOCAL_HEADER_TIMEOUT : undefined)
+        const promptCacheBreakpoints = ProviderTransform.promptCacheBreakpointsEnabled({
+          setting: options["promptCacheBreakpoints"],
+          providerID: model.providerID,
+          npm: model.api.npm,
+          modelID: model.api.id,
+          apiKey: credential?.type === "api" || (!credential && typeof options["apiKey"] === "string"),
+          url: baseURL,
+        })
+        delete options["promptCacheBreakpoints"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
         delete options["preconnect"]
@@ -2575,12 +2537,27 @@ const layer = Layer.effect(
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = { ...init }
+          const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+          const marker = headers.get(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+          headers.delete(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+          if (marker !== null) opts.headers = headers
+          const requestInput =
+            input instanceof Request && input.headers.has(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+              ? new Request(input, { headers })
+              : input
           const body = ProviderTransform.reasoningContextBody(
             model.api.npm,
             runtimeFlags.experimentalReasoningContext,
             init?.body,
           )
           if (body !== undefined) opts.body = body
+          const cacheBody = ProviderTransform.promptCacheBreakpointBody({
+            enabled: promptCacheBreakpoints,
+            url: input instanceof Request ? input.url : String(input),
+            marker,
+            body: opts.body,
+          })
+          if (cacheBody !== undefined) opts.body = cacheBody
           // A request that reaches OpenRouter here skips every free-model check, so it must not name a free model.
           // Model and provider options can replace the model the SDK sends (`model` in them overrides it). Their
           // fallbacks, presets and plugins still go out, but where they could let OpenRouter answer from another
@@ -2647,7 +2624,7 @@ const layer = Layer.effect(
           const res = ResponseTerminal.wrap(
             await Egress.fetch(
               policy.enabled ? inferenceSource(names, target, policy, holds) : "local-inference",
-              input,
+              requestInput,
               {
                 ...opts,
                 // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
@@ -2672,7 +2649,7 @@ const layer = Layer.effect(
           )
 
           if (!chunkAbortCtl) return res
-          return wrapSSE(res, chunkTimeout, chunkAbortCtl)
+          return ResponseStall.wrap(res, chunkTimeout, chunkAbortCtl)
         }
 
         const bundledLoader = BUNDLED_PROVIDERS[model.api.npm]

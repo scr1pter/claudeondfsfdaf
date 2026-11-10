@@ -181,6 +181,23 @@ async function appendOutcome(outcome: ModelOutcome, updatedAt?: number) {
   setVersion((value) => value + 1)
 }
 
+/**
+ * Forgets a project's recorded outcomes, or one session's, when the owner erases what Vector learned there or resets
+ * workflow insights. The recommender and learned workflow defaults read separate data, so erasing one clears both.
+ */
+export function clearOutcomes(projectId: string, input: { readonly sessionID?: string } = {}): Promise<void> {
+  return queueOutcome(projectId, async () => {
+    const sessionID = input.sessionID
+    const kept = sessionID
+      ? (await readOutcomes(projectId)).filter(
+          (outcome) => outcome.id !== `session:${sessionID}` && outcome.workspaceVersion?.sessionID !== sessionID,
+        )
+      : []
+    await writeOutcomes(projectId, kept)
+    setVersion((value) => value + 1)
+  }).catch(() => undefined)
+}
+
 // Filter at the storage boundary so every consumer, including exports and model rankings, sees the same history.
 export async function listOutcomes(projectId: string): Promise<ModelOutcome[]> {
   return readOutcomes(projectId).catch(() => [])

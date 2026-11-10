@@ -1,0 +1,22 @@
+{
+  "kind": "preregistered-maintenance-business-check-inventory-v1",
+  "business": [
+    "legacy-health", "legacy-list-accounts", "legacy-get-account", "legacy-list-usage", "legacy-quote",
+    "legacy-create-account", "legacy-record-usage", "legacy-workspace-isolation", "unknown-route", "authentication-required",
+    "migration-v2-envelope", "migration-exact-backup", "migration-restart-idempotent", "checksum-corruption-refused", "future-version-refused",
+    "invalid-legacy-refused", "stale-owner-lock-recovery", "second-live-owner-refused", "usage-exact-replay", "usage-conflicting-replay",
+    "usage-input-validation", "usage-utc-month-boundary", "usage-concurrent-deduplication", "account-plan-validation", "invoice-snapshot-arithmetic",
+    "invoice-exact-replay", "invoice-conflicting-replay", "invoice-concurrent-period-uniqueness", "reader-write-denied", "billing-key-account-scope",
+    "key-management-owner-only", "revocation-immediate", "revoked-idempotent-replay-denied", "revoked-inflight-body-denied", "invoice-workspace-isolation",
+    "invoice-account-scope-isolation", "late-usage-preserves-issued-invoice", "invoice-restart-durability", "credit-balance-arithmetic", "credit-exact-replay",
+    "credit-conflicting-replay", "overcredit-atomic-rejection", "concurrent-credit-limit", "credit-input-validation", "credit-workspace-isolation",
+    "sdk-connected-workflows", "sdk-strict-types", "sdk-api-error-contract", "cli-connected-workflows", "cli-error-and-secret-contract"
+  ],
+  "prerequisite": ["source-syntax", "server-readiness", "no-external-dependencies", "authored-source-unchanged"],
+  "expectedBusiness": 50,
+  "expectedPrerequisite": 4,
+  "expectedTotal": 54,
+  "seedPolicy": "The working legacy seed may pass business checks. Record the actual full seed outcome; never require or report an invented zero.",
+  "negativeControls": ["checksum-bypass", "revoked-replay", "inflight-revocation", "credit-cap-bypass", "invoice-recalculation"],
+  "scope": "Synthetic offline maintenance workload; no real billing or production security claim."
+}

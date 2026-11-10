@@ -7,6 +7,7 @@ import path from "path"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Effect } from "effect"
 import { Session } from "@/session/session"
+import { BackgroundJob } from "@/background/job"
 
 import { SessionRevert } from "../../src/session/revert"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -19,7 +20,14 @@ import { ModelV2 } from "@vectordevai/core/model"
 
 const it = testEffect(
   LayerNode.compile(
-    LayerNode.group([Session.node, SessionRevert.node, Snapshot.node, SessionProjector.node, CrossSpawnSpawner.node]),
+    LayerNode.group([
+      Session.node,
+      SessionRevert.node,
+      Snapshot.node,
+      SessionProjector.node,
+      CrossSpawnSpawner.node,
+      BackgroundJob.node,
+    ]),
   ),
 )
 
@@ -421,6 +429,48 @@ describe("revert + compact workflow", () => {
           expect(ids).toContain(a1.id)
           expect(ids).not.toContain(u2.id)
           expect(ids).not.toContain(a2.id)
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live(
+    "cleanup stops background commands that the removed messages started, and leaves earlier ones running",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+          const jobs = yield* BackgroundJob.Service
+
+          const info = yield* session.create({})
+          const sid = info.id
+          const u1 = yield* user(sid)
+          const a1 = yield* assistant(sid, u1.id, dir)
+          const u2 = yield* user(sid)
+          const a2 = yield* assistant(sid, u2.id, dir)
+          // Background commands (5.H) name the message and call that started them, as background subagents do.
+          const command = (id: string, messageID: MessageID, callID: string) =>
+            jobs.start({
+              id,
+              type: "shell",
+              title: id,
+              metadata: { parentSessionId: sid, background: true, parentMessageId: messageID, callID },
+              run: Effect.never,
+            })
+          yield* command("shl_0123456789abKeptCommand01", a1.id, "call-1")
+          yield* command("shl_0123456789abUndoneCommand1", a2.id, "call-2")
+
+          yield* session.setRevert({
+            sessionID: sid,
+            revert: { messageID: u2.id },
+            summary: { additions: 0, deletions: 0, files: 0 },
+          })
+          yield* revert.cleanup(yield* session.get(sid))
+
+          expect((yield* jobs.get("shl_0123456789abUndoneCommand1"))?.status).toBe("cancelled")
+          expect((yield* jobs.get("shl_0123456789abKeptCommand01"))?.status).toBe("running")
+          yield* jobs.cancel("shl_0123456789abKeptCommand01")
         }),
       { git: true },
     ),

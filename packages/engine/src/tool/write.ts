@@ -14,6 +14,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { assertOwnedPath } from "./owned-path"
+import { FileLock } from "./file-lock"
+import { FileState } from "./file-state"
 import * as Bom from "@/util/bom"
 import { Instruction } from "../session/instruction"
 import { SessionMemory } from "../session/memory"
@@ -48,12 +50,22 @@ export const WriteTool = Tool.define(
           yield* assertExternalDirectoryEffect(ctx, filepath)
           yield* assertOwnedPath(ctx, filepath)
 
-          const exists = yield* fs.existsSafe(filepath)
-          const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
           const next = Bom.split(params.content)
-          const desiredBom = source.bom || next.bom
-          const contentOld = source.text
           const contentNew = next.text
+          const before = yield* FileState.observe(filepath)
+          const check = (now: FileState.Observed | undefined) =>
+            FileState.verify({
+              sessionID: ctx.sessionID,
+              file: filepath,
+              now: now?.stamp,
+              kind: "update",
+              messages: ctx.messages,
+              tool: "write",
+              inFamily: ctx.inFamily,
+            })
+          yield* check(before)
+          const source = before ? Bom.decode(before.bytes) : { bom: false, text: "" }
+          const contentOld = source.text
 
           const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
           yield* ctx.ask({
@@ -66,20 +78,35 @@ export const WriteTool = Tool.define(
             },
           })
 
-          yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
-          if (yield* format.file(filepath)) {
-            yield* Bom.syncFile(fs, filepath, desiredBom)
-          }
-          yield* events.publish(FileSystem.Event.Edited, {
-            file: filepath,
-            sessionID: ctx.sessionID,
-            agent: ctx.agent,
-            messageID: ctx.messageID,
-          })
-          yield* events.publish(Watcher.Event.Updated, {
-            file: filepath,
-            event: exists ? "change" : "add",
-          })
+          // Never held across the ask. A change since the read above passes only when this session made it.
+          const { exists, fileState } = yield* FileLock.withFiles([filepath])(
+            Effect.gen(function* () {
+              const current = yield* FileState.observe(filepath)
+              if (!FileState.same(current?.stamp, before?.stamp)) yield* check(current)
+              const bom = (current ? Bom.decode(current.bytes).bom : false) || next.bom
+              if (ctx.assertWritable) yield* ctx.assertWritable({ files: [filepath] })
+              yield* FileLock.write(fs, filepath, Bom.join(contentNew, bom))
+              if (yield* format.file(filepath)) {
+                yield* Bom.syncFile(fs, filepath, bom)
+              }
+              const fileState = yield* FileState.commit({
+                sessionID: ctx.sessionID,
+                file: filepath,
+                title: typeof ctx.extra?.subagentTitle === "string" ? ctx.extra.subagentTitle : undefined,
+              })
+              yield* events.publish(FileSystem.Event.Edited, {
+                file: filepath,
+                sessionID: ctx.sessionID,
+                agent: ctx.agent,
+                messageID: ctx.messageID,
+              })
+              yield* events.publish(Watcher.Event.Updated, {
+                file: filepath,
+                event: current ? "change" : "add",
+              })
+              return { exists: current !== undefined, fileState }
+            }),
+          )
 
           let output = "Wrote file successfully."
           yield* lsp.touchFile(filepath, "document")
@@ -106,6 +133,7 @@ export const WriteTool = Tool.define(
               diagnostics,
               filepath,
               exists: exists,
+              fileState,
               ...(guarded.links.length ? { [Instruction.LINKS]: guarded.links } : {}),
             },
             output: guarded.text ? `${output}\n\n${guarded.text}` : output,

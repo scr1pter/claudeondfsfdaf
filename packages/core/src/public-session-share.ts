@@ -11,6 +11,7 @@ import { EventV2 } from "./event"
 import { SessionEvent } from "./session/event"
 import { SessionSchema } from "./session/schema"
 import { SessionTable } from "./session/sql"
+import { SessionAudience } from "./session/audience"
 import { PublicSessionShareTable, PublicSessionConsentTable } from "./share/public.sql"
 import { SessionArchive } from "./share/archive"
 import { accountOwner, encodedBody, makeShareTransport, shareID } from "./share/transport"
@@ -40,7 +41,26 @@ export const layerWith = (options?: { fetch?: typeof fetch }) =>
     Service,
     Effect.gen(function* () {
       const { db } = yield* Database.Service
+      const audience = SessionAudience.make({ db })
+      const privateShare = () =>
+        new PublicSession.Error({
+          code: "INVALID",
+          message: "Private conversations cannot be published or publicly exported.",
+        })
       const archive = yield* SessionArchive.Service
+      // The local export reads the history and its privacy flag in one read snapshot, with no write lock. A fence only
+      // adds rows and comes before any private bytes, so a snapshot that does not show it holds none of them. Building,
+      // encoding and scanning the public archive run after that snapshot is released: a live share captures about once
+      // a second, and must neither hold back another engine's writes nor wait on them.
+      const captureArchive = (input: SessionArchive.Selection) =>
+        Effect.gen(function* () {
+          const local = yield* archive.export(input)
+          if (local.privacy === "owner-only") return yield* privateShare()
+          const snapshot = yield* Effect.try({ try: () => SessionArchive.publicArchive(local), catch: unavailable })
+          const body = yield* Effect.try({ try: () => encodedBody(snapshot), catch: unavailable })
+          if (yield* audience.containsPrivateText(body)) return yield* privateShare()
+          return snapshot
+        })
       const credentials = yield* FreeModels.CredentialsService
       const events = yield* EventV2.Service
       const scope = yield* Scope.Scope
@@ -170,7 +190,8 @@ export const layerWith = (options?: { fetch?: typeof fetch }) =>
             message: "This public session has expired. Unshare it before creating a new link.",
           })
         if (row.state === "active" && !row.updates) return info(row)
-        const snapshot = yield* archive.preview({
+        // The network sends only these captured bytes, which a later fence cannot reach.
+        const snapshot = yield* captureArchive({
           sessionID: SessionSchema.ID.make(row.session_id),
           engine: row.engine,
         })
@@ -224,6 +245,7 @@ export const layerWith = (options?: { fetch?: typeof fetch }) =>
       const publish = (input: SessionArchive.Selection & PublicSession.Publish) =>
         lock(input.sessionID).withPermit(
           Effect.gen(function* () {
+            if (yield* audience.isPrivate(input.sessionID)) return yield* privateShare()
             if (!Schema.is(PublicSession.Consent)(input.consent))
               return yield* new PublicSession.Error({
                 code: "CONSENT_REQUIRED",
@@ -241,7 +263,7 @@ export const layerWith = (options?: { fetch?: typeof fetch }) =>
             const auth = yield* token
             const prior = yield* stored(input.sessionID)
             if (prior) return yield* write(prior, auth)
-            const snapshot = yield* archive.preview(input)
+            const snapshot = yield* captureArchive(input)
             yield* Effect.try({ try: () => encodedBody(snapshot), catch: unavailable })
             if (
               !input.consent.updates &&

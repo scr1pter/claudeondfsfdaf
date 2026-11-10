@@ -2,7 +2,11 @@ import { Billing } from "@vectordevai/schema/billing"
 import { stepForOutput, toolForOutput } from "./run/usage-output"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
-import { nextBackgroundEvent } from "./run/background-wait"
+import { backgroundTracker, nextBackgroundEvent, trackShell, waitingFor } from "./run/background-wait"
+import { runSessionAncestry } from "./run/ancestry"
+import { runWorkflow } from "./run/workflow"
+import { INTERRUPT_EXIT_CODE, handlesInterrupt, watchInterrupts } from "./run/interrupt"
+import { assertWorkflowOwner, parseWorkflowInputs, readWorkflowSource, requireWorkflowCapability } from "./workflow"
 // CLI entry point for `vector run` and `vector --mini`.
 //
 // Handles three modes:
@@ -45,6 +49,37 @@ import { FREE_MODELS_SIGN_IN_TERMINAL } from "@vectordevai/core/free-model-choic
 import { freeModelRunNotice } from "./run/free-model-notice"
 
 type ModelInput = Parameters<VectorClient["session"]["prompt"]>[0]["model"]
+
+export function validateWorkflowRunOptions(args: Record<string, unknown>, message = "") {
+  if (!args.workflow) {
+    if (args.input !== undefined || args.summarize !== undefined)
+      throw new Error("--input and --summarize require --workflow")
+    return
+  }
+  const incompatible = [
+    "command",
+    "mini",
+    "interactive",
+    "research",
+    "file",
+    "model",
+    "agent",
+    "variant",
+    "size",
+    "judge",
+    "max-cost",
+    "max-steps",
+    "stop-helpers",
+    "thinking",
+    "demo",
+  ].filter(
+    (key) => args[key] !== undefined && args[key] !== false && (!Array.isArray(args[key]) || args[key].length > 0),
+  )
+  if (message.trim() || incompatible.length || args.format === "json")
+    throw new Error(
+      "--workflow runs a workflow without a prompt, attached files or prompt-only options. Set agent/model and limits in the workflow or conversation; use vector workflow show --json for structured results.",
+    )
+}
 
 /** @internal Exported for focused permission-policy tests. */
 export function runPermissionReply(
@@ -222,6 +257,20 @@ export const RunCommand = effectCmd({
         describe: "the command to run, use message for args",
         type: "string",
       })
+      .option("workflow", {
+        type: "string",
+        describe:
+          "run a saved workflow name or local JSON file; prints its plan and progress to stderr and report to stdout",
+      })
+      .option("input", {
+        type: "string",
+        array: true,
+        describe: "with --workflow: input key=value (JSON values or literal strings)",
+      })
+      .option("summarize", {
+        type: "boolean",
+        describe: "with --workflow: ask the conversation's agent to summarize the final report",
+      })
       .option("continue", {
         alias: ["c"],
         describe: "continue the last session",
@@ -326,11 +375,16 @@ export const RunCommand = effectCmd({
         type: "number",
         describe: "stop this run after this many model steps",
       })
+      .option("stop-helpers", {
+        type: "boolean",
+        describe:
+          "Ctrl+C at a terminal also stops the subagents and background commands this session started, not only the main turn. Without --attach, exiting ends them anyway",
+      })
       .option("size", {
         type: "string",
         choices: ["auto", "chat", "light", "standard", "thorough"],
         describe:
-          "how much harness each prompt gets: auto (default) sizes it from what it says; only thorough offers subagents",
+          "how much harness each prompt gets: auto (default) sizes it from what it says; standard and thorough offer subagents; light only manages ones already running",
       })
       .option("judge", {
         type: "string",
@@ -368,7 +422,7 @@ export const RunCommand = effectCmd({
       })
       .option("report", {
         type: "string",
-        describe: "with --research: write the report, with its sources, to this Markdown file",
+        describe: "with --research: write the report and sources to a .md, .json, .docx or .pdf file",
       })
       .option("auto", {
         type: "boolean",
@@ -397,6 +451,7 @@ export const RunCommand = effectCmd({
         describe: "enable direct interactive demo slash commands; pass one as the message to run it immediately",
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
+    if (args.workflow) yield* Effect.promise(() => assertWorkflowOwner("start workflows"))
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
     const { InstanceRef } = yield* Effect.promise(() => import("@/effect/instance-ref"))
@@ -406,8 +461,11 @@ export const RunCommand = effectCmd({
     const providerSvc = yield* Provider.Service
     const flags = yield* RuntimeFlags.Service
     const localInstance = yield* InstanceRef
+    const { InstanceStore } = yield* Effect.promise(() => import("@/project/instance-store"))
+    const instances = yield* InstanceStore.Service
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
+      validateWorkflowRunOptions(args, rawMessage)
       const interactive = args.mini
       const auto = args.auto || args.yolo || args["dangerously-skip-permissions"]
       const thinking = interactive ? (args.thinking ?? true) : (args.thinking ?? false)
@@ -511,6 +569,13 @@ export const RunCommand = effectCmd({
           process.exit(1)
         }
       })()
+      const workflow = args.workflow
+        ? {
+            ...(await readWorkflowSource(args.workflow)),
+            inputs: parseWorkflowInputs(args.input),
+            ...(args.title ? { title: args.title } : {}),
+          }
+        : undefined
       if (args.attach)
         ServerAuth.assertSecurePasswordTransport(args.attach, args.password ?? process.env.VECTOR_SERVER_PASSWORD)
       const attachHeaders = args.attach
@@ -608,13 +673,13 @@ export const RunCommand = effectCmd({
         }
       }
 
-      const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
+      const piped = workflow || process.stdin.isTTY ? undefined : await Bun.stdin.text()
       // A prompt sends what was piped in as a part of its own (see `promptParts`), and a command as a message before it
       // (see `commandInput`).
       const input = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 
-      if (input.trim().length === 0 && !args.command && !interactive) {
+      if (input.trim().length === 0 && !args.command && !interactive && !workflow) {
         UI.error("You must provide a message or a command")
         process.exit(1)
       }
@@ -646,6 +711,7 @@ export const RunCommand = effectCmd({
 
       function title() {
         if (args.title) return args.title
+        if (args.workflow) return `Workflow: ${args.workflow}`
         // A headless run has no one to show a title to, so it names its session after the prompt instead of sending a
         // model request for a title.
         if (args.title === undefined && interactive) return undefined
@@ -903,6 +969,7 @@ export const RunCommand = effectCmd({
       }
 
       async function execute(sdk: VectorClient) {
+        if (workflow) await requireWorkflowCapability(sdk, "start")
         const available = await sdk.config.providers({}, { throwOnError: true })
         if (!available.data.providers.some((provider) => Object.keys(provider.models).length > 0)) {
           // With Vector Local on, models whose servers are not on the list are off; say which, not how to sign in.
@@ -977,37 +1044,19 @@ export const RunCommand = effectCmd({
           // Subagents run in child sessions, and a request left unanswered there blocks the whole run, so the run
           // answers requests from any session that descends from its own.
           const tree = new Set([sessionID])
-          const inRun = async (id: string | undefined, depth = 0): Promise<boolean> => {
-            if (!id || depth > 4) return false
-            if (tree.has(id)) return true
-            const parent = (await client.session.get({ sessionID: id }).catch(() => undefined))?.data?.parentID
-            if (!(await inRun(parent, depth + 1))) return false
-            tree.add(id)
-            return true
-          }
+          const inRun = runSessionAncestry(tree, async (id) =>
+            (await client.session.get({ sessionID: id }, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined))?.data,
+          )
           let error: string | undefined
           // A background subagent reports back in a follow-up turn after this session goes idle, and exiting would stop
           // it, so the run waits for each one it launched and for the turn that answers it. A stopped one starts no
           // turn. A note is answered once an assistant message created after it finishes: one that lands while a turn
-          // is ending is read by the next turn, which starts after the session has briefly gone idle.
-          const background = {
-            running: new Set<string>(),
-            unanswered: new Set<string>(),
-            // Task → the message that carried its note.
-            noted: new Map<string, string>(),
-            // The latest assistant message in this session that has finished. Message IDs sort by creation.
-            answered: "",
-          }
+          // is ending is read by the next turn, which starts after the session has briefly gone idle. A background
+          // command (5.H) is waited for the same way, from the shell call that started it to its exit note.
+          const background = backgroundTracker()
           let idle = false
           let activeAt = Date.now()
-          const waited = () => background.running.size === 0 && background.unanswered.size === 0
-          const settleNotes = () => {
-            for (const [task, messageID] of background.noted) {
-              if (messageID >= background.answered) continue
-              background.unanswered.delete(task)
-              background.noted.delete(task)
-            }
-          }
+          const waited = background.settled
 
           const iterator = events.stream[Symbol.asyncIterator]()
           while (true) {
@@ -1020,7 +1069,7 @@ export const RunCommand = effectCmd({
             if (failure.request) break
             if (next.timedOut || next.disconnected) {
               const message = next.timedOut
-                ? `Stopped waiting for ${background.running.size + background.unanswered.size} background subagent(s) after ${Math.round(backgroundWait / 1000)}s without activity`
+                ? `Stopped waiting for ${waitingFor(background)} after ${Math.round(backgroundWait / 1000)}s without activity`
                 : "The event stream ended before the parent and its background subagents finished. Completion could not be confirmed."
               error = error ? error + EOL + message : message
               if (
@@ -1067,7 +1116,9 @@ export const RunCommand = effectCmd({
                     ? properties.part.sessionID
                     : undefined
               : undefined
-            if (owner && tree.has(owner)) activeAt = Date.now()
+            // Discover nested activity on its first event, before a step finishes
+            // or a permission prompt appears, in every output format.
+            if (owner && (await inRun(owner))) activeAt = Date.now()
 
             if (
               (event.type === "session.created" || event.type === "session.updated") &&
@@ -1077,18 +1128,13 @@ export const RunCommand = effectCmd({
               const id = event.properties.info.id
               tree.add(id)
               activeAt = Date.now()
-              if (status === "running" || status === "queued") {
-                background.running.add(id)
-                background.unanswered.delete(id)
-              }
-              if (status === "completed" || status === "error") {
-                background.running.delete(id)
-                background.unanswered.add(id)
-              }
-              if (status === "cancelled") {
-                background.running.delete(id)
-                background.unanswered.delete(id)
-              }
+              const record = event.properties.info.metadata?.subagent
+              if (status)
+                background.status(
+                  id,
+                  status,
+                  isRecord(record) && typeof record.attempt === "number" ? record.attempt : undefined,
+                )
               if (status && idle && waited()) break
             }
 
@@ -1096,11 +1142,9 @@ export const RunCommand = effectCmd({
               event.type === "message.updated" &&
               event.properties.sessionID === sessionID &&
               event.properties.info.role === "assistant" &&
-              event.properties.info.time.completed !== undefined &&
-              event.properties.info.id > background.answered
+              event.properties.info.time.completed !== undefined
             ) {
-              background.answered = event.properties.info.id
-              settleNotes()
+              background.answer(event.properties.info.id)
               if (idle && waited()) break
             }
 
@@ -1134,7 +1178,16 @@ export const RunCommand = effectCmd({
               const part = event.properties.part
               const note =
                 part.sessionID === sessionID && part.type === "text" ? part.metadata?.taskNotification : undefined
-              if (isRecord(note) && typeof note.taskID === "string") background.noted.set(note.taskID, part.messageID)
+              if (isRecord(note) && typeof note.taskID === "string") {
+                background.note(
+                  note.taskID,
+                  part.messageID,
+                  note.quiet === true,
+                  typeof note.attempt === "number" ? note.attempt : undefined,
+                )
+                if (idle && waited()) break
+              }
+              if (part.sessionID === sessionID && trackShell(background, part) && idle && waited()) break
               if (part.sessionID !== sessionID) {
                 // A subagent's steps bill this run too. JSON output reports them, marked as a subagent's, so a
                 // consumer that totals step_finish records gets what the run spent.
@@ -1245,7 +1298,6 @@ export const RunCommand = effectCmd({
             if (event.type === "session.status" && event.properties.sessionID === sessionID) {
               idle = event.properties.status.type === "idle"
               if (idle) {
-                settleNotes()
                 if (waited()) break
               }
             }
@@ -1286,6 +1338,19 @@ export const RunCommand = effectCmd({
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
 
+        if (workflow) {
+          const result = await runWorkflow(
+            client,
+            { sessionID, source: workflow, summarize: args.summarize, auto, timeout: backgroundWait },
+            {
+              stdout: (text) => process.stdout.write(text),
+              stderr: (text) => process.stderr.write(text),
+            },
+          )
+          if (result.exitCode) process.exitCode = result.exitCode
+          return
+        }
+
         // Validate agent if specified
         const agent = await pickAgent(client)
 
@@ -1309,15 +1374,55 @@ export const RunCommand = effectCmd({
         if (!interactive) {
           const streamAbort = new AbortController()
           const events = await client.event.subscribe(undefined, { signal: streamAbort.signal })
+          // Ctrl+C at a terminal (5.I.6): with --attach the first press stops the main turn, or everything with
+          // --stop-helpers, and says which helpers keep running; a second press within 5 s stops them too and exits
+          // 130. SIGTERM and runs without a terminal keep the default.
+          // Without --attach the engine runs here, and the terminal's interrupt reached the processes it started, so
+          // every press stops everything and exits (interrupt.ts). process.exit skips the command's own disposal: the
+          // in-process engine is disposed first, so the background commands and helpers it started end with it (5.H),
+          // bounded like the stop before it. A press while that runs exits at once.
+          let leaving = false
+          const leave = (code: number) => {
+            const local = args.attach ? undefined : localInstance
+            if (leaving || !local) return process.exit(code)
+            leaving = true
+            void Promise.race([
+              Effect.runPromise(instances.dispose(local)),
+              new Promise((resolve) => setTimeout(resolve, 5_000)),
+            ])
+              .catch(() => undefined)
+              .finally(() => process.exit(code))
+          }
+          const interrupts = handlesInterrupt({
+            interactive,
+            workflow: false,
+            tty: process.stdin.isTTY === true || process.stderr.isTTY === true,
+          })
+            ? watchInterrupts({
+                client,
+                sessionID,
+                stopHelpers: args["stop-helpers"] === true,
+                inProcess: !args.attach,
+                write: (text) => process.stderr.write(text + EOL),
+                exit: leave,
+              })
+            : undefined
           const completed = loop(client, events)
             .catch((e) => {
               console.error(e)
               process.exitCode = 1
             })
-            .finally(() => streamAbort.abort())
+            .finally(() => {
+              streamAbort.abort()
+              interrupts?.dispose()
+            })
           async function finish() {
             const error = await completed
             if (error) process.exitCode = 1
+          }
+          // A run the user stopped with Ctrl+C ends as an interrupted command does.
+          const interrupted = () => {
+            if (interrupts?.interrupted) process.exitCode = INTERRUPT_EXIT_CODE
           }
 
           if (args.command) {
@@ -1345,6 +1450,7 @@ export const RunCommand = effectCmd({
             }
             await finish()
             conclude(result.data?.info)
+            interrupted()
             return
           }
 
@@ -1373,6 +1479,7 @@ export const RunCommand = effectCmd({
           }
           await finish()
           conclude(result.data?.info)
+          interrupted()
           if (args.report) await writeReport(client, sessionID, args.report)
           return
         }
@@ -1551,7 +1658,7 @@ export function researchProgress(part: {
   return { icon: "⚙", title }
 }
 
-// Writes the run's latest report, with its sources, to `file` for `vector run --research --report`.
+// The extension selects the attachment format; unknown extensions keep the existing Markdown behavior.
 async function writeReport(client: VectorClient, sessionID: string, file: string) {
   const messages = (await client.session.messages({ sessionID }).catch(() => undefined))?.data ?? []
   const runID = messages
@@ -1571,15 +1678,23 @@ async function writeReport(client: VectorClient, sessionID: string, file: string
     process.exitCode = 1
     return
   }
+  const extension = path.extname(file).toLowerCase()
+  const format =
+    extension === ".pdf" ? "pdf" : extension === ".docx" ? "docx" : extension === ".json" ? "json" : "markdown"
+  const binary = format === "pdf" || format === "docx"
   const exported = await client.memory.research
-    .export({ runID, format: "markdown" })
+    .export({ runID, format }, { parseAs: binary ? "blob" : "text" })
     .catch((error: unknown) => ({ error, data: undefined }))
-  if (exported.error || typeof exported.data !== "string") {
+  const body: unknown = exported.data
+  if (exported.error || (binary ? !(body instanceof Blob) : typeof body !== "string")) {
     UI.error(`Could not read the report: ${formatRunError(exported.error)}`)
     process.exitCode = 1
     return
   }
-  await Bun.write(path.resolve(file), exported.data)
+  await Bun.write(
+    path.resolve(file),
+    body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : (body as string),
+  )
   process.stderr.write(`Report written to ${path.resolve(file)}${EOL}`)
 }
 
@@ -1652,6 +1767,9 @@ export async function runMini(input: MiniCommandInput) {
     message: input.prompt ? [input.prompt] : [],
     share: undefined,
     command: undefined,
+    workflow: undefined,
+    input: undefined,
+    summarize: undefined,
     continue: input.continue,
     session: input.session,
     fork: input.fork,
@@ -1680,6 +1798,8 @@ export async function runMini(input: MiniCommandInput) {
     "max-cost": undefined,
     maxCost: undefined,
     "max-steps": undefined,
+    "stop-helpers": undefined,
+    stopHelpers: undefined,
     size: undefined,
     judge: undefined,
     research: undefined,

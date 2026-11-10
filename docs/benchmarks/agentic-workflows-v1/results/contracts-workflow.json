@@ -1,0 +1,366 @@
+{
+  "schemaVersion": 1,
+  "study": "agentic-workflows-v1",
+  "task": "workflow-runner",
+  "stage": "contracts_candidate_task_1",
+  "candidateRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "candidateSourceDirty": false,
+  "taskInstrument": {
+    "revision": "postlaunch-keyboard-v2",
+    "taskSha256": "bc418928e76adaebed02f7de9339d23c881c0d10bca33adb7b4b5002b6de7547",
+    "sharedByBothArms": true
+  },
+  "matchedExecution": {
+    "model": "gpt-6.1-sol",
+    "reasoning": "high",
+    "autonomousAgentsPerRuntime": 1,
+    "contextLimit": 1050000,
+    "outputCeiling": 32000,
+    "reasoningSummary": "auto",
+    "verbosity": "low",
+    "browserAccessMode": "shared-client"
+  },
+  "costBasis": "Usage-derived provider receipt charges under the funded meter; not invoice-reconciled",
+  "allChargesRetained": true,
+  "historicalSpendingReset": false,
+  "arms": {
+    "codex": {
+      "providerRequests": 30,
+      "measuredUsd": 0.8919725,
+      "agentWallMs": 664828,
+      "attempts": 1,
+      "paidRepairs": 0,
+      "firstSubmissionEqualsCompleteEpisode": true,
+      "settlementComplete": true,
+      "allChargesRetained": true,
+      "functionalEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true,
+        "sourceIntegrityStatus": "unchanged",
+        "exitCode": 0,
+        "evaluationModelCalls": 0
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "sourceFileCount": 19,
+      "sourcePublication": "../submissions/contracts-workflow/codex-first/source"
+    },
+    "vector": {
+      "providerRequests": 47,
+      "measuredUsd": 0.7512629,
+      "agentWallMs": 514140,
+      "attempts": 1,
+      "paidRepairs": 0,
+      "firstSubmissionEqualsCompleteEpisode": true,
+      "settlementComplete": true,
+      "allChargesRetained": true,
+      "functionalEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true,
+        "sourceIntegrityStatus": "unchanged",
+        "exitCode": 0,
+        "evaluationModelCalls": 0
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "sourceFileCount": 15,
+      "sourcePublication": "../submissions/contracts-workflow/vector-first/source"
+    }
+  },
+  "providerUsage": {
+    "kind": "Sanitized numeric projection of only the receipts for this completed pair",
+    "reasoningTokensAreSubsetOfOutput": true,
+    "cacheReadsWritesAreSubsetOfInput": true,
+    "fundedRatesUsdPerMillion": {
+      "uncachedInput": 2,
+      "cacheRead": 0.1,
+      "cacheWrite30m": 2.5,
+      "cacheWrite12h": 5,
+      "output": 10
+    },
+    "rateEvidence": "All selected receipts use the same recorded funded-meter rates; these are study rates, not a public pricing claim.",
+    "cacheWriteTtlRule": "When the receipt omits TTL detail, the funded meter accounts generic cache writes at its 30-minute rate. Explicit TTL detail is retained when present.",
+    "cases": {
+      "codex": {
+        "providerRequests": 30,
+        "measuredUsd": 0.8919725,
+        "tokens": {
+          "inputTokens": 1733035,
+          "cachedInputTokens": 1641525,
+          "cacheWriteTokens": 91420,
+          "cacheWrite30mTokens": 91420,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 90,
+          "outputTokens": 49909,
+          "reasoningTokens": 11998,
+          "totalTokens": 1782944
+        },
+        "cacheWriteTtlDetailedReceipts": 0,
+        "cacheWriteTtlDefaultedReceipts": 30,
+        "allRequestedModel": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "recomputedFundedCostUsd": 0.8919725,
+        "usageCostReconciled": true
+      },
+      "vector": {
+        "providerRequests": 47,
+        "measuredUsd": 0.7512629,
+        "tokens": {
+          "inputTokens": 2203714,
+          "cachedInputTokens": 2123084,
+          "cacheWriteTokens": 80489,
+          "cacheWrite30mTokens": 80489,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 141,
+          "outputTokens": 33745,
+          "reasoningTokens": 9923,
+          "totalTokens": 2237459
+        },
+        "cacheWriteTtlDetailedReceipts": 47,
+        "cacheWriteTtlDefaultedReceipts": 0,
+        "allRequestedModel": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "recomputedFundedCostUsd": 0.7512629,
+        "usageCostReconciled": true
+      }
+    }
+  },
+  "browserAccessAudit": {
+    "kind": "Numeric and fixed-metadata projection of the bounded posthoc audit",
+    "newSharedClientProfile": true,
+    "policy": {
+      "commonClientRequired": true,
+      "directLibraryEnvironmentProvided": false,
+      "posthocAudit": "bounded_manual_review_metadata",
+      "operatingSystemSandbox": false
+    },
+    "cases": {
+      "codex": {
+        "mode": "shared-client",
+        "status": "no_clear_bypass_observed",
+        "counts": {
+          "lines": 197,
+          "toolExecutions": 74,
+          "commandsInspected": 53,
+          "scriptsInspected": 0,
+          "directBrowserReferences": 0,
+          "commonClientInvocations": 0,
+          "unknownObservations": 39,
+          "informationalUnknownObservations": 39,
+          "reviewRequiredUnknownObservations": 0,
+          "terminalObservationActions": 0,
+          "terminalControlActions": 0,
+          "terminalInteractiveInputs": 0
+        },
+        "coverage": {
+          "observedToolExecutions": 74,
+          "uniqueCommandsInspected": 53,
+          "unknownObservations": 39,
+          "informationalOnlyUnknownObservations": 39,
+          "unresolvedBrowserOrTelemetryObservations": 0,
+          "adherenceProven": false
+        },
+        "limits": {
+          "logBytes": 33554432,
+          "lines": 50000,
+          "lineBytes": 1048576,
+          "commands": 1000,
+          "commandChars": 65536,
+          "scripts": 32,
+          "scriptBytes": 262144
+        },
+        "hardFenceOrSandboxClaim": false,
+        "transitiveImportsInspected": false,
+        "rawExecutionDetailsPublished": false,
+        "scriptBytesArePosthocSnapshots": true,
+        "executionSuccessInferred": false
+      },
+      "vector": {
+        "mode": "shared-client",
+        "status": "no_clear_bypass_observed",
+        "counts": {
+          "lines": 162,
+          "toolExecutions": 33,
+          "commandsInspected": 27,
+          "scriptsInspected": 0,
+          "directBrowserReferences": 0,
+          "commonClientInvocations": 23,
+          "unknownObservations": 0,
+          "informationalUnknownObservations": 0,
+          "reviewRequiredUnknownObservations": 0,
+          "terminalObservationActions": 2,
+          "terminalControlActions": 1,
+          "terminalInteractiveInputs": 0
+        },
+        "coverage": {
+          "observedToolExecutions": 33,
+          "uniqueCommandsInspected": 27,
+          "unknownObservations": 0,
+          "informationalOnlyUnknownObservations": 0,
+          "unresolvedBrowserOrTelemetryObservations": 0,
+          "adherenceProven": false
+        },
+        "limits": {
+          "logBytes": 33554432,
+          "lines": 50000,
+          "lineBytes": 1048576,
+          "commands": 1000,
+          "commandChars": 65536,
+          "scripts": 32,
+          "scriptBytes": 262144
+        },
+        "hardFenceOrSandboxClaim": false,
+        "transitiveImportsInspected": false,
+        "rawExecutionDetailsPublished": false,
+        "scriptBytesArePosthocSnapshots": true,
+        "executionSuccessInferred": false
+      }
+    },
+    "limitation": "Both statuses are no_clear_bypass_observed. This is bounded evidence, not proof of shared-client adherence or an operating-system hard fence. Transitive imports and unobserved execution are not established by this audit.",
+    "activityScope": "Audit tool-execution and command counts are audit coverage metadata, not complete comparable model-token or tool-payload measurements."
+  },
+  "comparison": {
+    "denominator": "Codex complete episode; both are normal completed first submissions with no repairs",
+    "vectorCostSavingsUsd": 0.1407096,
+    "vectorCostSavingsPercent": 15.77510517,
+    "vectorAgentWallReductionMs": 150688,
+    "vectorAgentWallReductionPercent": 22.66571203,
+    "pairTwentyPercentCostThresholdMet": false,
+    "equalRecordedTaskScore": true,
+    "allRequiredIndependentChecksPass": true,
+    "perTaskRecordedScoreCriterionMet": true,
+    "broaderCandidateQualityGateEstablished": false,
+    "broaderTwentyPercentClaimEstablished": false,
+    "conclusion": "For Task 1, both first submissions pass all 24 required checks and score 45/48 with identical dimension scores in bounded static review. Vector costs 15.77510517% less. This neither reaches 20% for this pair nor establishes the full candidate quality or release claim."
+  },
+  "qualityPriority": {
+    "rule": "No lower quality on any task; aggregate improvements must not offset a weaker task. Cost is secondary.",
+    "candidateTasksRequired": 3,
+    "candidateTasksReportedHere": 1,
+    "remainingCandidateTaskResultsIncluded": false,
+    "candidateDecision": "Await the complete three-task evaluation and task-by-task quality assessment."
+  },
+  "blindedCodeReview": {
+    "method": "Blinded static exact-source review with two supplied independent screenshots per submission",
+    "independentExecution": false,
+    "mapping": {
+      "juniper": "Codex",
+      "elm": "Vector"
+    },
+    "maximumScore": 48,
+    "scores": {
+      "codex": 45,
+      "vector": 45
+    },
+    "criticalFindingsEstablished": {
+      "codex": 0,
+      "vector": 0
+    },
+    "dimensions": [
+      {
+        "name": "Contract and data integrity",
+        "maximum": 12,
+        "codex": 12,
+        "vector": 12
+      },
+      {
+        "name": "Durable state and recovery",
+        "maximum": 10,
+        "codex": 9,
+        "vector": 9
+      },
+      {
+        "name": "Structure and maintainability",
+        "maximum": 8,
+        "codex": 8,
+        "vector": 8
+      },
+      {
+        "name": "Errors and resource bounds",
+        "maximum": 6,
+        "codex": 5,
+        "vector": 5
+      },
+      {
+        "name": "Added verification",
+        "maximum": 6,
+        "codex": 6,
+        "vector": 6
+      },
+      {
+        "name": "User interface and accessibility",
+        "maximum": 6,
+        "codex": 5,
+        "vector": 5
+      }
+    ],
+    "materialFindings": {
+      "both": [
+        "Changed default data directories can leave retained v1 history undiscovered when upgrading without an explicit DATA_DIR; this is not deletion.",
+        "A child exists before its start-persistence transaction commits; failure before live registration has no kill/reap guard. Completion rejection lacks explicit handling and can leave persisted running work until recovery."
+      ],
+      "codex": [
+        "Secondary metadata/history text is very small and low contrast.",
+        "Output pipes are fully buffered; normal protected fixture output is small."
+      ],
+      "vector": [
+        "Native required-field validation can prevent submit before the requested inline role=alert is populated for empty name/definition fields.",
+        "Resolved cancellation promises remain in the in-memory map, a conditional long-session retention limitation."
+      ]
+    },
+    "limitation": "Neither review established a critical finding. Reviewers did not independently execute the apps or authored tests. Static source and two screenshots per app do not establish production security, reliability, accessibility, or exact quality equivalence across unobserved states."
+  },
+  "accountingCheckpoint": {
+    "scope": "Historical checkpoint at settlement of this Task 1 pair, before the next active task",
+    "beforePair": {
+      "providerRequests": 674,
+      "measuredUsd": 16.155328
+    },
+    "pair": {
+      "providerRequests": 77,
+      "measuredUsd": 1.6432354
+    },
+    "studyThroughPairSettlement": {
+      "providerRequests": 751,
+      "measuredUsd": 17.7985634
+    },
+    "isCurrentBill": false,
+    "subsequentTaskActivityExcluded": true,
+    "note": "This historical checkpoint excludes later task activity and is not the current study bill."
+  },
+  "interpretationLimits": [
+    "One completed adaptive development-task pair is not independent causal evidence of a general product effect.",
+    "Equal total and dimension scores are bounded static observations; the material findings remain relevant to task-by-task quality.",
+    "No quality or cost result for either remaining candidate task is reported here.",
+    "Functional gates and static review do not establish production readiness."
+  ],
+  "publication": {
+    "sourceIndex": "../submissions/contracts-workflow/README.md",
+    "sourceManifest": "../submissions/contracts-workflow/manifest.json",
+    "sourceVerifier": "../submissions/contracts-workflow/verify.py",
+    "originalSourceBytesPreserved": true,
+    "allArchiveEntriesAccounted": true,
+    "excludedGeneratedRuntimeFiles": 0,
+    "note": "All authored source and protected task/dependency files, including hidden .gitignore files, are retained. Git-index byte verification is available for the repository owner after staging."
+  },
+  "sanitization": {
+    "sources": [
+      "candidate plan and summary/run aggregates",
+      "only numeric/model/usage/rate fields of this pair provider receipts",
+      "bounded browser-audit count metadata",
+      "two blinded review records",
+      "original source manifests"
+    ],
+    "privatePathsCredentialsRawExecutionLogsProviderIdentifiersAndRuntimeConfigurationExcluded": true
+  }
+}

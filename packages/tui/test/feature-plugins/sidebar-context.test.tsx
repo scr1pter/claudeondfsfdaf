@@ -2,8 +2,9 @@
 import { expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
 import type { TuiPluginApi } from "@vectordevai/plugin/tui"
-import type { EventSessionSpend, GlobalEvent } from "@vectordevai/sdk/v2"
+import type { AssistantMessage, EventSessionSpend, GlobalEvent, Session } from "@vectordevai/sdk/v2"
 import type { JSX } from "solid-js"
+import { createStore } from "solid-js/store"
 import plugin, { spendCapLabel } from "../../src/feature-plugins/sidebar/context"
 import { tmpdir } from "../fixture/fixture"
 import { createTuiPluginApi } from "../fixture/tui-plugin"
@@ -19,6 +20,77 @@ test("spendCapLabel shows spend against the cap only when the run has a dollar c
   expect(spendCapLabel({ spentUsd: 0.84 })).toBeUndefined()
   expect(spendCapLabel({ spentUsd: 0, capUsd: 2 })).toBeUndefined()
   expect(spendCapLabel(undefined)).toBeUndefined()
+})
+
+test("the sidebar updates context for a cached zero-output turn without changing session spend", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const previous: AssistantMessage = {
+    id: "msg_previous",
+    sessionID: "ses_root",
+    role: "assistant",
+    parentID: "msg_user",
+    providerID: "openai",
+    modelID: "gpt-test",
+    mode: "build",
+    agent: "build",
+    path: { cwd: "/repo", root: "/repo" },
+    time: { created: 1, completed: 2 },
+    cost: 0.1,
+    tokens: { input: 100, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+  }
+  const [state, setState] = createStore({ messages: [previous] })
+  const slot: { render?: (ctx: unknown, props: { session_id: string }) => JSX.Element } = {}
+  const base = createTuiPluginApi({
+    state: {
+      session: {
+        messages: () => state.messages,
+        get: () => ({ id: "ses_root", title: "Context test", cost: 1.25 }) as Session,
+      },
+    },
+  })
+  const api = {
+    ...base,
+    state: {
+      ...base.state,
+      provider: [{ id: "openai", models: { "gpt-test": { limit: { context: 2000 } } } }],
+    },
+    slots: {
+      register(input: { slots: { sidebar_content: NonNullable<typeof slot.render> } }) {
+        slot.render = input.slots.sidebar_content
+      },
+    },
+  } as unknown as TuiPluginApi
+  await plugin.tui(api, undefined, undefined as never)
+  const { app } = await mount(undefined, tmp.path, undefined, undefined, () =>
+    slot.render?.({}, { session_id: "ses_root" }),
+  )
+  const shows = (text: string) =>
+    wait(() => {
+      app.renderer.requestRender()
+      return app.captureSpans().lines.some((line) => line.spans.some((span) => span.text.includes(text)))
+    })
+  try {
+    await shows("110 tokens")
+    await shows("$1.25 spent")
+    const cached = {
+      ...previous,
+      id: "msg_cached",
+      tokens: { input: 0, output: 0, reasoning: 500, cache: { read: 1000, write: 0 } },
+    }
+    setState("messages", [previous, cached])
+    await shows("1,000 tokens")
+    await shows("50% of context used")
+    await shows("$1.25 spent")
+    setState("messages", [
+      previous,
+      cached,
+      { ...previous, id: "msg_pending", tokens: { ...previous.tokens, input: 0, output: 0 } },
+    ])
+    await shows("1,000 tokens")
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test("the sidebar shows the run cap from session.spend and keeps the warning colour for the rest of the run", async () => {

@@ -22,6 +22,8 @@ const Api = HttpApi.make("guest-gate").add(
         params: { sessionID: Schema.String },
         success: Schema.String,
       }),
+      HttpApiEndpoint.post("steal", "/sync/steal", { success: Schema.String }),
+      HttpApiEndpoint.post("replay", "/sync/replay", { success: Schema.String }),
     )
     .middleware(Authorization),
 )
@@ -35,7 +37,9 @@ const handlers = HttpApiBuilder.group(Api, "test", (handlers) =>
     )
     .handle("pty", () => Effect.succeed("ran"))
     .handle("reply", () => Effect.succeed("ran"))
-    .handle("messages", () => Effect.succeed("ran")),
+    .handle("messages", () => Effect.succeed("ran"))
+    .handle("steal", () => Effect.succeed("ran"))
+    .handle("replay", () => Effect.succeed("ran")),
 )
 
 const web = HttpRouter.toWebHandler(
@@ -67,6 +71,44 @@ const send = (method: string, path: string, username: string, password: string) 
     .then((response) => response.status)
 
 describe("guest owner-only gate", () => {
+  test("owner credentials relaying a guest cannot reach owner-only handlers", async () => {
+    const headers = {
+      authorization: ServerAuth.header({ username: "vector", password: "owner-secret" }) ?? "",
+      "x-vector-guest-request": "1",
+    }
+    expect((await web.handler(new Request("http://localhost/api/pty", { method: "POST", headers }))).status).toBe(403)
+    expect(
+      (
+        await web.handler(
+          new Request("http://localhost/api/pty", {
+            method: "POST",
+            headers: { ...headers, "x-vector-guest-request": "1, 1" },
+          }),
+        )
+      ).status,
+    ).toBe(403)
+    expect(
+      (await web.handler(new Request("http://localhost/api/session/ses_public/message", { headers }))).status,
+    ).toBe(200)
+  })
+  // Engines before WP28 steal a warped session with the marker to say a guest worked in it; the steal handler takes
+  // that request as a guest's (it refuses a private session and records guest input), so it is let through. A guest's
+  // own credentials, and the marker on every other owner-only route, stay refused.
+  test("only a warp's steal carrying the forwarded-guest marker reaches its handler", async () => {
+    const forwarded = {
+      authorization: ServerAuth.header({ username: "vector", password: "owner-secret" }) ?? "",
+      "x-vector-guest-request": "1",
+    }
+    const status = (path: string, headers: Record<string, string>) =>
+      web
+        .handler(new Request(`http://localhost${path}`, { method: "POST", headers }))
+        .then((response) => response.status)
+    expect(await status("/sync/steal", forwarded)).toBe(200)
+    expect(await status("/SYNC//steal;x", forwarded)).toBe(200)
+    expect(await status("/sync/replay", forwarded)).toBe(403)
+    expect(await send("POST", "/sync/steal", "guest", "guest-secret")).toBe(403)
+    expect(await send("POST", "/sync/steal", "vector", "owner-secret")).toBe(200)
+  })
   // The router ignores case, repeated and trailing slashes and anything after ';', and a URL parser reads a
   // leading '//' as a host, so each of these runs the owner-only handler unless the gate judges the matched route.
   const spellings = (route: string) => [

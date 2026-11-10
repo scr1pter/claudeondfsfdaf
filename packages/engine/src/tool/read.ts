@@ -13,6 +13,7 @@ import { SessionMemory } from "../session/memory"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { WebFence } from "@vectordevai/core/research/fence"
+import { FileState } from "./file-state"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -71,6 +72,8 @@ type Metadata = {
   pointer?: boolean
   // Documents linked to the file, which the output names by a placeholder.
   [Instruction.LINKS]?: Instruction.Link[]
+  // The file as this read saw it, which lets edit, write and apply_patch change it (read before write).
+  fileState?: FileState.Entry
 }
 
 export const ReadTool = Tool.define<
@@ -85,8 +88,9 @@ export const ReadTool = Tool.define<
     const lsp = yield* LSP.Service
     const scope = yield* Scope.Scope
 
-    const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
+    const miss = Effect.fn("ReadTool.miss")(function* (filepath: string, ctx: Tool.Context) {
       const dir = path.dirname(filepath)
+      yield* ctx.assertReadable?.({ files: [dir], recursive: true }) ?? Effect.void
       const base = path.basename(filepath)
       const items = yield* fs.readDirectory(dir).pipe(
         Effect.map((items) =>
@@ -251,6 +255,9 @@ export const ReadTool = Tool.define<
         filepath = FSUtil.normalizePath(filepath)
       }
       const title = path.relative(instance.worktree, filepath)
+      // A guest family may not probe a private task folder, even for whether a file exists. The runtime checks the
+      // read targets again before the output reaches history or the model.
+      yield* ctx.assertReadable?.({ files: [filepath] }) ?? Effect.void
 
       const stat = yield* fs.stat(filepath).pipe(
         Effect.catchIf(
@@ -258,6 +265,8 @@ export const ReadTool = Tool.define<
           () => Effect.succeed(undefined),
         ),
       )
+
+      if (stat?.type === "Directory") yield* ctx.assertReadable?.({ files: [filepath], recursive: true }) ?? Effect.void
 
       yield* assertExternalDirectoryEffect(ctx, filepath, {
         bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
@@ -270,8 +279,7 @@ export const ReadTool = Tool.define<
         always: ["*"],
         metadata: {},
       })
-
-      if (!stat) return yield* miss(filepath)
+      if (!stat) return yield* miss(filepath, ctx)
 
       if (stat.type === "Directory") {
         const items = yield* list(filepath)
@@ -309,6 +317,12 @@ export const ReadTool = Tool.define<
         }
       }
 
+      // Taken before the content is read: a change in between then reads as a change since this read.
+      const seen = yield* FileState.stamp(filepath).pipe(Effect.orElseSucceed(() => undefined))
+      const fileState = () => {
+        const entry = FileState.record(ctx.sessionID, filepath, seen)
+        return entry ? { fileState: entry } : {}
+      }
       const loaded = yield* instruction.resolve(ctx.messages, filepath, ctx.messageID, SessionMemory.linking(ctx))
       // Lines naming what is linked to the file are saved as placeholders, rendered for each request.
       const links = loaded.flatMap((item) => (item.link ? [item.link] : []))
@@ -328,6 +342,7 @@ export const ReadTool = Tool.define<
             truncated: false,
             loaded: loaded.map((item) => item.filepath),
             ...(links.length ? { [Instruction.LINKS]: links } : {}),
+            ...fileState(),
           },
           attachments: [
             {
@@ -394,6 +409,7 @@ export const ReadTool = Tool.define<
             display,
             fingerprint,
             pointer: true,
+            ...fileState(),
           },
         }
       }
@@ -451,6 +467,7 @@ export const ReadTool = Tool.define<
             truncated,
           },
           fingerprint,
+          ...fileState(),
         },
       }
     })

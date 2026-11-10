@@ -1,0 +1,71 @@
+"""Materialize the credential-free offline audit tools outside the checkout.
+
+Run this text artifact with Python: adapter-prepare.py.txt --root CHECKOUT --out SCRATCH.
+It does not run an agent, read credentials, or contact a provider.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--root", required=True)
+parser.add_argument("--out", required=True)
+args = parser.parse_args()
+root = Path(args.root).resolve()
+out = Path(args.out).resolve()
+source = root / "script/agent-eval"
+artifact = Path(__file__).resolve().parent
+if not (source / "footprint.ts").is_file():
+    raise SystemExit("Expected the pinned Vector checkout")
+if out == root or root in out.parents:
+    raise SystemExit("Choose a scratch directory outside the checkout")
+if out.exists() and any(out.iterdir()):
+    raise SystemExit("Choose a new or empty scratch directory; existing files are preserved")
+out.mkdir(parents=True, exist_ok=True)
+hashes = {}
+for name in ["footprint.ts", "footprint-actors.ts", "prompt-cache.ts", "tasks.ts", "score.ts"]:
+    text = (source / name).read_text(encoding="utf-8")
+    original = text
+    if name == "footprint.ts":
+        replacements = [
+            ('const REPO_ROOT = resolve(import.meta.dir, "../..")',
+             'const REPO_ROOT = ' + json.dumps(root.as_posix())),
+            ('    formatter: false,\n    lsp: false,',
+             '    formatter: false,\n    lsp: false,\n    sizing: { auto: flags.taskSize !== "thorough", judge: "off" },'),
+            ('    engineRoot: value("engine-root"),',
+             '    engineRoot: value("engine-root"),\n    taskSize: value("task-size"),'),
+            ('    const samplingTimer = phase ? setInterval(() => void sample(), 100) : undefined',
+             '    const samplingTimer = phase && process.platform !== "win32" ? setInterval(() => void sample(), 100) : undefined'),
+            ('sampledPeakProcessTreeRssKiB: Math.max(0, ...result.samples.map((sample) => sample.rssKiB)),',
+             'sampledPeakProcessTreeRssKiB: result.samples.length ? Math.max(...result.samples.map((sample) => sample.rssKiB)) : null,'),
+            ('    PATH: process.env.PATH ?? "",\n    PWD: dir,',
+             '    ...(process.platform === "win32" ? {\n'
+             '      PATHEXT: ".COM;.EXE;.BAT;.CMD",\n'
+             '      SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:/Windows",\n'
+             '      COMSPEC: process.env.COMSPEC ?? "C:/Windows/System32/cmd.exe",\n'
+             '      TEMP: process.env.TEMP ?? tmpdir(), TMP: process.env.TMP ?? tmpdir(),\n'
+             '    } : {}),\n'
+             '    PATH: process.env.PATH ?? "",\n    PWD: dir,'),
+            ('      websocket: flags.ws,',
+             '      websocket: flags.ws,\n      taskSize: flags.taskSize ?? "standard",\n'
+             '      auditAdapter: "Windows: minimal OS bootstrap vars, POSIX RSS unavailable; explicit sizing with default coding judge off",'),
+        ]
+        for old, new in replacements:
+            if text.count(old) != 1:
+                raise SystemExit("Source changed; review adapter seam: " + old)
+            text = text.replace(old, new)
+    (out / name).write_text(text, encoding="utf-8", newline="\n")
+    hashes[name] = {
+        "source_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        "generated_sha256": hashlib.sha256(text.encode()).hexdigest(),
+    }
+for name, output in [("accounting-probe.ts.txt", "accounting-probe.test.ts"),
+                     ("memory-cache-probe.ts.txt", "memory-cache-probe.ts")]:
+    text = (artifact / name).read_text(encoding="utf-8")
+    if "__VECTOR_ROOT__" not in text:
+        raise SystemExit("Missing checkout placeholder: " + name)
+    (out / output).write_text(text.replace("__VECTOR_ROOT__", root.as_posix()),
+                             encoding="utf-8", newline="\n")
+(out / "generated-hashes.json").write_text(json.dumps(hashes, indent=2) + "\n")
+print("Prepared offline tools in", out)
