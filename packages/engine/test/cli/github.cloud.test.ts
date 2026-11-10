@@ -132,23 +132,28 @@ const channelEnv = (mode = "codium"): Record<string, string | undefined> => ({
 })
 
 describe("cloud command HTTP boundary", () => {
-  test("mint masks before exclusive private storage and emits no credential through file commands", async () => {
-    await using f = await fixture()
-    expect(await mintRunToken({ purpose: "task", env: f.env, services: f.services })).toBe("ok")
-    expect(f.beforeWrite).toEqual([false])
-    expect(f.masks).toEqual(["oidc.1.proof", TOKEN])
-    expect(await fs.readFile(runTokenPath(f.env), "utf8")).toBe(TOKEN)
-    expect((await fs.stat(runTokenPath(f.env))).mode & 0o777).toBe(0o600)
-    expect((await fs.stat(path.dirname(runTokenPath(f.env)))).mode & 0o777).toBe(0o700)
-    expect(await fs.readFile(f.env.GITHUB_ENV!, "utf8")).toBe(
-      `VECTOR_RUN_DEADLINE=${success.deadline}\nVECTOR_RUN_ID=${success.runId}\n`,
-    )
-    expect(await fs.readFile(f.env.GITHUB_OUTPUT!, "utf8")).toBe(`rid=${success.runId}\nstatus=ok\n`)
-    expect(f.requests[0]!.body).toEqual({ purpose: "task", thread: "7", workflowVersion: "3" })
-    expect(f.audiences).toEqual([GithubAgents.AUDIENCE.mint])
-    await expect(mintRunToken({ purpose: "task", env: f.env, services: f.services })).rejects.toThrow("Could not store")
-    expect(await fs.readFile(runTokenPath(f.env), "utf8")).toBe(TOKEN)
-  })
+  test.skipIf(process.platform === "win32")(
+    "mint masks before exclusive private storage and emits no credential through file commands",
+    async () => {
+      await using f = await fixture()
+      expect(await mintRunToken({ purpose: "task", env: f.env, services: f.services })).toBe("ok")
+      expect(f.beforeWrite).toEqual([false])
+      expect(f.masks).toEqual(["oidc.1.proof", TOKEN])
+      expect(await fs.readFile(runTokenPath(f.env), "utf8")).toBe(TOKEN)
+      expect((await fs.stat(runTokenPath(f.env))).mode & 0o777).toBe(0o600)
+      expect((await fs.stat(path.dirname(runTokenPath(f.env)))).mode & 0o777).toBe(0o700)
+      expect(await fs.readFile(f.env.GITHUB_ENV!, "utf8")).toBe(
+        `VECTOR_RUN_DEADLINE=${success.deadline}\nVECTOR_RUN_ID=${success.runId}\n`,
+      )
+      expect(await fs.readFile(f.env.GITHUB_OUTPUT!, "utf8")).toBe(`rid=${success.runId}\nstatus=ok\n`)
+      expect(f.requests[0]!.body).toEqual({ purpose: "task", thread: "7", workflowVersion: "3" })
+      expect(f.audiences).toEqual([GithubAgents.AUDIENCE.mint])
+      await expect(mintRunToken({ purpose: "task", env: f.env, services: f.services })).rejects.toThrow(
+        "Could not store",
+      )
+      expect(await fs.readFile(runTokenPath(f.env), "utf8")).toBe(TOKEN)
+    },
+  )
   for (const [status, code, result, extra] of [
     [400, "INVALID_REQUEST", "denied", {}],
     [400, "INVALID_JSON", "denied", {}],
@@ -447,57 +452,88 @@ describe("private GitHub credentials", () => {
       expect(env.VECTOR_CLI_TOKEN).toBeUndefined()
     }
   })
-  test("private token files are consumed once and links/insecure modes are refused", async () => {
+  test.skipIf(process.platform === "win32")(
+    "private token files are consumed once and links/insecure modes are refused",
+    async () => {
+      await using f = await fixture()
+      await writeRunToken(TOKEN, f.env)
+      expect(await readRunToken(f.env)).toBe(TOKEN)
+      expect(existsSync(runTokenPath(f.env))).toBe(false)
+      await fs.writeFile(path.join(f.directory, "target"), TOKEN, { mode: 0o600 })
+      await fs.symlink(path.join(f.directory, "target"), runTokenPath(f.env))
+      await expect(readRunToken(f.env)).rejects.toThrow()
+      expect(await fs.readFile(path.join(f.directory, "target"), "utf8")).toBe(TOKEN)
+      await fs.unlink(runTokenPath(f.env))
+      await writeRunToken(TOKEN, f.env)
+      await fs.chmod(runTokenPath(f.env), 0o644)
+      await expect(readRunToken(f.env)).rejects.toThrow()
+    },
+  )
+  test.skipIf(process.platform === "win32")(
+    "a file growing after stat is read at most 1025 bytes and remains refused",
+    async () => {
+      await using f = await fixture()
+      await writeRunToken(TOKEN, f.env)
+      let read = 0
+      await expect(
+        readRunToken(f.env, async (file, flags) => {
+          const handle = await fs.open(file, flags)
+          return {
+            stat: async () => {
+              const info = await handle.stat()
+              await fs.appendFile(file, "x".repeat(1_048_576))
+              return info
+            },
+            read: async (buffer, offset, length, position) => {
+              expect(length).toBeLessThanOrEqual(1025)
+              const result = await handle.read(buffer, offset, length, position)
+              read += result.bytesRead
+              return result
+            },
+            close: () => handle.close(),
+          }
+        }),
+      ).rejects.toThrow("credentials are unavailable")
+      expect(read).toBe(1025)
+      expect(existsSync(runTokenPath(f.env))).toBe(true)
+    },
+  )
+  test.skipIf(process.platform === "win32")(
+    "the review loader unlinks its token and clears inherited account credentials",
+    async () => {
+      await using f = await fixture()
+      await writeRunToken(TOKEN, f.env)
+      f.env.GITHUB_TOKEN = "fixture-github-token"
+      f.env.VECTOR_CLI_TOKEN = CLI
+      const holder = createGithubSecrets()
+      await holder.load(f.env, channel({ unused: true }))
+      expect(holder.pendingRunToken()).toBe(TOKEN)
+      expect(holder.runToken()).toBeUndefined()
+      expect(existsSync(runTokenPath(f.env))).toBe(false)
+      expect(f.env.GITHUB_TOKEN).toBeUndefined()
+      expect(f.env.VECTOR_CLI_TOKEN).toBeUndefined()
+    },
+  )
+})
+
+// These file controls rely on POSIX owner/mode checks. Windows cannot establish that authority, and must refuse it.
+test.skipIf(process.platform !== "win32")(
+  "Windows cannot mint or load a token through POSIX private files",
+  async () => {
     await using f = await fixture()
-    await writeRunToken(TOKEN, f.env)
-    expect(await readRunToken(f.env)).toBe(TOKEN)
+    await expect(mintRunToken({ purpose: "task", env: f.env, services: f.services })).rejects.toThrow("Could not store")
     expect(existsSync(runTokenPath(f.env))).toBe(false)
-    await fs.writeFile(path.join(f.directory, "target"), TOKEN, { mode: 0o600 })
-    await fs.symlink(path.join(f.directory, "target"), runTokenPath(f.env))
-    await expect(readRunToken(f.env)).rejects.toThrow()
-    expect(await fs.readFile(path.join(f.directory, "target"), "utf8")).toBe(TOKEN)
-    await fs.unlink(runTokenPath(f.env))
-    await writeRunToken(TOKEN, f.env)
-    await fs.chmod(runTokenPath(f.env), 0o644)
-    await expect(readRunToken(f.env)).rejects.toThrow()
-  })
-  test("a file growing after stat is read at most 1025 bytes and remains refused", async () => {
-    await using f = await fixture()
-    await writeRunToken(TOKEN, f.env)
-    let read = 0
-    await expect(
-      readRunToken(f.env, async (file, flags) => {
-        const handle = await fs.open(file, flags)
-        return {
-          stat: async () => {
-            const info = await handle.stat()
-            await fs.appendFile(file, "x".repeat(1_048_576))
-            return info
-          },
-          read: async (buffer, offset, length, position) => {
-            expect(length).toBeLessThanOrEqual(1025)
-            const result = await handle.read(buffer, offset, length, position)
-            read += result.bytesRead
-            return result
-          },
-          close: () => handle.close(),
-        }
-      }),
-    ).rejects.toThrow("credentials are unavailable")
-    expect(read).toBe(1025)
-    expect(existsSync(runTokenPath(f.env))).toBe(true)
-  })
-  test("the review loader unlinks its token and clears inherited account credentials", async () => {
-    await using f = await fixture()
-    await writeRunToken(TOKEN, f.env)
-    f.env.GITHUB_TOKEN = "fixture-github-token"
+    expect(await fs.readFile(f.env.GITHUB_ENV!, "utf8")).toBe("")
+    expect(await fs.readFile(f.env.GITHUB_OUTPUT!, "utf8")).toBe("")
+    await fs.writeFile(runTokenPath(f.env), TOKEN)
+    f.env.GITHUB_TOKEN = "fixture-windows-github-token"
     f.env.VECTOR_CLI_TOKEN = CLI
     const holder = createGithubSecrets()
-    await holder.load(f.env, channel({ unused: true }))
-    expect(holder.pendingRunToken()).toBe(TOKEN)
-    expect(holder.runToken()).toBeUndefined()
-    expect(existsSync(runTokenPath(f.env))).toBe(false)
+    await expect(holder.load(f.env, channel({ unused: true }))).rejects.toThrow("credentials are unavailable")
+    expect(holder.loaded()).toBe(false)
+    expect(holder.pendingRunToken()).toBeUndefined()
+    expect(await fs.readFile(runTokenPath(f.env), "utf8")).toBe(TOKEN)
     expect(f.env.GITHUB_TOKEN).toBeUndefined()
     expect(f.env.VECTOR_CLI_TOKEN).toBeUndefined()
-  })
-})
+  },
+)

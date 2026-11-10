@@ -6,6 +6,9 @@ import { GithubAgents } from "@vectordevai/core/github-agents"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import {
   copyBundleFile,
+  prepare,
+  run,
+  finish,
   sandboxEnvironment,
   secretChannel,
   validateCheckoutTree,
@@ -101,21 +104,24 @@ test("the sandbox environment excludes every credential and runner file command 
   }
 })
 
-test("Codium channel consumes its private run file and excludes inherited own-key secrets", async () => {
-  await using f = await fixture()
-  await GithubSecrets.writeRunToken("vrt_fixture.signature", f.env)
-  const line = await secretChannel(f.env)
-  expect(JSON.parse(line)).toEqual({
-    v: 1,
-    githubToken: f.env.GITHUB_TOKEN,
-    runToken: "vrt_fixture.signature",
-    keys: {},
-  })
-  expect(line.endsWith("\n")).toBe(true)
-  await expect(fs.stat(GithubSecrets.runTokenPath(f.env))).rejects.toThrow()
-  expect(line).not.toContain(f.env.VECTOR_CLI_TOKEN)
-  expect(line).not.toContain(f.env.CUSTOM_CREDENTIAL)
-})
+test.skipIf(process.platform === "win32")(
+  "Codium channel consumes its private run file and excludes inherited own-key secrets",
+  async () => {
+    await using f = await fixture()
+    await GithubSecrets.writeRunToken("vrt_fixture.signature", f.env)
+    const line = await secretChannel(f.env)
+    expect(JSON.parse(line)).toEqual({
+      v: 1,
+      githubToken: f.env.GITHUB_TOKEN,
+      runToken: "vrt_fixture.signature",
+      keys: {},
+    })
+    expect(line.endsWith("\n")).toBe(true)
+    await expect(fs.stat(GithubSecrets.runTokenPath(f.env))).rejects.toThrow()
+    expect(line).not.toContain(f.env.VECTOR_CLI_TOKEN)
+    expect(line).not.toContain(f.env.CUSTOM_CREDENTIAL)
+  },
+)
 
 test("own-key channel captures exactly listed keys without reading any run credential", async () => {
   await using f = await fixture()
@@ -155,15 +161,17 @@ test("Codium refuses sudo opt-in and self-hosted execution before reading a cred
   expect(reads).toBe(0)
 })
 
-test("bundle copy preserves exact regular-file bytes with private output permissions", async () => {
-  await using f = await fixture()
-  await fs.writeFile(path.join(f.source, "patch.diff"), "fixture diff\n")
-  await copyBundleFile(f.source, f.destination, "patch.diff")
-  expect(await fs.readFile(path.join(f.destination, "patch.diff"), "utf8")).toBe("fixture diff\n")
-  if (process.platform !== "win32")
+test.skipIf(process.platform === "win32")(
+  "bundle copy preserves exact regular-file bytes with private output permissions",
+  async () => {
+    await using f = await fixture()
+    await fs.writeFile(path.join(f.source, "patch.diff"), "fixture diff\n")
+    await copyBundleFile(f.source, f.destination, "patch.diff")
+    expect(await fs.readFile(path.join(f.destination, "patch.diff"), "utf8")).toBe("fixture diff\n")
     expect((await fs.stat(path.join(f.destination, "patch.diff"))).mode & 0o777).toBe(0o600)
-  await expect(copyBundleFile(f.source, f.destination, "patch.diff")).rejects.toThrow()
-})
+    await expect(copyBundleFile(f.source, f.destination, "patch.diff")).rejects.toThrow()
+  },
+)
 
 test("bundle copy refuses unknown names, directories, links and oversized files", async () => {
   await using f = await fixture()
@@ -209,3 +217,26 @@ test("checkout preflight bounds directory depth before any privileged operation"
   }
   await expect(validateCheckoutTree(f.source)).rejects.toThrow("refused")
 })
+
+// The generated v3 jobs use ubuntu-latest; the sandbox entrypoints are explicitly Linux-only.
+test.skipIf(process.platform === "linux")(
+  "unsupported sandbox platforms refuse before creating private state",
+  async () => {
+    await using f = await fixture()
+    await expect(prepare(f.env)).rejects.toThrow()
+    await expect(run(["node", "fixture.js"], f.env)).rejects.toThrow()
+    await expect(finish(f.env)).rejects.toThrow()
+    expect(await fs.readdir(f.directory)).toEqual(["source"])
+  },
+)
+
+test.skipIf(process.platform !== "win32")(
+  "Windows cannot create a bundle without POSIX private directory guarantees",
+  async () => {
+    await using f = await fixture()
+    await fs.writeFile(path.join(f.source, "patch.diff"), "fixture diff\n")
+    await expect(copyBundleFile(f.source, f.destination, "patch.diff")).rejects.toThrow()
+    await expect(fs.stat(path.join(f.destination, "patch.diff"))).rejects.toThrow()
+    expect(await fs.readFile(path.join(f.source, "patch.diff"), "utf8")).toBe("fixture diff\n")
+  },
+)
