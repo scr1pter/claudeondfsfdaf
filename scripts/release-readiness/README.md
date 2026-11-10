@@ -84,3 +84,19 @@ They do not access GitHub, model providers, credentials or live workflows.
 The owner-review and platform acceptance packet lives in
 `docs/vector/owner-actions/release-199113.md`; the current and historical
 integration record is `docs/vector/build/multiagent-merge-plan.md`.
+
+## Local UI comparison
+
+`compare_ui.py` is a separate Windows-only, provider-free measurement runner.
+It uses this toolkit checkout's first-navigation harness against two explicitly
+chosen production build roots, serially, with power journals and raw results.
+`compare-ui.playwright.config.ts` disables server reuse through the inherited
+production configuration. It starts only its own isolated preview server.
+
+Install frozen dependencies in the toolkit and both build roots; put the
+recorded Bun and Node versions on PATH. Use a fresh output directory and AC
+power. See the [recorded comparison and commands](../../docs/vector/build/evidence/ui-comparison-ac-2026-11-09/README.md).
+`--order candidate-first` supports the reverse-order batch. The runner verifies
+scenario-repeat identities, preserves logs and cleans up its own test process
+tree on abnormal exit. Exit 0 qualifies completion and sampled AC state only;
+it is not a speed, model-quality or release certificate.

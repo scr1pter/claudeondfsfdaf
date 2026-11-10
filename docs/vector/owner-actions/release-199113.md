@@ -305,6 +305,10 @@ protected-publication decisions distinct.
       or fake-provider inputs and no paid inference, and record the run IDs and
       comparison. No additional permission is needed merely to run this free check.
       The older title benchmark does not cover these session/timeline changes.
+      Partial evidence: the [9 November local AC-powered first-navigation study](../build/evidence/ui-comparison-ac-2026-11-09/README.md)
+      completed 60 passing runs on pinned before/after revisions and reversed
+      orders. It is a selected three-scenario comparison on a shared Windows host;
+      it does not clear the exclusive full-timeline or native-platform checks.
 - [ ] Obtain approval for any paid live fork-cache or matched multi-agent measurement: provider,
       model/reasoning, task and quality gate, maximum total spend, responsible
       operator and permitted credential entry all **Pending**. Use a newly approved
@@ -324,6 +328,7 @@ protected-publication decisions distinct.
       updater-feed verification before marking 1.99.113 published. Publishing the
       website or merging source does not satisfy these checks.
 
-Packet preparation was source inspection and documentation only. This update
-executes no RC test, native application, model call, paid benchmark, workflow
-dispatch, account change, invitation, version bump or publication.
+Packet preparation itself was source inspection and documentation. The later
+free UI measurements are linked above and retain their own source and scope.
+No RC acceptance, paid model call, workflow dispatch, account change, invitation,
+version bump or publication is implied by this packet.

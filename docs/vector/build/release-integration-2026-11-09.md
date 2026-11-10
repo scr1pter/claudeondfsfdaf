@@ -59,6 +59,11 @@ that behavioral evidence.
 - [Production UI completion](evidence/ui-completion-2026-11-09/README.md): three
   scenarios passed, with raw metrics and lossless compressed traces retained.
   This battery-powered single run supplies no comparative speed evidence.
+- [AC-powered first-navigation comparison](evidence/ui-comparison-ac-2026-11-09/README.md):
+  60 runs passed across two source revisions and reversed run orders. All 46
+  power samples reported AC. Existing-conversation navigation was modestly slower;
+  the selected subset does not establish a general speed improvement or full
+  timeline qualification.
 
 The [validation record](evidence/release-coordination-2026-11-09.json) preserves
 the initial failures, repairs, commands and limits. No live provider calls,

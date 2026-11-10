@@ -1,6 +1,6 @@
 {
   "kind": "release-coordination-local-validation-v1",
-  "observedAtUtc": "2026-11-10T02:57:52.229940+00:00",
+  "observedAtUtc": "2026-11-10T03:33:01.018821+00:00",
   "sourceBaseline": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
   "branch": "release-coordination",
   "scope": "Local Windows compatibility diagnostics and narrowly scoped test-fixture correction; not full release qualification.",
@@ -64,7 +64,7 @@
   "realProviderCalls": 0,
   "providerCredentialReads": 0,
   "remainingQualification": [
-    "Matched before/after production UI study on stable AC power; local completion result is not timing qualification",
+    "Full timeline and platform performance qualification; selected AC first-navigation comparison is recorded separately",
     "Full exact-candidate CI and SDK/generated checks",
     "Authenticated Mac and Windows release-candidate acceptance",
     "Owner privacy/residual-risk review",
@@ -99,6 +99,13 @@
       "workspacesFailed": 0,
       "cached": 21,
       "seconds": 21.218
+    },
+    {
+      "revision": "82a7d26ce2bea3751f59076e6a26469eea632b00",
+      "workspacesPassed": 23,
+      "workspacesFailed": 0,
+      "cached": 23,
+      "seconds": 0.92
     }
   ],
   "productionUiCompletion": {
@@ -132,7 +139,8 @@
     },
     "timingComparison": "Not run: battery power, one run, no baseline; no speed or cost claim.",
     "userAppRestarted": false,
-    "nativeDesktopAcceptance": false
+    "nativeDesktopAcceptance": false,
+    "laterComparison": "Separate source-pinned AC comparison is recorded under acCommonHarnessComparison; original battery-run timing limitation remains historical."
   },
   "powerObservationAfterUi": {
     "api": "kernel32.GetSystemPowerStatus",
@@ -147,5 +155,20 @@
     "state": "incomplete",
     "reason": "GitHub API HTTP 403 during metadata collection. Complete unchanged Git inventory; uncollected metadata and final API-head consistency remain unknown. Collected main and finish-checks evidence retained on their pinned heads.",
     "releaseApproval": "not_assessed"
+  },
+  "acCommonHarnessComparison": {
+    "path": "ui-comparison-ac-2026-11-09/README.md",
+    "summary": "ui-comparison-ac-2026-11-09/summary.json",
+    "baseline": "4299d7432aaac8b1937c5986729360e6b9f176f5",
+    "candidate": "82a7d26ce2bea3751f59076e6a26469eea632b00",
+    "totalPassed": 60,
+    "totalFailed": 0,
+    "scenarioCount": 3,
+    "repeatsPerScenarioPerRevision": 10,
+    "order": ["baseline", "candidate", "candidate", "baseline"],
+    "powerSamples": 46,
+    "allPowerSamplesAC": true,
+    "realProviderCalls": 0,
+    "qualification": "Selected first-navigation DOM-observation comparison on one Windows host, not full timeline/platform/model-cost qualification. Existing-conversation medians modestly slower in both orders; no general speedup claim."
   }
 }

@@ -41,7 +41,7 @@ Keep PR #20's completed merge and main's tokenomics/research behavior as the int
 
 Keep feature implementation with its existing owners. The dependency order from the earlier plan remains useful: the runtime foundation is now on main; VectorScope can integrate against it; Codium still needs its track-A and owner gates; @vector owns its remaining build and the VS-05 dependency; Hands owns its main integration and remaining computer-use work. Recompute conflicts from the exact heads proposed for each merge. The historical counts below are not present-day merge predictions.
 
-Do not treat this coordination update as a desktop release, a Codium launch, a completed performance benchmark or approval of unfinished feature PRs. The release candidate still needs its source-bound CI, generated-contract checks, platform checks and the owner decisions in the release draft. The deployment inventory below describes what the integration was expected to change; verify the deployed revision before claiming those production checks passed.
+Do not treat this coordination update as a desktop release, a Codium launch, a completed full timeline benchmark or approval of unfinished feature PRs. The release candidate still needs its source-bound CI, generated-contract checks, platform checks and the owner decisions in the release draft. The deployment inventory below describes what the integration was expected to change; verify the deployed revision before claiming those production checks passed.
 
 ## Ongoing-agent boundaries and coordination
 
@@ -150,7 +150,9 @@ Merging does not ship the desktop or the CLI. A desktop release starts only from
 
 ### Production benchmark evidence for the session and timeline changes
 
-It is missing. `packages/app/AGENTS.md` asks for a production benchmark before and after any change to session or timeline code. This build changed 17 such files, adding about 1,070 lines: the session page, the composer and its docks, and the timeline's message and workflow parts. The build contract left the run to you, "only when he allows it". No run of the manual "production app benchmark" job exists for `self-evolving`; every CI run skipped it. The `vector-title-2026-10` benchmark belongs to main's early-title fix, not to this build. The savings from cache sharing in forks were shown only against a fake provider. The release notes also say the footprint numbers in `docs/benchmarks` are out of date.
+The full timeline study remains incomplete. `packages/app/AGENTS.md` asks for a production benchmark before and after any change to session or timeline code. This build changed 17 such files, adding about 1,070 lines: the session page, the composer and its docks, and the timeline's message and workflow parts. The earlier contract left the manual run to the owner; the current implementation request authorizes free checks. The recorded manual GitHub job remained skipped. The `vector-title-2026-10` benchmark belongs to main's early-title fix, not to this build. The savings from cache sharing in forks were shown only against a fake provider. The release notes also say the footprint numbers in `docs/benchmarks` are out of date.
+
+A [local AC-powered first-navigation comparison](evidence/ui-comparison-ac-2026-11-09/README.md) is now recorded for baseline `4299d743` and candidate `82a7d26c`. It used a shared pinned harness, separate production builds and two reversed run orders. All 60 runs passed with zero observed blank or unknown samples. Existing-conversation navigation was modestly slower in both orders; new-conversation and child-navigation results were mixed or broadly similar. This selected three-scenario study supplies no general speedup, full-timeline, model-cost or native-platform acceptance claim. Raw results, power samples and limits are retained for the UI owner's profiling follow-up.
 
 ## Historical order with the other builds (8 November 2026)
 
@@ -248,7 +250,7 @@ In more detail:
 - **The scheduled jobs start immediately.** They do nothing while Stripe has no key. If a Stripe key is ever added before you are ready, they start acting on Stripe data.
 - **Four checks failed once on `f062bcce`.** A Windows unit job, two Windows engine shards and the packet capture each failed on the first attempt and passed when re-run unchanged. Their causes are being found. Passing on a re-run does not show the cause, so a later run can fail the same way.
 - **Current main is not green.** The inspected test run on `0dcbb8e2` failed two engine shards. PR #23's same-head listed contexts passed in the later 02:57 UTC tracker snapshot, superseding the 02:14 pending observation, but the PR remains an author-owned draft and is not merged or release-approved. The older `4299d743` failures remain in "Historical CI evidence" and must not be used as the current status.
-- **Session and timeline performance has not been measured.**
+- **Performance evidence is partial.** The local first-navigation comparison above is complete for three scenarios. The full timeline study and platform qualification remain incomplete, and the existing-conversation path needs profiling follow-up.
 - **The Mac is checked only by hand.**
 - **Other branches need fresh integration checks.** The 8 November projections were Hands 68 files, VectorScope 10, Codium 7 and @vector 2. They describe those old tips, not today's merge result.
 - **Main's `bun.lock` still says the desktop is 1.99.111.** The merge keeps that. It is harmless, because install rewrites it, and the VectorScope merge or the release preparation fixes it. Don't fix it by hand in this merge.
