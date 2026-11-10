@@ -1,0 +1,13 @@
+# Connected workspace: where the build departs from, or reads into, the contract
+
+## 2026-11-09, CW-02 (core connect/policy.ts, findings.ts, frame.ts)
+
+The contract was right about the code for CW-02. These are choices where it is silent, all on the fail-closed side, recorded so CW-03 to CW-08 build on the same reading:
+
+- **`connect_model` for an unreadable price.** `reviewConsents` asks `connect_model` for a model whose cost kind is `unknown`, as for a priced one, because Vector cannot show it is free (I10). `plan` (Codium), `free` and `local` do not ask unless the repository picked the model.
+- **Any spend-guard stop refuses.** `effectiveCap` refuses a review whenever `run.stopped` is set, whatever the stop reason, and when a run with a dollar limit has nothing left. A local model still has no dollar cap.
+- **The check-command list is read, not copied.** `checkCommands` and `checkCommandRules` read VectorScope's list from the exported `reviewPermissionRules({ checks: true })`, since `CHECK_COMMANDS` is not exported, so both stay one list. The fix child's rules are VectorScope's bash rules with `allow` turned into `ask`, after a leading `bash * deny`.
+- **Read-pattern selection is sound, not literal.** `readPatterns` drops a pattern only when a later requester allow covers it, or when a VectorScope deny covers it and no later VectorScope rule could reopen one of its files without a later requester allow. Under the build agent's defaults this gives `.docker/config.json`, `**/.docker/config.json`, `.kube/*` and `**/.kube/*`, as section 3.2 says; a user's own deny on `*.env.*` is kept, because VectorScope reads `.env.example`. `readBlock` is the exact per-file check the hub runs on what it finds.
+- **Check 1 ignores letter case** and also fires when the `.vector` directory itself changed, because on a case-insensitive disk `.vector/Review.json` is the file the review reads.
+- **Comparing working-tree reviews.** An earlier finding nothing matched is labelled `fixed` only while its file is still among the reviewed changes (when the caller passes them); otherwise it is left out with a note. A match with an earlier `dismissed` finding stays `dismissed`. Fixed findings are appended with an empty body. For a branch, a fixed finding keeps the bucket the earlier run gave it, or reads as `still-open` (from VectorScope's state) when that run does not name it.
+- **The model-facing findings block is bounded.** `frame` lists every finding, but past about 40,000 characters later findings lose their bodies, and past half again as much they are counted; the text then points at `connect findings` with the run id. Results themselves still carry up to 200 whole findings.
