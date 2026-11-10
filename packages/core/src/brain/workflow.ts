@@ -3,6 +3,7 @@ export * as BrainWorkflow from "./workflow"
 import { and, desc, eq, inArray, lt, notInArray } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import type { RunBudget } from "@vectordevai/schema/run-budget"
+import { Billing } from "@vectordevai/schema/billing"
 import { makeGlobalNode } from "../effect/app-node"
 import type { CostKind } from "../review/types"
 import { TaskSize } from "../task-size"
@@ -95,6 +96,10 @@ export type ArmStats = {
   /** Mean dollars over priced runs whose subagents had all finished. */
   readonly costUsd?: number
   readonly pricedWeight: number
+  /** Codium across all observed steps, including helpers on a different provider. */
+  readonly codium?: "only" | "mixed"
+  /** Some own spend is unpriced, even if other observations have a dollar average. */
+  readonly ownUnpriced?: true
   /** Mean tokens (input, output, reasoning and a tenth of cache reads), for effort decisions of one model alone. */
   readonly tokens?: number
   readonly lastAt: number
@@ -519,6 +524,15 @@ function summary(arm: Arm, items: readonly Weighed[]): ArmStats {
   const pricedWeight = sum(priced, () => 1)
   const whole = items.filter((item) => !item.row.partial)
   const wholeWeight = sum(whole, () => 1)
+  const sources = items.map(({ row }) => {
+    const counted = Object.entries(row.costKinds).filter(([, count]) => count > 0)
+    return {
+      row,
+      kinds:
+        counted.length > 0 ? counted.map(([kind]) => kind) : [Billing.isCodium(row.providerID) ? "codium" : "unknown"],
+    }
+  })
+  const kinds = sources.flatMap((source) => source.kinds)
   return {
     arm,
     rows: items.length,
@@ -528,6 +542,13 @@ function summary(arm: Arm, items: readonly Weighed[]): ArmStats {
     checkedShare: weight > 0 ? signal / weight : 0,
     ...(pricedWeight > 0 ? { costUsd: sum(priced, (item) => item.row.costUsd!) / pricedWeight } : {}),
     pricedWeight,
+    ...(kinds.includes("codium") ? { codium: kinds.every((kind) => kind === "codium") ? "only" : "mixed" } : {}),
+    ...(kinds.includes("codium") &&
+    sources.some(
+      ({ row, kinds }) => kinds.some((kind) => kind !== "codium") && (row.costUsd === undefined || row.partial),
+    )
+      ? { ownUnpriced: true as const }
+      : {}),
     ...(wholeWeight > 0
       ? {
           tokens:
@@ -554,6 +575,7 @@ function merge(arm: Arm, items: readonly ArmStats[]): ArmStats {
   const pricedWeight = add((item) => item.pricedWeight)
   const tokened = items.filter((item) => item.tokens !== undefined)
   const tokenWeight = tokened.reduce((total, item) => total + item.weight, 0)
+  const sources = items.map(codium)
   return {
     arm,
     rows: add((item) => item.rows),
@@ -563,6 +585,11 @@ function merge(arm: Arm, items: readonly ArmStats[]): ArmStats {
     checkedShare: weight > 0 ? signal / weight : 0,
     ...(pricedWeight > 0 ? { costUsd: add((item) => (item.costUsd ?? 0) * item.pricedWeight) / pricedWeight } : {}),
     pricedWeight,
+    ...(sources.some(Boolean) ? { codium: sources.every((source) => source === "only") ? "only" : "mixed" } : {}),
+    ...(sources.some(Boolean) &&
+    items.some((item) => item.ownUnpriced || (!codium(item) && item.pricedWeight < item.weight))
+      ? { ownUnpriced: true as const }
+      : {}),
     ...(tokenWeight > 0
       ? { tokens: tokened.reduce((total, item) => total + item.tokens! * item.weight, 0) / tokenWeight }
       : {}),
@@ -615,9 +642,18 @@ function passes(stats: ArmStats) {
 }
 
 function cost(stats: ArmStats) {
-  if (stats.costUsd !== undefined && stats.pricedWeight >= PRICED_WEIGHT) return ` (avg $${stats.costUsd.toFixed(2)})`
+  const source = codium(stats)
+  if (source === "only") return " (Codium)"
+  const own =
+    stats.costUsd !== undefined && stats.pricedWeight >= PRICED_WEIGHT ? `avg $${stats.costUsd.toFixed(2)}` : undefined
+  if (source === "mixed") return ` (${own ?? "unknown"}${own && stats.ownUnpriced ? " + unknown" : ""} + Codium)`
+  if (own) return ` (${own})`
   if (stats.tokens !== undefined) return ` (avg ${Math.round(stats.tokens / 1000)}k tokens)`
   return ""
+}
+
+function codium(stats: ArmStats) {
+  return stats.codium ?? (Billing.isCodium(stats.arm.providerID) ? "only" : undefined)
 }
 
 function add<K extends string>(a: Readonly<Partial<Record<K, number>>>, b: Readonly<Partial<Record<K, number>>>) {

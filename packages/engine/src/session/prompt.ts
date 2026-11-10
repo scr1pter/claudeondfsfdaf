@@ -70,6 +70,7 @@ import { TaskNotify } from "@/task/notify"
 import { QUICK_DESCRIPTION } from "@/tool/escalate"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Flag } from "@vectordevai/core/flag/flag"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@vectordevai/core/database/database"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -106,6 +107,7 @@ import { TaskSize } from "@vectordevai/core/task-size"
 import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { SessionTaskSize } from "./task-size"
 import { SessionSkillLearn } from "./skill-learn"
+import { SessionBrainHelper } from "./brain-helper"
 import { SessionWorkflow } from "./workflow"
 import { LearnedSkill } from "@/skill/learned"
 import { BackgroundJob } from "@/background/job"
@@ -315,6 +317,7 @@ const layer = Layer.effect(
     const brainDatabase = yield* BrainDatabase.Service
     const knowledge = yield* BrainKnowledge.Service
     const guests = yield* FreeModelGuests.Service
+    const brainHelper = SessionBrainHelper.bind({ brain, provider, guests, instruction, sessions })
     const isolation = yield* TaskIsolation.Service
     const privacy = yield* SessionAudience.Service
     const git = yield* Git.Service
@@ -3210,6 +3213,18 @@ const layer = Layer.effect(
                 model,
               )).length
             : 0
+          if (session.internal === "brain.distill" && Billing.isCodium(model.providerID)) {
+            const floor = yield* provider.getBrainModel()
+            const settings = yield* brain.learnSettings()
+            if (
+              !(settings.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL) ||
+              settings.codiumHelpers !== "on" ||
+              !floor ||
+              floor.id !== model.id ||
+              !(yield* brainHelper.privateInput(session.parentID ?? sessionID))
+            )
+              return "break"
+          }
           const result = yield* handle.process({
             user: lastUser,
             agent: warm?.agent ?? stepAgent,
@@ -3245,6 +3260,7 @@ const layer = Layer.effect(
             retries: warm ? warm.retries : retries,
             // A Vectorscope review's helper sessions (vectorscope.review, vectorscope.verify, ...) say so to Codium.
             ...(session.internal?.startsWith("vectorscope.") ? { purpose: "review" as const } : {}),
+            ...(session.internal === "brain.distill" ? { purpose: "brain" as const } : {}),
             answering: () => Deferred.doneUnsafe(answering, Effect.succeed(true)),
             // The digest in the system prompt carries the owner's rules, MEMORY.md and pinned entries too.
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },
@@ -3575,7 +3591,8 @@ const layer = Layer.effect(
       const user = last?.message.info
       // The model learner runs where the user let it: with Vector Local on, by default.
       const allowed =
-        settings.modelLearner === "always" || (settings.modelLearner === "local-only" && Egress.policy().enabled)
+        settings.modelLearner !== "off" &&
+        (settings.modelLearner === "always" || Egress.policy().enabled || settings.codiumHelpers === "on")
       if (!last || user?.role !== "user" || !allowed) return undefined
       // Only a correction the rules found nothing in needs the session: whether it read outside content, and the reply
       // before the correction.
@@ -3615,17 +3632,19 @@ const layer = Layer.effect(
       spend: SpendGuard.Captured
     }) {
       if (yield* input.spend.stopped) return []
+      if (yield* guests.marked(input.session.id)) return []
       const primary = yield* provider
         .getModel(input.user.model.providerID, input.user.model.modelID)
         .pipe(Effect.option)
       if (Option.isNone(primary)) return []
-      const small = yield* provider.getSmallModel(input.user.model.providerID, input.user.model.modelID)
-      // A Codium conversation without a helper model learns nothing rather than spend its own model on it.
-      if (!small && input.user.model.providerID === ModelPlanStatus.PROVIDER_ID) return []
-      const model = small ?? primary.value
-      if (freeModelMayTrain(primary.value) || freeModelMayTrain(model)) return []
+      const model = yield* brainHelper.choose({ setting: "modelLearner", primary: primary.value })
+      if (!model) return []
+      // The existing own-provider learner can retain a tainted typed correction for review. Codium consent does not
+      // authorize sending a held repository or tainted session to a remote Brain helper.
+      if (Billing.isCodium(model.providerID) && (input.tainted || (yield* instruction.place()).held)) return []
       const title = yield* agents.get("title")
       if (!title) return []
+      const settings = yield* brain.learnSettings()
       const usage = TitleUsage.create({
         sessionID: input.session.id,
         model,
@@ -3634,6 +3653,8 @@ const layer = Layer.effect(
         spend: input.spend,
         costKind: yield* helperCostKind(model),
       })
+      if (!(yield* brainHelper.permitted(model, "modelLearner"))) return []
+      if (Billing.isCodium(model.providerID) && !(yield* brainHelper.privateInput(input.session.id))) return []
       const reply = yield* llm
         .stream({
           // Its own instructions on the title helper's: no tools, no repository context.
@@ -3661,7 +3682,7 @@ const layer = Layer.effect(
         const learned = BrainLearn.accept(suggestion, {
           typed: input.typed,
           tainted: input.tainted,
-          facets: input.settings.facets,
+          facets: settings.facets,
         })
         return learned ? [learned] : []
       })

@@ -3900,6 +3900,8 @@ export type MemorySkillLearning = "review" | "auto" | "off"
 
 export type MemorySkillDrafter = "off" | "local-only" | "always"
 
+export type MemoryCodiumHelpers = "ask" | "on" | "off"
+
 export type MemoryWorkflowLearning = "apply" | "observe" | "off"
 
 export type MemorySettings = {
@@ -3910,6 +3912,8 @@ export type MemorySettings = {
   modelLearner: MemoryModelLearner
   skills: MemorySkillLearning
   skillDrafter: MemorySkillDrafter
+  codiumHelpers?: MemoryCodiumHelpers
+  distillation?: boolean
   workflow: MemoryWorkflowLearning
   workflowExplore: boolean
 }
@@ -3979,6 +3983,8 @@ export type MemoryWorkflowArm = {
   checkedShare: number
   costUsd?: number
   pricedWeight: number
+  codium?: "only" | "mixed"
+  ownUnpriced?: true
   tokens?: number
   lastAt: number
 }
@@ -4314,6 +4320,18 @@ export type MemoryDistillEstimate = {
   costKind?: CostKind
   lowUsd?: number
   highUsd?: number
+}
+
+export type MemoryBootstrap = {
+  type: "ready"
+  queued: number
+  pending: number
+  maxTokens: number
+  documents: Array<{
+    id: string
+    title: string
+    estimate: MemoryDistillEstimate
+  }>
 }
 
 export type MemoryDistillResult = {
@@ -15156,6 +15174,8 @@ export type MemorySettingsUpdateData = {
     modelLearner?: MemoryModelLearner
     skills?: MemorySkillLearning
     skillDrafter?: MemorySkillDrafter
+    codiumHelpers?: MemoryCodiumHelpers
+    distillation?: boolean
     workflow?: MemoryWorkflowLearning
     workflowExplore?: boolean
   }
@@ -15929,6 +15949,40 @@ export type MemoryDocumentsFileResponses = {
 }
 
 export type MemoryDocumentsFileResponse = MemoryDocumentsFileResponses[keyof MemoryDocumentsFileResponses]
+
+export type MemoryBootstrapPrepareData = {
+  body?: {
+    model?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/bootstrap"
+}
+
+export type MemoryBootstrapPrepareErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryBootstrapPrepareError = MemoryBootstrapPrepareErrors[keyof MemoryBootstrapPrepareErrors]
+
+export type MemoryBootstrapPrepareResponses = {
+  /**
+   * A local scan and bounded document suggestions preview
+   */
+  200: MemoryBootstrap
+}
+
+export type MemoryBootstrapPrepareResponse = MemoryBootstrapPrepareResponses[keyof MemoryBootstrapPrepareResponses]
 
 export type MemoryDistillEstimateData = {
   body?: never

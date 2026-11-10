@@ -300,6 +300,9 @@ import type {
   MemoryBackupData,
   MemoryBackupErrors,
   MemoryBackupResponses,
+  MemoryBootstrapPrepareData,
+  MemoryBootstrapPrepareErrors,
+  MemoryBootstrapPrepareResponses,
   MemoryCreateData,
   MemoryCreateErrors,
   MemoryCreateResponses,
@@ -3119,6 +3122,28 @@ export class Documents extends HeyApiClient {
   }
 }
 
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Prepare a repository Brain bootstrap
+   *
+   * Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options?: Options<MemoryBootstrapPrepareData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      MemoryBootstrapPrepareResponses,
+      MemoryBootstrapPrepareErrors,
+      ThrowOnError
+    >({
+      url: "/memory/bootstrap",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
 export class Distill extends HeyApiClient {
   /**
    * Estimate finding more with a model
@@ -3136,7 +3161,7 @@ export class Distill extends HeyApiClient {
   /**
    * Find more with a model
    *
-   * Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
+   * Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
    */
   public run<ThrowOnError extends boolean = false>(options: Options<MemoryDistillRunData, ThrowOnError>) {
     return (options.client ?? this.client).post<MemoryDistillRunResponses, MemoryDistillRunErrors, ThrowOnError>({
@@ -3557,6 +3582,11 @@ export class Memory extends HeyApiClient {
   private _documents?: Documents
   get documents(): Documents {
     return (this._documents ??= new Documents({ client: this.client }))
+  }
+
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
   }
 
   private _distill?: Distill

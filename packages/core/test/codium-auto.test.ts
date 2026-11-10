@@ -71,3 +71,21 @@ test("a helper call uses Auto's floor, then its default, and is skipped when nei
   expect(CodiumAuto.helper(neither)).toBeUndefined()
   expect(CodiumAuto.helper(catalog([floor, middle]))).toBeUndefined()
 })
+
+test("Brain requires a qualified actual floor and a current plan, never Auto's substituted default", () => {
+  const ready = { ...catalog([{ ...floor, role: "floor" }, middle, auto()]), plan: "vector-10" }
+  expect(CodiumAuto.brain(ready)?.id).toBe(floor.id)
+  expect(CodiumAuto.brain({ ...ready, enabled: false })).toBeUndefined()
+  expect(CodiumAuto.brain({ ...ready, plan: null })).toBeUndefined()
+  expect(CodiumAuto.brain({ ...ready, plan: undefined })).toBeUndefined()
+  expect(
+    CodiumAuto.brain({
+      ...ready,
+      models: [middle, auto({ floor: middle.id, default: middle.id, ceiling: middle.id })],
+    }),
+  ).toBeUndefined()
+  for (const extra of [{ manualOnly: true as const }, { locked: { plan: "vector-50", name: "Pro" } }])
+    expect(
+      CodiumAuto.brain({ ...ready, models: [{ ...floor, role: "floor", ...extra }, middle, auto()] }),
+    ).toBeUndefined()
+})
