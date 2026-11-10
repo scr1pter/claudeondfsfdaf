@@ -614,9 +614,17 @@ std::optional<bool> classify_uia_keyboard_focusable(HRESULT status, const VARIAN
   return value.boolVal == VARIANT_TRUE;
 }
 std::optional<bool> classify_uia_pattern_support(HRESULT status, bool interface_present) noexcept {
-  if (status == S_OK && interface_present) return true;
-  // Microsoft: UIA_E_NOTSUPPORTED means the provider "explicitly does not support the specified
-  // property or control pattern". Null plus that exact status is the only accepted negative probe.
+  // Called only after the exact reserved NotSupported cache marker for a known typed pattern.
+  // Microsoft's provider contract/sample return S_OK + NULL when a pattern is unsupported. Its
+  // client checks the native HRESULT first, then treats a successful zero pattern handle as absent.
+  // https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/Win7Samples/winui/uiautomation/simpleuiaprovider/CPP/Provider.cpp#L117-L128
+  // https://github.com/MicrosoftDocs/sdk-api/blob/docs/sdk-api-src/content/uiautomationcore/nf-uiautomationcore-irawelementprovidersimple-getpatternprovider.md
+  // https://github.com/dotnet/wpf/blob/1fdaaaab9b20a0c00c3a53fa1a61d047fac96d2a/src/Microsoft.DotNet.Wpf/src/UIAutomation/UIAutomationClient/MS/Internal/Automation/UiaCoreApi.cs#L397-L407
+  // https://github.com/dotnet/wpf/blob/1fdaaaab9b20a0c00c3a53fa1a61d047fac96d2a/src/Microsoft.DotNet.Wpf/src/UIAutomation/UIAutomationClient/System/Windows/Automation/AutomationElement.cs#L562-L595
+  // https://github.com/dotnet/wpf/blob/1fdaaaab9b20a0c00c3a53fa1a61d047fac96d2a/src/Microsoft.DotNet.Wpf/src/UIAutomation/UIAutomationClient/MS/Internal/Automation/SafeHandles.cs#L39-L51
+  if (status == S_OK) return interface_present;
+  // UIA_E_NOTSUPPORTED also means the provider "explicitly does not support the specified
+  // property or control pattern". Every other failed or ambiguous result remains unknown.
   // https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/WinAuto/uiauto-error-codes.md
   if (status == UIA_E_NOTSUPPORTED && !interface_present) return false;
   return {};
