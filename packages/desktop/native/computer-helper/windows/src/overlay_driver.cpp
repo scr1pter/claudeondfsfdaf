@@ -185,7 +185,16 @@ bool window_current(const OverlayStopRequest& request, const WindowsOwner& paren
 }
 struct StopElement { UiaElement root, element; UiaSecurity security; UiaName name; };
 StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage) {
-  stage = OverlayDriverStage::stop_root; const auto root = uia.root(window);
+  stage = OverlayDriverStage::stop_root; UiaElement root;
+  try { root = uia.root(window); }
+  catch (...) {
+    // Sample the actor's existing health before click_stop's RAII closes it. This is not a new UIA
+    // query or a retry. A retired actor is not by itself proof of why its ticket could not complete.
+    // Diagnostics must never replace the original exception, including if the health read throws.
+    try { if (uia.available) stage = uia.available() ? OverlayDriverStage::stop_root_refused : OverlayDriverStage::stop_root_retired; }
+    catch (...) {}
+    throw;
+  }
   stage = OverlayDriverStage::stop_hit; auto element = uia.hit(root, point(request));
   for (size_t depth = 0; element && depth < 8; ++depth) {
     stage = OverlayDriverStage::stop_security; const auto security = uia.security(element);

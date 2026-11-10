@@ -419,6 +419,8 @@ export const COMPUTER_SMOKE_DRIVER_STAGES = [
   "window-observe",
   "stop-element",
   "stop-root",
+  "stop-root-retired",
+  "stop-root-refused",
   "stop-hit",
   "stop-security",
   "stop-name",
