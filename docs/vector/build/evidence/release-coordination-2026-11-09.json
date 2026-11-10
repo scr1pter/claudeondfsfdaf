@@ -92,6 +92,13 @@
       "workspacesFailed": 0,
       "cached": 21,
       "seconds": 29.074
+    },
+    {
+      "revision": "1df6150a454868f3d00dd6370712bfba230e843b",
+      "workspacesPassed": 23,
+      "workspacesFailed": 0,
+      "cached": 21,
+      "seconds": 21.218
     }
   ],
   "productionUiCompletion": {
@@ -133,5 +140,12 @@
     "ACLineStatus": 0,
     "batteryPercent": 52,
     "observedAtUtc": "2026-11-10T02:56:04.2287717Z"
+  },
+  "releaseSnapshot": {
+    "path": "release-status-2026-11-09.json",
+    "observedAtUtc": "2026-11-10T02:57:14.580005+00:00",
+    "state": "incomplete",
+    "reason": "GitHub API HTTP 403 during metadata collection. Complete unchanged Git inventory; uncollected metadata and final API-head consistency remain unknown. Collected main and finish-checks evidence retained on their pinned heads.",
+    "releaseApproval": "not_assessed"
   }
 }
