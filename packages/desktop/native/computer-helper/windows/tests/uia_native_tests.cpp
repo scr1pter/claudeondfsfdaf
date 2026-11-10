@@ -36,6 +36,19 @@ template<class Body> void refusal(Body body) {
 }
 size_t run_uia_native_tests() {
   size_t groups = 0; const auto test = [&](const std::function<void()>& body) { body(); ++groups; };
+  test([] {
+    VARIANT value{}; value.vt = VT_BOOL; value.boolVal = VARIANT_FALSE;
+    require(classify_uia_keyboard_focusable(S_OK, value) == false, "uia-native.keyboard-negative-default-never-authorizes-focus");
+    value.boolVal = VARIANT_TRUE;
+    require(classify_uia_keyboard_focusable(S_OK, value) == true, "uia-native.keyboard-positive-boolean-required");
+    for (const auto status : {E_FAIL, E_ACCESSDENIED, E_UNEXPECTED})
+      require(!classify_uia_keyboard_focusable(status, value), "uia-native.keyboard-query-failure-not-defaulted");
+    for (const auto kind : {VT_EMPTY, VT_NULL, VT_UNKNOWN, VT_I4, VT_BSTR}) {
+      value.vt = kind; require(!classify_uia_keyboard_focusable(S_OK, value), "uia-native.keyboard-malformed-type-not-defaulted");
+    }
+    value.vt = VT_BOOL; value.boolVal = 1;
+    require(!classify_uia_keyboard_focusable(S_OK, value), "uia-native.keyboard-noncanonical-boolean-not-positive");
+  });
   test([] { require(sanitize_uia(L"abc\n\r\txyz\u202e\u200b") == L"abcxyz", "uia-native.control-bidi-stripping"); });
   test([] { require(sanitize_uia(std::wstring(600, L'a')).size() == 500 && sanitize_uia(L"abcd", 2) == L"ab", "uia-native.string-cap"); });
   test([] {

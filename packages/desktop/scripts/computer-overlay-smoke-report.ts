@@ -470,6 +470,8 @@ export const COMPUTER_SMOKE_DRIVER_STAGES = [
   "uia-security-enabled",
   "uia-security-focus",
   "uia-security-keyboard",
+  "uia-security-keyboard-query-failed",
+  "uia-security-keyboard-variant-invalid",
   "uia-security-value-pattern",
   "uia-security-text-pattern",
   "uia-security-classify",

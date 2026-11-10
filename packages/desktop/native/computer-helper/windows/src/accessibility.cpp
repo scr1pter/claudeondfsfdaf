@@ -300,6 +300,7 @@ void AccessibilityService::mutate(const JsonObject& args, const OperationContext
     if (!record.facts || !record.facts->complete() || !same_accessibility_facts(*record.facts, prepared.facts)) failure(L"stale_ref");
     if (prepared.native.security.password) failure(L"secure_field");
     if (!prepared.native.security.enabled) failure(L"unsupported_action");
+    if (!setting && (*payload == L"SetFocus" || *payload == L"AXRaise") && !prepared.native.security.keyboard_focusable) failure(L"unsupported_action");
     const auto operation = setting ? WindowsPolicyOperation::set_value : WindowsPolicyOperation::pointer;
     WindowsSessionPolicy(session).require(window, operation, prepared.native.security.password);
     if (setting && (!prepared.native.security.editable() || !prepared.native.security.value_pattern || prepared.native.security.read_only != false)) failure(L"unsupported_action");

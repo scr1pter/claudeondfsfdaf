@@ -157,6 +157,41 @@ describe("independent overlay source admission", () => {
       implementation.match(/if \(!budget\.current\(\)\) \{ self->note_budget_failure\(budget\); unavailable\(\); \}/g),
     ).toHaveLength(2)
   })
+  test("only keyboard focusability uses its documented negative default and cannot authorize focus", async () => {
+    const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+    const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
+    const service = await readFile(path.join(native, "accessibility.cpp"), "utf8")
+    const security = implementation.slice(
+      implementation.indexOf("UiaSecurity security("),
+      implementation.indexOf("UiaName name("),
+    )
+    expect(security.match(/GetCachedPropertyValueEx\([^;]+, FALSE,/g)).toHaveLength(1)
+    expect(security).toContain("GetCachedPropertyValueEx(UIA_IsKeyboardFocusablePropertyId, FALSE, &keyboard.value)")
+    expect(security).toContain("FAILED(cached->GetCachedPropertyValueEx(id, TRUE, &result)) || result.vt != expected")
+    expect(security).toContain("GetCachedPropertyValueEx(UIA_IsPasswordPropertyId, TRUE, &password.value)")
+    for (const [property, kind] of [
+      ["ProcessId", "VT_I4"],
+      ["ControlType", "VT_I4"],
+      ["IsEnabled", "VT_BOOL"],
+      ["HasKeyboardFocus", "VT_BOOL"],
+      ["IsValuePatternAvailable", "VT_BOOL"],
+      ["IsTextPatternAvailable", "VT_BOOL"],
+    ])
+      expect(security).toContain(`property(UIA_${property}PropertyId, ${kind},`)
+    expect(security).toContain("classify_uia_keyboard_focusable(keyboard_status, keyboard.value)")
+    expect(security).toContain("result.keyboard_focusable = *keyboard_focusable")
+    expect(security).toContain(
+      "FAILED(keyboard_status) ? WindowsUiaPhase::security_keyboard_query_failed : WindowsUiaPhase::security_keyboard_variant_invalid",
+    )
+    expect(implementation).toContain(
+      'if (action == L"AXRaise" || action == L"SetFocus") { if (!state.keyboard_focusable) return false;',
+    )
+    expect(service).toContain(
+      'if (!setting && (*payload == L"SetFocus" || *payload == L"AXRaise") && !prepared.native.security.keyboard_focusable) failure(L"unsupported_action");',
+    )
+    expect(implementation).toContain("live.keyboard_focusable != old.keyboard_focusable")
+    expect(implementation).toContain("value.boolVal == VARIANT_TRUE")
+  })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))
     expect(graph.entries.map((entry) => entry.path)).toContain("packages/desktop/src/main/computer-overlay.ts")

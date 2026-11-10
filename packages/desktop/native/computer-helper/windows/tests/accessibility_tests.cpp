@@ -112,7 +112,8 @@ struct Fixture {
     backend.uia.belongs = [this](const UiaElement&, const WindowsWindow& selected) { return membership && selected.hwnd == window.hwnd; };
     backend.uia.perform = [this](const UiaElement& element, std::wstring_view action) {
       require(inside_fence, "accessibility.action-outside-authority"); ++performed;
-      require((element == button || element == menu_leaf) && (action == L"AXPress" || action == L"Invoke"), "accessibility.actual-selected-action"); last_action = action; return true;
+      require(((element == button || element == menu_leaf) && (action == L"AXPress" || action == L"Invoke")) ||
+          (element == text && (action == L"SetFocus" || action == L"AXRaise")), "accessibility.actual-selected-action"); last_action = action; return true;
     };
     backend.uia.set_value = [this](const UiaElement& element, const std::wstring& value) {
       require(inside_fence, "accessibility.write-outside-authority"); ++attempts;
@@ -223,6 +224,31 @@ void menu_wire(const JsonObject& value, const std::vector<std::wstring>& path, c
 
 size_t run_accessibility_tests() {
   size_t groups = 0; const auto test = [&](const std::function<void()>& body) { body(); ++groups; };
+  test([] {
+    for (const auto action : {L"SetFocus", L"AXRaise"}) for (const bool native_commit : {false, true}) for (const bool focusable : {false, true}) {
+      Fixture fixture(true, native_commit); fixture.nodes[fixture.text->identity].security.keyboard_focusable = focusable;
+      const auto ref = fixture.mint(); fixture.service->perform(fixture.action(ref, L"action", action), fixture.context(), fixture.done());
+      if (!focusable) require(fixture.code() == L"unsupported_action" && fixture.performed == 0 && fixture.writes == 0 && fixture.fences == 0,
+          "accessibility.focus-actions-require-positive-capability-before-authority");
+      if (focusable) require(fixture.reply().GetNamedBoolean(L"took") && fixture.performed == 1 && fixture.last_action == action,
+          "accessibility.focus-actions-preserve-positive-capability");
+    }
+  });
+  test([] {
+    for (const auto action : {L"SetFocus", L"AXRaise"}) {
+      Fixture fixture; const auto ref = fixture.mint();
+      fixture.on_prepare = [&] { fixture.nodes[fixture.text->identity].security.keyboard_focusable = false; };
+      fixture.service->perform(fixture.action(ref, L"action", action), fixture.context(), fixture.done());
+      require(fixture.code() == L"stale_ref" && fixture.performed == 0 && fixture.writes == 0,
+          "accessibility.focus-capability-revoked-before-mutation");
+    }
+  });
+  test([] {
+    Fixture fixture; fixture.nodes[fixture.button->identity].security.keyboard_focusable = false; const auto ref = fixture.mint(L"Increment");
+    fixture.service->perform(fixture.action(ref, L"action", L"Invoke"), fixture.context(), fixture.done());
+    require(fixture.reply().GetNamedBoolean(L"took") && fixture.performed == 1 && fixture.last_action == L"Invoke",
+        "accessibility.nonfocusable-observation-keeps-independent-pattern-action");
+  });
   test([] { Fixture fixture; const auto features = fixture.service->features(); require(features.GetNamedBoolean(L"ui.tree") && features.GetNamedBoolean(L"ui.actions") && features.GetNamedBoolean(L"ui.secureFieldDetect"), "accessibility.actual-implemented-feature-groups"); });
   test([] {
     Fixture fixture; fixture.service->tree(fixture.tree_args(10000, 10000), fixture.context(), fixture.done());

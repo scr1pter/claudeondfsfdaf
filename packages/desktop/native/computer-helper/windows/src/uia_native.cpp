@@ -273,7 +273,19 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     property(UIA_ProcessIdPropertyId, VT_I4, pid.value, WindowsUiaPhase::security_pid); property(UIA_ControlTypePropertyId, VT_I4, type.value, WindowsUiaPhase::security_type);
     note(WindowsUiaPhase::security_password); current_call(); if (FAILED(cached->GetCachedPropertyValueEx(UIA_IsPasswordPropertyId, TRUE, &password.value))) unavailable();
     property(UIA_IsEnabledPropertyId, VT_BOOL, enabled.value, WindowsUiaPhase::security_enabled);
-    property(UIA_HasKeyboardFocusPropertyId, VT_BOOL, focus.value, WindowsUiaPhase::security_focus); property(UIA_IsKeyboardFocusablePropertyId, VT_BOOL, keyboard.value, WindowsUiaPhase::security_keyboard);
+    property(UIA_HasKeyboardFocusPropertyId, VT_BOOL, focus.value, WindowsUiaPhase::security_focus);
+    // Microsoft documents IsKeyboardFocusable as VT_BOOL with "Default value: FALSE" and says
+    // ignoreDefaultValue=FALSE returns the UIA default when a provider does not support a property:
+    // https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/WinAuto/uiauto-automation-element-propids.md
+    // https://github.com/MicrosoftDocs/sdk-api/blob/docs/sdk-api-src/content/uiautomationclient/nf-uiautomationclient-iuiautomationelement-getcachedpropertyvalueex.md
+    // Only this capability accepts that negative default; the observed phase alone does not prove
+    // provider non-support. Failed queries and malformed variants still refuse the observation.
+    note(WindowsUiaPhase::security_keyboard); current_call();
+    const auto keyboard_status = cached->GetCachedPropertyValueEx(UIA_IsKeyboardFocusablePropertyId, FALSE, &keyboard.value);
+    const auto keyboard_focusable = classify_uia_keyboard_focusable(keyboard_status, keyboard.value);
+    if (!keyboard_focusable) {
+      note(FAILED(keyboard_status) ? WindowsUiaPhase::security_keyboard_query_failed : WindowsUiaPhase::security_keyboard_variant_invalid); unavailable();
+    }
     property(UIA_IsValuePatternAvailablePropertyId, VT_BOOL, available.value, WindowsUiaPhase::security_value_pattern);
     property(UIA_IsTextPatternAvailablePropertyId, VT_BOOL, text_available.value, WindowsUiaPhase::security_text_pattern);
     note(WindowsUiaPhase::security_pid);
@@ -283,7 +295,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     note(WindowsUiaPhase::security_classify); const auto classification = classify_uia_password(result.control_type,
         password.value.vt == VT_BOOL ? std::optional<bool>(password.value.boolVal != VARIANT_FALSE) : std::nullopt, result.value_pattern, result.text_pattern);
     if (!classification) unavailable(); result.password = *classification; result.enabled = enabled.value.boolVal != VARIANT_FALSE;
-    result.focused = focus.value.boolVal != VARIANT_FALSE; result.keyboard_focusable = keyboard.value.boolVal != VARIANT_FALSE; result.value_pattern = available.value.boolVal != VARIANT_FALSE;
+    result.focused = focus.value.boolVal != VARIANT_FALSE; result.keyboard_focusable = *keyboard_focusable; result.value_pattern = available.value.boolVal != VARIANT_FALSE;
     if (result.value_pattern) {
       note(WindowsUiaPhase::security_value_readonly); Variant read; current_call(); if (SUCCEEDED(cached->GetCachedPropertyValueEx(UIA_ValueIsReadOnlyPropertyId, TRUE, &read.value)) && read.value.vt == VT_BOOL) result.read_only = read.value.boolVal != VARIANT_FALSE;
     }
@@ -474,7 +486,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
   bool perform(const UiaElement& element, std::wstring_view action, const WindowsWindow* window = nullptr) {
     const auto state = security(element); if (!state.enabled) return false;
     if (state.password) throw Failure{L"secure_field", L"The native field is secure."};
-    if (action == L"AXRaise" || action == L"SetFocus") { const auto target = native(element); before_mutation(window); return mutation_result(target->SetFocus()); }
+    if (action == L"AXRaise" || action == L"SetFocus") { if (!state.keyboard_focusable) return false; const auto target = native(element); before_mutation(window); return mutation_result(target->SetFocus()); }
     if (action == L"AXScrollToVisible" || action == L"ScrollIntoView") { winrt::com_ptr<IUIAutomationScrollItemPattern> pattern; current_call();
       if (FAILED(native(element)->GetCurrentPatternAs(UIA_ScrollItemPatternId, IID_PPV_ARGS(pattern.put()))) || !pattern) return false; before_mutation(window); return mutation_result(pattern->ScrollIntoView()); }
     if (action == L"AXShowMenu" || action == L"Expand" || action == L"Collapse") { winrt::com_ptr<IUIAutomationExpandCollapsePattern> pattern; current_call();
@@ -563,6 +575,10 @@ std::wstring sanitize_uia(std::wstring_view text, size_t maximum) {
     if (value >= 0xdc00 && value <= 0xdfff) continue; result.push_back(text[index]);
   }
   return result;
+}
+std::optional<bool> classify_uia_keyboard_focusable(HRESULT status, const VARIANT& value) noexcept {
+  if (FAILED(status) || value.vt != VT_BOOL || (value.boolVal != VARIANT_FALSE && value.boolVal != VARIANT_TRUE)) return {};
+  return value.boolVal == VARIANT_TRUE;
 }
 std::optional<bool> classify_uia_password(int control_type, std::optional<bool> reported, bool value_pattern, bool text_pattern) noexcept {
   if (reported) return reported;
