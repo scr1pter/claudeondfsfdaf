@@ -222,9 +222,16 @@ jobs:
         timeout-minutes: 2
         shell: bash
         run: |
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS="$(bun --no-env-file --eval 'import { WINDOWS_NATIVE_CHECKS, WINDOWS_NATIVE_REASONS, WINDOWS_NATIVE_STAGES, WINDOWS_NATIVE_CODES } from "./scripts/computer-helper-selftest-windows.ts"; process.stdout.write(JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged, reasons: WINDOWS_NATIVE_REASONS, stages: WINDOWS_NATIVE_STAGES, codes: WINDOWS_NATIVE_CODES }))')"
+          export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS
           node --input-type=module <<'NODE'
           import { existsSync, readFileSync, appendFileSync } from "node:fs"
           import path from "node:path"
+          const native = JSON.parse(process.env.VECTOR_WINDOWS_NATIVE_DIAGNOSTICS)
+          const checks = new Set(native.checks.map(name => "privileged." + name))
+          const reasons = new Set(native.reasons)
+          const stages = new Set(native.stages)
+          const codes = new Set(native.codes)
           for (const name of ["computer-win32-core.json", "computer-win32-direct-node.json", "computer-win32-privileged.json"]) {
             const file = path.join(process.env.RUNNER_TEMP, name)
             if (!existsSync(file)) continue
@@ -232,7 +239,12 @@ jobs:
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
             const summary = "\n" + name + ": " + counts + "\n" + report.checks
               .filter(check => check.status === "skipped" || check.status === "failed")
-              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+              .map(check => {
+                const diagnostic = name === "computer-win32-privileged.json" && check.status === "failed"
+                  && checks.has(check.name) && reasons.has(check.reason) && stages.has(check.stage) && codes.has(check.nativeCode)
+                  ? " [stage=" + check.stage + ", nativeCode=" + check.nativeCode + "]" : ""
+                return "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + diagnostic + "\n"
+              }).join("")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
             process.stdout.write(summary)
           }

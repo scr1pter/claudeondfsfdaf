@@ -4,6 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { runInNewContext } from "node:vm"
+import {
+  WINDOWS_NATIVE_CHECKS,
+  WINDOWS_NATIVE_REASONS,
+  WINDOWS_NATIVE_STAGES,
+  WINDOWS_NATIVE_CODES,
+} from "./computer-helper-selftest-windows"
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a workflow mapping.")
@@ -948,7 +954,7 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
 })
 
-test("the x64 diagnostic logs its closed failed and skipped report rows even after an optional failure", () => {
+test("the x64 diagnostic logs closed failed stages and codes without exposing native payloads", () => {
   const current = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
   const isolated = current.findIndex((step) => step.name === "Run explicitly isolated Windows scenarios")
   const summary = current.find((step) => step.name === "Summarize x64 native diagnostic rows")!
@@ -957,20 +963,46 @@ test("the x64 diagnostic logs its closed failed and skipped report rows even aft
   expect(summary["timeout-minutes"]).toBe(2)
   expect(summary["continue-on-error"]).toBeUndefined()
   expect(summary.shell).toBe("bash")
-  const source = /^node --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+  expect(String(summary.run).split("\n").slice(0, 2)).toEqual([
+    'VECTOR_WINDOWS_NATIVE_DIAGNOSTICS="$(bun --no-env-file --eval \'import { WINDOWS_NATIVE_CHECKS, WINDOWS_NATIVE_REASONS, WINDOWS_NATIVE_STAGES, WINDOWS_NATIVE_CODES } from "./scripts/computer-helper-selftest-windows.ts"; process.stdout.write(JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged, reasons: WINDOWS_NATIVE_REASONS, stages: WINDOWS_NATIVE_STAGES, codes: WINDOWS_NATIVE_CODES }))\')"',
+    "export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS",
+  ])
+  const source = /\nnode --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
   expect(source).toBeString()
   const temporary = mkdtempSync(path.join(tmpdir(), "vector-native-diagnostic-summary-"))
   const output = path.join(temporary, "summary.md")
+  const env = {
+    ...process.env,
+    RUNNER_TEMP: temporary,
+    GITHUB_STEP_SUMMARY: output,
+    VECTOR_WINDOWS_NATIVE_DIAGNOSTICS: JSON.stringify({
+      checks: WINDOWS_NATIVE_CHECKS.privileged,
+      reasons: WINDOWS_NATIVE_REASONS,
+      stages: WINDOWS_NATIVE_STAGES,
+      codes: WINDOWS_NATIVE_CODES,
+    }),
+  }
   try {
     const files = ["computer-win32-core.json", "computer-win32-direct-node.json", "computer-win32-privileged.json"]
+    const diagnostic = { stage: "capture-window-item-full-ticket-expired", nativeCode: "timeout" }
     for (const file of files)
       writeFileSync(
         path.join(temporary, file),
         JSON.stringify({
           checks: [
-            { name: "unit", status: "passed", stdout: "PRIVATE UNIT OUTPUT" },
-            { name: "privileged.capture-color-patch", status: "failed", reason: "native_operation_failed" },
-            { name: "privileged.secure-field-refusal", status: "skipped", reason: "noninteractive_desktop" },
+            { name: "unit", status: "passed", stdout: "PRIVATE UNIT OUTPUT", ...diagnostic },
+            {
+              name: "privileged.capture-color-patch",
+              status: "failed",
+              reason: "native_operation_failed",
+              ...diagnostic,
+            },
+            {
+              name: "privileged.secure-field-refusal",
+              status: "skipped",
+              reason: "noninteractive_desktop",
+              ...diagnostic,
+            },
           ],
           image: "PRIVATE SCREENSHOT",
           stderr: "PRIVATE NATIVE ERROR",
@@ -980,7 +1012,7 @@ test("the x64 diagnostic logs its closed failed and skipped report rows even aft
     const result = spawnSync("node", ["--input-type=module", "-e", source!], {
       encoding: "utf8",
       timeout: 10_000,
-      env: { ...process.env, RUNNER_TEMP: temporary, GITHUB_STEP_SUMMARY: output },
+      env,
     })
     expect(result.error).toBeUndefined()
     expect(result.status, result.stderr).toBe(0)
@@ -988,9 +1020,51 @@ test("the x64 diagnostic logs its closed failed and skipped report rows even aft
     expect(result.stdout).toBe(readFileSync(output, "utf8"))
     for (const file of files)
       expect(result.stdout).toContain(
-        `\n${file}: passed=1, failed=1, skipped=1\n- FAILED privileged.capture-color-patch: native_operation_failed\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`,
+        `\n${file}: passed=1, failed=1, skipped=1\n- FAILED privileged.capture-color-patch: native_operation_failed${file === "computer-win32-privileged.json" ? " [stage=capture-window-item-full-ticket-expired, nativeCode=timeout]" : ""}\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`,
       )
+    expect(result.stdout.match(/\[stage=/g)).toHaveLength(1)
     expect(result.stdout).not.toMatch(/PRIVATE|image|stderr|unit:|\"checks\"/)
+
+    const invalid = [
+      { stage: "PRIVATE WINDOW TITLE", nativeCode: "timeout" },
+      { stage: diagnostic.stage, nativeCode: "PRIVATE NATIVE ERROR" },
+      { stage: diagnostic.stage },
+      { nativeCode: "timeout" },
+      { stage: null, nativeCode: "timeout" },
+      { stage: diagnostic.stage, nativeCode: ["timeout"] },
+    ]
+    writeFileSync(
+      path.join(temporary, "computer-win32-privileged.json"),
+      JSON.stringify({
+        checks: [
+          ...invalid.map((value) => ({
+            name: "privileged.capture-color-patch",
+            status: "failed",
+            reason: "native_operation_failed",
+            ...value,
+          })),
+          {
+            name: "privileged.capture-color-patch",
+            status: "passed",
+            reason: "native_operation_failed",
+            ...diagnostic,
+          },
+          { name: "privileged", status: "failed", reason: "native_operation_failed", ...diagnostic },
+          { name: "unit", status: "failed", reason: "native_operation_failed", ...diagnostic },
+          { name: "privileged.unknown-check", status: "failed", reason: "native_operation_failed", ...diagnostic },
+          { name: "privileged.capture-color-patch", status: "failed", reason: "native_failure", ...diagnostic },
+        ],
+      }),
+    )
+    const rejected = spawnSync("node", ["--input-type=module", "-e", source!], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env,
+    })
+    expect(rejected.error).toBeUndefined()
+    expect(rejected.status, rejected.stderr).toBe(0)
+    expect(rejected.stderr).toBe("")
+    expect(rejected.stdout).not.toMatch(/PRIVATE|stage=|nativeCode=/)
   } finally {
     rmSync(temporary, { recursive: true, force: true })
   }
