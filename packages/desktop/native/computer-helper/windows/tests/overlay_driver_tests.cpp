@@ -1,4 +1,5 @@
 #include "overlay_driver.h"
+#include "uia_native.h"
 #include "privileged_self_test.h"
 #include <propidl.h>
 #include <uiautomation.h>
@@ -129,6 +130,18 @@ size_t run_overlay_driver_tests() {
     }
     for (size_t index = 0; index < overlay_driver_stages.size(); ++index) require(overlay_driver_stage_name(static_cast<OverlayDriverStage>(index)) == overlay_driver_stages[index], "overlay-driver.stage-names-follow-the-closed-order");
     require(overlay_driver_stage_name(static_cast<OverlayDriverStage>(overlay_driver_stages.size())).empty(), "overlay-driver.out-of-range-stage-has-no-name");
+  });
+  test([] {
+    require(!overlay_driver_uia_stage(WindowsUiaPhase::none) && !overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(windows_uia_phases.size())), "overlay-driver.uia-unknown-phases-have-no-stage");
+    for (size_t index = 1; index < windows_uia_phases.size(); ++index) {
+      const auto stage = overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(index));
+      require(stage && overlay_driver_stage_name(*stage) == L"uia-" + std::wstring(windows_uia_phases[index]), "overlay-driver.uia-phase-maps-to-its-closed-stage");
+      try { throw Failure{L"no_ui_tree", L"PRIVATE NATIVE CONTENT"}; }
+      catch (...) {
+        const auto result = overlay_driver_caught(OverlayDriverMode::stop, *stage, std::current_exception());
+        require(!result.ok && !result.skipped && result.exit_code() == 1 && result.cause == L"core_failure:no_ui_tree" && result.stage == overlay_driver_stage_name(*stage), "overlay-driver.uia-stage-keeps-original-failure-and-exit");
+      }
+    }
   });
   test([] {
     for (const auto stage : {L"", L"bogus", L"Files", L"files ", L"observe_parent", L"C:\\Windows", L"0x80070005"}) {

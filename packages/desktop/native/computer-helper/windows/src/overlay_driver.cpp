@@ -184,15 +184,21 @@ bool window_current(const OverlayStopRequest& request, const WindowsOwner& paren
   return (extended & WS_EX_NOACTIVATE) && (extended & WS_EX_LAYERED) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION) && windows_desktop_available(observe_windows_desktop());
 }
 struct StopElement { UiaElement root, element; UiaSecurity security; UiaName name; };
-StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage) {
+StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic) {
   stage = OverlayDriverStage::stop_root; UiaElement root;
   try { root = uia.root(window); }
   catch (...) {
     // Sample the actor's existing health before click_stop's RAII closes it. This is not a new UIA
     // query or a retry. A retired actor is not by itself proof of why its ticket could not complete.
     // Diagnostics must never replace the original exception, including if the health read throws.
-    try { if (uia.available) stage = uia.available() ? OverlayDriverStage::stop_root_refused : OverlayDriverStage::stop_root_retired; }
-    catch (...) {}
+    try {
+      if (uia.available) {
+        const auto available = uia.available();
+        stage = available ? OverlayDriverStage::stop_root_refused : OverlayDriverStage::stop_root_retired;
+        // A retired worker may still run late; only a positively healthy actor refines this failure.
+        if (available && diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+      }
+    } catch (...) {}
     throw;
   }
   stage = OverlayDriverStage::stop_hit; auto element = uia.hit(root, point(request));
@@ -209,8 +215,8 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
   }
   invalid(L"stop_target_invalid");
 }
-uint64_t refresh_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, const StopElement& expected, OverlayDriverStage& stage) {
-  const auto started = GetTickCount64(); const auto current = observe_stop(uia, window, request, stage);
+uint64_t refresh_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, const StopElement& expected, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic) {
+  const auto started = GetTickCount64(); const auto current = observe_stop(uia, window, request, stage, diagnostic);
   stage = OverlayDriverStage::refresh;
   require(uia.equal(current.root, expected.root) && uia.equal(current.element, expected.element) && current.security.bounds == expected.security.bounds && current.name.text == expected.name.text && GetTickCount64() - started < 50);
   return started;
@@ -232,18 +238,18 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::envelope_shape; require(keys(envelope, {L"id", L"ok", L"stop"}) && safe_integer(field(envelope, L"id")) == 1 && envelope.GetNamedBoolean(L"ok"), L"control_invalid");
   stage = Stage::request; const auto request = parse_overlay_stop_request(envelope.GetNamedObject(L"stop")); require(request && request->parent == options.parent && request->nonce == options.nonce && request->parent_created == life->birth && request->source_digest == widen(overlay_driver_identity::kSourceDigest), L"control_invalid");
   stage = Stage::foreground; DWORD foreground = 0; if (!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != options.parent) throw DriverSkip{L"foreground_unavailable"};
-  stage = Stage::guardian_create; auto guardian = InputGuardian::native(); stage = Stage::backend_create; auto backend = InputBackend::system({}, guardian); stage = Stage::uia_create; const auto uia = WindowsUiaBackend::system();
+  stage = Stage::guardian_create; auto guardian = InputGuardian::native(); stage = Stage::backend_create; auto backend = InputBackend::system({}, guardian); stage = Stage::uia_create; const auto uia_diagnostic = std::make_shared<WindowsUiaDiagnostic>(); const auto uia = WindowsUiaBackend::system(uia_diagnostic);
   struct Close { InputBackend& backend; const WindowsUiaBackend& uia; std::shared_ptr<InputGuardian> guardian; ~Close() { guardian->close(); if (backend.close) backend.close(); if (uia.close) uia.close(); } } close{backend, uia, guardian};
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
   stage = Stage::window_observe; const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
   require(window.hwnd == request->banner && window.surface == request->banner && window.owner.process.pid == options.parent && window.physical_owner.process.pid == options.parent && same_windows_process(window.owner.process, parent.process) && same_windows_process(window.physical_owner.process, parent.process));
-  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current; require(valid_overlay_stop_request(observed_request) && window_current(observed_request, parent, window, life));
+  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage, uia_diagnostic); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current; require(valid_overlay_stop_request(observed_request) && window_current(observed_request, parent, window, life));
   stage = Stage::quiet; if (!backend.quiet()) throw DriverSkip{L"physical_input"};
   stage = Stage::guardian_ready; require(guardian->ready(), L"guardian_unavailable");
   stage = Stage::reserve; const InputRelease release{InputReleaseKind::mouse_button, 0, 0, false, 0}; const auto ticket = guardian->reserve(release); require(ticket.has_value(), L"guardian_unavailable");
   bool attempted = false, confirmed_up = false;
   try {
-    stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element, stage);
+    stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element, stage, uia_diagnostic);
     require(files.current() && windows_owner_current(bootstrap) && window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50); stage = Stage::post;
     const auto outcome = backend.post({InputEventKind::button_down, point(observed_request), release, 0, 0, backend.tag}, [&] {
       if (!files.current() || !windows_owner_current(bootstrap) || !window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50) return false;
@@ -399,6 +405,11 @@ bool overlay_driver_reason(std::wstring_view value) noexcept {
 }
 std::wstring_view overlay_driver_stage_name(OverlayDriverStage stage) noexcept {
   const auto index = static_cast<size_t>(stage); return index < overlay_driver_stages.size() ? overlay_driver_stages[index] : std::wstring_view{};
+}
+std::optional<OverlayDriverStage> overlay_driver_uia_stage(WindowsUiaPhase phase) noexcept {
+  const auto index = static_cast<size_t>(phase);
+  if (index == 0 || index >= windows_uia_phases.size()) return {};
+  return static_cast<OverlayDriverStage>(static_cast<size_t>(OverlayDriverStage::uia_root_current) + index - 1);
 }
 bool overlay_driver_stage(std::wstring_view value) noexcept {
   return std::find(overlay_driver_stages.begin(), overlay_driver_stages.end(), value) != overlay_driver_stages.end();

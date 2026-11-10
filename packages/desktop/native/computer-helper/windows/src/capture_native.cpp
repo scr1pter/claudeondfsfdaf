@@ -212,8 +212,10 @@ WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::functio
     require(SUCCEEDED(DwmGetWindowAttribute(request.window->hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &fresh, sizeof(fresh))) && rectangle(fresh) == bounds);
     require(current() && Clock::now() < deadline);
   };
-  const auto ticket_budget = [&] {
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+  const auto ticket_budget = [&](Clock::time_point* observed_at = nullptr) {
+    const auto observed = Clock::now();
+    if (observed_at) *observed_at = observed;
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - observed).count();
     require(remaining > 0);
     return static_cast<uint32_t>(std::min<int64_t>(50, remaining));
   };
@@ -227,9 +229,11 @@ WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::functio
   } // Retire and join the first timer before admitting any successor RPC on this thread.
   phase = CaptureReadPhase::window_factory_retired; metadata_current();
   phase = CaptureReadPhase::window_item_ticket;
-  const auto item_budget = ticket_budget();
+  Clock::time_point item_setup, rpc_started;
+  const auto item_budget = ticket_budget(&item_setup);
   { WindowsComCall call(item_budget); require(call.current());
-    require(current() && Clock::now() < deadline && call.current());
+    // Reuse the existing clock observation in exactly its prior short-circuit position.
+    require(current() && (rpc_started = Clock::now()) < deadline && call.current());
     phase = CaptureReadPhase::window_item_create;
     const auto created = interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item));
     if (FAILED(created)) {
@@ -239,14 +243,25 @@ WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::functio
         phase = cancelled ? CaptureReadPhase::window_item_expired_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_expired_denied : CaptureReadPhase::window_item_expired_other;
       if (observation == WindowsComObservation::current)
         phase = cancelled ? CaptureReadPhase::window_item_current_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_current_denied : CaptureReadPhase::window_item_current_other;
+      if (observation == WindowsComObservation::expired && cancelled && item_budget == 50) {
+        // Failure-only closing sample; success and the existing acceptance/HRESULT checks are unchanged.
+        const auto rpc_finished = Clock::now();
+        if (rpc_finished < deadline)
+          phase = capture_item_cancelled_ticket_expiry(std::chrono::duration_cast<std::chrono::milliseconds>(rpc_started - item_setup).count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(rpc_finished - rpc_started).count());
+      }
     }
     winrt::check_hresult(created);
     phase = CaptureReadPhase::window_item_current;
     const auto ticket_current = call.current();
-    const auto acquisition_current = Clock::now() < deadline;
+    const auto rpc_finished = Clock::now();
+    const auto acquisition_current = rpc_finished < deadline;
     if (!acquisition_current) phase = CaptureReadPhase::window_item_acquisition_expired;
     if (acquisition_current && !ticket_current)
-      phase = item_budget == 50 ? CaptureReadPhase::window_item_full_ticket_expired : CaptureReadPhase::window_item_truncated_ticket_expired;
+      phase = item_budget == 50
+        ? capture_item_ticket_expiry(std::chrono::duration_cast<std::chrono::milliseconds>(rpc_started - item_setup).count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(rpc_finished - rpc_started).count())
+        : CaptureReadPhase::window_item_truncated_ticket_expired;
     require(ticket_current && acquisition_current);
     phase = CaptureReadPhase::window_item_context; require(current()); }
   phase = CaptureReadPhase::window_item_retired; metadata_current();

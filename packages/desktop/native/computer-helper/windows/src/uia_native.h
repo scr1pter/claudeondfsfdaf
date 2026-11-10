@@ -1,11 +1,42 @@
 #pragma once
 #include "windows_enum.h"
+#include <oaidl.h>
 #include <memory>
+#include <atomic>
+#include <array>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vector::computer {
+// Read-only diagnostics for the never-shipped driver. A queued or quarantined job owns the shared state;
+// observers retain no stack references, callbacks or native/user values. Production callers omit it.
+enum class WindowsUiaPhase : uint8_t {
+  none, root_current, actor_admission, actor_queued, actor_budget, prepare_desktop,
+  prepare_create, prepare_interface, prepare_connection, prepare_transaction, prepare_walker, prepare_cache,
+  prepare_scope, prepare_control, prepare_filter, prepare_property, root_availability, root_target,
+  root_element, root_handle, root_wrap, runtime_id, runtime_shape, runtime_bounds,
+  runtime_value, wrap_equal, wrap_limit, security_cache, security_pid, security_type,
+  security_password, security_enabled, security_focus, security_keyboard, security_keyboard_query_failed, security_keyboard_variant_invalid, security_value_pattern, security_text_pattern,
+  security_classify, security_value_readonly, security_text_readonly, security_bounds, security_current, root_pid,
+  actor_current, actor_current_budget, actor_complete, actor_expired, actor_cancelled, actor_revoked,
+  actor_com_uninitialized, actor_com_cancellation_unavailable, actor_com_timer_unavailable, actor_com_expired
+};
+inline constexpr std::array<std::wstring_view, 54> windows_uia_phases{
+  L"none", L"root-current", L"actor-admission", L"actor-queued", L"actor-budget", L"prepare-desktop",
+  L"prepare-create", L"prepare-interface", L"prepare-connection", L"prepare-transaction", L"prepare-walker", L"prepare-cache",
+  L"prepare-scope", L"prepare-control", L"prepare-filter", L"prepare-property", L"root-availability", L"root-target",
+  L"root-element", L"root-handle", L"root-wrap", L"runtime-id", L"runtime-shape", L"runtime-bounds",
+  L"runtime-value", L"wrap-equal", L"wrap-limit", L"security-cache", L"security-pid", L"security-type",
+  L"security-password", L"security-enabled", L"security-focus", L"security-keyboard", L"security-keyboard-query-failed", L"security-keyboard-variant-invalid", L"security-value-pattern", L"security-text-pattern",
+  L"security-classify", L"security-value-readonly", L"security-text-readonly", L"security-bounds", L"security-current", L"root-pid",
+  L"actor-current", L"actor-current-budget", L"actor-complete", L"actor-expired", L"actor-cancelled", L"actor-revoked",
+  L"actor-com-uninitialized", L"actor-com-cancellation-unavailable", L"actor-com-timer-unavailable", L"actor-com-expired"
+};
+struct WindowsUiaDiagnostic { std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none}; };
+static_assert(std::atomic<WindowsUiaPhase>::is_always_lock_free);
+static_assert(windows_uia_phases.size() == static_cast<size_t>(WindowsUiaPhase::actor_com_expired) + 1);
 class NativeUia;
 class WindowsUiaElement final {
  public:
@@ -68,10 +99,12 @@ struct WindowsUiaBackend {
   std::function<bool(const UiaObservation&, const UiaName&, std::wstring_view, const std::optional<std::wstring>&,
                      const std::function<bool()>& metadata_gate)> commit;
   std::function<std::optional<UiaMenuShortcut>(const UiaElement&, const UiaElement&)> menu_target;
-  static WindowsUiaBackend system();
+  static WindowsUiaBackend system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic = {});
 };
 
 std::wstring sanitize_uia(std::wstring_view text, size_t maximum = 500);
+// A documented negative default never authorizes focus. Query/type failures remain unavailable.
+std::optional<bool> classify_uia_keyboard_focusable(HRESULT status, const VARIANT& value) noexcept;
 // Metadata only: never a Dispatcher callback, UIA query, provider RPC or native input operation.
 void require_uia_mutation_gate(const std::function<bool()>&);
 // Unsupported IsPassword is acceptable only for documented nontext controls with positively absent
