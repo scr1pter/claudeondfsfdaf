@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "bun test src/workflow-compliance.test.ts src/oauth.test.ts src/desktop-release-version.test.ts src/desktop-release-manifest.test.ts src/upload-model-catalog.test.ts src/cli-release-package.test.ts src/upload-cli-release.test.ts src/cli-package-managers.test.ts src/prepare-cli-release-catalog.test.ts src/verify-required-cli.test.ts src/cli-container.test.ts",
+    "test": "bun test src/workflow-compliance.test.ts src/oauth.test.ts src/desktop-release-version.test.ts src/desktop-release-manifest.test.ts src/upload-model-catalog.test.ts src/cli-release-package.test.ts src/upload-cli-release.test.ts src/cli-package-managers.test.ts src/prepare-cli-release-catalog.test.ts src/verify-required-cli.test.ts src/cli-container.test.ts src/hosted-budget.test.ts src/hosted-workers.test.ts src/hosted-image.test.ts",
     "release:cli": "bun src/upload-cli-release.ts",
     "release:cli:managers": "bun src/cli-package-managers.ts"
   },

@@ -30,6 +30,24 @@ export function selectUnitTests(tracked: readonly string[], changed: readonly st
     .sort()
 }
 
+// The hosted services lane (.github/workflows/vector-hosted-ci.yml, WP A58) runs on pull requests that touch the hosted
+// API, the Workers, the cloud computer, the schema, Vault, WebAuthn or the desktop's Remote, Vault and hosted modules. It
+// takes the hosted API suite in test/ and the tests of those parts, whatever the branch changed.
+export const HOSTED_TESTS = [
+  /^test\/[^/]+\.test\.tsx?$/,
+  /^packages\/(?:relay|ops-worker|hosted-computer|schema)\//,
+  /^packages\/core\/test\/(?:vault|webauthn|remote)\//,
+  /^packages\/desktop\/src\/main\/(?:remote|vault|hosted)-[^/]+\.test\.tsx?$/,
+  /^packages\/cloud\/src\/(?:hosted-[^/]+|workflow-compliance)\.test\.ts$/,
+]
+
+export function selectHostedTests(tracked: readonly string[]) {
+  return tracked
+    .filter((file) => UNIT_TEST.test(file) && !file.split("/").some((part) => NOT_UNIT.has(part)))
+    .filter((file) => HOSTED_TESTS.some((pattern) => pattern.test(file)))
+    .sort()
+}
+
 export function selectBrowserSpecs(tracked: readonly string[], changed: readonly string[]) {
   const touched = new Set(changed)
   return tracked
@@ -82,6 +100,14 @@ function git(root: string, ...args: string[]) {
     .filter(Boolean)
 }
 
+function changedSinceMain(root: string) {
+  // CI checks the branch out with its whole history, so the fork point with main is known.
+  const base = process.env.CODIUM_CI_BASE || "origin/main"
+  const fork = git(root, "merge-base", base, "HEAD")[0]
+  if (!fork) throw new Error(`No merge base between ${base} and HEAD; fetch ${base} first.`)
+  return git(root, "diff", "--name-only", "-z", fork, "HEAD")
+}
+
 async function run(command: string[], cwd: string, label: string) {
   const grouped = process.env.CI === "true"
   console.log(grouped ? `::group::${label}` : `\n${label}`)
@@ -95,11 +121,9 @@ async function main(argv: readonly string[]) {
   const root = path.resolve(import.meta.dir, "../../..")
   const exists = (relative: string) => existsSync(path.join(root, relative))
   const tracked = git(root, "ls-files", "-z")
-  // CI checks the branch out with its whole history, so the fork point with main is known.
-  const base = process.env.CODIUM_CI_BASE || "origin/main"
-  const fork = git(root, "merge-base", base, "HEAD")[0]
-  if (!fork) throw new Error(`No merge base between ${base} and HEAD; fetch ${base} first.`)
-  const changed = git(root, "diff", "--name-only", "-z", fork, "HEAD")
+  // The hosted lane's set does not depend on what the branch changed, so it needs no history.
+  const hosted = argv.includes("--hosted")
+  const changed = hosted ? [] : changedSinceMain(root)
 
   if (argv.includes("--browser")) {
     const specs = selectBrowserSpecs(tracked, changed)
@@ -114,12 +138,12 @@ async function main(argv: readonly string[]) {
     return run([process.execPath, ...browserCommand(specs)], path.join(root, BROWSER_DIRECTORY), "Playwright")
   }
 
-  const files = selectUnitTests(tracked, changed)
+  const files = hosted ? selectHostedTests(tracked) : selectUnitTests(tracked, changed)
   if (argv.includes("--list")) {
     for (const file of files) console.log(file)
     return 0
   }
-  if (!files.length) throw new Error("No Codium test files found")
+  if (!files.length) throw new Error(hosted ? "No hosted test files found" : "No Codium test files found")
   const owners = new Map(files.map((file) => [file, owningDirectory(file, exists)]))
 
   // Desktop packaging fixtures need the locked Electron runtime, as packages/desktop/scripts/test.ts installs it.
@@ -140,7 +164,7 @@ async function main(argv: readonly string[]) {
     const status = await run([process.execPath, ...unitCommand(file, directory)], path.join(root, directory), file)
     if (status !== 0) failed.push(file)
   }
-  console.log(`\nCodium: ${files.length - failed.length}/${files.length} test files passed`)
+  console.log(`\n${hosted ? "Hosted" : "Codium"}: ${files.length - failed.length}/${files.length} test files passed`)
   if (failed.length) console.error(`Failed test files:\n${failed.join("\n")}`)
   return failed.length ? 1 : 0
 }

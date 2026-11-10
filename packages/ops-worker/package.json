@@ -11,6 +11,8 @@
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "dry-run": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "secret-names": "wrangler secret list --format json",
     "smoke": "node e2e/ops-smoke.mjs"
   },
   "devDependencies": {

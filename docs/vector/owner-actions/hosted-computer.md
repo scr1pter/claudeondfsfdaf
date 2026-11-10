@@ -167,20 +167,42 @@ reports, and Vector stops it within minutes. The agent runs as its own user with
 with its own sandbox on, its profile wiped after every job; only the viewer proxy listens on the network, and it needs a
 single-use viewer token for that session.
 
-**Building and baking (owner step 14, after Vercel's written OK).** The image workflow (WP A58) does this in the
-`hosted-production` environment:
+**Building and baking (owner step 14, after Vercel's written OK).** The image workflow,
+`.github/workflows/vector-hosted-image.yml` (WP A58), does this. Before the first run, in the `hosted-production`
+environment (the one with you as required reviewer), set the secret `VECTOR_HOSTED_VERCEL_TOKEN` (a token for the hosted
+team, never the main team's) and the variables `VECTOR_HOSTED_VERCEL_TEAM_ID`, `VECTOR_HOSTED_VERCEL_PROJECT_ID` and
+`VECTOR_HOSTED_IMAGE_REPOSITORY` (the image's name in the hosted team's container registry, in the form
+`vcr.vercel.com/<team>/<project>/<name>`). Set the environment's deployment branches to protected branches only, and
+protect `main`. Then run it from Actions on `main` with:
 
-1. `bun run build` in `packages/hosted-computer` (hostd and the viewer proxy, for Node), and the Vector CLI for Linux
-   (musl) at `packages/hosted-computer/bin/vector`.
-2. `docker build --file image/Dockerfile --build-arg VECTOR_IMAGE_GENERATION=<n> .` from that folder. Raise the
-   generation with every rebuild. `VECTOR_MIN_DISK_GENERATION` (default 1) is the oldest disk generation this image
-   accepts; raise it only when a change makes older disks unsafe, because computers with older disks then stop booting.
-3. Push it to the hosted team's container registry and note its digest.
-4. `bun script/bake-snapshot.ts --image <image>@sha256:<digest> --generation <n>` with `VECTOR_HOSTED_VERCEL_TOKEN`,
-   `VECTOR_HOSTED_VERCEL_TEAM_ID` and `VECTOR_HOSTED_VERCEL_PROJECT_ID`. It starts one sandbox with no network, checks the
-   image there (at most 6 GB, no setuid file, no sudo), stops it and prints `VECTOR_HOSTED_BASE_SNAPSHOT=<id>`.
-5. Set `VECTOR_HOSTED_BASE_SNAPSHOT` in Vercel. New computers start from it. Computers that already have a disk keep
-   their own programs until their disk is made again (after its retention lapses, or when you delete it).
+- `generation`: a whole number, higher than every earlier run's. A generation already in the registry is refused, so a
+  run that failed after its push needs the next number.
+- `min_disk_generation` (default 1): the oldest disk generation this image accepts. Raise it only when a change makes
+  older disks unsafe, because computers with older disks then stop booting.
+- `cli_version`: an exact Vector CLI release already published (for example `1.99.120`). Its Linux musl x86-64 build is
+  taken from Vector's download store (the `VECTOR_CLI_BLOB_ORIGIN` variable the CLI release uses), checked against the
+  release's manifest, and its source must be on `main`.
+
+What it does: a preflight job with no secret checks the environment's reviewer and branch rule, `main`'s protection,
+that the commit is on `main`, and the inputs. The image job waits for your approval, then:
+
+1. `bun run build` in `packages/hosted-computer` (hostd and the viewer proxy, for Node), and the CLI at
+   `packages/hosted-computer/bin/vector`.
+2. `docker build --platform linux/amd64 --file image/Dockerfile` with both generations, then boots the image in Docker
+   and runs `test/image.test.ts` inside it, the same checks CI runs. Nothing is pushed if one fails.
+3. Signs Docker in to the registry with the Vercel CLI (`vercel vcr login docker`, the version the budget workflow
+   pins), pushes the image as `<repository>:g<generation>` and reads back its digest. The sign-in is deleted when the
+   step ends.
+4. `bun script/bake-snapshot.ts --image <repository>@sha256:<digest> --generation <n>`: one sandbox with no network,
+   the image checked there (at most 6 GB, no setuid file, no sudo), stopped, and `VECTOR_HOSTED_BASE_SNAPSHOT=<id>`
+   printed in the log and the run's summary.
+
+Then set `VECTOR_HOSTED_BASE_SNAPSHOT` in Vercel. New computers start from it. Computers that already have a disk keep
+their own programs until their disk is made again (after its retention lapses, or when you delete it).
+
+Not yet tried anywhere: the Vercel CLI's `vcr login docker` at that version and the registry's answers. If the sign-in
+step fails, the pinned version may predate the command: raise `VERCEL_CLI_VERSION` in
+`packages/cloud/src/hosted-budget.ts`, which both workflows use.
 
 **The real-microVM check.** Before listing `computer`, run `vector-codium-e2e.yml` with `hosted: true`. It boots a
 throwaway computer from the snapshot on the hosted test team and checks the firewall, the agent's egress, the disk and

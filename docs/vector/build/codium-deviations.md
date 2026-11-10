@@ -2678,3 +2678,69 @@ sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
   spells no key), `ops-worker.ts` and `ops-cleanup.ts` (`opsErasable`), `vercel.json`, the store fake, the two test
   files above, `packages/web/test/codium-configuration.test.ts` (the new cron), `docs/vector/MODEL-PLANS.md` and
   `docs/vector/owner-actions/brain-vault.md`.
+
+## A58 Deploy workflows (9 Nov 2026)
+
+- **One home for the Worker and image jobs.** `vector-hosted-ci.yml` also has `workflow_call` (input `services_only`) and
+  `workflow_dispatch`. The relay, ops Worker and image jobs that A39, A46 and A54 put in `vector-codium.yml` moved into
+  it unchanged (plus `persist-credentials: false` and an explicit `--platform linux/amd64`), and the Codium lane now
+  runs them through one `hosted` job that calls it with `services_only: true`, which skips its typecheck and tests
+  jobs (the lane runs its own). Pull requests run the whole workflow.
+- **Paths beyond §6.2's list.** Besides `api/**`, the four packages, Vault, WebAuthn and the desktop's Remote, Vault and
+  hosted modules, the pull request filter also takes `test/**` (the hosted API suite), `packages/core/src/remote/**`
+  and its tests (Remote's crypto, shared by the desktop and the phone since A42), `packages/cloud/src/hosted-*` and the
+  test picker, `docs/vector/owner-actions/sql/**` (the SQL the root tests run on Postgres), `bun.lock` (it pins
+  wrangler) and the hosted workflows. "Vault" is read as `packages/core/{src,test}/vault` and the desktop's `vault-*`;
+  the engine's `vector vault` command is not in the list. A test fails if any path stops matching a tracked file.
+- **Its tests.** `codium-ci-tests.ts --hosted` picks every root test, every test of the relay, ops Worker, cloud
+  computer and schema packages, core's vault, webauthn and remote tests, the desktop's `remote-*`, `vault-*` and
+  `hosted-*` tests and `packages/cloud`'s hosted and workflow tests, whatever the branch changed, so it needs no git
+  history. The build and service steps are the Codium lane's.
+- **"Protected main" is taken literally, and the environment must refuse other branches.** Both dispatch preflights
+  require (1) a required reviewer on `hosted-production`, as every protected workflow here does; (2)
+  `hosted-production`'s deployment branches set to protected branches only, read from the environment's
+  `deployment_branch_policy`, because a workflow file edited on another branch could drop the preflight, and only the
+  environment's own rule stops that; (3) `main` itself protected (`GET /repos/<repo>/branches/main` → `protected`),
+  because GitHub lets every branch deploy to a "protected branches only" environment when no branch is protected; and
+  (4) the commit an ancestor of `origin/main`. Each job that can see a secret checks out the preflight's commit, checks
+  it is still on `main`, and installs with `bun install --frozen-lockfile --ignore-scripts` without the shared
+  dependency cache action (another run could have written that cache). The CLI and container release workflows still
+  use the cache action; they were not changed.
+- **More checks before a Worker deploy.** `packages/cloud/src/hosted-workers.ts` (new) checks the committed
+  `wrangler.jsonc` (the Worker's name, a real 32-hex kill-flag namespace id instead of the zero placeholder, no secret's
+  name in `vars`) and, from `wrangler secret list --format json` (names only), that the owner set every secret the
+  Worker needs: `TICKET_PUBLIC_KEYS`, `INTERNAL_SECRET`, `ACCOUNT_KEY` for the relay; `INTERNAL_SECRET`, `ACCOUNT_KEY`
+  for the ops Worker. So a first deploy needs the owner's `wrangler secret put` steps done first (which the owner
+  guides already order that way), and a Worker that would answer 503 to everyone is never deployed. Both Worker
+  packages gained the scripts `deploy` (`wrangler deploy`) and `secret-names` (`wrangler secret list --format json`).
+  Nothing in the workflow or those scripts sets, changes or deletes a secret; a test checks every `run:` and script.
+- **The image's inputs and CLI.** Dispatch inputs: `generation`, `min_disk_generation` (default 1) and `cli_version`.
+  The CLI is not built from source: `packages/cloud/src/hosted-image.ts` (new) takes the `linux-x64-baseline-musl`
+  archive of an already published release, by exact stable version, from Vector's download store
+  (`vars.VECTOR_CLI_BLOB_ORIGIN`), decoded and checked as the CLI container does (manifest rules, size, SHA-256, only
+  the binary and its notices, an x86-64 ELF), and the release's own source commit must be on `main`. That is the
+  precedent of `cli-container.ts` ("never a registry's moving CLI tag"). Only `bin/vector` goes into the image, because
+  A54's Dockerfile copies nothing else; the CLI's notice files are not in the image (left for the legal read).
+- **The image is checked before it is pushed.** After `docker build --platform linux/amd64`, the job runs
+  `test/image.test.ts` with `VECTOR_TEST_HOSTED_IMAGE` on that image (the CI Docker job's checks), and pushes only if it
+  passes.
+- **The registry.** "The hosted team's registry" is Vercel Container Registry, `vcr.vercel.com/<team>/<project>/<name>`
+  (the only registry @vercel/sandbox 3.8.0 starts images from, per its README and types). The repository comes from
+  the `hosted-production` variable `VECTOR_HOSTED_IMAGE_REPOSITORY` and is checked to that form, in the characters
+  `bake-snapshot.ts` accepts. Docker signs in with `vercel vcr login docker`, the command that README documents, run
+  through `vercelCli` from `hosted-budget.ts` (the same pinned `vercel@65.3.1`, the token only in the environment, its
+  output never echoed), with `DOCKER_CONFIG` in the runner's temp folder, deleted when the step ends. Whether 65.3.1
+  has `vcr` is not verified. Each generation is pushed once as `<repository>:g<n>`: a tag the registry already has is
+  refused, and a lookup error that does not read as "not found" is refused too. The bake gets the one digest
+  `docker inspect` reports for that repository.
+- **Settings the contract does not name**, all in `hosted-production`: the secret `VECTOR_HOSTED_VERCEL_TOKEN` and the
+  variables `VECTOR_HOSTED_VERCEL_TEAM_ID` (shared with the budget workflow), `VECTOR_HOSTED_VERCEL_PROJECT_ID` and
+  `VECTOR_HOSTED_IMAGE_REPOSITORY`. The names match the Vercel settings `bake-snapshot.ts` reads; the values live in
+  GitHub's environment, not in Vercel's.
+- **No `${{ }}` in any hosted workflow's shell.** Inputs and step outputs reach every `run:` as environment variables
+  (the typecheck matrix's own fixed command is the one exception); a test checks all four hosted workflows.
+- **`packages/cloud`'s `test` script** now also lists `hosted-budget.test.ts` (A56 had not added it),
+  `hosted-workers.test.ts` and `hosted-image.test.ts`.
+- **Dispatch needs the default branch.** GitHub lists a `workflow_dispatch` workflow under Actions only once the file
+  is on the default branch, so "owner can dispatch" holds after `codium` reaches `main` (A60), with the settings above
+  in place.

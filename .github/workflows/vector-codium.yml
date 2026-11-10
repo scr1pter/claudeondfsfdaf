@@ -176,105 +176,14 @@ jobs:
         working-directory: packages/client
         run: bun run check:generated
 
-  # WP A39: the relay Worker's done criterion is a green deploy dry run (wrangler bundles the Worker and checks its
-  # configuration without uploading anything or signing in), and its smoke test runs the Worker on Cloudflare's local
-  # runtime under `wrangler dev --local` with throwaway keys. Neither needs a Cloudflare account or a secret.
-  relay:
-    name: Remote relay (dry run and local smoke)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      WRANGLER_SEND_METRICS: "false"
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "24"
-
-      - uses: ./.github/actions/setup-bun
-        with:
-          install-flags: --frozen-lockfile
-
-      - name: Dry-run the relay deploy
-        working-directory: packages/relay
-        run: bun run dry-run
-
-      - name: Smoke-test the relay under wrangler dev --local
-        working-directory: packages/relay
-        run: bun run smoke
-
-  # WP A46: the ops Worker's done criterion is a green deploy dry run. Its smoke test then runs that same bundle on
-  # Cloudflare's local runtime through miniflare (wrangler's own dependency), answering every outbound request itself, so
-  # it needs no Cloudflare account, no secret and no internet. Alarms run in real time: about three minutes.
-  ops-worker:
-    name: Ops Worker (dry run and miniflare smoke)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      WRANGLER_SEND_METRICS: "false"
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "24"
-
-      - uses: ./.github/actions/setup-bun
-        with:
-          install-flags: --frozen-lockfile
-
-      - name: Dry-run the ops Worker deploy
-        working-directory: packages/ops-worker
-        run: bun run dry-run
-
-      - name: Smoke-test the ops Worker bundle under miniflare
-        working-directory: packages/ops-worker
-        run: bun run smoke
-
-  # WP A54: the cloud computer's image. It is built here with a stand-in for the Vector CLI (the image workflow, WP A58,
-  # builds it with the real one), booted in a privileged container and checked from inside: ports, sudo, the VNC bind,
-  # viewer tokens, the credential guard, the profile wipe, and that boot fails closed without the right to load its
-  # firewall. Nothing is pushed anywhere; no secret is used.
-  hosted-image:
-    name: Cloud computer image (Docker)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - uses: ./.github/actions/setup-bun
-        with:
-          install-flags: --frozen-lockfile
-
-      - name: Build hostd and the viewer proxy for Node
-        working-directory: packages/hosted-computer
-        run: bun run build
-
-      - name: Build the image with a stand-in CLI
-        working-directory: packages/hosted-computer
-        run: |
-          set -euo pipefail
-          mkdir -p bin
-          printf '#!/bin/sh\necho "vector (image check stand-in)"\n' > bin/vector
-          docker build --file image/Dockerfile --build-arg VECTOR_IMAGE_GENERATION=1 --tag vector-hosted-computer:ci .
-
-      - name: Boot the image and check it from inside
-        working-directory: packages/hosted-computer
-        env:
-          VECTOR_TEST_HOSTED_IMAGE: vector-hosted-computer:ci
-        run: bun test --timeout 600000 ./test/image.test.ts
+  # WP A39, A46 and A54: the relay and ops Workers' deploy dry runs and smoke tests, and the cloud computer's image
+  # built and booted in Docker. They live in vector-hosted-ci.yml (WP A58), which pull requests touching the hosted
+  # services run too; here it runs only those jobs, with no secret.
+  hosted:
+    name: Hosted services
+    uses: ./.github/workflows/vector-hosted-ci.yml
+    with:
+      services_only: true
 
   browser:
     name: Codium browser specs
