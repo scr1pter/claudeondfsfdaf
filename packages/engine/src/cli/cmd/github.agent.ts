@@ -88,7 +88,7 @@ export const CANCEL_REPEAT_MS = 1000
 
 export type AgentCredentials = Pick<
   ReturnType<typeof GithubSecrets.createGithubSecrets>,
-  "loaded" | "githubToken" | "runToken"
+  "loaded" | "githubToken" | "runToken" | "redact"
 >
 
 export type AgentPhaseInput = {
@@ -176,8 +176,8 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
         credentials,
         services: input.services,
         consent,
-        log: input.log ?? console.log,
-        error: input.error ?? console.error,
+        log: (line) => (input.log ?? console.log)(credentials.redact(line)),
+        error: (line) => (input.error ?? console.error)(credentials.redact(line)),
         worktree: ctx.worktree,
         signal,
         run,
@@ -410,6 +410,8 @@ async function gather(start: Start, deps: Deps) {
         }),
         appToken: start.token,
         signal: deps.signal,
+        log: deps.log,
+        error: deps.error,
       })
     : { userPrompt: start.route.trigger, promptFiles: [] }
   return {
@@ -454,6 +456,8 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     sessionID: session.id,
     events: deps.events,
     permissions: deps.permissions,
+    clean: deps.credentials.redact,
+    write: deps.log,
   })
   deps.log(`vector session ${session.id}`)
   const chat = {
@@ -463,7 +467,7 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     model,
     halted: () => deps.halt.reason() !== undefined,
     // On Codium a turn's error object holds the gateway's own words, which no public log may print (P6).
-    ...(deps.codium ? { reportError: () => {} } : {}),
+    reportError: deps.codium ? () => {} : (label: string, error: unknown) => deps.error(`${label} ${messageOf(error)}`),
   }
   // A stop cancels the session's running turn, and chat sends no turn once the run has stopped. A stop that lands
   // after chat's check and before the turn's loop starts finds nothing to cancel, so the cancel repeats every
@@ -547,9 +551,9 @@ async function record(start: Start, task: Partial<Task>, result: Result, deps: D
     baseSha: start.baseSha,
     route: bundleRoute(start.route, task.headRef, deps.codium ? "codium" : "own-key"),
     // The check drops whole sentences, so a title that only repeats memory comes back empty.
-    title: title?.trim() || fallback,
-    body: body ?? "",
-    comment: comment ?? "",
+    title: deps.credentials.redact(title?.trim() || fallback),
+    body: deps.credentials.redact(body ?? ""),
+    comment: deps.credentials.redact(comment ?? ""),
     ...(result.end ? { end: result.end } : {}),
   }).catch((cause: unknown) => ({ crash: messageOf(cause) }))
   if ("crash" in written) {

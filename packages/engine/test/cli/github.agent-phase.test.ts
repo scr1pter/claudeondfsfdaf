@@ -40,6 +40,7 @@ import { withGithubCallbacks } from "../../src/cli/cmd/github.lifecycle"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { SessionPrompt } from "../../src/session/prompt"
 import { Session } from "../../src/session/session"
+import { SessionID } from "../../src/session/schema"
 import { ref, runtime, setup } from "../lib/research"
 import { FakeWeb } from "../../../core/test/lib/fake-web"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
@@ -134,6 +135,61 @@ function issueComment(input: { number: number; id: number; body: string; pr?: bo
 }
 
 describe("the agent phase's task", () => {
+  it.instance(
+    "channel credentials are removed from logs and bundle text while session history stays intact",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* setup()
+        yield* Effect.promise(() => commitSetup(test.dir))
+        const github = fakeGithub({
+          roles: { alice: "write" },
+          threads: [
+            { number: 12, kind: "issue", data: issueData({ title: "Output handling", body: "", author: "alice" }) },
+          ],
+        })
+        // The attachment matcher sees this URL, but normalization leaves /user-attachments/, so the downloader
+        // refuses it before a request. Both the match diagnostic and failed-download line still need filtering.
+        const url = `https://github.com/user-attachments/../${CHANNEL.githubToken}`
+        const event = yield* Effect.promise(() =>
+          eventFile(issueComment({ number: 12, id: 901, body: `/vector check [output](${url})` })),
+        )
+        const values = [CHANNEL.githubToken, CHANNEL.cliToken, ...Object.values(CHANNEL.keys)]
+        const command = `printf '%s' '${values.join(" ")}' >/dev/null; printf 'checked\\n'`
+        yield* test.llm.tool("bash", { command, description: "Check output handling" })
+        yield* test.llm.text(`Checked ${values.join(" ")}.`)
+        yield* test.llm.text(`Checked ${CHANNEL.githubToken}`)
+        const run = yield* phase({
+          env: stepEnv({
+            event,
+            eventName: "issue_comment",
+            thread: "12",
+            github: github.url,
+          }),
+          credentials: yield* Effect.promise(() => holder("own-key")),
+        })
+        github.stop()
+        expect(run.result).toMatchObject({ exitCode: 0, outcome: "no-changes" })
+        const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+        const output = `${run.lines.join("\n")}\n${JSON.stringify(bundle.summary)}`
+        expect(values.map((value) => output.includes(value))).toEqual(values.map(() => false))
+        expect(output).toContain("[redacted]")
+        expect(output).toContain("checked")
+        expect(run.lines.filter((line) => line.startsWith("Images "))).toHaveLength(1)
+        expect(run.lines.filter((line) => line.startsWith("error: Failed to download image: "))).toEqual([
+          "error: Failed to download image: https://github.com/user-attachments/../[redacted]",
+        ])
+        const sessionID = run.lines.find((line) => line.startsWith("vector session "))?.slice("vector session ".length)
+        expect(sessionID).toBeDefined()
+        const sessions = yield* Session.Service
+        const messages = yield* sessions.messages({ sessionID: SessionID.make(sessionID!) })
+        const history = JSON.stringify(messages)
+        expect(values.map((value) => history.includes(value))).toEqual(values.map(() => true))
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+    30_000,
+  )
+
   it.instance(
     "an issues event builds its prompt from the payload",
     () =>

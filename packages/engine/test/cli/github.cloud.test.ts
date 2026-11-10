@@ -294,6 +294,28 @@ describe("cloud command HTTP boundary", () => {
 })
 
 describe("private GitHub credentials", () => {
+  test("the holder redacts literal and JSON-escaped channel values without changing credentials", async () => {
+    const holder = createGithubSecrets()
+    const secret = 'fixture.key[private]\\path"first\nfixture-second-private-line'
+    const value = {
+      v: 1,
+      githubToken: "fixture-github-redaction-token",
+      cliToken: "vct_fixture.redaction",
+      keys: { CUSTOM_CREDENTIAL: secret, SHORT_CREDENTIAL: "x.y[7]" },
+    }
+    await holder.load(
+      { GITHUB_ACTIONS: "true", VECTOR_MODE: "own-key", VECTOR_SECRET_CHANNEL: "stdin" },
+      channel(value),
+    )
+    const serialized = JSON.stringify({ command: `print ${secret}`, short: value.keys.SHORT_CREDENTIAL })
+    expect(holder.redact(serialized)).toBe('{"command":"print [redacted]","short":"[redacted]"}')
+    expect(holder.redact(`${value.githubToken} ${value.cliToken} ${secret}`)).toBe("[redacted] [redacted] [redacted]")
+    expect(holder.redact("fixture-second-private-line")).toBe("[redacted]")
+    expect(holder.redact("ordinary output stays readable")).toBe("ordinary output stays readable")
+    expect(holder.providerKeys()).toEqual(value.keys)
+    expect(holder.githubToken() === value.githubToken && holder.cliToken() === value.cliToken).toBe(true)
+  })
+
   test("the channel leaves no OS credentials and loading alone authorizes no model", async () => {
     const holder = createGithubSecrets()
     const env = channelEnv()

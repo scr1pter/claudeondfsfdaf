@@ -211,6 +211,7 @@ async function* streamChunks(stream: Readable): AsyncGenerator<Uint8Array | stri
 /** One holder per CLI process. Tests create a separate holder, never replace process.env or a global service. */
 export function createGithubSecrets() {
   let held: Channel | undefined
+  let outputPattern: RegExp | undefined
   let authorized = false
   let authorization = 0
   let loading: Promise<void> | undefined
@@ -240,6 +241,20 @@ export function createGithubSecrets() {
     if (env.VECTOR_MODE === "codium") {
       if (!parsed.data.runToken || parsed.data.cliToken || Object.keys(parsed.data.keys).length) throw unavailable()
     } else if (env.VECTOR_MODE !== "own-key" || parsed.data.runToken || !parsed.data.cliToken) throw unavailable()
+    // The channel is absent from process.env. Its output filter therefore belongs to the holder too, and covers
+    // serialized tool arguments as well as ordinary text without changing any authoritative session data.
+    const values = [
+      parsed.data.githubToken,
+      parsed.data.runToken,
+      parsed.data.cliToken,
+      ...Object.values(parsed.data.keys),
+    ].flatMap((value) =>
+      value ? [value, ...value.split(/\r?\n/).filter((line) => line.length >= 12 && !line.startsWith("-----"))] : [],
+    )
+    const patterns = [...new Set(values.flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]))]
+      .sort((a, b) => b.length - a.length)
+      .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    outputPattern = patterns.length ? new RegExp(patterns.join("|"), "g") : undefined
     held = parsed.data
   }
   return {
@@ -254,6 +269,7 @@ export function createGithubSecrets() {
     githubToken: () => held?.githubToken,
     cliToken: () => held?.cliToken,
     providerKeys: () => ({ ...held?.keys }),
+    redact: (text: string) => (outputPattern ? text.replace(outputPattern, "[redacted]") : text),
     async authorize(check: (value: string) => Promise<boolean>) {
       const value = held?.runToken
       if (!value) return false

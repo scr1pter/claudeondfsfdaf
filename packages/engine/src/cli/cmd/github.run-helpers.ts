@@ -297,7 +297,13 @@ export async function getUserPrompt(ctx: PromptContext) {
 
 // The GitHub attachments a prompt links (at most five images or files), downloaded with the run's token and replaced
 // by @<file name>.
-async function attachments(text: string, ctx: Pick<PromptContext, "appToken" | "signal">) {
+async function attachments(
+  text: string,
+  ctx: Pick<PromptContext, "appToken" | "signal"> & {
+    log?: (line: string) => void
+    error?: (line: string) => void
+  },
+) {
   let prompt = text
   // Handle images
   const imgData: {
@@ -316,7 +322,7 @@ async function attachments(text: string, ctx: Pick<PromptContext, "appToken" | "
   const mdMatches = prompt.matchAll(/!?\[.*?\]\((https:\/\/github\.com\/user-attachments\/[^)]+)\)/gi)
   const tagMatches = prompt.matchAll(/<img .*?src="(https:\/\/github\.com\/user-attachments\/[^"]+)" \/>/gi)
   const matches = [...mdMatches, ...tagMatches].sort((a, b) => a.index - b.index).slice(0, 5)
-  console.log("Images", JSON.stringify(matches, null, 2))
+  ;(ctx.log ?? console.log)(`Images ${JSON.stringify(matches, null, 2)}`)
 
   let offset = 0
   for (const m of matches) {
@@ -330,7 +336,7 @@ async function attachments(text: string, ctx: Pick<PromptContext, "appToken" | "
       () => undefined,
     )
     if (!attachment) {
-      console.error(`Failed to download image: ${url}`)
+      ;(ctx.error ?? console.error)(`Failed to download image: ${url}`)
       continue
     }
 
@@ -675,8 +681,17 @@ export async function summarize(ctx: ChatContext, response: string, fallback: ()
  * the subagents it launched: nobody can answer one in an Action.
  */
 export async function subscribeSessionEvents(
-  ctx: SessionContext & { events: EventV2.Interface; permissions: Permission.Interface },
+  ctx: SessionContext & {
+    events: EventV2.Interface
+    permissions: Permission.Interface
+    clean?: (text: string) => string
+    write?: (text: string) => void
+  },
 ) {
+  const clean = ctx.clean ?? ((text: string) => text)
+  const write = ctx.write ?? UI.println
+  const log = ctx.write ?? console.log
+  const empty = ctx.write ? () => write("") : UI.empty
   const TOOL: Record<string, [string, string]> = {
     todowrite: ["Todo", UI.Style.TEXT_WARNING_BOLD],
     bash: ["Shell", UI.Style.TEXT_DANGER_BOLD],
@@ -690,11 +705,13 @@ export async function subscribeSessionEvents(
   }
 
   function printEvent(color: string, type: string, title: string) {
-    UI.println(
-      color + `|`,
-      UI.Style.TEXT_NORMAL + UI.Style.TEXT_DIM + ` ${type.padEnd(7, " ")}`,
-      "",
-      UI.Style.TEXT_NORMAL + title,
+    write(
+      [
+        color + `|`,
+        UI.Style.TEXT_NORMAL + UI.Style.TEXT_DIM + ` ${type.padEnd(7, " ")}`,
+        "",
+        UI.Style.TEXT_NORMAL + clean(title),
+      ].join(" "),
     )
   }
 
@@ -719,7 +736,7 @@ export async function subscribeSessionEvents(
       const request = evt.data as EventV2.Data<typeof Permission.Event.Asked>
       return Effect.gen(function* () {
         if (!(yield* inRun(request.sessionID))) return
-        console.log(`permission requested: ${request.permission} (${request.patterns.join(", ")}); rejecting`)
+        log(clean(`permission requested: ${request.permission} (${request.patterns.join(", ")}); rejecting`))
         yield* ctx.permissions.reply({ requestID: request.id, reply: "reject" }).pipe(Effect.ignore)
       })
     }),
@@ -738,7 +755,7 @@ export async function subscribeSessionEvents(
         const [tool, color] = TOOL[part.tool] ?? [part.tool, UI.Style.TEXT_INFO_BOLD]
         const title =
           part.state.title || Object.keys(part.state.input).length > 0 ? JSON.stringify(part.state.input) : "Unknown"
-        console.log()
+        log("")
         printEvent(color, tool, title)
       }
 
@@ -746,9 +763,9 @@ export async function subscribeSessionEvents(
         text = part.text
 
         if (part.time?.end) {
-          UI.empty()
-          UI.println(UI.markdown(text))
-          UI.empty()
+          empty()
+          write(UI.markdown(clean(text)))
+          empty()
           text = ""
           return Effect.void
         }
@@ -1167,6 +1184,8 @@ export async function getAgentUserPrompt(ctx: {
   finding?: string
   appToken: string
   signal: AbortSignal
+  log?: (line: string) => void
+  error?: (line: string) => void
 }) {
   const body = ctx.comment.body.trim()
   const bare = ctx.mentions.some((mention) => body.toLowerCase() === mention.toLowerCase())

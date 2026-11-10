@@ -1349,11 +1349,7 @@ describe("own key (INV-K1)", () => {
         gateway.reset({ codium: false, target: test.llm.url })
         const github = fakeGithub({ roles: { alice: "write" } })
         const cloud = cloudRecorder()
-        const credentials = {
-          loaded: () => true,
-          githubToken: () => CHANNEL.githubToken,
-          runToken: () => CHANNEL.runToken,
-        }
+        const credentials = yield* Effect.promise(() => holder("codium"))
         const env = stepEnv({
           event: yield* Effect.promise(() => eventFile({ inputs: {}, sender: { login: "alice", type: "User" } })),
           eventName: "workflow_dispatch",
