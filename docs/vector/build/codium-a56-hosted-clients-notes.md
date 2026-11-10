@@ -78,6 +78,12 @@ so no generator was run.
 | `packages/core` | `test/local-mode/sources.test.ts` | 15 pass |
 | `packages/cloud` | `src/hosted-budget.test.ts` (new: the calculation, never lower, the ceiling, the cycle end, the CLI's and Vector's answers, a run against a fake CLI and fake Vector, only `--amount` and the read flags, no amount in any outcome, the workflow's triggers, gates, environment, secrets, pins and its environment check run in bash), `src/workflow-compliance.test.ts` | 21, 23 pass |
 
+**M9's hosted cases (A56's done criterion):** the spend webhook escalates only (`test/codium-vercel-spend.test.ts`,
+52 pass, 4 Valkey cases skipped here and run in CI), the budget is never lowered and never above the ceiling
+(`packages/cloud/src/hosted-budget.test.ts`, 21 pass), and computers without a live session are stopped
+(`test/hosted-reaper.test.ts`, 21 pass). The committed API tree was also typechecked alone, without A57's uncommitted
+work (root `tsconfig.json` over a `git archive` of HEAD): clean.
+
 Also run here: `bun script/browser-imports.ts` from `packages/app` (the bundle walk the CI tests run, as one process):
 3,098 modules, no Node or Bun import; the three hosted screen modules are in it.
 
