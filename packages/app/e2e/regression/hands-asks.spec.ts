@@ -252,9 +252,14 @@ async function openAsk(page: Page, request: PermissionRequest, options: { plan?:
   await expect(composer).toBeVisible()
   if (options.plan) {
     // Plan mode is task-local rather than persisted: use the same mode menu as the person composing the message.
-    await page.locator('[data-action="prompt-mode"]').click()
-    await page.getByRole("group", { name: "Mode", exact: true }).getByRole("button", { name: /^Plan\b/ }).click()
-    await expect(page.locator('[data-action="prompt-mode"]')).toHaveText("Plan")
+    const modeTrigger = page.locator('[data-action="prompt-mode"]')
+    const modeGroup = page.getByRole("group", { name: "Mode", exact: true })
+    await modeTrigger.click()
+    await modeGroup.getByRole("button", { name: /^Plan\b/ }).click()
+    await expect(modeTrigger).toHaveText("Plan")
+    await modeGroup.waitFor({ state: "detached" })
+    // Menu unmount restores trigger focus on a deferred timer; finish that before focusing the composer.
+    await expect(modeTrigger).toBeFocused()
   }
   await composer.focus()
   await expect(composer).toBeFocused()
