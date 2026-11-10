@@ -538,6 +538,14 @@
       "reason": "A zombie sleep process with matching timing and process-group evidence remained under a non-reaping PID 1 and answered signal 0. The exact child.pid fixture binding had already been removed, so this does not prove that the observed zombie was the failing fixture child or establish the failure cause."
     },
     "requiredFollowup": "Retain the assertion and require this case to pass in hosted CI; do not reinterpret this local failure as a pass.",
-    "newBeforeSpawnRegression": "passed in the same file"
+    "newBeforeSpawnRegression": "passed in the same file",
+    "hostedConfirmation": {
+      "source": "2229637c48d21cef4a2e32563adc454704e2ae15",
+      "run": 42734559743,
+      "job": 129560520686,
+      "observedAt": "2026-11-10T01:28:08.4144667Z",
+      "result": "PASS unchanged POSIX whole-process-tree stop test,163.47ms",
+      "scope": "Hosted test pass resolves the need for proper-init validation. Local zombie attribution remains inferred; no source/assertion change was made."
+    }
   }
 }
