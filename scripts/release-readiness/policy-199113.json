@@ -55,6 +55,16 @@
       ]
     },
     {
+      "id": "process-cleanup",
+      "branches": ["process-finish"],
+      "scope113": "unknown",
+      "owner": "existing PR #26 author; ownership not verified in this account",
+      "notes": [
+        "New draft background-command ownership and cleanup follow-up; preserve its author's implementation ownership.",
+        "Overlap with finish-checks and runtime integration must be reviewed before choosing a candidate; branch appearance is not scope approval."
+      ]
+    },
+    {
       "id": "codium",
       "branches": ["codium"],
       "scope113": "separate",
@@ -162,6 +172,7 @@
     ],
     "coordination": null,
     "runtime": null,
+    "process-cleanup": null,
     "hands": null,
     "codium": null,
     "github-agent": null,

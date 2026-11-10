@@ -63,6 +63,12 @@ The checked-in `policy-199113.json` preserves the existing release boundary:
 the merged runtime is included; Hands, Codium, `@vector`, Vectorscope upgrades
 and cloud workspaces retain their separate launch/acceptance tracks. Keep
 implementation ownership with the agents already working on those lanes.
+The newly observed `process-finish` follow-up is explicitly mapped with unknown
+.113 inclusion; a new branch is not automatic release scope.
+
+The dated [integration hand-off](../../docs/vector/build/release-integration-2026-11-09.md)
+records object-only pairwise conflicts and local validation. These simulations
+never modify a branch, resolve its conflicts or qualify its behavior.
 
 ## Free tests
 
