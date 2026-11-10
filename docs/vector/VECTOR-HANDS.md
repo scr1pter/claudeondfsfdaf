@@ -1,6 +1,6 @@
 # Vector Hands engineering guide
 
-Vector Hands is the attended desktop feature scheduled for 1.99.112. Source checkpoints and actual native evidence are tracked in [hands-progress.md](./build/hands-progress.md); that ledger, rather than source presence, determines what has been validated. The complete contract is [hands-build-spec.md](./build/hands-build-spec.md), with intentional corrections in [hands-deviations.md](./build/hands-deviations.md).
+Vector Hands is an unreleased attended desktop feature. Its release version will be chosen after validation and owner review. Source checkpoints and actual native evidence are tracked in [hands-progress.md](./build/hands-progress.md); that ledger, rather than source presence, determines what has been validated. The complete contract is [hands-build-spec.md](./build/hands-build-spec.md), with intentional corrections in [hands-deviations.md](./build/hands-deviations.md).
 
 ## Architecture
 
@@ -16,7 +16,7 @@ The helpers serve only a verified containing Vector installation and actual call
 2. **Main ↔ engine:** the authenticated loopback bridge and its versioned schemas carry the lease, current native phase, app permissions and bounded screenshots. The bridge URL/token pair is supplied only to the matching local engine at startup. Linux, WSL and remote engines receive no working local Hands bridge.
 3. **Main ↔ helper:** protocol negotiation, helper manifest, platform/architecture and code identity are checked before serving. Windows Main additionally checks the SHA-256 compiled for the actual packaged helper architecture. Unknown or incompatible facts refuse; an environment variable at runtime cannot replace a compiled production pin.
 
-Never add `computer` as a user or project top-level configuration key. Personal choices belong to the desktop store. The managed `computer` policy requires Vector 1.99.112 or later and may restrict, but never manufacture, user consent.
+Never add `computer` as a user or project top-level configuration key. Personal choices belong to the desktop store. The managed `computer` policy requires a compatible desktop build that includes Hands and may restrict, but never manufacture, user consent.
 
 ## Names and identities
 
@@ -74,6 +74,6 @@ On Windows, sign the verified helper bytes before compiling Main's architecture 
 
 The reusable native workflow is `computer-helper.yml`, invoked through the registered `test.yml` dispatch. A normal native dispatch covers macOS and Windows; its explicit Windows-only diagnostic option preserves a concurrent macOS run and has narrower evidence.
 
-The desktop release must restore the exact tested helper artifacts, verify them before signing/packaging, sign Windows helpers before pin compilation and verify each final package. A rerun must reuse the run's existing artifact bytes. See [RELEASE-WORKFLOW.md](./RELEASE-WORKFLOW.md) and the 1.99.112 owner checklist before release.
+The desktop release must restore the exact tested helper artifacts, verify them before signing/packaging, sign Windows helpers before pin compilation and verify each final package. A rerun must reuse the run's existing artifact bytes. See [RELEASE-WORKFLOW.md](./RELEASE-WORKFLOW.md) and the [Hands owner checklist](./owner-actions/hands-release.md) before release.
 
 No build agent may substitute successful source tests for owner grant-persistence, clean-machine onboarding, real UAC, layout/hardware, lock/saver or multi-display evidence. Enabling Reset, releasing installers, changing legal pages and publishing approved release copy remain the concrete owner gates documented with the release checklist.

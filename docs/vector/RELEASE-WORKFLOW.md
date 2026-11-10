@@ -79,10 +79,9 @@ development binary or claim Windows/Linux runtime validation from a Mac build.
 The prototype workspace `@vectordevai/cli-dev` and its platform outputs are private;
 they are never npm release artifacts.
 
+## Vector Hands: unreleased desktop preparation
 
-## Vector Hands in desktop1.99.112
-
-Hands uses the exact tested native helpers from the same release run. The reusable
+A Hands release must use the exact tested native helpers from the same release run. The reusable
 native workflow validates its explicit prod/beta/dev channel; stable releases select
 prod and beta releases select beta. Channel-specific source/identity verification
 prevents relabeling a production helper. Artifact names carry the release tag and,
@@ -114,7 +113,7 @@ run this preview.
 
 See [Hands artifact details](build/hands-release-artifacts.md),
 [engineering notes](VECTOR-HANDS.md), and the
-[1.99.112 owner checklist](owner-actions/release-199112.md) for source measurement,
+[Hands owner checklist](owner-actions/hands-release.md) for source measurement,
 CI evidence, real OS grant/hardware checks, Reset and final copy/legal approval.
 Keep public availability on the previously published version until the actual release
 passes those gates.

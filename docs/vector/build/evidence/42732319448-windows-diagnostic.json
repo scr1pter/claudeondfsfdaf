@@ -88,7 +88,7 @@
   ],
   "rawArchiveVerification": {
     "verified": false,
-    "reason": "Environment network policy blocks productionresultssa12.blob.core.windows.net; user environment-settings request remains pending."
+    "reason": "Environment network policy blocks productionresultssa12.blob.core.windows.net. User authorized adding the host via browser, but this session has no browser/desktop controls or environment-settings editor; no allowlist change was made."
   },
   "releaseCredit": false
 }
