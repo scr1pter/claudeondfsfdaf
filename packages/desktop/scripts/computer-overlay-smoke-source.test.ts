@@ -150,6 +150,16 @@ describe("independent overlay source admission", () => {
     )
     expect(rootFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
     expect(rootFailure).toContain("if (available && diagnostic)")
+    const hitFailure = driver.slice(
+      driver.indexOf("try { element = uia.hit(root, point(request)); }"),
+      driver.indexOf("for (size_t depth = 0; element && depth < 8; ++depth)"),
+    )
+    expect(hitFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
+    expect(hitFailure).toContain(
+      "available ? OverlayDriverStage::stop_hit_refused : OverlayDriverStage::stop_hit_retired",
+    )
+    expect(hitFailure).toContain("if (available && diagnostic)")
+    expect(hitFailure).toContain("throw;")
     for (const phase of ["uninitialized", "cancellation_unavailable", "timer_unavailable", "expired"])
       expect(implementation).toContain(`WindowsComObservation::${phase}: note(WindowsUiaPhase::actor_com_${phase})`)
     expect(implementation).toContain("if (!actor_->diagnostic) return;")
@@ -240,6 +250,48 @@ describe("independent overlay source admission", () => {
     expect(security).not.toContain("GetCachedPropertyValueEx(UIA_IsTextPatternAvailablePropertyId, FALSE")
     expect(implementation).toContain("if (status == S_OK) return interface_present;")
     expect(implementation).toContain("if (status == UIA_E_NOTSUPPORTED && !interface_present) return false;")
+  })
+  test("hit traversal names local guards without extra native queries or stale completed-call phases", async () => {
+    const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+    const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
+    const hit = implementation.slice(
+      implementation.indexOf("UiaElement hit("),
+      implementation.indexOf("std::optional<std::wstring> value("),
+    )
+    expect(hit).toContain("const auto pid = security(root).pid;")
+    expect(hit).toContain("while (!queue.empty() && visited.size() < 400)")
+    expect(hit).toContain("note(WindowsUiaPhase::hit_loop); current_call();")
+    expect(hit).toContain(
+      "const auto state = security(node.element); note(WindowsUiaPhase::hit_pid); if (state.pid != pid) unavailable();",
+    )
+    expect(hit).toContain("note(WindowsUiaPhase::hit_depth); if (node.depth >= 30) unavailable();")
+    expect(hit).toContain("if (descendants.truncated) unavailable();")
+    expect(hit).toContain("note(WindowsUiaPhase::hit_enqueue); for (const auto& child : descendants.elements)")
+    const terminal = ["hit_queue_limit", "hit_ambiguous", "hit_empty", "hit_end"].map((phase) =>
+      hit.indexOf(`note(WindowsUiaPhase::${phase})`),
+    )
+    expect(terminal.every((index) => index >= 0)).toBe(true)
+    expect(terminal).toEqual([...terminal].sort((a, b) => a - b))
+    expect(hit.match(/current_call\(\)/g)).toHaveLength(1)
+    expect(hit.match(/security\(/g)).toHaveLength(2)
+    expect(hit).not.toMatch(/ElementFromPoint|now_ms|GetTickCount|sleep|wait_for/)
+    const children = implementation.slice(
+      implementation.indexOf("UiaChildren children("),
+      implementation.indexOf("UiaElement focused("),
+    )
+    for (const phase of ["children_capacity", "children_sibling_failed", "children_cycle"])
+      expect(children).toContain(`note(WindowsUiaPhase::${phase}); result.truncated = true; break;`)
+    expect(children).toContain("if (!result.truncated) note(WindowsUiaPhase::children_end); return result;")
+    expect(children.match(/current_call\(\)/g)).toHaveLength(2)
+    expect(children.match(/GetFirstChildElementBuildCache/g)).toHaveLength(1)
+    expect(children.match(/GetNextSiblingElementBuildCache/g)).toHaveLength(1)
+    const parent = implementation.slice(
+      implementation.indexOf("UiaElement parent("),
+      implementation.indexOf("bool equal("),
+    )
+    expect(parent).toContain("note(WindowsUiaPhase::parent_read); current_call();")
+    expect(parent).toContain("note(WindowsUiaPhase::parent_wrap); return wrap(std::move(parent));")
+    expect(parent.match(/GetParentElementBuildCache/g)).toHaveLength(1)
   })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))

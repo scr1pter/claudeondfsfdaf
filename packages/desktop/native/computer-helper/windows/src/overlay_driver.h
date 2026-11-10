@@ -29,7 +29,7 @@ enum class OverlayDriverStage : uint8_t {
   dpi, parent, files, observe_parent, observe_bootstrap, isolation,
   token, desktop, ready_write, envelope_read, envelope_shape, request,
   foreground, guardian_create, backend_create, uia_create, uia_available, window_observe,
-  stop_element, stop_root, stop_root_retired, stop_root_refused, stop_hit, stop_security,
+  stop_element, stop_root, stop_root_retired, stop_root_refused, stop_hit, stop_hit_retired, stop_hit_refused, stop_security,
   stop_name, stop_belongs, stop_equal, stop_parent, window_current, quiet,
   guardian_ready, reserve, refresh, post, observe_down, retire,
   observe_up, cleanup, uia_root_current, uia_actor_admission, uia_actor_queued, uia_actor_budget,
@@ -39,14 +39,15 @@ enum class OverlayDriverStage : uint8_t {
   uia_runtime_bounds, uia_runtime_value, uia_wrap_equal, uia_wrap_limit, uia_security_cache, uia_security_pid,
   uia_security_type, uia_security_password, uia_security_enabled, uia_security_focus, uia_security_keyboard, uia_security_keyboard_query_failed, uia_security_keyboard_variant_invalid, uia_security_value_pattern, uia_security_value_pattern_query_failed, uia_security_value_pattern_variant_invalid, uia_security_value_pattern_marker, uia_security_value_pattern_probe, uia_security_value_pattern_probe_invalid, uia_security_value_pattern_probe_empty, uia_security_value_pattern_probe_no_interface,
   uia_security_text_pattern, uia_security_text_pattern_query_failed, uia_security_text_pattern_variant_invalid, uia_security_text_pattern_marker, uia_security_text_pattern_probe, uia_security_text_pattern_probe_invalid, uia_security_text_pattern_probe_empty, uia_security_text_pattern_probe_no_interface, uia_security_classify, uia_security_value_readonly, uia_security_text_readonly, uia_security_bounds, uia_security_current,
-  uia_root_pid, uia_actor_current, uia_actor_current_budget, uia_actor_complete, uia_actor_expired, uia_actor_cancelled,
+  uia_root_pid, uia_hit_setup, uia_hit_loop, uia_hit_cycle, uia_hit_pid, uia_hit_equal, uia_hit_depth, uia_hit_children, uia_hit_enqueue, uia_hit_queue_limit, uia_hit_ambiguous, uia_hit_empty, uia_hit_end, uia_children_limit, uia_children_first, uia_children_loop, uia_children_capacity, uia_children_wrap, uia_children_append, uia_children_next, uia_children_sibling_failed, uia_children_compare, uia_children_cycle, uia_children_end, uia_parent_read, uia_parent_wrap,
+  uia_actor_current, uia_actor_current_budget, uia_actor_complete, uia_actor_expired, uia_actor_cancelled,
   uia_actor_revoked, uia_actor_com_uninitialized, uia_actor_com_cancellation_unavailable, uia_actor_com_timer_unavailable, uia_actor_com_expired
 };
-inline constexpr std::array<std::wstring_view, 105> overlay_driver_stages{
+inline constexpr std::array<std::wstring_view, 132> overlay_driver_stages{
   L"dpi", L"parent", L"files", L"observe-parent", L"observe-bootstrap", L"isolation",
   L"token", L"desktop", L"ready-write", L"envelope-read", L"envelope-shape", L"request",
   L"foreground", L"guardian-create", L"backend-create", L"uia-create", L"uia-available", L"window-observe",
-  L"stop-element", L"stop-root", L"stop-root-retired", L"stop-root-refused", L"stop-hit", L"stop-security",
+  L"stop-element", L"stop-root", L"stop-root-retired", L"stop-root-refused", L"stop-hit", L"stop-hit-retired", L"stop-hit-refused", L"stop-security",
   L"stop-name", L"stop-belongs", L"stop-equal", L"stop-parent", L"window-current", L"quiet",
   L"guardian-ready", L"reserve", L"refresh", L"post", L"observe-down", L"retire",
   L"observe-up", L"cleanup", L"uia-root-current", L"uia-actor-admission", L"uia-actor-queued", L"uia-actor-budget",
@@ -56,7 +57,8 @@ inline constexpr std::array<std::wstring_view, 105> overlay_driver_stages{
   L"uia-runtime-bounds", L"uia-runtime-value", L"uia-wrap-equal", L"uia-wrap-limit", L"uia-security-cache", L"uia-security-pid",
   L"uia-security-type", L"uia-security-password", L"uia-security-enabled", L"uia-security-focus", L"uia-security-keyboard", L"uia-security-keyboard-query-failed", L"uia-security-keyboard-variant-invalid", L"uia-security-value-pattern", L"uia-security-value-pattern-query-failed", L"uia-security-value-pattern-variant-invalid", L"uia-security-value-pattern-marker", L"uia-security-value-pattern-probe", L"uia-security-value-pattern-probe-invalid", L"uia-security-value-pattern-probe-empty", L"uia-security-value-pattern-probe-no-interface",
   L"uia-security-text-pattern", L"uia-security-text-pattern-query-failed", L"uia-security-text-pattern-variant-invalid", L"uia-security-text-pattern-marker", L"uia-security-text-pattern-probe", L"uia-security-text-pattern-probe-invalid", L"uia-security-text-pattern-probe-empty", L"uia-security-text-pattern-probe-no-interface", L"uia-security-classify", L"uia-security-value-readonly", L"uia-security-text-readonly", L"uia-security-bounds", L"uia-security-current",
-  L"uia-root-pid", L"uia-actor-current", L"uia-actor-current-budget", L"uia-actor-complete", L"uia-actor-expired", L"uia-actor-cancelled",
+  L"uia-root-pid", L"uia-hit-setup", L"uia-hit-loop", L"uia-hit-cycle", L"uia-hit-pid", L"uia-hit-equal", L"uia-hit-depth", L"uia-hit-children", L"uia-hit-enqueue", L"uia-hit-queue-limit", L"uia-hit-ambiguous", L"uia-hit-empty", L"uia-hit-end", L"uia-children-limit", L"uia-children-first", L"uia-children-loop", L"uia-children-capacity", L"uia-children-wrap", L"uia-children-append", L"uia-children-next", L"uia-children-sibling-failed", L"uia-children-compare", L"uia-children-cycle", L"uia-children-end", L"uia-parent-read", L"uia-parent-wrap",
+  L"uia-actor-current", L"uia-actor-current-budget", L"uia-actor-complete", L"uia-actor-expired", L"uia-actor-cancelled",
   L"uia-actor-revoked", L"uia-actor-com-uninitialized", L"uia-actor-com-cancellation-unavailable", L"uia-actor-com-timer-unavailable", L"uia-actor-com-expired"
 };
 static_assert(overlay_driver_stages.size() == static_cast<size_t>(OverlayDriverStage::uia_actor_com_expired) + 1);
