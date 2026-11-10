@@ -184,12 +184,10 @@ const localEntitlement = createCloudAgentEntitlement({
   enabled: () => modelPlansEnabled() && process.env.VECTOR_CLOUD_AGENTS_ENABLED === "true",
   async plan(accountId, fetcher) {
     if ((await readModelPlanAccount(accountId, fetcher))?.closing) return { active: false, closing: true }
-    // modelPlanStatus can settle a pending top-up under the billing lease, reads OpenRouter's management API, and
-    // reports a renewing plan as inactive: accepted while this backing is dormant (contract deviations, item 8).
+    // Status may still display a paid plan while payment, risk or its current period blocks access.
     const status = await modelPlanStatus(accountId, fetcher)
-    // `active` is the paid monthly plan. `access` also counts top-up credits, which grant no @vector runs.
-    if (!status.active) return { active: false }
-    // monthlyStatus already gives the period in milliseconds.
+    if (!status.active || !status.access) return { active: false }
+    // The entitlement snapshot already gives the period in milliseconds.
     return { active: true, plan: status.plan, periodStart: status.periodStart, periodEnd: status.periodEnd }
   },
 })

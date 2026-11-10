@@ -289,6 +289,36 @@ describe("the entitlement seam's local backing", () => {
     expect(store.requests.filter((request) => request.origin === KV && request.command[0] !== "GET")).toEqual([])
   })
 
+  test.each([
+    { name: "paused payment", state: "paused" as const },
+    { name: "frozen plan", state: "frozen" as const },
+    { name: "open dispute before snapshot reconciliation", state: "active" as const, disputed: true },
+  ])("the default refuses $name even while status still shows a paid plan", async ({ state, disputed }) => {
+    const paid = maxPlan()
+    const store = backend(
+      {
+        [paid.account]: {
+          customer: "cus_fixture",
+          ...(disputed
+            ? {
+                risk: {
+                  blocked: false,
+                  openDisputes: { dp_fixture: { status: "needs_response", at: Date.now() } },
+                  efw: [],
+                },
+              }
+            : {}),
+        },
+      },
+      [{ ...paid.snapshot, state }],
+    )
+    expect(await cloudAgentEntitlement(paid.account, { source: "github-comment" }, store.fetcher)).toEqual({
+      active: false,
+      reason: "none",
+    })
+    expect(store.requests.filter((request) => request.origin !== KV || request.command[0] !== "GET")).toEqual([])
+  })
+
   // The usual paid state: once the payment webhook or a first model request has provisioned it, the account holds this
   // period's monthly key, and modelPlanStatus reads that key's usage from OpenRouter's management API on every uncached
   // call (contract 2.3; the deviations file's Contract section, item 8). If OpenRouter cannot answer, the call rejects
