@@ -500,6 +500,9 @@ export const dict = {
   "terminal.title": "Terminal",
   "terminal.title.numbered": "Terminal {{number}}",
   "terminal.close": "Fechar terminal",
+  "terminal.agent": "Aberto por um agente",
+  "terminal.exited": "encerrado {{code}}",
+  "terminal.ended": "encerrado",
   "terminal.connectionLost.title": "Conexão Perdida",
   "terminal.connectionLost.description":
     "A conexão do terminal foi interrompida. Isso pode acontecer quando o servidor reinicia.",
@@ -712,6 +715,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "Acessar arquivos fora do repositório",
   "settings.permissions.tool.doom_loop.title": "Loop Infinito",
   "settings.permissions.tool.doom_loop.description": "Detectar chamadas de ferramentas repetidas com entrada idêntica",
+  "settings.permissions.tool.terminal.description":
+    "Ler, aguardar, redimensionar ou fechar um terminal que o agente não abriu: o seu ou o de outra sessão",
+  "settings.permissions.tool.terminal_input.description":
+    "Digitar texto ou pressionar teclas em um terminal. Cada linha enviada também é verificada como o comando de shell que é",
+  "session.permission.terminal.name": "Terminal",
+  "session.permission.terminal.action.read": "Ler a saída",
+  "session.permission.terminal.action.wait": "Aguardar a saída",
+  "session.permission.terminal.action.resize": "Redimensionar",
+  "session.permission.terminal.action.close": "Fechar e encerrar o processo",
+  "session.permission.terminal.text": "Texto a digitar",
+  "session.permission.terminal.enter": "Depois pressiona Enter",
+  "session.permission.terminal.keys": "Teclas a pressionar",
   "session.delete.failed.title": "Falha ao excluir sessão",
   "session.delete.title": "Excluir sessão",
   "session.delete.confirm": 'Excluir sessão "{{name}}"?',

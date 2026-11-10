@@ -7,6 +7,7 @@ import { LocalEvent } from "@vectordevai/schema/local-event"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalStartup } from "@vectordevai/core/local-mode/startup"
+import { holdDebugger } from "./debugger-hold"
 import { decideChromium, egressFilter, type EgressFilter, type Target } from "./egress-filter"
 import { engineEventSource } from "./keep-awake"
 import { companyAuthorities, trustCompanyCertificates, type WaitingAuthority } from "./local-certificates"
@@ -311,17 +312,13 @@ const PREPARE_LIMIT = 2_000
  */
 export function guardAgentContents(contents: Debuggee) {
   const tools = contents.debugger
-  const attached = (() => {
-    try {
-      tools.attach("1.3")
-      return true
-    } catch {
-      return false
-    }
-  })()
-  if (!attached) return undefined
+  // Shared with the tab's own file chooser interception (browser-agent.ts), which may hold it already.
+  const release = holdDebugger(tools)
+  if (!release) return undefined
   const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
     tools.sendCommand(method, params, sessionId).catch(() => undefined)
+  // The page's own script, which a guard that stops while the tab keeps the debugger takes back.
+  const added: { identifier?: string } = {}
   const prepare = (sessionId?: string, type?: string) =>
     Promise.all([
       ...(type === "worker"
@@ -332,7 +329,10 @@ export function guardAgentContents(contents: Debuggee) {
               "Page.addScriptToEvaluateOnNewDocument",
               { source: NO_PEER_CONNECTIONS_SCRIPT, runImmediately: true },
               sessionId,
-            ),
+            ).then((result) => {
+              const identifier = (result as { identifier?: unknown } | undefined)?.identifier
+              if (sessionId === undefined && typeof identifier === "string") added.identifier = identifier
+            }),
           ]),
       send("Target.setAutoAttach", AUTO_ATTACH, sessionId),
     ])
@@ -351,7 +351,10 @@ export function guardAgentContents(contents: Debuggee) {
   else void prepare()
   return () => {
     tools.removeListener("message", attachedTo)
-    if (tools.isAttached()) tools.detach()
+    if (release()) return
+    // The tab still holds the debugger: what this guard set there goes, and the frames and workers it held detach.
+    if (added.identifier) void send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier })
+    void send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true })
   }
 }
 

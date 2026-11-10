@@ -2,9 +2,8 @@ import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto
 import { Option, Schema } from "effect"
 import { Teams } from "../../packages/schema/src/teams.js"
 import { enforceRateLimit } from "./abuse.js"
-import { verifyCliToken } from "./cli-token.js"
 import { ApiError, json, type ApiRequest, type ApiResponse } from "./http.js"
-import { requireUnrevokedAccount } from "./revocation.js"
+import { requireUnrevokedCliToken } from "./revocation.js"
 
 const decodeKeys = Schema.decodeUnknownOption(Teams.Keys, { onExcessProperty: "error" })
 const decodeAccount = Schema.decodeUnknownOption(Teams.Payload.fields.account, { onExcessProperty: "error" })
@@ -45,12 +44,12 @@ export function createTeamsApi(
         ? /^Bearer (vct_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(authorization)?.[1]
         : undefined
     if (!token) throw new ApiError(401, "SIGN_IN_REQUIRED", "Sign in to Vector to load team configuration.")
-    const account = Option.getOrUndefined(decodeAccount(verifyCliToken(token, now())))
+    const claims = await requireUnrevokedCliToken(token, fetch, now())
+    const account = Option.getOrUndefined(decodeAccount({ id: claims.id, email: claims.email }))
     if (!account) throw new ApiError(401, "CLI_TOKEN_INVALID", "Sign in to Vector again to continue.")
-    await requireUnrevokedAccount(account.id)
     await limit(incoming, outgoing, "teams-config-account", 60, account.id)
     const row = await readConfiguration(account.id, org)
-    await requireUnrevokedAccount(account.id)
+    await requireUnrevokedCliToken(token, fetch, now())
     const issuedAt = now()
     // Do not keep policy usable past the already-verified CLI grant's expiry.
     const grant = JSON.parse(Buffer.from(token.slice(4).split(".")[0]!, "base64url").toString("utf8")) as {

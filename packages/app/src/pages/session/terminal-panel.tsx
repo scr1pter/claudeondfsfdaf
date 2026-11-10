@@ -18,7 +18,7 @@ import { useSettings } from "@/context/settings"
 import { useTerminal } from "@/context/terminal"
 import { useSDK } from "@/context/sdk"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
-import { createSizing, focusTerminalById } from "@/pages/session/helpers"
+import { createSizing, createTerminalReveal, focusTerminalById } from "@/pages/session/helpers"
 import { getTerminalHandoff, setTerminalHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 
@@ -104,11 +104,21 @@ export function TerminalPanel() {
     }
   }
 
+  const quiet = createTerminalReveal({
+    revealed: terminal.revealed,
+    active: terminal.active,
+    opened,
+    open: (revealed) => {
+      view().terminal.open()
+      if (revealed.focus) onCleanup(focus(revealed.id))
+    },
+  })
+
   createEffect(
     on(
       () => [opened(), terminal.active()] as const,
       ([next, id]) => {
-        if (!next || !id) return
+        if (!next || !id || quiet() === id) return
         const stop = focus(id)
         onCleanup(stop)
       },
@@ -302,10 +312,22 @@ export function TerminalPanel() {
                           <div id={`terminal-wrapper-${id}`} class="absolute inset-0">
                             <Terminal
                               pty={pty()}
-                              autoFocus={opened()}
-                              onConnect={() => markTerminalConnected(terminalRecoveryKey(pty()), id, ops.trim)}
+                              autoFocus={opened() && quiet() !== id}
+                              readOnly={pty().exitCode !== undefined || pty().gone === true}
+                              onConnect={() => {
+                                // A finished agent tab replays and closes. Its stored screen stays, since its PTY
+                                // may be gone the next time it shows.
+                                if (pty().exitCode !== undefined || pty().gone) return
+                                markTerminalConnected(terminalRecoveryKey(pty()), id, ops.trim)
+                              }}
                               onCleanup={ops.update}
-                              onConnectError={() => recoverTerminal(terminalRecoveryKey(pty()), id, ops.clone)}
+                              onConnectError={() => {
+                                // An agent's process cannot be started again, and a plain shell in its place would
+                                // pass for it, so its tab keeps what it showed until the user closes it, marked as
+                                // ended once the server says its PTY is gone.
+                                if (pty().agent !== undefined) return void ops.reconcile()
+                                recoverTerminal(terminalRecoveryKey(pty()), id, ops.clone)
+                              }}
                             />
                           </div>
                         )}

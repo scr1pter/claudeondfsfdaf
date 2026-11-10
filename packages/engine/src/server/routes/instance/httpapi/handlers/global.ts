@@ -17,6 +17,9 @@ import { RootHttpApi } from "../api"
 import { type Principal, RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 import { GlobalUpgradeInput } from "../groups/global"
 import { configLocked } from "./config"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -35,10 +38,18 @@ function parseBody(body: string) {
   }
 }
 
-function eventResponse(principal: Principal, sync: boolean) {
+export function globalEventResponse(principal: Principal) {
   return Effect.gen(function* () {
     const project = yield* ComputerPrivacy.projector
     yield* Effect.logInfo("global event connected")
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const replication = RequestOwner.replication(request)
+    const sync = request.headers[ComputerPrivacy.WORKSPACE_SYNC_HEADER] === "1"
+    // The owner's own control plane relays this stream into its app: it is screened like a guest's, except that
+    // unscoped events (terminals, toasts) still pass the same checks.
+    const relay = principal.kind === "owner" && (yield* RequestOwner.owner) && replication
+    const owner = (yield* RequestOwner.owner) && !replication
+    const audience = yield* SessionAudience.Service
     // An invited guest needs this stream to load the app, but only for the workspace it was invited to: the owner's
     // other projects must not reach it.
     const visible = (event: GlobalBusEvent) => {
@@ -65,8 +76,22 @@ function eventResponse(principal: Principal, sync: boolean) {
     return HttpServerResponse.stream(
       Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
         Stream.concat(events.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
+        Stream.filterEffect((event) =>
+          SessionAudienceHttp.envelope(event, owner, replication, relay).pipe(
+            Effect.provideService(SessionAudience.Service, audience),
+            Effect.map(
+              (allowed) =>
+                allowed &&
+                (event.payload.type === "server.connected" ||
+                  event.payload.type === "server.heartbeat" ||
+                  visible(event)),
+            ),
+          ),
+        ),
         Stream.mapEffect((event) =>
-          principal.kind === "owner" && !sync && event.payload.type !== "sync" ? Effect.succeed(event) : project(event),
+          principal.kind === "owner" && !sync && !replication && event.payload.type !== "sync"
+            ? Effect.succeed(event)
+            : project(event),
         ),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),
@@ -96,18 +121,14 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest
-      return yield* eventResponse(
-        yield* RequestPrincipal,
-        request.headers[ComputerPrivacy.WORKSPACE_SYNC_HEADER] === "1",
-      )
+      return yield* globalEventResponse(yield* RequestPrincipal)
     })
 
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {
       const global = { ...Redaction.redactConfig(yield* config.getGlobal()), locked: Config.lockedKeys() }
       // Vector Local's block is the owner's: their model servers' addresses, identities and the services they allowed.
       // A guest loads the app from this route but cannot change it, so it gets the rest.
-      if ((yield* RequestPrincipal).kind !== "owner") return omit(global, ["local"])
+      if (!(yield* RequestOwner.owner)) return omit(global, ["local"])
       return global
     })
 

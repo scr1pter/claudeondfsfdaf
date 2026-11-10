@@ -417,6 +417,29 @@ describe("usage report from the local summary", () => {
     effortLevels: report.effortLevels,
   }
 
+  test("keeps Codium activity from a filtered summary without sending its private counters", () => {
+    const built = UsageReport.fromSummary({
+      ...summary,
+      lifetimeTokens: 0,
+      lifetimeCost: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cachedTokens: 0,
+      codiumResponses: 2,
+      modelResponses: 2,
+      completedChats: 1,
+      favoriteModels: [],
+      effortLevels: [],
+      days: [{ date: "2026-09-29", tokens: 0, cost: 0, tasks: 1, codium: 2 }],
+      helpers: [{ id: "vectorscope.review", sessions: 1, responses: 1, tokens: 0, cost: 0, codiumSteps: 1 }],
+    })
+    expect(built).toMatchObject({ lifetimeTokens: 0, lifetimeCost: 0, modelResponses: 2, completedChats: 1 })
+    expect(built?.days).toEqual([{ date: "2026-09-29", tokens: 0, cost: 0, tasks: 1 }])
+    expect(built?.favoriteModels).toEqual([])
+    expect(JSON.stringify(built)).not.toMatch(/codium|vector-plan|vectorscope/)
+  })
+
   test("keeps the last seven days and the listed fields, and leaves out what the server would refuse", () => {
     const built = UsageReport.fromSummary(summary)
     expect(built?.days.map((day) => day.date)).toEqual([

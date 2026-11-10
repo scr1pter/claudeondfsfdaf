@@ -6,7 +6,7 @@ Once the steps below are done, Codium runs without anyone acting on a payment. U
 
 1. **A buyer pays.** Stripe Checkout takes the card payment for a monthly plan ($10, $50, $100 or $200) or a top-up of the same amounts. Stripe pays the money out to your bank on its normal payout schedule.
 2. **Credits are granted at once.** Stripe's signed notification reaches `/api/model-plans/webhook`. vectordev.ai asks Stripe whether the money was really paid, then sets the buyer's OpenRouter key limit:
-   - A monthly plan gets a new key capped at the month's credits that expires at the end of the paid period. Each renewal gets a fresh key, so monthly credits reset rather than roll over.
+   - A monthly plan gets a new key capped at the month's credits. It keeps working for `CODIUM_RENEWAL_GRACE_MINUTES` (120 by default, at most 360) past the end of the paid period, so a renewal that is still being collected never cuts off someone who pays. Each paid renewal gets a fresh key and the old one is switched off, so monthly credits reset rather than roll over.
    - A top-up adds its credits to the buyer's purchased-credit key, which never expires. The first top-up creates that key.
 3. **Credits come off on their own.** Each of these switches the month's key off or lowers the purchased-credit limit:
    - a failed renewal (the subscription goes past due);
@@ -73,7 +73,7 @@ Do all of this in **test mode** first, for the preview test run in [section 4](#
    - **Webhook** (Developers → Webhooks):
      - URL `https://vectordev.ai/api/model-plans/webhook`;
      - API version `2025-02-24.acacia`;
-     - events `checkout.session.completed`, `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`, `invoice.paid`, `invoice.payment_failed`, `payment_intent.succeeded`, `charge.succeeded`, `charge.updated`, `charge.refunded`, `charge.refund.updated`, `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn` and `.funds_reinstated`.
+     - exactly these 20 events: `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created`, `.updated`, `.deleted`, `invoice.created`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.finalization_failed`, `charge.refunded`, `charge.refund.updated`, `charge.dispute.created`, `.updated`, `.closed`, `.funds_reinstated`, `radar.early_fraud_warning.created`, `.updated`, `subscription_schedule.released` and `subscription_schedule.canceled`.
    - **Customer portal**, two configurations:
      - **Without plan changes** (`STRIPE_MODEL_PLAN_PORTAL_CONFIG_ID`): email updates, payment-method updates, invoice history and cancellation at the end of the period. Plan switching off. This one opens while Codium sales are paused or `MODEL_PLANS_ENABLED` is `false`, so nobody can buy a bigger plan then.
      - **With plan changes** (`STRIPE_MODEL_PLAN_CHANGE_PORTAL_CONFIG_ID`): the same, plus subscription updates to a different price, listing the four monthly products, each with its one price. Set proration to **none**, the billing cycle anchor to **now** (Stripe's API calls it `billing_cycle_anchor: now`; the dashboard may not offer it, so the script is the reliable way), and **schedule downgrades at the end of the period** (`decreasing_item_amount`).
@@ -93,6 +93,13 @@ Do all of this in **test mode** first, for the preview test run in [section 4](#
    - Example: at the busiest point customers hold $400 of credits and buy $60 of credits in 90 minutes. With L for the credits your largest purchase grants, set the threshold to at least ($400 + $60 + L) × 1.1 + $20, which is $526 + 1.1 × L.
 5. **Fee.** OpenRouter charges a fee on every credit purchase, auto top-ups included (5.5% by card when this was written). Set `CODIUM_OPENROUTER_FEE_PERCENT` to the fee its credits page shows, so the ledger's estimate stays right.
 6. **Resale terms.** OpenRouter's [terms, section 7](https://openrouter.ai/terms) restrict reselling API access. Confirm Codium is covered by suitable commercial terms before selling.
+7. **Privacy settings** (before the first sale, on this account only). The labels come from OpenRouter's documentation; match them to what the pages show.
+   - Settings → Observability: **Private Input & Output Logging — OFF.** If it is on, OpenRouter stores every Codium prompt and reply, and the privacy policy's zero-data-retention description stops being true.
+   - [Settings → Privacy](https://openrouter.ai/settings/privacy): **OpenRouter Use of Inputs/Outputs (the 1% discount) — OFF.**
+   - Same page: **paid models, allow providers that may train — OFF**, and **providers that may publish prompts — OFF.**
+   - Same page: **ZDR — ON for every model group** (Anthropic, OpenAI, Google, SpaceXAI and all other models). Codium already sends `zdr: true` on every request, so this is a second guard. Never turn this on for the free-models account (see [openrouter.md](openrouter.md), step 4).
+   - No BYOK provider keys, and no default or enforced plugins on this account.
+   - Once these are set, confirm it, so the privacy policy can say Vector keeps logging and input/output use off.
 
 ## 3. Vercel environment
 
@@ -111,7 +118,7 @@ Set these for **Production** with the live values (secrets only in Vercel, never
 | `OPENROUTER_MANAGEMENT_KEY`                                                         | The OpenRouter management key                                                                                                      |
 | `MODEL_PLAN_KEY_ENCRYPTION_SECRET`                                                  | 64 hex characters (`openssl rand -hex 32`). Keep it forever: changing it makes every stored buyer key unreadable.                  |
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN`                                              | The persistent store for Codium accounts, the funding state and the ledger                                                         |
-| `CRON_SECRET`                                                                       | Vercel sends it to the 10-minute funding check, as to the existing cron jobs                                                       |
+| `CRON_SECRET`                                                                       | Vercel sends it to the Codium cron jobs (funding, outbox, replay, sweeps), as to the existing ones                                 |
 | `RESEND_API_KEY`, `VECTOR_PURCHASE_EMAIL_FROM`                                      | Send the pause and reopen emails; bug reports use the same pair                                                                    |
 | `CODIUM_OWNER_EMAIL`                                                                | Where pause and reopen emails go (falls back to `VECTOR_BUG_REPORT_TO`). With neither set, sales still pause but no email is sent. |
 | `CODIUM_OWNER_SECRET`                                                               | At least 32 characters (`openssl rand -hex 32`). Unlocks the ledger.                                                               |
@@ -198,7 +205,8 @@ Anyone without the secret, signed-in buyers included, gets a 404. The ledger sho
 - An upgrade whose payment fails or waits for the bank leaves the subscription without monthly credits until the payment completes, because the latest invoice is then unpaid. Test it with `4000 0000 0000 0341` (the card is attached but the charge fails) before selling.
 - An upgrade in the portal does not reserve its credits the way a checkout does. The funding check keeps room for one more of the largest purchase, so one upgrade is always covered, and the new month's key is counted from the next check.
 
-- Stripe drafts each renewal invoice and charges it about an hour later. The new month's credits start when that charge succeeds, so for about an hour after each renewal a subscriber has only their purchased credits.
+- Stripe drafts each renewal invoice (`invoice.created`) and would charge it about an hour later. vectordev.ai finalizes and charges it within about a minute instead, through the outbox cron, but only while the account is not on hold, the subscription is the account's own current one (not upgraded away from, not a duplicate), Vector Codium is switched on and the OpenRouter balance covers what is owed plus the renewal. When the balance is short it leaves the charge to Stripe's own schedule; in the other cases it pauses collection on that subscription so nobody is charged. Either way you get an email naming the account, subscription and invoice ids. Until the renewal is paid, the previous month's key keeps serving, up to the renewal grace.
+- A Stripe notification that never arrives, or that vectordev.ai could not finish, is handled by replay within 10 minutes: it lists the 20 subscribed events since its last run and handles each one not yet marked done. An event that keeps failing is retried every 10 minutes for three days, and you get an email once it is an hour old. An hourly sweep also compares Stripe's disputes from the last 120 days with each account's hold, reconciles renewing and past-due accounts, and emails you about any customer with more than one live subscription (ids only; cancel and refund the extra one in Stripe). A daily sweep at 04:23 UTC checks every paying account's OpenRouter key limit, sets back any that was changed outside vectordev.ai and emails you, and rechecks stale accounts.
 - A checkout page opened before a pause can still be paid for until it expires, up to an hour later. The pause stops new checkouts; the open one's credits were already reserved when it opened.
 - Renewals still charge and grant credits while sales are paused, because those subscribers are already owed them.
 - Credits that were paid for but whose key could not yet be created (Stripe retries the notification until it succeeds) count only through their checkout's reservation. Once that lapses, half an hour after the checkout closes, they are not counted until the key exists. The margin covers this.

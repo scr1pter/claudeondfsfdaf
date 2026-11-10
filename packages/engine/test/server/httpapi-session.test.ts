@@ -658,6 +658,7 @@ describe("session HttpApi", () => {
             spentUsd: 0,
             steps: 0,
             unpricedSteps: 0,
+            codiumSteps: 0,
           },
         })
         yield* guard.end(session.id)
@@ -702,6 +703,7 @@ describe("session HttpApi", () => {
             spentUsd: 0.25,
             steps: 1,
             unpricedSteps: 0,
+            codiumSteps: 0,
             costKind: "priced",
           },
         })
@@ -718,6 +720,7 @@ describe("session HttpApi", () => {
             spentUsd: 0.85,
             steps: 2,
             unpricedSteps: 0,
+            codiumSteps: 0,
             costKind: "priced",
           },
         })
@@ -734,6 +737,7 @@ describe("session HttpApi", () => {
             spentUsd: 1.15,
             steps: 3,
             unpricedSteps: 0,
+            codiumSteps: 0,
             costKind: "priced",
           },
         } as const

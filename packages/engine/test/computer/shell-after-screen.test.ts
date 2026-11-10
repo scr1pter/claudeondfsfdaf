@@ -20,6 +20,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { ShellTool } from "@/tool/shell"
+import { ShellJobs } from "@/task/shells"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { TestConfig } from "../fixture/config"
@@ -71,6 +72,7 @@ type State = {
   loadedHistories: SessionID[]
   rootHistory: SessionV1.WithParts[]
   ask?: Tool.Context["ask"]
+  backgroundStart?: (input: ShellJobs.StartInput) => Effect.Effect<never>
 }
 
 const root = SessionID.make("ses_shell_computer_root")
@@ -88,8 +90,13 @@ const context: Tool.Context = {
 function fixture<A, E, R>(
   body: (
     state: State,
-    run: (command: string, extra?: Partial<Tool.Context>) => Effect.Effect<Tool.ExecuteResult>,
+    run: (
+      command: string,
+      extra?: Partial<Tool.Context>,
+      input?: { background?: boolean },
+    ) => Effect.Effect<Tool.ExecuteResult>,
   ) => Effect.Effect<A, E, R>,
+  options: { background?: boolean } = {},
 ) {
   return Effect.gen(function* () {
     const state: State = {
@@ -107,9 +114,9 @@ function fixture<A, E, R>(
     return yield* Effect.gen(function* () {
       const info = yield* ShellTool
       const tool = yield* info.init()
-      const run = (command: string, extra: Partial<Tool.Context> = {}) =>
+      const run = (command: string, extra: Partial<Tool.Context> = {}, input: { background?: boolean } = {}) =>
         tool.execute(
-          { command, timeout: 1000 },
+          { command, timeout: 1000, ...input },
           {
             ...context,
             ...extra,
@@ -125,6 +132,11 @@ function fixture<A, E, R>(
       Effect.provide(
         Layer.mergeAll(
           TestConfig.layer({ get: () => Effect.succeed({ shell: "/bin/bash" }) }),
+          RuntimeFlags.layer({ backgroundSubagents: options.background === true }),
+          Layer.mock(ShellJobs.Service, {
+            full: () => Effect.succeed(false),
+            start: (input) => state.backgroundStart?.(input) ?? Effect.die(new Error("Unexpected background start")),
+          }),
           Layer.mock(Plugin.Service, { trigger: (_name, _input, output) => Effect.succeed(output) }),
           Layer.mock(Agent.Service, {}),
           Layer.mock(Truncate.Service, { limits: () => Effect.succeed({ maxLines: 100, maxBytes: 4096 }) }),
@@ -483,5 +495,33 @@ it.instance("releasing the lease leaves same-turn shell confirmation in force", 
       })
       expect(state.spawns).toHaveLength(1)
     }),
+  ),
+)
+
+it.instance("background setup carries the same late after-screen guard through to process start", () =>
+  fixture(
+    (state, run) =>
+      Effect.gen(function* () {
+        state.ask = (request) =>
+          request.patterns.some((pattern) => pattern.startsWith(PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX))
+            ? Effect.void
+            : Effect.succeed("once" as const)
+        state.backgroundStart = (input) =>
+          Effect.gen(function* () {
+            // The background manager's session/slot/output setup can wait after the tool's initial scan.
+            state.completed = true
+            if (input.beforeSpawn) yield* input.beforeSpawn
+            state.spawns.push(input.process)
+            return yield* Effect.die(new Error("Background process started without a fresh confirmation"))
+          })
+        const refused = yield* failure(run("echo background", { extra: { promptOps: {} } }, { background: true }))
+        expect(String(refused)).toContain("fresh Allow once")
+        expect(shellAsks(state).map((request) => request.patterns)).toEqual([
+          ["echo background"],
+          ["echo background", PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX + "echo background"],
+        ])
+        expect(state.spawns).toEqual([])
+      }),
+    { background: true },
   ),
 )

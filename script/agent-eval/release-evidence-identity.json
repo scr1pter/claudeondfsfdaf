@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "repository": "scr1pter/claudeondfsfdaf",
+  "repositoryId": 1322376900,
+  "workflow": ".github/workflows/vector-desktop-release.yml",
+  "runId": 40781089625,
+  "attempt": 1,
+  "sourceSha": "dfc98974329f17c6814a923ac12ebe38b6673f38",
+  "version": "1.99.112",
+  "channel": "prod",
+  "platform": "linux-x64",
+  "installer": "vector-desktop-1.99.112-linux-x86_64.AppImage",
+  "catalogSha256": "a96b465110dd2fcc38e0dcca1a4115e12ea43ddaafdb0ebf587e15026767bf14",
+  "artifacts": {
+    "linux": {
+      "id": 12857033760,
+      "name": "vector-desktop-linux-v1.99.112-1",
+      "size": 359795997,
+      "sha256": "bf52c5056b7fbfff459c25cf30bc1d2687462b9caf7f39f085a369bddee52e64"
+    },
+    "catalog": {
+      "id": 12858090022,
+      "name": "vector-model-catalog",
+      "size": 543629,
+      "sha256": "4c247d70f4804f2f9918893b24bf25d7483560c14510f7db463010add97ad7de"
+    }
+  }
+}

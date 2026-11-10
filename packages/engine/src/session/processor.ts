@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { createHash } from "node:crypto"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -34,6 +35,7 @@ import { Database } from "@vectordevai/core/database/database"
 import { Usage, type LLMEvent } from "@vectordevai/llm"
 import { EffectBridge } from "@/effect/bridge"
 import { NativePatch } from "./llm/native-patch"
+import { SessionFork } from "./fork"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { NEXT_STEP_SLACK } from "@vectordevai/core/review/plan"
 import { providerCredentialAllowed, providerUsable } from "@vectordevai/core/provider-policy"
@@ -42,6 +44,7 @@ import { Auth } from "@/auth"
 import { ModelSlots } from "@vectordevai/core/local-mode/model-slots"
 import { LocalErrors } from "@vectordevai/core/local-mode/errors"
 import { Token } from "@vectordevai/core/util/token"
+import { POLLING_ACTIONS, TerminalTool } from "@/tool/terminal"
 
 const DOOM_LOOP_THRESHOLD = 3
 // Tools that change files. Without a snapshot to diff, a successful call to one of these counts as a file change for
@@ -177,6 +180,8 @@ interface ProcessorContext extends Input {
     output?: string
     error?: string
     providerExecuted: boolean
+    // A StructuredOutput call whose value was kept: the run's final answer.
+    final?: boolean
   }[]
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
@@ -210,6 +215,7 @@ const layer = Layer.effect(
     const guard = yield* SpendGuard.Service
     const provider = yield* Provider.Service
     const slots = yield* ModelSlots.Service
+    const forks = yield* SessionFork.Service
     // The user message each root session last answered, so its first step for a new prompt drops waiting helpers.
     const prompts = new Map<SessionID, string>()
 
@@ -275,6 +281,7 @@ const layer = Layer.effect(
         Effect.catch(() => Effect.succeed(undefined)),
         Effect.map((signIn) =>
           SpendGuard.costKindOf({
+            codium: Billing.isCodium(input.model.providerID),
             free: isFreeModel(input.model) || input.model.freeModel !== undefined,
             oauthPlan:
               signIn?.type === "oauth" &&
@@ -401,8 +408,17 @@ const layer = Layer.effect(
                   .update([output.output, ...(output.attachments ?? []).map((attachment) => attachment.url)].join("\n"))
                   .digest("hex"),
               }
+        // StructuredOutput says whether it kept the value; an invalid call it answered with an error is not final.
+        const final = output.metadata.valid === true || output.metadata.captured === true
         ctx.stepTools = ctx.stepTools.map((item) =>
-          item.callID === toolCallID ? { ...item, input: signature.input, output: signature.output } : item,
+          item.callID === toolCallID
+            ? {
+                ...item,
+                input: signature.input,
+                output: signature.output,
+                ...(item.tool === "StructuredOutput" && final ? { final } : {}),
+              }
+            : item,
         )
         yield* session.updatePart({
           ...match.part,
@@ -484,7 +500,11 @@ const layer = Layer.effect(
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
-        if (error instanceof PermissionV1.RejectedError || error instanceof Question.RejectedError) {
+        // A question no one answered in time (ask_timeout) lets the agent carry on with its own judgement.
+        if (
+          error instanceof PermissionV1.RejectedError ||
+          (error instanceof Question.RejectedError && !error.timedOut)
+        ) {
           ctx.blocked = ctx.shouldBreak
         }
         ctx.stepTools = ctx.stepTools.map((item) =>
@@ -500,37 +520,55 @@ const layer = Layer.effect(
       const recordStep = Effect.fn("SessionProcessor.recordStep")(function* (
         step: {
           costUsd: number
+          billed: boolean
           unpriced: boolean
           tokens: SessionV1.Assistant["tokens"]
           continues: boolean
           patched: boolean
+          financialOnly?: boolean
         },
         confirm?: Effect.Effect<boolean>,
+        checkpoint?: Effect.Effect<void>,
       ) {
-        const tools = ctx.stepTools
+        const tools = step.financialOnly ? [] : ctx.stepTools
         ctx.stepTools = []
         const kind = (yield* result(costKind)) ?? "unknown"
         const contextTokens = step.tokens.input + step.tokens.cache.read + step.tokens.cache.write
         // The next step is estimated at the rates its context will be billed at, a long-context tier included.
         const rates = Session.costAt(input.model.cost, contextTokens + NEXT_STEP_SLACK)
-        const verdict = yield* guard.record(
-          ctx.sessionID,
-          {
-            costUsd: step.costUsd,
-            // A model the catalog lists no price for is still priced when its provider reported what the step cost.
-            costKind: kind === "unknown" && step.costUsd > 0 && !step.unpriced ? "priced" : kind,
-            price: rates && SpendGuard.priceOf(rates),
-            contextTokens,
-            cachedTokens: step.tokens.cache.read,
-            continues: step.continues,
-            tools: (yield* config.get()).budget?.loop?.enabled === false ? [] : tools,
-            patched: step.patched,
-          },
-          confirm,
-        )
+        let confirmation: Exit.Exit<boolean> | undefined
+        const recorded = yield* guard
+          .record(
+            ctx.sessionID,
+            {
+              costUsd: step.costUsd,
+              unpriced: step.unpriced && !step.billed,
+              // A model the catalog lists no price for is still priced when its provider reported what the step cost.
+              costKind: kind === "unknown" && step.billed ? "priced" : kind,
+              price: rates && SpendGuard.priceOf(rates),
+              contextTokens,
+              cachedTokens: step.tokens.cache.read,
+              continues: step.continues,
+              tools: (yield* config.get()).budget?.loop?.enabled === false ? [] : tools,
+              patched: step.patched,
+            },
+            confirm?.pipe(
+              Effect.exit,
+              Effect.map((exit) => {
+                confirmation = exit
+                return Exit.isSuccess(exit) && exit.value
+              }),
+            ),
+          )
+          .pipe(Effect.exit)
+        // A cancelled snapshot confirmation must not erase the bill or replace the original interruption.
+        if (confirmation && Exit.isFailure(confirmation)) yield* Effect.failCause(confirmation.cause)
+        const verdict = Exit.isFailure(recorded) ? yield* Effect.failCause(recorded.cause) : recorded.value
+        // Deliver a pending cancellation after accounting, before a cap verdict replaces its turn error.
+        if (checkpoint) yield* checkpoint
         if (verdict.state !== "stopped" || !step.continues) return
         yield* stopTurn(verdict)
-      })
+      }, Effect.uninterruptible)
 
       // Ends this turn with the reason the spend guard stopped its run.
       const stopTurn = Effect.fn("SessionProcessor.stopTurn")(function* (
@@ -543,6 +581,7 @@ const layer = Layer.effect(
           spentUsd: run?.spentUsd,
           capUsd: run?.budget.usd,
           unpricedSteps: run?.unpricedSteps,
+          codiumSteps: run?.codiumSteps,
           estimate: stop.estimate,
         }).toObject()
         ctx.blocked = true
@@ -704,6 +743,8 @@ const layer = Layer.effect(
             // Computer repeats require the completed frame hash; an input-only check would reject observation
             // loops and repeated actions whose result shows progress before their result can arrive.
             if (value.name === "computer") return
+            // Polling a terminal repeats the same call while its output moves on: progress, not a loop.
+            if (value.name === TerminalTool.id && POLLING_ACTIONS.has(String(input.action))) return
 
             const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
               Effect.provideService(Database.Service, database),
@@ -801,6 +842,8 @@ const layer = Layer.effect(
             throw new Error(value.message)
 
           case "step-start":
+            // No usage report may follow an aborted response. Keep the started attempt as unknown rather than free.
+            ctx.started ??= new Usage({})
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
@@ -814,7 +857,8 @@ const layer = Layer.effect(
             const usage = Session.getUsage({
               model: ctx.model,
               usage: value.usage ?? new Usage({}),
-              metadata: value.providerMetadata,
+              metadata: value.providerMetadata ?? value.usage?.providerMetadata,
+              incomplete: ["other", "error", "abort", "unknown"].includes(value.reason),
             })
             if (attempt) {
               attempt = {
@@ -838,10 +882,12 @@ const layer = Layer.effect(
               tokens: usage.tokens,
               cost: usage.cost,
               ...(usage.unpriced ? { unpriced: true } : {}),
+              ...(usage.billing ? { billing: usage.billing } : {}),
             }
             // The provider has billed this step, so its usage is recorded whole before the snapshot, which can wait
             // on the worktree's snapshot lock long enough for a cancel to land.
-            yield* Effect.uninterruptible(
+            let recording = false
+            yield* Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
                 ctx.started = undefined
                 ctx.assistantMessage.finish = value.reason
@@ -850,45 +896,65 @@ const layer = Layer.effect(
                 ctx.assistantMessage.tokens = usage.tokens
                 yield* session.updatePart(stepFinish)
                 yield* session.updateMessage(ctx.assistantMessage)
-              }),
-            )
-            yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
-            // The step is over once the provider's terminal event is recorded, so the loop moves on now. The closing
-            // snapshot and the step's patch run in the session's snapshot queue, ahead of the next step's tools.
-            const start = ctx.snapshot
-            const opening = ctx.opening
-            ctx.snapshot = undefined
-            ctx.opening = undefined
-            const work = yield* enqueue(
-              ctx.sessionID,
-              Effect.gen(function* () {
-                const closing = yield* snapshot.track()
-                if (closing) yield* session.updatePart({ ...stepFinish, snapshot: closing })
-                const from = start ?? (opening ? yield* result(opening) : undefined)
-                const changed = from ? yield* recordPatch(from) : false
-                yield* summary
-                  .summarize({
-                    sessionID: ctx.sessionID,
-                    messageID: ctx.assistantMessage.parentID,
-                  })
-                  .pipe(Effect.ignore, Effect.forkIn(scope))
-                return changed
-              }),
-            )
-            yield* recordStep(
-              {
-                costUsd: usage.cost,
-                unpriced: usage.unpriced,
-                tokens: usage.tokens,
-                // The loop's own rule: it goes on after "tool-calls", and after local tool calls under any finish
-                // reason. A StructuredOutput call is the final answer.
-                continues:
-                  (value.reason === "tool-calls" || ctx.stepTools.some((item) => !item.providerExecuted)) &&
-                  !ctx.stepTools.some((item) => item.tool === "StructuredOutput"),
-                // The step's patch is taken off the request path, so a successful edit tool stands in for it here.
-                patched: ctx.stepTools.some((item) => FILE_TOOLS.has(item.tool) && item.error === undefined),
-              },
-              result(work).pipe(Effect.map((changed) => changed === true)),
+                yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
+                // A fork this step launched starts now that its reasoning metadata is final (5.E.3).
+                yield* forks.stepFinished(ctx.assistantMessage.id, value.reason)
+                // The step is over once the provider's terminal event is recorded, so the loop moves on now. The closing
+                // snapshot and the step's patch run in the session's snapshot queue, ahead of the next step's tools.
+                const start = ctx.snapshot
+                const opening = ctx.opening
+                ctx.snapshot = undefined
+                ctx.opening = undefined
+                const work = yield* enqueue(
+                  ctx.sessionID,
+                  Effect.gen(function* () {
+                    const closing = yield* snapshot.track()
+                    if (closing) yield* session.updatePart({ ...stepFinish, snapshot: closing })
+                    const from = start ?? (opening ? yield* result(opening) : undefined)
+                    const changed = from ? yield* recordPatch(from) : false
+                    yield* summary
+                      .summarize({
+                        sessionID: ctx.sessionID,
+                        messageID: ctx.assistantMessage.parentID,
+                      })
+                      .pipe(Effect.ignore, Effect.forkIn(scope))
+                    return changed
+                  }),
+                )
+                // A recording failure can follow the ledger update, so never retry an entered record.
+                recording = true
+                yield* recordStep(
+                  {
+                    costUsd: usage.cost,
+                    billed: usage.billed,
+                    unpriced: usage.unpriced,
+                    tokens: usage.tokens,
+                    // The loop's own rule: it goes on after "tool-calls", and after local tool calls under any finish
+                    // reason. Only a StructuredOutput call whose value was kept is the final answer.
+                    continues:
+                      (value.reason === "tool-calls" || ctx.stepTools.some((item) => !item.providerExecuted)) &&
+                      !ctx.stepTools.some((item) => item.final),
+                    // The step's patch is taken off the request path, so a successful edit tool stands in for it here.
+                    patched: ctx.stepTools.some((item) => FILE_TOOLS.has(item.tool) && item.error === undefined),
+                  },
+                  restore(result(work).pipe(Effect.map((changed) => changed === true))),
+                  restore(Effect.void),
+                )
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isFailure(exit) && !recording
+                    ? recordStep({
+                        costUsd: usage.cost,
+                        billed: usage.billed,
+                        unpriced: usage.unpriced,
+                        tokens: usage.tokens,
+                        continues: false,
+                        patched: false,
+                        financialOnly: true,
+                      }).pipe(Effect.exit, Effect.asVoid)
+                    : Effect.void,
+                ),
+              ),
             )
             if (
               !ctx.assistantMessage.summary &&
@@ -958,7 +1024,12 @@ const layer = Layer.effect(
         const started = ctx.started
         if (!started) return
         ctx.started = undefined
-        const usage = Session.getUsage({ model: ctx.model, usage: started })
+        const usage = Session.getUsage({
+          model: ctx.model,
+          usage: started,
+          metadata: started.providerMetadata,
+          incomplete: true,
+        })
         if (attempt) {
           attempt = {
             usage: started,
@@ -975,6 +1046,7 @@ const layer = Layer.effect(
         // Billed too, so it counts against the run, as a step that stopped where it was.
         yield* recordStep({
           costUsd: usage.cost,
+          billed: usage.billed,
           unpriced: usage.unpriced,
           tokens: usage.tokens,
           continues: false,
@@ -989,6 +1061,7 @@ const layer = Layer.effect(
           tokens: usage.tokens,
           cost: usage.cost,
           ...(usage.unpriced ? { unpriced: true } : {}),
+          ...(usage.billing ? { billing: usage.billing } : {}),
         })
         yield* session.updateMessage(ctx.assistantMessage)
       })
@@ -1053,9 +1126,12 @@ const layer = Layer.effect(
         ctx.toolcalls = {}
         ctx.assistantMessage.time.completed = Date.now()
         yield* session.updateMessage(ctx.assistantMessage)
+        // A step that ended without its step-finish stops the forks it launched; after a step-finish this does nothing.
+        yield* forks.stepFinished(ctx.assistantMessage.id, "abort")
       })
 
       const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
+        yield* forks.stepFinished(ctx.assistantMessage.id, aborted ? "abort" : "error")
         yield* Effect.logError("process", {
           "session.id": input.sessionID,
           messageID: input.assistantMessage.id,
@@ -1175,10 +1251,22 @@ const layer = Layer.effect(
                       tools: lease?.tools
                         ? Object.fromEntries(Object.entries(tools).filter(([name]) => lease.tools?.includes(name)))
                         : tools,
+                      accepted: () => {
+                        // Successful HTTP acceptance can precede the SDK's first step-start chunk.
+                        ctx.started ??= new Usage({})
+                        streamInput.accepted?.()
+                      },
                       started: (usage) => {
                         ctx.started = Usage.from(usage)
                         if (attempt)
-                          observe?.(attempt.cost + Session.getUsage({ model: ctx.model, usage: ctx.started }).cost)
+                          observe?.(
+                            attempt.cost +
+                              Session.getUsage({
+                                model: ctx.model,
+                                usage: ctx.started,
+                                metadata: ctx.started.providerMetadata,
+                              }).cost,
+                          )
                       },
                     })
                     .pipe(
@@ -1213,6 +1301,7 @@ const layer = Layer.effect(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
+                yield* forks.stepFinished(ctx.assistantMessage.id, "abort")
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
                 }
@@ -1329,6 +1418,7 @@ export const node = LayerNode.make({
     SpendGuard.node,
     Provider.node,
     ModelSlots.node,
+    SessionFork.node,
   ],
 })
 

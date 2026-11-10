@@ -97,6 +97,16 @@
   font-size: 12.5px;
 }
 
+[data-slot="local-read-error"] {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+
+[data-slot="local-read-error"] [data-slot="local-muted"] {
+  margin: 0;
+}
+
 [data-slot="local-subhead"] {
   margin: 0;
   color: var(--vx-text);

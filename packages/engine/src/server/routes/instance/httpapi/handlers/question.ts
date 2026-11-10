@@ -9,6 +9,8 @@ import { HttpServerRequest } from "effect/unstable/http"
 import { InstanceHttpApi } from "../api"
 import { QuestionNotFoundError } from "../errors"
 import { allowsSessionID } from "./session-access"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
 
 export const questionHandlers = HttpApiBuilder.group(InstanceHttpApi, "question", (handlers) =>
   Effect.gen(function* () {
@@ -26,16 +28,21 @@ export const questionHandlers = HttpApiBuilder.group(InstanceHttpApi, "question"
     const requireVisible = Effect.fn("QuestionHttpApi.requireVisible")(function* (requestID: QuestionID) {
       const principal = yield* RequestPrincipal
       const request = (yield* svc.list()).find((item) => item.id === requestID)
+      const owner = yield* RequestOwner.owner
+      if (request) yield* SessionAudienceHttp.assertSession(request.sessionID, owner)
       // A guest's answer goes to the session's model as a tool result, so it keeps that session's free-model
       // requests off models that may train (FreeModelGuests), as a guest's prompt does. One forwarded from another
       // engine's guest arrives with the owner's credentials and says so in a header.
       if (principal.kind === "owner") {
+        if (request && !owner) yield* SessionAudienceHttp.admit(request.sessionID, false)
         if (request && (yield* HttpServerRequest.HttpServerRequest).headers[GUEST_REQUEST_HEADER] === "1")
           yield* guests.mark(request.sessionID)
         return
       }
-      if (request && (yield* allowsSessionID(session, principal, request.sessionID)))
+      if (request && (yield* allowsSessionID(session, principal, request.sessionID))) {
+        yield* SessionAudienceHttp.admit(request.sessionID, false)
         return yield* guests.mark(request.sessionID)
+      }
       return yield* new QuestionNotFoundError({
         requestID: String(requestID),
         message: `Question request not found: ${requestID}`,

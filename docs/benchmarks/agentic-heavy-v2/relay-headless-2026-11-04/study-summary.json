@@ -1,0 +1,180 @@
+{
+  "kind": "closed-seven-role-study-v1",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "contextLimit": 1050000,
+  "outputCeiling": 32000,
+  "agentsEach": 7,
+  "depth": 2,
+  "sameSessionRepairAllowanceEach": 1,
+  "providerRequestLimitEach": 300,
+  "sourceRevision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+  "nativeStageRevision": "d858eda13c25d3e889c3fa8d86bdd7f52dd9c941",
+  "allChargesRetained": true,
+  "bothCurrentOwnedEpisodesSettled": true,
+  "allHistoricalAdmissionsSettled": false,
+  "historicalUnknownLiabilityHeldUsd": "7.177765",
+  "qualityComparisonMet": false,
+  "efficiencyClaimMet": false,
+  "arms": {
+    "vector": {
+      "requests": 279,
+      "costUsd": "6.6391490",
+      "knownReceipts": 279,
+      "finalDiagnosticChecksPassed": 53,
+      "finalDiagnosticChecksTotal": 54,
+      "originalFunctionalVerdict": "not_run",
+      "originalNativeAuditVerdict": "review_required",
+      "wallMs": 5459594.0,
+      "nativeRolesObserved": 7
+    },
+    "codex": {
+      "requests": 300,
+      "costUsd": "4.6033534",
+      "knownReceipts": 300,
+      "finalDiagnosticChecksPassed": 53,
+      "finalDiagnosticChecksTotal": 54,
+      "originalFunctionalVerdict": "product_failure",
+      "originalNativeAuditVerdict": "review_required",
+      "wallMs": 2767890.0,
+      "nativeRolesObserved": 7
+    }
+  },
+  "blindedReview": {
+    "kind": "unblinded-source-review-projection-v1",
+    "mapping": {
+      "A": "vector",
+      "B": "codex"
+    },
+    "mappingDisclosedAfterBothLocks": true,
+    "reviews": [
+      {
+        "reviewer": "R1",
+        "originalLockedSha256": "39184f6ef14c7d0c7dcfee2b772d1817f54415575b3861e11e1108a20462c84b",
+        "lockedAtUtc": "2026-11-05T02:19:09.681382+00:00",
+        "totals": {
+          "vector": 46,
+          "codex": 43
+        }
+      },
+      {
+        "reviewer": "R2",
+        "originalLockedSha256": "fb8d41c446a779103246a67fc094493dd232bc24554caa1a5306f86242ea48d7",
+        "lockedAtUtc": "2026-11-05T02:20:33.009607+00:00",
+        "totals": {
+          "vector": 47,
+          "codex": 42
+        }
+      }
+    ],
+    "categories": [
+      {
+        "reviewer_id": "R1",
+        "name": "Functional completeness and coherent API semantics",
+        "vector_score": 7,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Transactional integrity, recovery and corruption handling",
+        "vector_score": 8,
+        "codex_score": 4,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Authorization boundaries and input/error validation",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Concurrency, capability/lease fencing and lifecycle",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "CLI usability and typed SDK contract accuracy",
+        "vector_score": 8,
+        "codex_score": 7,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Maintainability and meaningful independent verification",
+        "vector_score": 7,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Functional completeness and coherent API semantics",
+        "vector_score": 8,
+        "codex_score": 6,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Transactional integrity, recovery and corruption handling",
+        "vector_score": 8,
+        "codex_score": 6,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Authorization boundaries and input/error validation",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Concurrency, capability/lease fencing and lifecycle",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "CLI usability and typed SDK contract accuracy",
+        "vector_score": 8,
+        "codex_score": 7,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Maintainability and meaningful independent verification",
+        "vector_score": 7,
+        "codex_score": 7,
+        "maximum": 8
+      }
+    ],
+    "meanTotals": {
+      "vector": 46.5,
+      "codex": 42.5
+    },
+    "vectorNoLowerInEveryDimensionForEveryReviewer": false,
+    "scope": "Two bounded static reviews of exact final source; no app execution. Functional gate and original native audit remain separate. A higher total does not override a lower dimension. Original reviewer disagreements and interpretation limits are retained."
+  },
+  "limits": [
+    "No quality-preserving or accepted-output cost comparison: full functional and native-review gates were not met.",
+    "Original reports are retained; independent final-source diagnostic is a separate free evaluation, not a relabelled paid result.",
+    "The bootstrap credential was denied by both products, with403 rather than evaluator401; no unauthorized-access conclusion follows.",
+    "Vector stopped on remaining single-call reservation headroom; Codex reached300calls during its one formal repair.",
+    "Both original native auditors raised StudyError while the strict frozen-input walker inventoried mutable runtime support links. Future audit corrections do not retroactively pass either original audit or erase other observations.",
+    "Single adaptive Windows task pair; no statistical, production or billion-token claim."
+  ],
+  "postRunDurabilityAdjudication": {
+    "providerCalls": 0,
+    "preRegistered": false,
+    "casesEach": 3,
+    "vectorRefusedDamagedStartup": 3,
+    "codexRefusedDamagedStartup": 0,
+    "originalGatesAndScoresUnchanged": true,
+    "evidence": "tail-diagnostic.json"
+  }
+}

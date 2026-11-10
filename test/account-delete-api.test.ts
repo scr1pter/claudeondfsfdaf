@@ -16,6 +16,7 @@ const keys = [
   "NODE_ENV",
   "VERCEL_ENV",
   "STRIPE_SECRET_KEY",
+  "CODIUM_STRIPE_MODE",
   "VECTOR_ACCESS_MODE",
   "VECTOR_CLI_TOKEN_SECRET",
 ] as const
@@ -163,8 +164,9 @@ describe("account deletion request boundary", () => {
     process.env.KV_REST_API_TOKEN = "test-redis-token"
     process.env.VECTOR_ACCESS_MODE = "paid"
     revocationAvailable = true
-    // The account has a Codium billing record, and Stripe is not configured to close it.
-    store.set(`vector:model-plans:account:${accountID}`, JSON.stringify({ customer: "cus_fixture" }))
+    // The account has a Codium billing record, and Stripe is not configured to close it. With no key and no
+    // CODIUM_STRIPE_MODE, Codium's records live in the test namespace.
+    store.set(`vector:codium:test:account:${accountID}`, JSON.stringify({ customer: "cus_fixture" }))
     const response = await attempt("owner@example.com")
     expect(response.status).toBe(503)
     expect(await response.json()).toMatchObject({ error: { code: "BILLING_DELETION_FAILED" } })

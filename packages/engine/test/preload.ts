@@ -102,6 +102,12 @@ delete process.env["CEREBRAS_API_KEY"]
 delete process.env["SAMBANOVA_API_KEY"]
 delete process.env["VECTOR_SERVER_PASSWORD"]
 delete process.env["VECTOR_SERVER_USERNAME"]
+// A guest password alone turns server authentication on too.
+delete process.env["VECTOR_SERVER_GUEST_PASSWORD"]
+delete process.env["VECTOR_SERVER_GUEST_USERNAME"]
+delete process.env["VECTOR_SERVER_GUEST_WORKSPACES"]
+delete process.env["VECTOR_SERVER_GUEST_WORKSPACE_DIRECTORIES"]
+delete process.env["VECTOR_SERVER_GUEST_SESSIONS"]
 delete process.env["VECTOR_EXPERIMENTAL"]
 delete process.env["VECTOR_ENABLE_EXPERIMENTAL_MODELS"]
 delete process.env["OTEL_EXPORTER_OTLP_ENDPOINT"]
@@ -110,6 +116,15 @@ delete process.env["OTEL_RESOURCE_ATTRIBUTES"]
 
 // Use in-memory sqlite
 process.env["VECTOR_AGENT_DB"] = ":memory:"
+
+// Effect's default ConfigProvider copies process.env the first time anything reads it and keeps that copy for the
+// whole process. Server.Default(), AppRuntime and RuntimeFlags all read through it, so whichever test file reached it
+// first decided what every later file saw: a file that sets the server passwords and disposes instances before
+// restoring them (test/server/local.test.ts, the memory-* server tests) left them in the copy, and
+// httpapi-compression.test.ts's unauthenticated requests then got 401. Take the copy here, from this clean
+// environment, so no file order can change it. Server.listen installs a fresh provider and still reads the live env.
+const { ConfigProvider, Context } = await import("effect")
+Context.getReferenceUnsafe(Context.empty(), ConfigProvider.ConfigProvider)
 
 // Now safe to import from src/
 const { initProjectors } = await import("../src/server/projectors")

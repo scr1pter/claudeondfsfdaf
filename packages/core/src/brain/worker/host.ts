@@ -8,6 +8,7 @@ import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { makeGlobalNode } from "../../effect/app-node"
 import { BrainWorkerEntry } from "./entry"
 import { BrainWorkerProtocol } from "./protocol"
+import { BrainOcr } from "../document/ocr"
 
 // Where documents are read: a worker thread, so a file that sends a parser into a loop or makes it grow can be stopped
 // without stopping the engine. The worker is started from its bundled source as an eval worker, which runs the same
@@ -55,7 +56,12 @@ export type EmbedModel = {
 }
 
 /** How a load's check went: the canaries' cosines against their pinned vectors. */
-export type Check = { readonly key: string; readonly cosines: readonly number[]; readonly passed: boolean; readonly ms: number }
+export type Check = {
+  readonly key: string
+  readonly cosines: readonly number[]
+  readonly passed: boolean
+  readonly ms: number
+}
 
 export type Refused = {
   readonly type: "refused"
@@ -174,6 +180,7 @@ export const sourceNode = makeGlobalNode({
 export const node = makeGlobalNode({ service: Service, layer, deps: [sourceNode] })
 
 function make(bundled: string | undefined, options: Options) {
+  const ocr = new Map<Worker, ReturnType<typeof BrainOcr.host>>()
   const ready = options.ready ?? DEFAULTS.ready
   const timeout = options.timeout ?? DEFAULTS.timeout
   const idle = options.idle ?? DEFAULTS.idle
@@ -220,6 +227,8 @@ function make(bundled: string | undefined, options: Options) {
   // must never be read on the main thread, so the same file dying again counts once; only crashes that no one file
   // explains end worker mode.
   const crashed = (worker: Worker, message: string) => {
+    ocr.get(worker)?.close()
+    ocr.delete(worker)
     if (state.worker === worker) {
       state.worker = undefined
       state.loaded = undefined
@@ -250,7 +259,11 @@ function make(bundled: string | undefined, options: Options) {
     state.worker = undefined
     state.starting = undefined
     if (!options.inline) state.loaded = undefined
-    if (worker) void worker.terminate()
+    if (worker) {
+      ocr.get(worker)?.close()
+      ocr.delete(worker)
+      void worker.terminate()
+    }
   }
 
   const start = () =>
@@ -259,6 +272,7 @@ function make(bundled: string | undefined, options: Options) {
         bundled !== undefined
           ? new Worker(bundled, { eval: true, execArgv: [], resourceLimits: RESOURCES })
           : new Worker(ENTRY, { execArgv: [], resourceLimits: RESOURCES })
+      ocr.set(worker, BrainOcr.host(worker))
       state.threads++
       // An idle worker never keeps a CLI process alive; a request's own timer does while it waits.
       worker.unref()
@@ -289,6 +303,8 @@ function make(bundled: string | undefined, options: Options) {
         crashed(worker, error.message)
       })
       worker.on("exit", () => {
+        ocr.get(worker)?.close()
+        ocr.delete(worker)
         state.threads--
         if (state.worker === worker && started.done) crashed(worker, "Vector's background reader stopped.")
       })
@@ -312,7 +328,9 @@ function make(bundled: string | undefined, options: Options) {
     state.starting = undefined
     if (worker && state.mode === "worker") {
       state.worker = worker
-      yield* Effect.logInfo("brain reader started in a worker thread", { source: bundled === undefined ? "file" : "bundle" })
+      yield* Effect.logInfo("brain reader started in a worker thread", {
+        source: bundled === undefined ? "file" : "bundle",
+      })
     }
     return state.mode === "worker" ? worker : undefined
   })
@@ -364,7 +382,10 @@ function make(bundled: string | undefined, options: Options) {
           )
       const decoded = Schema.decodeUnknownOption(BrainWorkerProtocol.Response)(answer)
       if (Option.isNone(decoded) || !("id" in decoded.value) || decoded.value.id !== request.id)
-        return yield* new ExtractError({ reason: "invalid", message: "Vector's background reader gave an answer it could not use." })
+        return yield* new ExtractError({
+          reason: "invalid",
+          message: "Vector's background reader gave an answer it could not use.",
+        })
       if (decoded.value.type === "failed")
         return yield* new ExtractError({ reason: "failed", message: decoded.value.message })
       return decoded.value
@@ -403,7 +424,10 @@ function make(bundled: string | undefined, options: Options) {
     const files = yield* Effect.tryPromise({
       try: () => model.files(),
       catch: (error) =>
-        new EmbedError({ reason: "failed", message: `Vector could not read the search model's files: ${error instanceof Error ? error.message : String(error)}` }),
+        new EmbedError({
+          reason: "failed",
+          message: `Vector could not read the search model's files: ${error instanceof Error ? error.message : String(error)}`,
+        }),
     })
     const answer = yield* ask(
       {
@@ -423,7 +447,10 @@ function make(bundled: string | undefined, options: Options) {
     ).pipe(Effect.mapError(embedError))
     if (answer.type !== "loaded")
       return yield* new EmbedError({ reason: "invalid", message: "Vector's background reader answered out of turn." })
-    const passed = answer.dims === model.settings.dims && answer.cosines.length === model.canaries.length && answer.cosines.every((cosine) => cosine >= model.threshold)
+    const passed =
+      answer.dims === model.settings.dims &&
+      answer.cosines.length === model.canaries.length &&
+      answer.cosines.every((cosine) => cosine >= model.threshold)
     state.check = { key: model.key, cosines: answer.cosines, passed, ms: answer.ms }
     if (!passed)
       return yield* new EmbedError({
@@ -441,11 +468,20 @@ function make(bundled: string | undefined, options: Options) {
     priority: "query" | "background",
   ) {
     if (texts.length === 0) return [] as Float32Array[]
-    const answer = yield* ask({ id: id(), type: "embed", key: model.key, texts: [...texts], role }, limits.batch, priority === "query").pipe(
-      Effect.mapError(embedError),
+    const answer = yield* ask(
+      { id: id(), type: "embed", key: model.key, texts: [...texts], role },
+      limits.batch,
+      priority === "query",
+    ).pipe(Effect.mapError(embedError))
+    if (
+      answer.type !== "embedded" ||
+      answer.dims !== model.settings.dims ||
+      answer.vectors.length !== texts.length * answer.dims
     )
-    if (answer.type !== "embedded" || answer.dims !== model.settings.dims || answer.vectors.length !== texts.length * answer.dims)
-      return yield* new EmbedError({ reason: "invalid", message: "Vector's background reader gave vectors it could not use." })
+      return yield* new EmbedError({
+        reason: "invalid",
+        message: "Vector's background reader gave vectors it could not use.",
+      })
     return texts.map((_, index) => answer.vectors.slice(index * answer.dims, (index + 1) * answer.dims))
   })
 
@@ -467,7 +503,10 @@ function make(bundled: string | undefined, options: Options) {
       )
       if (answer.type === "refused") return { type: "refused" as const, reason: answer.reason, message: answer.message }
       if (answer.type !== "extracted")
-        return yield* new ExtractError({ reason: "invalid", message: "Vector's background reader answered out of turn." })
+        return yield* new ExtractError({
+          reason: "invalid",
+          message: "Vector's background reader answered out of turn.",
+        })
       return { type: "extracted" as const, structured: answer.result }
     }),
     probe: Effect.fn("BrainWorker.probe")(function* (input) {
@@ -484,7 +523,10 @@ function make(bundled: string | undefined, options: Options) {
       )
       if (answer.type === "refused") return { type: "refused" as const, reason: answer.reason, message: answer.message }
       if (answer.type !== "probed")
-        return yield* new ExtractError({ reason: "invalid", message: "Vector's background reader answered out of turn." })
+        return yield* new ExtractError({
+          reason: "invalid",
+          message: "Vector's background reader answered out of turn.",
+        })
       return { type: "probed" as const, probe: answer.result }
     }),
     status: () =>

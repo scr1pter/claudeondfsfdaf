@@ -113,6 +113,15 @@ describe("server authentication", () => {
         expect(ServerAuth.isOwnerOnlyRoute(method!, route!)).toBe(true)
   })
 
+  test("merging or discarding an isolated subagent's changes is the owner's; reviewing their counts is not", () => {
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/session/:sessionID/tasks/:taskID/merge")).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/session/:sessionID/tasks/:taskID/discard")).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/session/:sessionID/tasks/:taskID/changes")).toBe(false)
+    // Neighbouring task routes keep their own rules.
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/session/:sessionID/tasks/:taskID/message")).toBe(false)
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/session/:sessionID/tasks/stop")).toBe(false)
+  })
+
   test("host commands and permission answers require the server owner", () => {
     expect(ServerAuth.isOwnerOnlyRoute("POST", "/pty")).toBe(true)
     expect(ServerAuth.isOwnerOnlyRoute("GET", "/pty/:ptyID/connect-token")).toBe(true)
@@ -130,6 +139,9 @@ describe("server authentication", () => {
     // Trusting a project lets its config run code, so it is the owner's call too.
     expect(ServerAuth.isOwnerOnlyRoute("POST", "/config/trust")).toBe(true)
     expect(ServerAuth.isOwnerOnlyRoute("GET", "/config/trust")).toBe(false)
+    // The held prompt files are the owner's paths, and approving them loads what an agent may have written.
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/config/prompt-trust")).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/config/prompt-trust/approve")).toBe(true)
     // Accepting that free models may train on prompts is the owner's choice; a guest may only read it.
     expect(ServerAuth.isOwnerOnlyRoute("POST", "/provider/free-models/consent")).toBe(true)
     expect(ServerAuth.isOwnerOnlyRoute("GET", "/provider/free-models/consent")).toBe(false)

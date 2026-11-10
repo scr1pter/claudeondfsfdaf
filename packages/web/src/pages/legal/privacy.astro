@@ -7,7 +7,7 @@ export const prerender = true
   eyebrow="Privacy"
   title="Privacy Policy"
   description="How Vector handles account information, local work, AI requests, connected services, diagnostics, and usage counts."
-  updated="October 17, 2026"
+  updated="October 28, 2026"
 >
   <section>
     <h2>1. Scope and contact</h2>
@@ -88,7 +88,8 @@ export const prerender = true
       Vector's server to check your account and limits, and send OpenRouter a one-way hash of your Vector account
       identifier with each request. Vector does not request zero data retention for these models. Most of their
       providers keep prompts and outputs under their own policies; OpenRouter records Phala, which serves Xing4.0,
-      as keeping none. The models fall into two groups:
+      as keeping none. OpenRouter also screens these requests for child sexual abuse material and may keep and
+      report flagged content. The models fall into two groups:
     </p>
     <ul>
       <li>
@@ -116,11 +117,43 @@ export const prerender = true
       to Vector's gateway on vectordev.ai, which Vercel hosts. The gateway checks your sign-in, your Codium plan or
       purchased credits and the credits held for your requests still running, then forwards the request to
       OpenRouter on a key Vector holds for your account, not a key of your own. Each request asks OpenRouter to route
-      it only to providers OpenRouter records as zero data retention and to deny data collection; this relies on
-      OpenRouter's records and the providers' published policies, not an independent audit. The gateway passes
-      request content through without storing it. With each request it sends OpenRouter a one-way hash of your
-      Vector account identifier, not your email address or name, so that use can be attributed to one account.
+      it only to endpoints OpenRouter records as zero data retention, meaning the provider does not store prompts or
+      outputs, and to deny data collection; this relies on OpenRouter's records and the providers' published
+      policies, not an independent audit. If no such endpoint is available for the model, the request fails; it is
+      never sent to an endpoint that keeps data. The gateway passes request content through without storing it.
     </p>
+    <p id="codium-retention">Zero data retention has these limits:</p>
+    <ul>
+      <li>
+        <strong>OpenRouter's exceptions.</strong> OpenRouter says it keeps no prompts or responses from
+        zero-data-retention requests unless the account holder turns storage on, or the content is needed to review,
+        report and preserve child sexual abuse material (CSAM). From October 27, 2026 OpenRouter screens every
+        request for CSAM, including zero-data-retention requests. Flagged content may be kept for human review and
+        reported where the law requires, and reported material is preserved for one year.
+      </li>
+      <li>
+        <strong>Prompt caches.</strong> To lower cost, Vector asks some providers to cache the repeated start of a
+        conversation: for 5 minutes on Claude Haiku 5.5 and Gemini 4 Argon, and for up to 30 minutes on GPT-6 Luna.
+        The provider holds that part of your request for that time so later requests can reuse it. The other Codium
+        models may use the provider's own short-lived in-memory cache, which OpenRouter does not count as retention.
+      </li>
+      <li>
+        <strong>Providers' safety checks.</strong> Providers follow their own published policies, and OpenRouter
+        notes that some may hold content for a time to run automated safety checks.
+      </li>
+      <li>
+        <strong>Metadata.</strong> OpenRouter keeps metadata about every request, such as the model, token counts
+        and latency, but not its content. The key Vector holds for your account is named with your Vector account
+        identifier and, for a monthly plan, your Stripe subscription identifier and billing-period start, so
+        OpenRouter can link that metadata to your Vector account. With each request the gateway also sends OpenRouter
+        a one-way hash of your Vector account identifier, not your email address or name.
+      </li>
+      <li>
+        <strong>Model requests only.</strong> Zero data retention covers the model request. Codium turns off
+        OpenRouter's plugins and server-side tools, such as web search, and accepts only text and function tools
+        that Vector runs itself, so no other OpenRouter service receives the request.
+      </li>
+    </ul>
     <p>
       For Codium, Vector keeps a billing record in its server-side data store: your Stripe customer, subscription
       and billing-period identifiers, your top-up purchases, and the encrypted OpenRouter key for your account with
@@ -408,7 +441,8 @@ export const prerender = true
       Providers may process information outside your country, with different privacy laws. Locations and
       transfer arrangements depend on the provider and service configuration. Contact us for information
       about the arrangements relevant to your account. A provider's independent retention rules continue
-      to apply to information already sent to it.
+      to apply to information already sent to it, and OpenRouter keeps the request metadata described in section 4
+      under its own privacy policy.
     </p>
   </section>
 

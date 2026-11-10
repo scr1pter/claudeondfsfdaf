@@ -2,9 +2,9 @@ export * as ServerAuth from "./auth"
 export {
   assertSecurePasswordTransport,
   isOwnerOnlyRoute,
-  ownerOnlyRequest,
   ownerPrincipal,
   principal,
+  refusedRequest,
   unauthorizedMessage,
 } from "@vectordevai/server/auth"
 

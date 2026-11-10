@@ -67,6 +67,7 @@ import { legacySessionServer, requireServerKey, sessionHref } from "./utils/sess
 import { SessionPage, TargetSessionRouteContent } from "@/pages/session"
 import { NewHome } from "@/pages/home"
 import { CloudHome } from "@/features/cloud/cloud-home"
+import { FollowupQueueProvider } from "@/features/followup/followup-queue"
 
 const NewSession = lazy(() => import("@/pages/new-session"))
 
@@ -445,7 +446,12 @@ declare global {
           objective: string
           primaryProvider: string
           primaryModel: string
-          modelPool?: { provider: string; model: string; label?: string }[]
+          modelPool?: {
+            provider: string
+            model: string
+            label?: string
+            codium?: { locked?: boolean; manualOnly?: boolean; auto?: boolean }
+          }[]
           strategy?: "economy" | "balanced" | "quality"
           maxAgents?: number
           maxConcurrency?: number
@@ -832,11 +838,15 @@ export function AppInterface(props: {
                 root={(routerProps) => (
                   <TabsProvider>
                     <NotificationProvider>
-                      <ServerShell>
-                        <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                          <NewAppLayout>{routerProps.children}</NewAppLayout>
-                        </Show>
-                      </ServerShell>
+                      {/* The follow-up queue and its drainers stay mounted across routes, so a queue drains with its
+                          session's page closed (5.I.1). */}
+                      <FollowupQueueProvider>
+                        <ServerShell>
+                          <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
+                            <NewAppLayout>{routerProps.children}</NewAppLayout>
+                          </Show>
+                        </ServerShell>
+                      </FollowupQueueProvider>
                     </NotificationProvider>
                   </TabsProvider>
                 )}

@@ -8,6 +8,8 @@ import { FreeModels } from "@vectordevai/core/free-models"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { ModelPlans } from "@vectordevai/core/model-plans"
+import { CodiumAuto } from "@vectordevai/core/codium-auto"
+import { TaskSize } from "@vectordevai/core/task-size"
 import { freeModelRequest, serializeFreeModelRequest } from "@vectordevai/core/free-model-request"
 import {
   FREE_MODEL_FALLBACKS,
@@ -86,6 +88,7 @@ import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
 import { ResponseTerminal } from "./response-terminal"
+import { ResponseStall } from "./response-stall"
 import { ModelSlots } from "@vectordevai/core/local-mode/model-slots"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { Egress } from "@vectordevai/core/local-mode/egress"
@@ -100,54 +103,6 @@ const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 // large prompt can keep it busy between chunks. A provider's own headerTimeout or chunkTimeout replaces these.
 export const LOCAL_HEADER_TIMEOUT = 600_000
 export const LOCAL_CHUNK_TIMEOUT = 120_000
-
-function wrapSSE(res: Response, ms: number, ctl: AbortController, deadlines: ProviderDeadlines.Interface) {
-  if (typeof ms !== "number" || ms <= 0) return res
-  if (!res.body) return res
-  if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
-
-  const reader = res.body.getReader()
-  const body = new ReadableStream<Uint8Array>({
-    async pull(ctrl) {
-      const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
-        const cancel = deadlines.schedule(ms, () => {
-          const err = new ProviderError.ResponseStreamError("SSE read timed out")
-          ctl.abort(err)
-          void reader.cancel(err)
-          reject(err)
-        })
-
-        reader.read().then(
-          (part) => {
-            cancel()
-            resolve(part)
-          },
-          (err) => {
-            cancel()
-            reject(err)
-          },
-        )
-      })
-
-      if (part.done) {
-        ctrl.close()
-        return
-      }
-
-      ctrl.enqueue(part.value)
-    },
-    async cancel(reason) {
-      ctl.abort(reason)
-      await reader.cancel(reason)
-    },
-  })
-
-  return new Response(body, {
-    headers: new Headers(res.headers),
-    status: res.status,
-    statusText: res.statusText,
-  })
-}
 
 function timeoutController(ms: number, deadlines: ProviderDeadlines.Interface) {
   const ctl = new AbortController()
@@ -1288,6 +1243,8 @@ export const Model = Schema.Struct({
   headers: Schema.Record(Schema.String, Schema.String),
   release_date: Schema.String,
   variants: optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
+  // Vector Codium's listing facts: lab, Auto role, locks and Codium Auto's models.
+  codium: optional(ModelV2.Codium),
 }).annotate({ identifier: "Model" })
 export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
 
@@ -1372,15 +1329,26 @@ export function toClientInfo(provider: Info): Info {
 
 export function defaultModelIDs<
   T extends {
-    models: Record<string, { id: string; freeModel?: { source: "shared" | "openrouter"; dataPolicy?: FreeDataPolicy } }>
+    models: Record<
+      string,
+      {
+        id: string
+        freeModel?: { source: "shared" | "openrouter"; dataPolicy?: FreeDataPolicy }
+        codium?: { role?: string; manualOnly?: boolean; locked?: unknown; auto?: unknown }
+      }
+    >
   },
 >(providers: Record<string, T>) {
   return Object.fromEntries(
     Object.entries(providers).flatMap(([id, item]) => {
-      // Vector Codium lists its models in the catalog's order, led by the model it recommends.
+      // Vector Codium's default is the model its catalog gives the default role, else the first it lists that the
+      // plan can use; never Codium Auto, a locked or a manual-only entry.
+      const codium = Object.values(item.models).filter(
+        (model) => !model.codium?.auto && !model.codium?.locked && !model.codium?.manualOnly,
+      )
       const model =
         id === ModelPlans.PROVIDER_ID
-          ? Object.values(item.models)[0]
+          ? (codium.find((model) => model.codium?.role === "default") ?? codium[0])
           : automaticModels(
               Object.values(item.models).filter(
                 (model) => id !== "openrouter" || model.freeModel?.source === "openrouter",
@@ -1476,6 +1444,15 @@ export interface Interface {
     query: string[],
   ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderV2.ID, primaryID?: ModelV2.ID) => Effect.Effect<Model | undefined>
+  /**
+   * The Vector Codium model Codium Auto runs one user message on, from the message's size and the context it adds to
+   * (CodiumAuto.resolve). Fails like getModel when Codium cannot run, and with a Codium notice when the account's plan
+   * offers no usable Auto.
+   */
+  readonly codiumAuto: (input: {
+    tier: TaskSize.Tier
+    contextTokens: number
+  }) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, ModelNotFoundError>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, DefaultModelError>
   /** The model a saved choice names today: renamed providers map to their new ID, retired ones give undefined. */
   readonly savedModel: (model: {
@@ -1748,7 +1725,11 @@ export function fromFreeModels(models: readonly FreeModelInfo[], providerID: "ve
   }
 }
 
-/** Vector Codium. Credentials are read at the fixed request boundary and never appear in provider info. */
+/**
+ * Vector Codium. Credentials are read at the fixed request boundary and never appear in provider info. Every catalog
+ * entry is listed with its `codium` listing metadata, so the pickers, routing and swarms can tell Codium Auto, locked
+ * and manual-only entries apart.
+ */
 export function fromModelPlans(models: readonly ModelPlans.Model[]): Info {
   return {
     id: ProviderV2.ID.make(ModelPlans.PROVIDER_ID),
@@ -1757,6 +1738,9 @@ export function fromModelPlans(models: readonly ModelPlans.Model[]): Info {
     env: [],
     options: {},
     models: Object.fromEntries(
+      // Every entry, with what its listing says: Codium Auto (resolved per user message), models the plan does not
+      // include (choosing one opens Change plan) and manual-only lanes. Nothing automatic picks those (defaultModelIDs,
+      // getSmallModel through CodiumAuto.helper, task and image routing, swarms).
       models.map((model) => [
         model.id,
         {
@@ -1772,6 +1756,7 @@ export function fromModelPlans(models: readonly ModelPlans.Model[]): Info {
           // No dollar price: a Codium step spends credits, so it is recorded unpriced and left out of dollar totals.
           cost: { ...UNPRICED },
           limit: { context: model.contextLength, output: model.maxOutputTokens },
+          codium: ModelPlans.listing(model),
           capabilities: {
             temperature: true,
             reasoning: false,
@@ -2532,6 +2517,15 @@ const layer = Layer.effect(
           ) !== undefined
         const chunkTimeout = options["chunkTimeout"] ?? (hosted ? LOCAL_CHUNK_TIMEOUT : undefined)
         const headerTimeout = options["headerTimeout"] ?? (hosted ? LOCAL_HEADER_TIMEOUT : undefined)
+        const promptCacheBreakpoints = ProviderTransform.promptCacheBreakpointsEnabled({
+          setting: options["promptCacheBreakpoints"],
+          providerID: model.providerID,
+          npm: model.api.npm,
+          modelID: model.api.id,
+          apiKey: credential?.type === "api" || (!credential && typeof options["apiKey"] === "string"),
+          url: baseURL,
+        })
+        delete options["promptCacheBreakpoints"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
         delete options["preconnect"]
@@ -2542,12 +2536,27 @@ const layer = Layer.effect(
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = { ...init }
+          const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+          const marker = headers.get(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+          headers.delete(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+          if (marker !== null) opts.headers = headers
+          const requestInput =
+            input instanceof Request && input.headers.has(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+              ? new Request(input, { headers })
+              : input
           const body = ProviderTransform.reasoningContextBody(
             model.api.npm,
             runtimeFlags.experimentalReasoningContext,
             init?.body,
           )
           if (body !== undefined) opts.body = body
+          const cacheBody = ProviderTransform.promptCacheBreakpointBody({
+            enabled: promptCacheBreakpoints,
+            url: input instanceof Request ? input.url : String(input),
+            marker,
+            body: opts.body,
+          })
+          if (cacheBody !== undefined) opts.body = cacheBody
           // A request that reaches OpenRouter here skips every free-model check, so it must not name a free model.
           // Model and provider options can replace the model the SDK sends (`model` in them overrides it). Their
           // fallbacks, presets and plugins still go out, but where they could let OpenRouter answer from another
@@ -2615,7 +2624,7 @@ const layer = Layer.effect(
           const res = ResponseTerminal.wrap(
             await Egress.fetch(
               policy.enabled ? inferenceSource(names, target, policy, holds) : "local-inference",
-              input,
+              requestInput,
               {
                 ...opts,
                 // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
@@ -2640,7 +2649,7 @@ const layer = Layer.effect(
           )
 
           if (!chunkAbortCtl) return res
-          return wrapSSE(res, chunkTimeout, chunkAbortCtl, deadlines)
+          return ResponseStall.wrap(res, chunkTimeout, chunkAbortCtl, deadlines)
         }
 
         const bundledLoader = BUNDLED_PROVIDERS[model.api.npm]
@@ -2860,10 +2869,22 @@ const layer = Layer.effect(
       return undefined
     })
 
+    // The model a Codium conversation's helper calls run on: Auto's floor, then its default, never a locked, manual-only
+    // or Auto entry. Without either (signed out, Codium off, Vector Local, or a plan whose Auto is not usable) there is
+    // no helper model and the helper is skipped.
+    const codiumHelper = Effect.fnUntraced(function* () {
+      const listed = (yield* refreshCodium({ wait: true }))[planID]
+      const chosen = CodiumAuto.helper(yield* modelPlans.catalog(yield* freeCredentials.get("vector")))
+      return chosen ? listed?.models[chosen.id] : undefined
+    })
+
     const getSmallModel = Effect.fn("Provider.getSmallModel")(function* (
       providerID: ProviderV2.ID,
       primaryID?: ModelV2.ID,
     ) {
+      // An explicitly selected Codium conversation keeps helper calls on Codium. A helper agent set to Codium Auto asks
+      // with the provider alone and may run beside a conversation on another provider, so the listing is read here.
+      if (providerID === planID) return yield* codiumHelper()
       const s = yield* providerState
       const provider = s.providers[providerID]
       if (!provider) return undefined
@@ -2873,18 +2894,19 @@ const layer = Layer.effect(
       // A helper call never moves a conversation onto a free model whose provider may train on prompts.
       if (providerID === "vector")
         return Object.values(provider.models).find((model) => isFreeModel(model) && !freeModelMayTrain(model))
-      // An explicitly selected Codium conversation keeps helper calls on its credit route at the lowest ceiling.
-      if (providerID === ModelPlans.PROVIDER_ID)
-        return Object.values(provider.models).toSorted(
-          (a, b) => a.cost.input + a.cost.output - b.cost.input - b.cost.output,
-        )[0]
       const cfg = yield* config.get()
 
       if (cfg.small_model) {
         const parsed = parseModel(cfg.small_model)
-        return yield* getModel(parsed.providerID, parsed.modelID).pipe(
+        // Codium Auto is a listing entry and never a model the gateway serves: as the small model it gives the model a
+        // Codium conversation's helpers get.
+        if (parsed.providerID === planID && parsed.modelID === ModelPlans.AUTO_ID) return yield* codiumHelper()
+        const small = yield* getModel(parsed.providerID, parsed.modelID).pipe(
           Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
         )
+        // A Codium model the plan no longer includes is listed, but every helper call to it would be refused: there is
+        // no helper model then, as when it was not listed, and the caller falls back (a title runs on its own model).
+        return parsed.providerID === planID && small?.codium?.locked ? undefined : small
       }
 
       const experimental = yield* plugin.trigger<"experimental.provider.small_model">(
@@ -2956,6 +2978,33 @@ const layer = Layer.effect(
       return undefined
     })
 
+    const codiumAuto = Effect.fn("Provider.codiumAuto")(function* (input: {
+      tier: TaskSize.Tier
+      contextTokens: number
+    }) {
+      const auto = ModelV2.ID.make(ModelPlans.AUTO_ID)
+      // Signed out, Codium off for the account or Vector Local on: the same notice a chosen Codium model gets.
+      const listed = (yield* refreshCodium({ wait: true }))[planID]
+      if (!listed) return yield* getModel(planID, auto).pipe(Effect.as({ providerID: planID, modelID: auto }))
+      const chosen = CodiumAuto.resolve({
+        catalog: yield* modelPlans.catalog(yield* freeCredentials.get("vector"), { wait: true }),
+        tier: input.tier,
+        contextTokens: input.contextTokens,
+      })
+      if (chosen && listed.models[chosen.id]) return { providerID: planID, modelID: ModelV2.ID.make(chosen.id) }
+      // An older gateway, or a plan whose Auto models are not all usable, offers no Auto: say so rather than pick one.
+      return yield* new ModelNotFoundError({
+        providerID: planID,
+        modelID: auto,
+        codium: "unavailable",
+        unavailable: {
+          id: planID,
+          reason: "no-models",
+          message: "Codium Auto is not available on your plan right now. Choose a Vector Codium model to continue.",
+        },
+      })
+    })
+
     const savedModel = Effect.fn("Provider.savedModel")(function* (model: { providerID: string; modelID: string }) {
       const s = yield* providerState
       // A saved Vector model stays on the shared allowance, even when the user's own OpenRouter account lists it too.
@@ -3002,7 +3051,11 @@ const layer = Layer.effect(
         // models are off and every model left runs on a server on the list, so the next recent choice is taken.
         if (isFreeModelRef(entry) && !Config.local().enabled) return entry
         if (!provider) continue
-        if (!provider.models[entry.modelID]) continue
+        const model = provider.models[entry.modelID]
+        if (!model) continue
+        // A Codium model the plan no longer includes is listed (choosing it opens Change plan), but every turn on it
+        // would be refused, so it is never the default, as the app and the TUI never restore it.
+        if (entry.providerID === planID && model.codium?.locked) continue
         return { providerID: entry.providerID, modelID: entry.modelID }
       }
 
@@ -3037,6 +3090,7 @@ const layer = Layer.effect(
       preconnect,
       closest,
       getSmallModel,
+      codiumAuto,
       defaultModel,
       savedModel,
       freeSignIn,

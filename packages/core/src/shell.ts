@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "child_process"
 import { readFile } from "fs/promises"
 import { realpathSync, statSync } from "fs"
 import { setTimeout as sleep } from "node:timers/promises"
+import { Option, Schema } from "effect"
 import { untrustedChildEnvironment } from "./child-environment"
 import { Flag } from "./flag/flag"
 import { FSUtil } from "./fs-util"
@@ -213,6 +214,19 @@ export function args(file: string, command: string, cwd: string) {
   if (n === "cmd") return ["/c", command]
   if (ps(file)) return ["-NoProfile", "-Command", command]
   return ["-c", command]
+}
+
+/**
+ * The command line a program started with `argv` runs, to show it: inside the bash and zsh wrapper `args` builds, the
+ * line it evaluates, so the rc-file lines do not take its place; otherwise the program and its arguments as one line.
+ */
+export function commandLine(file: string, argv: readonly string[]) {
+  const wrapped =
+    argv.length === 5 && argv[0] === "-l" && argv[1] === "-c" && argv[3] === "vector"
+      ? /\n\s*eval ("(?:[^"\\]|\\.)*")\s*$/.exec(argv[2])
+      : null
+  const line = wrapped ? Schema.decodeUnknownOption(Schema.fromJsonString(Schema.String))(wrapped[1]) : Option.none()
+  return Option.getOrElse(line, () => [file, ...argv].join(" "))
 }
 
 /**

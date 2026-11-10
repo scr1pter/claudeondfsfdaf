@@ -4,12 +4,128 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type { ModelCatalog } from "@vectordevai/core/model-catalog"
 import type { TaskSize } from "@vectordevai/core/task-size"
+import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { Option, Schema } from "effect"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
+import { createHash } from "node:crypto"
 
 const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+
+// Internal request metadata only. The provider fetch removes this before any transport runs.
+export const PROMPT_CACHE_PREFIX_HEADER = "x-vector-prompt-cache-prefix"
+
+export function promptCachePrefix(text: string) {
+  return `${text.length}:${createHash("sha256").update(text).digest("hex")}`
+}
+
+export function promptCacheBreakpointsEnabled(input: {
+  setting: unknown
+  providerID: string
+  npm: string
+  modelID: string
+  apiKey: boolean
+  url: unknown
+}) {
+  if (
+    (input.setting !== undefined && input.setting !== true) ||
+    !input.apiKey ||
+    input.providerID !== "openai" ||
+    input.npm !== "@ai-sdk/openai" ||
+    input.modelID !== "gpt-6.1-sol"
+  )
+    return false
+  if (input.url !== undefined && typeof input.url !== "string") return false
+  const url = URL.parse(input.url ?? "https://api.openai.com/v1")
+  if (!url || url.username || url.password) return false
+  const official =
+    url.protocol === "https:" &&
+    url.hostname === "api.openai.com" &&
+    !url.port &&
+    ["/v1", "/v1/", "/v1/responses"].includes(url.pathname)
+  const loopback = url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname)
+  if (input.setting === true) return official || loopback
+  return official && !url.search && !url.hash
+}
+
+// Compatibility with the pinned SDK, which cannot express Responses text-block breakpoints.
+// An exact prefix marker from request preparation prevents inferring a boundary from arbitrary text.
+export function promptCacheBreakpointBody(input: {
+  enabled: boolean
+  url: string
+  marker: string | null
+  body: unknown
+}) {
+  if (!input.enabled || !input.marker || typeof input.body !== "string") return undefined
+  const url = URL.parse(input.url)
+  if (
+    !url ||
+    url.username ||
+    url.password ||
+    !url.pathname.endsWith("/responses") ||
+    !(
+      (url.protocol === "https:" && url.hostname === "api.openai.com" && !url.port) ||
+      (url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname))
+    )
+  )
+    return undefined
+  const marker = /^([1-9]\d{0,6}):([a-f0-9]{64})$/.exec(input.marker)
+  const decoded = decodeJson(input.body)
+  if (!marker || Option.isNone(decoded) || !isRecord(decoded.value)) return undefined
+  const body = decoded.value
+  if (
+    body.model !== "gpt-6.1-sol" ||
+    body.prompt_cache_options !== undefined ||
+    body.prompt_cache_retention !== undefined ||
+    !Array.isArray(body.input) ||
+    body.input.some(
+      (item) =>
+        isRecord(item) &&
+        (item.prompt_cache_breakpoint !== undefined ||
+          (Array.isArray(item.content) &&
+            item.content.some((part) => isRecord(part) && part.prompt_cache_breakpoint !== undefined))),
+    ) ||
+    !isRecord(body.input[0])
+  )
+    return undefined
+  const first = body.input[0]
+  if (first.role !== "developer" && first.role !== "system") return undefined
+  const parts = typeof first.content === "string" ? [{ type: "input_text", text: first.content }] : first.content
+  if (
+    !Array.isArray(parts) ||
+    parts.length === 0 ||
+    !parts.every(
+      (part): part is Record<string, unknown> & { type: "input_text"; text: string } =>
+        isRecord(part) &&
+        part.type === "input_text" &&
+        typeof part.text === "string" &&
+        part.prompt_cache_breakpoint === undefined,
+    )
+  )
+    return undefined
+  const length = Number(marker[1])
+  const text = parts.map((part) => part.text).join("")
+  if (length > text.length || promptCachePrefix(text.slice(0, length)) !== input.marker) return undefined
+  const ends = parts.map((part, index) => parts.slice(0, index + 1).reduce((sum, item) => sum + item.text.length, 0))
+  const boundary = ends.findIndex((end) => end >= length)
+  const part = parts[boundary]
+  if (!part) return undefined
+  const offset = length - (ends[boundary - 1] ?? 0)
+  const content = parts.flatMap((item, index) =>
+    index !== boundary
+      ? [item]
+      : [
+          { ...item, text: item.text.slice(0, offset), prompt_cache_breakpoint: { mode: "explicit", ttl: "30m" } },
+          ...(offset < item.text.length ? [{ ...item, text: item.text.slice(offset) }] : []),
+        ],
+  )
+  return JSON.stringify({
+    ...body,
+    prompt_cache_options: { mode: "implicit", ttl: "30m" },
+    input: [{ ...first, content }, ...body.input.slice(1)],
+  })
+}
 
 type Modality = NonNullable<ModelCatalog.Model["modalities"]>["input"][number]
 
@@ -338,9 +454,12 @@ function normalizeMessages(
   return msgs
 }
 
-function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
+// Breakpoints go on the first two system messages and the last two others. With a `boundary` (a fork's last inherited
+// message) the earlier of those two goes there instead, so the provider's look-back from it finds the parent's entry.
+function applyCaching(msgs: ModelMessage[], model: Provider.Model, boundary?: ModelMessage): ModelMessage[] {
   const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
-  const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
+  const rest = msgs.filter((msg) => msg.role !== "system")
+  const final = boundary && boundary.role !== "system" ? unique([boundary, rest.at(-1)!]) : rest.slice(-2)
 
   const providerOptions = {
     anthropic: {
@@ -467,11 +586,68 @@ export function usesCacheBreakpoints(model: Provider.Model) {
   )
 }
 
-export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>, cache = true) {
+/** Whether the provider caches the prompt prefix, so a smaller tool set on the next request would write it again. */
+export function caches(model: Provider.Model) {
+  return usesCacheBreakpoints(model) || (model.cost?.cache?.read ?? 0) > 0
+}
+
+// Whether a request with these provider options runs an Anthropic model with thinking on, directly, on Vertex or on
+// Bedrock. Anthropic refuses forced tool use while extended thinking is on.
+function anthropicThinking(model: Provider.Model, options: Record<string, any>) {
+  const on = (setting: unknown) => isPlainObject(setting) && (setting.type === "enabled" || setting.type === "adaptive")
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic")
+    return on(options.thinking)
+  if (model.api.npm === "@ai-sdk/amazon-bedrock")
+    return (model.api.id.includes("anthropic") || model.api.id.includes("claude")) && on(options.reasoningConfig)
+  return false
+}
+
+/**
+ * The tool choice a request can send: "required" becomes "auto" for an Anthropic model with thinking on, which refuses
+ * forced tool use. The caller follows such a step with a closing one that turns thinking off (`withoutThinking`).
+ */
+export function toolChoice(
+  model: Provider.Model,
+  options: Record<string, any>,
+  requested?: "auto" | "required" | "none",
+): "auto" | "required" | "none" | undefined {
+  if (requested === "required" && anthropicThinking(model, options)) return "auto"
+  return requested
+}
+
+/** Provider options with Anthropic thinking turned off, for a step that must force a tool call. */
+export function withoutThinking(options: Record<string, any>): Record<string, any> {
+  const { thinking: _thinking, reasoningConfig: _reasoning, ...rest } = options
+  return rest
+}
+
+// Marks the boundary message through the transforms below, which may copy, drop or insert messages. Object spread
+// copies a symbol key, and request bodies never carry one.
+const BOUNDARY = Symbol("vector.cache-boundary")
+type Marked = ModelMessage & { [BOUNDARY]?: true }
+
+/** `boundary` is the index in `msgs` of a fork's last inherited message, which takes the non-final cache breakpoint. */
+export function message(
+  msgs: ModelMessage[],
+  model: Provider.Model,
+  options: Record<string, unknown>,
+  cache = true,
+  boundary?: number,
+) {
+  if (boundary !== undefined && msgs[boundary])
+    msgs = msgs.map((msg, index) => {
+      if (index !== boundary) return msg
+      const copy: Marked = { ...msg }
+      copy[BOUNDARY] = true
+      return copy
+    })
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
+  const marked =
+    boundary === undefined ? undefined : msgs.find((msg): msg is Marked => (msg as Marked)[BOUNDARY] === true)
+  if (marked) delete marked[BOUNDARY]
   if (cache && usesCacheBreakpoints(model)) {
-    msgs = applyCaching(msgs, model)
+    msgs = applyCaching(msgs, model, marked)
   }
 
   // Remap providerOptions keys from stored providerID to expected SDK key
@@ -1169,10 +1345,9 @@ export function options(input: {
     }
   }
 
-  // Every OpenAI request names its session as the prompt cache key, on every model, as the Codex CLI does. OpenAI
-  // routes a request by its opening tokens together with this key, and spills a group that passes roughly 15 requests
-  // a minute onto other cache machines. Without a key every Vector session shares one group, because their opening
-  // tokens (the tool definitions) are the same, so parallel sessions and subagents push each other off their cache.
+  // Preserve session-scoped cache accounting by default. A key separates cache reuse between request groups;
+  // newer OpenAI models route automatically, while older models also use the key to help route related requests.
+  // Callers can opt out with setCacheKey: false, and explicit model or agent keys are merged later.
   if (
     input.providerOptions?.setCacheKey === true ||
     (input.model.providerID === "openai" && input.providerOptions?.setCacheKey !== false)
@@ -1344,6 +1519,53 @@ export function effortOptions(model: Provider.Model, effort: TaskSize.Effort): R
   if (effort === "default") return {}
   if (effort === "off") return smallOptions(model)
   return model.variants?.high ?? {}
+}
+
+type Level = "off" | "low" | "medium" | "high"
+
+/** The level an effort or variant name stands for: high, xhigh and max are high; low and minimal low; none off. */
+export function level(value: unknown): Level | undefined {
+  if (value === "none" || value === "off" || value === "disabled") return "off"
+  if (value === "minimal" || value === "low") return "low"
+  if (value === "medium") return "medium"
+  if (value === "high" || value === "xhigh" || value === "max") return "high"
+  return undefined
+}
+
+// The reasoning level set options name, if they name one.
+function optionsLevel(options: Record<string, any>): Level | undefined {
+  const named = level(options.reasoningEffort) ?? level(options.reasoning_effort) ?? level(options.effort)
+  if (named) return named
+  if (isPlainObject(options.reasoning)) {
+    if (options.reasoning.enabled === false) return "off"
+    const effort = level(options.reasoning.effort)
+    if (effort) return effort
+  }
+  for (const setting of [options.thinking, options.reasoningConfig]) {
+    if (!isPlainObject(setting)) continue
+    if (setting.type === "disabled") return "off"
+    if (setting.type === "enabled" || setting.type === "adaptive") return "high"
+  }
+  if (isPlainObject(options.thinkingConfig)) {
+    if (options.thinkingConfig.thinkingBudget === 0) return "off"
+    const thinking = level(options.thinkingConfig.thinkingLevel)
+    if (thinking) return thinking
+  }
+  if (options.enable_thinking === false) return "off"
+  return undefined
+}
+
+/**
+ * The reasoning level a model runs at when nothing picks one: no variant, no size and no agent option. For example
+ * medium on GPT-5, which Vector sends at medium, and off for an Anthropic model, which thinks only when asked.
+ */
+export function defaultEffort(model: Provider.Model): Level {
+  if (!model.capabilities.reasoning) return "off"
+  const found = optionsLevel(mergeDeep(options({ model, sessionID: "" }), model.options ?? {}))
+  if (found) return found
+  if (model.api.npm.includes("anthropic") || model.api.id.includes("claude") || model.api.id.includes("anthropic"))
+    return "off"
+  return "medium"
 }
 
 // Maps model ID prefix to provider slug used in providerOptions.
@@ -1519,7 +1741,98 @@ function sanitizeOpenAISchema(value: unknown): unknown {
   return result
 }
 
-export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 {
+// Bounds a provider's schema path drops: OpenAI's subset above, and the Google SDK's conversion. With `restate`, each is
+// restated in its node's description so the model still reads it; the engine checks it either way.
+const NUMBER_AND_COUNT_BOUNDS = [
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
+]
+const OPENAI_DROPS = [...NUMBER_AND_COUNT_BOUNDS, "minLength"]
+const GOOGLE_DROPS = [...NUMBER_AND_COUNT_BOUNDS, "additionalProperties"]
+
+function droppedBounds(model: Provider.Model): readonly string[] {
+  if (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure") return OPENAI_DROPS
+  if (model.api.npm === "@ai-sdk/google" || model.api.npm === "@ai-sdk/google-vertex") return GOOGLE_DROPS
+  return []
+}
+
+function restateBounds(node: unknown, keys: readonly string[]): unknown {
+  if (!isPlainObject(node)) return node
+  const result: JsonRecord = { ...node }
+  const said = keys.flatMap((key) => {
+    const value = node[key]
+    if (value === undefined || (key === "additionalProperties" && value !== false)) return []
+    if (key === "uniqueItems" && value !== true) return []
+    return [`${key}: ${JSON.stringify(value)}`]
+  })
+  if (said.length > 0)
+    result.description = `${typeof node.description === "string" && node.description ? `${node.description} ` : ""}(${said.join(", ")})`
+  const each = (value: unknown) =>
+    isPlainObject(value)
+      ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, restateBounds(item, keys)]))
+      : value
+  for (const key of ["properties", "$defs", "definitions"]) if (key in node) result[key] = each(node[key])
+  for (const key of ["items", "additionalProperties", "not"])
+    if (key in node) result[key] = restateBounds(node[key], keys)
+  for (const key of ["anyOf", "oneOf", "allOf"]) {
+    const list = node[key]
+    if (Array.isArray(list)) result[key] = list.map((item) => restateBounds(item, keys))
+  }
+  return result
+}
+
+export function schema(model: Provider.Model, schema: JSONSchema7, options: { restate?: boolean } = {}): JSONSchema7 {
+  if (options.restate) {
+    const checked = JsonSchemaCheck.accept(schema)
+    if (checked.ok) {
+      let structural = false
+      const lower = (value: unknown): unknown => {
+        if (typeof value === "boolean") {
+          structural = true
+          // OpenAI cannot take a boolean schema. The exact rule remains in the bounded engine contract below.
+          return model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure" ? {} : value
+        }
+        if (!isPlainObject(value)) return value
+        const next: JsonRecord = { ...value }
+        for (const key of ["properties", "$defs", "definitions"])
+          if (isPlainObject(value[key]))
+            next[key] = Object.fromEntries(Object.entries(value[key]).map(([name, child]) => [name, lower(child)]))
+        for (const key of ["items", "not"]) if (key in value) next[key] = lower(value[key])
+        if (isPlainObject(value.additionalProperties)) next.additionalProperties = lower(value.additionalProperties)
+        for (const key of ["anyOf", "oneOf", "allOf"]) if (Array.isArray(value[key])) next[key] = value[key].map(lower)
+        structural ||= "not" in value || value.nullable === true
+        if (value.nullable === true && (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure")) {
+          delete next.nullable
+          return { anyOf: [next, { type: "null" }] }
+        }
+        if (typeof value.$ref === "string" && Object.keys(value).some((key) => key !== "$ref")) {
+          structural = true
+          // Moonshot rejects ref siblings. Keep their conjunction and root definitions instead of deleting them.
+          if (model.providerID === "moonshotai" || model.api.id.toLowerCase().includes("kimi")) {
+            const { $ref, $defs, definitions, ...siblings } = next
+            return { ...($defs ? { $defs } : {}), ...(definitions ? { definitions } : {}), allOf: [{ $ref }, siblings] }
+          }
+        }
+        return next
+      }
+      schema = lower(schema) as JSONSchema7
+      // Some SDK wire formats cannot express not/boolean/ref-sibling rules. Preserve their exact meaning for the
+      // model, with at most the already accepted 16 KiB schema, while the engine checks the original on every call.
+      if (structural)
+        schema.description = `${schema.description ? `${schema.description}\n` : ""}Your response must satisfy this JSON Schema: ${checked.normalized}`
+    }
+    const dropped = droppedBounds(model)
+    if (dropped.length > 0) schema = restateBounds(schema, dropped) as JSONSchema7
+  }
   /*
   if (["openai", "azure"].includes(providerID)) {
     if (schema.type === "object" && schema.properties) {

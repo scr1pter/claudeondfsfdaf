@@ -268,8 +268,12 @@ export type SessionsImportArchiveOutput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
     readonly cost: number
     readonly unpricedSteps?: number
+    readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
+    readonly subagentCodiumSteps?: number
     readonly subagentTokens?: {
       readonly input: number
       readonly output: number
@@ -519,8 +523,12 @@ export type SessionsListOutput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
     readonly cost: number
     readonly unpricedSteps?: number
+    readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
+    readonly subagentCodiumSteps?: number
     readonly subagentTokens?: {
       readonly input: number
       readonly output: number
@@ -638,8 +646,12 @@ export type SessionsCreateOutput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
     readonly cost: number
     readonly unpricedSteps?: number
+    readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
+    readonly subagentCodiumSteps?: number
     readonly subagentTokens?: {
       readonly input: number
       readonly output: number
@@ -694,8 +706,12 @@ export type SessionsGetOutput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
     readonly cost: number
     readonly unpricedSteps?: number
+    readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
+    readonly subagentCodiumSteps?: number
     readonly subagentTokens?: {
       readonly input: number
       readonly output: number
@@ -932,7 +948,8 @@ export type SessionsSpendOutput = {
     readonly spentUsd: number
     readonly steps: number
     readonly unpricedSteps: number
-    readonly costKind?: "free" | "priced" | "plan" | "local" | "unknown"
+    readonly codiumSteps?: number
+    readonly costKind?: "free" | "priced" | "plan" | "local" | "unknown" | "codium"
   } | null
 }["data"]
 
@@ -1112,6 +1129,7 @@ export type SessionsContextOutput = {
         readonly finish?: string
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -1131,6 +1149,7 @@ export type SessionsContextOutput = {
               readonly type: "codium"
               readonly action: "credits" | "sign-in" | "unavailable"
               readonly message: string
+              readonly code?: string
             }
       }
     | {
@@ -1140,6 +1159,7 @@ export type SessionsContextOutput = {
         readonly recent: string
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -1175,6 +1195,7 @@ export type SessionsHistoryOutput = {
           readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
           readonly cost?: number
           readonly unpriced?: boolean
+          readonly billing?: "codium"
           readonly tokens?: {
             readonly input: number
             readonly output: number
@@ -1347,6 +1368,7 @@ export type SessionsHistoryOutput = {
                 readonly finish?: string
                 readonly cost?: number
                 readonly unpriced?: boolean
+                readonly billing?: "codium"
                 readonly tokens?: {
                   readonly input: number
                   readonly output: number
@@ -1366,6 +1388,7 @@ export type SessionsHistoryOutput = {
                       readonly type: "codium"
                       readonly action: "credits" | "sign-in" | "unavailable"
                       readonly message: string
+                      readonly code?: string
                     }
               }
             | {
@@ -1375,6 +1398,7 @@ export type SessionsHistoryOutput = {
                 readonly recent: string
                 readonly cost?: number
                 readonly unpriced?: boolean
+                readonly billing?: "codium"
                 readonly tokens?: {
                   readonly input: number
                   readonly output: number
@@ -1582,6 +1606,7 @@ export type SessionsHistoryOutput = {
           readonly finish: string
           readonly cost: number
           readonly unpriced?: boolean
+          readonly billing?: "codium"
           readonly tokens: {
             readonly input: number
             readonly output: number
@@ -1615,6 +1640,7 @@ export type SessionsHistoryOutput = {
                 readonly type: "codium"
                 readonly action: "credits" | "sign-in" | "unavailable"
                 readonly message: string
+                readonly code?: string
               }
         }
       }
@@ -1838,6 +1864,7 @@ export type SessionsHistoryOutput = {
           readonly recent: string
           readonly cost?: number
           readonly unpriced?: boolean
+          readonly billing?: "codium"
           readonly tokens?: {
             readonly input: number
             readonly output: number
@@ -1859,6 +1886,7 @@ export type SessionsHistoryOutput = {
           readonly reason: "auto" | "manual"
           readonly cost?: number
           readonly unpriced?: boolean
+          readonly billing?: "codium"
           readonly tokens?: {
             readonly input: number
             readonly output: number
@@ -1931,6 +1959,7 @@ export type SessionsEventsOutput =
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -2103,6 +2132,7 @@ export type SessionsEventsOutput =
               readonly finish?: string
               readonly cost?: number
               readonly unpriced?: boolean
+              readonly billing?: "codium"
               readonly tokens?: {
                 readonly input: number
                 readonly output: number
@@ -2122,6 +2152,7 @@ export type SessionsEventsOutput =
                     readonly type: "codium"
                     readonly action: "credits" | "sign-in" | "unavailable"
                     readonly message: string
+                    readonly code?: string
                   }
             }
           | {
@@ -2131,6 +2162,7 @@ export type SessionsEventsOutput =
               readonly recent: string
               readonly cost?: number
               readonly unpriced?: boolean
+              readonly billing?: "codium"
               readonly tokens?: {
                 readonly input: number
                 readonly output: number
@@ -2338,6 +2370,7 @@ export type SessionsEventsOutput =
         readonly finish: string
         readonly cost: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens: {
           readonly input: number
           readonly output: number
@@ -2371,6 +2404,7 @@ export type SessionsEventsOutput =
               readonly type: "codium"
               readonly action: "credits" | "sign-in" | "unavailable"
               readonly message: string
+              readonly code?: string
             }
       }
     }
@@ -2594,6 +2628,7 @@ export type SessionsEventsOutput =
         readonly recent: string
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -2615,6 +2650,7 @@ export type SessionsEventsOutput =
         readonly reason: "auto" | "manual"
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -2809,6 +2845,7 @@ export type SessionsMessageOutput = {
         readonly finish?: string
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -2828,6 +2865,7 @@ export type SessionsMessageOutput = {
               readonly type: "codium"
               readonly action: "credits" | "sign-in" | "unavailable"
               readonly message: string
+              readonly code?: string
             }
       }
     | {
@@ -2837,6 +2875,7 @@ export type SessionsMessageOutput = {
         readonly recent: string
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -3004,6 +3043,7 @@ export type MessagesListOutput = {
         readonly finish?: string
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -3023,6 +3063,7 @@ export type MessagesListOutput = {
               readonly type: "codium"
               readonly action: "credits" | "sign-in" | "unavailable"
               readonly message: string
+              readonly code?: string
             }
       }
     | {
@@ -3032,6 +3073,7 @@ export type MessagesListOutput = {
         readonly recent: string
         readonly cost?: number
         readonly unpriced?: boolean
+        readonly billing?: "codium"
         readonly tokens?: {
           readonly input: number
           readonly output: number
@@ -3106,6 +3148,14 @@ export type ModelsListOutput = {
     readonly status: "alpha" | "beta" | "deprecated" | "active"
     readonly enabled: boolean
     readonly limit: { readonly context: number; readonly input?: number; readonly output: number }
+    readonly codium?: {
+      readonly lab?: string
+      readonly role?: "floor" | "default" | "ceiling"
+      readonly manualOnly?: boolean
+      readonly locked?: { readonly plan: string; readonly name: string; readonly previewUntil?: number }
+      readonly preview?: { readonly until: number }
+      readonly auto?: { readonly floor: string; readonly default: string; readonly ceiling: string }
+    }
   }>
 }
 
@@ -3684,6 +3734,7 @@ export type PtysListOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }>
 }
 
@@ -3743,6 +3794,7 @@ export type PtysCreateOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }
 }
 
@@ -3768,6 +3820,7 @@ export type PtysGetOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }
 }
 
@@ -3798,6 +3851,7 @@ export type PtysUpdateOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }
 }
 

@@ -5,7 +5,7 @@ import MarketingLayout from "../../components/marketing/MarketingLayout.astro"
 // Dev-only design harness for the logged-in account page. Never built for prod.
 if (!import.meta.env.DEV) return Astro.redirect("/account")
 
-const preview = { user: { id: "usr_preview", email: "krishna@vectordev.ai", name: "Krishna Bharadwaj" } }
+const preview = { user: { id: "usr_preview", email: "you@example.com", name: "Krishna Bharadwaj" } }
 ---
 
 <MarketingLayout title="Account preview (dev)" description="Design harness" noindex>

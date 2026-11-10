@@ -27,6 +27,14 @@ const COMMANDS = new Set<NonNullable<BrowserAgentInput["command"]>>([
   "readPage",
   "observePage",
   "clickRef",
+  "typeRef",
+  "selectOption",
+  "hover",
+  "listTabs",
+  "openTab",
+  "switchTab",
+  "closeTab",
+  "readLogs",
 ])
 
 export function parseBrowserAgentInput(value: unknown): BrowserAgentInput {
@@ -49,6 +57,11 @@ export function parseBrowserAgentInput(value: unknown): BrowserAgentInput {
     visible: optionalBoolean(input.visible, "visible"),
     milliseconds: optionalNumber(input.milliseconds, "milliseconds"),
     deltaY: optionalNumber(input.deltaY, "deltaY"),
+    tabId: optionalTab(input.tabId),
+    values: optionalValues(input.values),
+    expectOrigin: optionalString(input.expectOrigin, "expectOrigin", 2048),
+    expectLabel: optionalString(input.expectLabel, "expectLabel", 300),
+    settle: optionalBoolean(input.settle, "settle"),
   }
 }
 
@@ -124,7 +137,7 @@ export function parseResearchBrowserInput(value: unknown): ResearchInput {
     ...(input.provenance === undefined ? {} : { provenance: addresses(input.provenance, "provenance") }),
     ...(input.typed === undefined ? {} : { typed: addresses(input.typed, "typed") }),
     ...(input.url === undefined ? {} : { url: optionalString(input.url, "url", 8192)! }),
-    ...(input.ref === undefined ? {} : { ref: optionalRef(input.ref)! }),
+    ...(input.ref === undefined || input.ref === "" ? {} : { ref: optionalRef(input.ref)! }),
     ...(input.text === undefined ? {} : { text: optionalString(input.text, "text", 2_000)! }),
     ...(input.key === undefined ? {} : { key: optionalString(input.key, "key", 32)! }),
     ...(input.deltaY === undefined ? {} : { deltaY: optionalNumber(input.deltaY, "deltaY")! }),
@@ -170,11 +183,28 @@ function addresses(value: unknown, name: string) {
   })
 }
 
-// The handles observe gives, ref_1 to ref_9999.
+// The handles observe gives, ref_1 to ref_9999. A model may fill every optional field, so "" is no ref.
 function optionalRef(value: unknown) {
-  if (value === undefined) return
+  if (value === undefined || value === "") return
   if (typeof value !== "string" || !/^ref_\d{1,4}$/.test(value)) throw new Error("Invalid browser ref.")
   return value
+}
+
+// The handles listTabs gives, tab_1 to tab_9999.
+function optionalTab(value: unknown) {
+  if (value === undefined || value === "") return
+  if (typeof value !== "string" || !/^tab_\d{1,4}$/.test(value)) throw new Error("Invalid browser tab.")
+  return value
+}
+
+// selectOption's option values or labels: as many as a select offers the agent at once.
+function optionalValues(value: unknown) {
+  if (value === undefined) return
+  if (!Array.isArray(value) || value.length > 32) throw new Error("Invalid browser values.")
+  return value.map((item) => {
+    if (typeof item !== "string" || item.length > 1024) throw new Error("Invalid browser values.")
+    return item
+  })
 }
 
 function boundedString(value: unknown, name: string, max: number) {

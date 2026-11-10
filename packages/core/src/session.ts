@@ -33,8 +33,10 @@ import { LocationServiceMap } from "./location-service-map"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { SessionAudience } from "./session/audience"
 import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
+import { SessionAccounting } from "./session/accounting"
 import { Revert } from "@vectordevai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@vectordevai/schema/durable-event-manifest"
@@ -132,7 +134,7 @@ export interface Interface {
   readonly shareFlush: (sessionID: SessionSchema.ID) => Effect.Effect<PublicSession.Info, PublicSession.Error>
   readonly unshare: (sessionID: SessionSchema.ID) => Effect.Effect<void, PublicSession.Error>
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly create: (input: CreateInput, actor?: SessionAudience.Actor) => Effect.Effect<SessionSchema.Info>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -208,6 +210,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
     const db = database.db
     const events = yield* EventV2.Service
     const projects = yield* ProjectV2.Service
@@ -266,10 +269,11 @@ const layer = Layer.effect(
       sharePreview: (sessionID, options) => sharing.review({ sessionID, engine: "v2", ...options }),
       shareFlush: sharing.flush,
       unshare: sharing.unshare,
-      create: Effect.fn("V2Session.create")(function* (input) {
+      create: Effect.fn("V2Session.create")(function* (input, actor: SessionAudience.Actor = "owner") {
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
+        yield* audience.register({ sessionID, parentID: input.parentID, actor }).pipe(Effect.orDie)
         const project = yield* projects.resolve(input.location.directory)
         yield* db
           .insert(ProjectTable)
@@ -302,7 +306,14 @@ const layer = Layer.effect(
           time: { created: now, updated: now },
         })
         const projected = yield* events
-          .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
+          .publish(
+            SessionV1.Event.Created,
+            { sessionID, info },
+            {
+              location: input.location,
+              commit: (seq) => SessionAccounting.initializeEmpty(db, sessionID, seq),
+            },
+          )
           .pipe(
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {

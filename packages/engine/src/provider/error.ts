@@ -5,20 +5,15 @@ import type { ProviderV2 } from "@vectordevai/core/provider"
 import { isContextOverflow } from "@vectordevai/llm"
 import { FreeModelsLimitError } from "@vectordevai/schema/free-model"
 import { ModelPlans } from "@vectordevai/core/model-plans"
+import { ResponseStreamError } from "./response-stall"
+
+export { ResponseStreamError } from "./response-stall"
 
 export class HeaderTimeoutError extends Error {
   public override readonly name = "ProviderHeaderTimeoutError"
 
   constructor(public readonly ms: number) {
     super(`Provider response headers timed out after ${ms}ms`)
-  }
-}
-
-export class ResponseStreamError extends Error {
-  public override readonly name = "ProviderResponseStreamError"
-
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options)
   }
 }
 
@@ -198,8 +193,9 @@ export function parseAPICallError(input: { providerID: ProviderV2.ID; error: API
   }
 
   const failure = codium ? ModelPlans.gatewayFailure(input.error.statusCode, input.error.responseBody) : undefined
-  // Short capacity is temporary: retried like any busy provider, with no purchase prompt.
-  if (failure?.kind === "capacity")
+  // A temporary Codium answer (busy, renewing, waiting for the account's other requests, short capacity) is retried
+  // after its retry-after, with no purchase prompt.
+  if (failure?.retry)
     return {
       type: "api_error",
       message: failure.message,
@@ -209,7 +205,8 @@ export function parseAPICallError(input: { providerID: ProviderV2.ID; error: API
       responseBody: input.error.responseBody,
       metadata: { code: failure.code },
     }
-  // The app reads metadata.codium to offer the matching action, and retries skip these errors.
+  // Every other Codium answer is final (§4.10). The app reads metadata.codium to offer the matching action, and
+  // retries skip these errors.
   if (failure)
     return {
       type: "api_error",
@@ -217,7 +214,7 @@ export function parseAPICallError(input: { providerID: ProviderV2.ID; error: API
       statusCode: input.error.statusCode,
       isRetryable: false,
       responseBody: input.error.responseBody,
-      metadata: { codium: failure.kind, code: failure.code },
+      metadata: { codium: failure.action ?? "unavailable", kind: failure.kind, code: failure.code },
     }
   const metadata = input.error.url ? { url: input.error.url } : undefined
   return {

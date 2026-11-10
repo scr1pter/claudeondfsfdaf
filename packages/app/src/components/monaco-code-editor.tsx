@@ -20,7 +20,7 @@ export type InlineCompleteInput = {
   language: string
   cursorLine: number
 }
-export type InlineCompleteFn = (input: InlineCompleteInput) => Promise<string | undefined>
+export type InlineCompleteFn = (input: InlineCompleteInput, signal?: AbortSignal) => Promise<string | undefined>
 export type InlineEditSelection = {
   startOffset: number
   endOffset: number
@@ -100,6 +100,7 @@ let environmentReady = false
 // model, so we register ONE global provider and route each model's request to the
 // editor instance that owns it via this registry (keyed by model URI).
 const completionRegistry = new Map<string, InlineCompleteFn>()
+const completionRequests = new Map<string, AbortController>()
 const languageServiceRegistry = new Map<string, MonacoLanguageService>()
 let inlineProviderReady = false
 let languageProvidersReady = false
@@ -291,31 +292,45 @@ function ensureInlineProvider() {
     { pattern: "**" },
     {
       provideInlineCompletions: async (model, position, _context, token) => {
-        const complete = completionRegistry.get(model.uri.toString())
+        const uri = model.uri.toString()
+        const complete = completionRegistry.get(uri)
         if (!complete) return { items: [] }
-        // Debounce: only ask the model once the user pauses; bail if they kept typing.
-        await new Promise((resolve) => setTimeout(resolve, 400))
-        if (token.isCancellationRequested) return { items: [] }
-        const prefix = model.getValueInRange(new monaco.Range(1, 1, position.lineNumber, position.column))
-        const lastLine = model.getLineCount()
-        const suffix = model.getValueInRange(
-          new monaco.Range(position.lineNumber, position.column, lastLine, model.getLineMaxColumn(lastLine)),
-        )
-        const suggestion = await complete({
-          path: model.uri.fsPath,
-          prefix,
-          suffix,
-          language: model.getLanguageId(),
-          cursorLine: position.lineNumber,
-        }).catch(() => undefined)
-        if (!suggestion || token.isCancellationRequested) return { items: [] }
-        return {
-          items: [
+        completionRequests.get(uri)?.abort()
+        const controller = new AbortController()
+        completionRequests.set(uri, controller)
+        const cancellation = token.onCancellationRequested(() => controller.abort())
+        if (token.isCancellationRequested) controller.abort()
+        try {
+          // Debounce: only ask the model once the user pauses; keep cancellation connected during generation too.
+          await new Promise((resolve) => setTimeout(resolve, 400))
+          if (controller.signal.aborted) return { items: [] }
+          const prefix = model.getValueInRange(new monaco.Range(1, 1, position.lineNumber, position.column))
+          const lastLine = model.getLineCount()
+          const suffix = model.getValueInRange(
+            new monaco.Range(position.lineNumber, position.column, lastLine, model.getLineMaxColumn(lastLine)),
+          )
+          const suggestion = await complete(
             {
-              insertText: suggestion,
-              range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+              path: model.uri.fsPath,
+              prefix,
+              suffix,
+              language: model.getLanguageId(),
+              cursorLine: position.lineNumber,
             },
-          ],
+            controller.signal,
+          ).catch(() => undefined)
+          if (!suggestion || controller.signal.aborted) return { items: [] }
+          return {
+            items: [
+              {
+                insertText: suggestion,
+                range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+              },
+            ],
+          }
+        } finally {
+          cancellation.dispose()
+          if (completionRequests.get(uri) === controller) completionRequests.delete(uri)
         }
       },
       disposeInlineCompletions: () => {},
@@ -579,11 +594,17 @@ export function MonacoCodeEditor(props: {
   // Route this editor's model to props.inlineComplete (read lazily so it stays current).
   const syncCompletion = () => {
     const uri = editor?.getModel()?.uri.toString()
-    if (registeredUri && registeredUri !== uri) completionRegistry.delete(registeredUri)
+    if (registeredUri && registeredUri !== uri) {
+      completionRequests.get(registeredUri)?.abort()
+      completionRegistry.delete(registeredUri)
+    }
     registeredUri = uri
     if (!uri) return
-    if (props.inlineComplete) completionRegistry.set(uri, (input) => props.inlineComplete!(input))
-    else completionRegistry.delete(uri)
+    if (props.inlineComplete) completionRegistry.set(uri, (input, signal) => props.inlineComplete!(input, signal))
+    else {
+      completionRequests.get(uri)?.abort()
+      completionRegistry.delete(uri)
+    }
     if (props.languageService) languageServiceRegistry.set(uri, props.languageService)
     else languageServiceRegistry.delete(uri)
   }
@@ -669,6 +690,8 @@ export function MonacoCodeEditor(props: {
     // The user took the editor: land the rest of a replay at once.
     editor.onDidFocusEditorText(() => animation?.finish())
     editor.onDidChangeModelContent(() => {
+      const uri = editor?.getModel()?.uri.toString()
+      if (uri) completionRequests.get(uri)?.abort()
       if (applyingExternal) return
       props.onChange(editor!.getValue())
       scheduleDiagnostics()
@@ -691,6 +714,7 @@ export function MonacoCodeEditor(props: {
     syncCompletion()
     scheduleDiagnostics(0)
     onCleanup(() => {
+      if (registeredUri) completionRequests.get(registeredUri)?.abort()
       if (registeredUri) completionRegistry.delete(registeredUri)
       if (registeredUri) languageServiceRegistry.delete(registeredUri)
       if (diagnosticsTimer) clearTimeout(diagnosticsTimer)

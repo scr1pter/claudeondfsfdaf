@@ -16,6 +16,7 @@ import { Env } from "../env"
 import { applyEdits, modify, parse } from "jsonc-parser"
 import { InstallationLocal } from "@vectordevai/core/installation/version"
 import { existsSync, readFileSync, renameSync, watch, writeFileSync } from "fs"
+import { isMainThread } from "node:worker_threads"
 import { isRecord } from "@/util/record"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Redaction } from "@vectordevai/core/redaction"
@@ -31,6 +32,8 @@ import { ConfigPermissionV1 } from "@vectordevai/core/v1/config/permission"
 import { ConfigPluginV1 } from "@vectordevai/core/v1/config/plugin"
 import { ConfigAgent } from "./agent"
 import { ConfigCommand } from "./command"
+import { PromptTrust } from "./prompt-trust"
+import { PromptSource } from "@/session/prompt-source"
 import { ConfigManaged } from "@vectordevai/core/config/managed"
 import { ConfigParse } from "./parse"
 import { ConfigSchema } from "./schema"
@@ -79,8 +82,11 @@ function normalizeLoadedConfig(data: unknown) {
   return copy
 }
 
-function projectExecutableConfig(config: Info, trusted: boolean, base: Info): Info {
-  const next = { ...config }
+/** What a repository's config may set, given the merged config before it (`base`). Exported for tests. */
+export function projectExecutableConfig(config: Info, trusted: boolean, base: Info): Info {
+  // Subagent and workflow limits only narrow the user's, trusted or not. An untrusted repository's budget and sizing
+  // then collapse below.
+  const next = repositorySubagents(config, base)
   // A repository's own local block never applies, trusted or not: only the user's config and the company's policy
   // set Vector Local, so a cloned repository can neither loosen it nor turn it off.
   delete next.local
@@ -159,6 +165,91 @@ function projectExecutableConfig(config: Info, trusted: boolean, base: Info): In
     next.provider = Object.fromEntries(
       Object.entries(next.provider).filter(([, provider]) => projectProviderEndpointsAllowed(provider)),
     )
+  }
+  return next
+}
+
+// A repository's budget keys that are the user's alone: spend limits cover every repository together, so these are
+// dropped, with a notice once per file.
+export function ignoredSpendKeys(config: Info): string[] {
+  const subagents = config.budget?.subagents
+  return [
+    ...(config.budget?.run ? ["budget.run"] : []),
+    ...(["usd", "steps", "warnAt", "unpricedSteps"] as const)
+      .filter((key) => subagents?.[key] !== undefined)
+      .map((key) => `budget.subagents.${key}`),
+  ]
+}
+
+const lower = (repository: number | undefined, user: number | undefined, fallback?: number) =>
+  repository === undefined ? undefined : Math.min(repository, user ?? fallback ?? repository)
+
+const present = <T extends object>(value: T) => {
+  const kept = Object.fromEntries(Object.entries(value).filter((entry) => entry[1] !== undefined))
+  return Object.keys(kept).length ? (kept as T) : undefined
+}
+
+// What a repository's subagent and workflow keys may set, trusted or not (multi-agent contract 4.2): the counts and
+// every workflow ceiling only lower the user's value or the default, forks only turn off, models only narrow the user's
+// list, and ask_timeout only shortens the user's own. The subagents' shared spend ceiling and isolation are the user's
+// alone. Exported for tests.
+export function repositorySubagents(config: Info, base: Info): Info {
+  const next = { ...config }
+  if (next.budget?.subagents || next.budget?.workflow) {
+    const budget = { ...next.budget }
+    const user = base.budget
+    const repository = budget.subagents
+    const subagents = repository
+      ? present({
+          running: lower(repository.running, user?.subagents?.running, ConfigV1.SubagentDefaults.running),
+          per_request: lower(
+            repository.per_request,
+            user?.subagents?.per_request,
+            ConfigV1.SubagentDefaults.per_request,
+          ),
+        })
+      : undefined
+    const flow = budget.workflow
+    const defaults = ConfigV1.WorkflowDefaults
+    const maxAgents = user?.workflow?.max_agents ?? defaults.max_agents
+    const workflow = flow
+      ? present({
+          max_agents: lower(flow.max_agents, user?.workflow?.max_agents, defaults.max_agents),
+          concurrency: lower(flow.concurrency, user?.workflow?.concurrency, defaults.concurrency),
+          usd: lower(flow.usd, user?.workflow?.usd),
+          tokens: lower(flow.tokens, user?.workflow?.tokens),
+          steps: lower(flow.steps, user?.workflow?.steps, maxAgents * defaults.steps_per_agent),
+          per_agent_steps: lower(flow.per_agent_steps, user?.workflow?.per_agent_steps, defaults.per_agent_steps),
+          minutes: lower(flow.minutes, user?.workflow?.minutes, defaults.minutes),
+          runs: lower(flow.runs, user?.workflow?.runs, defaults.runs),
+        })
+      : undefined
+    if (subagents) budget.subagents = subagents
+    else delete budget.subagents
+    if (workflow) budget.workflow = workflow
+    else delete budget.workflow
+    if (Object.keys(budget).length) next.budget = budget
+    else delete next.budget
+  }
+  const repository = next.sizing?.subagents
+  if (repository) {
+    const sizing = { ...next.sizing }
+    const user = base.sizing?.subagents
+    const allowed = user?.models
+    const subagents = present({
+      fork: repository.fork === false ? (false as const) : undefined,
+      models: repository.models && allowed ? repository.models.filter((model) => allowed.includes(model)) : undefined,
+      ask_timeout:
+        repository.ask_timeout !== undefined &&
+        user?.ask_timeout !== undefined &&
+        repository.ask_timeout < user.ask_timeout
+          ? repository.ask_timeout
+          : undefined,
+    })
+    if (subagents) sizing.subagents = subagents
+    else delete sizing.subagents
+    if (Object.keys(sizing).length) next.sizing = sizing
+    else delete next.sizing
   }
   return next
 }
@@ -403,9 +494,12 @@ type State = {
   /** A repository's own local block was left out, which the Vector Local pane says. */
   repositoryLocal: boolean
   directories: string[]
+  loaded: Loaded
   configDirectory: string | undefined
   deps: Fiber.Fiber<void>[]
   trust: WorkspaceTrust.Snapshot
+  trustInputs: readonly string[]
+  trustInputWorkspace: string
   trusted: boolean
   trustedSnapshot: WorkspaceTrust.TrustedSnapshot | undefined
   ceiling: PermissionCeiling | undefined
@@ -417,6 +511,17 @@ type State = {
  * repository's avoid list narrows what research reads, but only these clear a host name from its outbound check.
  */
 export type ResearchDomains = { readonly prefer: readonly string[]; readonly avoid: readonly string[] }
+
+/**
+ * The config files and directories an instance loaded, spelled where they are on disk rather than where trust copied
+ * them: what the prompt guard counts as prompt sources (PromptSource).
+ */
+export type Loaded = {
+  /** The config files it loaded, or looked for in a config directory. */
+  readonly files: readonly string[]
+  /** The config directories it loaded agents, modes, commands, skills and plugins from. */
+  readonly directories: readonly string[]
+}
 
 export type TrustStatus = WorkspaceTrust.Status & {
   /**
@@ -445,10 +550,12 @@ export interface Interface {
   readonly storedMcp: (name: string) => Effect.Effect<Record<string, unknown>>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
+  readonly loaded: () => Effect.Effect<Loaded>
   readonly trustedPath: (path: string) => Effect.Effect<string | undefined>
   readonly waitForDependencies: () => Effect.Effect<void>
   readonly trust: () => Effect.Effect<TrustStatus>
   readonly approve: () => Effect.Effect<void>
+  readonly inheritTrust: (directory: string) => Effect.Effect<boolean>
   readonly permissionCeiling: () => Effect.Effect<PermissionCeiling | undefined>
   readonly researchDomains: () => Effect.Effect<ResearchDomains>
   /**
@@ -889,6 +996,45 @@ function announceHeldLocal() {
   localState.announced = pendingKey(pending)
   toastHeldLocal(pending)
 }
+
+// A global config file's prompt-bearing keys wait for the owner when they changed since the owner last approved them
+// (PromptTrust); the rest of the file, its providers and sign-ins included, still loads.
+// A prompt kept in a file its keys name with `{file:...}` counts as theirs: that file changed is held as well.
+function withheld(file: string, info: Info): Info {
+  if (PromptTrust.allowed(file) && PromptSource.references(file).every(PromptTrust.allowed)) return info
+  return PromptTrust.strip(info)
+}
+
+// The held prompt files each process has announced, so a reload does not say it again.
+const announcedPrompts = new Set<string>()
+
+/**
+ * Says once that prompt files outside the repository wait for the owner. A terminal gets one line on stderr; the
+ * terminal UI, whose server runs in a worker beside the screen, shows it as a toast instead; the desktop app shows its
+ * own banner from GET /config/prompt-trust.
+ */
+const announceHeldPrompts = Effect.fnUntraced(function* (held: readonly string[]) {
+  if (held.length === 0) return
+  yield* Effect.logWarning("holding prompt files that changed since the owner approved them", { count: held.length })
+  if (Flag.VECTOR_CLIENT === "desktop" || announcedPrompts.has(held.join("\0"))) return
+  announcedPrompts.add(held.join("\0"))
+  if (isMainThread) {
+    process.stderr.write(`${PromptTrust.notice(held.length)}\n`)
+    return
+  }
+  GlobalBus.emit("event", {
+    directory: "global",
+    payload: {
+      type: TuiEvent.ToastShow.type,
+      properties: {
+        title: "Prompt files held",
+        message: `${PromptTrust.notice(held.length)}.`,
+        variant: "warning",
+        duration: 15_000,
+      },
+    },
+  })
+})
 
 function toastHeldLocal(pending: LocalPending) {
   GlobalBus.emit("event", {
@@ -1634,9 +1780,14 @@ const layer = Layer.effect(
         }
       }
 
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "config.json"), env, true))
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "vector.json"), env))
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "vector.jsonc"), env))
+      for (const [name, preserve] of [
+        ["config.json", true],
+        ["vector.json", false],
+        ["vector.jsonc", false],
+      ] as const) {
+        const file = path.join(Global.Path.config, name)
+        result = mergeConfig(result, withheld(file, yield* loadFile(file, env, preserve)))
+      }
 
       // The user's own files as written, local block included: an update replaces a list, so adding a model server to
       // the user's list starts from this one, and the servers they listed have no per-token price. What Vector Local
@@ -1659,19 +1810,20 @@ const layer = Layer.effect(
       return yield* Effect.uninterruptible(cachedGlobal)
     })
 
-    // A repository's budget.run stopped applying when spend limits became one overall set. Say so once per repository
-    // file, so a cap someone relied on does not disappear silently, without repeating it on every load. Parallel agents
-    // and copies of a repository load it from new folders, so a file is remembered by the repository it belongs to
-    // (its remote or first commit, which worktrees and copies share) and its path inside it rather than by where it
-    // sits on disk. A folder without Git has no such identity; its copies share the file's content instead. Only the
-    // most recent files are remembered, so the list cannot grow without bound.
+    // A repository's budget.run stopped applying when spend limits became one overall set, and its subagent spend
+    // limits (budget.subagents usd, steps, warnAt, unpricedSteps) never apply. Say so once per repository
+    // file and key, so a cap someone relied on does not disappear silently, without repeating it on every load. Parallel
+    // agents and copies of a repository load it from new folders, so a file is remembered by the repository it belongs
+    // to (its remote or first commit, which worktrees and copies share) and its path inside it rather than by where it
+    // sits on disk, with each key it was named for. A folder without Git has no such identity; its copies share the
+    // file's content instead. Only the most recent entries are remembered, so the list cannot grow without bound.
     const noticeIgnoredRunBudgets = Effect.fn("Config.noticeIgnoredRunBudgets")(function* (
       workspace: string,
       repository: string,
-      sources: string[],
+      ignored: { source: string; keys: string[] }[],
     ) {
-      yield* Effect.logWarning("ignoring budget.run in repository config; spend limits cover every repository", {
-        sources,
+      yield* Effect.logWarning("ignoring spend limits in repository config; spend limits cover every repository", {
+        ignored,
       })
       const file = path.join(Global.Path.state, "ignored-repository-budgets.json")
       const noticed = yield* fs.readJson(file).pipe(
@@ -1680,20 +1832,25 @@ const layer = Layer.effect(
         ),
         Effect.orElseSucceed((): string[] => []),
       )
-      const entries = yield* Effect.forEach(sources, (source) =>
+      const entries = yield* Effect.forEach(ignored, ({ source, keys: dropped }) =>
         Effect.gen(function* () {
           const relative = path.relative(workspace, source) || source
-          if (repository !== "global") return { relative, key: `${repository}:${relative}` }
-          const content = (yield* fs.readFileStringSafe(source).pipe(Effect.orElseSucceed(() => undefined))) ?? ""
-          return {
-            relative,
-            key: `content:${createHash("sha256").update(`${relative}\n${content}`).digest("hex").slice(0, 32)}`,
+          if (repository !== "global") {
+            const id = `${repository}:${relative}`
+            // An entry without a key is from 1.99.111, which named budget.run alone.
+            const settings = dropped.filter(
+              (setting) => !noticed.includes(`${id}#${setting}`) && !(setting === "budget.run" && noticed.includes(id)),
+            )
+            return { relative, settings, keys: settings.map((setting) => `${id}#${setting}`) }
           }
+          const content = (yield* fs.readFileStringSafe(source).pipe(Effect.orElseSucceed(() => undefined))) ?? ""
+          const key = `content:${createHash("sha256").update(`${relative}\n${content}`).digest("hex").slice(0, 32)}`
+          return { relative, settings: noticed.includes(key) ? [] : dropped, keys: [key] }
         }),
       )
-      const fresh = entries.filter((entry) => !noticed.includes(entry.key))
+      const fresh = entries.filter((entry) => entry.settings.length > 0)
       if (!fresh.length) return
-      const keys = fresh.map((entry) => entry.key)
+      const keys = fresh.flatMap((entry) => entry.keys)
       yield* fs
         .writeWithDirs(
           file,
@@ -1701,16 +1858,18 @@ const layer = Layer.effect(
         )
         .pipe(Effect.ignore)
       const files = fresh.map((entry) => entry.relative).join(" and ")
+      const settings = [...new Set(fresh.flatMap((entry) => entry.settings))]
+      const named = settings.join(" and ")
       GlobalBus.emit("event", {
         directory: "global",
         payload: {
           type: TuiEvent.ToastShow.type,
           properties: {
             title: "Repository spend cap ignored",
-            message: `This repository's ${files} ${fresh.length === 1 ? "sets" : "set"} budget.run, which no longer applies: spend limits now cover all your repositories together. ${
+            message: `This repository's ${files} ${fresh.length === 1 ? "sets" : "set"} ${named}, which ${settings.length === 1 ? "does" : "do"} not apply from a repository: spend limits now cover all your repositories together. ${
               Flag.VECTOR_CLIENT === "desktop"
                 ? "Set your limits in Settings, under Spend limits."
-                : `Set budget.run in ${path.join(Global.Path.config, "vector.json")} instead, or pass --max-cost to vector run.`
+                : `Set ${named} in ${path.join(Global.Path.config, "vector.json")} instead${settings.includes("budget.run") ? ", or pass --max-cost to vector run" : ""}.`
             }`,
             variant: "warning",
             duration: 15_000,
@@ -1799,14 +1958,17 @@ const layer = Layer.effect(
           if (updated === normalized) return
           yield* fs.writeFileString(filepath, updated).pipe(Effect.catch(() => Effect.void))
         })
+        const trustInputs = [
+          ...projectFiles,
+          ...projectTuiFiles,
+          ...projectDirectories,
+          ...localAgentConfig,
+          ...(tuiConfig?.project ? [tuiConfig.path] : []),
+        ]
         const captureTrustSnapshot = () =>
-          WorkspaceTrust.snapshot(trustWorkspace, [
-            ...projectFiles,
-            ...projectTuiFiles,
-            ...projectDirectories,
-            ...localAgentConfig,
-            ...(tuiConfig?.project ? [tuiConfig.path] : []),
-          ]).catch((cause) => WorkspaceTrust.unavailableSnapshot(trustWorkspace, cause))
+          WorkspaceTrust.snapshot(trustWorkspace, trustInputs).catch((cause) =>
+            WorkspaceTrust.unavailableSnapshot(trustWorkspace, cause),
+          )
         const existingTrustSnapshot = yield* Effect.promise(captureTrustSnapshot)
         const snapshotFailure = WorkspaceTrust.unavailableReason(existingTrustSnapshot)
         if (snapshotFailure) {
@@ -1914,8 +2076,8 @@ const layer = Layer.effect(
         // config, never this one.
         let userResearch: Pick<Info, "research"> = {}
         let projectGrants = false
-        // Repository files whose budget.run was dropped, for the notice once loading ends.
-        const ignoredRunBudgets: string[] = []
+        // Repository files whose budget.run or subagent spend limits were dropped, for the notice once loading ends.
+        const ignoredRunBudgets: { source: string; keys: string[] }[] = []
 
         // Only Config.local() says what Vector Local is: it was resolved at start from the user's own config files and
         // the company's policy (refreshLocal), so no source's local block reaches the merged config. A repository's is
@@ -1943,7 +2105,8 @@ const layer = Layer.effect(
             ...kept,
           ]
           const next = dropped.length === 0 ? input : (omit(input, dropped as (keyof Info)[]) as Info)
-          if (projectSource && next.budget?.run) ignoredRunBudgets.push(source)
+          const spendKeys = projectSource ? ignoredSpendKeys(next) : []
+          if (spendKeys.length) ignoredRunBudgets.push({ source, keys: spendKeys })
           const safe = projectSource ? projectExecutableConfig(next, trusted, result) : next
           if (projectSource) projectGrants ||= grantsPermission(safe)
           // Only the keys a source sets: merging an undefined key would erase what an earlier user source declared,
@@ -2037,7 +2200,7 @@ const layer = Layer.effect(
         if (agentConfig) {
           const next = agentConfig.project
             ? yield* loadProjectFile(agentConfig.path, authEnv, !trusted)
-            : yield* loadFile(agentConfig.path, authEnv, true)
+            : withheld(agentConfig.path, yield* loadFile(agentConfig.path, authEnv, true))
           yield* merge(agentConfig.path, next, agentConfig.project ? "local" : "global")
           yield* Effect.logDebug("loaded custom config", { path: agentConfig.path })
         }
@@ -2076,7 +2239,9 @@ const layer = Layer.effect(
             for (const file of ["vector.json", "vector.jsonc", ...LOCAL_CONFIG_FILES]) {
               const source = path.join(dir, file)
               yield* Effect.logDebug(`loading config from ${source}`)
-              const next = local ? yield* loadProjectFile(source, authEnv, !trusted) : yield* loadFile(source, authEnv)
+              const next = local
+                ? yield* loadProjectFile(source, authEnv, !trusted)
+                : withheld(source, yield* loadFile(source, authEnv))
               yield* merge(source, next)
               result.agent ??= {}
               result.mode ??= {}
@@ -2100,11 +2265,15 @@ const layer = Layer.effect(
           if (!locked.includes("command"))
             result.command = mergeDeep(
               result.command ?? {},
-              yield* Effect.promise(() => ConfigCommand.load(runtimeDir)),
+              yield* Effect.promise(() => ConfigCommand.load(runtimeDir, PromptTrust.allowed)),
             )
           const agents = mergeDeep(
-            locked.includes("agent") ? {} : yield* Effect.promise(() => ConfigAgent.load(runtimeDir)),
-            locked.includes("mode") ? {} : yield* Effect.promise(() => ConfigAgent.loadMode(runtimeDir)),
+            locked.includes("agent")
+              ? {}
+              : yield* Effect.promise(() => ConfigAgent.load(runtimeDir, PromptTrust.allowed)),
+            locked.includes("mode")
+              ? {}
+              : yield* Effect.promise(() => ConfigAgent.loadMode(runtimeDir, PromptTrust.allowed)),
           )
           if (local) projectGrants ||= grantsPermission({ agent: agents })
           else userPermissions = mergeConfigConcatArrays(userPermissions, { agent: agents })
@@ -2112,7 +2281,10 @@ const layer = Layer.effect(
           // Auto-discovered plugins under `.vector/plugin(s)` are already local files, so ConfigPlugin.load
           // returns normalized Specs and we only need to attach origin metadata here.
           if (!locked.includes("plugin"))
-            yield* mergePluginOrigins(dir, yield* Effect.promise(() => ConfigPlugin.load(runtimeDir)))
+            yield* mergePluginOrigins(
+              dir,
+              yield* Effect.promise(() => ConfigPlugin.load(runtimeDir, PromptTrust.allowed)),
+            )
         }
 
         if (!Flag.VECTOR_DISABLE_PROJECT_CONFIG) {
@@ -2240,16 +2412,50 @@ const layer = Layer.effect(
           })
         }
 
+        // What the prompt guard counts: the files and directories loaded for prompts and permissions, which an
+        // untrusted repository's are not. The hold records any root it has not seen and says what it holds.
+        const loadedDirectories = allDirectories.filter((directory) => !projectContains(directory) || trusted)
+        const loaded = {
+          files: [
+            ...["config.json", "vector.json", "vector.jsonc"].map((file) => path.join(Global.Path.config, file)),
+            ...(agentConfig && (!agentConfig.project || trusted) ? [agentConfig.path] : []),
+            ...(trusted ? projectFiles : []),
+            ...loadedDirectories
+              .filter((dir) => dir.endsWith(".vector") || dir === agentConfigDir?.path)
+              .flatMap((dir) =>
+                ["vector.json", "vector.jsonc", ...LOCAL_CONFIG_FILES].map((file) => path.join(dir, file)),
+              ),
+          ],
+          directories: loadedDirectories,
+        }
+        const prompts = PromptTrust.scope(
+          PromptSource.build({
+            ...loaded,
+            skills: result.skills?.paths ?? [],
+            instructions: result.instructions ?? [],
+            home: Global.Path.home,
+            config: Global.make().config,
+            directory: ctx.directory,
+            worktree: ctx.worktree,
+          }),
+          ctx,
+        )
+        yield* PromptTrust.record(prompts)
+        yield* announceHeldPrompts(yield* PromptTrust.held(prompts))
+
         return {
           config: result,
           repositoryLocal,
           directories,
+          loaded,
           configDirectory:
             agentConfigDir?.project && trustedSnapshot
               ? WorkspaceTrust.materializedPath(trustedSnapshot, agentConfigDir.path)
               : agentConfigDir?.path,
           deps,
           trust: trustSnapshot,
+          trustInputs,
+          trustInputWorkspace: trustWorkspace,
           trusted,
           trustedSnapshot,
           ceiling:
@@ -2285,6 +2491,10 @@ const layer = Layer.effect(
 
     const directories = Effect.fn("Config.directories")(function* () {
       return yield* InstanceState.use(state, (s) => s.directories)
+    })
+
+    const loaded = Effect.fn("Config.loaded")(function* () {
+      return yield* InstanceState.use(state, (s) => s.loaded)
     })
 
     const waitForDependencies = Effect.fn("Config.waitForDependencies")(function* () {
@@ -2333,6 +2543,29 @@ const layer = Layer.effect(
     const approve = Effect.fn("Config.approve")(function* () {
       yield* InstanceState.useEffect(state, (s) =>
         Effect.promise(() => WorkspaceTrust.approve(Global.Path.state, s.trust)),
+      )
+    })
+
+    const inheritTrust = Effect.fn("Config.inheritTrust")(function* (directory: string) {
+      return yield* InstanceState.useEffect(state, (s) =>
+        Effect.tryPromise({
+          try: async () => {
+            if (!s.trusted || Flag.VECTOR_PURE) return false
+            // loaded() omits TUI settings and declined inputs; inheritance must compare the exact capture inputs.
+            const inputs = s.trustInputs.map((input) => {
+              if (FSUtil.contains(s.trustInputWorkspace, input)) {
+                return path.join(directory, path.relative(s.trustInputWorkspace, input))
+              }
+              if (FSUtil.contains(s.trust.workspace, input)) {
+                return path.join(directory, path.relative(s.trust.workspace, input))
+              }
+              return input
+            })
+            const child = await WorkspaceTrust.snapshot(directory, inputs)
+            return WorkspaceTrust.inherit(Global.Path.state, s.trust, child)
+          },
+          catch: (cause) => cause,
+        }).pipe(Effect.orElseSucceed(() => false)),
       )
     })
 
@@ -2493,10 +2726,12 @@ const layer = Layer.effect(
       storedMcp,
       invalidate,
       directories,
+      loaded,
       waitForDependencies,
       trust,
       trustedPath,
       approve,
+      inheritTrust,
       permissionCeiling,
       researchDomains,
       localPolicy,

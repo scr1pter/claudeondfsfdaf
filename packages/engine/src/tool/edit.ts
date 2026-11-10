@@ -4,7 +4,7 @@
 // https://github.com/cline/cline/blob/main/evals/diff-edits/diff-apply/diff-06-26-25.ts
 
 import * as path from "path"
-import { Effect, Schema, Semaphore } from "effect"
+import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
 import { createTwoFilesPatch, diffLines } from "diff"
@@ -17,6 +17,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { assertOwnedPath } from "./owned-path"
+import { FileLock } from "./file-lock"
+import { FileState } from "./file-state"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import * as Bom from "@/util/bom"
 import { Instruction } from "../session/instruction"
@@ -33,18 +35,6 @@ function detectLineEnding(text: string): "\n" | "\r\n" {
 function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   if (ending === "\n") return text
   return text.replaceAll("\n", "\r\n")
-}
-
-const locks = new Map<string, Semaphore.Semaphore>()
-
-function lock(filePath: string) {
-  const resolvedFilePath = FSUtil.resolve(filePath)
-  const hit = locks.get(resolvedFilePath)
-  if (hit) return hit
-
-  const next = Semaphore.makeUnsafe(1)
-  locks.set(resolvedFilePath, next)
-  return next
 }
 
 export const Parameters = Schema.Struct({
@@ -87,105 +77,95 @@ export const EditTool = Tool.define(
           yield* assertExternalDirectoryEffect(ctx, filePath)
           yield* assertOwnedPath(ctx, filePath)
 
-          let diff = ""
-          let contentOld = ""
-          let contentNew = ""
-          yield* lock(filePath).withPermits(1)(
+          const empty =
+            "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement."
+          const creating = params.oldString === ""
+          // The change on the file's text as it is: worked out again when the file changed during the ask.
+          const derive = (current: FileState.Observed | undefined) => {
+            if (creating) {
+              const next = Bom.split(params.newString)
+              return { contentOld: "", contentNew: next.text, bom: next.bom }
+            }
+            const source = Bom.decode(current!.bytes)
+            const ending = detectLineEnding(source.text)
+            const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
+            const replacement = convertToLineEnding(normalizeLineEndings(params.newString), ending)
+            const next = Bom.split(replace(source.text, old, replacement, params.replaceAll))
+            return { contentOld: source.text, contentNew: next.text, bom: source.bom || next.bom }
+          }
+          const patch = (from: string, to: string) =>
+            trimDiff(createTwoFilesPatch(filePath, filePath, normalizeLineEndings(from), normalizeLineEndings(to)))
+
+          let before: FileState.Observed | undefined
+          if (creating) {
+            if (yield* afs.existsSafe(filePath)) throw new Error(empty)
+          } else {
+            const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+            if (!info) throw new Error(`File ${filePath} not found`)
+            if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
+            before = yield* FileState.observe(filePath)
+            if (!before) throw new Error(`File ${filePath} not found`)
+          }
+          const check = (now: FileState.Observed | undefined) =>
+            FileState.verify({
+              sessionID: ctx.sessionID,
+              file: filePath,
+              now: now?.stamp,
+              kind: creating ? "create" : "update",
+              messages: ctx.messages,
+              tool: "edit",
+              inFamily: ctx.inFamily,
+            })
+          yield* check(before)
+
+          let change = derive(before)
+          let diff = patch(change.contentOld, change.contentNew)
+          yield* ctx.ask({
+            permission: "edit",
+            patterns: [path.relative(instance.worktree, filePath)],
+            always: ["*"],
+            metadata: {
+              filepath: filePath,
+              diff,
+            },
+          })
+
+          // Never held across the ask. Inside it the file is read again: this session's own change since (a parallel
+          // edit in the same step) passes and the edit is applied to the new text; anyone else's is refused.
+          const { contentOld, contentNew, fileState } = yield* FileLock.withFiles([filePath])(
             Effect.gen(function* () {
-              if (params.oldString === "") {
-                const existed = yield* afs.existsSafe(filePath)
-                if (existed) {
-                  throw new Error(
-                    "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
-                  )
-                }
-                const next = Bom.split(params.newString)
-                const desiredBom = next.bom
-                contentOld = ""
-                contentNew = next.text
-                diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
-                yield* ctx.ask({
-                  permission: "edit",
-                  patterns: [path.relative(instance.worktree, filePath)],
-                  always: ["*"],
-                  metadata: {
-                    filepath: filePath,
-                    diff,
-                  },
-                })
-                yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
-                if (yield* format.file(filePath)) {
-                  contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
-                }
-                yield* events.publish(FileSystem.Event.Edited, {
-                  file: filePath,
-                  sessionID: ctx.sessionID,
-                  agent: ctx.agent,
-                  messageID: ctx.messageID,
-                })
-                yield* events.publish(Watcher.Event.Updated, {
-                  file: filePath,
-                  event: "add",
-                })
-                return
+              const current = yield* FileState.observe(filePath)
+              if (!FileState.same(current?.stamp, before?.stamp)) {
+                if (creating && current) throw new Error(empty)
+                if (!creating && !current) throw new Error(`File ${filePath} not found`)
+                yield* check(current)
+                change = derive(current)
               }
-
-              const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
-              if (!info) throw new Error(`File ${filePath} not found`)
-              if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
-              const source = yield* Bom.readFile(afs, filePath)
-              contentOld = source.text
-
-              const ending = detectLineEnding(contentOld)
-              const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
-              const replacement = convertToLineEnding(normalizeLineEndings(params.newString), ending)
-
-              const next = Bom.split(replace(contentOld, old, replacement, params.replaceAll))
-              const desiredBom = source.bom || next.bom
-              contentNew = next.text
-
-              diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
-                ),
-              )
-              yield* ctx.ask({
-                permission: "edit",
-                patterns: [path.relative(instance.worktree, filePath)],
-                always: ["*"],
-                metadata: {
-                  filepath: filePath,
-                  diff,
-                },
-              })
-
-              yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
+              if (ctx.assertWritable) yield* ctx.assertWritable({ files: [filePath] })
+              yield* FileLock.write(afs, filePath, Bom.join(change.contentNew, change.bom))
+              let written = change.contentNew
               if (yield* format.file(filePath)) {
-                contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
+                written = yield* Bom.syncFile(afs, filePath, change.bom)
               }
+              const fileState = yield* FileState.commit({
+                sessionID: ctx.sessionID,
+                file: filePath,
+                title: typeof ctx.extra?.subagentTitle === "string" ? ctx.extra.subagentTitle : undefined,
+              })
               yield* events.publish(FileSystem.Event.Edited, {
-                  file: filePath,
-                  sessionID: ctx.sessionID,
-                  agent: ctx.agent,
-                  messageID: ctx.messageID,
-                })
+                file: filePath,
+                sessionID: ctx.sessionID,
+                agent: ctx.agent,
+                messageID: ctx.messageID,
+              })
               yield* events.publish(Watcher.Event.Updated, {
                 file: filePath,
-                event: "change",
+                event: creating ? "add" : "change",
               })
-              diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
-                ),
-              )
-            }).pipe(Effect.orDie),
+              return { contentOld: change.contentOld, contentNew: written, fileState }
+            }),
           )
+          diff = patch(contentOld, contentNew)
 
           let additions = 0
           let deletions = 0
@@ -222,12 +202,13 @@ export const EditTool = Tool.define(
               diagnostics,
               diff,
               filediff,
+              fileState,
               ...(guarded.links.length ? { [Instruction.LINKS]: guarded.links } : {}),
             },
             title: `${path.relative(instance.worktree, filePath)}`,
             output,
           }
-        }),
+        }).pipe(Effect.orDie),
     }
   }),
 )
@@ -731,7 +712,9 @@ export function replace(content: string, oldString: string, newString: string, r
     const matches = [...spans].map((span) => ({ span, count: content.split(span).length - 1 }))
     const total = matches.reduce((sum, match) => sum + match.count, 0)
     if (total > 1 && !replaceAll) {
-      throw new Error("Found multiple matches for oldString. Provide more surrounding context to make the match unique.")
+      throw new Error(
+        "Found multiple matches for oldString. Provide more surrounding context to make the match unique.",
+      )
     }
 
     // A fuzzy replacer hands back a span taken from the file, which can cover

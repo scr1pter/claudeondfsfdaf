@@ -1,6 +1,7 @@
-import { batch, createMemo, onCleanup, onMount, type Accessor } from "solid-js"
+import { batch, createEffect, createMemo, on, onCleanup, onMount, type Accessor } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
+import type { TerminalReveal } from "@/context/terminal"
 import { same } from "@/utils/same"
 
 const emptyTabs: string[] = []
@@ -119,6 +120,43 @@ const skip = new Set(["Alt", "Control", "Meta", "Shift"])
 export const shouldFocusTerminalOnKeyDown = (event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey">) => {
   if (skip.has(event.key)) return false
   return !(event.ctrlKey || event.metaKey || event.altKey)
+}
+
+/** The active terminal tab that typing outside any field may move into: never an agent's, where a stray keystroke
+    would reach the agent's program. */
+export const typingTerminal = (tabs: readonly { id: string; agent?: string }[], active: string | undefined) => {
+  const tab = tabs.find((pty) => pty.id === active)
+  return tab?.agent === undefined ? tab?.id : undefined
+}
+
+/** Follows an agent's requests to show a terminal. Each new reveal opens the panel. One without focus leaves its tab
+    quiet, the returned id: neither the panel nor the terminal takes the keyboard focus for it until another tab is
+    active or the panel closes, so the user's focus stays where it was. */
+export const createTerminalReveal = (input: {
+  revealed: Accessor<TerminalReveal | undefined>
+  active: Accessor<string | undefined>
+  opened: Accessor<boolean>
+  open: (revealed: TerminalReveal) => void
+}) => {
+  createEffect(
+    on(
+      input.revealed,
+      (revealed) => {
+        if (revealed) input.open(revealed)
+      },
+      { defer: true },
+    ),
+  )
+  return createMemo(
+    on(
+      [input.revealed, input.active, input.opened],
+      ([revealed, active, opened], previous, quiet: string | undefined) => {
+        if (revealed !== previous?.[0]) return revealed && !revealed.focus ? revealed.id : undefined
+        if (!opened) return undefined
+        return quiet === active ? quiet : undefined
+      },
+    ),
+  )
 }
 
 export const createOpenReviewFile = (input: {

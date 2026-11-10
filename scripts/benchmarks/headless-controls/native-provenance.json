@@ -1,0 +1,132 @@
+{
+  "kind": "headless-instrument-provenance-v1",
+  "fromRevision": "367660e67ddd25c9f5b06e6ee150e2b55ec906e8",
+  "fromDirectory": "scripts/benchmarks/matched-agentic-round-two",
+  "toDirectory": "scripts/benchmarks/matched-headless-stage",
+  "identicalPythonFilesIgnoringOnlyLineEndings": [
+    "codex_alias_probe.py",
+    "codex_free_probe.py",
+    "heavy_adapter_smoke.py",
+    "heavy_codex_alias_probe.py",
+    "heavy_runner.py",
+    "native_pair_smoke.py",
+    "native_registry.py",
+    "native_team_policy.py",
+    "role_graph.py",
+    "test_additional_funding.py",
+    "test_cancellation_observations.py",
+    "test_free_probe.py",
+    "test_heavy_funding_profile.py",
+    "test_heavy_role_graph.py",
+    "test_heavy_runner.py",
+    "test_owned_witness.py",
+    "test_transcript_paths.py",
+    "vector_free_probe.py"
+  ],
+  "changedPythonFiles": [
+    "funding_profiles.py",
+    "owned_team_witness.py",
+    "paired_runner.py",
+    "test_paired_runner.py"
+  ],
+  "definitionComparison": {
+    "funding_profiles.py": {
+      "unchangedTopLevelDefinitions": [
+        "FundingProfile"
+      ],
+      "changedTopLevelDefinitions": [
+        "funding_policy"
+      ],
+      "addedTopLevelDefinitions": []
+    },
+    "owned_team_witness.py": {
+      "unchangedTopLevelDefinitions": [
+        "digest",
+        "known",
+        "additional_healthy",
+        "Audit",
+        "generation_pins",
+        "profile_body",
+        "reservation_bound",
+        "terminal_problem",
+        "known_length_incomplete",
+        "known_completed_usage",
+        "QueuedClientCancelled",
+        "OwnedArm",
+        "WitnessServer",
+        "unique_object",
+        "Handler"
+      ],
+      "changedTopLevelDefinitions": [
+        "financial_headroom",
+        "healthy",
+        "OwnedSupervisor"
+      ],
+      "addedTopLevelDefinitions": [
+        "carry_healthy"
+      ]
+    },
+    "paired_runner.py": {
+      "unchangedTopLevelDefinitions": [
+        "common_helpers",
+        "preserved_history",
+        "affordability",
+        "checked_path",
+        "build_plan",
+        "reviewed",
+        "gate_report",
+        "settled_invocation_state",
+        "coordinate_team_arm",
+        "run_pair",
+        "FreshOwnedRegistry",
+        "team_environment",
+        "native_command",
+        "timestamp",
+        "native_turn_chronology",
+        "native_command_text",
+        "normalize_transcript",
+        "execute_owned",
+        "parser",
+        "main"
+      ],
+      "changedTopLevelDefinitions": [
+        "validate_task_commands",
+        "audit_descendants",
+        "NativeAdapter"
+      ],
+      "addedTopLevelDefinitions": []
+    },
+    "test_paired_runner.py": {
+      "unchangedTopLevelDefinitions": [
+        "Meter",
+        "Registry",
+        "evaluation",
+        "Adapter"
+      ],
+      "changedTopLevelDefinitions": [
+        "PairedRunnerTests"
+      ],
+      "addedTopLevelDefinitions": []
+    }
+  },
+  "methodologyChanges": [
+    "Conservative funding status and both held unknowns; no extra allowance",
+    "Headless API/CLI/SDK final native verification; UI default preserved",
+    "Explicit offline compiler binding and no-install setup command",
+    "Same trusted rg/git paths in both isolated native environments",
+    "Canonical LF source publication; model/roles/transport/tool generation unchanged"
+  ],
+  "allActualNativeAndWireFunctionsUnchanged": [
+    "team_environment",
+    "native_command",
+    "execute_owned",
+    "normalize_transcript",
+    "native_turn_chronology",
+    "terminal_problem",
+    "known_length_incomplete",
+    "known_completed_usage",
+    "WitnessServer",
+    "OwnedArm"
+  ],
+  "allProviderCallsInQualificationFake": true
+}

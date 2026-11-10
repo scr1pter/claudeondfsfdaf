@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import {
   FREE_MODEL_TRAINING_LABEL,
   FREE_MODEL_TRAINING_REFUSED_TERMINAL,
@@ -16,6 +17,7 @@ import { Effect } from "effect"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { ModelPlans } from "@vectordevai/core/model-plans"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -101,9 +103,7 @@ export const ModelsCommand = effectCmd({
 
     const codium = providers[ProviderV2.ID.make(ModelPlans.PROVIDER_ID)]
     if (codium && (!args.provider || args.provider === ModelPlans.PROVIDER_ID))
-      UI.println(
-        `${ModelPlans.PROVIDER_NAME}: ${Object.keys(codium.models).length} models paid with Codium credits (${ModelPlans.PROVIDER_ID}/…). Run "vector codium" for your balance.`,
-      )
+      codiumLines(Object.values(codium.models)).forEach((line) => UI.println(line))
 
     const print = (providerID: ProviderV2.ID, verbose?: boolean) => {
       const p = providers[providerID]
@@ -112,7 +112,7 @@ export const ModelsCommand = effectCmd({
         process.stdout.write(`${providerID}/${modelID}`)
         process.stdout.write(EOL)
         if (verbose) {
-          process.stdout.write(JSON.stringify(model, null, 2))
+          process.stdout.write(JSON.stringify(modelForOutput(providerID, model), null, 2))
           process.stdout.write(EOL)
         }
       }
@@ -130,3 +130,31 @@ export const ModelsCommand = effectCmd({
     for (const providerID of ids) print(ProviderV2.ID.make(providerID), args.verbose)
   }),
 })
+
+/**
+ * What `vector models` says about Vector Codium, on stderr beside the selectors: how many models the plan includes,
+ * Codium Auto when the plan has it, and the models a higher plan includes, by name and plan only. Never a price, credits
+ * or an amount.
+ */
+export function codiumLines(models: readonly { id: string; name: string; codium?: ModelPlanStatus.Listing }[]) {
+  const included = models.filter((model) => !ModelPlanStatus.isAuto(model) && !ModelPlanStatus.isLocked(model))
+  const auto = models.find(ModelPlanStatus.isAuto)
+  const locked = models.flatMap((model) =>
+    model.codium?.locked ? [`${model.name} (${model.codium.locked.name})`] : [],
+  )
+  return [
+    `${ModelPlans.PROVIDER_NAME}: ${included.length} ${included.length === 1 ? "model" : "models"} included in your plan (${ModelPlans.PROVIDER_ID}/…). Run "vector codium" for your plan and usage.`,
+    ...(auto ? [`  Codium Auto picks a model for each message (${ModelPlans.PROVIDER_ID}/${auto.id})`] : []),
+    ...(locked.length
+      ? [`  Locked: ${locked.join(", ")}. Change plan to use them: ${ModelPlanStatus.MANAGE_URL}`]
+      : []),
+  ]
+}
+
+/** Model selectors and capabilities stay public; Codium's zero internal rates are not a price. */
+export function modelForOutput<T extends { cost: unknown }>(providerID: string, model: T) {
+  if (!Billing.isCodium(providerID)) return model
+  const result: Partial<T> & { billing?: "codium" } = { ...model, billing: "codium" }
+  delete result.cost
+  return result
+}

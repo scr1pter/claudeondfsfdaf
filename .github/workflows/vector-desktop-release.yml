@@ -170,12 +170,14 @@ jobs:
       - name: Require the access re-ask caveat after a measured helper change
         env:
           TAG: ${{ env.RELEASE_TAG }}
+          REQUESTED_UNSIGNED: ${{ inputs.allow_unsigned || false }}
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
         run: |
           set -euo pipefail
           changed=false
           previous=$(git describe --tags --match 'v[0-9]*' --abbrev=0 HEAD^ 2>/dev/null || true)
           if [ -z "$previous" ] || ! git diff --quiet "$previous" HEAD -- packages/desktop/native/computer-helper/macos/identity.lock.json; then changed=true; fi
-          bun --no-env-file packages/desktop/scripts/release-caveat.ts --tag "$TAG" --lock-changed "$changed"
+          bun --no-env-file packages/desktop/scripts/release-caveat.ts --tag "$TAG" --lock-changed "$changed" --hands-preview "$RELEASE_DRY_RUN"
 
       - name: Resolve the release signing policy
         id: release-policy

@@ -11,6 +11,7 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalStartup } from "@vectordevai/core/local-mode/startup"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
+import { holdDebugger } from "./debugger-hold"
 import { createEgressFilter } from "./egress-filter"
 import { VECTOR_DOWNLOADS } from "./update-feed"
 import { companyCertificates, trustCompanyCertificates } from "./local-certificates"
@@ -339,7 +340,7 @@ describe("Chromium under Vector Local", () => {
         isAttached: () => state.attached,
         sendCommand: async (method: string, params?: Record<string, unknown>, session?: string) => {
           sent.push({ method, ...(params ? { params } : {}), ...(session ? { session } : {}) })
-          return {}
+          return method === "Page.addScriptToEvaluateOnNewDocument" ? { identifier: "script-1" } : {}
         },
         on: (_name: string, listener: (event: unknown, method: string, params: unknown) => void) =>
           void listeners.add(listener),
@@ -413,6 +414,29 @@ describe("Chromium under Vector Local", () => {
     expect(tab.sent.find((item) => item.session === "worker-1")!.params!.expression).toBe(script.source)
     stop()
     expect([tab.state.attached, tab.listeners.size]).toEqual([false, 0])
+  })
+
+  test("shares the debugger with the tab's own file chooser hold, and stopping takes back only what it set", async () => {
+    const tab = debuggee({ url: "http://localhost:5173/" })
+    // The agent browser holds the tab's debugger for its file choosers first.
+    const chooser = holdDebugger(tab.contents.debugger as never)!
+    expect(tab.state.attached).toBe(true)
+    const stop = guardAgentContents(tab.contents as never)!
+    await settle()
+    expect(tab.sent.map((item) => item.method)).toContain("Page.addScriptToEvaluateOnNewDocument")
+    tab.sent.splice(0)
+    stop()
+    await settle()
+    // Still attached for the tab, without the guard's script or its hold on new frames and workers.
+    expect(tab.state.attached).toBe(true)
+    expect(tab.listeners.size).toBe(0)
+    expect(tab.sent).toEqual([
+      { method: "Page.removeScriptToEvaluateOnNewDocument", params: { identifier: "script-1" } },
+      { method: "Target.setAutoAttach", params: { autoAttach: false, waitForDebuggerOnStart: false, flatten: true } },
+    ])
+    // The last hold to go detaches.
+    expect(chooser()).toBe(true)
+    expect(tab.state.attached).toBe(false)
   })
 
   test("guards a page already open at once, and leaves the preload alone when the debugger cannot attach", async () => {

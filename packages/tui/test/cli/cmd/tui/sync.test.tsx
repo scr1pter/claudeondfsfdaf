@@ -55,6 +55,61 @@ describe("tui sync", () => {
     }
   })
 
+  // I30: every capability flag is synced, and a missing flag or an answer that is not a JSON object reads as false.
+  test("bootstrap syncs every capability flag and reads an HTML answer as unsupported", async () => {
+    const flags = {
+      backgroundSubagents: true,
+      workDelegation: true,
+      subagentLimits: true,
+      sessionStop: true,
+      taskPromote: true,
+      taskResume: true,
+      taskAttention: true,
+      taskIsolation: true,
+      workflows: true,
+      backgroundShells: true,
+    }
+    {
+      await using tmp = await tmpdir()
+      await Bun.write(`${tmp.path}/kv.json`, "{}")
+      const { app, sync } = await mount((url) => {
+        if (url.pathname === "/experimental/capabilities")
+          return json({ ...flags, taskPromote: false, workflows: "yes" })
+      }, tmp.path)
+      try {
+        expect(sync.data.capabilities).toEqual({
+          experimentalBackgroundSubagents: true,
+          workDelegation: true,
+          subagentLimits: true,
+          sessionStop: true,
+          taskPromote: false,
+          taskResume: true,
+          taskAttention: true,
+          taskIsolation: true,
+          workflows: false,
+          backgroundShells: true,
+        })
+      } finally {
+        app.renderer.destroy()
+      }
+    }
+    {
+      await using tmp = await tmpdir()
+      await Bun.write(`${tmp.path}/kv.json`, "{}")
+      const { app, sync } = await mount((url) => {
+        if (url.pathname === "/experimental/capabilities")
+          return new Response("<!doctype html><html><body>proxy</body></html>", {
+            headers: { "content-type": "text/html" },
+          })
+      }, tmp.path)
+      try {
+        expect(Object.values(sync.data.capabilities).every((value) => value === false)).toBe(true)
+      } finally {
+        app.renderer.destroy()
+      }
+    }
+  })
+
   test("reading the providers again lists Vector Codium once a slow first catalog read answers", async () => {
     await using tmp = await tmpdir()
     await Bun.write(`${tmp.path}/kv.json`, "{}")

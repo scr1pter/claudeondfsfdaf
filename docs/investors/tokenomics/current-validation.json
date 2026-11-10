@@ -1,0 +1,23 @@
+{
+  "kind": "investor-brief-render-validation-v2",
+  "date": "2026-11-04",
+  "status": "verified-four-pages-awaiting-additional-study",
+  "pages": 4,
+  "pageSizePoints": [
+    612,
+    792
+  ],
+  "renderDpi": 100,
+  "allPagesVisuallyInspectedByRoot": true,
+  "visibleClippingOrOverlapObserved": false,
+  "qualityClaimTestsPassed": 8,
+  "newPaidSavingsClaim": false,
+  "compactionBaselineFailFixedPass": 8,
+  "compactionBroadTestsPassed": 281,
+  "countsAcrossSuitesNotAdded": true,
+  "documentBuildModelCalls": 0,
+  "PDFsha256": "8716b16362db00704e6d52926ea160bb5a06faedd23f8dd7cc4b1ec6e0c35ba2",
+  "dataSha256": "5f8ef88c95dff8ac295e4b567053565165284ed7a28f88a03a058a0fd84b3923",
+  "builderSha256": "f37dd9c7d1f4f4eb8d05b0b87b71209b1b59b40a007d7413a340ee78a7bf5cf4",
+  "finalNotYetDelivered": true
+}

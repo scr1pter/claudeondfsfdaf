@@ -143,8 +143,22 @@ export function SortableTerminalTab(props: { terminal: LocalPTY; onClose?: () =>
             />
           }
         >
-          <span onDblClick={edit} classList={{ invisible: store.editing }}>
+          <span onDblClick={edit} class="flex items-center gap-1.5" classList={{ invisible: store.editing }}>
+            <Show when={props.terminal.agent}>
+              <span class="flex shrink-0 text-icon-weak" title={language.t("terminal.agent")}>
+                <Icon name="task" size="small" />
+                <span class="sr-only">{language.t("terminal.agent")}</span>
+              </span>
+            </Show>
             {label()}
+            <Show when={props.terminal.exitCode !== undefined}>
+              <span class="text-text-weak">
+                {language.t("terminal.exited", { code: String(props.terminal.exitCode) })}
+              </span>
+            </Show>
+            <Show when={props.terminal.exitCode === undefined && props.terminal.gone}>
+              <span class="text-text-weak">{language.t("terminal.ended")}</span>
+            </Show>
           </span>
         </Tabs.Trigger>
         <Show when={store.editing}>

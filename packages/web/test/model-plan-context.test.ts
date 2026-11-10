@@ -13,8 +13,10 @@ import { modelPlanRequest, requireModelPlanContext, streamModelPlanResponse } fr
 const engine = path.join(import.meta.dir, "../../engine/src")
 const model = CODIUM_MODELS[0]
 const system = await Bun.file(path.join(engine, "session/prompt/default.txt")).text()
+// The engine has no websearch tool since search moved to its own browser (23 October 2026): the browser tool's
+// description says how to search, so it stands where websearch did.
 const tools = await Promise.all(
-  ["read", "edit", "write", "grep", "glob", "task", "todowrite", "webfetch", "websearch", "apply_patch", "lsp"].map(
+  ["read", "edit", "write", "grep", "glob", "task", "todowrite", "webfetch", "browser", "apply_patch", "lsp"].map(
     async (name) => ({
       type: "function",
       function: {

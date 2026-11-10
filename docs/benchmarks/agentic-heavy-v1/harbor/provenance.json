@@ -1,0 +1,77 @@
+{
+  "kind": "harbor-instrument-provenance-v1",
+  "publicContractsChangedDuringRuntimeQualification": false,
+  "baselineCommit": "672f833",
+  "baselineFreeze": "static-freeze.json",
+  "qualifiedFreeze": "runtime-freeze.json",
+  "infrastructureOrigins": [
+    {
+      "component": "pinned dependency scaffold",
+      "source": "../foundry/instrument/seed",
+      "changes": "Package and lockfile workspace name changed to harbor-benchmark; dependency versions unchanged."
+    },
+    {
+      "component": "owned_process.py",
+      "source": "../foundry/owned_process.py",
+      "changes": "Line endings normalized to LF; process ownership behavior unchanged."
+    },
+    {
+      "component": "local-proxy.cjs and local-proxy.test.cjs",
+      "source": "../../../../scripts/benchmarks/browser-driver/proxy.cjs and proxy.test.cjs",
+      "changes": "Local require paths changed; forwarding/reset/CONNECT/upgrade behavior unchanged. A narrow standalone local-policy.cjs restricts the sole allowed origin to HTTP 127.0.0.1."
+    }
+  ],
+  "runtimeInstrumentRepairs": [
+    "Convert the resolved Windows Vite module path with pathToFileURL before dynamic ESM import.",
+    "Create owned AppData and temporary directories before launching Chromium.",
+    "Read independent HTTP assertions through explicit Node loopback GETs with browser cookies, no redirects and bounded responses; avoid APIRequestContext proxy CONNECT behavior.",
+    "Reuse guarded shared proxy transport to handle browser connection reuse and TCP resets.",
+    "Wait for an asynchronous visible runbook version update and compare rendered status words case-insensitively.",
+    "Retain all proxy denials while attributing application HTTP and WebSocket attempts through browser page/context events; browser service requests stay separately recorded."
+  ],
+  "referenceRepairs": [
+    "Correct TypeScript narrowing errors before the reference passed typecheck.",
+    "Give entity and navigation links explicit names required by the unchanged accessible UI contract, including navigation with count badges.",
+    "Preserve runbook snapshot provenance when the UI changes only release notes."
+  ],
+  "preservation": {
+    "baselinePublicSourceRetainedInGit": true,
+    "originalReferenceSourceAndHashInventoryRetainedPrivately": true,
+    "allRawRuntimeAttemptsRetainedWithoutRewrite": true,
+    "qualifiedReferenceSourceAndHashInventoryRetainedPrivately": true,
+    "referenceSourceIncludedInTaskOrSeed": false,
+    "referencePublicationDeferredUntilStudyEnds": true
+  },
+  "limits": [
+    "No paid calls or model outcomes are represented by these reference controls.",
+    "Windows is the executed platform; other platforms are not runtime qualified.",
+    "The verifier remains independent of each participant application and all required check inventory rows are retained."
+  ],
+  "qualifiedTools": {
+    "bun": {
+      "version": "1.3.14",
+      "sha256": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c"
+    },
+    "node": {
+      "version": "24.22.0",
+      "sha256": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c"
+    },
+    "chrome": {
+      "version": null,
+      "sha256": "3375c0e426a9c54cfe9184f7977bc7a08d553fe07862a0a2bc141711089cd15d"
+    },
+    "playwrightPackage": {
+      "version": "1.59.1",
+      "sha256": "f5c873af32da3a56849a77a73eb4e6acf9629d58564ba420077feea88800225c"
+    }
+  },
+  "qualifiedDependencyVersions": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "@types/bun": "1.3.13",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.8.2",
+    "vite": "7.1.4"
+  }
+}

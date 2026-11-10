@@ -230,6 +230,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             currentAssistant.cost = event.data.cost
             if (event.data.unpriced) currentAssistant.unpriced = true
             else delete currentAssistant.unpriced
+            if (event.data.billing) currentAssistant.billing = event.data.billing
+            else delete currentAssistant.billing
             currentAssistant.tokens = event.data.tokens
             if (event.data.snapshot)
               currentAssistant.snapshot = { ...currentAssistant.snapshot, end: event.data.snapshot }

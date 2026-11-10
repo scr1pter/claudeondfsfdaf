@@ -1,0 +1,180 @@
+name: Vector Codium end-to-end
+
+# Stripe test-mode checks for Codium against a preview deployment: test clocks, renewals, refunds, disputes and the
+# checkout pages in a browser. Dispatch only, and every secret lives in the codium-test environment, which needs the
+# owner's approval. The secrets are a Stripe test-mode key and a separate test store; a live key is refused.
+#
+# Work packages add checks under packages/web/e2e/codium:
+# - *.test.ts: Bun checks against Stripe test mode and the preview, run one file at a time;
+# - playwright.config.ts with *.spec.ts: browser checks (the first one adds @playwright/test to packages/web).
+# Checks read CODIUM_E2E_TARGET, CODIUM_E2E_STRIPE_SECRET_KEY, CODIUM_E2E_KV_REST_API_URL,
+# CODIUM_E2E_KV_REST_API_TOKEN and, for Vercel Deployment Protection, CODIUM_E2E_VERCEL_BYPASS.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Preview deployment origin in Stripe test mode (https, never vectordev.ai)
+        required: true
+        type: string
+      checks:
+        description: Which checks to run
+        required: true
+        default: all
+        type: choice
+        options: [all, api, browser]
+
+# One run at a time: the checks share one Stripe test account and one test store.
+concurrency:
+  group: vector-codium-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  guard:
+    name: Require the protected codium-test environment
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      target: ${{ steps.target.outputs.target }}
+    steps:
+      - name: Require protected codium-test environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/codium-test" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length') || {
+            echo "Create the codium-test environment with the owner as required reviewer before running these checks."
+            exit 1
+          }
+          test "$reviewers" -gt 0 || {
+            echo "codium-test must have at least one required reviewer before running these checks."
+            exit 1
+          }
+
+      - name: Refuse production targets
+        id: target
+        env:
+          CODIUM_E2E_TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          target=$(printf '%s' "${CODIUM_E2E_TARGET:-}" | tr '[:upper:]' '[:lower:]')
+          case "$target" in
+            https://*) ;;
+            *) echo "The target must be the https origin of a preview deployment."; exit 1 ;;
+          esac
+          host=${target#https://}
+          host=${host%/}
+          case "$host" in
+            # A trailing dot would still reach vectordev.ai, so the host must be written without one.
+            "" | *[!a-z0-9.-]* | .* | *. | *..*)
+              echo "The target must be an origin such as https://<preview>.vercel.app, with no path, port or credentials."
+              exit 1
+              ;;
+            vectordev.ai | *.vectordev.ai)
+              echo "Codium end-to-end checks never run against vectordev.ai."
+              exit 1
+              ;;
+          esac
+          echo "target=https://$host" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: Codium end-to-end (${{ inputs.checks }})
+    needs: guard
+    runs-on: ubuntu-24.04
+    environment: codium-test
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CODIUM_E2E_TARGET: ${{ needs.guard.outputs.target }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Playwright 1.59 hangs while extracting Chromium with Node 24.16.
+          node-version: "24.15"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Require Stripe test mode and the test store
+        env:
+          CODIUM_E2E_STRIPE_SECRET_KEY: ${{ secrets.CODIUM_E2E_STRIPE_SECRET_KEY }}
+          CODIUM_E2E_KV_REST_API_URL: ${{ secrets.CODIUM_E2E_KV_REST_API_URL }}
+          CODIUM_E2E_KV_REST_API_TOKEN: ${{ secrets.CODIUM_E2E_KV_REST_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "${CODIUM_E2E_STRIPE_SECRET_KEY:-}" in
+            sk_test_?* | rk_test_?*) ;;
+            *) echo "CODIUM_E2E_STRIPE_SECRET_KEY must be a Stripe test-mode key; live keys are refused."; exit 1 ;;
+          esac
+          case "${CODIUM_E2E_KV_REST_API_URL:-}" in
+            https://?*) ;;
+            *) echo "CODIUM_E2E_KV_REST_API_URL must be the https URL of the separate test store."; exit 1 ;;
+          esac
+          test -n "${CODIUM_E2E_KV_REST_API_TOKEN:-}" || {
+            echo "CODIUM_E2E_KV_REST_API_TOKEN is missing."
+            exit 1
+          }
+
+      - name: Run the Stripe test-mode checks
+        if: inputs.checks != 'browser'
+        working-directory: packages/web
+        env:
+          CODIUM_E2E_STRIPE_SECRET_KEY: ${{ secrets.CODIUM_E2E_STRIPE_SECRET_KEY }}
+          CODIUM_E2E_KV_REST_API_URL: ${{ secrets.CODIUM_E2E_KV_REST_API_URL }}
+          CODIUM_E2E_KV_REST_API_TOKEN: ${{ secrets.CODIUM_E2E_KV_REST_API_TOKEN }}
+          CODIUM_E2E_VERCEL_BYPASS: ${{ secrets.CODIUM_E2E_VERCEL_BYPASS }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          checks=(e2e/codium/*.test.ts)
+          if [ "${#checks[@]}" -eq 0 ]; then
+            echo "::notice::No Codium test-mode checks yet (packages/web/e2e/codium/*.test.ts)."
+            exit 0
+          fi
+          failed=0
+          for check in "${checks[@]}"; do
+            echo "::group::$check"
+            status=0
+            bun test --timeout 600000 "./$check" || status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              echo "::error title=Codium end-to-end check failed::$check"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      # No artifacts are uploaded: browser traces would carry the bypass header and test credentials, and this
+      # repository is public.
+      - name: Run the browser checks
+        if: inputs.checks != 'api'
+        working-directory: packages/web
+        env:
+          CODIUM_E2E_STRIPE_SECRET_KEY: ${{ secrets.CODIUM_E2E_STRIPE_SECRET_KEY }}
+          CODIUM_E2E_KV_REST_API_URL: ${{ secrets.CODIUM_E2E_KV_REST_API_URL }}
+          CODIUM_E2E_KV_REST_API_TOKEN: ${{ secrets.CODIUM_E2E_KV_REST_API_TOKEN }}
+          CODIUM_E2E_VERCEL_BYPASS: ${{ secrets.CODIUM_E2E_VERCEL_BYPASS }}
+          CI: true
+        run: |
+          set -euo pipefail
+          if [ ! -f e2e/codium/playwright.config.ts ]; then
+            echo "::notice::No Codium browser checks yet (packages/web/e2e/codium/playwright.config.ts)."
+            exit 0
+          fi
+          ./node_modules/.bin/playwright install --with-deps chromium
+          ./node_modules/.bin/playwright test --config e2e/codium/playwright.config.ts

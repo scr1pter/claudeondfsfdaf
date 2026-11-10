@@ -9,11 +9,11 @@ import { ModelPlans } from "./ModelPlans"
 import "../download/download.css"
 import "./account.css"
 
-// Only the owner sees the Design tab; api/design-lab decides who may open it.
-const DESIGN_LAB_OWNER = "krishnabharadwaj0521@gmail.com"
-
 type AccountState = {
   user: { id: string; email: string; name?: string }
+  // Decided by api/account/status against the Design Lab's allowlist, so this page never carries anyone's address.
+  // It only shows the Design tab; api/design-lab still decides who may open the lab.
+  owner?: boolean
 }
 
 /**
@@ -127,7 +127,7 @@ export function AccountPage(props: { preview?: AccountState }) {
             <span>Vector</span>
           </a>
           <nav aria-label="Account navigation">
-            {account?.user.email === DESIGN_LAB_OWNER && <a href="/design">Design</a>}
+            {account?.owner === true && <a href="/design">Design</a>}
             <a href="/docs">Docs</a>
             <button type="button" onClick={signOut} disabled={Boolean(action)}>
               Sign out
@@ -250,5 +250,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isAccountState(value: Record<string, unknown>): value is AccountState {
   if (!isRecord(value.user)) return false
   if (typeof value.user.id !== "string" || typeof value.user.email !== "string") return false
+  if (value.owner !== undefined && typeof value.owner !== "boolean") return false
   return value.user.name === undefined || typeof value.user.name === "string"
 }

@@ -1,0 +1,107 @@
+---
+import DocsPage from "../../layouts/DocsPage.astro"
+
+export const prerender = true
+---
+
+<DocsPage id="first-launch">
+
+          <p>
+            This page takes you from nothing to a first answer from Vector, one step at a time, with no coding
+            knowledge needed. Each step names the buttons as Vector and your computer show them.
+          </p>
+
+          <h2 id="download">Download Vector</h2>
+          <ol class="steps">
+            <li><span>1</span><div><strong>Create a free account</strong><p>Go to <a href="/download">vectordev.ai/download</a>, which asks you to log in first. Choose <strong>Continue with Google</strong>, or choose <strong>Sign up</strong> to make an account with your email and a password. An email account may ask you to confirm it from your inbox before you log in.</p></div></li>
+            <li><span>2</span><div><strong>Download the installer</strong><p>Choose <strong>Download Vector</strong>. The button names the computer it detected, such as macOS · Apple silicon. If that is wrong, open <strong>Other platforms</strong> and pick yours. An older Mac may have an Intel processor: Apple menu → About This Mac says which.</p></div></li>
+            <li><span>3</span><div><strong>Install it</strong><p>On a Mac, open the downloaded file and drag Vector into Applications. On Windows, run the installer. On Linux, the download is an AppImage, which runs without installing.</p></div></li>
+          </ol>
+
+          <h2 id="open">Open Vector the first time</h2>
+          <p>
+            Vector is in preview: the Mac app is not yet signed with an Apple Developer ID or notarized by Apple, and the
+            Windows installer is not yet code-signed. So the first time you open it, macOS or Windows warns you. This is
+            expected, and you only need to get past it once.
+          </p>
+
+          <h3 id="macos">On a Mac</h3>
+          <ol class="steps">
+            <li><span>1</span><div><strong>Open Vector from Applications</strong><p>macOS stops it with a message such as “Vector” can't be opened because it is from an unidentified developer, or Apple could not verify “Vector” is free of malware. Close the message with <strong>Done</strong> or <strong>OK</strong>. Do not choose Move to Trash.</p></div></li>
+            <li><span>2</span><div><strong>Allow it in System Settings</strong><p>Open System Settings from the Apple menu, then <strong>Privacy &amp; Security</strong> (on older macOS, System Preferences → Security &amp; Privacy). Scroll down to the note that Vector was blocked and choose <strong>Open Anyway</strong>. If the note is not there, try to open Vector once more, then look again.</p></div></li>
+            <li><span>3</span><div><strong>Confirm</strong><p>macOS asks you to confirm with your Mac's password or Touch ID. Choose <strong>Open Anyway</strong> (or <strong>Open</strong>) when it asks, and Vector starts.</p></div></li>
+          </ol>
+          <p>
+            You may also see a keychain message: Vector wants to use your confidential information stored in
+            “Vector Safe Storage” in your keychain. That item protects your sign-ins on this Mac. Type your Mac's login
+            password and choose <strong>Always Allow</strong>. A new install usually does not ask. If Vector was on this
+            Mac before, it can ask the first time you open the new copy, and until Vector is signed with an Apple
+            Developer ID it can ask once again after each update. If you chose Deny, Vector says it couldn't open its
+            secure credential vault: quit Vector, open it again, and choose Always Allow.
+          </p>
+
+          <h3 id="windows-and-linux">On Windows or Linux</h3>
+          <p>
+            On Windows, SmartScreen shows Windows protected your PC when you run the installer. Choose
+            <strong>More info</strong>, then <strong>Run anyway</strong>. On Linux, allow the AppImage to run as a program first: tick that option in
+            the file's Properties in your file manager, or run <code>chmod +x</code> on the file in a terminal. Then open
+            it. Keep using the AppImage itself, since in-app updates only work there. If Vector says it cannot open its
+            credential vault, unlock or set up your desktop's keyring, such as GNOME Keyring (libsecret) or KWallet, and
+            open Vector again.
+          </p>
+          <p>
+            If your computer still refuses to open Vector, see <a href="/docs/troubleshooting#common-problems">Troubleshooting</a>.
+          </p>
+
+          <h2 id="sign-in">Sign in</h2>
+          <p>
+            Vector opens on Home with <strong>Getting started</strong>, a short list of first steps that Vector ticks off
+            as you do them. Signing in to Vector is what makes the free models work.
+          </p>
+          <ol class="steps">
+            <li><span>1</span><div><strong>Start signing in</strong><p>Next to Connect a model, choose <strong>Start free</strong>. You can also choose <strong>Sign in to Vector</strong> in the message box, or in Settings → Account.</p></div></li>
+            <li><span>2</span><div><strong>Finish in your browser</strong><p>Your web browser opens vectordev.ai. Log in with the account you downloaded Vector with, if it asks. The page then says Continue in Vector.</p></div></li>
+            <li><span>3</span><div><strong>Go back to Vector</strong><p>Your browser asks whether it may open Vector. Allow it, and Vector finishes signing you in. If nothing happens, choose <strong>Open Vector</strong> on the page. The link works once and expires after five minutes, so after that, start again from Vector.</p></div></li>
+          </ol>
+
+          <h2 id="pick-a-model">Pick a model</h2>
+          <p>
+            A model is the AI that reads your request and does the work. The message box shows the one that will answer;
+            choose its name to see the others. There are three ways to get one:
+          </p>
+          <dl class="doc-rows">
+            <div><dt>Free models</dt><dd>Signed in, the model list has <strong>Free models inside of Vector</strong>, at no cost to you and with no payment details, within a per-minute and a daily limit for each account. Some are labelled <strong>May train on your prompts</strong>: before your first message to one, Vector asks, and sends nothing until you choose <strong>Accept and send</strong>. If Vector says free models are unavailable right now, try again later or use one of the ways below.</dd></div>
+            <div><dt>Your own key</dt><dd>If you already pay an AI company such as OpenAI, Anthropic or Google, create an API key on its website. In Vector, choose <strong>Use my own API key</strong>, or open Settings → Providers &amp; keys. Pick the company, paste the key and choose <strong>Continue</strong>. Its models join the list, and that company bills you for what you use.</dd></div>
+            <div><dt>Vector Codium</dt><dd>When Vector Codium is available, the model list has its models under <strong>Vector Codium</strong>. They run on credits from a plan or a top-up you buy at <a href="/codium">vectordev.ai/codium</a>, and Settings → Account shows the share of this month's credits left. Vector never chooses a Codium model for you, so pick one yourself. Until then, the plans there say Coming soon.</dd></div>
+          </dl>
+          <p>
+            More about each, and about models you host yourself, is on <a href="/docs/models">Models</a>.
+          </p>
+
+          <h2 id="run-a-first-task">Run a first task</h2>
+          <ol class="steps">
+            <li><span>1</span><div><strong>Open a folder</strong><p>On Home, choose <strong>Open repository</strong> and pick the folder Vector should work in. A folder of code is called a repository. To start from nothing, make an empty folder with that window's New Folder button and choose it.</p></div></li>
+            <li><span>2</span><div><strong>Answer the trust question, if it comes</strong><p>A folder with Vector settings of its own asks <strong>Trust this repository?</strong> once. Choose Trust this repository only for a folder you know. <strong>Not now</strong> leaves its settings off, and you can trust it later.</p></div></li>
+            <li><span>3</span><div><strong>Ask for something safe</strong><p>Choose <strong>New session</strong>, type your request in the message box, and press Enter. A good first request asks Vector to look and explain without changing anything.</p></div></li>
+          </ol>
+          <div class="prompt-example">
+            <div class="code-bar">
+              <span>Try this first</span>
+            </div>
+            <p>
+              Look through this folder and explain, in plain language, what is in it and what it does. Don't change any
+              files.
+            </p>
+          </div>
+          <p>
+            Vector shows each step as it works. When it needs your permission, for example to run a command, the message
+            box shows <strong>Permission required</strong> with Deny, <strong>Allow once</strong> and, for some steps,
+            Allow always. Allow once approves only that step. When the answer arrives, Getting started ticks off its
+            last step.
+          </p>
+          <p>
+            Next, ask for a small change and look at it in Review changes before you keep it. If it went the wrong way,
+            Rewind code + chat undoes your last request. <a href="/docs/first-task">Your first task</a> shows how to write
+            a request Vector can check, and <a href="/docs/checkpoints">Checkpoints and recovery</a> how to undo.
+          </p>
+</DocsPage>

@@ -1,0 +1,32 @@
+{
+  "row": "none",
+  "description": "A customer with no subscription at all.",
+  "apiVersion": "2025-02-24.acacia",
+  "accountId": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+  "now": 1790816400,
+  "account": {
+    "customer": "cus_CodiumFixture01"
+  },
+  "objects": {
+    "customers": [
+      {
+        "id": "cus_CodiumFixture01",
+        "object": "customer",
+        "created": 1788220200,
+        "email": null,
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90"
+        }
+      }
+    ],
+    "subscriptions": []
+  },
+  "expect": {
+    "state": "none",
+    "plan": null,
+    "periodStart": 0,
+    "periodEnd": 0,
+    "key": "none"
+  }
+}

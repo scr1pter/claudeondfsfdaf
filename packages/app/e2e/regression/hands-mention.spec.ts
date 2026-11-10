@@ -4,6 +4,7 @@ import type { Computer } from "@vectordevai/schema/computer"
 import { Hands } from "@vectordevai/schema/hands"
 import type { FakeComputerScript } from "../../src/features/computer/fake-platform"
 import { installFakeComputer, type ComputerTestWindow } from "../utils/fake-computer"
+import { reply } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/Vector/ComputerMentions"
@@ -388,7 +389,8 @@ async function openComposer(
     ],
     pageMessages: () => ({ items: [] }),
     // Omitted, the mock engine answers the capabilities route with 404, as an older engine does.
-    capabilities,
+    // Explicit bodies can also exercise malformed capability shapes without widening the mock server's API.
+    capabilities: capabilities === undefined ? undefined : reply(200, JSON.stringify(capabilities)),
     ...(server.events ? { events: server.events, eventRetry: 50 } : {}),
   })
   // A reconnecting stream may reread session status, so it changes with the events.

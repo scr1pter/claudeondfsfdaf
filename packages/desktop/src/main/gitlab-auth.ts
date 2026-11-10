@@ -1,12 +1,13 @@
-import { safeStorage, shell } from "electron"
+import { shell } from "electron"
 
 import { getStore, removeStoreFileIfEmpty } from "./store"
+import { vaultSecrets } from "./vault-secrets"
 
 // GitLab OAuth Device Flow: sign in to GitLab from Vector without the glab CLI.
 // Mirrors github-auth.ts. Device flow needs ONLY a public OAuth application ID —
 // never a client secret — so it is safe to ship inside a desktop binary. The
-// resulting token is encrypted with Electron's safeStorage (Keychain / DPAPI /
-// libsecret) before it touches disk, and it is never logged.
+// resulting token is sealed with Vector's credential vault (protected by
+// Keychain / DPAPI / libsecret) before it touches disk, and it is never logged.
 
 // The client ID is a public OAuth application ID (device flow requires no secret),
 // so it is safe to ship inside the desktop binary. Override it at build/run time
@@ -23,6 +24,7 @@ const GITLAB_SCOPE = "api"
 
 const AUTH_STORE = "gitlab-auth"
 const TOKEN_KEY = "token"
+const TOKEN_PURPOSE = "gitlab-token"
 const LOGIN_KEY = "login"
 const AVATAR_KEY = "avatarUrl"
 
@@ -83,7 +85,7 @@ export async function startDeviceLogin(): Promise<GitlabDeviceLoginStart> {
     throw new Error("GitLab sign-in isn't configured in this build of Vector.")
   }
   // Fail before the user does the whole verification dance, not after.
-  if (!safeStorage.isEncryptionAvailable()) throw new Error(SECURE_STORAGE_ERROR)
+  if (!vaultSecrets.available()) throw new Error(SECURE_STORAGE_ERROR)
   // Restarting sign-in drops any stale flow so an old poll loop can't race us.
   cancelDeviceLogin()
 
@@ -200,10 +202,10 @@ async function finishLogin(token: string): Promise<GitlabDeviceLoginResult> {
   const res = await fetch(`${GITLAB_API}/user`, { headers: apiHeaders(token) }).catch(() => undefined)
   if (!res?.ok) return { ok: false, error: "Signed in, but couldn't load your GitLab profile. Try again." }
   const user = (await res.json().catch(() => undefined)) as { username?: string; avatar_url?: string } | undefined
-  if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: SECURE_STORAGE_ERROR }
+  if (!vaultSecrets.available()) return { ok: false, error: SECURE_STORAGE_ERROR }
 
   const store = getStore(AUTH_STORE)
-  store.set(TOKEN_KEY, safeStorage.encryptString(token).toString("base64"))
+  store.set(TOKEN_KEY, vaultSecrets.seal(token, TOKEN_PURPOSE))
   if (user?.username) store.set(LOGIN_KEY, user.username)
   if (user?.avatar_url) store.set(AVATAR_KEY, user.avatar_url)
   return { ok: true, login: user?.username }
@@ -212,13 +214,17 @@ async function finishLogin(token: string): Promise<GitlabDeviceLoginResult> {
 // ---- Token storage --------------------------------------------------------
 
 export function getGitlabToken(): string | undefined {
-  const raw = getStore(AUTH_STORE).get(TOKEN_KEY)
+  const store = getStore(AUTH_STORE)
+  const raw = store.get(TOKEN_KEY)
   if (typeof raw !== "string" || !raw) return
-  if (!safeStorage.isEncryptionAvailable()) return
+  if (!vaultSecrets.available()) return
   try {
-    return safeStorage.decryptString(Buffer.from(raw, "base64"))
+    const opened = vaultSecrets.openSync(raw, TOKEN_PURPOSE)
+    // An earlier release's token moves into the vault.
+    if (opened.resealed) store.set(TOKEN_KEY, opened.resealed)
+    return opened.text
   } catch {
-    // The OS key changed (or the blob is corrupt) — the token is unrecoverable.
+    // The vault key changed (or the blob is corrupt) — the token is unrecoverable.
     logoutGitlab()
     return
   }

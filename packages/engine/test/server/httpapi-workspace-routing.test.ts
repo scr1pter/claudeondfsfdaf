@@ -20,6 +20,7 @@ import { WorkspaceV2 } from "@vectordevai/core/workspace"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PtyTicket } from "@vectordevai/core/pty/ticket"
 import { FreeModelGuests, GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import type { WorkspaceAdapter } from "../../src/control-plane/types"
 import { Workspace } from "../../src/control-plane/workspace"
 import { WorkspaceTable } from "@vectordevai/core/control-plane/workspace.sql"
@@ -62,6 +63,7 @@ const it = testEffect(
     workspaceLayer,
     LayerNode.compile(PtyTicket.node),
     LayerNode.compile(FreeModelGuests.node),
+    LayerNode.compile(SessionAudience.node),
     Socket.layerWebSocketConstructorGlobal,
   ),
 )
@@ -370,6 +372,16 @@ describe("HttpApi workspace routing middleware", () => {
               query: WorkspaceRoutingQuery,
               success: Schema.Boolean,
             }),
+            HttpApiEndpoint.post("merge", "/experimental/session/:sessionID/tasks/:taskID/merge", {
+              params: Schema.Struct({ sessionID: SessionID, taskID: Schema.String }),
+              query: WorkspaceRoutingQuery,
+              success: Schema.Boolean,
+            }),
+            HttpApiEndpoint.post("discard", "/experimental/session/:sessionID/tasks/:taskID/discard", {
+              params: Schema.Struct({ sessionID: SessionID, taskID: Schema.String }),
+              query: WorkspaceRoutingQuery,
+              success: Schema.Boolean,
+            }),
             HttpApiEndpoint.post("register", "/experimental/session/:sessionID/tasks/bridge/register", {
               params: Schema.Struct({ sessionID: SessionID }),
               query: WorkspaceRoutingQuery,
@@ -395,6 +407,8 @@ describe("HttpApi workspace routing middleware", () => {
               .handle("list", () => Effect.succeed(false))
               .handle("stop", () => Effect.succeed(false))
               .handle("message", () => Effect.succeed(false))
+              .handle("merge", () => Effect.succeed(false))
+              .handle("discard", () => Effect.succeed(false))
               .handle("register", () => Effect.succeed(false))
               .handle("poll", () => Effect.succeed(false))
               .handle("receipt", () => Effect.succeed(false)),
@@ -455,6 +469,14 @@ describe("HttpApi workspace routing middleware", () => {
             HttpClient.execute,
           )).status,
         ).toBe(403)
+      }
+      // Control of the session does not make a guest the owner: merge and discard are refused before forwarding.
+      for (const action of ["merge", "discard"]) {
+        const refused = yield* HttpClientRequest.post(
+          `/experimental/session/ses_claimed/tasks/ses_child/${action}`,
+        ).pipe(HttpClient.execute)
+        expect(refused.status).toBe(403)
+        expect(yield* refused.text).toContain("Only the server owner can merge or discard")
       }
       expect(forwarded).toHaveLength(3)
     }),

@@ -1,5 +1,6 @@
 import type { Event } from "@vectordevai/sdk/v2/client"
 import type { Event as SchemaEvent } from "@vectordevai/schema/event"
+import type { Pty } from "@vectordevai/schema/pty"
 import type { ServerEvent } from "@vectordevai/schema/server-event"
 import { createSimpleContext } from "@vectordevai/ui/context"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
@@ -319,6 +320,9 @@ type SDKEventMap = {
 } & {
   "client.joined": PresenceEvent<typeof ServerEvent.ClientJoined>
   "client.left": PresenceEvent<typeof ServerEvent.ClientLeft>
+  // Typed from the schema too, so the terminal panel never waits on an SDK regeneration. Encoded, because the stream
+  // carries the plain strings the schema brands as PTY IDs.
+  "pty.revealed": { type: typeof Pty.Event.Revealed.type; properties: typeof Pty.Event.Revealed.data.Encoded }
 }
 
 function createDirSdkContext(directory: string, serverSDK: ServerSDKBase) {

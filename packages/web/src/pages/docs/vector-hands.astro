@@ -1,14 +1,14 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
 import { Hands } from "@vectordevai/schema/hands"
-import { release112 } from "../../data/vector-releases"
+import { handsReleasePreview } from "../../data/vector-releases"
 
 export const prerender = true
 ---
 
 <DocsPage id="vector-hands">
   <p class="note">
-    {release112.since} {Hands.NAME} lets Vector work in the desktop apps you approve while you are at your computer.
+    {handsReleasePreview.since} {Hands.NAME} lets Vector work in the desktop apps you approve while you are at your computer.
     Availability depends on your operating system, local engine and permissions.
   </p>
   <p>
@@ -106,7 +106,7 @@ export const prerender = true
 
   <h2 id="administrators">For administrators</h2>
   <p>
-    The managed <code>computer</code> policy requires <strong>Vector 1.99.112 or later</strong>. Put it only in an
+    The managed <code>computer</code> policy requires <strong>a compatible Vector build that includes Hands</strong>. Put it only in an
     authenticated company-managed configuration source described in <a href="/docs/local">Vector Local</a>.
     Do not add it to a repository's or user's <code>vector.json</code>; older engines reject unknown top-level keys.
     Personal preferences belong to the desktop Settings page.

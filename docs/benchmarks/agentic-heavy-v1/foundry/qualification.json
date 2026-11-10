@@ -1,0 +1,862 @@
+{
+  "kind": "heavy-foundry-free-wrapper-runtime-qualification-v1",
+  "localDate": "2026-11-02",
+  "timezone": "America/Los_Angeles",
+  "providerCalls": 0,
+  "fundedMeterCalls": 0,
+  "newModelGeneration": false,
+  "instrumentSourceRevision": "3230bff",
+  "qualificationCodeSha256": {
+    "evaluate.py": "c61010c9705ac14a8650e36a85548a9427d487d836aee44dd8560124930c9ee5",
+    "owned_process.py": "c3c7ea92c3aff03867c8d20757e03b5e6266992a5724de2bb2db787d9725054c",
+    "task.json": "d40692bcc39d89300f46a38cba2bbc6c5f82ff8b1d0b936e30de0a5b6de22bc1"
+  },
+  "binarySha256": {
+    "bun": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c",
+    "node": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c",
+    "python": "f8b45d63047da9d9adf09892e4cc4317b859e86a93a478cc9616bc69d3b176e5",
+    "chrome": "3375c0e426a9c54cfe9184f7977bc7a08d553fe07862a0a2bc141711089cd15d"
+  },
+  "referencePublicPath": "docs/benchmarks/tokenomics-2026-11-01/foundry/submissions/readiness-first",
+  "cases": {
+    "positive": {
+      "classification": "known public readiness-first app",
+      "process": {
+        "exitCode": 0,
+        "stopReason": null,
+        "timedOut": false,
+        "wallMs": 46062.0
+      },
+      "normalizedVerdict": "passed",
+      "normalizedCheckCount": 76,
+      "normalizedCounts": {
+        "passed": 76,
+        "failed": 0,
+        "not_run": 0
+      },
+      "apiPassed": 32,
+      "apiTotal": 32,
+      "browserPassed": 40,
+      "browserTotal": 40,
+      "prerequisitePassed": 4,
+      "prerequisiteTotal": 4,
+      "originalFullGatePassed": true,
+      "originalApplicationSourceUnchanged": true,
+      "independentAuthoredManifestUnchanged": true,
+      "authoredSourceFiles": 17,
+      "authoredManifestSha256": "b737c29f677d67d64961bbec1239420828947606ba5ef33af9edcbcaffc987be",
+      "originalReportSha256": "a648dbb6fffb68083ada593b1df4a2ad55b6083abf49055fb8cb95393b2e9a1c",
+      "checks": [
+        {
+          "name": "prerequisite:typecheck",
+          "category": "prerequisite",
+          "status": "passed"
+        },
+        {
+          "name": "prerequisite:build",
+          "category": "prerequisite",
+          "status": "passed"
+        },
+        {
+          "name": "prerequisite:startup",
+          "category": "prerequisite",
+          "status": "passed"
+        },
+        {
+          "name": "prerequisite:source_integrity",
+          "category": "prerequisite",
+          "status": "passed"
+        },
+        {
+          "name": "api:authentication_bootstrap",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:sessions_password_storage",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:workspaces_selection",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:invites_email_single_use",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:roles_owner_protection",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:tenant_boundary",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:customers_crud_search",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:customers_uniqueness_validation",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:products_crud_cents",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:stock_ledger_validation",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:stock_concurrency",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:orders_price_snapshots",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:draft_order_state_machine",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:fulfillment_atomic_retry",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:fulfillment_idempotency",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:fulfillment_competing_orders",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:fulfillment_same_key_concurrency",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:invoices_snapshot_validation",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:invoice_number_concurrency",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:invoice_status_transitions",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:projects_crud",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:tasks_crud_filters_validation",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:comments_permissions",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:project_cascade",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:csv_import_atomicity",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:csv_exports_roundtrip",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:attachments_bytes_auth",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:attachment_validation_paths",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:attachment_cascade",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:activity_sync_analytics",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:membership_revocation",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "api:restart_persistence",
+          "category": "api",
+          "status": "passed"
+        },
+        {
+          "name": "browser:signup-and-workspace",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:multiple-workspaces-and-isolated-selection",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:customer-create-real-api",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:customer-edit-keeps-real-data",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:customer-search",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:unused-customer-delete-confirmation",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:quoted-customer-csv-import",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:customer-export-escaping-and-formula-safety",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:product-creation-and-exact-cents",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:product-search-and-export",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:stock-receipt-real-movements",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:stock-history-visible-reason-delta-date",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:negative-stock-visible-error-no-write",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:multi-line-order-price-snapshots",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:order-status-filter-and-export",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:order-fulfillment-updates-stock-once",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:invoice-issued-from-fulfilled-order",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:invoice-sent-paid-workflow",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:invoice-immutable-after-catalog-customer-edits",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:project-create-and-board",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:tasks-created-with-assignee-date-and-priority",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:task-edit-moves-kanban-column",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:task-search-and-composed-filters",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:task-comment-safe-rendering",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:task-attachment-upload-download-exact-bytes",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:unsupported-attachment-visible-error-no-persistence",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:attachment-delete-removes-download",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:task-delete-confirmation-real-api",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:overview-real-workspace-analytics",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:activity-real-events-and-author",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:owner-invite-and-read-only-join",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:read-only-ui-permissions",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:live-role-promotion",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:cross-client-live-product-update",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:membership-revocation-reacts-live",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:session-refresh-sign-out-sign-in",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:keyboard-dialog-escape-and-focus-return",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:accessible-controls-and-desktop-evidence",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:mobile-responsive-pages-and-evidence",
+          "category": "browser",
+          "status": "passed"
+        },
+        {
+          "name": "browser:browser-runtime-diagnostics",
+          "category": "browser",
+          "status": "passed"
+        }
+      ],
+      "postStopPasswordCryptographicVerification": true
+    },
+    "negative": {
+      "classification": "original empty five-file scaffold",
+      "process": {
+        "exitCode": 1,
+        "stopReason": null,
+        "timedOut": false,
+        "wallMs": 5031.0
+      },
+      "normalizedVerdict": "product_failure",
+      "normalizedCheckCount": 76,
+      "normalizedCounts": {
+        "passed": 1,
+        "failed": 3,
+        "not_run": 72
+      },
+      "apiPassed": 0,
+      "apiTotal": 32,
+      "browserPassed": 0,
+      "browserTotal": 40,
+      "prerequisitePassed": 1,
+      "prerequisiteTotal": 4,
+      "originalFullGatePassed": false,
+      "originalApplicationSourceUnchanged": true,
+      "independentAuthoredManifestUnchanged": true,
+      "authoredSourceFiles": 5,
+      "authoredManifestSha256": "dbee30406a95f7973e2ec8535e1332e0e71d920bba15f1d43fb2e2c0c9572c79",
+      "originalReportSha256": "0fd5ee357299f89558b6282d8486f077221620a5171e09e85e136bc4fa066403",
+      "checks": [
+        {
+          "name": "prerequisite:typecheck",
+          "category": "prerequisite",
+          "status": "failed"
+        },
+        {
+          "name": "prerequisite:build",
+          "category": "prerequisite",
+          "status": "failed"
+        },
+        {
+          "name": "prerequisite:startup",
+          "category": "prerequisite",
+          "status": "failed"
+        },
+        {
+          "name": "prerequisite:source_integrity",
+          "category": "prerequisite",
+          "status": "passed"
+        },
+        {
+          "name": "api:authentication_bootstrap",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:sessions_password_storage",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:workspaces_selection",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:invites_email_single_use",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:roles_owner_protection",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:tenant_boundary",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:customers_crud_search",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:customers_uniqueness_validation",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:products_crud_cents",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:stock_ledger_validation",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:stock_concurrency",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:orders_price_snapshots",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:draft_order_state_machine",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:fulfillment_atomic_retry",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:fulfillment_idempotency",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:fulfillment_competing_orders",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:fulfillment_same_key_concurrency",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:invoices_snapshot_validation",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:invoice_number_concurrency",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:invoice_status_transitions",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:projects_crud",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:tasks_crud_filters_validation",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:comments_permissions",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:project_cascade",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:csv_import_atomicity",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:csv_exports_roundtrip",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:attachments_bytes_auth",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:attachment_validation_paths",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:attachment_cascade",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:activity_sync_analytics",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:membership_revocation",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "api:restart_persistence",
+          "category": "api",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:signup-and-workspace",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:multiple-workspaces-and-isolated-selection",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:customer-create-real-api",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:customer-edit-keeps-real-data",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:customer-search",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:unused-customer-delete-confirmation",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:quoted-customer-csv-import",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:customer-export-escaping-and-formula-safety",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:product-creation-and-exact-cents",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:product-search-and-export",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:stock-receipt-real-movements",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:stock-history-visible-reason-delta-date",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:negative-stock-visible-error-no-write",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:multi-line-order-price-snapshots",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:order-status-filter-and-export",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:order-fulfillment-updates-stock-once",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:invoice-issued-from-fulfilled-order",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:invoice-sent-paid-workflow",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:invoice-immutable-after-catalog-customer-edits",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:project-create-and-board",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:tasks-created-with-assignee-date-and-priority",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:task-edit-moves-kanban-column",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:task-search-and-composed-filters",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:task-comment-safe-rendering",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:task-attachment-upload-download-exact-bytes",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:unsupported-attachment-visible-error-no-persistence",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:attachment-delete-removes-download",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:task-delete-confirmation-real-api",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:overview-real-workspace-analytics",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:activity-real-events-and-author",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:owner-invite-and-read-only-join",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:read-only-ui-permissions",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:live-role-promotion",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:cross-client-live-product-update",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:membership-revocation-reacts-live",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:session-refresh-sign-out-sign-in",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:keyboard-dialog-escape-and-focus-return",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:accessible-controls-and-desktop-evidence",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:mobile-responsive-pages-and-evidence",
+          "category": "browser",
+          "status": "not_run"
+        },
+        {
+          "name": "browser:browser-runtime-diagnostics",
+          "category": "browser",
+          "status": "not_run"
+        }
+      ]
+    }
+  },
+  "pureControls": {
+    "adapter": {
+      "passed": 10,
+      "failed": 0
+    },
+    "unchangedOriginalInstrument": {
+      "passed": 11,
+      "failed": 0
+    }
+  },
+  "dependencySetup": "Reused the previous owned paired-v5 readiness dependency directory through private node_modules junctions. Dependency sets and bun.lock match the scaffold; no network installation or source edit.",
+  "retainedPreparationObservation": "An initial byte-equality assertion on the entire reference package.json was overstrict because the already-published app adds test scripts. It stopped before any Bun/app run. Dependency/devDependency sets and lockfile match; reference source was not changed.",
+  "limits": [
+    "These are known reference/empty-scaffold checks, not fresh model outputs or paid benchmark passes.",
+    "The original historical app and all raw reports remain unchanged.",
+    "The wrapper runtime was qualified on Windows only; no production or security guarantee.",
+    "Raw runtime paths/logs/configuration are private; this is an allowlisted outcome projection."
+  ]
+}

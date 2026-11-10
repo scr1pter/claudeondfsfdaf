@@ -1,0 +1,8 @@
+archive/*.py -text
+heavy/*.py -text
+heavy-phase-plan.json -text
+
+# Sealed transport programs and data are byte-hashed across Windows checkouts.
+archive/** -text
+continuation/** -text
+carry/** -text

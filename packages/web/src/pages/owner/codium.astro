@@ -1,0 +1,16 @@
+---
+import { CodiumOwnerPage } from "../../components/marketing/owner/CodiumOwner"
+import MarketingLayout from "../../components/marketing/MarketingLayout.astro"
+import "../../components/marketing/account/account.css"
+
+// Only the empty shell is public. Private data is fetched after owner authentication in the browser.
+export const prerender = true
+---
+
+<MarketingLayout title="Vector · Codium owner" description="Private." noindex>
+  <div class="account-environment">
+    <CodiumOwnerPage client:only="react">
+      <div slot="fallback" class="account-loading" role="status">Checking your session…</div>
+    </CodiumOwnerPage>
+  </div>
+</MarketingLayout>

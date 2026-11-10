@@ -400,6 +400,8 @@ export async function runResearchBrowser(input: ResearchInput): Promise<Report> 
     COMMAND_DEADLINE_MS,
   ).finally(() => {
     if (browser.closed) return
+    // Commands can overlap: the timer the one before armed is replaced, never left behind to close a browser in use.
+    if (browser.idle) clearTimeout(browser.idle)
     browser.idle = setTimeout(() => void closeBrowser(browser), IDLE_MS)
     browser.idle.unref?.()
   })

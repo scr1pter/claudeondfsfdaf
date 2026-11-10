@@ -25835,6 +25835,488 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## @pdf-lib/fontkit@1.1.1
+
+License: MIT
+
+Declared license: MIT
+Source declaration: https://registry.npmjs.org/@pdf-lib%2Ffontkit/1.1.1
+Published artifact integrity: sha512-KjMd7grNapIWS/Dm0gvfHEilSyAmeLvrEGVcqLGi0VYebuqqzTbgF29efCx7tvx+IEbG3zQciRSWl3GkUSvjZg==
+Package metadata author: Andrew Dillon <andrew.dillon.j@gmail.com>
+Package metadata contributor: Devon Govett
+The exact published package and its upstream repository contain no LICENSE file. No package-specific copyright notice is invented. The standard declared license text is reproduced below, followed by the copyright/license comment blocks physically retained in both published JavaScript bundles. Bundled component notices are separate from the package metadata declaration.
+License text source: https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/MIT.txt
+
+MIT License
+
+Copyright (c) <year> <copyright holders>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+Retained notices from published dist/fontkit.es.js and dist/fontkit.umd.js:
+
+/*
+   * base64-arraybuffer
+   * https://github.com/niklasvh/base64-arraybuffer
+   *
+   * Copyright (c) 2012 Niklas von Hertzen
+   * Licensed under the MIT license.
+   */
+/**
+     * The font's copyright information
+     * @type {string}
+     */
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+   Bit reading helpers
+*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+
+     Collection of static dictionary words.
+  */
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+   Lookup table to map the previous two bytes to a context id.
+
+   There are four different context modeling modes defined here:
+     CONTEXT_LSB6: context id is the least significant 6 bits of the last byte,
+     CONTEXT_MSB6: context id is the most significant 6 bits of the last byte,
+     CONTEXT_UTF8: second-order context model tuned for UTF8-encoded text,
+     CONTEXT_SIGNED: second-order context model tuned for signed integers.
+
+   The context id for the UTF8 context model is calculated as follows. If p1
+   and p2 are the previous two bytes, we calcualte the context as
+
+     context = kContextLookup[p1] | kContextLookup[p2 + 256].
+
+   If the previous two bytes are ASCII characters (i.e. < 128), this will be
+   equivalent to
+
+     context = 4 * context1(p1) + context2(p2),
+
+   where context1 is based on the previous byte in the following way:
+
+     0  : non-ASCII control
+     1  : \t, \n, \r
+     2  : space
+     3  : other punctuation
+     4  : " '
+     5  : %
+     6  : ( < [ {
+     7  : ) > ] }
+     8  : , ; :
+     9  : .
+     10 : =
+     11 : number
+     12 : upper-case vowel
+     13 : upper-case consonant
+     14 : lower-case vowel
+     15 : lower-case consonant
+
+   and context2 is based on the second last byte:
+
+     0 : control, space
+     1 : punctuation
+     2 : upper-case letter, number
+     3 : lower-case letter
+
+   If the last byte is ASCII, and the second last byte is not (in a valid UTF8
+   stream it will be a continuation byte, value between 128 and 191), the
+   context is the same as if the second last byte was an ASCII control or space.
+
+   If the last byte is a UTF8 lead byte (value >= 192), then the next byte will
+   be a continuation byte and the context id is 2 or 3 depending on the LSB of
+   the last byte and to a lesser extent on the second last byte if it is ASCII.
+
+   If the last byte is a UTF8 continuation byte, the second last byte can be:
+     - continuation byte: the next byte is probably ASCII or lead byte (assuming
+       4-byte UTF8 characters are rare) and the context id is 0 or 1.
+     - lead byte (192 - 207): next byte is ASCII or lead byte, context is 0 or 1
+     - lead byte (208 - 255): next byte is continuation byte, context is 2 or 3
+
+   The possible value combinations of the previous two bytes, the range of
+   context ids and the type of the next byte is summarized in the table below:
+
+   |--------\-----------------------------------------------------------------|
+   |         \                         Last byte                              |
+   | Second   \---------------------------------------------------------------|
+   | last byte \    ASCII            |   cont. byte        |   lead byte      |
+   |            \   (0-127)          |   (128-191)         |   (192-)         |
+   |=============|===================|=====================|==================|
+   |  ASCII      | next: ASCII/lead  |  not valid          |  next: cont.     |
+   |  (0-127)    | context: 4 - 63   |                     |  context: 2 - 3  |
+   |-------------|-------------------|---------------------|------------------|
+   |  cont. byte | next: ASCII/lead  |  next: ASCII/lead   |  next: cont.     |
+   |  (128-191)  | context: 4 - 63   |  context: 0 - 1     |  context: 2 - 3  |
+   |-------------|-------------------|---------------------|------------------|
+   |  lead byte  | not valid         |  next: ASCII/lead   |  not valid       |
+   |  (192-207)  |                   |  context: 0 - 1     |                  |
+   |-------------|-------------------|---------------------|------------------|
+   |  lead byte  | not valid         |  next: cont.        |  not valid       |
+   |  (208-)     |                   |  context: 2 - 3     |                  |
+   |-------------|-------------------|---------------------|------------------|
+
+   The context id for the signed context mode is calculated as:
+
+     context = (kContextLookup[512 + p1] << 3) | kContextLookup[512 + p2].
+
+   For any context modeling modes, the context ids can be calculated by |-ing
+   together two lookups from one table using context model dependent offsets:
+
+     context = kContextLookup[offset1 + p1] | kContextLookup[offset2 + p2].
+
+   where offset1 and offset2 are dependent on the context mode.
+*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+   Lookup tables to map prefix codes to value ranges. This is used during
+   decoding of the block lengths, literal insertion lengths and copy lengths.
+*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+   Transformations on dictionary words.
+*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+/*
+	   * base64-arraybuffer
+	   * https://github.com/niklasvh/base64-arraybuffer
+	   *
+	   * Copyright (c) 2012 Niklas von Hertzen
+	   * Licensed under the MIT license.
+	   */
+/**
+	     * The font's copyright information
+	     * @type {string}
+	     */
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+	   Licensed under the Apache License, Version 2.0 (the "License");
+	   you may not use this file except in compliance with the License.
+	   You may obtain a copy of the License at
+
+	   http://www.apache.org/licenses/LICENSE-2.0
+
+	   Unless required by applicable law or agreed to in writing, software
+	   distributed under the License is distributed on an "AS IS" BASIS,
+	   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	   See the License for the specific language governing permissions and
+	   limitations under the License.
+
+	   Bit reading helpers
+	*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+	     Licensed under the Apache License, Version 2.0 (the "License");
+	     you may not use this file except in compliance with the License.
+	     You may obtain a copy of the License at
+
+	     http://www.apache.org/licenses/LICENSE-2.0
+
+	     Unless required by applicable law or agreed to in writing, software
+	     distributed under the License is distributed on an "AS IS" BASIS,
+	     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	     See the License for the specific language governing permissions and
+	     limitations under the License.
+
+	     Collection of static dictionary words.
+	  */
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+	   Licensed under the Apache License, Version 2.0 (the "License");
+	   you may not use this file except in compliance with the License.
+	   You may obtain a copy of the License at
+
+	   http://www.apache.org/licenses/LICENSE-2.0
+
+	   Unless required by applicable law or agreed to in writing, software
+	   distributed under the License is distributed on an "AS IS" BASIS,
+	   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	   See the License for the specific language governing permissions and
+	   limitations under the License.
+
+	   Lookup table to map the previous two bytes to a context id.
+
+	   There are four different context modeling modes defined here:
+	     CONTEXT_LSB6: context id is the least significant 6 bits of the last byte,
+	     CONTEXT_MSB6: context id is the most significant 6 bits of the last byte,
+	     CONTEXT_UTF8: second-order context model tuned for UTF8-encoded text,
+	     CONTEXT_SIGNED: second-order context model tuned for signed integers.
+
+	   The context id for the UTF8 context model is calculated as follows. If p1
+	   and p2 are the previous two bytes, we calcualte the context as
+
+	     context = kContextLookup[p1] | kContextLookup[p2 + 256].
+
+	   If the previous two bytes are ASCII characters (i.e. < 128), this will be
+	   equivalent to
+
+	     context = 4 * context1(p1) + context2(p2),
+
+	   where context1 is based on the previous byte in the following way:
+
+	     0  : non-ASCII control
+	     1  : \t, \n, \r
+	     2  : space
+	     3  : other punctuation
+	     4  : " '
+	     5  : %
+	     6  : ( < [ {
+	     7  : ) > ] }
+	     8  : , ; :
+	     9  : .
+	     10 : =
+	     11 : number
+	     12 : upper-case vowel
+	     13 : upper-case consonant
+	     14 : lower-case vowel
+	     15 : lower-case consonant
+
+	   and context2 is based on the second last byte:
+
+	     0 : control, space
+	     1 : punctuation
+	     2 : upper-case letter, number
+	     3 : lower-case letter
+
+	   If the last byte is ASCII, and the second last byte is not (in a valid UTF8
+	   stream it will be a continuation byte, value between 128 and 191), the
+	   context is the same as if the second last byte was an ASCII control or space.
+
+	   If the last byte is a UTF8 lead byte (value >= 192), then the next byte will
+	   be a continuation byte and the context id is 2 or 3 depending on the LSB of
+	   the last byte and to a lesser extent on the second last byte if it is ASCII.
+
+	   If the last byte is a UTF8 continuation byte, the second last byte can be:
+	     - continuation byte: the next byte is probably ASCII or lead byte (assuming
+	       4-byte UTF8 characters are rare) and the context id is 0 or 1.
+	     - lead byte (192 - 207): next byte is ASCII or lead byte, context is 0 or 1
+	     - lead byte (208 - 255): next byte is continuation byte, context is 2 or 3
+
+	   The possible value combinations of the previous two bytes, the range of
+	   context ids and the type of the next byte is summarized in the table below:
+
+	   |--------\-----------------------------------------------------------------|
+	   |         \                         Last byte                              |
+	   | Second   \---------------------------------------------------------------|
+	   | last byte \    ASCII            |   cont. byte        |   lead byte      |
+	   |            \   (0-127)          |   (128-191)         |   (192-)         |
+	   |=============|===================|=====================|==================|
+	   |  ASCII      | next: ASCII/lead  |  not valid          |  next: cont.     |
+	   |  (0-127)    | context: 4 - 63   |                     |  context: 2 - 3  |
+	   |-------------|-------------------|---------------------|------------------|
+	   |  cont. byte | next: ASCII/lead  |  next: ASCII/lead   |  next: cont.     |
+	   |  (128-191)  | context: 4 - 63   |  context: 0 - 1     |  context: 2 - 3  |
+	   |-------------|-------------------|---------------------|------------------|
+	   |  lead byte  | not valid         |  next: ASCII/lead   |  not valid       |
+	   |  (192-207)  |                   |  context: 0 - 1     |                  |
+	   |-------------|-------------------|---------------------|------------------|
+	   |  lead byte  | not valid         |  next: cont.        |  not valid       |
+	   |  (208-)     |                   |  context: 2 - 3     |                  |
+	   |-------------|-------------------|---------------------|------------------|
+
+	   The context id for the signed context mode is calculated as:
+
+	     context = (kContextLookup[512 + p1] << 3) | kContextLookup[512 + p2].
+
+	   For any context modeling modes, the context ids can be calculated by |-ing
+	   together two lookups from one table using context model dependent offsets:
+
+	     context = kContextLookup[offset1 + p1] | kContextLookup[offset2 + p2].
+
+	   where offset1 and offset2 are dependent on the context mode.
+	*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+	   Licensed under the Apache License, Version 2.0 (the "License");
+	   you may not use this file except in compliance with the License.
+	   You may obtain a copy of the License at
+
+	   http://www.apache.org/licenses/LICENSE-2.0
+
+	   Unless required by applicable law or agreed to in writing, software
+	   distributed under the License is distributed on an "AS IS" BASIS,
+	   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	   See the License for the specific language governing permissions and
+	   limitations under the License.
+
+	   Lookup tables to map prefix codes to value ranges. This is used during
+	   decoding of the block lengths, literal insertion lengths and copy lengths.
+	*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+	   Licensed under the Apache License, Version 2.0 (the "License");
+	   you may not use this file except in compliance with the License.
+	   You may obtain a copy of the License at
+
+	   http://www.apache.org/licenses/LICENSE-2.0
+
+	   Unless required by applicable law or agreed to in writing, software
+	   distributed under the License is distributed on an "AS IS" BASIS,
+	   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	   See the License for the specific language governing permissions and
+	   limitations under the License.
+
+	   Transformations on dictionary words.
+	*/
+/* Copyright 2013 Google Inc. All Rights Reserved.
+
+	   Licensed under the Apache License, Version 2.0 (the "License");
+	   you may not use this file except in compliance with the License.
+	   You may obtain a copy of the License at
+
+	   http://www.apache.org/licenses/LICENSE-2.0
+
+	   Unless required by applicable law or agreed to in writing, software
+	   distributed under the License is distributed on an "AS IS" BASIS,
+	   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	   See the License for the specific language governing permissions and
+	   limitations under the License.
+	*/
+
+
+## @pdf-lib/standard-fonts@1.0.0
+
+License: MIT
+
+### LICENSE.md
+
+MIT License
+
+Copyright (c) 2018 Andrew Dillon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## @pdf-lib/upng@1.0.1
+
+License: MIT
+
+### LICENSE
+
+MIT License
+
+Copyright (c) 2017 Photopea
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## @pierre/diffs@1.2.10
 
 License: apache-2.0
@@ -69426,6 +69908,34 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+## pako@1.0.11
+
+License: (MIT AND Zlib)
+
+### LICENSE
+
+(The MIT License)
+
+Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
 ## parse-conflict-json@5.0.1
 
 License: ISC
@@ -69820,6 +70330,34 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+## pdf-lib@1.17.1
+
+License: MIT
+
+### LICENSE.md
+
+MIT License
+
+Copyright (c) 2019 Andrew Dillon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## picocolors@1.1.1
 
@@ -74844,6 +75382,25 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## tslib@1.14.1
+
+License: 0BSD
+
+### LICENSE.txt
+
+Copyright (c) Microsoft Corporation.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
 
 ## tslib@2.8.1
 

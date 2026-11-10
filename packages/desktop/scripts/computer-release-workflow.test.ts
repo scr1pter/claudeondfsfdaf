@@ -291,3 +291,19 @@ test("the release and reusable native lane keep channel identities, source check
   for (const name of ["windows-build", "windows-arm64-test"])
     expect(commands(record(nativeJobs[name]))).toContain("--channel $env:VECTOR_CHANNEL")
 })
+
+test("the preview caveat adapter receives explicit guarded context without changing production notes", () => {
+  const caveat = steps(job("prepare")).find(
+    (step) => step.name === "Require the access re-ask caveat after a measured helper change",
+  )!
+  expect(caveat.env).toEqual({
+    TAG: "${{ env.RELEASE_TAG }}",
+    REQUESTED_UNSIGNED: "${{ inputs.allow_unsigned || false }}",
+    EVENT_REPOSITORY: "${{ github.event.repository.full_name }}",
+  })
+  expect(caveat.run).toContain('--hands-preview "$RELEASE_DRY_RUN"')
+  expect(record(release.env).RELEASE_DRY_RUN).toBe("${{ inputs.dry_run || false }}")
+  expect(record(release.env).RELEASE_PRERELEASE).toBe("${{ inputs.prerelease || false }}")
+  expect(record(release.env).VECTOR_CHANNEL).toBe("${{ inputs.prerelease && 'beta' || 'prod' }}")
+  expect(caveat["continue-on-error"]).toBeUndefined()
+})

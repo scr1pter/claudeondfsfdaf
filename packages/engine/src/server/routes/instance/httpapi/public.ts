@@ -60,6 +60,7 @@ const QueryParameterSchemas: Record<string, OpenApiSchema> = {
   "GET /experimental/session roots": QueryBooleanOpenApi,
   "GET /experimental/session internal": QueryBooleanOpenApi,
   "GET /experimental/session archived": QueryBooleanOpenApi,
+  "GET /experimental/session/{sessionID}/tasks/{taskID}/changes diff": QueryBooleanOpenApi,
   "GET /find/file limit": { type: "integer", minimum: 1, maximum: 200 },
   "GET /local/egress since": { type: "integer", minimum: 0 },
   "GET /local/egress blocked": QueryBooleanOpenApi,

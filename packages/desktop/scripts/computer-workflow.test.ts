@@ -1,9 +1,15 @@
 import { expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { runInNewContext } from "node:vm"
+import {
+  WINDOWS_NATIVE_CHECKS,
+  WINDOWS_NATIVE_REASONS,
+  WINDOWS_NATIVE_STAGES,
+  WINDOWS_NATIVE_CODES,
+} from "./computer-helper-selftest-windows"
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a workflow mapping.")
@@ -43,6 +49,7 @@ function expression(
   ref = "refs/heads/hands",
   needs: Record<string, unknown> = {},
   status: { cancelled?: boolean; success?: boolean; steps?: Record<string, unknown> } = {},
+  definition = helper,
 ) {
   // GitHub permits hyphens in dotted property names; translate those accesses outside string literals.
   const code = value
@@ -53,7 +60,7 @@ function expression(
   return runInNewContext(
     code,
     {
-      inputs,
+      inputs: { ...inputDefaults(definition), ...inputs },
       needs,
       always: () => true,
       cancelled: () => status.cancelled ?? false,
@@ -74,11 +81,88 @@ function expression(
   ) as unknown
 }
 
-function group(value: unknown, inputs: Record<string, unknown>, ref = "refs/heads/hands") {
+function inputDefaults(definition: ReturnType<typeof workflow>) {
+  const event = definition === helper ? "workflow_call" : "workflow_dispatch"
+  const inputs = record(record(record(definition.document.on)[event]).inputs)
+  return Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name, record(input).default]))
+}
+
+function mainExpression(
+  value: string,
+  inputs: Record<string, unknown>,
+  event = "workflow_dispatch",
+  ref = "refs/heads/hands",
+) {
+  return expression(value, inputs, event, ref, {}, {}, main)
+}
+
+function group(value: unknown, inputs: Record<string, unknown>, ref = "refs/heads/hands", definition = main) {
   if (typeof value !== "string") throw new Error("Expected a concurrency group.")
   return value.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, code: string) =>
-    String(expression(code, inputs, "workflow_dispatch", ref)),
+    String(expression(code, inputs, "workflow_dispatch", ref, {}, {}, definition)),
   )
+}
+
+function helperGroup(value: unknown, inputs: Record<string, unknown>, ref = "refs/heads/hands") {
+  return group(value, inputs, ref, helper)
+}
+
+const targets = [
+  "all",
+  "linux",
+  "windows",
+  "windows-units",
+  "macos-signing",
+  "macos-overlay",
+  "windows-overlay",
+] as const
+const booleanSelectors = [
+  "computer_helper",
+  "desktop_engine_node",
+  "hands_ui",
+  "hands_benchmark",
+  "release_evidence",
+  "production_benchmark",
+  "offline_footprint",
+] as const
+const ordinaryJobs = ["computer-helper", "unit", "desktop-engine-node", "engine-linux", "engine-windows", "e2e"]
+const targetJobs = {
+  all: "computer-helper",
+  linux: "computer-helper",
+  windows: "computer-helper",
+  "windows-units": "computer-helper-windows-units",
+  "macos-signing": "computer-helper-macos-signing",
+  "macos-overlay": "computer-helper-macos-overlay",
+  "windows-overlay": "computer-helper-windows-overlay",
+}
+const dispatchModes: { inputs: Record<string, unknown>; jobs: string[] }[] = [
+  { inputs: {}, jobs: ordinaryJobs },
+  ...targets.map((target) => ({
+    inputs: { computer_helper: true, computer_helper_target: target },
+    jobs: [targetJobs[target]],
+  })),
+  { inputs: { desktop_engine_node: true }, jobs: ["desktop-engine-node"] },
+  { inputs: { hands_ui: true }, jobs: ["hands-ui"] },
+  { inputs: { hands_benchmark: true }, jobs: ["hands-benchmark"] },
+  { inputs: { hands_ui: true, hands_benchmark: true }, jobs: ["hands-ui", "hands-benchmark"] },
+  { inputs: { release_evidence: true }, jobs: ["release-evidence"] },
+  { inputs: { production_benchmark: true }, jobs: ["production-benchmark"] },
+  { inputs: { offline_footprint: true }, jobs: ["offline-footprint"] },
+]
+
+function validateDispatch(inputs: Record<string, unknown>) {
+  const validator = record(record(main.document.jobs)["validate-dispatch"])
+  const step = steps(validator)[0]!
+  return spawnSync("bash", ["--noprofile", "--norc", "-c", String(step.run)], {
+    env: {
+      ...process.env,
+      ...Object.fromEntries(
+        Object.entries(record(step.env)).map(([name, value]) => [name, String(mainExpression(String(value), inputs))]),
+      ),
+    },
+    encoding: "utf8",
+    timeout: 5000,
+  })
 }
 
 test("the native workflow has safe reusable/manual defaults and the temporary CI branch trigger", () => {
@@ -188,84 +272,154 @@ test("the normal test workflow supplies only the native lane's read permissions"
   expect(main.source).not.toContain("pull_request_target:")
 })
 
-test("a native-only dispatch excludes ordinary and focused jobs without sharing their cancellation group", () => {
+test("dispatch selectors stay within GitHub's input limit and every expensive job waits for validation", () => {
   const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.computer_helper).toMatchObject({ type: "boolean", default: false })
-  const all = record(main.document.jobs)
-  const selected = { computer_helper: true, hands_ui: true, hands_benchmark: true }
-  for (const [name, value] of Object.entries(all)) {
-    const current = record(value)
-    expect(typeof current.if, `${name} must respect native-only dispatch`).toBe("string")
-    expect(expression(String(current.if), selected), `${name} has incorrect native-only routing`).toBe(
-      name === "computer-helper",
-    )
-  }
-  expect(
-    expression(String(record(all["computer-helper"]).if), {
-      computer_helper: false,
-      hands_ui: true,
-      hands_benchmark: false,
-    }),
-  ).toBe(false)
-  expect(expression(String(record(all["computer-helper"]).if), {}, "pull_request")).toBe(true)
-  expect(expression(String(record(all["computer-helper"]).if), {}, "push", "refs/heads/main")).toBe(true)
+  expect(Object.keys(inputs).toSorted()).toEqual([...booleanSelectors, "computer_helper_target"].toSorted())
+  expect(Object.keys(inputs)).toHaveLength(8)
+  expect(Object.keys(inputs).length).toBeLessThanOrEqual(10)
+  expect(inputs.computer_helper_target).toMatchObject({ type: "choice", default: "all", options: [...targets] })
+  for (const name of booleanSelectors) expect(inputs[name]).toMatchObject({ type: "boolean", default: false })
+  // Undefined inputs used to hide false-vs-undefined routing errors and the helper's true E2E default.
+  expect(mainExpression("inputs.offline_footprint", {})).toBe(false)
+  expect(mainExpression("inputs.computer_helper_target", {})).toBe("all")
+  expect(expression("inputs['full-desktop-e2e']", {})).toBe(true)
 
-  const cancellation = record(main.document.concurrency)
-  const modes = [
-    { computer_helper: true, hands_ui: false, hands_benchmark: false },
-    { computer_helper: false, hands_ui: false, hands_benchmark: false },
-    { computer_helper: false, hands_ui: true, hands_benchmark: false },
-    { computer_helper: false, hands_ui: false, hands_benchmark: true },
-  ]
-  expect(new Set(modes.map((mode) => group(cancellation.group, mode))).size).toBe(modes.length)
-  const child = record(helper.document.concurrency)
-  expect(child["cancel-in-progress"]).toBe(true)
-  const native = group(child.group, { "artifact-suffix": "fixture" })
-  expect(native).not.toBe(group(cancellation.group, modes[0]!))
-  expect(native).not.toBe(group(child.group, { "artifact-suffix": "fixture" }, "refs/heads/another-task"))
+  const all = record(main.document.jobs)
+  const validator = record(all["validate-dispatch"])
+  expect(validator.if).toBeUndefined()
+  expect(validator.needs).toBeUndefined()
+  expect(validator["runs-on"]).toBe("ubuntu-24.04")
+  expect(validator["timeout-minutes"]).toBe(2)
+  expect(validator.permissions).toEqual({ contents: "read" })
+  expect(validator["continue-on-error"]).toBeUndefined()
+  const current = steps(validator)
+  expect(current).toHaveLength(1)
+  expect(current[0]!.name).toBe("Validate workflow dispatch selectors before setup")
+  expect(current[0]!.shell).toBe("bash")
+  expect(current[0]!.uses).toBeUndefined()
+  expect(current[0]!["continue-on-error"]).toBeUndefined()
+  expect(Object.keys(record(current[0]!.env)).toSorted()).toEqual(
+    [...booleanSelectors.map((name) => name.toUpperCase()), "COMPUTER_HELPER_TARGET"].toSorted(),
+  )
+  for (const [name, value] of Object.entries(all)) {
+    if (name === "validate-dispatch") continue
+    const needs = record(value).needs
+    expect(typeof needs === "string" ? [needs] : needs, name).toContain("validate-dispatch")
+    expect(String(record(value).if), name).not.toMatch(/always\(\)|failure\(\)/)
+  }
 })
 
-test("Windows-only dispatch is explicit, native-only and independent of all-native cancellation", () => {
-  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.computer_helper_windows_only).toMatchObject({ type: "boolean", default: false })
+test("valid native choices, Node, Hands and study modes run only their named jobs", () => {
   const all = record(main.document.jobs)
-  const reuse = record(all["computer-helper"])
-  const selector = record(reuse.with)["windows-only"]
-  expect(typeof selector).toBe("string")
+  for (const mode of dispatchModes)
+    for (const [name, value] of Object.entries(all))
+      expect(
+        mainExpression(String(record(value).if ?? "true"), mode.inputs),
+        `${name}: ${JSON.stringify(mode.inputs)}`,
+      ).toBe(name === "validate-dispatch" || mode.jobs.includes(name))
+  for (const event of ["pull_request", "push"])
+    for (const [name, value] of Object.entries(all))
+      expect(mainExpression(String(record(value).if ?? "true"), {}, event), `${name}: ${event}`).toBe(
+        name === "validate-dispatch" || ordinaryJobs.includes(name),
+      )
+})
+
+test("the actual cheap validator rejects mixed modes, orphan or unknown targets and nonboolean flags", () => {
+  for (const mode of dispatchModes) {
+    const result = validateDispatch(mode.inputs)
+    expect(result.error).toBeUndefined()
+    expect(result.status, `${JSON.stringify(mode.inputs)}: ${result.stdout} ${result.stderr}`).toBe(0)
+  }
+  for (let bits = 0; bits < 1 << booleanSelectors.length; bits++) {
+    const mode = Object.fromEntries(booleanSelectors.map((name, index) => [name, !!(bits & (1 << index))]))
+    const groups = [
+      mode.computer_helper,
+      mode.desktop_engine_node,
+      mode.hands_ui || mode.hands_benchmark,
+      mode.release_evidence,
+      mode.production_benchmark,
+      mode.offline_footprint,
+    ].filter(Boolean).length
+    if (groups > 1)
+      for (const [name, value] of Object.entries(record(main.document.jobs))) {
+        if (name === "validate-dispatch") continue
+        expect(mainExpression(String(record(value).if), mode), name).toBe(false)
+      }
+  }
+  // Keep real Bash process count bounded on Windows; exhaust every condition above without spawning per tuple.
+  for (const mode of [
+    { computer_helper: true, desktop_engine_node: true },
+    { computer_helper: true, hands_ui: true },
+    { computer_helper: true, hands_benchmark: true },
+    { desktop_engine_node: true, hands_ui: true, hands_benchmark: true },
+    { hands_ui: true, release_evidence: true },
+    { hands_benchmark: true, production_benchmark: true },
+    { offline_footprint: true, release_evidence: true },
+    { production_benchmark: true, offline_footprint: true },
+    { release_evidence: true, production_benchmark: true },
+    { offline_footprint: true, desktop_engine_node: true },
+    Object.fromEntries(booleanSelectors.map((name) => [name, true])),
+  ])
+    expect(validateDispatch(mode).status, JSON.stringify(mode)).toBe(1)
+  for (const target of targets.slice(1)) expect(validateDispatch({ computer_helper_target: target }).status).toBe(1)
+  for (const target of ["unknown", "WINDOWS", "windows,linux"])
+    expect(validateDispatch({ computer_helper: true, computer_helper_target: target }).status).toBe(1)
+  for (const flag of booleanSelectors) expect(validateDispatch({ [flag]: "not-boolean" }).status, flag).toBe(1)
+})
+
+test("dispatch cancellation groups distinguish every valid mode and cannot be reused by invalid mixed flags", () => {
+  const cancellation = record(main.document.concurrency)
+  expect(cancellation["cancel-in-progress"]).toBe(true)
+  const groups = dispatchModes.map((mode) => group(cancellation.group, mode.inputs))
+  expect(new Set(groups).size).toBe(dispatchModes.length)
+  for (const mode of dispatchModes)
+    expect(group(cancellation.group, mode.inputs, "refs/heads/another-task")).not.toBe(
+      group(cancellation.group, mode.inputs),
+    )
+  for (let bits = 0; bits < 1 << booleanSelectors.length; bits++) {
+    const mode = Object.fromEntries(booleanSelectors.map((name, index) => [name, !!(bits & (1 << index))]))
+    const selected = [
+      mode.computer_helper,
+      mode.desktop_engine_node,
+      mode.hands_ui || mode.hands_benchmark,
+      mode.release_evidence,
+      mode.production_benchmark,
+      mode.offline_footprint,
+    ].filter(Boolean).length
+    if (selected > 1) expect(groups).not.toContain(group(cancellation.group, mode))
+  }
+  expect(group(cancellation.group, {})).toBe(group(cancellation.group, inputDefaults(main)))
+  const child = record(helper.document.concurrency)
+  expect(child["cancel-in-progress"]).toBe(true)
+  const native = helperGroup(child.group, { "artifact-suffix": "fixture" })
+  expect(groups).not.toContain(native)
+  expect(native).not.toBe(helperGroup(child.group, { "artifact-suffix": "fixture" }, "refs/heads/another-task"))
+  expect(mainExpression(String(cancellation.group), {}, "push", "refs/heads/main")).toBe("test-1")
+  expect(mainExpression(String(cancellation.group), { computer_helper: true }, "pull_request")).toBe(
+    mainExpression(String(cancellation.group), {}, "pull_request"),
+  )
+})
+
+test("Windows and Linux choices map only their native reusable-workflow selectors", () => {
+  const reuse = record(record(main.document.jobs)["computer-helper"])
   for (const event of ["workflow_dispatch", "pull_request", "push"])
     for (const native of [false, true])
-      for (const windows of [false, true]) {
-        const mode = {
-          computer_helper: native,
-          computer_helper_windows_only: windows,
-          hands_ui: false,
-          hands_benchmark: false,
-        }
-        expect(expression(String(selector), mode, event)).toBe(event === "workflow_dispatch" && native && windows)
-      }
-  const windows = { computer_helper: true, computer_helper_windows_only: true, hands_ui: true, hands_benchmark: true }
-  for (const [name, value] of Object.entries(all))
-    expect(expression(String(record(value).if), windows), `${name} has incorrect Windows-only routing`).toBe(
-      name === "computer-helper",
-    )
-  // The flag by itself leaves ordinary full-regression routing and cancellation unchanged.
-  const baseline = { computer_helper: false, hands_ui: false, hands_benchmark: false }
-  for (const value of Object.values(all)) {
-    const condition = String(record(value).if)
-    expect(expression(condition, { ...baseline, computer_helper_windows_only: true })).toBe(
-      expression(condition, baseline),
-    )
-  }
-  const cancellation = record(main.document.concurrency)
-  const native = { ...baseline, computer_helper: true }
-  expect(group(cancellation.group, windows)).not.toBe(group(cancellation.group, native))
-  expect(group(cancellation.group, { ...baseline, computer_helper_windows_only: true })).toBe(
-    group(cancellation.group, baseline),
-  )
+      for (const target of targets)
+        for (const [selector, selected] of [
+          ["windows-only", "windows"],
+          ["linux-only", "linux"],
+        ])
+          expect(
+            mainExpression(
+              String(record(reuse.with)[selector!]),
+              { computer_helper: native, computer_helper_target: target },
+              event,
+            ),
+          ).toBe(event === "workflow_dispatch" && native && target === selected)
   const child = record(helper.document.concurrency)
   const suffix = { "artifact-suffix": "same-immutable-source" }
-  expect(group(child.group, { ...suffix, "windows-only": true })).not.toBe(group(child.group, suffix))
-  expect(group(child.group, { ...suffix, "windows-only": false })).toBe(group(child.group, suffix))
+  expect(helperGroup(child.group, { ...suffix, "windows-only": true })).not.toBe(helperGroup(child.group, suffix))
+  expect(helperGroup(child.group, { ...suffix, "windows-only": false })).toBe(helperGroup(child.group, suffix))
 })
 
 test("Windows-only native coverage keeps both architectures and required checks while skipping macOS", () => {
@@ -442,6 +596,54 @@ test("shipping and test archives preserve executable modes while failure diagnos
   }
 })
 
+test("native summaries expose failed and skipped closed rows in job logs without native payloads", () => {
+  const reports = {
+    "mac-build": ["computer-darwin-core.json", "computer-darwin-privileged.json"],
+    "mac-test": ["computer-darwin-matrix.json", "computer-darwin-matrix-privileged.json"],
+    "windows-build": ["computer-win32-core.json", "computer-win32-privileged.json"],
+    "windows-arm64-test": ["computer-win32-arm64.json", "computer-win32-arm64-privileged.json"],
+  }
+  for (const [name, files] of Object.entries(reports)) {
+    const summary = steps(job(name)).find(
+      (step) => typeof step.run === "string" && step.run.includes('check.status === "skipped"'),
+    )!
+    expect(summary.if).toBe("${{ always() }}")
+    expect(summary["timeout-minutes"]).toBe(2)
+    const source = /^node --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+    expect(source).toBeString()
+    const temporary = mkdtempSync(path.join(tmpdir(), "vector-native-summary-"))
+    const output = path.join(temporary, "summary.md")
+    try {
+      const checks = [
+        { name: "unit", status: "passed", raw: "PRIVATE UNIT OUTPUT" },
+        { name: "privileged.capture-color-patch", status: "failed", reason: "native_operation_failed" },
+        { name: "privileged.secure-field-refusal", status: "skipped", reason: "noninteractive_desktop" },
+      ]
+      for (const file of files)
+        writeFileSync(
+          path.join(temporary, file),
+          JSON.stringify({ checks, image: "PRIVATE SCREENSHOT", stderr: "PRIVATE NATIVE ERROR" }),
+        )
+      const result = spawnSync("node", ["--input-type=module", "-e", source!], {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { ...process.env, RUNNER_TEMP: temporary, GITHUB_STEP_SUMMARY: output, WINDOWS_PROTOCOL: "true" },
+      })
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toBe("")
+      expect(result.stdout).toBe(readFileSync(output, "utf8"))
+      for (const file of files)
+        expect(result.stdout).toContain(
+          `\n${file}: passed=1, failed=1, skipped=1\n- FAILED privileged.capture-color-patch: native_operation_failed\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`,
+        )
+      expect(result.stdout).not.toMatch(/PRIVATE|image|stderr|unit:|\"checks\"/)
+    } finally {
+      rmSync(temporary, { recursive: true, force: true })
+    }
+  }
+})
+
 test("optional native unit failures retain separate bounded suite diagnostics", () => {
   for (const name of ["mac-build", "mac-test"]) {
     const current = steps(job(name))
@@ -458,88 +660,12 @@ test("optional native unit failures retain separate bounded suite diagnostics", 
   }
 })
 
-test("focused Node smoke keeps normal CI gates and uses its own cancellation group", () => {
-  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.desktop_engine_node).toMatchObject({ type: "boolean", default: false })
-  const all = record(main.document.jobs)
-  const focused = {
-    desktop_engine_node: true,
-    computer_helper: true,
-    computer_helper_windows_units_only: true,
-    computer_helper_macos_signing_only: true,
-    computer_helper_macos_overlay_only: true,
-    computer_helper_windows_overlay_only: true,
-    hands_ui: true,
-    hands_benchmark: true,
-  }
-  for (const [name, value] of Object.entries(all)) {
-    const current = record(value)
-    expect(expression(String(current.if), focused), name).toBe(name === "desktop-engine-node")
-    if (
-      ![
-        "hands-ui",
-        "hands-benchmark",
-        "computer-helper-windows-units",
-        "computer-helper-macos-signing",
-        "computer-helper-macos-overlay",
-        "computer-helper-windows-overlay",
-      ].includes(name)
-    ) {
-      expect(expression(String(current.if), {}), name).toBe(true)
-      expect(expression(String(current.if), {}, "pull_request"), name).toBe(true)
-    }
-  }
-  const cancellation = record(main.document.concurrency)
-  expect(group(cancellation.group, focused)).not.toBe(group(cancellation.group, {}))
-  expect(group(cancellation.group, focused)).not.toBe(group(cancellation.group, { computer_helper: true }))
-})
-
-test("Linux-only dispatch keeps ordinary gates and native cancellation groups independent", () => {
-  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.computer_helper_linux_only).toMatchObject({ type: "boolean", default: false })
-  const all = record(main.document.jobs)
-  const reuse = record(all["computer-helper"])
-  const selector = record(reuse.with)["linux-only"]
-  expect(typeof selector).toBe("string")
-  for (const event of ["workflow_dispatch", "pull_request", "push"])
-    for (const native of [false, true])
-      for (const linux of [false, true])
-        expect(
-          expression(String(selector), { computer_helper: native, computer_helper_linux_only: linux }, event),
-        ).toBe(event === "workflow_dispatch" && native && linux)
-  const linux = { computer_helper: true, computer_helper_linux_only: true, hands_ui: true, hands_benchmark: true }
-  for (const [name, value] of Object.entries(all))
-    expect(expression(String(record(value).if), linux), `${name} has incorrect Linux-only routing`).toBe(
-      name === "computer-helper",
-    )
-  const baseline = { computer_helper: false, hands_ui: false, hands_benchmark: false }
-  for (const value of Object.values(all))
-    for (const event of ["workflow_dispatch", "pull_request", "push"])
-      expect(expression(String(record(value).if), { ...baseline, computer_helper_linux_only: true }, event)).toBe(
-        expression(String(record(value).if), baseline, event),
-      )
-  const cancellation = record(main.document.concurrency)
-  const modes = [
-    { computer_helper: true },
-    { computer_helper: true, computer_helper_windows_only: true },
-    { computer_helper: true, computer_helper_linux_only: true },
-    { computer_helper: true, computer_helper_windows_only: true, computer_helper_linux_only: true },
-    { desktop_engine_node: true },
-  ]
-  expect(new Set(modes.map((mode) => group(cancellation.group, mode))).size).toBe(modes.length)
-  expect(group(cancellation.group, { ...baseline, computer_helper_linux_only: true })).toBe(
-    group(cancellation.group, baseline),
-  )
+test("reusable Linux-only and Windows-only cancellation groups remain independent", () => {
   const child = record(helper.document.concurrency)
   const suffix = { "artifact-suffix": "same-immutable-source" }
-  const childModes = [
-    {},
-    { "windows-only": true },
-    { "linux-only": true },
-    { "windows-only": true, "linux-only": true },
-  ]
-  expect(new Set(childModes.map((mode) => group(child.group, { ...suffix, ...mode }))).size).toBe(childModes.length)
-  expect(group(child.group, { ...suffix, "linux-only": false })).toBe(group(child.group, suffix))
+  const modes = [{}, { "windows-only": true }, { "linux-only": true }, { "windows-only": true, "linux-only": true }]
+  expect(new Set(modes.map((mode) => helperGroup(child.group, { ...suffix, ...mode }))).size).toBe(modes.length)
+  expect(helperGroup(child.group, { ...suffix, "linux-only": false })).toBe(helperGroup(child.group, suffix))
 })
 
 test("Linux-only runs both real Electron lanes and skips every native OS lane", () => {
@@ -697,41 +823,6 @@ test("the macOS matrix can diagnose admitted artifacts after later fixture failu
   expect(helperRelease["continue-on-error"]).toBeUndefined()
 })
 
-test("x64 unit diagnostics require explicit native dispatch and keep independent cancellation groups", () => {
-  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.computer_helper_windows_units_only).toMatchObject({ type: "boolean", default: false })
-  const all = record(main.document.jobs)
-  const diagnostic = record(all["computer-helper-windows-units"])
-  const selected = { computer_helper: true, computer_helper_windows_units_only: true }
-  for (const event of ["workflow_dispatch", "pull_request", "push"])
-    for (const native of [false, true])
-      for (const units of [false, true])
-        expect(
-          expression(
-            String(diagnostic.if),
-            { computer_helper: native, computer_helper_windows_units_only: units },
-            event,
-          ),
-        ).toBe(event === "workflow_dispatch" && native && units)
-  for (const [name, value] of Object.entries(all)) {
-    expect(expression(String(record(value).if), selected), name).toBe(name === "computer-helper-windows-units")
-    for (const event of ["workflow_dispatch", "pull_request", "push"])
-      expect(expression(String(record(value).if), { computer_helper_windows_units_only: true }, event), name).toBe(
-        expression(String(record(value).if), {}, event),
-      )
-  }
-  const modes = [
-    selected,
-    { computer_helper: true },
-    { computer_helper: true, computer_helper_windows_only: true },
-    { computer_helper: true, computer_helper_linux_only: true },
-    { desktop_engine_node: true },
-    { ...selected, computer_helper_windows_only: true },
-    { ...selected, computer_helper_linux_only: true },
-  ]
-  expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
-})
-
 test("Windows unit and diagnostic lanes exercise the packed Main pin reader before native builds", () => {
   const all = record(main.document.jobs)
   const unit = record(all.unit)
@@ -767,18 +858,10 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
   expect(diagnostic["runs-on"]).toBe("windows-2025")
   expect(diagnostic.permissions).toEqual({ contents: "read" })
-  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  for (const key of ["outputs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
   const current = steps(diagnostic)
-  const guard = current[0]!
-  expect(guard.name).toBe("Reject incompatible diagnostic selectors before setup")
-  for (const windows of ["true", "false"])
-    for (const linux of ["true", "false"])
-      expect(
-        spawnSync("bash", ["--noprofile", "--norc", "-c", String(guard.run)], {
-          env: { ...process.env, WINDOWS_ONLY: windows, LINUX_ONLY: linux },
-          timeout: 5000,
-        }).status,
-      ).toBe(windows === "true" || linux === "true" ? 1 : 0)
+  expect(diagnostic.needs).toBe("validate-dispatch")
+  expect(current[0]!.name).toBe("Checkout repository")
   const script = commands(diagnostic)
   expect(script).toContain("--platform win32 --arch x64 --channel prod --out native/out/win32")
   expect(script).toContain("bun install --frozen-lockfile --ignore-scripts")
@@ -948,6 +1031,122 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
 })
 
+test("the x64 diagnostic logs closed failed stages and codes without exposing native payloads", () => {
+  const current = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
+  const isolated = current.findIndex((step) => step.name === "Run explicitly isolated Windows scenarios")
+  const summary = current.find((step) => step.name === "Summarize x64 native diagnostic rows")!
+  expect(current.indexOf(summary)).toBeGreaterThan(isolated)
+  expect(summary.if).toBe("${{ always() }}")
+  expect(summary["timeout-minutes"]).toBe(2)
+  expect(summary["continue-on-error"]).toBeUndefined()
+  expect(summary.shell).toBe("bash")
+  expect(String(summary.run).split("\n").slice(0, 2)).toEqual([
+    'VECTOR_WINDOWS_NATIVE_DIAGNOSTICS="$(bun --no-env-file --eval \'import { WINDOWS_NATIVE_CHECKS, WINDOWS_NATIVE_REASONS, WINDOWS_NATIVE_STAGES, WINDOWS_NATIVE_CODES } from "./scripts/computer-helper-selftest-windows.ts"; process.stdout.write(JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged, reasons: WINDOWS_NATIVE_REASONS, stages: WINDOWS_NATIVE_STAGES, codes: WINDOWS_NATIVE_CODES }))\')"',
+    "export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS",
+  ])
+  const source = /\nnode --input-type=module <<'NODE'\n([\s\S]+)\nNODE\s*$/.exec(String(summary.run))?.[1]
+  expect(source).toBeString()
+  const temporary = mkdtempSync(path.join(tmpdir(), "vector-native-diagnostic-summary-"))
+  const output = path.join(temporary, "summary.md")
+  const env = {
+    ...process.env,
+    RUNNER_TEMP: temporary,
+    GITHUB_STEP_SUMMARY: output,
+    VECTOR_WINDOWS_NATIVE_DIAGNOSTICS: JSON.stringify({
+      checks: WINDOWS_NATIVE_CHECKS.privileged,
+      reasons: WINDOWS_NATIVE_REASONS,
+      stages: WINDOWS_NATIVE_STAGES,
+      codes: WINDOWS_NATIVE_CODES,
+    }),
+  }
+  try {
+    const files = ["computer-win32-core.json", "computer-win32-direct-node.json", "computer-win32-privileged.json"]
+    const diagnostic = { stage: "capture-window-item-full-ticket-expired", nativeCode: "timeout" }
+    for (const file of files)
+      writeFileSync(
+        path.join(temporary, file),
+        JSON.stringify({
+          checks: [
+            { name: "unit", status: "passed", stdout: "PRIVATE UNIT OUTPUT", ...diagnostic },
+            {
+              name: "privileged.capture-color-patch",
+              status: "failed",
+              reason: "native_operation_failed",
+              ...diagnostic,
+            },
+            {
+              name: "privileged.secure-field-refusal",
+              status: "skipped",
+              reason: "noninteractive_desktop",
+              ...diagnostic,
+            },
+          ],
+          image: "PRIVATE SCREENSHOT",
+          stderr: "PRIVATE NATIVE ERROR",
+        }),
+      )
+    writeFileSync(path.join(temporary, "unrelated.json"), JSON.stringify({ text: "PRIVATE UNRELATED FILE" }))
+    const result = spawnSync("node", ["--input-type=module", "-e", source!], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env,
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toBe(readFileSync(output, "utf8"))
+    for (const file of files)
+      expect(result.stdout).toContain(
+        `\n${file}: passed=1, failed=1, skipped=1\n- FAILED privileged.capture-color-patch: native_operation_failed${file === "computer-win32-privileged.json" ? " [stage=capture-window-item-full-ticket-expired, nativeCode=timeout]" : ""}\n- SKIPPED privileged.secure-field-refusal: noninteractive_desktop\n`,
+      )
+    expect(result.stdout.match(/\[stage=/g)).toHaveLength(1)
+    expect(result.stdout).not.toMatch(/PRIVATE|image|stderr|unit:|\"checks\"/)
+
+    const invalid = [
+      { stage: "PRIVATE WINDOW TITLE", nativeCode: "timeout" },
+      { stage: diagnostic.stage, nativeCode: "PRIVATE NATIVE ERROR" },
+      { stage: diagnostic.stage },
+      { nativeCode: "timeout" },
+      { stage: null, nativeCode: "timeout" },
+      { stage: diagnostic.stage, nativeCode: ["timeout"] },
+    ]
+    writeFileSync(
+      path.join(temporary, "computer-win32-privileged.json"),
+      JSON.stringify({
+        checks: [
+          ...invalid.map((value) => ({
+            name: "privileged.capture-color-patch",
+            status: "failed",
+            reason: "native_operation_failed",
+            ...value,
+          })),
+          {
+            name: "privileged.capture-color-patch",
+            status: "passed",
+            reason: "native_operation_failed",
+            ...diagnostic,
+          },
+          { name: "privileged", status: "failed", reason: "native_operation_failed", ...diagnostic },
+          { name: "unit", status: "failed", reason: "native_operation_failed", ...diagnostic },
+          { name: "privileged.unknown-check", status: "failed", reason: "native_operation_failed", ...diagnostic },
+          { name: "privileged.capture-color-patch", status: "failed", reason: "native_failure", ...diagnostic },
+        ],
+      }),
+    )
+    const rejected = spawnSync("node", ["--input-type=module", "-e", source!], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env,
+    })
+    expect(rejected.error).toBeUndefined()
+    expect(rejected.status, rejected.stderr).toBe(0)
+    expect(rejected.stderr).toBe("")
+    expect(rejected.stdout).not.toMatch(/PRIVATE|stage=|nativeCode=/)
+  } finally {
+    rmSync(temporary, { recursive: true, force: true })
+  }
+})
+
 test("successful direct Windows checks forward only deduplicated fixed Caller context receipts", () => {
   const check = steps(record(record(main.document.jobs)["computer-helper-windows-units"])).find(
     (step) => step.name === "Run Windows unit and fresh version/probe checks",
@@ -1007,58 +1206,15 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
   expect(emitted.join("")).not.toContain("PRIVATE")
 })
 
-test("macOS certificate diagnostics are explicit, isolated and keep default and Node routes intact", () => {
-  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.computer_helper_macos_signing_only).toMatchObject({ type: "boolean", default: false })
-  const all = record(main.document.jobs)
-  const diagnostic = record(all["computer-helper-macos-signing"])
-  const selected = { computer_helper: true, computer_helper_macos_signing_only: true }
-  for (const event of ["workflow_dispatch", "pull_request", "push"])
-    for (const native of [false, true])
-      for (const signing of [false, true])
-        expect(
-          expression(
-            String(diagnostic.if),
-            { computer_helper: native, computer_helper_macos_signing_only: signing },
-            event,
-          ),
-        ).toBe(event === "workflow_dispatch" && native && signing)
-  for (const [name, value] of Object.entries(all)) {
-    expect(expression(String(record(value).if), selected), name).toBe(name === "computer-helper-macos-signing")
-    for (const event of ["workflow_dispatch", "pull_request", "push"])
-      expect(expression(String(record(value).if), { computer_helper_macos_signing_only: true }, event), name).toBe(
-        expression(String(record(value).if), {}, event),
-      )
-  }
-  const modes = [
-    {},
-    { computer_helper_windows_only: true },
-    { computer_helper_linux_only: true },
-    { computer_helper_windows_units_only: true },
-  ].flatMap((mode) => [
-    { computer_helper: true, ...mode },
-    { ...selected, ...mode },
-  ])
-  expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
-})
-
 test("the fast macOS certificate lane shares the real fixture and cleanup without native build or release credit", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-macos-signing"])
   expect(diagnostic["runs-on"]).toBe("macos-15")
   expect(record(diagnostic.env).DEVELOPER_DIR).toBe("/Applications/Xcode_16.4.app/Contents/Developer")
   expect(diagnostic.permissions).toEqual({ contents: "read" })
-  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  for (const key of ["outputs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
   const current = steps(diagnostic)
-  expect(current[0]!.name).toBe("Reject incompatible signing selectors before setup")
-  for (const windows of ["true", "false"])
-    for (const linux of ["true", "false"])
-      for (const units of ["true", "false"])
-        expect(
-          spawnSync("bash", ["--noprofile", "--norc", "-c", String(current[0]!.run)], {
-            env: { ...process.env, WINDOWS_ONLY: windows, LINUX_ONLY: linux, WINDOWS_UNITS_ONLY: units },
-            timeout: 5000,
-          }).status,
-        ).toBe([windows, linux, units].includes("true") ? 1 : 0)
+  expect(diagnostic.needs).toBe("validate-dispatch")
+  expect(current[0]!.name).toBe("Checkout repository")
   for (const name of [
     "Verify certificate signing with a temporary trusted CI identity",
     "Remove any interrupted signing fixture trust and keychain",
@@ -1090,63 +1246,14 @@ test("the fast macOS certificate lane shares the real fixture and cleanup withou
     expect(JSON.stringify(value)).not.toContain("computer-helper-macos-signing")
 })
 
-test("macOS overlay diagnostics require explicit native dispatch and keep all cancellation groups independent", () => {
-  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.computer_helper_macos_overlay_only).toMatchObject({ type: "boolean", default: false })
-  expect(Object.keys(inputs).length).toBeLessThanOrEqual(10)
-  const all = record(main.document.jobs)
-  const diagnostic = record(all["computer-helper-macos-overlay"])
-  const selected = { computer_helper: true, computer_helper_macos_overlay_only: true }
-  for (const event of ["workflow_dispatch", "pull_request", "push"])
-    for (const native of [false, true])
-      for (const overlay of [false, true])
-        expect(
-          expression(
-            String(diagnostic.if),
-            { computer_helper: native, computer_helper_macos_overlay_only: overlay },
-            event,
-          ),
-        ).toBe(event === "workflow_dispatch" && native && overlay)
-  for (const [name, value] of Object.entries(all)) {
-    expect(expression(String(record(value).if), selected), name).toBe(name === "computer-helper-macos-overlay")
-    for (const event of ["workflow_dispatch", "pull_request", "push"])
-      expect(expression(String(record(value).if), { computer_helper_macos_overlay_only: true }, event), name).toBe(
-        expression(String(record(value).if), {}, event),
-      )
-  }
-  const modes = [
-    {},
-    { computer_helper_windows_only: true },
-    { computer_helper_linux_only: true },
-    { computer_helper_windows_units_only: true },
-    { computer_helper_macos_signing_only: true },
-  ].flatMap((mode) => [
-    { computer_helper: true, ...mode },
-    { ...selected, ...mode },
-  ])
-  expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
-})
-
 test("the fast macOS overlay lane runs the real pinned Electron commands without helper/certificate/release work", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-macos-overlay"])
   expect(diagnostic["runs-on"]).toBe("macos-15")
   expect(diagnostic.permissions).toEqual({ contents: "read" })
-  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  for (const key of ["outputs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
   const current = steps(diagnostic)
-  expect(current[0]!.name).toBe("Reject incompatible overlay selectors before setup")
-  for (let bits = 0; bits < 16; bits++)
-    expect(
-      spawnSync("bash", ["--noprofile", "--norc", "-c", String(current[0]!.run)], {
-        env: {
-          ...process.env,
-          WINDOWS_ONLY: String(Boolean(bits & 1)),
-          LINUX_ONLY: String(Boolean(bits & 2)),
-          WINDOWS_UNITS_ONLY: String(Boolean(bits & 4)),
-          MACOS_SIGNING_ONLY: String(Boolean(bits & 8)),
-        },
-        timeout: 5000,
-      }).status,
-    ).toBe(bits === 0 ? 0 : 1)
+  expect(diagnostic.needs).toBe("validate-dispatch")
+  expect(current[0]!.name).toBe("Checkout repository")
   for (const name of [
     "Install the exact pinned Electron runtime",
     "Run real Electron overlay properties and controller lifecycle",
@@ -1164,86 +1271,12 @@ test("the fast macOS overlay lane runs the real pinned Electron commands without
     expect(JSON.stringify(value)).not.toContain("computer-helper-macos-overlay")
 })
 
-test("Windows overlay diagnostics isolate actual job routing and every incompatible selector before setup", () => {
-  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
-  expect(inputs.computer_helper_windows_overlay_only).toMatchObject({ type: "boolean", default: false })
-  expect(Object.keys(inputs).length).toBeLessThanOrEqual(10)
-  const all = record(main.document.jobs)
-  const diagnostic = record(all["computer-helper-windows-overlay"])
-  const selected = { computer_helper: true, computer_helper_windows_overlay_only: true }
-  for (const event of ["workflow_dispatch", "pull_request", "push"])
-    for (const native of [false, true])
-      for (const overlay of [false, true])
-        expect(
-          expression(
-            String(diagnostic.if),
-            {
-              computer_helper: native,
-              computer_helper_windows_overlay_only: overlay,
-            },
-            event,
-          ),
-        ).toBe(event === "workflow_dispatch" && native && overlay)
-  const flags = [
-    "computer_helper_windows_only",
-    "computer_helper_linux_only",
-    "computer_helper_windows_units_only",
-    "computer_helper_macos_signing_only",
-    "computer_helper_macos_overlay_only",
-  ]
-  const current = steps(diagnostic)
-  const guard = current[0]!
-  expect(guard.name).toBe("Reject incompatible overlay selectors before setup")
-  expect(guard.shell).toBe("bash")
-  const names = ["WINDOWS_ONLY", "LINUX_ONLY", "WINDOWS_UNITS_ONLY", "MACOS_SIGNING_ONLY", "MACOS_OVERLAY_ONLY"]
-  const modes: Record<string, unknown>[] = []
-  for (let bits = 0; bits < 32; bits++) {
-    const mode: Record<string, unknown> = {
-      ...selected,
-      ...Object.fromEntries(flags.map((flag, index) => [flag, Boolean(bits & (1 << index))])),
-    }
-    modes.push(mode)
-    for (const [name, value] of Object.entries(all))
-      expect(expression(String(record(value).if), mode), name).toBe(name === "computer-helper-windows-overlay")
-    for (const [name, source] of Object.entries(record(guard.env)))
-      expect(expression(String(source), mode), name).toBe(mode[flags[names.indexOf(name)]!])
-    const rejected = spawnSync("bash", ["--noprofile", "--norc", "-c", String(guard.run)], {
-      env: {
-        ...process.env,
-        ...Object.fromEntries(names.map((name, index) => [name, String(Boolean(bits & (1 << index)))])),
-      },
-      encoding: "utf8",
-      timeout: 5000,
-    })
-    expect(rejected.status).toBe(bits === 0 ? 0 : 1)
-    if (bits !== 0) expect(rejected.stdout).toContain("require all other platform selectors to be off")
-  }
-  for (const [name, value] of Object.entries(all))
-    for (const event of ["workflow_dispatch", "pull_request", "push"])
-      expect(expression(String(record(value).if), { computer_helper_windows_overlay_only: true }, event), name).toBe(
-        expression(String(record(value).if), {}, event),
-      )
-  const concurrency = record(main.document.concurrency).group
-  expect(new Set(modes.map((mode) => group(concurrency, mode))).size).toBe(modes.length)
-  for (const mode of [
-    {},
-    { computer_helper: true },
-    { computer_helper: true, computer_helper_windows_only: true },
-    { computer_helper: true, computer_helper_linux_only: true },
-    { computer_helper: true, computer_helper_windows_units_only: true },
-    { computer_helper: true, computer_helper_macos_overlay_only: true },
-    { computer_helper: true, computer_helper_macos_signing_only: true },
-    { desktop_engine_node: true },
-  ])
-    expect(group(concurrency, selected)).not.toBe(group(concurrency, mode))
-})
-
 test("the fast Windows overlay lane preserves stock Electron assertions and bounded logs without native or release work", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-overlay"])
   expect(diagnostic["runs-on"]).toBe("windows-2025")
   expect(diagnostic.permissions).toEqual({ contents: "read" })
   expect(record(diagnostic.defaults).run).toEqual({ shell: "pwsh", "working-directory": "packages/desktop" })
-  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  for (const key of ["outputs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
   const current = steps(diagnostic)
   const original = steps(job("windows-build"))
   const install = current.find((step) => step.name === "Install the exact pinned Electron runtime")!

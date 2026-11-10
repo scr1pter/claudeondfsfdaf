@@ -1,0 +1,140 @@
+{
+  "kind": "final-investor-pdf-qa-v1",
+  "checkedAtUtc": "2026-11-05T04:41:30.797207+00:00",
+  "pdfFile": "vector-tokenomics-brief.pdf",
+  "pdfSha256": "d3bae79c2bf3f9cbf230d673413f3b3d283ce164f688c5f1dd8c4b1f6657e3e7",
+  "bytes": 88912,
+  "pages": 6,
+  "allPagesRendered": true,
+  "allPagesVisuallyReviewed": true,
+  "visualReviewScope": "Root pages1-3; peer pages4-6; final page4 reviewed by root+peer after latest changes. Final pages1,2,3,5,6 pixel-identical to reviewed render. Header/footer separately verified on every page.",
+  "fontGlyphChecksPassed": true,
+  "glyphBoundsMethod": "PDFium character boxes",
+  "privateCredentialAndMachinePathScanPassed": true,
+  "claimTestsPassed": 17,
+  "bodyLayoutGuardPassed": true,
+  "glyphBounds": [
+    {
+      "page": 1,
+      "glyphBounds": [
+        45.0,
+        29.28,
+        566.4,
+        761.89
+      ],
+      "allGlyphsWithinPage": true
+    },
+    {
+      "page": 2,
+      "glyphBounds": [
+        45.0,
+        29.28,
+        566.46,
+        761.89
+      ],
+      "allGlyphsWithinPage": true
+    },
+    {
+      "page": 3,
+      "glyphBounds": [
+        45.0,
+        29.28,
+        566.53,
+        761.89
+      ],
+      "allGlyphsWithinPage": true
+    },
+    {
+      "page": 4,
+      "glyphBounds": [
+        45.0,
+        29.28,
+        566.5,
+        761.89
+      ],
+      "allGlyphsWithinPage": true
+    },
+    {
+      "page": 5,
+      "glyphBounds": [
+        45.0,
+        29.28,
+        566.57,
+        761.89
+      ],
+      "allGlyphsWithinPage": true
+    },
+    {
+      "page": 6,
+      "glyphBounds": [
+        45.0,
+        29.28,
+        566.52,
+        761.89
+      ],
+      "allGlyphsWithinPage": true
+    }
+  ],
+  "linkCount": 9,
+  "links": [
+    {
+      "page": 4,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/contracts-stage-summary.json",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 4,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/contracts-cost-drivers.json",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 4,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/e410bd72a291351e47fe627fd193f66b06f8e8d7/docs/investors/tokenomics/engineering-validation.json",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 4,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/98f6f319243aecd561d05a0c4bb43f74fe8f68fd/docs/investors/tokenomics/legacy-engineering-validation.json",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 4,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/766093ae4382d79f1d1b9ee07e4a66492caa2b4e/docs/investors/tokenomics/publication-post-push-validation.json",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 4,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/766093ae4382d79f1d1b9ee07e4a66492caa2b4e/docs/investors/tokenomics/publication-engineering-validation.json",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 4,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 5,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/tree/0fe95c04de437f497db8d4f3f5091ea25f93b496/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    },
+    {
+      "page": 6,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/tree/0fe95c04de437f497db8d4f3f5091ea25f93b496/docs/benchmarks/agentic-heavy-v3/ledgerdesk-maintenance-2026-11-04",
+      "gitObjectExists": true,
+      "rectangleWithinPage": true
+    }
+  ],
+  "builderSha256": "e580b246742dab84fceb249c706b0d053d111e467f59d862cc0d092e76982906",
+  "dataSha256": "0d534d072271c9f0205ce9df94c4f8892691ff95f6d27875d6bb3dba69314f3e",
+  "pdfMarkerRunOnceEarlier": true,
+  "productionCodeRevision": "89525f448be3d2c650af528b1328d210e822d149",
+  "paidMaintenanceRevision": "94c27c67185bbce343e0fa0eac4ec60bb801e343"
+}

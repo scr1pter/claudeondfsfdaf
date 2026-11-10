@@ -159,5 +159,34 @@ test("step settlement preserves normalized usage and billing metadata", async ()
     finish: "stop",
     tokens: { input: 70, output: 20, reasoning: 5, cache: { read: 20, write: 10 } },
     providerMetadata: { copilot: { totalNanoAiu: 100_000_000 } },
+    tools: [],
   })
 })
+
+for (const providerExecuted of [false, true]) {
+  test(`${providerExecuted ? "hosted" : "local"} loop signatures follow the result sent back to the model`, async () => {
+    const { publisher } = capture()
+    await Effect.runPromise(publisher.publish(LLMEvent.stepStart({ index: 0 })))
+    for (const value of [1, 2]) {
+      const id = `call-${value}`
+      await Effect.runPromise(publisher.publish(LLMEvent.toolCall({ id, name: "read", input: {}, providerExecuted })))
+      await Effect.runPromise(
+        publisher.publish(
+          LLMEvent.toolResult({
+            id,
+            name: "read",
+            providerExecuted,
+            result: { type: "json", value },
+            output: { structured: { value }, content: [{ type: "text", text: "same visible output" }] },
+          }),
+        ),
+      )
+    }
+    const signatures = publisher.stepSettlement()?.tools
+    expect(signatures).toHaveLength(2)
+    expect(signatures?.[0].input).toBe("{}")
+    expect(signatures?.[0].output).toBeString()
+    if (providerExecuted) expect(signatures?.[0].output).not.toBe(signatures?.[1].output)
+    if (!providerExecuted) expect(signatures?.[0].output).toBe(signatures?.[1].output)
+  })
+}

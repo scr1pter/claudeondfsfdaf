@@ -27,11 +27,13 @@ struct DriverSkip { std::wstring reason; };
 enum class OverlayDriverStage : uint8_t {
   dpi, parent, files, observe_parent, observe_bootstrap, isolation, token, desktop, ready_write, envelope_read,
   envelope_shape, request, foreground, guardian_create, backend_create, uia_create, uia_available, window_observe,
-  stop_element, window_current, quiet, guardian_ready, reserve, refresh, post, observe_down, retire, observe_up, cleanup};
-inline constexpr std::array<std::wstring_view, 29> overlay_driver_stages{
+  stop_element, stop_root, stop_root_retired, stop_root_refused, stop_hit, stop_security, stop_name, stop_belongs, stop_equal, stop_parent,
+  window_current, quiet, guardian_ready, reserve, refresh, post, observe_down, retire, observe_up, cleanup};
+inline constexpr std::array<std::wstring_view, 38> overlay_driver_stages{
   L"dpi", L"parent", L"files", L"observe-parent", L"observe-bootstrap", L"isolation", L"token", L"desktop", L"ready-write", L"envelope-read",
   L"envelope-shape", L"request", L"foreground", L"guardian-create", L"backend-create", L"uia-create", L"uia-available", L"window-observe",
-  L"stop-element", L"window-current", L"quiet", L"guardian-ready", L"reserve", L"refresh", L"post", L"observe-down", L"retire", L"observe-up", L"cleanup"};
+  L"stop-element", L"stop-root", L"stop-root-retired", L"stop-root-refused", L"stop-hit", L"stop-security", L"stop-name", L"stop-belongs", L"stop-equal", L"stop-parent",
+  L"window-current", L"quiet", L"guardian-ready", L"reserve", L"refresh", L"post", L"observe-down", L"retire", L"observe-up", L"cleanup"};
 static_assert(overlay_driver_stages.size() == static_cast<size_t>(OverlayDriverStage::cleanup) + 1);
 // HRESULTs are reported only as one of these buckets, never as a value.
 inline constexpr std::array<std::wstring_view, 5> overlay_driver_hresult_classes{L"access_denied", L"rpc", L"not_found", L"timeout", L"other"};

@@ -1,6 +1,6 @@
 // The documentation's shape: groups in order, each leaf a page under /docs.
 // Edit here and the sidebar, the pager and the search index all follow.
-import { release111, release112 } from "./vector-releases"
+import { handsReleasePreview, release111, release113 } from "./vector-releases"
 import { Hands } from "@vectordevai/schema/hands"
 
 export type DocLink = { id: string; title: string; blurb: string }
@@ -10,6 +10,12 @@ export const docsNav: DocGroup[] = [
   {
     label: "Get started",
     links: [
+      {
+        id: "first-launch",
+        title: "First launch, step by step",
+        blurb:
+          "For anyone new to Vector: download it, get past the first-launch warnings, sign in, pick a model and run a first task.",
+      },
       {
         id: "install",
         title: "Install Vector",
@@ -33,7 +39,12 @@ export const docsNav: DocGroup[] = [
       {
         id: "subagents",
         title: "Subagents and subagent specialists",
-        blurb: "Vector's agent hands self-contained pieces of a task to other agents that run at the same time.",
+        blurb: `Vector's agent hands self-contained pieces of a task to other agents that run at the same time. ${release113.since} on ordinary requests too, within limits you set, with Stop including helpers, worktrees and background commands.`,
+      },
+      {
+        id: "workflows",
+        title: "Workflows",
+        blurb: `${release113.since} a declarative plan of stages that runs many subagents with ceilings you approve first, and reports once.`,
       },
       {
         id: "parallel-agents",
@@ -59,7 +70,7 @@ export const docsNav: DocGroup[] = [
       {
         id: Hands.DOCS,
         title: Hands.NAME,
-        blurb: `${release112.since} work in the local apps you approve, with app permissions, sensitive-step asks and Stop.`,
+        blurb: `${handsReleasePreview.since} work in the local apps you approve, with app permissions, sensitive-step asks and Stop.`,
       },
       {
         id: "browser-agent",
@@ -79,8 +90,7 @@ export const docsNav: DocGroup[] = [
       {
         id: "tokenomics",
         title: "Vector Tokenomics Engine",
-        blurb:
-          "Measures what each run spends from the tokens your provider reports, and stops starting automations once your daily cap is spent.",
+        blurb: `Measures what each run spends from the tokens your provider reports, and stops starting automations once your daily cap is spent. ${release113.since} learned defaults that only make work cheaper.`,
       },
       {
         id: "mcp-and-plugins",
@@ -105,8 +115,7 @@ export const docsNav: DocGroup[] = [
       {
         id: "brain",
         title: "Vector Brain",
-        blurb:
-          "From desktop 1.99.110: rules, memory and what Vector learns, kept on your computer and sent only when they bear on a request.",
+        blurb: `From desktop 1.99.110: rules, memory and what Vector learns, kept on your computer and sent only when they bear on a request. ${release113.since} skills learned from your own runs, waiting for your review.`,
       },
       {
         id: "documents",

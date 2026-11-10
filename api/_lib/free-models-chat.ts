@@ -20,8 +20,8 @@ import {
 } from "../../packages/core/src/free-model-choice.js"
 import { freeModelRequest } from "../../packages/core/src/free-model-request.js"
 import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
-import { verifyCliToken, type CliTokenUser } from "./cli-token.js"
-import { requireUnrevokedAccount } from "./revocation.js"
+import type { CliTokenUser } from "./cli-token.js"
+import { requireUnrevokedCliToken } from "./revocation.js"
 import { currentFreeModelCatalog, freeModelsEnabled, openRouterHeaders } from "./free-models-catalog.js"
 import { persistentStore } from "./persistent-store.js"
 import { ApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
@@ -193,8 +193,7 @@ export async function handleFreeModelsChat(
     requireTrustedJsonRequest(request, MAX_BYTES)
     if (!freeModelsEnabled()) throw new ApiError(503, "FREE_MODELS_DISABLED", FREE_MODELS_UNAVAILABLE)
     const token = /^Bearer (vct_[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)$/.exec(String(request.headers.authorization ?? ""))?.[1]
-    const account = verifyCliToken(token ?? "", now)
-    await requireUnrevokedAccount(account.id, fetcher)
+    const account = await requireUnrevokedCliToken(token ?? "", fetcher, now)
     const unmetered = unmeteredAccount(account)
     const disclosure = request.headers[FREE_MODELS_DISCLOSURE_HEADER] === FREE_MODELS_DISCLOSURE
     const consent = disclosure && request.headers[FREE_MODELS_CONSENT_HEADER] === FREE_MODELS_CONSENT_ACCEPTED

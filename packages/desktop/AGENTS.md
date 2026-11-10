@@ -11,4 +11,4 @@
 - Helper transport/lifecycle checks execute compiled bundles with actual Node. Bun may compile a bundle; do not replace the Node child runtime with Bun.
 - Keep the measured macOS lock enforced. Verify exact source/artifact provenance before copying a candidate; never invent hashes. Already measured native/builder changes require a helper version bump.
 - Preserve stable `computer` identifiers and per-channel helper bundle IDs. User-facing names come from `@vectordevai/schema/hands`.
-- See `docs/vector/VECTOR-HANDS.md` and `docs/vector/owner-actions/release-199112.md` for signing order, manual evidence and owner release gates.
+- See `docs/vector/VECTOR-HANDS.md` and `docs/vector/owner-actions/hands-release.md` for signing order, manual evidence and owner release gates.

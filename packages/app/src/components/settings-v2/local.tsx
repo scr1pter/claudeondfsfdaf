@@ -1,5 +1,5 @@
 import type { LocalCheckResult, LocalModelCheck, LocalServer, LocalStatus } from "@vectordevai/sdk/v2/client"
-import { For, Show, createMemo, createResource, createSignal } from "solid-js"
+import { For, Show, createMemo, createResource, createSignal, onCleanup } from "solid-js"
 import { useDialog } from "@vectordevai/ui/context/dialog"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { Switch } from "@vectordevai/ui/v2/switch-v2"
@@ -10,6 +10,14 @@ import { LocalCovers } from "@/features/local/egress-popover"
 import { OffInLocalRow } from "@/features/local/off-in-local"
 import { DialogLocalSetup } from "@/features/local/setup-wizard"
 import { useLocalStatus } from "@/features/local/use-local"
+import {
+  createReadRetry,
+  readErrorText,
+  readFailure,
+  retryText,
+  type ReadFailure,
+  type RetryState,
+} from "@/features/local/read-retry"
 import {
   AGENT,
   CHECK_RESULT,
@@ -56,12 +64,13 @@ import "@/features/local/local.css"
 // the roles, the services the user allowed, everything Vector Local keeps off with Allow… where it may be allowed, the
 // certificates, the network log and a check of every layer. The owner turns Vector Local on and off here (owner,
 // 22 Oct). Every change goes through the Local API, which asks the owner before anything loosens; an invited guest is
-// told whose settings these are and sees none of them.
+// told whose settings these are and sees none of them. When Vector cannot read Vector Local's status or look for model
+// servers, the page says what failed and why, tries again on its own while the failure may pass, and offers Try again.
 
 const title = (id: (typeof SECTIONS)[number]["id"]) => SECTIONS.find((section) => section.id === id)!.title
 
 export function SettingsLocalV2() {
-  const reader = useLocalStatus()
+  const reader = useLocalStatus({ retry: true })
   const local = useLocalChange()
   const dialog = useDialog()
   const [notice, setNotice] = createSignal("")
@@ -115,13 +124,28 @@ export function SettingsLocalV2() {
         <Show
           when={reader.status()}
           fallback={
-            <p class="settings-v2-card-description">
-              {reader.loading()
-                ? "Reading Vector Local…"
-                : reader.unsupported()
-                  ? "This engine does not support Vector Local. Use the current desktop engine, or update this engine before setting it up."
-                  : "Vector could not read Vector Local from its engine."}
-            </p>
+            <Show
+              when={reader.failure()}
+              fallback={
+                <p class="settings-v2-card-description">
+                  {reader.loading()
+                    ? "Reading Vector Local…"
+                    : reader.unsupported()
+                      ? "This engine does not support Vector Local. Use the current desktop engine, or update this engine before setting it up."
+                      : "Vector is not connected to an engine, so it cannot read Vector Local."}
+                </p>
+              }
+            >
+              {(failure) => (
+                <ReadError
+                  failure={failure()}
+                  retry={reader.retry()}
+                  trying={reader.loading()}
+                  remote={reader.remote()}
+                  onRetry={reader.again}
+                />
+              )}
+            </Show>
           }
         >
           {(status) => (
@@ -303,6 +327,11 @@ function ServersCard(props: {
   const local = useLocalChange()
   const [found, setFound] = createSignal<readonly LocalServer[]>()
   const [finding, setFinding] = createSignal(false)
+  const [findFailure, setFindFailure] = createSignal<ReadFailure>()
+  const [findRetry, setFindRetry] = createSignal<RetryState>({ attempt: 0, wait: undefined })
+  // Find servers, and Try again after it failed, start the waits over; a failure that may pass is looked for again.
+  const finder = createReadRetry({ run: () => void find(), onChange: setFindRetry })
+  onCleanup(finder.dispose)
   const [typed, setTyped] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const listed = createMemo(() => new Set(props.status.policy.endpoints.map((endpoint) => endpoint.origin)))
@@ -314,9 +343,13 @@ function ServersCard(props: {
     setFinding(true)
     const result = await client.local
       .detect({}, { throwOnError: false })
-      .catch((cause: unknown) => ({ error: cause, data: undefined }))
+      .then((answer) => ({ data: answer.data, status: answer.response?.status, error: answer.error as unknown }))
+      .catch((cause: unknown) => ({ data: undefined, status: undefined, error: cause }))
     setFinding(false)
-    if (!result.data) return props.onError(refusalMessage(result.error))
+    const failure = result.data ? undefined : readFailure("servers", result)
+    setFindFailure(failure)
+    finder.settled(failure)
+    if (!result.data) return
     setFound(result.data)
     if (result.data.length === 0)
       props.onNotice(
@@ -428,12 +461,7 @@ function ServersCard(props: {
           )}
         </Show>
         <div data-slot="local-inline">
-          <ButtonV2
-            variant="outline"
-            disabled={finding()}
-            data-action="settings-local-find"
-            onClick={() => void find()}
-          >
+          <ButtonV2 variant="outline" disabled={finding()} data-action="settings-local-find" onClick={finder.now}>
             {finding() ? "Looking…" : "Find servers"}
           </ButtonV2>
           <input
@@ -456,6 +484,17 @@ function ServersCard(props: {
             Add server
           </ButtonV2>
         </div>
+        <Show when={findFailure()}>
+          {(failure) => (
+            <ReadError
+              failure={failure()}
+              retry={findRetry()}
+              trying={finding()}
+              remote={props.reader.remote()}
+              onRetry={finder.now}
+            />
+          )}
+        </Show>
         <Show when={locked()}>
           <p data-slot="local-muted">{LOCKED}</p>
         </Show>
@@ -854,6 +893,45 @@ function CheckCard(props: { reader: ReturnType<typeof useLocalStatus> }) {
           )}
         </Show>
       </div>
+    </div>
+  )
+}
+
+/** What Vector could not read and why, the automatic tries, and Try again. */
+function ReadError(props: {
+  failure: ReadFailure
+  retry: RetryState
+  trying: boolean
+  remote?: string
+  onRetry: () => void
+}) {
+  const text = () => readErrorText(props.failure, props.remote)
+  return (
+    <div
+      data-slot="local-read-error"
+      data-component="settings-local-read-error"
+      data-target={props.failure.target}
+      data-reason={props.failure.reason}
+    >
+      <p data-slot="local-error" role="alert">
+        {text().title} {text().reason}
+      </p>
+      <Show when={retryText(props.failure, props.retry, props.trying)}>
+        {(line) => (
+          <p data-slot="local-muted" role="status">
+            {line()}
+          </p>
+        )}
+      </Show>
+      <ButtonV2
+        size="small"
+        variant="outline"
+        disabled={props.trying}
+        data-action="settings-local-retry"
+        onClick={props.onRetry}
+      >
+        Try again
+      </ButtonV2>
     </div>
   )
 }

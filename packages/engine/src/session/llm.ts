@@ -1,3 +1,4 @@
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { llmClient } from "@vectordevai/core/effect/app-node-platform"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -45,6 +46,8 @@ import { ComputerGeneric } from "@/computer/generic"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
+const INHERITED = Symbol("vector.computer-inherited-message")
+
 export type StreamInput = {
   user: SessionV1.User
   sessionID: string
@@ -65,14 +68,29 @@ export type StreamInput = {
   // Reasoning effort from the request's task size (LLMRequestPrep.prepare).
   effort?: TaskSize.Effort
   tools: Record<string, Tool>
+  // What a Vector Codium request is for (X-Vector-Purpose): "title", "brain", a Vectorscope review's "review"; without
+  // one, a judge agent's request is "judge" and anything else "chat".
+  purpose?: ModelPlanStatus.Purpose
   retries?: number
+  // "required" is sent as "auto" where the provider refuses forced tool use with thinking on
+  // (ProviderTransform.toolChoice); `chose` hears what was sent.
   toolChoice?: "auto" | "required" | "none"
+  chose?: (toolChoice: "auto" | "required" | "none" | undefined) => void
+  // false turns Anthropic thinking off, for a closing step that must force a tool call.
+  thinking?: false
   // false for a request whose prefix is never sent again, such as a compaction summary: cache breakpoints would only
   // make the provider bill its whole input at the cache-write premium.
   cache?: boolean
-  // Called with the usage a provider reports as it starts a response, before the step finishes. A step that is
-  // stopped or fails mid-stream reports nothing more, so this is what it was billed.
+  // The prompt cache key to send instead of the session's (promptCacheKey, prompt_cache_key), such as a fork's root's
+  // on its first request. Affinity and session headers keep the session's own IDs.
+  cacheKey?: string
+  // The index in `messages` of a fork's last inherited message, which takes the non-final cache breakpoint.
+  boundary?: number
+  // Called with usage the provider reports as it starts a response, before the step finishes. Interrupted streams
+  // may report nothing more, so these counters remain a known subtotal with incomplete final usage.
   started?: (usage: UsageInput) => void
+  // The SDK accepted a streaming response, even when no usage or content chunk has arrived yet.
+  accepted?: () => void
   // Called at the first event of the response, once the provider has the request and is answering it.
   answering?: () => void
   // What the request carries out of the brain (personal memory, private document passages, repository excerpts), for
@@ -217,6 +235,10 @@ const live: Layer.Layer<
         typeof item.options.fetch === "function"
       )
         Object.assign(prepared.headers, { [REQUEST_ID_HEADER]: input.requestID })
+      const options =
+        input.thinking === false ? ProviderTransform.withoutThinking(prepared.params.options) : prepared.params.options
+      const toolChoice = ProviderTransform.toolChoice(input.model, options, input.toolChoice)
+      input.chose?.(toolChoice)
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via vector's tool system
@@ -348,27 +370,39 @@ const live: Layer.Layer<
         config: cfg,
         requested: input.computerRequested,
       })
+      // Generic Anthropic replay can remove a whole old signed-reasoning message. Mark the inherited prefix before
+      // that normalization so a fork's cache boundary still ends at its last surviving inherited message.
+      const inheritedEnd =
+        input.boundary === undefined ? undefined : prepared.messages.length - input.messages.length + input.boundary
+      const tagged =
+        inheritedEnd === undefined
+          ? prepared.messages
+          : prepared.messages.map((message, index) =>
+              index <= inheritedEnd ? Object.assign({ ...message }, { [INHERITED]: true }) : message,
+            )
       const prepareGeneric = () =>
         computerGeneric.prepare({
           sessionID: input.sessionID,
           model: input.model,
-          messages: prepared.messages,
+          messages: tagged,
           tools: prepared.tools,
-          options: prepared.params.options,
+          options,
           config: cfg,
         })
       // Generic computer tools need the same stable definition and context clearing on either LLM runtime.
       // A native computer turn must not create a generic snapshot that was never sent to the provider.
       const genericComputer = nativeComputer ? undefined : prepareGeneric()
       if (flags.experimentalNativeLlm || nativeComputer) {
+        const nativeMessages = genericComputer?.messages ?? tagged
+        const boundary = inheritedEnd === undefined ? undefined : inheritedBoundary(nativeMessages)
         const native = LLMNativeRuntime.stream({
           model: input.model,
           provider: item,
           auth: info,
           llmClient,
-          messages: genericComputer?.messages ?? prepared.messages,
+          messages: nativeMessages,
           tools: genericComputer?.tools ?? prepared.tools,
-          toolChoice: input.toolChoice,
+          toolChoice,
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
@@ -379,13 +413,16 @@ const live: Layer.Layer<
                   model: input.model,
                   messages: prepared.messages,
                   tools: prepared.tools,
-                  options: prepared.params.options,
+                  options,
                   config: cfg,
                 })
-              : (genericComputer?.options ?? prepared.params.options),
+              : (genericComputer?.options ?? options),
           headers: prepared.headers,
           abort: input.abort,
           computer: nativeComputer ? ComputerModels.native(input.model) : undefined,
+          ...(input.cache === false ? { cache: false } : {}),
+          // Native messages are not merged as the AI SDK's prompt is, so the boundary needs no promptIndex.
+          ...(boundary === undefined ? {} : { boundary }),
         })
         if (native.type === "supported") {
           yield* Effect.logInfo("llm runtime selected", {
@@ -431,6 +468,7 @@ const live: Layer.Layer<
         "llm.model": input.model.id,
       })
       const generic = genericComputer ?? prepareGeneric()
+      const boundary = inheritedEnd === undefined ? undefined : inheritedBoundary(generic.messages)
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       return {
@@ -481,7 +519,7 @@ const live: Layer.Layer<
           // A workflow model runs its tools inside its own stream, so holding a shell call back to the end would wait
           // on itself.
           tools: isWorkflow ? generic.tools : ToolOrder.tools(generic.tools, input.abort),
-          toolChoice: input.toolChoice,
+          toolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,
@@ -500,14 +538,20 @@ const live: Layer.Layer<
                       input.model,
                       prepared.messageTransformOptions,
                       input.cache !== false,
+                      boundary === undefined ? undefined : LLMRequestPrep.promptIndex(generic.messages, boundary),
                     )
                   }
                   return args.params
                 },
+                async wrapStream({ doStream }) {
+                  const response = await doStream()
+                  input.accepted?.()
+                  return response
+                },
               },
               NativePatch.middleware({
                 model: input.model,
-                options: prepared.params.options,
+                options,
                 tool: prepared.tools.apply_patch,
               }),
               ...(isWorkflow ? [] : [ToolOrder.middleware()]),
@@ -586,6 +630,11 @@ const live: Layer.Layer<
     return Service.of({ stream })
   }),
 )
+
+function inheritedBoundary(messages: readonly ModelMessage[]) {
+  const index = messages.findLastIndex((message) => INHERITED in message)
+  return index < 0 ? undefined : index
+}
 
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
 

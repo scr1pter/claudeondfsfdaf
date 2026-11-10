@@ -5,33 +5,49 @@ import { mintCliToken, mintDeletionGrant } from "../_lib/cli-token.js"
 import { handleApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "../_lib/http.js"
 
 export default async function handler(request: ApiRequest, response: ApiResponse) {
+  return handleCliExchange(request, response)
+}
+
+export async function handleCliExchange(
+  request: ApiRequest,
+  response: ApiResponse,
+  fetcher: typeof fetch = fetch,
+  now = Date.now(),
+) {
   try {
     requireMethod(request, "POST")
     requireTrustedJsonRequest(request, 2_000)
-    await enforceRateLimit(request, response, {
-      scope: "desktop-exchange-ip",
-      limit: 30,
-      windowSeconds: 300,
-      requirePersistent: true,
-    })
+    await enforceRateLimit(
+      request,
+      response,
+      { scope: "desktop-exchange-ip", limit: 30, windowSeconds: 300, requirePersistent: true },
+      fetcher,
+    )
     const body = await readJson<{ code?: unknown }>(request, 2_000)
-    await enforceRateLimit(request, response, {
-      scope: "desktop-exchange-code",
-      identifier: stableAbuseIdentifier(typeof body.code === "string" ? body.code : "invalid"),
-      limit: 8,
-      windowSeconds: 300,
-      requirePersistent: true,
-    })
-    const exchanged = await consumeDesktopCode(body)
-    await requireUnrevokedAccount(exchanged.user.id)
-    // A code made for deleting the account buys a ten-minute deletion grant and never a CLI token. Only the desktop
-    // app exchanges codes, so its token is marked as the desktop's own (see mintCliToken).
+    await enforceRateLimit(
+      request,
+      response,
+      {
+        scope: "desktop-exchange-code",
+        identifier: stableAbuseIdentifier(typeof body.code === "string" ? body.code : "invalid"),
+        limit: 8,
+        windowSeconds: 300,
+        requirePersistent: true,
+      },
+      fetcher,
+    )
+    const exchanged = await consumeDesktopCode(body, fetcher, now)
+    await requireUnrevokedAccount(exchanged.user.id, fetcher)
+    // Only the saved PKCE purpose selects the credential. Exchange-body client/purpose fields grant nothing.
     json(
       response,
       200,
       exchanged.purpose === "delete"
-        ? { ...mintDeletionGrant(exchanged.user), user: { email: exchanged.user.email } }
-        : { ...mintCliToken(exchanged.user, Date.now(), "desktop"), user: exchanged.user },
+        ? { ...mintDeletionGrant(exchanged.user, now), user: { email: exchanged.user.email } }
+        : {
+            ...mintCliToken(exchanged.user, now, exchanged.purpose === "cli" ? "cli" : "desktop"),
+            user: exchanged.user,
+          },
     )
   } catch (error) {
     handleApiError(response, error)

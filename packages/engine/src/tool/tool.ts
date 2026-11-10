@@ -6,6 +6,7 @@ import type { MessageV2 } from "../session/message-v2"
 import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
 import * as Truncate from "./truncate"
+import type { GitMutation } from "./shell/git-mutation"
 import { Agent } from "@/agent/agent"
 
 interface Metadata {
@@ -33,6 +34,14 @@ export class InvalidArgumentsError extends Schema.TaggedErrorClass<InvalidArgume
   }
 }
 
+export type WritableInput = {
+  files: readonly string[]
+  /** Detected shell targets that may replace/remove a directory and everything beneath it. */
+  recursive?: readonly string[]
+  git?: readonly GitMutation.Result[]
+  via?: "shell" | "file"
+}
+
 export type Context<M extends Metadata = Metadata> = {
   sessionID: SessionID
   /** The session that launched this one, when it is a subagent: its user messages are a brief another agent wrote. */
@@ -47,6 +56,18 @@ export type Context<M extends Metadata = Metadata> = {
   /** Assignment scope supplied by the session runtime, never by model arguments. */
   ownedPaths?: readonly string[]
   getOwnedPaths?: () => Effect.Effect<readonly string[] | undefined>
+  /** Runtime ownership check, repeated inside file locks. */
+  assertWritable?(input: WritableInput): Effect.Effect<void>
+  /**
+   * Whether that session is in this conversation's family, supplied by the session runtime and never by model
+   * arguments. Refusals name another conversation's subagent or session only when it is; absent, or when the answer
+   * cannot be read, they name none.
+   */
+  inFamily?: (sessionID: string) => Effect.Effect<boolean>
+  /** Verified guest disclosure checks supplied by the runtime, before filesystem access and before output. */
+  assertReadable?(input: { files: readonly string[]; recursive?: boolean }): Effect.Effect<void>
+  assertGitReadable?(input: { cwd: string; args?: string[]; env?: Record<string, string> }): Effect.Effect<void>
+  assertOutput?(value: unknown): Effect.Effect<void>
   messages: SessionV1.WithParts[]
   /**
    * The whole conversation, with what a compaction folded away: the messages the session stored, then this step's.
@@ -148,6 +169,8 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
             ),
           )
           const result = yield* execute(decoded as Schema.Schema.Type<Parameters>, ctx)
+          // Private raw output is refused before truncation can save it to a file the model may read later.
+          if (ctx.assertOutput) yield* ctx.assertOutput(result)
           if (result.metadata.truncated !== undefined) {
             return result
           }

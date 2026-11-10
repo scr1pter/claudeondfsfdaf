@@ -184,20 +184,34 @@ bool window_current(const OverlayStopRequest& request, const WindowsOwner& paren
   return (extended & WS_EX_NOACTIVATE) && (extended & WS_EX_LAYERED) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION) && windows_desktop_available(observe_windows_desktop());
 }
 struct StopElement { UiaElement root, element; UiaSecurity security; UiaName name; };
-StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request) {
-  const auto root = uia.root(window); auto element = uia.hit(root, point(request));
+StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage) {
+  stage = OverlayDriverStage::stop_root; UiaElement root;
+  try { root = uia.root(window); }
+  catch (...) {
+    // Sample the actor's existing health before click_stop's RAII closes it. This is not a new UIA
+    // query or a retry. A retired actor is not by itself proof of why its ticket could not complete.
+    // Diagnostics must never replace the original exception, including if the health read throws.
+    try { if (uia.available) stage = uia.available() ? OverlayDriverStage::stop_root_refused : OverlayDriverStage::stop_root_retired; }
+    catch (...) {}
+    throw;
+  }
+  stage = OverlayDriverStage::stop_hit; auto element = uia.hit(root, point(request));
   for (size_t depth = 0; element && depth < 8; ++depth) {
-    const auto security = uia.security(element);
+    stage = OverlayDriverStage::stop_security; const auto security = uia.security(element);
     if (security.control_type == 50000) {
-      const auto name = uia.name(element); require(security.pid == request.parent && security.enabled && !security.password && (!security.value_pattern || security.read_only == true) && (!security.text_pattern || security.text_read_only == true) && security.bounds && security.bounds->width >= 3 && security.bounds->height >= 3 && request.banner_bounds.contains(*security.bounds) && overlay_stop_bounds_match(request.stop_bounds, *security.bounds) && name.complete && name.text == L"Stop" && uia.belongs(element, window));
+      stage = OverlayDriverStage::stop_name; const auto name = uia.name(element);
+      // The belongs step retains all preceding local button facts in their original short-circuit order.
+      stage = OverlayDriverStage::stop_belongs; require(security.pid == request.parent && security.enabled && !security.password && (!security.value_pattern || security.read_only == true) && (!security.text_pattern || security.text_read_only == true) && security.bounds && security.bounds->width >= 3 && security.bounds->height >= 3 && request.banner_bounds.contains(*security.bounds) && overlay_stop_bounds_match(request.stop_bounds, *security.bounds) && name.complete && name.text == L"Stop" && uia.belongs(element, window));
       return {root, element, security, name};
     }
-    require(security.pid == request.parent && !security.password); if (uia.equal(element, root)) break; element = uia.parent(element);
+    require(security.pid == request.parent && !security.password); stage = OverlayDriverStage::stop_equal; if (uia.equal(element, root)) break;
+    stage = OverlayDriverStage::stop_parent; element = uia.parent(element);
   }
   invalid(L"stop_target_invalid");
 }
-uint64_t refresh_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, const StopElement& expected) {
-  const auto started = GetTickCount64(); const auto current = observe_stop(uia, window, request);
+uint64_t refresh_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, const StopElement& expected, OverlayDriverStage& stage) {
+  const auto started = GetTickCount64(); const auto current = observe_stop(uia, window, request, stage);
+  stage = OverlayDriverStage::refresh;
   require(uia.equal(current.root, expected.root) && uia.equal(current.element, expected.element) && current.security.bounds == expected.security.bounds && current.name.text == expected.name.text && GetTickCount64() - started < 50);
   return started;
 }
@@ -223,13 +237,13 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
   stage = Stage::window_observe; const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
   require(window.hwnd == request->banner && window.surface == request->banner && window.owner.process.pid == options.parent && window.physical_owner.process.pid == options.parent && same_windows_process(window.owner.process, parent.process) && same_windows_process(window.physical_owner.process, parent.process));
-  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current; require(valid_overlay_stop_request(observed_request) && window_current(observed_request, parent, window, life));
+  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current; require(valid_overlay_stop_request(observed_request) && window_current(observed_request, parent, window, life));
   stage = Stage::quiet; if (!backend.quiet()) throw DriverSkip{L"physical_input"};
   stage = Stage::guardian_ready; require(guardian->ready(), L"guardian_unavailable");
   stage = Stage::reserve; const InputRelease release{InputReleaseKind::mouse_button, 0, 0, false, 0}; const auto ticket = guardian->reserve(release); require(ticket.has_value(), L"guardian_unavailable");
   bool attempted = false, confirmed_up = false;
   try {
-    stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element);
+    stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element, stage);
     require(files.current() && windows_owner_current(bootstrap) && window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50); stage = Stage::post;
     const auto outcome = backend.post({InputEventKind::button_down, point(observed_request), release, 0, 0, backend.tag}, [&] {
       if (!files.current() || !windows_owner_current(bootstrap) || !window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50) return false;
@@ -335,7 +349,9 @@ int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<L
       require(held && GetFileInformationByHandleEx(held.get(), FileBasicInfo, &info, sizeof(info)) && (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && equal_path(final_path(held.get()), directory.wstring()), L"source_mismatch"); profile_directories.push_back(std::move(held));
     }
   }
-  std::wstring command = L"\"" + files.electron.path + L"\" \"" + files.main.path + L"\" \"--user-data-dir=" + profile.wstring() + L"\" --computer-smoke-nonce=" + options.nonce;
+  // Enable Chromium accessibility before the fixture renders any window. Its later app setting
+  // follows earlier rendered windows and does not wait for a native accessibility tree.
+  std::wstring command = L"\"" + files.electron.path + L"\" --force-renderer-accessibility \"" + files.main.path + L"\" \"--user-data-dir=" + profile.wstring() + L"\" --computer-smoke-nonce=" + options.nonce;
   const auto preserved = command; auto environment = child_environment(profile); PROCESS_INFORMATION process{}; constexpr DWORD flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
   BOOL launched = token ? CreateProcessAsUserW(token.get(), files.electron.path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment.data(), files.root.c_str(), &startup.StartupInfo, &process) : CreateProcessW(files.electron.path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment.data(), files.root.c_str(), &startup.StartupInfo, &process);
   if (!launched && token && GetLastError() == ERROR_PRIVILEGE_NOT_HELD) { QuotaPrivilege quota; if (quota.ready()) { command = preserved; launched = CreateProcessAsUserW(token.get(), files.electron.path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment.data(), files.root.c_str(), &startup.StartupInfo, &process); } }

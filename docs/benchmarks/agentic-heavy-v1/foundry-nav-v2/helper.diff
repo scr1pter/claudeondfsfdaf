@@ -1,0 +1,28 @@
+--- original/instrument/browser-eval.cjs
++++ foundry-nav-v2/instrument/browser-eval.cjs
+@@ -145,0 +146,19 @@
++}
++
++async function openProjectBoard(target, projectName, { timeout = 10_000 } = {}) {
++  const deadline = Date.now() + timeout;
++  const budget = () => {
++    const remaining = deadline - Date.now();
++    if (remaining <= 0) throw new Error("Project opening deadline exceeded");
++    return remaining;
++  };
++  await navigateWithDialogs(target, "Projects", { timeout: budget() });
++  const opener = namedAction(target, "Open project " + projectName);
++  // Re-selecting Projects may preserve an already-open board. Return through
++  // a visible UI control, then still require the exact target opener.
++  if (!(await actionVisible(target, opener))) {
++    const back = namedAction(target, "All projects");
++    if (await actionVisible(target, back)) await back.click({ timeout: budget() });
++  }
++  await opener.click({ timeout: budget() });
++  await target.getByRole("button", { name: "New task", exact: true }).waitFor({ state: "visible", timeout: budget() });
+@@ -335 +354 @@
+-  async function openProject() { await nav("Projects"); await action("Open project " + state.projectName); await page.getByRole("button", { name: "New task", exact: true }).waitFor(); }
++  async function openProject() { await openProjectBoard(page, state.projectName); }
+@@ -730 +749 @@
+-module.exports = { browserEvaluate, csvRows, navigateAction, dismissDialogs, navigateWithDialogs, openInvoiceDetails, nativeSelect, choose, waitForWorkspaceSelection, waitForVisibleActivity };
++module.exports = { browserEvaluate, csvRows, navigateAction, dismissDialogs, navigateWithDialogs, openInvoiceDetails, openProjectBoard, nativeSelect, choose, waitForWorkspaceSelection, waitForVisibleActivity };

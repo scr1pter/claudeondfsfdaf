@@ -1,6 +1,7 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { Config } from "@/config/config"
+import { ConfigAgent } from "@/config/agent"
 import { serviceUse } from "@vectordevai/core/effect/service-use"
 import { Provider } from "@/provider/provider"
 
@@ -8,6 +9,9 @@ import { generateObject, streamObject, type ModelMessage } from "ai"
 import { Truncate } from "@/tool/truncate"
 import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
+import { SessionCodiumAuto } from "@/session/codium-auto"
+import { Token } from "@/util/token"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
@@ -136,6 +140,49 @@ const RESEARCH_AGENTS: Record<string, { readonly tools: readonly string[]; reado
   // The judge gets the cited passages in its brief and answers in plain lines.
   [RESEARCH_JUDGE]: { tools: [], subagents: [] },
 }
+// The built-in agents that never edit files (5.F.4): refused task isolation, and never writers in task claims. Names
+// match exactly; a user's own agent is never read-only because its name starts with one of these.
+const READ_ONLY = new Set(["explore", "review", "judge", "security", RESEARCH, RESEARCHER, RESEARCH_JUDGE])
+export function readOnly(agent: string) {
+  return READ_ONLY.has(agent)
+}
+// The shell commands a read-only specialist may run to verify work: allowed reads of Git and pull requests, and test or
+// build entrypoints behind an ask. Everything else in bash is denied for them.
+const READONLY_VERIFICATION_BASH = {
+  "*": "deny",
+  "git diff*": "allow",
+  "git status*": "allow",
+  "git show*": "allow",
+  "git log*": "allow",
+  "gh pr view*": "allow",
+  "gh pr diff*": "allow",
+  "gh pr review*": "ask",
+  // Test and build entrypoints execute repository-controlled code. A read-only specialist may run them only
+  // after an explicit approval; the shell sandbox remains a second boundary after approval.
+  "bun test*": "ask",
+  "bun typecheck*": "ask",
+  "bun run test*": "ask",
+  "bun run build*": "ask",
+  "npm test*": "ask",
+  "npm run test*": "ask",
+  "npm run build*": "ask",
+  "pnpm test*": "ask",
+  "pnpm run test*": "ask",
+  "pnpm run build*": "ask",
+  "pytest*": "ask",
+  "cargo test*": "ask",
+  "go test*": "ask",
+} as const
+const VERIFICATION_COMMANDS = Object.entries(READONLY_VERIFICATION_BASH)
+  .filter((entry) => entry[1] !== "deny")
+  .map((entry) => entry[0])
+/**
+ * Whether a bash rule pattern stays inside the read-only specialists' verification commands (`git diff*`, `bun test*`
+ * and the like). Workflow planning counts such a rule as reading, so a read-only specialist is never planned as a writer.
+ */
+export function verificationCommand(pattern: string) {
+  return VERIFICATION_COMMANDS.some((command) => Wildcard.match(pattern, command))
+}
 /** The tools a research agent may be offered at all, whatever any rule allows; nothing for any other agent. */
 export function researchTools(agent: string): readonly string[] | undefined {
   return RESEARCH_AGENTS[agent]?.tools
@@ -154,6 +201,8 @@ const RESEARCH_DENIED = [
   "websearch",
   "skill",
   "escalate",
+  "terminal",
+  "terminal_input",
 ]
 
 const GeneratedAgent = Schema.Struct({
@@ -262,7 +311,15 @@ const layer = Layer.effect(
         const defaults = Permission.fromConfig({
           "*": "allow",
           doom_loop: "ask",
+          // A learned skill Vector put in use on its own, after two matching runs, asks before it first loads.
+          learned_skill: "ask",
+          workflow: "ask",
           unsandboxed_shell: "ask",
+          // Terminals the agent did not open (the user's, or another session's) ask before the agent reads, waits
+          // on, types into, resizes or closes them, and a submitted line also goes through the shell's own rules.
+          // Its own terminals ask nothing to read.
+          terminal: { "*": "allow", "other:*": "ask" },
+          terminal_input: { "*": "allow", "other:*": "ask" },
           browser_external: "ask",
           browser_interact: "ask",
           browser_sensitive: "ask",
@@ -289,31 +346,7 @@ const layer = Layer.effect(
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
-        const readonlyVerificationBash = {
-          "*": "deny",
-          "git diff*": "allow",
-          "git status*": "allow",
-          "git show*": "allow",
-          "git log*": "allow",
-          "gh pr view*": "allow",
-          "gh pr diff*": "allow",
-          "gh pr review*": "ask",
-          // Test and build entrypoints execute repository-controlled code. A read-only specialist may run them only
-          // after an explicit approval; the shell sandbox remains a second boundary after approval.
-          "bun test*": "ask",
-          "bun typecheck*": "ask",
-          "bun run test*": "ask",
-          "bun run build*": "ask",
-          "npm test*": "ask",
-          "npm run test*": "ask",
-          "npm run build*": "ask",
-          "pnpm test*": "ask",
-          "pnpm run test*": "ask",
-          "pnpm run build*": "ask",
-          "pytest*": "ask",
-          "cargo test*": "ask",
-          "go test*": "ask",
-        } as const
+        const readonlyVerificationBash = READONLY_VERIFICATION_BASH
         // Flags that make an allowed command write a chosen file, run another program, or read any file without the
         // read tool's asks (`git diff --no-index .env README.md`). They come after every other rule, so no ask or
         // allow can reopen them.
@@ -479,6 +512,8 @@ const layer = Layer.effect(
                 },
               }),
               user,
+              // After the user's rules: plan mode never types into a terminal, whatever they allow.
+              Permission.fromConfig({ terminal_input: "deny" }),
             ),
             mode: "primary",
             native: true,
@@ -661,6 +696,14 @@ const layer = Layer.effect(
             mode: "subagent",
             native: true,
           },
+          workflow: {
+            name: "workflow",
+            mode: "subagent",
+            native: true,
+            hidden: true,
+            permission: Permission.merge(defaults, user, Permission.fromConfig({ "*": "deny" })),
+            options: {},
+          },
           compaction: {
             name: "compaction",
             mode: "primary",
@@ -724,6 +767,11 @@ const layer = Layer.effect(
         // A Subagent specialist turned off still takes its config, for the copy its helpers keep (below).
         const off = new Set<string>()
         for (const [key, value] of Object.entries(cfg.agent ?? {})) {
+          // A markdown agent with a reserved name fails to load (ConfigAgent); one from a config file is left out.
+          if (ConfigAgent.RESERVED.includes(key)) {
+            yield* Effect.logWarning(`agent "${key}" is ignored: that name is reserved by Vector`)
+            continue
+          }
           if (value.disable && !isNativeSpecialist(key)) {
             delete agents[key]
             continue
@@ -876,6 +924,9 @@ const layer = Layer.effect(
           )
         }
 
+        // The coordinator never calls tools or a model, including built-in external-directory allowances.
+        agents.workflow.permission = Permission.merge(defaults, user, Permission.fromConfig({ "*": "deny" }))
+
         // Vector's own helpers run as Subagent specialists: a Vectorscope review prompts review and security. One
         // turned off leaves the agent list and `get`, but a helper session still gets it, hidden, from `helper`.
         const helpers: Record<string, Info> = Object.fromEntries(
@@ -952,7 +1003,15 @@ const layer = Layer.effect(
         model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
       }) {
         const cfg = yield* config.get()
-        const model = input.model ?? (yield* provider.defaultModel())
+        const named = input.model ?? (yield* provider.defaultModel())
+        // Codium Auto is a listing entry, never a model the gateway serves: this one request runs on the model Auto
+        // picks for standard work, and fails with Auto's notice before anything is sent when the plan offers none.
+        const model = SessionCodiumAuto.isAuto(named)
+          ? yield* provider.codiumAuto({
+              tier: "standard",
+              contextTokens: Token.estimate(`${PROMPT_GENERATE}\n${input.description}`),
+            })
+          : named
         const resolved = yield* provider.getModel(model.providerID, model.modelID)
         const language = yield* provider.getLanguage(resolved)
         // The OpenTelemetry tracer package loads only when the experimental exporter is configured.
@@ -1000,14 +1059,20 @@ const layer = Layer.effect(
           ),
         } satisfies Parameters<typeof generateObject>[0]
 
-        if (isOpenaiOauth) {
+        // A ChatGPT sign-in and the Codium gateway both answer only as a stream: a whole-answer request to Codium would
+        // be sent, and spend the plan's usage, with no answer Vector could read.
+        if (isOpenaiOauth || resolved.providerID === ModelPlanStatus.PROVIDER_ID) {
           return yield* Effect.promise(async () => {
             const result = streamObject({
               ...params,
-              providerOptions: ProviderTransform.providerOptions(resolved, {
-                instructions: system.join("\n"),
-                store: false,
-              }),
+              ...(isOpenaiOauth
+                ? {
+                    providerOptions: ProviderTransform.providerOptions(resolved, {
+                      instructions: system.join("\n"),
+                      store: false,
+                    }),
+                  }
+                : {}),
               onError: () => {},
             })
             for await (const part of result.fullStream) {

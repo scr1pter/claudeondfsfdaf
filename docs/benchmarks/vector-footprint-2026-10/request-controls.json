@@ -1,0 +1,534 @@
+{
+  "schemaVersion": 1,
+  "sourceSHA": "09cf9fa01c5be66de901e657bc7cf1d095fdaa6e",
+  "runID": 40795116370,
+  "scope": "Selected model and reasoning controls from fake-provider request bodies, not full payloads or live model usage.",
+  "artifacts": [
+    {
+      "report": "messages-standard.json",
+      "artifactID": 12863957982,
+      "archiveDigest": "sha256:769fb75d008f0303ed30fb6d111db2bb78a1b25ba2a9de1712bb2a0b6fcd0c2c",
+      "files": [
+        {
+          "path": "vector-standard/requests/vector-solo-fix-1.json",
+          "sha256": "88bb5055bf88ea79656ebc8fc2981bd528a2aef7088a7d4e313ebc31e1e004f7",
+          "requests": [
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            }
+          ]
+        },
+        {
+          "path": "vector-standard/requests/vector-solo-fix-2.json",
+          "sha256": "e159a1f09bef70a2be12270bed5043b56315e2093d06717689f59b37c3c25d6e",
+          "requests": [
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": 32000,
+              "max_output_tokens": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "messages-thorough.json",
+      "artifactID": 12863661825,
+      "archiveDigest": "sha256:1b39ca1823d95f6ff23dec66219a4a307033a1bec991bb7a4382e460ce183654",
+      "files": [
+        {
+          "path": "vector-thorough/requests/vector-solo-fix-1.json",
+          "sha256": "3227e5e8604d00776d32ac0eeede8a18b96924704e0a17ec0b42efed690a4763",
+          "requests": [
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            }
+          ]
+        },
+        {
+          "path": "vector-thorough/requests/vector-solo-fix-2.json",
+          "sha256": "5805f72548d2985ae140c0c0bd9672123ad73aa0e956a2c503aa308823c4bbbb",
+          "requests": [
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            },
+            {
+              "model": "claude-sonnet-4-5",
+              "reasoning": null,
+              "reasoning_effort": null,
+              "thinking": {
+                "type": "enabled",
+                "budget_tokens": 16000
+              },
+              "output_config": null,
+              "max_tokens": 48000,
+              "max_output_tokens": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "responses-standard.json",
+      "artifactID": 12864490348,
+      "archiveDigest": "sha256:aae5aab191b65b4b6139dc9b5b5531f53065cc940b231765802b7b9e336c15da",
+      "files": [
+        {
+          "path": "vector-openai-standard/requests/vector-openai-solo-fix-1.json",
+          "sha256": "a11ed9887483b8ff8f7361e6c09352d56c7b5f022e5e5e0c217497d1417dcffa",
+          "requests": [
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            }
+          ]
+        },
+        {
+          "path": "vector-openai-standard/requests/vector-openai-solo-fix-2.json",
+          "sha256": "5f4ea82f2ceab3e2fcde4a9112be4cb5759a20efee09b63954b5b3f92f3392fd",
+          "requests": [
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "report": "responses-thorough.json",
+      "artifactID": 12862664778,
+      "archiveDigest": "sha256:c715b78261c69acdede4cddc1e77eeff97a2102ee64ebc29c9b4ac10d0a731ea",
+      "files": [
+        {
+          "path": "vector-openai-thorough/requests/vector-openai-solo-fix-1.json",
+          "sha256": "f3a86bb54c21e36076909b863be497dd09b77794ed58fb3474acbbccc94ba4e4",
+          "requests": [
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            }
+          ]
+        },
+        {
+          "path": "vector-openai-thorough/requests/vector-openai-solo-fix-2.json",
+          "sha256": "5a5c49caeb5d45ffc307ea8393b500d2f98fb0f86b772c3420ebefeb9edc6c09",
+          "requests": [
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+              },
+              "reasoning_effort": null,
+              "thinking": null,
+              "output_config": null,
+              "max_tokens": null,
+              "max_output_tokens": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

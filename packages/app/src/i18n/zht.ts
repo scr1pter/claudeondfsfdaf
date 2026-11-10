@@ -543,6 +543,9 @@ export const dict = {
   "terminal.title": "終端機",
   "terminal.title.numbered": "終端機 {{number}}",
   "terminal.close": "關閉終端機",
+  "terminal.agent": "由代理程式開啟",
+  "terminal.exited": "已結束 {{code}}",
+  "terminal.ended": "已結束",
 
   "terminal.connectionLost.title": "連線中斷",
   "terminal.connectionLost.description": "終端機連線已中斷。這可能會在伺服器重新啟動時發生。",
@@ -763,6 +766,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "存取儲存庫之外的檔案",
   "settings.permissions.tool.doom_loop.title": "Doom Loop",
   "settings.permissions.tool.doom_loop.description": "偵測具有相同輸入的重複工具呼叫",
+  "settings.permissions.tool.terminal.description":
+    "讀取、等待、調整大小或關閉代理程式未開啟的終端機：你的終端機或其他工作階段的終端機",
+  "settings.permissions.tool.terminal_input.description":
+    "在終端機中輸入文字或按鍵。送出的每一行也會依 shell 指令進行檢查",
+  "session.permission.terminal.name": "終端機",
+  "session.permission.terminal.action.read": "讀取其輸出",
+  "session.permission.terminal.action.wait": "等待其輸出",
+  "session.permission.terminal.action.resize": "調整其大小",
+  "session.permission.terminal.action.close": "關閉並結束其程序",
+  "session.permission.terminal.text": "要輸入的文字",
+  "session.permission.terminal.enter": "然後按 Enter",
+  "session.permission.terminal.keys": "要按的鍵",
 
   "session.delete.failed.title": "刪除工作階段失敗",
   "session.delete.title": "刪除工作階段",

@@ -247,126 +247,13 @@ body:has(.cx-page)::before {
   height: 1em;
 }
 
-/* Pricing: title, plan toggle, cards, the note under them, and the comparison table. */
+/* Pricing: monthly cards, the note under them, and the comparison table. */
 .cx-pricing h1 {
   text-align: center;
 }
 
-.cx-toggle-wrap {
-  margin-top: var(--cx-v);
-  display: flex;
-  justify-content: center;
-}
-
-/* Pill radio groups: the plan type toggle under the title, and the top-up amount picker in its card. */
-.cx-seg {
-  --cx-seg-fill: var(--cx-card);
-  position: relative;
-  display: flex;
-  padding: 0.125rem;
-  background: var(--cx-fg-05);
-  border-radius: 3.4e38px;
-  text-align: center;
-}
-
-.cx-seg-indicator {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  background: var(--cx-seg-fill);
-  border-radius: 3.4e38px;
-  box-shadow:
-    0 1px 3px 0 rgb(0 0 0 / 0.1),
-    0 1px 2px -1px rgb(0 0 0 / 0.1);
-  transition: all 0.14s cubic-bezier(0.25, 1, 0.5, 1);
-}
-
-.cx-seg label {
-  position: relative;
-  padding: var(--cx-pad-md-sm);
-  border: 1px solid transparent;
-  border-radius: 3.4e38px;
-  font-size: 1rem;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.cx-seg input {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  appearance: none;
-  border-radius: inherit;
-  cursor: pointer;
-}
-
-/* Focus follows the checked option, whose fill already marks it, so the radios draw no ring of their own. */
-.cx-seg input:focus-visible {
-  outline: none;
-}
-
-.cx-seg span {
-  position: relative;
-  color: var(--cx-sec);
-  pointer-events: none;
-}
-
-.cx-seg label:hover span,
-.cx-seg label:has(input:checked) span {
-  color: var(--cx-fg);
-}
-
-/* Until the island measures the labels, the chosen label carries the fill itself. */
-.cx-seg:not([data-ready]) label:has(input:checked) {
-  background: var(--cx-seg-fill);
-  box-shadow:
-    0 1px 3px 0 rgb(0 0 0 / 0.1),
-    0 1px 2px -1px rgb(0 0 0 / 0.1);
-}
-
-/* A direct top-ups link is chosen before the island loads, while its markup still has the plans checked. */
-html[data-codium-mode="topup"] .cx-toggle:not([data-ready]) label[data-value="monthly"] {
-  background: none;
-  box-shadow: none;
-}
-
-html[data-codium-mode="topup"] .cx-toggle:not([data-ready]) label[data-value="monthly"] span {
-  color: var(--cx-sec);
-}
-
-html[data-codium-mode="topup"] .cx-toggle:not([data-ready]) label[data-value="topup"] {
-  background: var(--cx-seg-fill);
-  box-shadow:
-    0 1px 3px 0 rgb(0 0 0 / 0.1),
-    0 1px 2px -1px rgb(0 0 0 / 0.1);
-}
-
-html[data-codium-mode="topup"] .cx-toggle:not([data-ready]) label[data-value="topup"] span {
-  color: var(--cx-fg);
-}
-
-.cx-picker {
-  --cx-seg-fill: var(--cx-card-03);
-  flex: none;
-}
-
-.cx-picker label {
-  padding: 0.25rem 0.75rem;
-}
-
 .cx-plans {
   margin-top: calc(var(--cx-v) * 2);
-}
-
-html[data-codium-mode="topup"] .cx-plans {
-  max-width: 840px;
-  margin-inline: auto;
-}
-
-html[data-codium-mode="topup"] .cx-panel[data-mode="monthly"],
-html:not([data-codium-mode="topup"]) .cx-panel[data-mode="topup"] {
-  display: none;
 }
 
 .cx-cards {
@@ -382,7 +269,7 @@ html:not([data-codium-mode="topup"]) .cx-panel[data-mode="topup"] {
 }
 
 @media (min-width: 1140px) {
-  .cx-cards:not(.cx-cards--pair) {
+  .cx-cards {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
@@ -415,11 +302,6 @@ html:not([data-codium-mode="topup"]) .cx-panel[data-mode="topup"] {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-}
-
-/* Cards in a pair have room for a picker beside the name, and keep its height either way. */
-.cx-cards--pair .cx-card-head {
-  min-height: 2.375rem;
 }
 
 .cx-divider {
@@ -553,13 +435,7 @@ html:not([data-codium-mode="topup"]) .cx-panel[data-mode="topup"] {
  */
 .cx-compare {
   margin-top: calc(var(--cx-v) * 4);
-  display: none;
-}
-
-@media (min-width: 660px) {
-  .cx-compare {
-    display: block;
-  }
+  display: block;
 }
 
 .cx-compare h2 {
@@ -793,4 +669,40 @@ html:not([data-codium-mode="topup"]) .cx-panel[data-mode="topup"] {
   align-items: center;
   justify-content: center;
   gap: var(--cx-g);
+}
+
+/* Listed premium tiers and coming work have distinct, restrained treatments. */
+.cx-card--premium {
+  background: var(--cx-card-02);
+}
+
+.cx-card--premium::before {
+  border-color: color-mix(in oklab, var(--cx-accent) 22%, transparent);
+}
+
+.cx-coming-pill {
+  display: inline-block;
+  padding: 0.1em 0.55em;
+  margin-inline-start: 0.35em;
+  border-radius: 999px;
+  color: var(--cx-accent);
+  background: color-mix(in oklab, var(--cx-accent) 12%, transparent);
+  font-size: 0.75rem;
+}
+
+.cx-coming > p + p {
+  margin-top: 0.5rem;
+  color: var(--cx-sec);
+}
+
+.cx-muted {
+  color: var(--cx-sec);
+}
+
+.cx-card-inner > .cx-muted {
+  margin-top: var(--cx-v);
+}
+
+.cx-compare-text {
+  max-width: 22rem;
 }

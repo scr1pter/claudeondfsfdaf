@@ -17,6 +17,7 @@ import { Glob } from "@vectordevai/core/util/glob"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
+import { PromptTrust } from "@/config/prompt-trust"
 
 const CLAUDE_EXTERNAL_DIR = ".claude"
 const AGENTS_EXTERNAL_DIR = ".agents"
@@ -103,6 +104,11 @@ export interface Interface {
 }
 
 const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
+  // A skill outside the repository that changed since the owner last approved it waits for them.
+  if (!PromptTrust.allowed(match)) {
+    yield* Effect.logWarning("holding a changed skill until the owner approves it", { skill: match })
+    return
+  }
   const md = yield* Effect.tryPromise({
     try: () => ConfigMarkdown.parse(match),
     catch: (err) => err,
@@ -323,7 +329,7 @@ const layer = Layer.effect(
 )
 
 export function fmt(list: Info[], opts: { verbose: boolean }) {
-  const described = list.filter((skill) => skill.description !== undefined)
+  const described = list.filter((skill): skill is Info & { description: string } => skill.description !== undefined)
   if (described.length === 0) return "No skills are currently available."
   if (opts.verbose) {
     return [
@@ -333,7 +339,9 @@ export function fmt(list: Info[], opts: { verbose: boolean }) {
         .flatMap((skill) => [
           "  <skill>",
           `    <name>${skill.name}</name>`,
-          `    <description>${skill.description}</description>`,
+          // A description is the skill author's text, so its markup is escaped as element text and cannot close this
+          // block or open another. Quotes mean nothing here and stay, so the built-in description keeps its bytes.
+          `    <description>${skill.description.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</description>`,
           `    <location>${escapeHtml(skill.location)}</location>`,
           "  </skill>",
         ]),

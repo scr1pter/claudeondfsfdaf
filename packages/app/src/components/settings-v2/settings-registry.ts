@@ -55,8 +55,15 @@ export const settingsGroups: readonly SettingsGroup[] = [
         value: "general",
         label: "General",
         icon: "sliders",
-        // The Terminal shell picker lives here too.
+        // The Terminal shell picker and "While Vector works" (follow-ups and the Stop button) live here too.
         keywords: [
+          "follow-up",
+          "followup",
+          "steer",
+          "queue",
+          "stop button",
+          "stop helpers",
+          "while working",
           "data",
           "judge",
           "routing",
@@ -89,6 +96,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "reports",
           "sources",
           "citations",
+          "skills",
+          "learned skills",
+          "workflow",
+          "insights",
+          "effort",
+          "tokenomics",
         ],
       },
       {
@@ -132,7 +145,19 @@ export const settingsGroups: readonly SettingsGroup[] = [
         value: "subagents",
         label: "Agents",
         icon: "task",
-        keywords: ["subagent", "parallel", "delegation", "runtime"],
+        // The subagent limits and the Workflows section (5.I.4) live here too.
+        keywords: [
+          "subagent",
+          "parallel",
+          "delegation",
+          "runtime",
+          "subagent limits",
+          "at once",
+          "per request",
+          "spend ceiling",
+          "workflows",
+          "saved workflows",
+        ],
       },
       {
         value: "computer",

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { sql } from "drizzle-orm"
 import { Effect } from "effect"
+import { BrainEventTable } from "@vectordevai/core/brain/sql"
 import { BrainDistill } from "@vectordevai/core/brain/distill"
 import type { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { added, text, withKnowledge, type Setup } from "./fixture/knowledge"
@@ -318,6 +319,36 @@ const suggest = (setup: Setup, id: string) =>
   })
 
 describe("BrainKnowledge suggestions", () => {
+  test("Codium history keeps the result and attribution but drops supplied token and dollar totals", async () => {
+    const codiumRun: BrainKnowledge.DistillRun = { ...run, model: "vector-plan/vendor/coder", costKind: "codium" }
+    const result = await withKnowledge((setup) =>
+      Effect.gen(function* () {
+        const { document } = yield* added(setup, text("Billing.md", BILLING))
+        const stored = yield* setup.knowledge.distilled(setup.place, document!.id, {
+          records: yield* locked(setup, document!.id),
+          // Older callers can still provide private measurements; the history writer must omit them itself.
+          run: codiumRun,
+        })
+        const detail = yield* setup.knowledge.document(setup.place, document!.id, { personal: true })
+        return { stored, history: detail!.history.filter((item) => item.action === "distilled") }
+      }),
+    )
+    expect(result.stored?.records).toHaveLength(1)
+    expect(result.history).toHaveLength(1)
+    expect(result.history[0]?.detail).toMatchObject({
+      model: "vector-plan/vendor/coder",
+      session: "ses_test",
+      costKind: "codium",
+      kept: 1,
+      duplicate: 0,
+      dropped: run.dropped,
+    })
+    expect(result.history[0]?.detail).not.toHaveProperty("tokens")
+    expect(result.history[0]?.detail).not.toHaveProperty("cost")
+    expect(codiumRun.tokens).toEqual(run.tokens)
+    expect(codiumRun.cost).toBe(0.002)
+  })
+
   test("kept suggestions wait as proposed records, never recalled, with the run on the document's History", async () => {
     const result = await withKnowledge((setup) =>
       Effect.gen(function* () {
@@ -416,5 +447,61 @@ describe("BrainKnowledge suggestions", () => {
     const bodies = result.source.sections.flatMap((item) => item.passages.map((passage) => passage.body))
     expect(bodies.join("\n")).toContain("support lead")
     expect(bodies.join("\n")).not.toContain("AI assistant")
+  })
+})
+
+
+test("legacy Codium history is projected safely without rewriting stored receipts", async () => {
+  const result = await withKnowledge((setup) =>
+    Effect.gen(function* () {
+      const { document } = yield* added(setup, text("Billing.md", BILLING))
+      const distilled = yield* setup.knowledge.distilled(setup.place, document!.id, {
+        records: yield* locked(setup, document!.id),
+        run,
+      })
+      const record = distilled!.records[0]!
+      const receipts = [
+        { entry_id: document!.id, detail: { ...run, session: "legacy-codium", costKind: "codium", cost: 9 } },
+        {
+          entry_id: record.id,
+          detail: { ...run, session: "legacy-provider", model: "vector-plan/sol", costKind: "unknown", cost: 9 },
+        },
+        { entry_id: document!.id, detail: { ...run, session: "legacy-own", cost: 0.12 } },
+      ]
+      yield* setup.db
+        .insert(BrainEventTable)
+        .values(
+          receipts.map((item, index) => ({
+            ...item,
+            repository_id: setup.place.repository,
+            at: Date.now() + index,
+            action: "distilled",
+            actor: "vector" as const,
+          })),
+        )
+        .run()
+        .pipe(Effect.orDie)
+      const documentDetail = yield* setup.knowledge.document(setup.place, document!.id, { personal: true })
+      const recordDetail = yield* setup.knowledge.record(setup.place, record.id, { personal: true })
+      const stored = yield* setup.db.select().from(BrainEventTable).all().pipe(Effect.orDie)
+      return { documentDetail, recordDetail, stored }
+    }),
+  )
+  for (const id of ["legacy-codium", "legacy-provider"]) {
+    const projected = result.documentDetail!.history.find((event) => event.detail?.session === id)?.detail
+    expect(projected).toBeDefined()
+    expect(projected).not.toHaveProperty("tokens")
+    expect(projected).not.toHaveProperty("cost")
+    expect(result.stored.find((event) => event.detail?.session === id)?.detail).toMatchObject({
+      tokens: run.tokens,
+      cost: 9,
+    })
+  }
+  expect(
+    result.recordDetail!.history.find((event) => event.detail?.session === "legacy-provider")?.detail,
+  ).not.toHaveProperty("tokens")
+  expect(result.documentDetail!.history.find((event) => event.detail?.session === "legacy-own")?.detail).toMatchObject({
+    tokens: run.tokens,
+    cost: 0.12,
   })
 })

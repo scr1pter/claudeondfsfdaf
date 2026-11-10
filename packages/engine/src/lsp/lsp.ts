@@ -14,6 +14,7 @@ import { containsPath } from "@/project/instance-context"
 import { NonNegativeInt } from "@vectordevai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LspEvent } from "@vectordevai/schema/lsp-event"
+import { TaskPlace } from "@/task/place"
 
 export const Event = LspEvent
 
@@ -228,6 +229,11 @@ const layer = Layer.effect(
 
         if (!cfg.lsp) {
           yield* Effect.logInfo("all LSPs are disabled")
+        } else if (
+          (TaskPlace.isTaskDirectory(ctx.directory) || TaskPlace.isTaskDirectory(ctx.worktree)) &&
+          cfg.sizing?.subagents?.isolation?.lsp !== true
+        ) {
+          yield* Effect.logInfo("LSP servers stay off in isolated task workspaces")
         } else if (!(yield* config.trust()).trusted) {
           // Language servers run the project's own code: binaries under its node_modules/.bin, its tsserver and
           // ESLint config, its virtualenv's Python, build scripts. So even a user-level `lsp` setting starts them

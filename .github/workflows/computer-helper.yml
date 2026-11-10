@@ -308,9 +308,11 @@ jobs:
             if (!existsSync(file)) continue
             const report = JSON.parse(readFileSync(file, "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
-            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
             const sidecar = file + ".unit-diagnostic.json"
             if (existsSync(sidecar)) {
               const d = JSON.parse(readFileSync(sidecar, "utf8"))
@@ -580,9 +582,11 @@ jobs:
             if (!existsSync(file)) continue
             const report = JSON.parse(readFileSync(file, "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
-            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
             const sidecar = file + ".unit-diagnostic.json"
             if (existsSync(sidecar)) {
               const d = JSON.parse(readFileSync(sidecar, "utf8"))
@@ -734,9 +738,11 @@ jobs:
           for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-.*\.json$/.test(name))) {
             const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
-            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
           }
           NODE
       - name: Install the exact pinned Electron runtime
@@ -949,9 +955,11 @@ jobs:
           for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-arm64.*\.json$/.test(name))) {
             const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
-            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n").join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
           }
           NODE
       - name: Preserve check report

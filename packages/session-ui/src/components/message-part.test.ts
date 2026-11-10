@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { beforeAll, describe, expect, mock, test } from "bun:test"
 import type { Part } from "@vectordevai/sdk/v2"
 import { readPartText } from "./message-part-text"
 import {
@@ -10,6 +10,45 @@ import {
   sameGroups,
   type PartGroup,
 } from "./message-part-group"
+
+let getToolInfo: typeof import("./message-part").getToolInfo
+
+beforeAll(async () => {
+  // Bun loads Solid's server build, where the router and the tooltips' popper cannot load, and the markdown worker URL
+  // is a Vite import. getToolInfo uses none of them.
+  mock.module("./markdown-shiki.worker.ts?worker&url", () => ({ default: "" }))
+  mock.module("@solidjs/router", () => ({ useLocation: () => ({ pathname: "" }) }))
+  mock.module("@vectordevai/ui/tooltip", () => ({ Tooltip: () => undefined, TooltipKeybind: () => undefined }))
+  mock.module("@vectordevai/ui/v2/tooltip-v2", () => ({ TooltipV2: () => undefined }))
+  getToolInfo = (await import("./message-part")).getToolInfo
+})
+
+describe("getToolInfo for terminal", () => {
+  test("names the terminal by its title, then its command, its id or the action", () => {
+    expect(getToolInfo("terminal", { action: "open", title: "dev server", command: "npm run dev" })).toEqual({
+      icon: "console",
+      title: "Terminal",
+      subtitle: "dev server",
+    })
+    expect(getToolInfo("terminal", { action: "open", command: "npm run dev" }).subtitle).toBe("npm run dev")
+    expect(getToolInfo("terminal", { action: "read", id: "pty_1" }).subtitle).toBe("pty_1")
+    expect(getToolInfo("terminal", { action: "list" }).subtitle).toBe("list")
+  })
+
+  test("shows the text a type call types and the keys a keys call presses", () => {
+    expect(getToolInfo("terminal", { action: "type", id: "pty_1", text: "npm test", enter: true }).subtitle).toBe(
+      "npm test ⏎",
+    )
+    expect(getToolInfo("terminal", { action: "type", id: "pty_1", text: "y\nrm -rf build" }).subtitle).toBe(
+      "y ⏎ rm -rf build",
+    )
+    expect(getToolInfo("terminal", { action: "type", id: "pty_1", text: "", enter: true }).subtitle).toBe("⏎")
+    expect(getToolInfo("terminal", { action: "keys", id: "pty_1", keys: ["ctrl-c", "up", "enter"] }).subtitle).toBe(
+      "ctrl-c up enter",
+    )
+    expect(getToolInfo("terminal", { action: "keys", id: "pty_1", keys: [] }).subtitle).toBe("pty_1")
+  })
+})
 
 describe("readPartText", () => {
   test("returns empty string when accum is undefined and part text is undefined", () => {

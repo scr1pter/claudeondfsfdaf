@@ -1,0 +1,522 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-main-integration-local-validation",
+  "recordedAt": "2026-11-10T01:14:02.304932+00:00",
+  "source": {
+    "repository": "scr1pter/claudeondfsfdaf",
+    "worktree": "/workspace/vector-hands-finish",
+    "branch": "hands",
+    "state": "merge-in-progress-with-continuation-edits",
+    "commitBound": false,
+    "note": "Checks cover successive local merged working-tree checkpoints. This record does not attest an immutable source commit or a final merge tree."
+  },
+  "scope": {
+    "execution": "Local targeted named-file tests and package typechecks, run serially by the root agent. Counts are read from the retained Bun logs; completion of typechecks is corroborated by STATE.json.",
+    "runtime": "Bun 1.3.14",
+    "logDirectoryAtValidation": "/tmp/hands-final-ci",
+    "commandFidelity": "Invocations below reconstruct the confirmed package/file runner pattern; complete shell command lines, environment settings and all extra flags were not retained. Engine test timeouts were 30 seconds except prompt.test.ts at 180 seconds.",
+    "notEstablished": [
+      "hosted CI for the completed integration",
+      "native OS capture, input or permission behavior",
+      "packaged installers or production signing",
+      "manual device checks",
+      "release readiness"
+    ]
+  },
+  "summary": {
+    "suites": 48,
+    "pass": 1095,
+    "skip": 4,
+    "fail": 1,
+    "assertions": 10055,
+    "outcome": "one-local-failure-remains; not an all-green validation"
+  },
+  "tests": {
+    "packages/app": {
+      "invocation": "bun test --isolate --conditions=browser --preload ./happydom.ts {file}",
+      "results": {
+        "src/components/prompt-input/submit.test.ts": {
+          "pass": 104,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 476,
+          "log": "merge-submit-final.log"
+        },
+        "src/features/computer/send-gate.test.ts": {
+          "pass": 14,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 100,
+          "log": "merge-app-features-computer-send-gate.log"
+        },
+        "src/features/economics/session-traffic.test.ts": {
+          "pass": 1,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 12,
+          "log": "merge-app-features-economics-session-traffic.log"
+        },
+        "src/features/followup/followup-queue.test.ts": {
+          "pass": 10,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 113,
+          "log": "merge-app-features-followup-followup-queue.log"
+        },
+        "src/i18n/en.test.ts": {
+          "pass": 10,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 311,
+          "log": "merge-app-i18n-en.log"
+        },
+        "src/pages/session/composer/session-permission-dock.test.tsx": {
+          "pass": 18,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 105,
+          "log": "merge-app-pages-session-composer-session-permission-dock.log"
+        }
+      }
+    },
+    "packages/core": {
+      "invocation": "bun test {file}",
+      "results": {
+        "test/model-plans.test.ts": {
+          "pass": 36,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 378,
+          "log": "merge-core-model-plans.log"
+        },
+        "test/public-session-share.test.ts": {
+          "pass": 48,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 339,
+          "log": "merge-core-public-session-share.log"
+        },
+        "test/pty/pty-session.test.ts": {
+          "pass": 9,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 36,
+          "log": "merge-pty-final.log"
+        }
+      }
+    },
+    "packages/desktop": {
+      "invocation": "bun test {file}",
+      "results": {
+        "scripts/computer-overlay-workflow.test.ts": {
+          "pass": 6,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 104,
+          "log": "merge-desktop-computer-overlay-workflow.test.ts.log"
+        },
+        "scripts/computer-release-workflow.test.ts": {
+          "pass": 9,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 244,
+          "log": "merge-desktop-computer-release-workflow.test.ts.log"
+        },
+        "scripts/computer-workflow.test.ts": {
+          "pass": 29,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 3282,
+          "log": "merged-workflow-with-capture.log"
+        },
+        "scripts/release-caveat.test.ts": {
+          "pass": 4,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 30,
+          "log": "merge-desktop-release-caveat.test.ts.log"
+        },
+        "scripts/verify-computer-helper-windows.test.ts": {
+          "pass": 17,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 85,
+          "log": "merge-desktop-verify-computer-helper-windows.test.ts.log"
+        }
+      }
+    },
+    "packages/engine": {
+      "invocation": "bun test {file}",
+      "results": {
+        "test/computer/screens.test.ts": {
+          "pass": 11,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 36,
+          "log": "merge-engine-computer-screens.log"
+        },
+        "test/computer/shell-after-screen.test.ts": {
+          "pass": 16,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 58,
+          "log": "merge-engine-computer-shell-after-screen.log"
+        },
+        "test/event-manifest.test.ts": {
+          "pass": 2,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 24,
+          "log": "merge-engine-event-manifest.log"
+        },
+        "test/permission/next.test.ts": {
+          "pass": 96,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 192,
+          "log": "merge-engine-permission-next.log"
+        },
+        "test/provider/local-fit.test.ts": {
+          "pass": 17,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 82,
+          "log": "merge-engine-provider-local-fit.log"
+        },
+        "test/provider/response-stall.test.ts": {
+          "pass": 1,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 9,
+          "log": "merge-engine-provider-response-stall.log"
+        },
+        "test/question/question.test.ts": {
+          "pass": 16,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 40,
+          "log": "merge-engine-question-question.log"
+        },
+        "test/server/guest-computer.test.ts": {
+          "pass": 5,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 41,
+          "log": "merge-engine-server-guest-computer.log"
+        },
+        "test/session/compaction-tail.test.ts": {
+          "pass": 12,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 95,
+          "log": "merge-engine-session-compaction-tail.log"
+        },
+        "test/session/fork.test.ts": {
+          "pass": 15,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 130,
+          "log": "merge-engine-fork.log"
+        },
+        "test/session/llm.test.ts": {
+          "pass": 63,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 185,
+          "log": "merge-engine-session-llm.log"
+        },
+        "test/session/llm/computer-native-actions.test.ts": {
+          "pass": 15,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 91,
+          "log": "merge-engine-session-llm-computer-native-actions.log"
+        },
+        "test/session/llm/computer-native-replay.test.ts": {
+          "pass": 6,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 13,
+          "log": "merge-engine-session-llm-computer-native-replay.log"
+        },
+        "test/session/llm/computer-native.test.ts": {
+          "pass": 15,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 74,
+          "log": "merge-engine-session-llm-computer-native.log"
+        },
+        "test/session/memory.test.ts": {
+          "pass": 3,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 13,
+          "log": "merge-engine-session-memory.log"
+        },
+        "test/session/processor-computer.test.ts": {
+          "pass": 40,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 176,
+          "log": "merge-engine-session-processor-computer.log"
+        },
+        "test/session/prompt.test.ts": {
+          "pass": 157,
+          "skip": 1,
+          "fail": 0,
+          "assertions": 710,
+          "log": "merge-engine-session-prompt.log"
+        },
+        "test/session/system.test.ts": {
+          "pass": 22,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 257,
+          "log": "merge-engine-session-system.log"
+        },
+        "test/session/terminal-admission.test.ts": {
+          "pass": 6,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 96,
+          "log": "merge-engine-session-terminal-admission.log"
+        },
+        "test/task/shells.test.ts": {
+          "pass": 11,
+          "skip": 1,
+          "fail": 1,
+          "assertions": 98,
+          "log": "merge-engine-task-shells.log"
+        },
+        "test/tool/shell.test.ts": {
+          "pass": 63,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 475,
+          "log": "merge-engine-tool-shell.log"
+        },
+        "test/tool/terminal.test.ts": {
+          "pass": 42,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 235,
+          "log": "merge-terminal-spawn-final.log"
+        }
+      }
+    },
+    "packages/schema": {
+      "invocation": "bun test {file}",
+      "results": {
+        "test/permission-policy.test.ts": {
+          "pass": 6,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 70,
+          "log": "merge-schema-permission-policy.log"
+        }
+      }
+    },
+    "packages/server": {
+      "invocation": "bun test {file}",
+      "results": {
+        "src/auth.test.ts": {
+          "pass": 12,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 146,
+          "log": "merge-server-src-auth.test.ts.log"
+        },
+        "src/middleware/authorization.test.ts": {
+          "pass": 5,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 20,
+          "log": "merge-server-src-middleware-authorization.test.ts.log"
+        }
+      }
+    },
+    "packages/session-ui": {
+      "invocation": "bun test {file}",
+      "results": {
+        "src/components/computer-labels.test.ts": {
+          "pass": 27,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 635,
+          "log": "merge-session-ui-computer-labels.log"
+        },
+        "src/components/message-part.test.ts": {
+          "pass": 24,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 60,
+          "log": "merge-session-ui-message-part.log"
+        },
+        "src/components/reply-footer.test.ts": {
+          "pass": 2,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 4,
+          "log": "merge-session-ui-reply-footer.log"
+        },
+        "src/components/workflow-part.test.ts": {
+          "pass": 6,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 19,
+          "log": "merge-session-ui-workflow-part.log"
+        }
+      }
+    },
+    "packages/tui": {
+      "invocation": "bun test {file}",
+      "results": {
+        "test/util/permission.test.ts": {
+          "pass": 34,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 152,
+          "log": "merge-tui-permission.log"
+        }
+      }
+    },
+    "packages/web": {
+      "invocation": "bun test {file}",
+      "results": {
+        "test/docs-hands.test.ts": {
+          "pass": 5,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 53,
+          "log": "merge-web-docs-hands.log"
+        },
+        "test/local-docs.test.ts": {
+          "pass": 5,
+          "skip": 1,
+          "fail": 0,
+          "assertions": 28,
+          "log": "merge-web-local-docs.log"
+        },
+        "test/release-113-docs.test.ts": {
+          "pass": 8,
+          "skip": 0,
+          "fail": 0,
+          "assertions": 85,
+          "log": "merge-web-release-113-docs.log"
+        },
+        "test/release-copy.test.ts": {
+          "pass": 12,
+          "skip": 1,
+          "fail": 0,
+          "assertions": 38,
+          "log": "merge-web-release-copy.log"
+        }
+      }
+    }
+  },
+  "typechecks": {
+    "invocation": "bun typecheck from each package",
+    "passed": {
+      "packages/app": "merged-app-typecheck.log",
+      "packages/client": "merged-type-client.log",
+      "packages/core": "merged-type-core.log",
+      "packages/desktop": "merged-type-desktop.log",
+      "packages/engine": "merged-engine-typecheck.log",
+      "packages/llm": "merged-type-llm.log",
+      "packages/protocol": "merged-type-protocol.log",
+      "packages/schema": "merged-type-schema.log",
+      "packages/sdk/js": "merged-type-sdk-js.log",
+      "packages/server": "merged-type-server.log",
+      "packages/session-ui": "merged-type-session-ui.log",
+      "packages/tui": "merged-type-tui.log",
+      "packages/web": "merged-web-typecheck.log"
+    },
+    "appE2E": {
+      "cwd": "packages/app",
+      "invocation": "bun run typecheck:e2e",
+      "status": "passed",
+      "log": "merged-e2e-typecheck.log"
+    },
+    "websiteResult": {
+      "files": 204,
+      "errors": 0,
+      "warnings": 0,
+      "hints": 186
+    }
+  },
+  "generation": {
+    "status": "passed per local checkpoint",
+    "client": {
+      "cwd": "packages/client",
+      "invocation": "bun run generate"
+    },
+    "legacySDK": {
+      "entrypoint": "packages/sdk/js/script/build.ts",
+      "log": "sdk-generate.log",
+      "note": "The existing generation script includes its own emit/build step; the full caller command was not retained."
+    }
+  },
+  "supersededCheckpoints": [
+    {
+      "log": "merge-workflow-tests.log",
+      "observed": {
+        "pass": 21,
+        "skip": 0,
+        "fail": 9,
+        "assertions": 1094
+      },
+      "supersededBy": "merged-workflow-with-capture.log",
+      "note": "Interim workflow state; excluded from the final local totals."
+    },
+    {
+      "log": "merged-workflow-tests.log",
+      "observed": {
+        "pass": 28,
+        "skip": 0,
+        "fail": 0,
+        "assertions": 3261
+      },
+      "supersededBy": "merged-workflow-with-capture.log",
+      "note": "Earlier passing workflow checkpoint, before the final capture-summary contract; not counted twice."
+    },
+    {
+      "log": "merge-app-components-prompt-input-submit.log",
+      "observed": {
+        "pass": 103,
+        "skip": 0,
+        "fail": 0,
+        "assertions": 465
+      },
+      "supersededBy": "merge-submit-final.log",
+      "note": "Earlier submit checkpoint; only the final 104-test result is counted."
+    }
+  ],
+  "knownFailure": {
+    "cwd": "packages/engine",
+    "file": "test/task/shells.test.ts",
+    "case": "background shell commands > stop kills the command's whole process tree and is reported quietly (POSIX)",
+    "existingTestCase": true,
+    "observedError": "the command's own child must be killed with it",
+    "result": {
+      "pass": 11,
+      "skip": 1,
+      "fail": 1,
+      "assertions": 98
+    },
+    "observation": {
+      "recordedAt": "2026-11-10T00:23:58.251302+00:00",
+      "process": "sleep",
+      "state": "Z (zombie)",
+      "parentPID": 1,
+      "killZeroSucceeds": true,
+      "PID1Command": "tail -f /dev/null",
+      "log": "shell-child-zombie-observation.json"
+    },
+    "attribution": {
+      "status": "inferred, unconfirmed",
+      "reason": "A zombie sleep process with matching timing and process-group evidence remained under a non-reaping PID 1 and answered signal 0. The exact child.pid fixture binding had already been removed, so this does not prove that the observed zombie was the failing fixture child or establish the failure cause."
+    },
+    "requiredFollowup": "Retain the assertion and require this case to pass in hosted CI; do not reinterpret this local failure as a pass.",
+    "newBeforeSpawnRegression": "passed in the same file"
+  }
+}

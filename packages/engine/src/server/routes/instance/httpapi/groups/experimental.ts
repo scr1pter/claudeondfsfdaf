@@ -19,11 +19,32 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { Task } from "@vectordevai/schema/task"
 import { TaskBridge } from "@vectordevai/schema/task-bridge"
+import { Workflow } from "@vectordevai/schema/workflow"
 
 export class TaskApiError extends Schema.ErrorClass<TaskApiError>("TaskApiError")(
   {
-    code: Schema.Literals(["not_found", "forbidden", "invalid", "finished", "rate_limited"]),
+    code: Schema.Literals([
+      "not_found",
+      "forbidden",
+      "invalid",
+      "finished",
+      "rate_limited",
+      "limit",
+      "conflict",
+      "running",
+    ]),
     message: Schema.String,
+  },
+  { httpApiStatus: 400 },
+) {}
+
+// 4.9: `disabled` names a start the owner's settings turn off (background subagents, or task/workflow denied for the
+// default agent); `issues` carries the structured validation failures of an invalid start or resume.
+export class WorkflowApiError extends Schema.ErrorClass<WorkflowApiError>("WorkflowApiError")(
+  {
+    code: Schema.Literals(["invalid", "busy", "not_found", "running", "disabled", "forbidden", "limit"]),
+    message: Schema.String,
+    issues: Schema.optional(Schema.Array(Workflow.Issue)),
   },
   { httpApiStatus: 400 },
 ) {}
@@ -32,6 +53,8 @@ export const TaskListQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   descendants: Schema.optional(QueryBoolean),
   limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  active: Schema.optional(QueryBoolean),
+  shells: Schema.optional(QueryBoolean),
 })
 
 export const TaskMessageInput = Schema.Struct({
@@ -45,12 +68,43 @@ export const TaskStopInput = Schema.Struct({
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
 })
 
+export const TaskBackgroundInput = Schema.Struct({
+  taskIDs: Schema.optional(Schema.Array(Schema.String).check(Schema.isMinLength(1), Schema.isMaxLength(200))),
+})
+
+export const TaskResumeInput = Schema.Struct({
+  taskIDs: Schema.Array(Schema.String).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
+  text: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096))),
+})
+
+export const TaskChangesQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  diff: Schema.optional(QueryBoolean),
+})
+
+export const TaskMergeInput = Schema.Struct({
+  files: Schema.optional(Schema.Array(Schema.String).check(Schema.isMinLength(1), Schema.isMaxLength(500))),
+  includeStacked: Schema.optional(Schema.Boolean),
+  force: Schema.optional(Schema.Boolean),
+})
+
+export const TaskDiscardInput = Schema.Struct({
+  reason: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
+})
+
+export const SessionStopInput = Schema.Struct({
+  helpers: Schema.Boolean,
+  reason: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
+})
+
 export const TaskWaitInput = Schema.Struct({
   taskIDs: Schema.Array(Schema.String).check(Schema.isMinLength(1), Schema.isMaxLength(200)),
   mode: Schema.optional(Schema.Literals(["any", "all"])),
   timeout: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 0, maximum: 60_000 }))),
 })
 
+// A client uses a feature only when its flag is true; a missing flag means the engine lacks it. The flags expose no
+// limit values.
 const CapabilitiesResponse = Schema.Struct({
   backgroundSubagents: Schema.Boolean,
   computer: Schema.optional(
@@ -60,6 +114,15 @@ const CapabilitiesResponse = Schema.Struct({
       reason: Schema.optional(Schema.String),
     }),
   ),
+  workDelegation: Schema.optional(Schema.Boolean),
+  subagentLimits: Schema.optional(Schema.Boolean),
+  sessionStop: Schema.optional(Schema.Boolean),
+  taskPromote: Schema.optional(Schema.Boolean),
+  taskResume: Schema.optional(Schema.Boolean),
+  taskAttention: Schema.optional(Schema.Boolean),
+  taskIsolation: Schema.optional(Schema.Boolean),
+  workflows: Schema.optional(Schema.Boolean),
+  backgroundShells: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "ExperimentalCapabilities" })
 
 const ToolIDs = Schema.Array(Schema.String).annotate({ identifier: "ToolIDs" })
@@ -105,6 +168,12 @@ export const SessionListQuery = Schema.Struct({
 })
 
 export const ExperimentalPaths = {
+  workflowSaved: "/experimental/workflow/saved",
+  workflowValidate: "/experimental/workflow/validate",
+  workflowStart: "/experimental/session/:sessionID/workflow",
+  workflowList: "/experimental/session/:sessionID/workflow",
+  workflowGet: "/experimental/session/:sessionID/workflow/:runID",
+  workflowResume: "/experimental/session/:sessionID/workflow/:runID/resume",
   capabilities: "/experimental/capabilities",
   console: "/experimental/console",
   consoleOrgs: "/experimental/console/orgs",
@@ -116,11 +185,17 @@ export const ExperimentalPaths = {
   session: "/experimental/session",
   sessionUsage: "/experimental/session/usage",
   sessionBackground: "/experimental/session/:sessionID/background",
+  sessionStop: "/experimental/session/:sessionID/stop",
   taskList: "/experimental/session/:sessionID/tasks",
   taskInspect: "/experimental/session/:sessionID/tasks/:taskID",
   taskMessage: "/experimental/session/:sessionID/tasks/:taskID/message",
   taskStop: "/experimental/session/:sessionID/tasks/stop",
   taskWait: "/experimental/session/:sessionID/tasks/wait",
+  taskBackground: "/experimental/session/:sessionID/tasks/background",
+  taskResume: "/experimental/session/:sessionID/tasks/resume",
+  taskChanges: "/experimental/session/:sessionID/tasks/:taskID/changes",
+  taskMerge: "/experimental/session/:sessionID/tasks/:taskID/merge",
+  taskDiscard: "/experimental/session/:sessionID/tasks/:taskID/discard",
   taskBridgeRegister: "/experimental/session/:sessionID/tasks/bridge/register",
   taskBridgePoll: "/experimental/session/:sessionID/tasks/bridge/poll",
   taskBridgeReceipt: "/experimental/session/:sessionID/tasks/bridge/receipt",
@@ -247,6 +322,20 @@ export const ExperimentalApi = HttpApi.make("experimental")
               "Detach any synchronous subagents currently blocking the session and continue them in the background.",
           }),
         ),
+        HttpApiEndpoint.post("sessionStop", ExperimentalPaths.sessionStop, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionStopInput,
+          success: described(Task.SessionStopResult, "What the stop reached"),
+          error: TaskApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.stop",
+            summary: "Stop a session",
+            description:
+              "Stop the session's main turn and, with helpers, every subagent working under it. No new turn starts until the next user message; partial work is kept.",
+          }),
+        ),
         HttpApiEndpoint.get("taskList", ExperimentalPaths.taskList, {
           params: { sessionID: SessionID },
           query: TaskListQuery,
@@ -312,6 +401,77 @@ export const ExperimentalApi = HttpApi.make("experimental")
               "Wait for any or all selected children with a bounded timeout and no polling or model requests.",
           }),
         ),
+        HttpApiEndpoint.post("taskBackground", ExperimentalPaths.taskBackground, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          // No body moves every one.
+          payload: [HttpApiSchema.NoContent, TaskBackgroundInput],
+          success: described(Task.PromoteResult, "Tasks moved to the background"),
+          error: TaskApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.task.background",
+            summary: "Move session tasks to the background",
+            description:
+              "Move the session's running foreground subagents, or the selected ones, to the background, batch entries included. Each keeps running and reports later on its own.",
+          }),
+        ),
+        HttpApiEndpoint.post("taskResume", ExperimentalPaths.taskResume, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: TaskResumeInput,
+          success: described(Task.ResumeResult, "Tasks resumed in the background"),
+          error: TaskApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.task.resume",
+            summary: "Resume session tasks",
+            description:
+              "Continue the session's stopped, failed or interrupted subagents in the background, each in a new attempt. A completed subagent continues only with text. Nothing resumes on its own.",
+          }),
+        ),
+        HttpApiEndpoint.get("taskChanges", ExperimentalPaths.taskChanges, {
+          params: { sessionID: SessionID, taskID: Schema.String },
+          query: TaskChangesQuery,
+          success: described(Task.ChangesResult, "Isolated task changes"),
+          error: TaskApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.task.changes",
+            summary: "Review an isolated task's changes",
+            description:
+              "Read an isolated child's changed files and, with diff=true, its bounded patch. Only the authenticated owner receives paths and the patch; other viewers receive counts.",
+          }),
+        ),
+        HttpApiEndpoint.post("taskMerge", ExperimentalPaths.taskMerge, {
+          params: { sessionID: SessionID, taskID: Schema.String },
+          query: WorkspaceRoutingQuery,
+          // No body merges every saved file, as the SDK sends it when no option is given.
+          payload: [HttpApiSchema.NoContent, TaskMergeInput],
+          success: described(Task.MergeResult, "Merged isolated changes"),
+          error: TaskApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.task.merge",
+            summary: "Merge an isolated task",
+            description:
+              "Owner only. Bring an isolated child's saved changes, or the selected files, into the parent checkout after a checkpoint.",
+          }),
+        ),
+        HttpApiEndpoint.post("taskDiscard", ExperimentalPaths.taskDiscard, {
+          params: { sessionID: SessionID, taskID: Schema.String },
+          query: WorkspaceRoutingQuery,
+          // No body discards without a reason.
+          payload: [HttpApiSchema.NoContent, TaskDiscardInput],
+          success: described(Task.DiscardResult, "Discarded isolated changes"),
+          error: TaskApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.task.discard",
+            summary: "Discard an isolated task",
+            description: "Owner only. Keep a recovery artifact, then remove an isolated child's checkout and branch.",
+          }),
+        ),
         HttpApiEndpoint.post("taskBridgeRegister", ExperimentalPaths.taskBridgeRegister, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
@@ -349,6 +509,67 @@ export const ExperimentalApi = HttpApi.make("experimental")
             identifier: "experimental.task.bridge.receipt",
             summary: "Confirm a desktop task command",
             description: "Owner-authenticated desktop relay with an expiring lease. No callback URLs are accepted.",
+          }),
+        ),
+        HttpApiEndpoint.get("workflowSaved", ExperimentalPaths.workflowSaved, {
+          query: WorkspaceRoutingQuery,
+          success: Workflow.SavedList,
+          error: WorkflowApiError,
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "experimental.workflow.saved", summary: "List trusted saved workflows" }),
+        ),
+        HttpApiEndpoint.post("workflowValidate", ExperimentalPaths.workflowValidate, {
+          query: WorkspaceRoutingQuery,
+          success: Workflow.Validation,
+          error: WorkflowApiError,
+          payload: Workflow.ValidateInput,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.validate",
+            summary: "Validate a workflow without starting it",
+          }),
+        ),
+        HttpApiEndpoint.post("workflowStart", ExperimentalPaths.workflowStart, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.Started,
+          error: WorkflowApiError,
+          payload: Workflow.StartInput,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.start",
+            summary: "Start an owner-approved workflow",
+          }),
+        ),
+        HttpApiEndpoint.get("workflowList", ExperimentalPaths.workflowList, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.RunList,
+          error: WorkflowApiError,
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "experimental.workflow.list", summary: "List workflow runs" }),
+        ),
+        HttpApiEndpoint.get("workflowGet", ExperimentalPaths.workflowGet, {
+          params: { sessionID: SessionID, runID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.RunDetail,
+          error: WorkflowApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.get",
+            summary: "Get workflow progress and results",
+          }),
+        ),
+        HttpApiEndpoint.post("workflowResume", ExperimentalPaths.workflowResume, {
+          params: { sessionID: SessionID, runID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.Started,
+          error: WorkflowApiError,
+          payload: [HttpApiSchema.NoContent, Workflow.ResumeInput],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.resume",
+            summary: "Resume an owner-approved workflow",
           }),
         ),
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {

@@ -1,5 +1,9 @@
 # Handoff: finish building Vector Hands (Vector's computer use)
 
+> **Current continuation supersedes this historical briefing.** All **73/73 source packages** are implemented. Continue from the [current checkpoint](./hands-progress.md#current-continuation-main-integration-and-native-validation-pending), not D5b. Main `0dcbb8e2` integration is in progress and awaits validation. Published desktop 1.99.112 did **not** include Hands; Hands is unversioned and unreleased, with its own [owner checklist](../owner-actions/hands-release.md). Windows native Stop/capture and final x64/ARM64 packaging evidence remain open. The early-accessibility fixture change is diagnostic only. Signing, real-device OS checks and public release remain owner gates. The full original handoff below is preserved as historical context; its package count, next task and release target are superseded.
+
+## Historical handoff
+
 You are taking over a build started in an earlier Claude session and continued by Codex. Read this whole briefing first. Continue the implementation, validation and review through completion of the remaining work packages for **Vector desktop 1.99.112**.
 
 Everything lives on GitHub. The owner works across several computers, so nothing essential may stay on one machine. Clone the repository, work on the **`hands`** branch, and push each completed package. This is the same Vector repository and workspace discussed with the owner; do not search for a separate Hands product or restart the project.

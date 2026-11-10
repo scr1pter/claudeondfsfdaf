@@ -20,7 +20,8 @@ import { Parameters as Question } from "../../src/tool/question"
 import { Parameters as Read } from "../../src/tool/read"
 import { Parameters as Shell } from "../../src/tool/shell"
 import { Parameters as Skill } from "../../src/tool/skill"
-import { BatchParameters, Parameters as Task } from "../../src/tool/task"
+import { BatchParameters, InputParameters, Parameters as Task } from "../../src/tool/task"
+import { Parameters as Terminal } from "../../src/tool/terminal"
 import { Parameters as Todo } from "../../src/tool/todo"
 import { Parameters as WebFetch } from "../../src/tool/webfetch"
 import { Parameters as Write } from "../../src/tool/write"
@@ -47,6 +48,7 @@ describe("tool parameters", () => {
     test("read", () => expect(toJsonSchema(Read)).toMatchSnapshot())
     test("skill", () => expect(toJsonSchema(Skill)).toMatchSnapshot())
     test("task", () => expect(toJsonSchema(BatchParameters)).toMatchSnapshot())
+    test("terminal", () => expect(toJsonSchema(Terminal)).toMatchSnapshot())
     test("todo", () => expect(toJsonSchema(Todo)).toMatchSnapshot())
     test("webfetch", () => expect(toJsonSchema(WebFetch)).toMatchSnapshot())
     test("write", () => expect(toJsonSchema(Write)).toMatchSnapshot())
@@ -114,6 +116,38 @@ describe("tool parameters", () => {
     })
     test("rejects missing command", () => {
       expect(accepts(Shell, {})).toBe(false)
+    })
+    // 5.H: always advertised, refused at execute where a session may not run one.
+    test("accepts optional background flag", () => {
+      expect(parse(Shell, { command: "bun run build", background: true })).toEqual({
+        command: "bun run build",
+        background: true,
+      })
+      expect(accepts(Shell, { command: "ls", background: "yes" })).toBe(false)
+    })
+  })
+
+  describe("terminal", () => {
+    test("accepts every action with its own fields", () => {
+      expect(parse(Terminal, { action: "list" })).toEqual({ action: "list" })
+      expect(parse(Terminal, { action: "open", command: "npm", args: ["run", "dev"], reveal: true })).toEqual({
+        action: "open",
+        command: "npm",
+        args: ["run", "dev"],
+        reveal: true,
+      })
+      expect(accepts(Terminal, { action: "keys", id: "pty_1", keys: ["ctrl-c", "up", "page_down", "space"] })).toBe(
+        true,
+      )
+      expect(accepts(Terminal, { action: "wait", id: "pty_1", pattern: "ready", timeout: 1000, cursor: 0 })).toBe(true)
+    })
+    test("rejects unknown actions and keys, long titles and out-of-range numbers", () => {
+      expect(accepts(Terminal, { action: "evaluate" })).toBe(false)
+      expect(accepts(Terminal, { action: "keys", id: "pty_1", keys: ["ctrl-q"] })).toBe(false)
+      expect(accepts(Terminal, { action: "keys", id: "pty_1", keys: Array(33).fill("enter") })).toBe(false)
+      expect(accepts(Terminal, { action: "open", title: "x".repeat(81) })).toBe(false)
+      expect(accepts(Terminal, { action: "read", id: "pty_1", cursor: -1 })).toBe(false)
+      expect(accepts(Terminal, { action: "read", id: "pty_1", lines: 0 })).toBe(false)
     })
   })
 
@@ -256,6 +290,34 @@ describe("tool parameters", () => {
     })
     test("rejects missing prompt", () => {
       expect(accepts(Task, { description: "d", subagent_type: "general" })).toBe(false)
+    })
+    // 4.4: a brief's own model, effort, output_schema, fork and isolation, alone or in each entry, never beside a
+    // batch's array.
+    test("takes model, effort, output_schema, fork and isolation per brief, never at a batch's top level", () => {
+      const brief = { description: "d", prompt: "p" }
+      for (const [key, value] of [
+        ["model", "small"],
+        ["effort", "low"],
+        ["output_schema", { type: "object" }],
+        ["fork", true],
+        ["isolation", "worktree"],
+      ] as const) {
+        expect(accepts(InputParameters, { ...brief, [key]: value }), key).toBe(true)
+        expect(accepts(InputParameters, { tasks: [brief, { ...brief, [key]: value }] }), key).toBe(true)
+        expect(accepts(InputParameters, { tasks: [brief], [key]: value }), key).toBe(false)
+      }
+      // Never xhigh or max from a brief.
+      for (const effort of ["xhigh", "max", "off"])
+        expect(accepts(InputParameters, { ...brief, effort }), effort).toBe(false)
+      const advertised = JSON.stringify(toJsonSchema(BatchParameters))
+      expect(advertised).toContain('"model"')
+      expect(advertised).toContain('"effort"')
+      expect(advertised).toContain('"output_schema"')
+      expect(advertised).toContain('"fork"')
+      expect(advertised).toContain('"isolation"')
+      // Worktree is the only isolation; shared work omits the field.
+      for (const isolation of ["none", "copy", true])
+        expect(accepts(InputParameters, { ...brief, isolation }), String(isolation)).toBe(false)
     })
   })
 

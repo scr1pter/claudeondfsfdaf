@@ -498,6 +498,9 @@ export const dict = {
   "terminal.title": "ターミナル",
   "terminal.title.numbered": "ターミナル {{number}}",
   "terminal.close": "ターミナルを閉じる",
+  "terminal.agent": "エージェントが開いたターミナル",
+  "terminal.exited": "終了 {{code}}",
+  "terminal.ended": "終了",
   "terminal.connectionLost.title": "接続が失われました",
   "terminal.connectionLost.description":
     "ターミナルの接続が中断されました。これはサーバーが再起動したときに発生することがあります。",
@@ -708,6 +711,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "リポジトリ外のファイルへのアクセス",
   "settings.permissions.tool.doom_loop.title": "無限ループ",
   "settings.permissions.tool.doom_loop.description": "同一入力による繰り返しのツール呼び出しを検出",
+  "settings.permissions.tool.terminal.description":
+    "エージェントが開いていないターミナル(あなたのものや別のセッションのもの)を読み取る、待機する、サイズを変更する、または閉じる",
+  "settings.permissions.tool.terminal_input.description":
+    "ターミナルにテキストを入力するかキーを押す。送信される行はシェルコマンドとしても確認されます",
+  "session.permission.terminal.name": "ターミナル",
+  "session.permission.terminal.action.read": "出力を読み取る",
+  "session.permission.terminal.action.wait": "出力を待つ",
+  "session.permission.terminal.action.resize": "サイズを変更する",
+  "session.permission.terminal.action.close": "閉じてプロセスを終了する",
+  "session.permission.terminal.text": "入力するテキスト",
+  "session.permission.terminal.enter": "その後 Enter を押す",
+  "session.permission.terminal.keys": "押すキー",
   "session.delete.failed.title": "セッションの削除に失敗しました",
   "session.delete.title": "セッションの削除",
   "session.delete.confirm": 'セッション "{{name}}" を削除しますか？',

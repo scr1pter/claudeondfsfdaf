@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { providerRuntimeEnabled } from "@vectordevai/schema/provider-policy"
 import { type Accessor, Component, Show } from "solid-js"
 import { useDialog } from "@vectordevai/ui/context/dialog"
@@ -42,7 +43,8 @@ export const DialogSelectProvider: Component<{ directory?: Accessor<string | und
             (provider) =>
               provider.id === CUSTOM_ID ||
               // Vector's own providers come with the Vector account; there is nothing to connect.
-              (!["vector", "vector-plan"].includes(provider.id) && !isHiddenProvider(provider.id, provider)),
+              (!["vector", Billing.CODIUM_PROVIDER_ID].includes(provider.id) &&
+                !isHiddenProvider(provider.id, provider)),
           )
         }}
         filterKeys={["id", "name"]}

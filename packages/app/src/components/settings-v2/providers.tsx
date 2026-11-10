@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { providerEnabled, providerRuntimeEnabled } from "@vectordevai/schema/provider-policy"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { Tag } from "@vectordevai/ui/v2/badge-v2"
@@ -32,7 +33,7 @@ const PROVIDER_NOTES = [
 
 const PROVIDER_ICON_SIZE = 16
 // Vector Codium has its own section with plan and balances; it has no key to disconnect.
-const HIDDEN_PROVIDER_IDS = new Set(["vector", "vector-plan"])
+const HIDDEN_PROVIDER_IDS = new Set(["vector", Billing.CODIUM_PROVIDER_ID])
 
 const providerDisplayName = (id: string, name: string) => brandProviderName(id, name)
 

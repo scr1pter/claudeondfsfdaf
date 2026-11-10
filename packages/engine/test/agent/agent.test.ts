@@ -10,6 +10,7 @@ import { Agent, RESEARCHER, RESEARCH_JUDGE } from "../../src/agent/agent"
 import PROMPT_REVIEW from "../../src/agent/prompt/review.txt"
 import { GENERAL_SUBAGENT } from "../../src/agent/subagent-kind"
 import { NATIVE_SPECIALISTS } from "@vectordevai/core/agent/specialists"
+import { WorkflowMarkers } from "../../src/orchestration/constants"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
@@ -476,9 +477,14 @@ it.instance("native Subagents include the configurable coding specialists and de
       .filter((agent) => agent.native === true && agent.mode === "subagent" && agent.name !== GENERAL_SUBAGENT)
       .map((agent) => agent.name)
       .toSorted()
-    expect(specialists).toEqual([...NATIVE_SPECIALISTS, RESEARCHER, RESEARCH_JUDGE].toSorted())
+    // The hidden workflow coordinator (WP31, G.4) is native too: an engine-reserved name, not a specialist to turn off.
+    expect(specialists).toEqual(
+      [...NATIVE_SPECIALISTS, RESEARCHER, RESEARCH_JUDGE, WorkflowMarkers.WORKFLOW_AGENT].toSorted(),
+    )
     expect(NATIVE_SPECIALISTS).not.toContain(RESEARCHER)
     expect(NATIVE_SPECIALISTS).not.toContain(RESEARCH_JUDGE)
+    expect(NATIVE_SPECIALISTS).not.toContain(WorkflowMarkers.WORKFLOW_AGENT)
+    expect(yield* load((svc) => svc.get(WorkflowMarkers.WORKFLOW_AGENT))).toMatchObject({ hidden: true })
   }),
 )
 
@@ -767,6 +773,51 @@ it.instance("default permission asks for risky and unsandboxed operations", () =
     expect(evalPerm(build, "unsandboxed_shell")).toBe("ask")
     expect(evalPerm(build, "webfetch")).toBe("ask")
     expect(evalPerm(build, "websearch")).toBe("ask")
+  }),
+)
+
+it.instance("terminals the agent did not open ask before input, resizing or closing; its own do not", () =>
+  Effect.gen(function* () {
+    for (const name of ["build", "general", "debug", "test"]) {
+      const agent = (yield* load((svc) => svc.get(name)))!
+      for (const permission of ["terminal", "terminal_input"]) {
+        expect(Permission.evaluate(permission, "own:pty_1", agent.permission).action).toBe("allow")
+        expect(Permission.evaluate(permission, "other:pty_1", agent.permission).action).toBe("ask")
+      }
+      expect(Permission.disabled(["terminal"], agent.permission).size).toBe(0)
+    }
+    // The read-only specialists and the quick lane deny everything else, which hides the tool.
+    for (const name of ["explore", "review", "judge", "security", "quick"]) {
+      const agent = (yield* load((svc) => svc.get(name)))!
+      expect(Permission.disabled(["terminal"], agent.permission).has("terminal")).toBe(true)
+      expect(Permission.evaluate("terminal_input", "own:pty_1", agent.permission).action).toBe("deny")
+    }
+  }),
+)
+
+it.instance(
+  "plan mode never types into a terminal, whatever the user's rules allow",
+  () =>
+    Effect.gen(function* () {
+      const plan = (yield* load((svc) => svc.get("plan")))!
+      const build = (yield* load((svc) => svc.get("build")))!
+      expect(Permission.evaluate("terminal_input", "own:pty_1", plan.permission).action).toBe("deny")
+      expect(Permission.evaluate("terminal_input", "other:pty_1", plan.permission).action).toBe("deny")
+      // Reading, waiting and its own terminals' lifecycle stay as the defaults have them.
+      expect(Permission.evaluate("terminal", "own:pty_1", plan.permission).action).toBe("allow")
+      expect(Permission.disabled(["terminal"], plan.permission).size).toBe(0)
+      expect(Permission.evaluate("terminal_input", "other:pty_1", build.permission).action).toBe("allow")
+    }),
+  { trusted: true, config: { permission: { terminal_input: "allow" } } },
+)
+
+it.instance("research agents are never handed a terminal", () =>
+  Effect.gen(function* () {
+    for (const name of ["research", RESEARCHER]) {
+      const agent = (yield* load((svc) => svc.get(name)))!
+      expect(Permission.evaluate("terminal", "own:pty_1", agent.permission).action).toBe("deny")
+      expect(Permission.evaluate("terminal_input", "own:pty_1", agent.permission).action).toBe("deny")
+    }
   }),
 )
 

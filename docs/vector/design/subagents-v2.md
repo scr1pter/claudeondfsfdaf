@@ -32,7 +32,7 @@ Authorization derives from the request principal and stored ownership, never a c
 
 ## Notifications and safe boundaries
 
-Keep a fixed, documented 500 ms window starting with the first completion. Completions inside it arrive together. Preserve cancelled-only and budget-stopped quiet delivery, and suppress reports whose launching message was reverted. Notifications carry bounded reports and references, clearly attributed as automated output with no human authority.
+Hold notes in one window per parent. A busy parent gets them at once, so they join its next step. An idle parent gets them after 1.5 s without a new note, at most 5 s after the first, and after the whole 5 s while another of its background jobs runs. A turn the user starts takes held notes with it. Notes are recorded without starting a turn when the user stopped the helpers with the main agent (until the user writes again), when the spend guard halted the parent, or when no note in the batch wakes it, such as one that only reports stopped helpers. Suppress reports whose launching message was reverted. Notifications carry bounded reports and references, clearly attributed as automated output with no human authority.
 
 V1 uses its own prompt admission adapter and serialized provider-turn boundary. Synthetic notifications must not become the user's selected model/format/budget or displace a pending human message. V2 continues to admit durable inputs through `SessionV2.prompt` and `SessionExecution`; never bridge its runner to the legacy loop. Steer promotes at a safe provider-turn boundary; queue promotes only when the session would otherwise become idle.
 

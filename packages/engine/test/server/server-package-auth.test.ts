@@ -40,3 +40,16 @@ describe("@vectordevai/server auth", () => {
     )
   })
 })
+
+describe("workflow route ownership", () => {
+  test("saved and validation require owner identity before the general GET allowance", () => {
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/workflow/saved")).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/workflow/validate")).toBe(true)
+  })
+  test("start and resume require owner identity while reads remain accessible to allowed guests", () => {
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/session/:sessionID/workflow")).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/session/:sessionID/workflow/:runID/resume")).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/session/:sessionID/workflow")).toBe(false)
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/session/:sessionID/workflow/:runID")).toBe(false)
+  })
+})

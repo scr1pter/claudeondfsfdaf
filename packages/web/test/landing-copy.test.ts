@@ -113,10 +113,10 @@ test("the self-evolving section says whose prompts and data they are, and no mor
 // The owner's emphasis (22 October 2026): Vector is the self-evolving, low-cost AI agentic harness, built on technology
 // of its own. The hero stays as short as it was on main: it says plainly what Vector is, with one emphasis line that
 // labels the brain from brainRelease, since the brain is what makes it self-evolving and is not out until desktop
-// 1.99.110. The detail sits in the sections below. The README cannot read brainRelease, so it is held to it here.
-test("the hero, the title and the README call Vector the self-evolving, low-cost AI agentic harness", async () => {
+// 1.99.110. The detail sits in the sections below. The README said it too until it was reduced to one word (owner,
+// 24 October 2026); the hero deck and the title carry it now.
+test("the hero and the title call Vector the self-evolving, low-cost AI agentic harness", async () => {
   const source = await Bun.file(path.join(web, "src/pages/index.astro")).text()
-  const readme = (await Bun.file(path.join(repo, "README.md")).text()).replace(/\s+/g, " ")
   const hero = lander.slice(lander.indexOf('<section id="ch-start"'), lander.indexOf('<section id="evolving"'))
   const deck = hero.slice(hero.indexOf('<p class="hero-deck simple-deck">'), hero.indexOf("</p>", hero.indexOf("hero-deck")))
   expect(lander).toContain('<span class="headline-lead">The self-evolving AI agentic harness&nbsp;that</span>')
@@ -138,21 +138,9 @@ test("the hero, the title and the README call Vector the self-evolving, low-cost
     expect(text).toContain(`Vector Brain is ${brainCopy(version).kicker}.`)
     expect(text).toContain("Free with a Vector account")
   }
-  // The README's opening says Vector is self-evolving only with the brain's release beside it, and its present-tense
-  // list of the technology Vector is built on leaves the brain to the paragraph that names that release.
-  const other = brainCopy(Bun.semver.order(publishedDesktopVersion, "1.99.110") < 0 ? "1.99.110" : "1.99.109")
-  expect(readme).toContain(
-    `**The low-cost AI agentic harness for planning, building, reviewing and shipping software.** Self-evolving with Vector Brain, ${brainRelease.lede}.`,
-  )
-  expect(readme).not.toContain(`Self-evolving with Vector Brain, ${other.lede}.`)
-  const opening = readme.slice(0, readme.indexOf(brainRelease.readme))
-  expect(opening).toContain("It is built on proprietary technology: the **tokenomics engine**")
-  expect(opening.replace(`Self-evolving with Vector Brain, ${brainRelease.lede}.`, "")).not.toMatch(
-    /self-evolving|Vector Brain/i,
-  )
   // The brain's own name, everywhere: never the owner's slip for it, which is built here so this file does not spell it.
   const slip = new RegExp(["g", "brain"].join(""), "i")
-  expect([page, readme].filter((text) => slip.test(text))).toEqual([])
+  expect(page).not.toMatch(slip)
 })
 
 // Request sizing and the Run Guard are in the desktop app; the terminal gets them with the next CLI release. Every
@@ -168,71 +156,43 @@ test("request sizing and the Run Guard are called desktop features wherever the 
   expect(lander).not.toMatch(/sr-only">[^<]*(stops a run|cap you set)/)
 })
 
-// "Low-cost" rests on one published benchmark, which the README quotes with its caveats: the integrated HTTP cells
-// of the efficiency archive, Vector on the Messages API against Claude Code at the same rates, as the investor page
-// quotes it.
-test("the README's cost claim quotes the efficiency archive's range against Claude Code, with its caveats", async () => {
-  const summary = await Bun.file(path.join(repo, "docs/benchmarks/vector-efficiency-2026-10/summary.json")).json()
-  const readme = (await Bun.file(path.join(repo, "README.md")).text()).replace(/\s+/g, " ")
-  const cell = (
-    runtime: string,
-    scenario: string,
-    session: number,
-  ): { costUsd: number; requests: number } | undefined =>
-    summary.cells.find(
-      (item: { state: string; transport: string; runtime: string; scenario: string; session: number }) =>
-        item.state === "integrated" &&
-        item.transport === "http" &&
-        item.runtime === runtime &&
-        item.scenario === scenario &&
-        item.session === session,
-    )
-  // long-loop is left out for the reason test/investor-page.test.ts gives: its fixture lacks a file the script reads.
-  const scenarios = ["solo-fix", "delegate-explore", "delegate-general"]
-  const range = (session: number) => {
-    const savings = scenarios.map((scenario) => {
-      const vector = cell("vector", scenario, session)
-      const claude = cell("claude-code", scenario, session)
-      expect(vector?.requests).toBe(claude?.requests)
-      return Math.round((1 - (vector?.costUsd ?? 0) / (claude?.costUsd ?? 1)) * 100)
-    })
-    if (Math.min(...savings) === Math.max(...savings)) return `${savings[0]}%`
-    return `${Math.min(...savings)}–${Math.max(...savings)}%`
-  }
-  // The README names the archive and the revision it froze, as the investor page's footnote does. The landing page no
-  // longer carries the note (owner, 27 October 2026).
+// "Low-cost" rests on one published benchmark: the integrated HTTP cells of the efficiency archive, Vector on the
+// Messages API against Claude Code at the same rates. The README quoted it until it was reduced to one word (owner,
+// 24 October 2026); the investor page's footnote quotes it now, and test/investor-page.test.ts holds its range and
+// caveats to the archive.
+test("the investor page's cost claim dates the runtime the efficiency archive froze, and no page goes past it", async () => {
+  const investors = await read("src/pages/investors.astro")
+  // The archive freezes one revision of the runtime, committed on 11 October 2026. The footnote gives that date, not
+  // the commit or the archive's place in Vector's repository, which readers of the public page cannot open. The
+  // landing page no longer carries the note (owner, 27 October 2026).
   const archive = await Bun.file(path.join(repo, "docs/benchmarks/vector-efficiency-2026-10/README.md")).text()
   const revision = archive.match(/integrated command-line runtime is frozen at `([0-9a-f]{40})`/)?.[1]
   expect(revision).toBeDefined()
   expect(lander).not.toContain("Low cost, measured")
-  expect(readme).toContain(`(commit ${revision?.slice(0, 9)}) and Claude Code 2.1.215`)
-  expect(readme).toContain(
-    `Vector's modelled spend was ${range(1)} lower in a first session and ${range(2)} lower in a second, run as a new process`,
-  )
-  ;[
-    "docs/benchmarks/vector-efficiency-2026-10/README.md",
-    "(commit 6f7f3c2ea) and Claude Code 2.1.215",
-    "identical scripted tool steps against a local fake model server",
-    "the same number of model requests",
-    "medians of three repetitions",
-    "characters ÷ 4",
-    "not the quality of answers",
-    "does not show that Vector is cheaper than other agents in general",
-  ].forEach((caveat) => expect(readme).toContain(caveat))
+  expect(investors).toContain("Vector's runtime as of 11 October 2026 and Claude Code 2.1.215")
+  // The frontmatter's comment may point at the archive; the page it renders does not.
+  const rendered = investors.slice(investors.indexOf("---", 3) + 3)
+  expect(rendered).not.toContain(revision!.slice(0, 7))
+  expect(rendered).not.toContain("docs/benchmarks")
   // Never a bare superlative, and nothing from the archive where Claude Code or Codex comes out ahead.
   expect(
-    [page, readme].filter((text) => /\bcheapest\b|\blowest[- ]cost\b|MiB|wall[- ]time|Codex [^,.]*cheaper/i.test(text)),
+    [page, investors].filter((text) => /\bcheapest\b|\blowest[- ]cost\b|MiB|wall[- ]time|Codex [^,.]*cheaper/i.test(text)),
   ).toEqual([])
 })
 
-test("Vector Velocity is in development and branded by one size, 550B parameters", () => {
-  expect(lander).toContain('"is building a 550B model of its own."')
-  expect(lander).toContain("and is building a 550B-parameter model of its own.")
-  expect(lander).toContain("Velocity, the 550B-parameter model we're building")
-  // One size, and nothing about how many of its parameters run per token.
-  expect(new Set(visible.flatMap((text) => Array.from(text.matchAll(/(\d+)B(?:-parameter| model)/g), (match) => match[1])))).toEqual(
-    new Set(["550"]),
-  )
+test("Vector Velocity is planned with 550B+ parameters and no availability or performance claim", () => {
+  expect(lander).toContain('"is planning Vector Velocity, a 550B+ parameter model."')
+  expect(lander).toContain("and is planning Vector Velocity, a model with 550B+ parameters.")
+  expect(lander).toContain("Vector Velocity, our planned model with 550B+ parameters")
+  expect(lander).not.toMatch(/is building a 550B|550B-parameter model we're building/)
+  // One planned size, and nothing about how many of its parameters run per token.
+  expect(
+    new Set(
+      visible.flatMap((text) =>
+        Array.from(text.matchAll(/(\d+B\+?)(?:[- ]parameter| parameters| model)/g), (match) => match[1]),
+      ),
+    ),
+  ).toEqual(new Set(["550B+"]))
   expect(
     visible.filter((text) =>
       /\bactive (?:per token|param\w*)|parameters active|\bactivated\b|\bA\d+B\b|\bunder \d+B\b|\d+B (?:active|per token|for every token)|parameters (?:per|for every) token|300B|300 billion/i.test(
@@ -324,4 +284,15 @@ test("the landing page names neither the upstream project nor Cloud Services", (
     [],
   )
   expect(page).not.toMatch(/Cloud [Ss]ervices/)
+})
+
+// The pictures of the app work in a sample repository, the same ~/code/myapp the terminal docs use, never in the
+// folder on the owner's computer that Vector itself is built in.
+test("the app pictures show a sample repository, not the owner's folder", () => {
+  const traces = /~\/Vectordev|>\s*Vectordev\.ai\s*<|\/Users\/|\/home\/[a-z]|\.codex\/worktrees/
+  expect(shots.filter((shot) => traces.test(shot.text)).map((shot) => shot.file)).toEqual([])
+  const named = (file: string) => shots.find((shot) => shot.file.endsWith(file))?.text ?? ""
+  expect(named("ShotSession.astro")).toContain('<span class="ss-prompt">~/code/myapp (')
+  expect(named("ShotTasksPanel.astro")).toContain("the currently staged patch in ~/code/myapp on branch")
+  expect(named("ShotSidebar.astro")).toContain('<span class="sb-project-name">myapp</span>')
 })

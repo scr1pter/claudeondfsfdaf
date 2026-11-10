@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createServer } from "node:http"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
+import { Location } from "@vectordevai/core/location"
+import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { PtyID } from "@vectordevai/core/pty/schema"
+import { AbsolutePath } from "@vectordevai/core/schema"
 import { Server } from "../../src/server/server"
 import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir, tmpdirScoped } from "../fixture/fixture"
-import { Config, Effect, Layer, Queue, Schema } from "effect"
+import { Config, Effect, Exit, Layer, Queue, Schema, Scope } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
@@ -30,9 +34,12 @@ const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer
   { disableListenLog: true, disableLogger: true },
 )
 
+// The legacy handlers provide this same layer, so one build shares its location services (and their terminals)
+// between the served routes and the test.
 const effectIt = testEffect(
   Layer.mergeAll(
     testStateLayer,
+    locationServiceMapLayer,
     Socket.layerWebSocketConstructorGlobal,
     servedRoutes.pipe(
       Layer.provide(Socket.layerWebSocketConstructorGlobal),
@@ -49,6 +56,29 @@ function app() {
 function serverUrl() {
   return HttpServer.HttpServer.use((server) => Effect.succeed(HttpServer.formatAddress(server.address)))
 }
+
+// Bun's node:http server never finishes close() once it has itself closed an upgraded WebSocket, as the replay of an
+// exited terminal does, so the test server's teardown would stall. Replays go to a second server, let go after a
+// short grace. It needs its own layer value: the test's build shares layers by identity, so servedRoutes would not
+// be served again.
+const replayRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
+  HttpApiApp.routes,
+  { disableListenLog: true, disableLogger: true },
+)
+
+const withReplayServer = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    const server = yield* Layer.buildWithScope(
+      replayRoutes.pipe(
+        Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0, gracefulShutdownTimeout: "50 millis" })),
+      ),
+      scope,
+    )
+    const exit = yield* body.pipe(Effect.provide(server), Effect.exit)
+    yield* Scope.close(scope, Exit.void).pipe(Effect.exit)
+    return yield* exit
+  })
 
 const directoryHeader = (dir: string) => HttpClientRequest.setHeader("x-vector-directory", dir)
 
@@ -298,6 +328,105 @@ describe("pty HttpApi bridge", () => {
           HttpClient.execute,
         )
         expect(removed.status).toBe(200)
+      }),
+  )
+  ;(process.platform === "win32" ? effectIt.live.skip : effectIt.live)(
+    "keeps an exited agent terminal listed and replayable until it is removed",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* tmpdirScoped({ trusted: true, git: true, config: { formatter: false, lsp: false } })
+        const locations = yield* LocationServiceMap.Service
+        const inLocation = <A, E>(effect: Effect.Effect<A, E, Pty.Service>) =>
+          effect.pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(dir) }))))
+        const owner = { kind: "agent" as const, sessionID: "ses_agent" }
+        const agent = yield* inLocation(
+          Pty.Service.use((service) =>
+            service.create(
+              { command: "/usr/bin/env", args: ["sh", "-c", 'printf "agent-output\\n"; exit 5'], cwd: dir },
+              owner,
+            ),
+          ),
+        )
+        const created = yield* HttpClientRequest.post(PtyPaths.create).pipe(
+          directoryHeader(dir),
+          HttpClientRequest.bodyJson({ command: "/usr/bin/env", args: ["sh", "-c", "exit 0"] }),
+          Effect.flatMap(HttpClient.execute),
+        )
+        expect(created.status).toBe(200)
+        const user = yield* Schema.decodeUnknownEffect(Pty.Info)(yield* created.json)
+        expect("owner" in user).toBe(false)
+
+        const exited = (id: PtyID) =>
+          Effect.gen(function* () {
+            while ((yield* inLocation(Pty.Service.use((service) => service.get(id)))).status !== "exited")
+              yield* Effect.sleep("20 millis")
+          }).pipe(Effect.timeout("5 seconds"))
+        yield* exited(agent.id)
+        yield* exited(user.id)
+
+        const get = (id: string) =>
+          HttpClientRequest.get(PtyPaths.get.replace(":ptyID", id)).pipe(directoryHeader(dir), HttpClient.execute)
+        const list = yield* HttpClientRequest.get(PtyPaths.list).pipe(directoryHeader(dir), HttpClient.execute)
+        expect(
+          (yield* Schema.decodeUnknownEffect(Schema.Array(Pty.Info))(yield* list.json)).map((info) => info.id),
+        ).toEqual([agent.id])
+        const found = yield* get(agent.id)
+        expect(found.status).toBe(200)
+        expect(yield* found.json).toMatchObject({ id: agent.id, status: "exited", exitCode: 5, owner })
+        expect((yield* get(user.id)).status).toBe(404)
+        const token = (id: string) =>
+          HttpClientRequest.post(PtyPaths.connectToken.replace(":ptyID", id)).pipe(
+            directoryHeader(dir),
+            HttpClientRequest.setHeader("x-vector-ticket", "1"),
+            HttpClient.execute,
+          )
+        expect((yield* token(agent.id)).status).toBe(200)
+        expect((yield* token(user.id)).status).toBe(404)
+
+        const renamed = yield* HttpClientRequest.put(PtyPaths.update.replace(":ptyID", agent.id)).pipe(
+          directoryHeader(dir),
+          HttpClientRequest.bodyJson({ title: "finished", size: { cols: 80, rows: 24 } }),
+          Effect.flatMap(HttpClient.execute),
+        )
+        expect(renamed.status).toBe(200)
+        expect(yield* renamed.json).toMatchObject({ id: agent.id, title: "finished", status: "exited" })
+
+        // Connecting replays what the terminal kept, sends the cursor, then closes normally.
+        const end = (yield* inLocation(Pty.Service.use((service) => service.read(agent.id)))).end
+        const replay = (query: string) =>
+          Effect.gen(function* () {
+            const socket = yield* Socket.makeWebSocket(
+              `${(yield* serverUrl()).replace(/^http/, "ws")}${PtyPaths.connect.replace(":ptyID", agent.id)}?${query}directory=${encodeURIComponent(dir)}`,
+            )
+            const frames: Array<string | Uint8Array> = []
+            const code = yield* socket
+              .runRaw((message) => {
+                frames.push(message)
+              })
+              .pipe(
+                Effect.as(undefined),
+                Effect.catchReason("SocketError", "SocketCloseError", (reason) => Effect.succeed(reason.code)),
+                Effect.timeout("5 seconds"),
+              )
+            return {
+              code,
+              output: frames.filter((frame) => typeof frame === "string").join(""),
+              meta: frames
+                .filter((frame): frame is Uint8Array => typeof frame !== "string" && frame[0] === 0)
+                .map((frame) => JSON.parse(new TextDecoder().decode(frame.slice(1)))),
+            }
+          })
+        expect(yield* withReplayServer(Effect.all([replay(""), replay("cursor=-1&")]))).toEqual([
+          { code: 1000, output: "agent-output\r\n", meta: [{ cursor: end }] },
+          { code: 1000, output: "", meta: [{ cursor: end }] },
+        ])
+
+        const removed = yield* HttpClientRequest.delete(PtyPaths.remove.replace(":ptyID", agent.id)).pipe(
+          directoryHeader(dir),
+          HttpClient.execute,
+        )
+        expect(removed.status).toBe(200)
+        expect((yield* get(agent.id)).status).toBe(404)
       }),
   )
 })

@@ -496,6 +496,9 @@ export const dict = {
   "terminal.title": "터미널",
   "terminal.title.numbered": "터미널 {{number}}",
   "terminal.close": "터미널 닫기",
+  "terminal.agent": "에이전트가 연 터미널",
+  "terminal.exited": "종료됨 {{code}}",
+  "terminal.ended": "종료됨",
   "terminal.connectionLost.title": "연결 끊김",
   "terminal.connectionLost.description":
     "터미널 연결이 중단되었습니다. 서버가 재시작하면 이런 일이 발생할 수 있습니다.",
@@ -704,6 +707,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "저장소 외부의 파일에 액세스",
   "settings.permissions.tool.doom_loop.title": "무한 반복",
   "settings.permissions.tool.doom_loop.description": "동일한 입력으로 반복되는 도구 호출 감지",
+  "settings.permissions.tool.terminal.description":
+    "에이전트가 열지 않은 터미널(내 터미널 또는 다른 세션의 터미널)을 읽기, 대기, 크기 조정 또는 닫기",
+  "settings.permissions.tool.terminal_input.description":
+    "터미널에 텍스트를 입력하거나 키를 누르기. 제출되는 줄은 셸 명령으로도 검사됩니다",
+  "session.permission.terminal.name": "터미널",
+  "session.permission.terminal.action.read": "출력 읽기",
+  "session.permission.terminal.action.wait": "출력 기다리기",
+  "session.permission.terminal.action.resize": "크기 조정",
+  "session.permission.terminal.action.close": "닫고 프로세스 종료",
+  "session.permission.terminal.text": "입력할 텍스트",
+  "session.permission.terminal.enter": "그다음 Enter 누르기",
+  "session.permission.terminal.keys": "누를 키",
   "session.delete.failed.title": "세션 삭제 실패",
   "session.delete.title": "세션 삭제",
   "session.delete.confirm": '"{{name}}" 세션을 삭제하시겠습니까?',

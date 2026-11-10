@@ -5,9 +5,11 @@ import { useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useSync } from "@/context/sync"
-import { usePrompt } from "@/context/prompt"
+import { usePrompt, type Prompt } from "@/context/prompt"
 import { ComputerStateContext, createComputerState } from "@/features/computer/use-computer-state"
 import { desktopOwns } from "@/pages/layout-computer-notify"
+import { useLanguage } from "@/context/language"
+import { useServer } from "@/context/server"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { createBackgroundTasks, type BackgroundTasks } from "./background-tasks"
 import { appendTaskQuestion } from "./task-board-model"
@@ -25,12 +27,26 @@ export function BackgroundTasksProvider(props: ParentProps<{ sessionID: Accessor
   const navigate = useNavigate()
   const params = useParams<{ serverKey?: string }>()
   const prompt = usePrompt()
+  const language = useLanguage()
+  const platform = usePlatform()
+  const server = useServer()
   const open = (sessionID: string) =>
     navigate(
       params.serverKey
         ? sessionHref(requireServerKey(params.serverKey), sessionID)
         : legacySessionHref(sdk().directory, sessionID),
     )
+  // The root's composer draft changes in place, attachments kept, and takes focus on the root's page.
+  const compose = (rootID: string, change: (current: Prompt) => Prompt) => {
+    const target = prompt.capture({ dir: sdk().directory, id: rootID })
+    const next = change(target.current())
+    target.set(
+      next,
+      next.reduce((end, part) => (part.type === "image" ? end : Math.max(end, part.end)), 0),
+    )
+    if (props.sessionID() !== rootID) open(rootID)
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
+  }
   const value = createBackgroundTasks({
     sessionID: props.sessionID,
     sync: useSync(),
@@ -46,20 +62,15 @@ export function BackgroundTasksProvider(props: ParentProps<{ sessionID: Accessor
           detail: { taskID: task.id, parentSessionID: task.parentSessionID, sourcePath: sdk().directory },
         }),
       ),
-    ask: (agent, rootID) => {
-      const target = prompt.capture({ dir: sdk().directory, id: rootID })
-      const next = appendTaskQuestion(target.current(), agent)
-      target.set(
-        next,
-        next.reduce((end, part) => (part.type === "image" ? end : Math.max(end, part.end)), 0),
-      )
-      if (props.sessionID() !== rootID) open(rootID)
-      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-component="prompt-input"]')?.focus())
-    },
+    openPath: platform.platform === "desktop" && platform.openPath ? (path) => platform.openPath!(path) : undefined,
+    local: () => server.isLocal(),
+    capabilities: () => serverSync().capabilities(),
+    t: language.t,
+    compose,
+    ask: (agent, rootID) => compose(rootID, (current) => appendTaskQuestion(current, agent)),
   })
   // The desktop owns a Hands run only on its own built-in engine, judged from the page's own server, which in the new
   // layout can differ from the globally selected one. Anything else follows the engine's computer.state event.
-  const platform = usePlatform()
   const serverSDK = useServerSDK()
   const sync = useSync()
   const computer = createComputerState({

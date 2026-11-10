@@ -138,6 +138,8 @@ async function mockServers(page: Page, requests: string[]) {
         home: current.directory,
       })
     if (url.pathname === "/vcs") return json(route, { branch: "main", default_branch: "main" })
+    // The location's terminals, which the server lists as an array: none here.
+    if (url.pathname === "/pty" && route.request().method() === "GET") return json(route, [])
     return json(route, {})
   })
 }

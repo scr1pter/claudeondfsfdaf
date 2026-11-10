@@ -48,6 +48,48 @@ function search<T>(items: T[], target: string, key: (item: T) => string) {
   return { found: false, index: left }
 }
 
+/**
+ * What the engine says it can do (`GET /experimental/capabilities`). The TUI uses each feature only behind its flag
+ * (I30): a missing flag, a failed request, or an answer that is not a JSON object (an HTML page from a proxy, say)
+ * reads as unsupported.
+ */
+export type Capabilities = {
+  experimentalBackgroundSubagents: boolean
+  workDelegation: boolean
+  subagentLimits: boolean
+  sessionStop: boolean
+  taskPromote: boolean
+  taskResume: boolean
+  taskAttention: boolean
+  taskIsolation: boolean
+  workflows: boolean
+  backgroundShells: boolean
+}
+
+const CAPABILITY_FLAGS = [
+  "workDelegation",
+  "subagentLimits",
+  "sessionStop",
+  "taskPromote",
+  "taskResume",
+  "taskAttention",
+  "taskIsolation",
+  "workflows",
+  "backgroundShells",
+] as const
+
+export function readCapabilities(value: unknown): Capabilities {
+  const data =
+    value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  return {
+    experimentalBackgroundSubagents: data.backgroundSubagents === true,
+    ...(Object.fromEntries(CAPABILITY_FLAGS.map((flag) => [flag, data[flag] === true])) as Record<
+      (typeof CAPABILITY_FLAGS)[number],
+      boolean
+    >),
+  }
+}
+
 export const {
   context: SyncContext,
   use: useSync,
@@ -63,9 +105,7 @@ export const {
       provider: Provider[]
       provider_default: Record<string, string>
       provider_next: ProviderListResponse
-      capabilities: {
-        experimentalBackgroundSubagents: boolean
-      }
+      capabilities: Capabilities
       provider_auth: Record<string, ProviderAuthMethod[]>
       agent: Agent[]
       command: Command[]
@@ -112,9 +152,7 @@ export const {
         default: {},
         connected: [],
       },
-      capabilities: {
-        experimentalBackgroundSubagents: false,
-      },
+      capabilities: readCapabilities(undefined),
       provider_auth: {},
       config: {},
       status: "loading",
@@ -529,7 +567,7 @@ export const {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
               setStore("provider_next", reconcile(providerList))
-              setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
+              setStore("capabilities", readCapabilities(capabilities))
               setStore("agent", reconcile(agents))
               setStore("config", reconcile(config))
               if (sessions !== undefined) setStore("session", reconcile(sessions))

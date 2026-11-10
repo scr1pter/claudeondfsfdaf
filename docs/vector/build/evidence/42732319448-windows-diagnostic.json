@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "kind": "windows-x64-native-diagnostic-observation",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands-diagnostics",
+  "sourceCommit": "418e744299ff46654dbd28d52518146aeb7e74dd",
+  "run": {
+    "id": 42732319448,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "createdAt": "2026-11-10T00:58:20Z",
+    "updatedAt": "2026-11-10T01:09:18Z",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42732319448"
+  },
+  "job": {
+    "id": 129553144419,
+    "name": "Windows x64 native and staged diagnostics (no release evidence)",
+    "conclusion": "failure"
+  },
+  "observationSource": "Official GitHub decoded job log and run/artifact metadata; raw report archives not downloaded or locally verified.",
+  "windowsPackagedPinReader": {
+    "passed": 17,
+    "failed": 0,
+    "assertions": 85
+  },
+  "core": {
+    "passed": 30,
+    "skipped": 1,
+    "failed": 0
+  },
+  "isolated": {
+    "passed": 34,
+    "skipped": 10,
+    "failed": 2,
+    "failedChecks": [
+      {
+        "name": "privileged",
+        "reason": "native-check-failed"
+      },
+      {
+        "name": "privileged.capture-color-patch",
+        "reason": "native_operation_failed",
+        "stage": "capture-window-item-full-ticket-expired",
+        "nativeCode": "capture_unavailable"
+      }
+    ],
+    "scope": "Optional isolated step emitted failure; not a passing native result."
+  },
+  "staged": {
+    "receipt": {
+      "protocol": 1,
+      "kind": "result",
+      "phase": "exit",
+      "stop": {
+        "ok": false,
+        "reason": "native_failure",
+        "stage": "stop-root-refused",
+        "cause": "core_failure:no_ui_tree"
+      },
+      "exitCode": 1
+    },
+    "controllerNativeProofObservedAt": "2026-11-10T01:09:10.7955227Z",
+    "resultReceiptObservedAt": "2026-11-10T01:09:12.6903176Z",
+    "interpretation": "Root call refused while actor remained available; early fixture accessibility startup did not resolve refusal. No exact internal call identified yet."
+  },
+  "captureInterpretation": "CreateForWindow succeeded but the full 50 ms ticket had expired while the acquisition remained current. This does not isolate RPC duration from ticket setup, pre-call checks or scheduling.",
+  "artifacts": [
+    {
+      "id": 13726171332,
+      "name": "computer-overlay-win32-x64-native-diagnostic-418e744299ff46654dbd28d52518146aeb7e74dd-1",
+      "sizeBytes": 5006,
+      "apiDigest": "sha256:dfef221d535d5597d2af19ea4d7ffd3781d3a8917ad03199cc06752565347b27"
+    },
+    {
+      "id": 13726160957,
+      "name": "computer-helper-win32-x64-diagnostic-418e744299ff46654dbd28d52518146aeb7e74dd-1",
+      "sizeBytes": 554,
+      "apiDigest": "sha256:eda53afd8793565e3f63042e22f014bc14381885aad75749a3942c94e517d23a"
+    },
+    {
+      "id": 13726136024,
+      "name": "computer-helper-win32-x64-isolated-diagnostic-418e744299ff46654dbd28d52518146aeb7e74dd-1",
+      "sizeBytes": 864,
+      "apiDigest": "sha256:c00fa3e6c1a7799fc096dbe4ebe70632c3d384cd6be4cac6e5533bfa8a733710"
+    }
+  ],
+  "rawArchiveVerification": {
+    "verified": false,
+    "reason": "Environment network policy blocks productionresultssa12.blob.core.windows.net; user environment-settings request remains pending."
+  },
+  "releaseCredit": false
+}

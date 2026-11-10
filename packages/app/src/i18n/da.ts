@@ -550,6 +550,9 @@ export const dict = {
   "terminal.title": "Terminal",
   "terminal.title.numbered": "Terminal {{number}}",
   "terminal.close": "Luk terminal",
+  "terminal.agent": "Åbnet af en agent",
+  "terminal.exited": "afsluttet {{code}}",
+  "terminal.ended": "afsluttet",
 
   "terminal.connectionLost.title": "Forbindelse mistet",
   "terminal.connectionLost.description": "Terminalforbindelsen blev afbrudt. Dette kan ske, når serveren genstarter.",
@@ -774,6 +777,18 @@ export const dict = {
   "settings.permissions.tool.external_directory.description": "Få adgang til filer uden for dette repository",
   "settings.permissions.tool.doom_loop.title": "Doom Loop",
   "settings.permissions.tool.doom_loop.description": "Opdag gentagne værktøjskald med identisk input",
+  "settings.permissions.tool.terminal.description":
+    "Læse, vente på, ændre størrelse på eller lukke en terminal, agenten ikke åbnede: din eller en anden sessions",
+  "settings.permissions.tool.terminal_input.description":
+    "Skrive tekst eller trykke på taster i en terminal. En linje, der sendes, kontrolleres også som den shell-kommando, den er",
+  "session.permission.terminal.name": "Terminal",
+  "session.permission.terminal.action.read": "Læs dens output",
+  "session.permission.terminal.action.wait": "Vent på dens output",
+  "session.permission.terminal.action.resize": "Ændr dens størrelse",
+  "session.permission.terminal.action.close": "Luk den og afslut dens proces",
+  "session.permission.terminal.text": "Tekst der skrives",
+  "session.permission.terminal.enter": "Trykker derefter på Enter",
+  "session.permission.terminal.keys": "Taster der trykkes",
 
   "session.delete.failed.title": "Kunne ikke slette session",
   "session.delete.title": "Slet session",

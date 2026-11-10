@@ -633,3 +633,79 @@ button.settings-memory-doc-title:hover {
 .settings-memory .settings-v2-card-head.settings-memory-facet-head {
   grid-template-columns: 1fr auto;
 }
+
+/* Skills: a skill's steps, checks, commands and failure excerpt, and a file to share, as plain text. */
+.settings-memory-pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--vx-line);
+  border-radius: 8px;
+  background: var(--vx-surface);
+  color: var(--v2-text-text-base);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-memory-skill-body {
+  margin: 8px 0 0;
+}
+
+.settings-memory-skill-body > summary {
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-memory-edit--tall {
+  min-height: 180px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.settings-memory-versions {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+}
+
+.settings-memory-versions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Workflow insights: one size's runs by setting. */
+.settings-memory-arms {
+  width: 100%;
+  margin: 8px 0 0;
+  border-collapse: collapse;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+}
+
+.settings-memory-arms th,
+.settings-memory-arms td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--vx-line);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.settings-memory-arms th {
+  color: var(--v2-text-text-faint);
+  font-weight: 500;
+}
+
+.settings-memory-arms td:first-child {
+  color: var(--v2-text-text-base);
+}

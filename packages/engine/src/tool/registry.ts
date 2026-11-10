@@ -1,17 +1,26 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { PlanExitTool } from "./plan"
+import { WorkflowTool } from "./workflow"
+import { WorkflowRuns } from "@/orchestration/runs"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
+import { TerminalTool } from "./terminal"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { SessionFork } from "@/session/fork"
+import { TaskNotify } from "@/task/notify"
+import { ShellJobs } from "@/task/shells"
+import { TaskLimits } from "@/task/limits"
 import { TaskManageTool } from "./task-manage"
+import { TaskIsolation } from "@/task/isolation"
 import { TaskManager } from "@/task/manager"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Database } from "@vectordevai/core/database/database"
@@ -60,6 +69,7 @@ import { FSUtil } from "@vectordevai/core/fs-util"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
+import { LearnedSkill } from "../skill/learned"
 import { Permission } from "@/permission"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -149,6 +159,7 @@ const layer = Layer.effect(
     const escalate = yield* EscalateTool
     const task = yield* TaskTool
     const taskManage = yield* TaskManageTool
+    const workflow = yield* WorkflowTool.make(() => Tool.init(task))
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
@@ -157,6 +168,7 @@ const layer = Layer.effect(
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
     const shell = yield* ShellTool
+    const terminaltool = yield* TerminalTool
     const globtool = yield* GlobTool
     const writetool = yield* WriteTool
     const edit = yield* EditTool
@@ -214,6 +226,8 @@ const layer = Layer.effect(
                 const output = typeof result === "string" ? result : result.output
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
+                // Private raw output is refused before truncation can save it to a file the model may read later.
+                if (toolCtx.assertOutput) yield* toolCtx.assertOutput(result)
                 const info = yield* agent.get(toolCtx.agent)
                 const out = yield* truncate.output(output, {}, info)
                 return {
@@ -285,6 +299,7 @@ const layer = Layer.effect(
           invalid: Tool.init(invalid),
           escalate: Tool.init(escalate),
           shell: Tool.init(shell),
+          terminal: Tool.init(terminaltool),
           read: Tool.init(read),
           glob: Tool.init(globtool),
           grep: Tool.init(greptool),
@@ -292,6 +307,7 @@ const layer = Layer.effect(
           write: Tool.init(writetool),
           task: Tool.init(task),
           taskManage: Tool.init(taskManage),
+          workflow: Tool.init(workflow),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           teammate: Tool.init(teammate),
@@ -319,6 +335,7 @@ const layer = Layer.effect(
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
+            tool.terminal,
             tool.read,
             tool.glob,
             tool.grep,
@@ -326,6 +343,7 @@ const layer = Layer.effect(
             tool.write,
             tool.task,
             tool.taskManage,
+            tool.workflow,
             tool.fetch,
             tool.todo,
             ...(team ? [tool.teammate] : []),
@@ -546,6 +564,13 @@ function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+// The same location services the app's terminal routes reach, so the terminal tool sees the terminals the panel shows.
+const locationServiceMapNode = LayerNode.make({
+  service: LocationServiceMap.Service,
+  layer: locationServiceMapLayer,
+  deps: [],
+})
+
 export const node = LayerNode.make({
   service: Service,
   layer,
@@ -583,9 +608,20 @@ export const node = LayerNode.make({
     Ripgrep.node,
     SpendGuard.node,
     TaskManager.node,
+    WorkflowRuns.node,
+    TaskNotify.node,
+    // The shell tool starts background commands through it (Effect.serviceOption); without it they are refused.
+    ShellJobs.node,
+    TaskLimits.node,
     Global.node,
     ResearchStore.node,
     ResearchRun.node,
+    LearnedSkill.node,
+    // The task tool forks through it (Effect.serviceOption), so it must be built here.
+    SessionFork.node,
+    // The task tool isolates through it (Effect.serviceOption); without it every isolation request is refused.
+    TaskIsolation.node,
+    locationServiceMapNode,
   ],
 })
 

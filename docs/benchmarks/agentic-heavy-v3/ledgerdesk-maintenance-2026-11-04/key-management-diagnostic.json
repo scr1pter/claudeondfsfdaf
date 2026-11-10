@@ -1,0 +1,88 @@
+{
+  "kind": "separate-key-management-diagnostic-v1",
+  "providerCalls": 0,
+  "sourceUnchanged": true,
+  "originalGatesAndScoresUnchanged": true,
+  "rows": [
+    {
+      "runtime": "codex",
+      "checks": [
+        {
+          "case": "billing-cannot-create",
+          "expectedStatus": 403,
+          "actualStatus": 403,
+          "errorCode": "forbidden",
+          "passed": true
+        },
+        {
+          "case": "reader-cannot-create",
+          "expectedStatus": 403,
+          "actualStatus": 403,
+          "errorCode": "forbidden",
+          "passed": true
+        },
+        {
+          "case": "owner-role-not-issuable",
+          "expectedStatus": 400,
+          "actualStatus": 400,
+          "errorCode": "invalid_key",
+          "passed": true
+        },
+        {
+          "case": "scope-account-must-exist",
+          "expectedStatus": 400,
+          "actualStatus": 404,
+          "errorCode": "not_found",
+          "passed": false
+        },
+        {
+          "case": "foreign-owner-revocation",
+          "expectedStatus": 404,
+          "actualStatus": 404,
+          "errorCode": "not_found",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "runtime": "vector",
+      "checks": [
+        {
+          "case": "billing-cannot-create",
+          "expectedStatus": 403,
+          "actualStatus": 403,
+          "errorCode": "forbidden",
+          "passed": true
+        },
+        {
+          "case": "reader-cannot-create",
+          "expectedStatus": 403,
+          "actualStatus": 403,
+          "errorCode": "forbidden",
+          "passed": true
+        },
+        {
+          "case": "owner-role-not-issuable",
+          "expectedStatus": 400,
+          "actualStatus": 400,
+          "errorCode": "invalid_key",
+          "passed": true
+        },
+        {
+          "case": "scope-account-must-exist",
+          "expectedStatus": 400,
+          "actualStatus": 404,
+          "errorCode": "not_found",
+          "passed": false
+        },
+        {
+          "case": "foreign-owner-revocation",
+          "expectedStatus": 404,
+          "actualStatus": 404,
+          "errorCode": "not_found",
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

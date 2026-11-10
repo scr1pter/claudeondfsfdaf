@@ -31,9 +31,10 @@ const ticketScope = Effect.gen(function* () {
   return { directory: instance?.directory, workspaceID }
 })
 
-// Legacy surface compatibility: before exited-session retention, sessions vanished the moment
-// their process exited. These routes preserve that observable behavior — exited sessions are
-// invisible here — while the canonical /api/pty surface exposes them until removal.
+// The legacy surface hides exited sessions, as it did before retention, except an agent's: its tab stays in the
+// panel, read-only, until the user closes it. The canonical /api/pty surface exposes every session until removal.
+const visible = (info: Pty.Info) => info.status === "running" || info.owner !== undefined
+
 export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handlers) =>
   Effect.gen(function* () {
     const tickets = yield* PtyTicket.Service
@@ -59,7 +60,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
 
     const list = Effect.fn("PtyHttpApi.list")(function* () {
       const sessions = yield* pty(Pty.Service.use((service) => service.list()))
-      return sessions.filter((info) => info.status === "running")
+      return sessions.filter(visible)
     })
 
     const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
@@ -88,7 +89,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
             }),
         ),
         Effect.flatMap((info) =>
-          info.status === "running"
+          visible(info)
             ? Effect.succeed(info)
             : new ApiError.PtyNotFoundError({
                 ptyID: ctx.params.ptyID,
@@ -181,11 +182,10 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
         request: HttpServerRequest.HttpServerRequest
       }) {
         if (!validOrigin(ctx.request, cors)) return HttpServerResponse.empty({ status: 403 })
-        const exists = yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-          Effect.map((info) => info.status === "running"),
-          Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(false)),
+        const info = yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+          Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(undefined)),
         )
-        if (!exists) return HttpServerResponse.empty({ status: 404 })
+        if (!info || !visible(info)) return HttpServerResponse.empty({ status: 404 })
 
         const query = Schema.decodeUnknownOption(CursorQuery)(yield* HttpServerRequest.ParsedSearchParams)
         if (Option.isNone(query)) return HttpServerResponse.empty({ status: 400 })
@@ -213,22 +213,37 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
         // Outbound frames flow through one queue drained by a single writer so replay, live
         // output, and the close frame keep their order.
         const outbox = yield* Queue.unbounded<string | Uint8Array | Socket.CloseEvent>()
-        const attachment = yield* pty(
-          Pty.Service.use((service) =>
-            service.attach(ctx.params.ptyID, {
-              cursor,
-              onData: (chunk) => Queue.offerUnsafe(outbox, chunk),
-              onEnd: () => Queue.offerUnsafe(outbox, new Socket.CloseEvent(1000)),
-            }),
-          ),
-        ).pipe(
-          Effect.catchTags({
-            "Pty.NotFoundError": () =>
-              closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined)),
-            "Pty.ExitedError": () =>
-              closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined)),
-          }),
-        )
+        const notFound = () =>
+          closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined))
+        // An exited agent terminal has no process left to attach to: replay what it kept, then close normally. Input
+        // frames go nowhere. A cursor past the end (-1 tails) replays nothing and reports the end.
+        const attachment =
+          info.status === "exited"
+            ? yield* pty(
+                Pty.Service.use((service) =>
+                  service.read(ctx.params.ptyID, { cursor: cursor === -1 ? Number.MAX_SAFE_INTEGER : (cursor ?? 0) }),
+                ),
+              ).pipe(
+                Effect.map(
+                  (read): Pty.Attachment => ({
+                    replay: read.output,
+                    cursor: read.cursor,
+                    write: () => {},
+                    activate: () => Queue.offerUnsafe(outbox, new Socket.CloseEvent(1000)),
+                    detach: () => {},
+                  }),
+                ),
+                Effect.catchTag("Pty.NotFoundError", notFound),
+              )
+            : yield* pty(
+                Pty.Service.use((service) =>
+                  service.attach(ctx.params.ptyID, {
+                    cursor,
+                    onData: (chunk) => Queue.offerUnsafe(outbox, chunk),
+                    onEnd: () => Queue.offerUnsafe(outbox, new Socket.CloseEvent(1000)),
+                  }),
+                ),
+              ).pipe(Effect.catchTags({ "Pty.NotFoundError": notFound, "Pty.ExitedError": notFound }))
         if (!attachment) return HttpServerResponse.empty()
 
         for (const chunk of PtyProtocol.chunks(attachment.replay)) Queue.offerUnsafe(outbox, chunk)

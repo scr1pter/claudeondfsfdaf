@@ -606,6 +606,9 @@ export const dict = {
   "terminal.title": "Термінал",
   "terminal.title.numbered": "Термінал {{number}}",
   "terminal.close": "Закрити термінал",
+  "terminal.agent": "Відкрито агентом",
+  "terminal.exited": "завершено {{code}}",
+  "terminal.ended": "завершено",
   "terminal.connectionLost.title": "З'єднання втрачено",
   "terminal.connectionLost.abnormalClose": "WebSocket закрито аномально: {{code}}",
   "terminal.connectionLost.description":
@@ -900,6 +903,18 @@ export const dict = {
   "settings.permissions.tool.doom_loop.title": "Цикл приреченості",
   "settings.permissions.tool.doom_loop.description":
     "Виявлення повторюваних викликів інструментів з однаковими вхідними даними",
+  "settings.permissions.tool.terminal.description":
+    "Читання, очікування, зміна розміру або закриття термінала, який агент не відкривав: вашого або іншої сесії",
+  "settings.permissions.tool.terminal_input.description":
+    "Введення тексту або натискання клавіш у терміналі. Кожен надісланий рядок також перевіряється як команда оболонки",
+  "session.permission.terminal.name": "Термінал",
+  "session.permission.terminal.action.read": "Прочитати вивід",
+  "session.permission.terminal.action.wait": "Дочекатися виводу",
+  "session.permission.terminal.action.resize": "Змінити розмір",
+  "session.permission.terminal.action.close": "Закрити й завершити процес",
+  "session.permission.terminal.text": "Текст для введення",
+  "session.permission.terminal.enter": "Потім натискає Enter",
+  "session.permission.terminal.keys": "Клавіші для натискання",
 
   "session.delete.failed.title": "Не вдалося видалити сесію",
   "session.delete.title": "Видалити сесію",

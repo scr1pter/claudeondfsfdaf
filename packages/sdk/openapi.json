@@ -1537,6 +1537,167 @@
         ]
       }
     },
+    "/config/prompt-trust": {
+      "get": {
+        "tags": ["config"],
+        "operationId": "config.promptTrust.get",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Held prompt files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptTrustStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden | ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_Forbidden"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "The prompt files outside this repository (global agents, commands, skills and instruction files, and the prompt settings of global config) that changed since the owner last approved them. Vector does not load them until the owner approves. Owner only.",
+        "summary": "Get held prompt files",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.config.promptTrust.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/config/prompt-trust/approve": {
+      "post": {
+        "tags": ["config"],
+        "operationId": "config.promptTrust.approve",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prompt files approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptTrustApproved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden | ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_Forbidden"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/effect_HttpApiError_Conflict"
+                }
+              }
+            }
+          }
+        },
+        "description": "Approve the held prompt files the owner was shown, as GET returned them, and reload the instance so Vector loads them. When the files held now are not exactly those, unchanged, nothing is approved and the request fails with 409: read the list again. Owner only.",
+        "summary": "Approve held prompt files",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptTrustApproval"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.config.promptTrust.approve({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/config/providers": {
       "get": {
         "tags": ["config"],
@@ -2472,6 +2633,106 @@
         ]
       }
     },
+    "/experimental/session/{sessionID}/stop": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.session.stop",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the stop reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSessionStopResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TaskApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Stop the session's main turn and, with helpers, every subagent working under it. No new turn starts until the next user message; partial work is kept.",
+        "summary": "Stop a session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "helpers": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": ["helpers"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.session.stop({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/experimental/session/{sessionID}/tasks": {
       "get": {
         "tags": ["experimental"],
@@ -2516,6 +2777,24 @@
             "in": "query",
             "schema": {
               "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            },
+            "required": false
+          },
+          {
+            "name": "shells",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
             },
             "required": false
           }
@@ -2984,6 +3263,534 @@
         ]
       }
     },
+    "/experimental/session/{sessionID}/tasks/background": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.task.background",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks moved to the background",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskPromoteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TaskApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Move the session's running foreground subagents, or the selected ones, to the background, batch entries included. Each keeps running and reports later on its own.",
+        "summary": "Move session tasks to the background",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "taskIDs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 200
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.task.background({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/tasks/resume": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.task.resume",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks resumed in the background",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResumeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TaskApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Continue the session's stopped, failed or interrupted subagents in the background, each in a new attempt. A completed subagent continues only with text. Nothing resumes on its own.",
+        "summary": "Resume session tasks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "taskIDs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 32
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "required": ["taskIDs"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.task.resume({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/tasks/{taskID}/changes": {
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.task.changes",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "taskID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "diff",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": ["true", "false"]
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Isolated task changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskChangesResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TaskApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read an isolated child's changed files and, with diff=true, its bounded patch. Only the authenticated owner receives paths and the patch; other viewers receive counts.",
+        "summary": "Review an isolated task's changes",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.task.changes({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/tasks/{taskID}/merge": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.task.merge",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "taskID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Merged isolated changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskMergeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TaskApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner only. Bring an isolated child's saved changes, or the selected files, into the parent checkout after a checkpoint.",
+        "summary": "Merge an isolated task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 500
+                  },
+                  "includeStacked": {
+                    "type": "boolean"
+                  },
+                  "force": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.task.merge({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/tasks/{taskID}/discard": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.task.discard",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "taskID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Discarded isolated changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDiscardResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TaskApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner only. Keep a recovery artifact, then remove an isolated child's checkout and branch.",
+        "summary": "Discard an isolated task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.task.discard({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/experimental/session/{sessionID}/tasks/bridge/register": {
       "post": {
         "tags": ["experimental"],
@@ -3247,6 +4054,505 @@
           {
             "lang": "js",
             "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.task.bridge.receipt({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workflow/saved": {
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.saved",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.SavedList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSavedList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List trusted saved workflows",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.saved({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workflow/validate": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.validate",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.Validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowValidation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Validate a workflow without starting it",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowValidateInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.validate({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/workflow": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.start",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.Started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start an owner-approved workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowStartInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.start({\n  ...\n})"
+          }
+        ]
+      },
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.list",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.RunList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List workflow runs",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/workflow/{runID}": {
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.get",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.RunDetail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get workflow progress and results",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/workflow/{runID}/resume": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.resume",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.Started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Resume an owner-approved workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowResumeInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.resume({\n  ...\n})"
           }
         ]
       }
@@ -7907,7 +9213,7 @@
             }
           }
         },
-        "description": "Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again.",
+        "description": "Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again. A learned skill is refused with reason `skill-entry`: change it under /memory/skills.",
         "summary": "Change a memory entry",
         "requestBody": {
           "content": {
@@ -8012,7 +9318,7 @@
             }
           }
         },
-        "description": "Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file.",
+        "description": "Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file. A learned skill is refused with reason `skill-entry`: forget it under /memory/skills.",
         "summary": "Forget a memory entry",
         "x-codeSamples": [
           {
@@ -8077,7 +9383,7 @@
             }
           }
         },
-        "description": "Erase what Vector learned for this repository, for the user, or everywhere. Files people wrote are left alone.",
+        "description": "Erase what Vector learned for this repository, for the user, or everywhere. Erasing a repository or everything also erases its learned skills and workflow insights. The repository's Deep research runs go with its memory, and every run with everything; erasing what Vector learned about the user keeps them. Files people wrote are left alone.",
         "summary": "Erase learned memory",
         "requestBody": {
           "content": {
@@ -8168,7 +9474,7 @@
             }
           }
         },
-        "description": "Forget every entry Vector learned whose only evidence is this session, so it is not learned again. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.",
+        "description": "Forget every entry Vector learned whose only evidence is this session, so it is not learned again, with its workflow records; a learned skill that session taught goes back to the text other sessions taught, or goes. The Deep research runs the session started are forgotten too. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.",
         "summary": "Erase what Vector learned in a session",
         "x-codeSamples": [
           {
@@ -8527,7 +9833,7 @@
             }
           }
         },
-        "description": "Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.",
+        "description": "Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, learned skills and their drafter, workflow insights and their exploration, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.",
         "summary": "Change memory settings",
         "requestBody": {
           "content": {
@@ -8570,6 +9876,18 @@
                   },
                   "modelLearner": {
                     "$ref": "#/components/schemas/MemoryModelLearner"
+                  },
+                  "skills": {
+                    "$ref": "#/components/schemas/MemorySkillLearning"
+                  },
+                  "skillDrafter": {
+                    "$ref": "#/components/schemas/MemorySkillDrafter"
+                  },
+                  "workflow": {
+                    "$ref": "#/components/schemas/MemoryWorkflowLearning"
+                  },
+                  "workflowExplore": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false
@@ -8581,6 +9899,677 @@
           {
             "lang": "js",
             "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.settings.update({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/memory/skills": {
+      "get": {
+        "tags": ["memory"],
+        "operationId": "memory.skills.list",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["active", "review", "archived", "all"]
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The repository's learned skills, with the skill settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySkillList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Skills Vector drafted for the repository at `directory` after a run turned a failing check green: in use, waiting for your review (`filter=review`), put away (`filter=archived`) or all of them. Each carries its procedure, checks, commands, version and counts.",
+        "summary": "List learned skills",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.skills.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/memory/skills/{memoryID}": {
+      "get": {
+        "tags": ["memory"],
+        "operationId": "memory.skills.get",
+        "parameters": [
+          {
+            "name": "memoryID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A learned skill's id, such as s4k2q7m"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One learned skill with its evidence, versions and uses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySkillDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "One learned skill: the runs that vouch for it, every version of its text, and how its loads fared.",
+        "summary": "Get a learned skill",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.skills.get({\n  ...\n})"
+          }
+        ]
+      },
+      "patch": {
+        "tags": ["memory"],
+        "operationId": "memory.skills.update",
+        "parameters": [
+          {
+            "name": "memoryID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A learned skill's id, such as s4k2q7m"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The skill after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySkillDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Edit its description, steps, checks or commands (a new version, checked like a draft), approve or reject a draft, archive it, restore it, undo the version in use, or roll back to `version`. Checks and commands must be on the allow lists.",
+        "summary": "Change a learned skill",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "procedure": {
+                    "type": "string"
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "commands": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": ["approve", "reject", "archive", "restore", "undo", "rollback"]
+                  },
+                  "version": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.skills.update({\n  ...\n})"
+          }
+        ]
+      },
+      "delete": {
+        "tags": ["memory"],
+        "operationId": "memory.skills.forget",
+        "parameters": [
+          {
+            "name": "memoryID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A learned skill's id, such as s4k2q7m"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The skill was forgotten",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "forgotten": {
+                      "type": "boolean",
+                      "enum": [true]
+                    }
+                  },
+                  "required": ["forgotten"],
+                  "additionalProperties": false,
+                  "description": "The skill was forgotten"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Delete every version of the skill, its uses and the sessions' listings of it, and keep only a hash of its key so Vector does not draft it again.",
+        "summary": "Forget a learned skill",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.skills.forget({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/memory/skills/{memoryID}/share": {
+      "get": {
+        "tags": ["memory"],
+        "operationId": "memory.skills.sharePreview",
+        "parameters": [
+          {
+            "name": "memoryID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A learned skill's id, such as s4k2q7m"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file sharing would write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySkillSharePreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The file sharing the skill would write and where, after the same checks sharing makes, or the refusal it would give. Writes nothing.",
+        "summary": "Preview sharing a learned skill",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.skills.sharePreview({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "tags": ["memory"],
+        "operationId": "memory.skills.share",
+        "parameters": [
+          {
+            "name": "memoryID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A learned skill's id, such as s4k2q7m"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file written for the team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySkillShared"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Write a skill you approved to `.vector/skills/<name>/SKILL.md` for your team to commit, with no error excerpt, session ids or counts, after checking it against your personal memory (refused with reason `personal` and the sentences to edit). It changes the repository's settings, so the app reloads the directory once no session in it is busy and you trust them again. Refused with reason `exists` unless `force`.",
+        "summary": "Share a learned skill to the repository",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "force": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.skills.share({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/memory/workflow": {
+      "get": {
+        "tags": ["memory"],
+        "operationId": "memory.workflow.get",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the build agent's runs here passed with and cost, by size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryWorkflowInsights"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "For each size, the effort, subagent split and subagent model the build agent ran with in this repository, how often their checks passed and what they cost, and the cheaper default the runs support. Runs where you, the agent or config chose the effort are left out, and unknown cost stays unknown.",
+        "summary": "Get workflow insights",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.workflow.get({\n  ...\n})"
+          }
+        ]
+      },
+      "delete": {
+        "tags": ["memory"],
+        "operationId": "memory.workflow.reset",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "tier",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["light", "standard", "thorough"]
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many runs were forgotten",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["removed"],
+                  "additionalProperties": false,
+                  "description": "How many runs were forgotten"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Forget the runs workflow insights learned from in this repository, for one size (`tier`) or every size. Learned defaults start again from nothing.",
+        "summary": "Reset workflow insights",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.workflow.reset({\n  ...\n})"
           }
         ]
       }
@@ -11000,7 +12989,7 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "enum": ["markdown", "json"]
+              "enum": ["markdown", "json", "docx", "pdf"]
             },
             "required": false
           }
@@ -11009,9 +12998,26 @@
           "200": {
             "description": "Success",
             "content": {
-              "text/markdown": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "string",
+                      "format": "byte",
+                      "contentEncoding": "base64"
+                    },
+                    {
+                      "type": "string",
+                      "format": "byte",
+                      "contentEncoding": "base64"
+                    }
+                  ]
                 }
               }
             }
@@ -11044,7 +13050,7 @@
             }
           }
         },
-        "description": "The run as an attachment: the report with a bibliography as Markdown, or with `format=json` the run, its queries, sources, notes and report.",
+        "description": "The run as an attachment: the report with a bibliography as Markdown (default), Word (`format=docx`) or PDF (`format=pdf`). JSON contains the run, queries, sources, notes and report. Word and PDF are generated locally from saved text; no image or URL is fetched.",
         "summary": "Export a research run",
         "x-codeSamples": [
           {
@@ -25734,6 +27740,9 @@
             "$ref": "#/components/schemas/EventPtyDeleted"
           },
           {
+            "$ref": "#/components/schemas/EventPtyRevealed"
+          },
+          {
             "$ref": "#/components/schemas/EventQuestionV2Asked"
           },
           {
@@ -26170,10 +28179,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -26447,6 +28470,19 @@
             "required": ["providerID", "modelID"],
             "additionalProperties": false
           },
+          "selected": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": ["providerID", "modelID"],
+            "additionalProperties": false
+          },
           "system": {
             "type": "string"
           },
@@ -26654,6 +28690,10 @@
                 "type": "integer",
                 "minimum": 0
               },
+              "codiumSteps": {
+                "type": "integer",
+                "minimum": 0
+              },
               "estimate": {
                 "type": "object",
                 "properties": {
@@ -26856,6 +28896,9 @@
           "unpriced": {
             "type": "boolean"
           },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
+          },
           "tokens": {
             "type": "object",
             "properties": {
@@ -26894,6 +28937,32 @@
           },
           "size": {
             "$ref": "#/components/schemas/TaskSizeTier"
+          },
+          "workflow": {
+            "type": "object",
+            "properties": {
+              "effort": {
+                "type": "string",
+                "enum": ["default"]
+              },
+              "split": {
+                "type": "string",
+                "enum": ["solo"]
+              },
+              "subagentModel": {
+                "type": "string",
+                "enum": ["small"]
+              },
+              "source": {
+                "type": "string",
+                "enum": ["learned", "explore"]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": ["source", "reason"],
+            "additionalProperties": false
           },
           "finish": {
             "type": "string"
@@ -27474,6 +29543,9 @@
           "unpriced": {
             "type": "boolean"
           },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
+          },
           "tokens": {
             "type": "object",
             "properties": {
@@ -27776,6 +29848,20 @@
         "required": ["text"],
         "additionalProperties": false
       },
+      "PtyOwner": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["agent"]
+          },
+          "sessionID": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "sessionID"],
+        "additionalProperties": false
+      },
       "Pty": {
         "type": "object",
         "properties": {
@@ -27809,6 +29895,9 @@
           "exitCode": {
             "type": "integer",
             "minimum": 0
+          },
+          "owner": {
+            "$ref": "#/components/schemas/PtyOwner"
           }
         },
         "required": ["id", "title", "command", "args", "cwd", "status", "pid"],
@@ -27908,7 +29997,7 @@
       },
       "CostKind": {
         "type": "string",
-        "enum": ["free", "priced", "plan", "local", "unknown"]
+        "enum": ["free", "priced", "plan", "local", "unknown", "codium"]
       },
       "QuestionOption": {
         "type": "object",
@@ -28354,6 +30443,9 @@
                       },
                       "unpriced": {
                         "type": "boolean"
+                      },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
                       },
                       "tokens": {
                         "type": "object",
@@ -28867,6 +30959,9 @@
                       },
                       "unpriced": {
                         "type": "boolean"
+                      },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
                       },
                       "tokens": {
                         "type": "object",
@@ -29709,6 +31804,9 @@
                       "unpriced": {
                         "type": "boolean"
                       },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
+                      },
                       "tokens": {
                         "type": "object",
                         "properties": {
@@ -29780,6 +31878,9 @@
                       },
                       "unpriced": {
                         "type": "boolean"
+                      },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
                       },
                       "tokens": {
                         "type": "object",
@@ -30424,6 +32525,35 @@
                   },
                   "type": {
                     "type": "string",
+                    "enum": ["pty.revealed"]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^pty"
+                      },
+                      "focus": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["id", "focus"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "type", "properties"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
                     "enum": ["question.v2.asked"]
                   },
                   "properties": {
@@ -31036,6 +33166,10 @@
                         "minimum": 0
                       },
                       "unpricedSteps": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "codiumSteps": {
                         "type": "integer",
                         "minimum": 0
                       },
@@ -33113,6 +35247,81 @@
                   }
                 },
                 "additionalProperties": false
+              },
+              "subagents": {
+                "type": "object",
+                "properties": {
+                  "usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "steps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "warnAt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "unpricedSteps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "running": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16
+                  },
+                  "per_request": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "workflow": {
+                "type": "object",
+                "properties": {
+                  "max_agents": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "concurrency": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16
+                  },
+                  "usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "tokens": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "steps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "per_agent_steps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1440
+                  },
+                  "runs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "additionalProperties": false
@@ -33125,6 +35334,54 @@
               },
               "judge": {
                 "$ref": "#/components/schemas/TaskJudgeMode"
+              },
+              "learn": {
+                "type": "boolean"
+              },
+              "subagents": {
+                "type": "object",
+                "properties": {
+                  "fork": {
+                    "type": "boolean"
+                  },
+                  "models": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 32
+                  },
+                  "ask_timeout": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1440
+                  },
+                  "isolation": {
+                    "type": "object",
+                    "properties": {
+                      "lsp": {
+                        "type": "boolean"
+                      },
+                      "mcp": {
+                        "type": "boolean"
+                      },
+                      "link": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 16
+                      },
+                      "max_kept": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "additionalProperties": false
@@ -33622,6 +35879,81 @@
                   }
                 },
                 "additionalProperties": false
+              },
+              "subagents": {
+                "type": "object",
+                "properties": {
+                  "usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "steps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "warnAt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "unpricedSteps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "running": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16
+                  },
+                  "per_request": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "workflow": {
+                "type": "object",
+                "properties": {
+                  "max_agents": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "concurrency": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16
+                  },
+                  "usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "tokens": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "steps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "per_agent_steps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1440
+                  },
+                  "runs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "additionalProperties": false
@@ -33634,6 +35966,54 @@
               },
               "judge": {
                 "$ref": "#/components/schemas/TaskJudgeMode"
+              },
+              "learn": {
+                "type": "boolean"
+              },
+              "subagents": {
+                "type": "object",
+                "properties": {
+                  "fork": {
+                    "type": "boolean"
+                  },
+                  "models": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 32
+                  },
+                  "ask_timeout": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1440
+                  },
+                  "isolation": {
+                    "type": "object",
+                    "properties": {
+                      "lsp": {
+                        "type": "boolean"
+                      },
+                      "mcp": {
+                        "type": "boolean"
+                      },
+                      "link": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 16
+                      },
+                      "max_kept": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "additionalProperties": false
@@ -33793,6 +36173,83 @@
           }
         },
         "required": ["workspace", "trusted", "ignored", "settings", "approvable"],
+        "additionalProperties": false
+      },
+      "PromptTrustFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      },
+      "PromptTrustStatus": {
+        "type": "object",
+        "properties": {
+          "held": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptTrustFile"
+            }
+          }
+        },
+        "required": ["held", "files"],
+        "additionalProperties": false
+      },
+      "effect_HttpApiError_Forbidden": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["Forbidden"]
+          }
+        },
+        "required": ["_tag"],
+        "additionalProperties": false
+      },
+      "PromptTrustApproval": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptTrustFile"
+            }
+          }
+        },
+        "required": ["files"],
+        "additionalProperties": false
+      },
+      "PromptTrustApproved": {
+        "type": "object",
+        "properties": {
+          "approved": {
+            "type": "number"
+          }
+        },
+        "required": ["approved"],
+        "additionalProperties": false
+      },
+      "effect_HttpApiError_Conflict": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["Conflict"]
+          }
+        },
+        "required": ["_tag"],
         "additionalProperties": false
       },
       "Model": {
@@ -34064,6 +36521,9 @@
             "additionalProperties": {
               "type": "object"
             }
+          },
+          "codium": {
+            "$ref": "#/components/schemas/ModelCodium"
           }
         },
         "required": [
@@ -34138,6 +36598,33 @@
             },
             "required": ["available"],
             "additionalProperties": false
+          },
+          "workDelegation": {
+            "type": "boolean"
+          },
+          "subagentLimits": {
+            "type": "boolean"
+          },
+          "sessionStop": {
+            "type": "boolean"
+          },
+          "taskPromote": {
+            "type": "boolean"
+          },
+          "taskResume": {
+            "type": "boolean"
+          },
+          "taskAttention": {
+            "type": "boolean"
+          },
+          "taskIsolation": {
+            "type": "boolean"
+          },
+          "workflows": {
+            "type": "boolean"
+          },
+          "backgroundShells": {
+            "type": "boolean"
           }
         },
         "required": ["backgroundSubagents"],
@@ -34322,10 +36809,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -34549,6 +37050,10 @@
           "tasks": {
             "type": "integer",
             "minimum": 0
+          },
+          "codium": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": ["date", "tokens", "cost", "tasks"],
@@ -34574,6 +37079,10 @@
           },
           "cost": {
             "type": "number"
+          },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": ["id", "sessions", "responses", "tokens", "cost"],
@@ -34590,6 +37099,10 @@
             "type": "number"
           },
           "unpricedResponses": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "codiumResponses": {
             "type": "integer",
             "minimum": 0
           },
@@ -34707,10 +37220,30 @@
         "properties": {
           "code": {
             "type": "string",
-            "enum": ["not_found", "forbidden", "invalid", "finished", "rate_limited"]
+            "enum": ["not_found", "forbidden", "invalid", "finished", "rate_limited", "limit", "conflict", "running"]
           },
           "message": {
             "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "additionalProperties": false
+      },
+      "WorkflowApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": ["invalid", "busy", "not_found", "running", "disabled", "forbidden", "limit"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
           }
         },
         "required": ["code", "message"],
@@ -36651,6 +39184,112 @@
         "required": ["_tag", "name", "message"],
         "additionalProperties": false
       },
+      "MemorySkill": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "procedure": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "failure": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "drafter": {
+            "type": "string",
+            "enum": ["rules", "model", "user", "import"]
+          },
+          "approvedBy": {
+            "type": "string",
+            "enum": ["user", "vector"]
+          },
+          "approvedAt": {
+            "type": "number"
+          },
+          "sharedPath": {
+            "type": "string"
+          },
+          "sharedAt": {
+            "type": "number"
+          },
+          "helpful": {
+            "type": "number"
+          },
+          "harmful": {
+            "type": "number"
+          },
+          "proven": {
+            "type": "number"
+          },
+          "uses": {
+            "type": "object",
+            "properties": {
+              "loads": {
+                "type": "number"
+              },
+              "passes": {
+                "type": "number"
+              },
+              "fails": {
+                "type": "number"
+              },
+              "ignored": {
+                "type": "number"
+              },
+              "reverts": {
+                "type": "number"
+              }
+            },
+            "required": ["loads", "passes", "fails", "ignored", "reverts"],
+            "additionalProperties": false
+          },
+          "instructionLikeFailure": {
+            "type": "boolean"
+          },
+          "fading": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "description",
+          "procedure",
+          "checks",
+          "commands",
+          "version",
+          "drafter",
+          "helpful",
+          "harmful",
+          "proven",
+          "uses",
+          "instructionLikeFailure",
+          "fading"
+        ],
+        "additionalProperties": false
+      },
       "MemoryEntry": {
         "type": "object",
         "properties": {
@@ -36663,7 +39302,7 @@
           },
           "kind": {
             "type": "string",
-            "enum": ["rule", "preference", "decision", "lesson", "fact", "failure", "review", "term"]
+            "enum": ["rule", "preference", "decision", "lesson", "fact", "failure", "review", "term", "skill"]
           },
           "origin": {
             "type": "string",
@@ -36758,6 +39397,9 @@
             },
             "required": ["key", "meaning"],
             "additionalProperties": false
+          },
+          "skill": {
+            "$ref": "#/components/schemas/MemorySkill"
           }
         },
         "required": [
@@ -36801,9 +39443,22 @@
           },
           "learning": {
             "type": "boolean"
+          },
+          "skills": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "number"
+              },
+              "review": {
+                "type": "number"
+              }
+            },
+            "required": ["active", "review"],
+            "additionalProperties": false
           }
         },
-        "required": ["active", "review", "archived", "rules", "learned", "digestTokens", "learning"],
+        "required": ["active", "review", "archived", "rules", "learned", "digestTokens", "learning", "skills"],
         "additionalProperties": false
       },
       "MemoryList": {
@@ -36849,7 +39504,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["message", "file", "check", "user", "file-item", "document"]
+            "enum": ["message", "file", "check", "user", "file-item", "document", "run"]
           },
           "path": {
             "type": "string"
@@ -37057,6 +39712,8 @@
               "enum": [
                 "truncated",
                 "scanned",
+                "ocr",
+                "ocr-incomplete",
                 "encrypted",
                 "macros-ignored",
                 "external-links",
@@ -37208,6 +39865,18 @@
         "type": "string",
         "enum": ["local-only", "always", "off"]
       },
+      "MemorySkillLearning": {
+        "type": "string",
+        "enum": ["review", "auto", "off"]
+      },
+      "MemorySkillDrafter": {
+        "type": "string",
+        "enum": ["off", "local-only", "always"]
+      },
+      "MemoryWorkflowLearning": {
+        "type": "string",
+        "enum": ["apply", "observe", "off"]
+      },
       "MemorySettings": {
         "type": "object",
         "properties": {
@@ -37225,9 +39894,341 @@
           },
           "modelLearner": {
             "$ref": "#/components/schemas/MemoryModelLearner"
+          },
+          "skills": {
+            "$ref": "#/components/schemas/MemorySkillLearning"
+          },
+          "skillDrafter": {
+            "$ref": "#/components/schemas/MemorySkillDrafter"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/MemoryWorkflowLearning"
+          },
+          "workflowExplore": {
+            "type": "boolean"
           }
         },
-        "required": ["learning", "repositoryDocs", "keepOriginals", "facets", "modelLearner"],
+        "required": [
+          "learning",
+          "repositoryDocs",
+          "keepOriginals",
+          "facets",
+          "modelLearner",
+          "skills",
+          "skillDrafter",
+          "workflow",
+          "workflowExplore"
+        ],
+        "additionalProperties": false
+      },
+      "MemorySkillList": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryEntry"
+            }
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "skills": {
+                "$ref": "#/components/schemas/MemorySkillLearning"
+              },
+              "skillDrafter": {
+                "$ref": "#/components/schemas/MemorySkillDrafter"
+              }
+            },
+            "required": ["skills", "skillDrafter"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["skills", "settings"],
+        "additionalProperties": false
+      },
+      "MemorySkillVersion": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number"
+          },
+          "entryID": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "procedure": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "string",
+            "enum": ["agent", "user", "vector", "import"]
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["learned", "edited", "imported", "rollback"]
+          },
+          "createdAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "version",
+          "entryID",
+          "name",
+          "description",
+          "procedure",
+          "checks",
+          "commands",
+          "actor",
+          "reason",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "MemorySkillUses": {
+        "type": "object",
+        "properties": {
+          "loads": {
+            "type": "number"
+          },
+          "passes": {
+            "type": "number"
+          },
+          "fails": {
+            "type": "number"
+          },
+          "ignored": {
+            "type": "number"
+          },
+          "reverts": {
+            "type": "number"
+          }
+        },
+        "required": ["loads", "passes", "fails", "ignored", "reverts"],
+        "additionalProperties": false
+      },
+      "MemorySkillDetail": {
+        "type": "object",
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/MemoryEntry"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryEvidence"
+            }
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemorySkillVersion"
+            }
+          },
+          "uses": {
+            "$ref": "#/components/schemas/MemorySkillUses"
+          }
+        },
+        "required": ["entry", "evidence", "versions", "uses"],
+        "additionalProperties": false
+      },
+      "MemorySkillSharePreview": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          }
+        },
+        "required": ["path", "text", "exists"],
+        "additionalProperties": false
+      },
+      "MemorySkillShared": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "trust": {
+            "type": "string",
+            "enum": ["changed"]
+          },
+          "reload": {
+            "type": "string",
+            "enum": ["when-idle"]
+          }
+        },
+        "required": ["path", "trust", "reload"],
+        "additionalProperties": false
+      },
+      "MemoryWorkflowArm": {
+        "type": "object",
+        "properties": {
+          "arm": {
+            "type": "object",
+            "properties": {
+              "effortTier": {
+                "$ref": "#/components/schemas/TaskSizeTier"
+              },
+              "effort": {
+                "type": "string"
+              },
+              "split": {
+                "type": "string",
+                "enum": ["solo", "subagents"]
+              },
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              },
+              "subagentModel": {
+                "type": "string",
+                "enum": ["parent", "small"]
+              }
+            },
+            "required": ["effortTier", "effort", "split", "providerID", "modelID"],
+            "additionalProperties": false
+          },
+          "rows": {
+            "type": "number"
+          },
+          "weight": {
+            "type": "number"
+          },
+          "signal": {
+            "type": "number"
+          },
+          "passRate": {
+            "type": "number"
+          },
+          "lower": {
+            "type": "number"
+          },
+          "checkedShare": {
+            "type": "number"
+          },
+          "costUsd": {
+            "type": "number"
+          },
+          "pricedWeight": {
+            "type": "number"
+          },
+          "tokens": {
+            "type": "number"
+          },
+          "lastAt": {
+            "type": "number"
+          }
+        },
+        "required": ["arm", "rows", "weight", "signal", "checkedShare", "pricedWeight", "lastAt"],
+        "additionalProperties": false
+      },
+      "MemoryWorkflowAdvice": {
+        "type": "object",
+        "properties": {
+          "effortTier": {
+            "$ref": "#/components/schemas/TaskSizeTier"
+          },
+          "effort": {
+            "type": "string",
+            "enum": ["default"]
+          },
+          "split": {
+            "type": "string",
+            "enum": ["solo"]
+          },
+          "subagentModel": {
+            "type": "string",
+            "enum": ["small"]
+          },
+          "source": {
+            "type": "string",
+            "enum": ["learned", "explore"]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "basis": {
+            "type": "object",
+            "properties": {
+              "chosen": {
+                "$ref": "#/components/schemas/MemoryWorkflowArm"
+              },
+              "instead": {
+                "$ref": "#/components/schemas/MemoryWorkflowArm"
+              }
+            },
+            "required": ["chosen", "instead"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["effortTier", "source", "reason", "basis"],
+        "additionalProperties": false
+      },
+      "MemoryWorkflowInsights": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/MemoryWorkflowLearning"
+          },
+          "explore": {
+            "type": "boolean"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tier": {
+                  "$ref": "#/components/schemas/TaskSizeTier"
+                },
+                "arms": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryWorkflowArm"
+                  }
+                },
+                "advice": {
+                  "$ref": "#/components/schemas/MemoryWorkflowAdvice"
+                },
+                "wouldAdvise": {
+                  "$ref": "#/components/schemas/MemoryWorkflowAdvice"
+                },
+                "excluded": {
+                  "type": "number"
+                }
+              },
+              "required": ["tier", "arms", "excluded"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["mode", "explore", "tiers"],
         "additionalProperties": false
       },
       "MemoryModelOption": {
@@ -37896,6 +40897,8 @@
               "enum": [
                 "truncated",
                 "scanned",
+                "ocr",
+                "ocr-incomplete",
                 "encrypted",
                 "macros-ignored",
                 "external-links",
@@ -38104,7 +41107,7 @@
             "type": "number"
           }
         },
-        "required": ["enabled", "sections", "input", "output"],
+        "required": ["enabled", "sections"],
         "additionalProperties": false
       },
       "MemoryDistillResult": {
@@ -38173,7 +41176,7 @@
             "type": "string"
           }
         },
-        "required": ["model", "sessionID", "records", "duplicate", "dropped", "tokens", "cost", "costKind"],
+        "required": ["model", "sessionID", "records", "duplicate", "dropped", "costKind"],
         "additionalProperties": false
       },
       "MemoryPassage": {
@@ -38802,6 +41805,9 @@
           "verdict": {
             "$ref": "#/components/schemas/ResearchVerdict"
           },
+          "measurement": {
+            "$ref": "#/components/schemas/ResearchMeasurement"
+          },
           "created_at": {
             "type": "integer",
             "minimum": 0
@@ -39327,10 +42333,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -39539,10 +42559,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -39787,10 +42821,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -40045,10 +43093,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -40257,10 +43319,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -40480,10 +43556,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -40837,10 +43927,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -41049,10 +44153,24 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -41573,6 +44691,10 @@
             "minimum": 0
           },
           "unpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "codiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -42231,6 +45353,9 @@
             "$ref": "#/components/schemas/PtyDeleted"
           },
           {
+            "$ref": "#/components/schemas/PtyRevealed"
+          },
+          {
             "$ref": "#/components/schemas/QuestionV2Asked"
           },
           {
@@ -42366,17 +45491,6 @@
           }
         },
         "required": ["name", "data"],
-        "additionalProperties": false
-      },
-      "effect_HttpApiError_Forbidden": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["Forbidden"]
-          }
-        },
-        "required": ["_tag"],
         "additionalProperties": false
       },
       "Event.tui.prompt.append": {
@@ -42613,6 +45727,10 @@
         },
         "required": ["id", "url", "expiresAt", "updatedAt", "revision", "updates"],
         "additionalProperties": false
+      },
+      "BillingKind": {
+        "type": "string",
+        "enum": ["codium"]
       },
       "ModelRef": {
         "type": "object",
@@ -43190,6 +46308,9 @@
           },
           "message": {
             "type": "string"
+          },
+          "code": {
+            "type": "string"
           }
         },
         "required": ["type", "action", "message"],
@@ -43284,6 +46405,9 @@
           "unpriced": {
             "type": "boolean"
           },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
+          },
           "tokens": {
             "type": "object",
             "properties": {
@@ -43342,6 +46466,9 @@
           },
           "unpriced": {
             "type": "boolean"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
           },
           "tokens": {
             "type": "object",
@@ -44342,6 +47469,9 @@
                   "unpriced": {
                     "type": "boolean"
                   },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
+                  },
                   "tokens": {
                     "type": "object",
                     "properties": {
@@ -45127,6 +48257,9 @@
                   },
                   "unpriced": {
                     "type": "boolean"
+                  },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
                   },
                   "tokens": {
                     "type": "object",
@@ -46131,6 +49264,9 @@
                   "unpriced": {
                     "type": "boolean"
                   },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
+                  },
                   "tokens": {
                     "type": "object",
                     "properties": {
@@ -46223,6 +49359,9 @@
                   },
                   "unpriced": {
                     "type": "boolean"
+                  },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
                   },
                   "tokens": {
                     "type": "object",
@@ -46533,6 +49672,64 @@
         "required": ["removed"],
         "additionalProperties": false
       },
+      "ModelCodium": {
+        "type": "object",
+        "properties": {
+          "lab": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": ["floor", "default", "ceiling"]
+          },
+          "manualOnly": {
+            "type": "boolean"
+          },
+          "locked": {
+            "type": "object",
+            "properties": {
+              "plan": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "previewUntil": {
+                "type": "number"
+              }
+            },
+            "required": ["plan", "name"],
+            "additionalProperties": false
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "until": {
+                "type": "number"
+              }
+            },
+            "required": ["until"],
+            "additionalProperties": false
+          },
+          "auto": {
+            "type": "object",
+            "properties": {
+              "floor": {
+                "type": "string"
+              },
+              "default": {
+                "type": "string"
+              },
+              "ceiling": {
+                "type": "string"
+              }
+            },
+            "required": ["floor", "default", "ceiling"],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
       "TaskStatus": {
         "type": "string",
         "enum": ["queued", "running", "waiting_on_user", "completed", "failed", "stopped"]
@@ -46583,6 +49780,12 @@
           },
           "unpricedSteps": {
             "type": "number"
+          },
+          "codiumSteps": {
+            "type": "number"
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
           }
         },
         "required": ["cost", "tokens", "total", "toolUses", "steps"],
@@ -46610,6 +49813,9 @@
           "unpricedSteps": {
             "type": "number"
           },
+          "codiumSteps": {
+            "type": "number"
+          },
           "costKind": {
             "$ref": "#/components/schemas/CostKind"
           },
@@ -46628,6 +49834,244 @@
           }
         },
         "required": ["kind", "id", "budget", "spentUsd", "steps", "unpricedSteps"],
+        "additionalProperties": false
+      },
+      "TaskModel": {
+        "type": "object",
+        "properties": {
+          "providerID": {
+            "type": "string"
+          },
+          "modelID": {
+            "type": "string"
+          },
+          "variant": {
+            "type": "string"
+          }
+        },
+        "required": ["providerID", "modelID"],
+        "additionalProperties": false
+      },
+      "TaskInterrupted": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "cause": {
+            "type": "string"
+          },
+          "reported": {
+            "type": "boolean"
+          },
+          "resumedAt": {
+            "type": "number"
+          },
+          "dismissedAt": {
+            "type": "number"
+          }
+        },
+        "required": ["at", "cause"],
+        "additionalProperties": false
+      },
+      "TaskWaiting": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "since": {
+            "type": "number"
+          },
+          "requestID": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "since"],
+        "additionalProperties": false
+      },
+      "TaskResult": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "attempts": {
+            "type": "number"
+          }
+        },
+        "required": ["format"],
+        "additionalProperties": false
+      },
+      "TaskIsolation": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "files": {
+            "type": "number"
+          },
+          "additions": {
+            "type": "number"
+          },
+          "deletions": {
+            "type": "number"
+          },
+          "merged": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": ["mode", "state"],
+        "additionalProperties": false
+      },
+      "TaskWorkflowStage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "done": {
+            "type": "number"
+          },
+          "failed": {
+            "type": "number"
+          },
+          "skipped": {
+            "type": "number"
+          },
+          "running": {
+            "type": "number"
+          },
+          "waiting": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "title", "phase", "done", "failed", "skipped", "running", "waiting"],
+        "additionalProperties": false
+      },
+      "TaskWorkflow": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "runID": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "round": {
+            "type": "number"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskWorkflowStage"
+            }
+          },
+          "agents": {
+            "type": "object",
+            "properties": {
+              "launched": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "running": {
+                "type": "number"
+              }
+            },
+            "required": ["launched", "max", "running"],
+            "additionalProperties": false
+          },
+          "tokens": {
+            "type": "object",
+            "properties": {
+              "used": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              }
+            },
+            "required": ["used"],
+            "additionalProperties": false
+          },
+          "stop": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": ["reason", "message"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["role", "runID"],
         "additionalProperties": false
       },
       "TaskInfo": {
@@ -46689,6 +50133,9 @@
           "costKind": {
             "$ref": "#/components/schemas/CostKind"
           },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
+          },
           "ownedPaths": {
             "type": "array",
             "items": {
@@ -46733,9 +50180,61 @@
               },
               "stop": {
                 "type": "boolean"
+              },
+              "resume": {
+                "type": "boolean"
+              },
+              "background": {
+                "type": "boolean"
+              },
+              "merge": {
+                "type": "boolean"
+              },
+              "discard": {
+                "type": "boolean"
               }
             },
             "required": ["inspect", "message", "stop"],
+            "additionalProperties": false
+          },
+          "model": {
+            "$ref": "#/components/schemas/TaskModel"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "fork": {
+            "type": "boolean"
+          },
+          "queuedReason": {
+            "type": "string"
+          },
+          "interrupted": {
+            "$ref": "#/components/schemas/TaskInterrupted"
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/TaskWaiting"
+          },
+          "result": {
+            "$ref": "#/components/schemas/TaskResult"
+          },
+          "isolation": {
+            "$ref": "#/components/schemas/TaskIsolation"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/TaskWorkflow"
+          },
+          "inbox": {
+            "type": "object",
+            "properties": {
+              "unread": {
+                "type": "number"
+              }
+            },
+            "required": ["unread"],
             "additionalProperties": false
           }
         },
@@ -46755,6 +50254,109 @@
         ],
         "additionalProperties": false
       },
+      "TaskSessionStopResult": {
+        "type": "object",
+        "properties": {
+          "aborted": {
+            "type": "boolean"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskInfo"
+            }
+          },
+          "shells": {
+            "type": "number"
+          },
+          "excluded": {
+            "type": "number"
+          },
+          "skipped": {
+            "type": "number"
+          }
+        },
+        "required": ["aborted", "tasks", "shells", "excluded", "skipped"],
+        "additionalProperties": false
+      },
+      "TaskLimits": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "number"
+          },
+          "queued": {
+            "type": "number"
+          },
+          "maxRunning": {
+            "type": "number"
+          },
+          "launched": {
+            "type": "number"
+          },
+          "maxPerRequest": {
+            "type": "number"
+          },
+          "spend": {
+            "type": "object",
+            "properties": {
+              "spentUsd": {
+                "type": "number"
+              },
+              "limitUsd": {
+                "type": "number"
+              },
+              "unknownSteps": {
+                "type": "number"
+              },
+              "warned": {
+                "type": "boolean"
+              },
+              "stopped": {
+                "type": "boolean"
+              }
+            },
+            "required": ["spentUsd", "unknownSteps", "warned", "stopped"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["running", "queued", "maxRunning", "launched", "maxPerRequest"],
+        "additionalProperties": false
+      },
+      "TaskShell": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "number"
+          },
+          "completedAt": {
+            "type": "number"
+          },
+          "exitCode": {
+            "type": "number"
+          },
+          "outputPath": {
+            "type": "string"
+          },
+          "outputBytes": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "title", "command", "status", "startedAt", "outputBytes"],
+        "additionalProperties": false
+      },
       "TaskListResult": {
         "type": "object",
         "properties": {
@@ -46766,9 +50368,43 @@
           },
           "truncated": {
             "type": "boolean"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/TaskLimits"
+          },
+          "shells": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskShell"
+            }
           }
         },
         "required": ["tasks", "truncated"],
+        "additionalProperties": false
+      },
+      "TaskMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "deliveredAt": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "direction", "sender", "text", "createdAt"],
         "additionalProperties": false
       },
       "TaskInspectResult": {
@@ -46801,6 +50437,28 @@
           },
           "truncated": {
             "type": "boolean"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskMessage"
+            }
+          },
+          "structured": {
+            "type": "object",
+            "properties": {
+              "json": {
+                "type": "string"
+              },
+              "valid": {
+                "type": "boolean"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["json", "valid", "truncated"],
+            "additionalProperties": false
           }
         },
         "required": ["task", "steps", "output", "truncated"],
@@ -46835,6 +50493,12 @@
             "items": {
               "$ref": "#/components/schemas/TaskInfo"
             }
+          },
+          "shells": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskShell"
+            }
           }
         },
         "required": ["tasks"],
@@ -46851,9 +50515,141 @@
           },
           "timedOut": {
             "type": "boolean"
+          },
+          "attention": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "shells": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskShell"
+            }
           }
         },
         "required": ["tasks", "timedOut"],
+        "additionalProperties": false
+      },
+      "TaskPromoteResult": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskInfo"
+            }
+          }
+        },
+        "required": ["tasks"],
+        "additionalProperties": false
+      },
+      "TaskResumeResult": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskInfo"
+            }
+          }
+        },
+        "required": ["tasks"],
+        "additionalProperties": false
+      },
+      "TaskChangedFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "additions": {
+            "type": "number"
+          },
+          "deletions": {
+            "type": "number"
+          },
+          "binary": {
+            "type": "boolean"
+          }
+        },
+        "required": ["path", "status", "additions", "deletions", "binary"],
+        "additionalProperties": false
+      },
+      "TaskChangesResult": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/TaskInfo"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskChangedFile"
+            }
+          },
+          "patch": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "mergeable": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": ["task", "files", "truncated", "mergeable"],
+        "additionalProperties": false
+      },
+      "TaskMergeResult": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/TaskInfo"
+          },
+          "merged": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remaining": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checkpoint": {
+            "type": "string"
+          }
+        },
+        "required": ["task", "merged", "remaining", "conflicts"],
+        "additionalProperties": false
+      },
+      "TaskDiscardResult": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/TaskInfo"
+          },
+          "saved": {
+            "type": "string"
+          }
+        },
+        "required": ["task"],
         "additionalProperties": false
       },
       "TaskBridgeRegisterInput": {
@@ -47003,6 +50799,427 @@
           }
         },
         "required": ["accepted"],
+        "additionalProperties": false
+      },
+      "WorkflowIssue": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "message"],
+        "additionalProperties": false
+      },
+      "WorkflowSaved": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": ["repository", "user"]
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "default": {}
+              },
+              "required": ["name", "required"],
+              "additionalProperties": false
+            }
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
+          }
+        },
+        "required": ["name", "title", "source", "inputs"],
+        "additionalProperties": false
+      },
+      "WorkflowSavedList": {
+        "type": "object",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSaved"
+            }
+          }
+        },
+        "required": ["workflows"],
+        "additionalProperties": false
+      },
+      "WorkflowValidateInput": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowPlanStage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "string"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "enum": ["dynamic"]
+              }
+            ]
+          },
+          "serial": {
+            "type": "boolean"
+          },
+          "writes": {
+            "type": "string"
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verify": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "maxRounds": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": ["agent", "maxRounds"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "title", "phase", "agent", "items", "serial", "writes", "asks"],
+        "additionalProperties": false
+      },
+      "WorkflowPlan": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowPlanStage"
+            }
+          },
+          "maxAgents": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "concurrency": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "usd": {
+            "type": "number"
+          },
+          "tokens": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "steps": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "perAgentSteps": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "minutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "saved": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": ["repository", "user"]
+              }
+            },
+            "required": ["name", "source"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["title", "stages", "maxAgents", "concurrency", "steps", "perAgentSteps", "minutes"],
+        "additionalProperties": false
+      },
+      "WorkflowValidation": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
+          },
+          "plan": {
+            "$ref": "#/components/schemas/WorkflowPlan"
+          }
+        },
+        "required": ["ok", "issues", "warnings"],
+        "additionalProperties": false
+      },
+      "WorkflowStartInput": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "quiet": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowStarted": {
+        "type": "object",
+        "properties": {
+          "runID": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/WorkflowPlan"
+          }
+        },
+        "required": ["runID", "title", "plan"],
+        "additionalProperties": false
+      },
+      "WorkflowRunList": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskInfo"
+            }
+          }
+        },
+        "required": ["runs"],
+        "additionalProperties": false
+      },
+      "WorkflowNode": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "preview": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "required": ["key", "stage", "phase", "item", "status"],
+        "additionalProperties": false
+      },
+      "WorkflowRunDetail": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/TaskInfo"
+          },
+          "spec": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowNode"
+            },
+            "maxItems": 500
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "report": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "results": {}
+        },
+        "required": ["task", "nodes", "truncated"],
+        "additionalProperties": false
+      },
+      "WorkflowResumeInput": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "retryFailed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ResearchMeasurement": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "value": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "scale": {
+            "type": "string",
+            "enum": ["one", "thousand", "million", "billion", "trillion"]
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "period": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "geography": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "population": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "methodology": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": ["metric", "value", "unit"],
         "additionalProperties": false
       },
       "ProjectDirectories": {
@@ -47486,10 +51703,22 @@
           "unpricedSteps": {
             "type": "number"
           },
+          "codiumSteps": {
+            "type": "number"
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "number"
+          },
+          "subagentCodiumSteps": {
             "type": "number"
           },
           "subagentTokens": {
@@ -47696,6 +51925,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -48495,6 +52727,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -49506,6 +53741,9 @@
               "unpriced": {
                 "type": "boolean"
               },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
+              },
               "tokens": {
                 "type": "object",
                 "properties": {
@@ -49599,6 +53837,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -50021,6 +54262,9 @@
             },
             "required": ["context", "output"],
             "additionalProperties": false
+          },
+          "codium": {
+            "$ref": "#/components/schemas/ModelCodium"
           }
         },
         "required": [
@@ -52455,6 +56699,57 @@
         "required": ["id", "type", "data"],
         "additionalProperties": false
       },
+      "PtyRevealed": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["pty.revealed"]
+          },
+          "durable": {
+            "type": "object",
+            "properties": {
+              "aggregateID": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": ["aggregateID", "seq", "version"],
+            "additionalProperties": false
+          },
+          "location": {
+            "$ref": "#/components/schemas/LocationRef"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^pty"
+              },
+              "focus": {
+                "type": "boolean"
+              }
+            },
+            "required": ["id", "focus"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "data"],
+        "additionalProperties": false
+      },
       "QuestionV2Asked": {
         "type": "object",
         "properties": {
@@ -53421,6 +57716,10 @@
                 "minimum": 0
               },
               "unpricedSteps": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "codiumSteps": {
                 "type": "integer",
                 "minimum": 0
               },
@@ -54647,6 +58946,9 @@
               "unpriced": {
                 "type": "boolean"
               },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
+              },
               "tokens": {
                 "type": "object",
                 "properties": {
@@ -55159,6 +59461,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -55993,6 +60298,9 @@
               "unpriced": {
                 "type": "boolean"
               },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
+              },
               "tokens": {
                 "type": "object",
                 "properties": {
@@ -56064,6 +60372,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -56699,6 +61010,35 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
+      "EventPtyRevealed": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["pty.revealed"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^pty"
+              },
+              "focus": {
+                "type": "boolean"
+              }
+            },
+            "required": ["id", "focus"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
       "EventQuestionV2Asked": {
         "type": "object",
         "properties": {
@@ -57183,6 +61523,10 @@
                 "minimum": 0
               },
               "unpricedSteps": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "codiumSteps": {
                 "type": "integer",
                 "minimum": 0
               },

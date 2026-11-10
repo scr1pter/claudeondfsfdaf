@@ -129,6 +129,25 @@ function withLocal<A, E, R>(
   )
 }
 
+// Vector Local as the owner sets it in their own config, so the config watcher, which may read the files again at
+// any moment, applies the same policy instead of turning Vector Local off in the middle of a test. A watcher stays
+// open for the whole process once any test file in it has built the app runtime, and fires 50 ms after a test before
+// this one removed the file. Each describe that uses it turns it off after each test.
+function setLocal(block?: ConfigLocalV1.Info) {
+  const file = path.join(Global.Path.config, "vector.json")
+  rmSync(file, { force: true })
+  if (block) {
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ local: block }))
+  }
+  Config.refreshLocal()
+  Config.confirmLocal()
+}
+
+function off() {
+  setLocal()
+}
+
 const qwen = (id: string) => ({
   id,
   name: id,
@@ -1459,24 +1478,11 @@ describe("the agent's own actions under Vector Local", () => {
         ),
       ),
   })
-  // Vector Local as the owner sets it in their own config, so the config watcher, which may read the files again at
-  // any moment, applies the same policy instead of turning Vector Local off in the middle of a test.
-  const setLocal = (block?: ConfigLocalV1.Info) => {
-    const file = path.join(Global.Path.config, "vector.json")
-    rmSync(file, { force: true })
-    if (block) {
-      mkdirSync(path.dirname(file), { recursive: true })
-      writeFileSync(file, JSON.stringify({ local: block }))
-    }
-    Config.refreshLocal()
-    Config.confirmLocal()
-  }
   const on = (web: "ask" | "none" = "ask") =>
     Effect.sync(() => {
       asked.length = 0
       setLocal({ enabled: true, web })
     })
-  const off = () => setLocal()
   afterEach(() => {
     off()
     rmSync(Config.localConfirmedFile(), { force: true })
@@ -1880,6 +1886,11 @@ describe("the agent's own actions under Vector Local", () => {
 })
 
 describe("Vector's own installs under Vector Local", () => {
+  afterEach(() => {
+    off()
+    rmSync(Config.localConfirmedFile(), { force: true })
+  })
+
   test("a language server installer starts only when Vector Local lets it reach its registry, Web access None first", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "vector-lsp-local-"))
     const ran = path.join(dir, "ran.txt")
@@ -1898,15 +1909,15 @@ describe("Vector's own installs under Vector Local", () => {
     process.env.PATH = path.join(dir, "bin")
     try {
       // Allowed, but Web access None reaches no internet registry: nothing starts.
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true, web: "none", allow: [allowed] } }))
+      setLocal({ enabled: true, web: "none", allow: [allowed] })
       expect(await Gopls.spawn(dir, {} as never, flags)).toBeUndefined()
       expect(await Bun.file(ran).exists()).toBe(false)
       // Not allowed: nothing starts either.
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+      setLocal({ enabled: true })
       expect(await Gopls.spawn(dir, {} as never, flags)).toBeUndefined()
       expect(await Bun.file(ran).exists()).toBe(false)
       // Allowed with Web access Ask: the installer runs.
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true, allow: [allowed] } }))
+      setLocal({ enabled: true, allow: [allowed] })
       await Gopls.spawn(dir, {} as never, flags)
       expect((await Bun.file(ran).text()).replaceAll('"', "")).toContain("install golang.org/x/tools/gopls@latest")
     } finally {
@@ -1917,6 +1928,11 @@ describe("Vector's own installs under Vector Local", () => {
 })
 
 describe("Vector's own services under Vector Local", () => {
+  afterEach(() => {
+    off()
+    rmSync(Config.localConfirmedFile(), { force: true })
+  })
+
   test("are skipped without an attempt, and work as before with it off", async () => {
     const sent: string[] = []
     const fetch = Object.assign(
@@ -1930,7 +1946,7 @@ describe("Vector's own services under Vector Local", () => {
     const link = `https://vectordev.ai/s/${"a".repeat(32)}`
     const free = FreeModels.createClient({ request: fetch, local: () => Egress.policy().enabled })
 
-    Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+    setLocal({ enabled: true })
     const refused = await share.read(link).catch((error: unknown) => error)
     expect(refused).toMatchObject({
       code: "UNAVAILABLE",
@@ -1939,7 +1955,7 @@ describe("Vector's own services under Vector Local", () => {
     expect((await free.catalog(true)).enabled).toBe(false)
     expect(sent).toEqual([])
 
-    Egress.configure(LocalPolicy.OFF)
+    off()
     await share.read(link).catch(() => undefined)
     await free.catalog(true)
     expect(sent).toEqual([`https://vectordev.ai/api/shares/${"a".repeat(32)}`, FreeModels.CATALOG_URL])
@@ -1948,6 +1964,10 @@ describe("Vector's own services under Vector Local", () => {
 
 describe("Vector's own git and the V2 runner under Vector Local", () => {
   const git = testEffect(LayerNode.compile(LayerNode.group([Git.node, CrossSpawnSpawner.node])))
+  afterEach(() => {
+    off()
+    rmSync(Config.localConfirmedFile(), { force: true })
+  })
 
   git.live("decides a git fetch to github.com before git starts, and blocks it with Web access None", () =>
     withLocal({ enabled: true, web: "none" }, () =>
@@ -1964,7 +1984,9 @@ describe("Vector's own git and the V2 runner under Vector Local", () => {
           "Vector Local blocked a git request to github.com. Web access is set to None, so git reaches no internet server.",
         )
         // A remote by its name is decided by the URL git would use for it.
-        yield* Effect.promise(() => Bun.$`git -C ${dir} remote add origin git@github.com:vectordevai/vector.git`.quiet())
+        yield* Effect.promise(() =>
+          Bun.$`git -C ${dir} remote add origin git@github.com:vectordevai/vector.git`.quiet(),
+        )
         const named = yield* repo.sync.fetchBranch(repository!, { branch: "main" }).pipe(Effect.flip)
         expect(named.message).toContain("Vector Local blocked a git request to github.com.")
         expect(Egress.events().filter((event) => event.source === "git-remote")).toEqual([
@@ -1988,7 +2010,9 @@ describe("Vector's own git and the V2 runner under Vector Local", () => {
         // .invalid names never resolve, so nothing could be reached even if a decision were missed.
         yield* Effect.promise(() => Bun.$`git -C ${dir} remote add team/fork https://git.invalid/team/fork.git`.quiet())
         yield* Effect.promise(() => Bun.$`git -C ${dir} config url.https://git.invalid/.insteadOf gh:`.quiet())
-        const named = yield* repo.sync.fetchBranch(repository!, { remote: "team/fork", branch: "main" }).pipe(Effect.flip)
+        const named = yield* repo.sync
+          .fetchBranch(repository!, { remote: "team/fork", branch: "main" })
+          .pipe(Effect.flip)
         expect(named.message).toBe(
           "Vector Local blocked a git request to git.invalid. Vector Local blocks Vector's own git requests to internet servers unless you allow one.",
         )

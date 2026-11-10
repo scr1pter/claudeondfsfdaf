@@ -593,7 +593,11 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
     const followed = await Promise.all(
       fromComments.map(async (prior) => {
         if (!prior.also?.length || head.startsWith(prior.sha)) return prior
-        if (!moves.has(prior.sha)) moves.set(prior.sha, deps.git.diff(prior.sha, head).catch(() => undefined))
+        if (!moves.has(prior.sha))
+          moves.set(
+            prior.sha,
+            deps.git.diff(prior.sha, head).catch(() => undefined),
+          )
         const changes = await moves.get(prior.sha)
         return changes ? followAlso(prior, changes) : prior
       }),
@@ -684,7 +688,13 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       ...(triage ? { triage } : {}),
       knownPath: known,
       onProgress: (event) =>
-        log(event.type === "cost" ? `Spent $${event.costUsd.toFixed(4)}` : `${event.name}: ${event.status}`),
+        log(
+          event.type === "cost"
+            ? event.kind === "codium"
+              ? "Spent: Codium"
+              : `Spent $${event.costUsd.toFixed(4)}${event.codium ? " + Codium" : ""}`
+            : `${event.name}: ${event.status}`,
+        ),
       onCheckpoint: async (cost) => {
         spent = cost
         await upsertSticky(buildRunningBody({ previous: before, head, startedAt, state: running(cost.costUsd) })).catch(
@@ -948,7 +958,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
         notes: [...notes, ...outcome.notes],
         ...(outcome.cost ? { cost: outcome.cost } : {}),
         durationMs: outcome.durationMs,
-        prTotal: { costUsd: next.costUsd, reviews: next.reviews },
+        prTotal: { costUsd: next.costUsd, reviews: next.reviews, codiumReviews: next.codiumReviews },
         ...(ctx.runUrl ? { runUrl: ctx.runUrl } : {}),
         commentUrls,
         state: next,

@@ -1,4 +1,5 @@
 import { ExternalAgent } from "@vectordevai/schema/external-agent"
+import { Billing } from "@vectordevai/schema/billing"
 import { isTerminalWorkspace, type WorkspaceRecordForEconomics } from "./economics-repository"
 
 export type WorkspaceOutcomeRecord = WorkspaceRecordForEconomics & {
@@ -60,7 +61,7 @@ export function createWorkspaceOutcomeRecorder(
       if (lifecycle.disposed) return Promise.resolve(false)
       // A run of a user's own coding agent is never measured into the recommendations: its vendor's terms bar using
       // it to evaluate or rank models (ExternalAgent.excludedFromLearning).
-      if (ExternalAgent.excludedFromLearning(input)) return Promise.resolve(false)
+      if (ExternalAgent.excludedFromLearning(input) || Billing.isCodium(input.provider)) return Promise.resolve(false)
       const key = JSON.stringify([input.sourcePath, input.id])
       const previous = states.get(key)
       if (previous && (input.revision ?? 0) < (previous.workspace.revision ?? 0))

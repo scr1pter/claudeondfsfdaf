@@ -18,6 +18,32 @@ export const GLOB = path.join(TRUNCATION_DIR, "*")
 
 export type Result = { content: string; truncated: false } | { content: string; truncated: true; outputPath: string }
 
+// A background command's log (`shell-<shl_ id>.log`, 5.H), named by an ID that encodes when the command started.
+const SHELL_LOG = /^shell-(shl_[0-9a-f]{12}[0-9A-Za-z]{14})\.log$/
+// Logs a command this process still runs. Cleanup leaves them, however long the command has been quiet.
+const held = new Set<string>()
+
+/** Keeps a file in the tool-output directory from cleanup until the returned release is called. */
+export function hold(file: string) {
+  const name = path.basename(file)
+  held.add(name)
+  return () => {
+    held.delete(name)
+  }
+}
+
+// What output() writes beside the part of a text it keeps: how much it left out, and where the whole text is.
+// A Grep or a ranged Read of the saved file costs far less than a subagent that starts from an empty context.
+function notice(removed: number, unit: "bytes" | "lines", file: string) {
+  return `...${removed} ${unit} truncated...\n\nThe tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
+}
+
+/** The most output() adds to the text it keeps when it cuts, for callers fitting several cut texts into one output. */
+export const NOTICE = {
+  bytes: Buffer.byteLength(`\n\n${notice(Number.MAX_SAFE_INTEGER, "bytes", path.join(DIR, `${"x".repeat(40)}.web`))}`),
+  lines: 5,
+} as const
+
 export interface Options {
   maxLines?: number
   maxBytes?: number
@@ -48,19 +74,33 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
 
     const cleanup = Effect.fn("Truncate.cleanup")(function* () {
-      const cutoff = Identifier.timestamp(
-        Identifier.create("tool", "ascending", Date.now() - Duration.toMillis(RETENTION)),
-      )
+      const now = Date.now()
+      const cutoff = Identifier.timestamp(Identifier.create("tool", "ascending", now - Duration.toMillis(RETENTION)))
       const entries = yield* fs.readDirectory(TRUNCATION_DIR).pipe(
         // The directory also holds retained artifacts. Only generated tool IDs
         // encode a timestamp; unrelated names must not abort or enter cleanup.
         // A saved web page ends in `.web`, so Grep and Read know to fence it.
-        Effect.map((all) => all.filter((name) => /^tool_[0-9a-f]{12}[0-9A-Za-z]{14}(?:\.web)?$/.test(name))),
+        Effect.map((all) =>
+          all.filter((name) => /^tool_[0-9a-f]{12}[0-9A-Za-z]{14}(?:\.web)?$/.test(name) || SHELL_LOG.test(name)),
+        ),
         Effect.catch(() => Effect.succeed([])),
       )
       for (const entry of entries) {
-        if (Identifier.timestamp(entry.replace(/\.web$/, "")) >= cutoff) continue
-        yield* fs.remove(path.join(TRUNCATION_DIR, entry)).pipe(Effect.catch(() => Effect.void))
+        const file = path.join(TRUNCATION_DIR, entry)
+        const command = SHELL_LOG.exec(entry)?.[1]
+        if (Identifier.timestamp(command ?? entry.replace(/\.web$/, "")) >= cutoff) continue
+        if (command) {
+          // A command's log goes once its command started and last wrote more than RETENTION ago, and never while this
+          // process still runs it. A command another engine still runs keeps writing to its log, so a recent write keeps
+          // it too.
+          if (held.has(entry)) continue
+          const written = yield* fs.stat(file).pipe(
+            Effect.map((info) => Option.getOrUndefined(info.mtime)?.getTime() ?? now),
+            Effect.catch(() => Effect.succeed(now)),
+          )
+          if (written >= now - Duration.toMillis(RETENTION)) continue
+        }
+        yield* fs.remove(file).pipe(Effect.catch(() => Effect.void))
       }
     })
 
@@ -133,15 +173,10 @@ const layer = Layer.effect(
       const unit = hitBytes ? "bytes" : "lines"
       const preview = out.join("\n")
       const file = yield* write(options.save?.() ?? text)
-
-      // A Grep or a ranged Read of the saved file costs far less than a subagent that starts from an empty context.
-      const hint = `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
+      const cut = notice(removed, unit, file)
 
       return {
-        content:
-          direction === "head"
-            ? `${preview}\n\n...${removed} ${unit} truncated...\n\n${hint}`
-            : `...${removed} ${unit} truncated...\n\n${hint}\n\n${preview}`,
+        content: direction === "head" ? `${preview}\n\n${cut}` : `${cut}\n\n${preview}`,
         truncated: true,
         outputPath: file,
       } as const

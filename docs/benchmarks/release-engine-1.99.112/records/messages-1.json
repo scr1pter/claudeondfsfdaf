@@ -1,0 +1,111 @@
+[
+  {
+    "info": {
+      "id": "msg_194b36b54001NJKgBVc4bS86c6",
+      "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+      "role": "user",
+      "time": {
+        "created": 1793496149423
+      },
+      "summary": {
+        "diffs": []
+      },
+      "agent": "build",
+      "model": {
+        "providerID": "openai",
+        "modelID": "gpt-6.1-sol",
+        "variant": "medium"
+      },
+      "executionMode": "normal",
+      "size": "standard",
+      "judge": "off"
+    },
+    "parts": [
+      {
+        "id": "prt_194b36db3001CV0YDuY6a7j4a7",
+        "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+        "messageID": "msg_194b36b54001NJKgBVc4bS86c6",
+        "type": "text",
+        "text": "This is a request-cache instrumentation check. Reply only with CACHE_CHECK_DONE. Do not call tools, edit files, delegate, or research."
+      }
+    ]
+  },
+  {
+    "info": {
+      "id": "msg_194b36df7002PFpDSfcxygumbi",
+      "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+      "role": "assistant",
+      "time": {
+        "created": 1793496149495,
+        "completed": 1793496149634
+      },
+      "parentID": "msg_194b36b54001NJKgBVc4bS86c6",
+      "modelID": "gpt-6.1-sol",
+      "providerID": "openai",
+      "mode": "build",
+      "agent": "build",
+      "path": {
+        "cwd": "/home/runner/work/_temp/vector-release-evidence/study/project",
+        "root": "/home/runner/work/_temp/vector-release-evidence/study/project"
+      },
+      "cost": 0.004176,
+      "tokens": {
+        "total": 2056,
+        "input": 2048,
+        "output": 6,
+        "reasoning": 2,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "variant": "medium",
+      "size": "standard",
+      "finish": "stop"
+    },
+    "parts": [
+      {
+        "id": "prt_194b36e6f0013gnNxT5mY4qyWt",
+        "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+        "messageID": "msg_194b36df7002PFpDSfcxygumbi",
+        "type": "step-start",
+        "snapshot": "ddb2b1326c9bdfaf847319cb842524643f945e5d"
+      },
+      {
+        "id": "prt_194b36e73001c6pp3lZOpsK4dU",
+        "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+        "messageID": "msg_194b36df7002PFpDSfcxygumbi",
+        "type": "text",
+        "text": "CACHE_CHECK_DONE",
+        "time": {
+          "start": 1793496149619,
+          "end": 1793496149623
+        },
+        "metadata": {
+          "openai": {
+            "itemId": "msg_offline_1"
+          }
+        }
+      },
+      {
+        "id": "prt_194b36e7b001kd0xPdCXLSJpsW",
+        "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+        "messageID": "msg_194b36df7002PFpDSfcxygumbi",
+        "type": "step-finish",
+        "reason": "stop",
+        "snapshot": "ddb2b1326c9bdfaf847319cb842524643f945e5d",
+        "cost": 0.004176,
+        "tokens": {
+          "total": 2056,
+          "input": 2048,
+          "output": 6,
+          "reasoning": 2,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    ]
+  }
+]

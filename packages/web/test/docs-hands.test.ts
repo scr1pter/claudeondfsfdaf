@@ -3,7 +3,7 @@ import { Schema } from "effect"
 import { Hands } from "@vectordevai/schema/hands"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { docsNav } from "../src/data/docs-nav"
-import { release112 } from "../src/data/vector-releases"
+import { handsReleasePreview } from "../src/data/vector-releases"
 
 const page = await Bun.file(new URL("../src/pages/docs/vector-hands.astro", import.meta.url)).text()
 
@@ -11,7 +11,7 @@ test("the feature's stable docs route uses the shared brand and release stage", 
   const links = docsNav.flatMap((group) => group.links).filter((link) => link.id === Hands.DOCS)
   expect(links).toHaveLength(1)
   expect(links[0]?.title).toBe(Hands.NAME)
-  expect(links[0]?.blurb).toStartWith(release112.since)
+  expect(links[0]?.blurb).toStartWith(handsReleasePreview.since)
   expect(page).toContain('<DocsPage id="vector-hands">')
   expect(page).toContain("{Hands.NAME}")
   expect(page).toContain("{Hands.MENTION}")
@@ -76,7 +76,12 @@ test("the managed-only sample decodes and cannot be mistaken for personal config
     native_tools: "off",
     screenshot_retention_days: 7,
   })
-  for (const sentence of ["Vector 1.99.112 or later", "company-managed", "Do not add", "user's consent"])
+  for (const sentence of [
+    "a compatible Vector build that includes Hands",
+    "company-managed",
+    "Do not add",
+    "user's consent",
+  ])
     expect(page).toContain(sentence)
   for (const limit of [
     "macOS 14",

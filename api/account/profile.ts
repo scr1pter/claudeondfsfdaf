@@ -1,7 +1,7 @@
 import { enforceRateLimit } from "../_lib/abuse.js"
 import { readAccountProfile } from "../_lib/account.js"
-import { verifyCliToken } from "../_lib/cli-token.js"
-import { accountTokensRevoked } from "../_lib/revocation.js"
+import { verifyCliTokenClaims } from "../_lib/cli-token.js"
+import { accountTokensRevoked, requireUnrevokedCliToken } from "../_lib/revocation.js"
 import { ApiError, handleApiError, json, requireMethod, type ApiRequest, type ApiResponse } from "../_lib/http.js"
 
 /**
@@ -21,10 +21,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       if (error instanceof ApiError && error.code === "ABUSE_PROTECTION_UNAVAILABLE") return
       throw error
     })
-    const user = verifyCliToken(
-      /^Bearer (vct_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(request.headers.authorization ?? "")?.[1] ?? "",
-    )
-    if (await accountTokensRevoked(user.id))
+    const token = /^Bearer (vct_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(request.headers.authorization ?? "")?.[1] ?? ""
+    const user = verifyCliTokenClaims(token)
+    if (user.jti) await requireUnrevokedCliToken(token)
+    if (!user.jti && (await accountTokensRevoked(user.id)))
       throw new ApiError(401, "CLI_TOKEN_INVALID", "Sign in to Vector again to continue.")
     const profile = await readAccountProfile(user.id)
     json(response, 200, { name: profile.name ?? null, avatar: profile.avatar ?? null })

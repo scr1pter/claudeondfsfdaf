@@ -466,15 +466,24 @@ timed.live(
             expect(Provider.LOCAL_HEADER_TIMEOUT).toBe(600_000)
             expect(Provider.LOCAL_CHUNK_TIMEOUT).toBe(120_000)
             const provider = yield* Provider.Service
+            const localProvider = yield* provider.getProvider(LOCAL)
+            const cloudProvider = yield* provider.getProvider(CLOUD)
+            localProvider.options.fetch = server.fetch
+            cloudProvider.options.fetch = server.fetch
             const hosted = yield* provider.getLanguage(
               Provider.withPriority(yield* provider.getModel(LOCAL, MODEL), "user"),
             )
             const cloud = yield* provider.getLanguage(yield* provider.getModel(CLOUD, MODEL))
-            // The injected scheduler advances these exact deadlines while requests use real I/O.
+            // The provider and SDK use controlled responses; only injected deadlines advance.
             yield* Effect.promise(async () => {
+              const active: Promise<unknown>[] = []
+              const follow = <T>(promise: PromiseLike<T>) => {
+                active.push(Promise.resolve(promise).catch(() => undefined))
+                return watch(promise)
+              }
               try {
                 // No headers: a server someone hosts is given up on after ten minutes, and not before.
-                const first = watch(hosted.doStream(call("first")))
+                const first = follow(hosted.doStream(call("first")))
                 await ready(server.arrived(1), "first request arrival")
                 expect(clock.pending()).toContain(600_000)
                 clock.advance(Provider.LOCAL_HEADER_TIMEOUT - 1)
@@ -490,11 +499,11 @@ timed.live(
                 })
 
                 // Headers and the first chunk, then nothing: it is given up on after two minutes without a chunk.
-                const second = watch(hosted.doStream(call("second")))
+                const second = follow(hosted.doStream(call("second")))
                 await ready(server.arrived(2), "second request arrival")
                 server.headers(1)
                 const streaming = Promise.withResolvers<void>()
-                const quiet = watch(
+                const quiet = follow(
                   drain((await ready(second.done(), "second response headers")).stream, streaming.resolve),
                 )
                 // The decoder consumed the first text chunk and drain requested the next before time moves.
@@ -512,14 +521,14 @@ timed.live(
                 expect(ProviderError.unwrapTypedError(quiet.error())).toMatchObject({ message: "SSE read timed out" })
 
                 // The cloud API has neither: it waits as long as the reply takes.
-                const third = watch(cloud.doStream(call("third")))
+                const third = follow(cloud.doStream(call("third")))
                 await ready(server.arrived(3), "cloud request arrival")
                 expect(clock.pending()).toEqual([])
                 clock.advance(Provider.LOCAL_HEADER_TIMEOUT * 2)
                 expect(await third.state()).toBe("pending")
                 server.headers(2)
                 const cloudStreaming = Promise.withResolvers<void>()
-                const waited = watch(
+                const waited = follow(
                   drain((await ready(third.done(), "cloud response headers")).stream, cloudStreaming.resolve),
                 )
                 await ready(cloudStreaming.promise, "first cloud text chunk")
@@ -530,7 +539,12 @@ timed.live(
                 server.end(2)
                 expect(await ready(waited.done(), "cloud response completion")).toBe("done")
               } finally {
-                clock.clear()
+                try {
+                  server.close()
+                  await ready(Promise.all(active), "controlled request cleanup")
+                } finally {
+                  clock.clear()
+                }
               }
             })
             expect(server.seen).toEqual(["first", "second", "third"])
@@ -939,7 +953,7 @@ function watch<T>(promise: PromiseLike<T>) {
     state: async () => {
       for (const _ of Array.from({ length: 50 })) {
         if (seen.state !== "pending") break
-        await new Promise<void>((resolve) => setImmediate(resolve))
+        await Promise.resolve()
       }
       return seen.state
     },
@@ -967,6 +981,8 @@ function ready<T>(promise: PromiseLike<T>, phase: string): Promise<T> {
 
 type Stall = {
   readonly url: string
+  readonly fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  readonly close: () => void
   /** The last message of each request, in the order they arrived. */
   readonly seen: string[]
   /** Resolves once `count` requests have arrived. */
@@ -977,31 +993,47 @@ type Stall = {
   readonly end: (index: number) => void
 }
 
-// A fake OpenAI-compatible server on 127.0.0.1 that answers nothing until told: first the headers, then the reply.
+// Controlled OpenAI-compatible responses: the real SDK still builds/parses them, while no TCP or child process has
+// to make progress after a large fake-clock jump. Unanswered fetches honor the provider's header AbortSignal.
 function withStall<A, E, R>(body: (server: Stall) => Effect.Effect<A, E, R>) {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
-      const requests: { readonly respond: (response: Response) => void; readonly finish: Promise<void> }[] = []
-      const ends: (() => void)[] = []
+      const requests: {
+        readonly respond: (response: Response) => void
+        readonly reject: (error: unknown) => void
+        controller?: ReadableStreamDefaultController<Uint8Array>
+        closed: boolean
+      }[] = []
       const waits: { readonly count: number; readonly resolve: () => void }[] = []
       const seen: string[] = []
       const encoder = new TextEncoder()
-      const http = Bun.serve({
-        hostname: "127.0.0.1",
-        port: 0,
-        idleTimeout: 0,
-        async fetch(request) {
-          seen.push((await request.json()).messages.at(-1)?.content)
-          const finish = Promise.withResolvers<void>()
-          ends.push(finish.resolve)
-          const answer = Promise.withResolvers<Response>()
-          requests.push({ respond: answer.resolve, finish: finish.promise })
-          waits.filter((wait) => requests.length >= wait.count).forEach((wait) => wait.resolve())
-          return answer.promise
-        },
-      })
+      const lifecycle = { closed: false }
       const stall: Stall = {
-        url: `http://127.0.0.1:${http.port}/v1`,
+        url: "http://127.0.0.1:1/v1",
+        fetch: async (_input, init) => {
+          if (lifecycle.closed) throw new Error("controlled response disposed")
+          if (typeof init?.body !== "string") throw new Error("SDK did not send a JSON request body")
+          const response = Promise.withResolvers<Response>()
+          const payload = JSON.parse(init.body) as { messages: { content: string }[] }
+          const signal = init.signal
+          const aborted = () => response.reject(signal?.reason)
+          const waiting = { respond: response.resolve, reject: response.reject, closed: false }
+          seen.push(payload.messages.at(-1)?.content ?? "")
+          requests.push(waiting)
+          signal?.addEventListener("abort", aborted, { once: true })
+          if (signal?.aborted) aborted()
+          waits.filter((wait) => requests.length >= wait.count).forEach((wait) => wait.resolve())
+          return response.promise.finally(() => signal?.removeEventListener("abort", aborted))
+        },
+        close: () => {
+          lifecycle.closed = true
+          requests.forEach((request) => {
+            request.reject(new Error("controlled response disposed"))
+            if (request.closed) return
+            request.closed = true
+            request.controller?.close()
+          })
+        },
         seen,
         arrived: (count) =>
           requests.length >= count
@@ -1013,38 +1045,37 @@ function withStall<A, E, R>(body: (server: Stall) => Effect.Effect<A, E, R>) {
           const request = requests[index]
           request.respond(
             new Response(
-              new ReadableStream({
+              new ReadableStream<Uint8Array>({
                 start(controller) {
-                  // Bun sends a streamed reply's headers with its first chunk.
+                  request.controller = controller
                   controller.enqueue(
                     encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "waiting" } }] })}\n\n`),
                   )
                 },
-                async pull(controller) {
-                  await request.finish
-                  controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] })}\n\n` +
-                        "data: [DONE]\n\n",
-                    ),
-                  )
-                  controller.close()
+                cancel() {
+                  request.closed = true
                 },
               }),
               { headers: { "content-type": "text/event-stream" } },
             ),
           )
         },
-        end: (index) => ends[index]?.(),
+        end: (index) => {
+          const request = requests[index]
+          if (request.closed || !request.controller) return
+          request.closed = true
+          request.controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] })}\n\n` +
+                "data: [DONE]\n\n",
+            ),
+          )
+          request.controller.close()
+        },
       }
-      return { stall, http, requests, ends }
+      return { stall, requests }
     }),
     (started) => body(started.stall),
-    (started) =>
-      Effect.sync(() => {
-        started.ends.forEach((end) => end())
-        started.requests.forEach((request) => request.respond(new Response("closed", { status: 503 })))
-        void started.http.stop(true)
-      }),
+    (started) => Effect.sync(() => started.stall.close()),
   )
 }

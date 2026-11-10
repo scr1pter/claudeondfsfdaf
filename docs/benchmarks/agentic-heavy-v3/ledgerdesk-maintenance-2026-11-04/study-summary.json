@@ -1,0 +1,171 @@
+{
+  "kind": "closed-budget-limited-maintenance-study-v1",
+  "productRevision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+  "stageRevision": "4760d3854ea37f581779f1e96aa1002a7de6e572",
+  "planSha256": "be494acd632d82ec1a28df0eb4993527804fbf26624d127bf18fe11f7a5fab36",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "contextLimit": 1050000,
+  "outputCeiling": 32000,
+  "configuredAgentsEach": 7,
+  "actualLifecycleMatched": false,
+  "all189ChargesRetained": true,
+  "bothCurrentOwnedEpisodesSettled": true,
+  "qualityComparisonMet": false,
+  "efficiencyClaimMet": false,
+  "codexFirstAndFinalSourceIdentical": true,
+  "blindedReview": {
+    "kind": "unblinded-source-review-projection-v1",
+    "mapping": {
+      "A": "vector",
+      "B": "codex"
+    },
+    "mappingDisclosedAfterBothLocks": true,
+    "reviews": [
+      {
+        "reviewer": "R1",
+        "lockedAtUtc": "2026-11-05T03:53:00.936994+00:00",
+        "originalLockedSha256": "4550d8146f48f19256cfd6b36b8d8e7ac7830ad948f6d50724e0838776adb1a2",
+        "totals": {
+          "vector": 45,
+          "codex": 48
+        }
+      },
+      {
+        "reviewer": "R2",
+        "lockedAtUtc": "2026-11-05T03:52:23Z",
+        "originalLockedSha256": "0187cd801ea4be71f0c3ff427bcfd25bf206c7fc70e8ebdd4c89729f0ec63b59",
+        "totals": {
+          "vector": 45,
+          "codex": 47
+        }
+      }
+    ],
+    "categories": [
+      {
+        "reviewer_id": "R1",
+        "name": "Functional completeness and coherent API semantics",
+        "vector_score": 7,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Transactional integrity, recovery and corruption handling",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Authorization boundaries and input/error validation",
+        "vector_score": 7,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Concurrency, capability/lease fencing and lifecycle",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "CLI usability and typed SDK contract accuracy",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R1",
+        "name": "Maintainability and meaningful independent verification",
+        "vector_score": 7,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Functional completeness and coherent API semantics",
+        "vector_score": 7,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Transactional integrity, recovery and corruption handling",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Authorization boundaries and input/error validation",
+        "vector_score": 7,
+        "codex_score": 7,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Concurrency, capability/lease fencing and lifecycle",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "CLI usability and typed SDK contract accuracy",
+        "vector_score": 8,
+        "codex_score": 8,
+        "maximum": 8
+      },
+      {
+        "reviewer_id": "R2",
+        "name": "Maintainability and meaningful independent verification",
+        "vector_score": 7,
+        "codex_score": 8,
+        "maximum": 8
+      }
+    ],
+    "meanTotals": {
+      "vector": 45.0,
+      "codex": 47.5
+    },
+    "vectorNoLowerInEveryDimensionForEveryReviewer": false,
+    "scope": "Bounded static reviews; original findings, author/instrument familiarity disclosures and disagreements retained. No runtime/source repair, rescore or security certification."
+  },
+  "arms": {
+    "vector": {
+      "requests": 58,
+      "knownReceipts": 58,
+      "costUsd": "1.4211116",
+      "observedNativeRoles": 5,
+      "checksPassed": 53,
+      "checksTotal": 54,
+      "checkProvenance": "separate free final-source diagnostic; originalgate not_run",
+      "originalFunctionalVerdict": "not_run",
+      "originalNativeAuditVerdict": "review_required",
+      "wallMs": 1021828.0
+    },
+    "codex": {
+      "requests": 131,
+      "knownReceipts": 131,
+      "costUsd": "2.3666455",
+      "observedNativeRoles": 7,
+      "checksPassed": 53,
+      "checksTotal": 54,
+      "checkProvenance": "first paid submission; final source unchanged",
+      "originalFunctionalVerdict": "product_failure",
+      "originalNativeAuditVerdict": "review_required",
+      "wallMs": 1331594.0
+    }
+  },
+  "scope": [
+    "Both runs stopped on reservation affordability; do not claim completed equal-team efficiency.",
+    "Codex first submission53/54; Vector originalgate not_run, separate free unchanged-source diagnostic53/54.",
+    "Codex observed7roles, Vector observed5; Vector independentQA/judge didnotstart.",
+    "Both rejected a nonexistent key-scope account with404; evaluator expected400. Otherfourkeycontrolprobes pass, original failed check retained.",
+    "The same profile and task were configured; financial limits interrupted actual workflows unequally.",
+    "Engineering corrections are not isolated causes of any paid cost difference."
+  ]
+}

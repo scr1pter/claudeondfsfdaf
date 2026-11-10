@@ -1,4 +1,5 @@
 import { ComputerPrivacy } from "@vectordevai/server/computer-privacy"
+import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicShareRemovalError, publicShareWarning } from "@vectordevai/schema/public-share"
 import { ShareNext } from "@/share/share-next"
@@ -6,9 +7,18 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
 import { Context, Effect, FiberMap, Iterable, Layer, Schema, Stream } from "effect"
 import { serviceUse } from "@vectordevai/core/effect/service-use"
-import { FetchHttpClient, HttpBody, HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http"
+import {
+  FetchHttpClient,
+  HttpBody,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpServerResponse,
+} from "effect/unstable/http"
 import { Database } from "@vectordevai/core/database/database"
-import { FreeModelGuests, GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
 import { asc } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
@@ -103,6 +113,14 @@ export class SessionEventsNotFoundError extends Schema.TaggedErrorClass<SessionE
   },
 ) {}
 
+export class PrivateTransferError extends Schema.TaggedErrorClass<PrivateTransferError>()(
+  "WorkspacePrivateTransferError",
+  {
+    message: Schema.String,
+    sessionID: SessionID,
+  },
+) {}
+
 export class SessionWarpHttpError extends Schema.TaggedErrorClass<SessionWarpHttpError>()(
   "WorkspaceSessionWarpHttpError",
   {
@@ -129,6 +147,7 @@ type SessionWarpError =
   | WorkspaceNotFoundError
   | SessionEventsNotFoundError
   | SessionWarpHttpError
+  | PrivateTransferError
   | Vcs.PatchApplyError
   | HttpClientError.HttpClientError
 type WaitForSyncError = SyncTimeoutError | SyncAbortedError
@@ -172,7 +191,44 @@ const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const fs = yield* FSUtil.Service
     const { db } = yield* Database.Service
-    const guests = yield* FreeModelGuests.Service
+    const audience = yield* SessionAudience.Service
+    const requireTransfer = Effect.fn("Workspace.requireTransfer")(function* (sessionID: SessionID) {
+      if ((yield* audience.isPrivate(sessionID)) || (yield* audience.hasGuestInput(sessionID)))
+        return yield* new PrivateTransferError({
+          sessionID,
+          message:
+            "Private session families and families with guest input cannot move between workspaces until transfer preserves their privacy restriction. Export a local archive instead.",
+        })
+    })
+    // The conversation's own events, as a warp replays them.
+    const history = (sessionID: SessionID) =>
+      db
+        .select({
+          id: EventTable.id,
+          aggregateID: EventTable.aggregate_id,
+          seq: EventTable.seq,
+          type: EventTable.type,
+          data: EventTable.data,
+        })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+    // The per-conversation check replication applies at the source (`/sync/history` leaves out a conversation that fails
+    // it): events that show private task text, or name a private session or directory, never leave in a warp either,
+    // although the conversation itself is neither private nor guest-input.
+    const requireShareable = Effect.fn("Workspace.requireShareable")(function* (
+      sessionID: SessionID,
+      events: readonly unknown[],
+    ) {
+      if (yield* SessionAudienceHttp.response(HttpServerResponse.jsonUnsafe(events), false, audience, true)) return
+      return yield* new PrivateTransferError({
+        sessionID,
+        message:
+          "This conversation's history shows private task data, so it cannot move between workspaces until transfer preserves its privacy restriction. Export a local archive instead.",
+      })
+    })
     const connections = new Map<WorkspaceV2.ID, ConnectionStatus>()
     const syncFibers = yield* FiberMap.make<WorkspaceV2.ID, void, SyncLoopError>()
 
@@ -196,7 +252,7 @@ const layer = Layer.effect(
       url: URL | string,
       headers: HeadersInit | undefined,
     ) {
-      const outgoing = new Headers(headers)
+      const outgoing = new Headers(RequestOwner.replicationHeaders(headers))
       outgoing.set(ComputerPrivacy.WORKSPACE_SYNC_HEADER, "1")
       const response = yield* http.execute(
         HttpClientRequest.get(route(url, "/global/event"), {
@@ -321,6 +377,7 @@ const layer = Layer.effect(
       space: Info,
       url: URL | string,
       headers: HeadersInit | undefined,
+      transfer?: SessionID,
     ) {
       const sessionIDs = (yield* db
         .select({ id: SessionTable.id })
@@ -341,7 +398,8 @@ const layer = Layer.effect(
 
       const response = yield* http.execute(
         HttpClientRequest.post(route(url, "/sync/history"), {
-          headers: new Headers(headers),
+          // The source omits private and guest-input conversations; a warp names its own, which is refused if restricted.
+          headers: RequestOwner.replicationHeaders(headers, transfer),
           body: HttpBody.jsonUnsafe(state),
         }),
       )
@@ -430,7 +488,7 @@ const layer = Layer.effect(
                   directory: event.directory,
                   project: event.project,
                   workspace: space.id,
-                  payload: event.payload,
+                  payload: SessionAccountingOutput.untrusted(payload),
                 })
               } catch (error) {
                 yield* Effect.logWarning("failed to emit global event", {
@@ -572,6 +630,9 @@ const layer = Layer.effect(
 
     const sessionWarp = Effect.fn("Workspace.sessionWarp")(function* (input: SessionWarpInput) {
       return yield* Effect.gen(function* () {
+        yield* requireTransfer(input.sessionID)
+        // Before anything is stopped or sent. A remote source checks again on its own side, with its own roots.
+        yield* requireShareable(input.sessionID, yield* history(input.sessionID))
         const current = yield* db
           .select({ workspaceID: SessionTable.workspace_id })
           .from(SessionTable)
@@ -585,14 +646,22 @@ const layer = Layer.effect(
             const target = yield* WorkspaceAdapterRuntime.target(previous)
 
             if (target.type === "remote") {
-              yield* syncHistory(previous, target.url, target.headers).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("session warp final source sync failed", {
+              yield* syncHistory(previous, target.url, target.headers, input.sessionID).pipe(
+                Effect.catch((error) => {
+                  if (error instanceof SyncHttpError && error.status === 403)
+                    return Effect.fail(
+                      new PrivateTransferError({
+                        sessionID: input.sessionID,
+                        message:
+                          "The source engine refused session history. This conversation cannot be moved without preserving its privacy restriction.",
+                      }),
+                    )
+                  return Effect.logWarning("session warp final source sync failed", {
                     workspaceID: previous.id,
                     sessionID: input.sessionID,
                     error: errorData(error),
-                  }),
-                ),
+                  })
+                }),
               )
             } else {
               yield* prompt.cancel(input.sessionID)
@@ -605,6 +674,7 @@ const layer = Layer.effect(
           }
         }
 
+        yield* requireTransfer(input.sessionID)
         const sourcePatch =
           input.copyChanges && current?.workspaceID
             ? yield* runInWorkspace({
@@ -657,19 +727,7 @@ const layer = Layer.effect(
           return
         }
 
-        const rows = yield* db
-          .select({
-            id: EventTable.id,
-            aggregateID: EventTable.aggregate_id,
-            seq: EventTable.seq,
-            type: EventTable.type,
-            data: EventTable.data,
-          })
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, input.sessionID))
-          .orderBy(asc(EventTable.seq))
-          .all()
-          .pipe(Effect.orDie)
+        const rows = yield* history(input.sessionID)
         if (rows.length === 0)
           return yield* new SessionEventsNotFoundError({
             message: `No events found for session: ${input.sessionID}`,
@@ -684,6 +742,9 @@ const layer = Layer.effect(
           batches,
           (events, i) =>
             Effect.gen(function* () {
+              yield* requireTransfer(input.sessionID)
+              // A root fenced during the warp, or a remote source's history read since, is checked batch by batch.
+              yield* requireShareable(input.sessionID, events)
               const response = yield* http.execute(
                 HttpClientRequest.post(route(target.url, "/sync/replay"), {
                   headers: new Headers(target.headers),
@@ -708,13 +769,11 @@ const layer = Layer.effect(
           { discard: true },
         )
 
-        // The remote engine keeps its own guest marks, so a session an invited guest worked in here says so, and stays
-        // off may-train free models there too (FreeModelGuests).
-        const stealHeaders = new Headers(target.headers)
-        if (yield* guests.marked(input.sessionID)) stealHeaders.set(GUEST_REQUEST_HEADER, "1")
+        // A conversation with guest input never moves (requireTransfer), so the steal carries no guest marker.
+        yield* requireTransfer(input.sessionID)
         const response = yield* http.execute(
           HttpClientRequest.post(route(target.url, "/sync/steal"), {
-            headers: stealHeaders,
+            headers: new Headers(target.headers),
             body: HttpBody.jsonUnsafe({ sessionID: input.sessionID }),
           }),
         )
@@ -1006,7 +1065,7 @@ export const node = LayerNode.make({
     RuntimeFlags.node,
     FSUtil.node,
     Database.node,
-    FreeModelGuests.node,
+    SessionAudience.node,
   ],
 })
 

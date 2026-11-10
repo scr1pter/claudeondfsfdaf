@@ -1,0 +1,40 @@
+{
+  "repository": "scr1pter/vector-model-catalog",
+  "revision": "06e1cdd7b981c006291b938ad94f4dd6e40f61bd",
+  "path": "vector/api.json",
+  "sourceSha256": "850dd7f9ea8b55752d421c7582c9e137a55a9fbe936f66711f3039cbb3446c99",
+  "sha256": "784309673addec6790370607fa73cdeb6d7cede19a2406b7c39d20de2183aaf3",
+  "sourceRevision": "d6c7d3eee3fd72ac8301574a9c9df12acb6d2e50",
+  "reviewedApplicationSnapshot": "bb2971e0bc10a43cc9b50f47950e48d4286cf92a",
+  "reviewedAt": "2026-10-23",
+  "preparedAt": "2026-10-28",
+  "sourceBytes": 5313020,
+  "sourceProviders": 226,
+  "sourceModels": 8387,
+  "preparedBytes": 5185951,
+  "preparedProviders": 219,
+  "preparedModels": 8188,
+  "restoredModels": [
+    "anthropic/claude-haiku-5.5",
+    "deepseek/deepseek-v4.1-flash-1017",
+    "google/gemini-4-argon",
+    "moonshotai/kimi-k3.1-pro"
+  ],
+  "validation": {
+    "forkValidate": "passed",
+    "identicalForkWebBuilds": 2,
+    "existingRecordsUnchanged": true,
+    "webCatalogTests": {
+      "passed": 26,
+      "failed": 0,
+      "assertions": 100
+    }
+  },
+  "published": false,
+  "actionsVariablesVerified": false,
+  "mergedToMain": "2026-11-04",
+  "replacedMirrorSha256": "a96b465110dd2fcc38e0dcca1a4115e12ea43ddaafdb0ebf587e15026767bf14",
+  "releaseVariableRequired": {
+    "VECTOR_CATALOG_FORK_REVISION": "06e1cdd7b981c006291b938ad94f4dd6e40f61bd"
+  }
+}

@@ -7,7 +7,7 @@ export const prerender = true
   eyebrow="Terms"
   title="Terms of Service"
   description="The agreement for Vector accounts, software, and connected services."
-  updated="October 17, 2026"
+  updated="October 28, 2026"
 >
   <section>
     <h2>1. This agreement</h2>
@@ -136,6 +136,18 @@ export const prerender = true
       your first prompt to one. Vector leaves out free models whose terms bar this use, such as NVIDIA's trial
       endpoints. Vector itself never trains on your prompts.
     </p>
+    <p id="codium-data">
+      Vector Codium requests go from Vector through Vector's gateway and OpenRouter to the provider serving the model
+      you choose. Each request asks OpenRouter to use only endpoints it records as zero data retention that do not
+      collect request data. This is a routing restriction that relies on OpenRouter's classification and each
+      provider's published policy; it is not a guarantee by Vector or an independent audit, and Vector does not
+      control what OpenRouter or a provider does with a request. Zero data retention has exceptions: OpenRouter
+      screens requests for child sexual abuse material and may keep and report flagged content as the law requires,
+      providers may hold part of a request in a short-lived prompt cache or for their own automated safety checks,
+      and OpenRouter keeps request metadata such as token counts. If no qualifying endpoint is available, the request
+      fails rather than going to an endpoint that keeps data. The <a href="/legal/privacy#codium">Privacy Policy</a>
+      describes these details.
+    </p>
   </section>
 
   <section>
@@ -165,7 +177,9 @@ export const prerender = true
     <p>
       Do not use Vector to violate law or another person's rights; access systems without authorization;
       distribute malware; commit fraud; harass or exploit others; steal credentials or confidential material;
-      evade security or usage controls; or disrupt our services or connected providers. Do not share CLI tokens
+      evade security or usage controls; or disrupt our services or connected providers. Model services, including
+      OpenRouter, screen requests for child sexual abuse material and may report it to the authorities as the law
+      requires. Do not share CLI tokens
       or account credentials, or misrepresent another person's identity or your authority. Software restrictions remain
       subject to applicable law and the rights granted by third-party open-source licenses.
     </p>

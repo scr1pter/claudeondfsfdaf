@@ -1,7 +1,8 @@
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "@vectordevai/ui/context"
-import { batch, createEffect, createMemo, createRoot, on, onCleanup } from "solid-js"
+import { batch, createEffect, createMemo, createRoot, createSignal, on, onCleanup } from "solid-js"
 import { useParams } from "@solidjs/router"
+import type { Pty } from "@vectordevai/schema/pty"
 import { useSDK, type DirectorySDK } from "./sdk"
 import type { Platform } from "./platform"
 import { useServerSDK } from "./server-sdk"
@@ -19,7 +20,19 @@ export type LocalPTY = {
   buffer?: string
   scrollY?: number
   cursor?: number
+  /** Set for a terminal an agent opened: the agent's session. */
+  agent?: string
+  /** An agent's terminal whose process ended: kept, read-only, until the user closes it. */
+  exitCode?: number
+  /**
+   * An agent's terminal whose PTY went without an exit, which an engine restart or a global reload does: kept,
+   * read-only and marked as ended, until the user closes it.
+   */
+  gone?: true
 }
+
+/** An agent's request to bring a tab to the front. `at` tells two reveals of the same tab apart. */
+export type TerminalReveal = { id: string; focus: boolean; at: number }
 
 /** A command to run in a new terminal tab, in the shape desktop prepares it (ExternalAgent.TerminalLaunch). */
 export type TerminalCommand = {
@@ -62,6 +75,9 @@ function pty(value: unknown): LocalPTY | undefined {
   const buffer = text(value.buffer)
   const scrollY = num(value.scrollY)
   const cursor = num(value.cursor)
+  const agent = text(value.agent)
+  const exitCode = num(value.exitCode)
+  const gone = value.gone === true
 
   return {
     id,
@@ -72,6 +88,9 @@ function pty(value: unknown): LocalPTY | undefined {
     ...(buffer !== undefined ? { buffer } : {}),
     ...(scrollY !== undefined ? { scrollY } : {}),
     ...(cursor !== undefined ? { cursor } : {}),
+    ...(agent !== undefined ? { agent } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(gone ? { gone: true as const } : {}),
   }
 }
 
@@ -152,7 +171,7 @@ export function clearWorkspaceTerminals(
   }
 }
 
-function createWorkspaceTerminalSession(
+export function createWorkspaceTerminalSession(
   sdk: DirectorySDK,
   dir: string,
   scope: ServerScopeValue,
@@ -191,7 +210,9 @@ function createWorkspaceTerminalSession(
     )
   }
 
-  const removeExited = (id: string) => {
+  const [revealed, setRevealed] = createSignal<TerminalReveal>()
+
+  const removeTab = (id: string) => {
     const all = store.all
     const index = all.findIndex((x) => x.id === id)
     if (index === -1) return
@@ -207,10 +228,87 @@ function createWorkspaceTerminalSession(
     })
   }
 
-  const unsub = sdk.event.on("pty.exited", (event: { properties: { id: string } }) => {
-    removeExited(event.properties.id)
-  })
-  onCleanup(unsub)
+  // An agent's terminal joins the tabs without taking the active one from the user. A tab already shown only learns
+  // that its process ended, which happens when it ended while the app was closed.
+  const adopt = (info: typeof Pty.Info.Encoded) => {
+    if (info.owner?.kind !== "agent") return
+    const exitCode = info.status === "exited" ? (info.exitCode ?? 0) : undefined
+    const index = store.all.findIndex((pty) => pty.id === info.id)
+    if (index !== -1) {
+      if (exitCode !== undefined && store.all[index]?.agent !== undefined) setStore("all", index, "exitCode", exitCode)
+      return
+    }
+    setStore("all", store.all.length, {
+      id: info.id,
+      title: info.title,
+      titleNumber: pickNextTerminalNumber(),
+      agent: info.owner.sessionID,
+      ...(exitCode !== undefined ? { exitCode } : {}),
+    })
+    if (!store.active) setStore("active", info.id)
+  }
+
+  const unsubs = [
+    sdk.event.on("pty.created", (event: { properties: { info: typeof Pty.Info.Encoded } }) => {
+      // A write before the stored tabs load would keep them from loading. The list below picks this one up instead.
+      if (!ready()) return
+      adopt(event.properties.info)
+    }),
+    sdk.event.on("pty.updated", (event: { properties: { info: typeof Pty.Info.Encoded } }) => {
+      const index = store.all.findIndex((pty) => pty.id === event.properties.info.id)
+      if (index === -1 || store.all[index]?.title === event.properties.info.title) return
+      setStore("all", index, "title", event.properties.info.title)
+    }),
+    sdk.event.on("pty.exited", (event: { properties: typeof Pty.Event.Exited.data.Encoded }) => {
+      const index = store.all.findIndex((pty) => pty.id === event.properties.id)
+      if (index === -1) return
+      if (store.all[index]?.agent === undefined) {
+        removeTab(event.properties.id)
+        return
+      }
+      setStore("all", index, "exitCode", event.properties.exitCode)
+    }),
+    sdk.event.on("pty.deleted", (event: { properties: typeof Pty.Event.Deleted.data.Encoded }) => {
+      removeTab(event.properties.id)
+    }),
+    sdk.event.on("pty.revealed", (event: { properties: typeof Pty.Event.Revealed.data.Encoded }) => {
+      if (!store.all.some((pty) => pty.id === event.properties.id)) return
+      batch(() => {
+        setStore("active", event.properties.id)
+        setRevealed({ id: event.properties.id, focus: event.properties.focus, at: Date.now() })
+      })
+    }),
+  ]
+  onCleanup(() => unsubs.forEach((unsub) => unsub()))
+
+  // The server's terminals against the stored tabs: agent terminals opened while the app was closed join, and a stored
+  // agent tab whose PTY the server no longer has is marked gone. Core ends PTYs without an exit or a deletion when the
+  // engine restarts or a global reload disposes their location. Only tabs stored before the list was asked for are
+  // judged by it: one an event adds meanwhile is newer than the list.
+  const reconcile = () => {
+    // A write before the stored tabs load would keep them from loading; the list after they load covers this one.
+    if (!ready()) return Promise.resolve()
+    const before = new Set(store.all.map((pty) => pty.id))
+    return sdk.client.pty
+      .list()
+      .then((result) => {
+        // Only a list says which terminals the server has. Any other answer says nothing, so no tab is judged by it.
+        const list = Array.isArray(result.data) ? result.data : undefined
+        if (!list) return
+        list.forEach(adopt)
+        const live = new Set(list.map((info) => info.id))
+        store.all.forEach((pty, index) => {
+          if (pty.agent === undefined || pty.exitCode !== undefined || pty.gone) return
+          if (live.has(pty.id) || !before.has(pty.id)) return
+          setStore("all", index, "gone", true)
+        })
+      })
+      .catch((error: unknown) => {
+        console.error("Failed to list terminals", error)
+      })
+  }
+
+  void Promise.resolve(ready.promise).then(reconcile)
 
   const update = (client: DirectorySDK["client"], pty: Partial<LocalPTY> & { id: string }) => {
     const index = store.all.findIndex((x) => x.id === pty.id)
@@ -270,6 +368,10 @@ function createWorkspaceTerminalSession(
     ready,
     all: createMemo(() => store.all),
     active: createMemo(() => store.active),
+    /** The tab an agent last asked to bring to the front. Not persisted: a reveal matters only while it is new. */
+    revealed,
+    /** Checks the stored agent tabs against the server's terminals again: after a reload, a reconnect, a failed connect. */
+    reconcile,
     clear() {
       batch(() => {
         setStore("active", undefined)
@@ -297,7 +399,8 @@ function createWorkspaceTerminalSession(
         })
     },
     /** Opens a prepared command (an install, a sign-in or an agent's own screen, from desktop) as a new tab and makes
-        it the active one, so whatever it asks for is visible. `onExit` fires once, when that process ends. */
+        it the active one, so whatever it asks for is visible. `onExit` fires once, when that process ends or its tab
+        is closed. */
     async run(command: TerminalCommand, onExit?: (exitCode: number) => void) {
       const titleNumber = pickNextTerminalNumber()
       const created = await sdk.client.pty
@@ -316,11 +419,20 @@ function createWorkspaceTerminalSession(
       if (!info?.id) return undefined
       const id = info.id
       if (onExit) {
-        const stop = sdk.event.on("pty.exited", (event: { properties: { id: string; exitCode?: number } }) => {
-          if (event.properties.id !== id) return
-          stop()
-          onExit(event.properties.exitCode ?? 0)
-        })
+        const end = (exitCode: number) => {
+          stops.forEach((stop) => stop())
+          onExit(exitCode)
+        }
+        const stops = [
+          sdk.event.on("pty.exited", (event: { properties: typeof Pty.Event.Exited.data.Encoded }) => {
+            if (event.properties.id === id) end(event.properties.exitCode)
+          }),
+          // Closing the tab deletes the PTY and publishes no exit, so the deletion ends the command: as a failure,
+          // since it never finished.
+          sdk.event.on("pty.deleted", (event: { properties: typeof Pty.Event.Deleted.data.Encoded }) => {
+            if (event.properties.id === id) end(1)
+          }),
+        ]
       }
       setStore("all", store.all.length, { id, title: info.title ?? command.title, titleNumber })
       setStore("active", id)
@@ -464,6 +576,16 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
 
     const workspace = createMemo(() => loadWorkspace(directory(), params.id, scope()))
 
+    // A global reload (a provider key changed) or a reconnect after the engine restarted can end agent terminals with
+    // no event for them: each workspace's agent tabs are checked against the server's terminals again.
+    createEffect(() => {
+      const unsub = serverSDK().event.on("global", (event) => {
+        if (event.type !== "global.disposed" && event.type !== "server.connected") return
+        for (const entry of cache.values()) void entry.value.reconcile()
+      })
+      onCleanup(unsub)
+    })
+
     createEffect(
       on(
         () => ({ dir: directory(), id: params.id, scope: scope() }),
@@ -481,6 +603,7 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
       ready: () => workspace().ready(),
       all: () => workspace().all(),
       active: () => workspace().active(),
+      revealed: () => workspace().revealed(),
       new: () => workspace().new(),
       run: (command: TerminalCommand, onExit?: (exitCode: number) => void) => workspace().run(command, onExit),
       update: (pty: Partial<LocalPTY> & { id: string }) => workspace().update(pty),

@@ -5,7 +5,8 @@ import { createServer } from "node:http"
 import { Schema } from "effect"
 import { Teams } from "../../schema/src/teams"
 import { createTeamsApi } from "../../../api/_lib/teams"
-import { mintCliToken } from "../../../api/_lib/cli-token"
+import { mintCliToken, verifyCliTokenClaims } from "../../../api/_lib/cli-token"
+import { revokeCliToken } from "../../../api/_lib/revocation"
 
 integrationTests()
 
@@ -273,6 +274,22 @@ function integrationTests() {
     expect(response.status).toBe(401)
     expect(captured).toHaveLength(1)
     expect(await response.json()).toMatchObject({ error: { code: "CLI_TOKEN_INVALID" } })
+  })
+
+  test("one revoked CLI grant cannot load signed policy while its sibling remains authorized", async () => {
+    const user = { id: state.account, email: "fixture@example.test" }
+    const token = mintCliToken(user, Date.now(), "cli").token
+    const sibling = mintCliToken(user, Date.now(), "cli").token
+    const claims = verifyCliTokenClaims(token)
+    redisKeys.add(`vector:cli-revoked:${claims.id}:token:${claims.jti}`)
+    expect((await signed(await send(`/api/org/config?org=${state.org}`, token), token)).account.id).toBe(state.account)
+    await revokeCliToken(claims.id, claims.jti!, claims.expiresAt)
+    captured.length = 0
+    expect((await send(`/api/org/config?org=${state.org}`, token)).status).toBe(401)
+    expect(captured).toEqual([])
+    expect((await signed(await send(`/api/org/config?org=${state.org}`, sibling), sibling)).account.id).toBe(
+      state.account,
+    )
   })
 
   test("configuration revisions advance atomically under parallel writes and cannot be rolled back by caller fields", async () => {

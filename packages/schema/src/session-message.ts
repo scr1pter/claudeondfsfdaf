@@ -2,6 +2,7 @@ export * as SessionMessage from "./session-message"
 
 import { Schema } from "effect"
 import { optional } from "./schema"
+import { Billing } from "./billing"
 import { ProviderMetadata, ToolContent } from "./llm"
 import { Model } from "./model"
 import { FileAttachment, Prompt } from "./prompt"
@@ -28,6 +29,8 @@ export const CodiumError = Schema.Struct({
   type: Schema.Literal("codium"),
   action: Schema.Literals(["credits", "sign-in", "unavailable"]),
   message: Schema.String,
+  // The gateway's code (§4.10), for a finer answer than the action, such as a daily limit that offers no purchase.
+  code: Schema.String.pipe(optional),
 }).annotate({ identifier: "Session.Error.Codium" })
 
 export const AssistantError = Schema.Union([UnknownError, FreeModelLimit, CodiumError]).annotate({
@@ -192,6 +195,8 @@ export const Assistant = Schema.Struct({
   cost: Schema.Finite.pipe(optional),
   // The model lists no price, so cost is 0 because nothing could be charged, not because the step was free.
   unpriced: Schema.Boolean.pipe(optional),
+  // The message ran on Vector Codium: its usage shows as "Codium", never as tokens or dollars.
+  billing: Billing.Kind.pipe(optional),
   tokens: Schema.Struct({
     input: Schema.Finite,
     output: Schema.Finite,
@@ -214,6 +219,8 @@ export const Compaction = Schema.Struct({
   // What the summary request cost, so session totals can count it and a revert past it can take it back out.
   cost: Assistant.fields.cost,
   unpriced: Assistant.fields.unpriced,
+  // A compaction row names no model, so this flag is the only sign its summary request ran on Vector Codium.
+  billing: Assistant.fields.billing,
   tokens: Assistant.fields.tokens,
   ...Base,
 }).annotate({ identifier: "Session.Message.Compaction" })

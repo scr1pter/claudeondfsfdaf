@@ -1,12 +1,13 @@
-import { safeStorage, shell } from "electron"
+import { shell } from "electron"
 
 import { getStore, removeStoreFileIfEmpty } from "./store"
+import { vaultSecrets } from "./vault-secrets"
 
 // GitHub OAuth Device Flow: sign in to GitHub from Vector without the gh CLI.
 // Device flow needs ONLY a public OAuth client ID — never a client secret — so
-// it is safe to ship inside a desktop binary. The resulting token is encrypted
-// with Electron's safeStorage (Keychain / DPAPI / libsecret) before it touches
-// disk, and it is never logged.
+// it is safe to ship inside a desktop binary. The resulting token is sealed
+// with Vector's credential vault (protected by Keychain / DPAPI / libsecret)
+// before it touches disk, and it is never logged.
 
 // Paste your GitHub OAuth App client ID here (Settings → Developer settings →
 // OAuth Apps, with "Enable Device Flow" checked) to bake it into the build.
@@ -15,45 +16,12 @@ const GITHUB_CLIENT_ID = (process.env.VECTOR_GITHUB_CLIENT_ID?.trim() ?? "") || 
 
 const AUTH_STORE = "github-auth"
 const TOKEN_KEY = "token"
+const TOKEN_PURPOSE = "github-token"
 const LOGIN_KEY = "login"
 const AVATAR_KEY = "avatarUrl"
 
 const SECURE_STORAGE_ERROR = "Vector can't store the GitHub token securely on this system."
 const NETWORK_ERROR = "Couldn't reach GitHub. Check your internet connection and try again."
-
-async function canStoreTokenSecurely() {
-  try {
-    if (await safeStorage.isAsyncEncryptionAvailable()) return true
-  } catch {
-    // Some older platform backends only expose the synchronous provider.
-  }
-  return safeStorage.isEncryptionAvailable()
-}
-
-async function encryptToken(token: string) {
-  try {
-    if (await safeStorage.isAsyncEncryptionAvailable()) {
-      return (await safeStorage.encryptStringAsync(token)).toString("base64")
-    }
-  } catch {
-    // Fall through to the established synchronous provider when available.
-  }
-  if (!safeStorage.isEncryptionAvailable()) throw new Error(SECURE_STORAGE_ERROR)
-  return safeStorage.encryptString(token).toString("base64")
-}
-
-async function decryptToken(raw: string) {
-  const encrypted = Buffer.from(raw, "base64")
-  try {
-    if (await safeStorage.isAsyncEncryptionAvailable()) {
-      return (await safeStorage.decryptStringAsync(encrypted)).result
-    }
-  } catch {
-    // Existing tokens may have been written by the synchronous provider.
-  }
-  if (!safeStorage.isEncryptionAvailable()) return
-  return safeStorage.decryptString(encrypted)
-}
 
 export type GithubAuthStatus = {
   configured: boolean
@@ -115,7 +83,7 @@ export async function startDeviceLogin(input?: { workflow?: boolean }): Promise<
     throw new Error("GitHub sign-in isn't configured in this build of Vector.")
   }
   // Fail before the user does the whole verification dance, not after.
-  if (!(await canStoreTokenSecurely())) throw new Error(SECURE_STORAGE_ERROR)
+  if (!vaultSecrets.available()) throw new Error(SECURE_STORAGE_ERROR)
   // Restarting sign-in drops any stale flow so an old poll loop can't race us.
   cancelDeviceLogin()
 
@@ -231,10 +199,9 @@ async function finishLogin(token: string): Promise<GithubDeviceLoginResult> {
   const res = await fetch("https://api.github.com/user", { headers: apiHeaders(token) }).catch(() => undefined)
   if (!res?.ok) return { ok: false, error: "Signed in, but couldn't load your GitHub profile. Try again." }
   const user = (await res.json().catch(() => undefined)) as { login?: string; avatar_url?: string } | undefined
+  if (!vaultSecrets.available()) return { ok: false, error: SECURE_STORAGE_ERROR }
   const store = getStore(AUTH_STORE)
-  const encrypted = await encryptToken(token).catch(() => undefined)
-  if (!encrypted) return { ok: false, error: SECURE_STORAGE_ERROR }
-  store.set(TOKEN_KEY, encrypted)
+  store.set(TOKEN_KEY, vaultSecrets.seal(token, TOKEN_PURPOSE))
   if (user?.login) store.set(LOGIN_KEY, user.login)
   if (user?.avatar_url) store.set(AVATAR_KEY, user.avatar_url)
   return { ok: true, login: user?.login }
@@ -243,15 +210,18 @@ async function finishLogin(token: string): Promise<GithubDeviceLoginResult> {
 // ---- Token storage --------------------------------------------------------
 
 export async function getGithubToken(): Promise<string | undefined> {
-  const raw = getStore(AUTH_STORE).get(TOKEN_KEY)
-  if (typeof raw !== "string" || !raw) return
-  try {
-    return await decryptToken(raw)
-  } catch {
-    // The OS key changed (or the blob is corrupt) — the token is unrecoverable.
+  const store = getStore(AUTH_STORE)
+  const raw = store.get(TOKEN_KEY)
+  if (typeof raw !== "string" || !raw || !vaultSecrets.available()) return
+  const opened = await vaultSecrets.open(raw, TOKEN_PURPOSE).catch(() => undefined)
+  if (!opened) {
+    // The vault key changed (or the blob is corrupt) — the token is unrecoverable.
     logoutGithub()
     return
   }
+  // Unless the person signed out or in again meanwhile, an earlier release's token moves into the vault.
+  if (opened.resealed && store.get(TOKEN_KEY) === raw) store.set(TOKEN_KEY, opened.resealed)
+  return opened.text
 }
 
 export function logoutGithub(): void {

@@ -1,0 +1,14 @@
+export type Actor = {id: string; name: string; role: 'admin' | 'operator' | 'viewer'};
+export type Project = {id: string; name: string; slug: string; description: string; createdAt: string; updatedAt: string};
+export type Environment = {id: string; projectId: string; name: string; protected: boolean; activeReleaseId: string | null};
+export type Step = {key: string; name: string; kind: 'check' | 'build' | 'deploy'; dependsOn: string[]; durationMs: number; failureMode: 'never' | 'once' | 'always'};
+export type Runbook = {id: string; projectId: string; name: string; description: string; version: number; steps: Step[]; createdAt: string; updatedAt: string};
+export type Approval = {actorId: string; decision: string; comment: string; createdAt: string; revision: number};
+export type Release = {id: string; projectId: string; environmentId: string; title: string; versionLabel: string; notes: string; authorId: string; status: string; revision: number; runbookId: string | null; runbookVersion: number | null; steps: Step[]; approvals: Approval[]; createdAt: string; updatedAt: string; submittedAt: string | null; startedAt: string | null; finishedAt: string | null; previousReleaseId: string | null};
+export type Job = {id: string; releaseId: string; stepKey: string; name: string; kind: string; dependsOn: string[]; status: string; attempts: number; recoveryCount: number; startedAt: string | null; finishedAt: string | null; error: string | null};
+export type Artifact = {id: string; jobId: string; releaseId: string; name: string; size: number; sha256: string; createdAt: string};
+export type Log = {id: string; jobId: string; sequence: number; event: string; message: string; createdAt: string};
+export type Incident = {id: string; projectId: string; environmentId: string; releaseId: string | null; title: string; severity: string; status: string; summary: string; resolution: string; version: number; createdBy: string; createdAt: string; updatedAt: string; resolvedAt: string | null};
+export type Timeline = {id: string; type: string; actorId: string; message: string; createdAt: string};
+export type AuditEvent = {id: string; sequence: number; projectId: string | null; actorId: string; type: string; entityId: string; details: Record<string, unknown>; createdAt: string};
+export type Dashboard = {counts: {projects: number; environments: number; activeReleases: number; runningJobs: number; openIncidents: number; failedReleases: number}; recentEvents: AuditEvent[]};

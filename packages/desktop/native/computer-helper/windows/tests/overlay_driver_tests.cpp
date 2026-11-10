@@ -48,7 +48,7 @@ size_t run_overlay_driver_tests() {
     }
   });
   test([] {
-    for (const auto extra : {L"--stdio", L"--target=C:\\other.exe", L"--script=other.js", L"--no-sandbox", L"--report=private.txt"}) {
+    for (const auto extra : {L"--stdio", L"--target=C:\\other.exe", L"--script=other.js", L"--no-sandbox", L"--report=private.txt", L"--force-renderer-accessibility", L"--disable-renderer-accessibility"}) {
       auto arguments = stop_options(); arguments.push_back(extra); require(!parse_overlay_driver_options(arguments), "overlay-driver.no-arbitrary-stop-command-argument");
       const std::vector<std::wstring> bootstrap{L"--launch-electron", L"--nonce", std::wstring(64, L'a'), extra}; require(!parse_overlay_driver_options(bootstrap), "overlay-driver.no-arbitrary-electron-argument");
     }

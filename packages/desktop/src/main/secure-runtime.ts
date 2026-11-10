@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { app, safeStorage } from "electron"
+import { vaultSecrets } from "./vault-secrets"
 
 const KEY_DIRECTORY = "secure-runtime"
 const KEY_FILE = "credential-key.v1"
@@ -44,6 +45,8 @@ export async function setupSecureRuntimeSecrets() {
   process.env.VECTOR_CREDENTIAL_KEY = key.toString("base64")
   process.env.VECTOR_MCP_AUTH_KEY = key.toString("base64")
   if (secure) process.env.VECTOR_REQUIRE_SECURE_CREDENTIAL_STORE = "1"
+  // This launch's one read of the OS credential store is behind us: every sign-in after this is sealed in memory.
+  vaultSecrets.setKey(secure ? key : undefined)
 }
 
 function secureStorageAvailable() {

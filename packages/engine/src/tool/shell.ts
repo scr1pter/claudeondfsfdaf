@@ -1,4 +1,4 @@
-import { Effect, Exit, Fiber, Stream } from "effect"
+import { Effect, Exit, Fiber, Option, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
@@ -13,10 +13,15 @@ import { fileURLToPath } from "url"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Shell } from "@vectordevai/core/shell"
-import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
+import { AGENT_MARKER, untrustedChildEnvironment } from "@vectordevai/core/child-environment"
 import { ShellID } from "./shell/id"
 import { Sandbox } from "./shell/sandbox"
 import { CloudCli } from "./shell/cloud-cli"
+import { GitMutation } from "./shell/git-mutation"
+import { TaskClaims } from "@/task/claims"
+import { ShellJobs } from "@/task/shells"
+import type { TaskPromptOps } from "./task"
+import { FileLock } from "./file-lock"
 import { UNREAD } from "./shell/unread"
 
 import * as Truncate from "./truncate"
@@ -27,6 +32,7 @@ import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
+import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { LocalCommand } from "@vectordevai/core/local-mode/command"
 import { ComputerCommand } from "@vectordevai/core/util/computer-command"
 import { Hands } from "@vectordevai/schema/hands"
@@ -77,6 +83,7 @@ const PS_ALIASES = new Map([
   ["rd", "remove-item"],
   ["ren", "rename-item"],
   ["ri", "remove-item"],
+  ["rm", "remove-item"],
   ["rmdir", "remove-item"],
   ["rni", "rename-item"],
   ["sc", "set-content"],
@@ -116,10 +123,19 @@ type Scan = {
   patterns: Set<string>
   always: Set<string>
   writes: Set<string>
+  /** Resolved ownership targets; permission patterns above retain their existing spelling. */
+  written: Set<string>
+  mutates: Set<string>
+  recursive: Set<string>
+  git: GitMutation.Result[]
   /** Files a command reads that the read tool's rules apply to, relative to the worktree. */
   reads: Set<string>
   /** Vercel and Supabase CLI calls that act on a cloud account, by permission pattern. */
   cloud: Map<string, CloudCli.Request & { command: string }>
+  /** Every git invocation the scan recognizes, read-only ones included, for the guest Git guard. */
+  gitReads: { cwd: string; args: string[]; env: Record<string, string> }[]
+  /** Rechecked after asynchronous setup and immediately before this line may execute. */
+  beforeRun?: Effect.Effect<void>
 }
 
 type Chunk = {
@@ -258,7 +274,8 @@ function hiddenSubstitution(root: Node, zsh: boolean) {
     opened.add(start + node.text.length - 1)
     backticks.push([start, start + node.text.length])
   }
-  const within = (ranges: [number, number][], index: number) => ranges.some(([start, end]) => index >= start && index < end)
+  const within = (ranges: [number, number][], index: number) =>
+    ranges.some(([start, end]) => index >= start && index < end)
   // zsh runs code through syntax the bash grammar does not model: parameter flags (`${(e)X}`) and glob qualifiers
   // (`*(e:...:)`, `*(+fn)`). Outside quotes, a parenthesised group stuck to a word is read as one; inside double
   // quotes only the flags are live.
@@ -475,6 +492,40 @@ function shellWord(arg: string, cwd: string, ps: boolean, shell: string) {
   return home(bashWord(arg))
 }
 
+// A word a command writes to, read as shellWord reads it, except that bash and zsh also expand a leading $HOME or
+// $XDG_CONFIG_HOME (see posixHome).
+function targetWord(arg: string, cwd: string, ps: boolean, shell: string) {
+  if (ps || Shell.name(shell) === "cmd") return shellWord(arg, cwd, ps, shell)
+  return home(posixHome(arg, bashWord(arg)))
+}
+
+// Whether a command removes or overrides the agent marker: it names the marker at all (`unset`, `env -u`, an assignment,
+// PowerShell's `Env:`), or starts a program with an emptied environment (`env -i`, `env -`, bash's `exec -c`,
+// PowerShell's `-UseNewEnvironment`).
+export function dropsMarker(command: string) {
+  return (
+    command.includes(AGENT_MARKER) ||
+    /(?:^|[\s;&|(`/])env(?:\s+-\S*)*?\s+(?:-[A-Za-z]*i[A-Za-z]*|--ignore-environment|-)(?=\s|$)/.test(command) ||
+    /(?:^|[\s;&|(`])exec(?:\s+-\S*)*?\s+-[A-Za-z]*c[A-Za-z]*(?=\s|$)/.test(command) ||
+    /-UseNewEnvironment\b/i.test(command)
+  )
+}
+
+// bash and zsh expand a word that starts with `$HOME`, `${HOME}`, `$XDG_CONFIG_HOME` or `${XDG_CONFIG_HOME}`, bare or
+// in double quotes, before the program sees it: the commonest spelling of a global prompt file
+// (`cp x $HOME/.config/vector/AGENTS.md`), which the scan would otherwise ask for as written, inside the worktree. The
+// shell Vector starts inherits this process's environment. Single quotes and a backslash keep the text as written.
+// Only write targets are read this way (section 8.2), so the edit rules and the prompt guard see the file a write lands
+// on. Reads, git diff paths and input redirects keep `$HOME` unknown, as the shell decides where it points, so the
+// read-only agents still refuse them.
+function posixHome(raw: string, word: string) {
+  if (!/^"?\$\{?(?:HOME|XDG_CONFIG_HOME)\b/.test(raw)) return word
+  return word.replace(/^\$(?:\{(HOME|XDG_CONFIG_HOME)\}|(HOME|XDG_CONFIG_HOME))(?=$|\/)/, (match, braced, bare) => {
+    if ((braced ?? bare) === "HOME") return os.homedir()
+    return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config")
+  })
+}
+
 // A word split into its folder and the name of the file it opens. Windows opens a name whatever its case and without its
 // trailing spaces and dots: `.ENV` and `'.env '` are `.env`. NTFS ends a file name at its first colon: `.env::$DATA` is
 // the file's own content and `.env:notes` one of its alternate streams. A colon inside an expansion (`%X:~0,0%`) is not
@@ -581,6 +632,313 @@ function pathArgs(list: Part[], ps: boolean, cmd = false) {
     out.push(item.text)
   }
   return out
+}
+
+// Options of cp, mv, install and ln whose value is the next word.
+const VALUED = new Set(["-t", "--target-directory", "-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix"])
+
+type Write = { target: string; sources: string[]; folder: boolean }
+// The commands writes() reads.
+const WRITERS = new Set(["cp", "mv", "install", "ln", "tee", "sed", "dd"])
+
+// The files a bash command writes by name rather than through a redirect (section 8.2), best effort: the last operand of
+// cp, mv, install and ln, or the folder -t names, every file of tee and of sed -i, and dd's of=. Interpreters, git
+// apply and patch write files this does not see. PowerShell's and cmd's forms of these are psWrites and cmdWrites.
+function writes(cmd: string, words: readonly string[]): Write[] {
+  const file = (target: string) => ({ target, sources: [], folder: false })
+  if (cmd === "dd") return words.flatMap((word) => (word.startsWith("of=") ? [file(word.slice(3))] : []))
+  if (cmd === "tee") return words.filter((word) => !word.startsWith("-")).map(file)
+  if (cmd === "sed") return edited(words).map(file)
+  if (!["cp", "mv", "install", "ln"].includes(cmd)) return []
+  // `install -d` only makes folders.
+  if (cmd === "install" && words.some((word) => /^-[A-Za-z]*d/.test(word) || word === "--directory")) return []
+  const operands = words.filter((word, index) => !word.startsWith("-") && !VALUED.has(words[index - 1] ?? ""))
+  const named = words.findIndex((word) => word === "-t" || word === "--target-directory")
+  const folder =
+    words.find((word) => word.startsWith("--target-directory="))?.slice("--target-directory=".length) ??
+    (named === -1 ? undefined : words[named + 1])
+  if (folder) return [{ target: folder, sources: operands, folder: true }]
+  if (operands.length < 2) return []
+  return [{ target: operands[operands.length - 1], sources: operands.slice(0, -1), folder: false }]
+}
+
+// The files `sed -i` edits in place: every operand but the script, which is the first one unless -e or -f gave it.
+// BSD sed takes the backup suffix of a bare -i as the next word, often ''.
+function edited(words: readonly string[]) {
+  if (!words.some((word) => /^-[A-Za-z]*i/.test(word) || word.startsWith("--in-place"))) return []
+  const scripts = (word: string | undefined) =>
+    !!word && (/^-[A-Za-z]*[ef]$/.test(word) || /^--(expression|file)$/.test(word))
+  const operands = words.filter(
+    (word, index) =>
+      !word.startsWith("-") && !scripts(words[index - 1]) && !(words[index - 1] === "-i" && bashWord(word) === ""),
+  )
+  const scripted = words.some((word) => scripts(word) || /^--(expression|file)=/.test(word))
+  return scripted ? operands : operands.slice(1)
+}
+
+// PowerShell's common parameters, which every cmdlet takes.
+const PS_COMMON = [
+  "-verbose",
+  "-debug",
+  "-erroraction",
+  "-warningaction",
+  "-informationaction",
+  "-progressaction",
+  "-errorvariable",
+  "-warningvariable",
+  "-informationvariable",
+  "-outvariable",
+  "-outbuffer",
+  "-pipelinevariable",
+]
+// The switches among the parameters below, which take a value only after a colon (`-Recurse:$false`).
+const PS_SWITCHES = new Set([
+  "-verbose",
+  "-debug",
+  "-container",
+  "-force",
+  "-recurse",
+  "-passthru",
+  "-whatif",
+  "-confirm",
+  "-append",
+])
+// The aliases PowerShell gives these parameters.
+const PS_PARAMETER_ALIASES = new Map([
+  ["-lp", "-literalpath"],
+  ["-pspath", "-literalpath"],
+  ["-ea", "-erroraction"],
+  ["-wa", "-warningaction"],
+  ["-infa", "-informationaction"],
+  ["-proga", "-progressaction"],
+  ["-ev", "-errorvariable"],
+  ["-wv", "-warningvariable"],
+  ["-iv", "-informationvariable"],
+  ["-ov", "-outvariable"],
+  ["-ob", "-outbuffer"],
+  ["-pv", "-pipelinevariable"],
+  ["-vb", "-verbose"],
+  ["-db", "-debug"],
+  ["-wi", "-whatif"],
+  ["-cf", "-confirm"],
+])
+// The parameters of Copy-Item and Move-Item (`cp`, `mv`, `copy`, `cpi`, `move`, `mi`), and of Tee-Object (`tee`).
+const PS_COPY = [
+  "-path",
+  "-literalpath",
+  "-destination",
+  "-container",
+  "-force",
+  "-filter",
+  "-include",
+  "-exclude",
+  "-recurse",
+  "-passthru",
+  "-credential",
+  "-fromsession",
+  "-tosession",
+  "-whatif",
+  "-confirm",
+  ...PS_COMMON,
+]
+const PS_TEE = ["-inputobject", "-filepath", "-literalpath", "-append", "-encoding", "-variable", ...PS_COMMON]
+
+// The parameter a PowerShell parameter word names: its alias, or the one parameter whose name it begins, as PowerShell
+// accepts `-Dest` for `-Destination`. An ambiguous prefix (`-d`) names none, and PowerShell refuses the command.
+function psParameter(text: string, names: readonly string[]) {
+  const flag = text.toLowerCase().replace(/:.*$/s, "")
+  const name = PS_PARAMETER_ALIASES.get(flag) ?? flag
+  if (names.includes(name)) return name
+  const found = names.filter((item) => item.startsWith(name))
+  return found.length === 1 ? found[0] : undefined
+}
+
+type PsArgument = { type: string; text: string; colon: boolean }
+
+// A PowerShell command's arguments as written, each parameter marked when a colon joins it to its value
+// (`-Destination:x`, `-Recurse:$false`), which parts() drops.
+function psArguments(node: Node) {
+  const out: PsArgument[] = []
+  for (const child of node.children) {
+    if (child?.type !== "command_elements") continue
+    for (const item of child.children) {
+      if (!item || item.type === "redirection") continue
+      const last = out[out.length - 1]
+      if (item.type === "command_argument_sep") {
+        if (item.text === ":" && last?.type === "command_parameter") last.colon = true
+        continue
+      }
+      out.push({ type: item.type, text: item.text, colon: false })
+    }
+  }
+  return out
+}
+
+// The files a PowerShell command writes by name (section 8.2), as writes() finds them for bash: the destination of
+// Copy-Item and Move-Item, named or second by position (first when the source is named), or the current location when
+// none is given, and Tee-Object's file. `cmd` is the command's name through PS_ALIASES, so `copy`, `cpi`, `move` and
+// `mi` arrive as the cmdlets they run. `cp`, `mv` and `tee` are the cmdlets' aliases only on Windows: elsewhere they
+// run the native tools, as install, ln, dd and sed do everywhere, and writes() reads their words as under bash, `-t`
+// included. An array argument (`a.txt,b.txt`), which the grammar splits before each comma, reaches them word by word.
+function psWrites(cmd: string, args: readonly PsArgument[]): Write[] {
+  if (WRITERS.has(cmd) && (process.platform !== "win32" || !["cp", "mv", "tee"].includes(cmd)))
+    return writes(
+      cmd,
+      args.map((arg) => (arg.type !== "command_parameter" && arg.text.startsWith(",") ? arg.text.slice(1) : arg.text)),
+    )
+  const copy = ["cp", "mv", "copy-item", "move-item"].includes(cmd)
+  if (!copy && cmd !== "tee" && cmd !== "tee-object") return []
+  const names = copy ? PS_COPY : PS_TEE
+  const named = new Map<string, string[]>()
+  const positional: string[][] = []
+  let want: string | undefined
+  let last: string[] | undefined
+  for (const arg of args) {
+    // `a.txt,b.txt` is one array argument, which the grammar splits before each comma.
+    if (arg.type !== "command_parameter" && arg.text.startsWith(",") && last) {
+      last.push(arg.text.slice(1))
+      continue
+    }
+    if (want !== undefined) {
+      last = named.get(want) ?? []
+      named.set(want, last)
+      last.push(arg.text)
+      want = undefined
+      continue
+    }
+    if (arg.type === "command_parameter") {
+      const name = psParameter(arg.text, names)
+      const inline = arg.text.includes(":") ? arg.text.slice(arg.text.indexOf(":") + 1) : ""
+      last = undefined
+      // A switch takes a value only after a colon (`-Recurse:$false`), and that value names no file.
+      if (!name || PS_SWITCHES.has(name)) {
+        if (arg.colon) want = ""
+        continue
+      }
+      if (inline) named.set(name, [...(named.get(name) ?? []), inline])
+      else want = name
+      continue
+    }
+    last = [arg.text]
+    positional.push(last)
+  }
+  if (!copy) {
+    if (named.has("-variable")) return []
+    const target = named.get("-filepath")?.[0] ?? named.get("-literalpath")?.[0] ?? positional[0]?.[0]
+    return target ? [{ target, sources: [], folder: false }] : []
+  }
+  const given = named.get("-path") ?? named.get("-literalpath")
+  const sources = given ?? positional[0] ?? []
+  const target = named.get("-destination")?.[0] ?? positional[given ? 0 : 1]?.[0]
+  if (target) return [{ target, sources, folder: false }]
+  // Without a destination the cmdlets copy or move into the current location, which the bash tool's workdir may set.
+  return sources.length > 0 ? [{ target: ".", sources, folder: true }] : []
+}
+
+// The files cmd's copy and move write: the last operand, when there are two or more, as writes() reads cp and mv, and
+// for a copy of one source, that source's name in the current folder, where copy puts it without a destination.
+// Switches (`/Y`) may stand anywhere. `words` are as written, so the operands are read as cmd reads them later.
+function cmdWrites(cmd: string, words: readonly string[]): Write[] {
+  if (cmd !== "copy" && cmd !== "move") return []
+  const operands = words.filter((word) => !cmdWord(unquote(word)).startsWith("/"))
+  if (cmd === "copy" && operands.length === 1) return [{ target: ".", sources: operands, folder: true }]
+  if (operands.length < 2) return []
+  return [{ target: operands[operands.length - 1], sources: operands.slice(0, -1), folder: false }]
+}
+
+/** Removal and metadata writes detected beside permission scanning; unresolved words stay out of ownership checks. */
+function mutationTargets(cmd: string, words: readonly string[]) {
+  if (cmd === "mv") return writes(cmd, words).flatMap((write) => write.sources)
+  if (!["rm", "rmdir", "unlink", "touch", "truncate"].includes(cmd)) return []
+  const valued =
+    cmd === "touch"
+      ? new Set(["-d", "--date", "-t", "-r", "--reference"])
+      : cmd === "truncate"
+        ? new Set(["-s", "--size", "-r", "--reference"])
+        : new Set<string>()
+  const paths: string[] = []
+  let after = false
+  let skip = false
+  for (const word of words) {
+    if (skip) {
+      skip = false
+      continue
+    }
+    if (!after && word === "--") {
+      after = true
+      continue
+    }
+    if (!after && word.startsWith("-")) {
+      skip = valued.has(word)
+      continue
+    }
+    paths.push(word)
+  }
+  return paths
+}
+
+function psMutationTargets(cmd: string, args: readonly PsArgument[]) {
+  if (["mv", "move-item"].includes(cmd)) return psWrites(cmd, args).flatMap((write) => write.sources)
+  if (cmd !== "remove-item")
+    return mutationTargets(
+      cmd,
+      args.map((arg) => arg.text),
+    )
+  const names = [
+    "-path",
+    "-literalpath",
+    "-filter",
+    "-include",
+    "-exclude",
+    "-recurse",
+    "-force",
+    "-credential",
+    "-stream",
+    "-whatif",
+    "-confirm",
+    ...PS_COMMON,
+  ]
+  const paths: string[] = []
+  let want: string | undefined
+  let array = false
+  for (const arg of args) {
+    if (want !== undefined) {
+      array = want === "-path" || want === "-literalpath"
+      if (array) paths.push(arg.text)
+      want = undefined
+      continue
+    }
+    if (arg.type === "command_parameter") {
+      array = false
+      const name = psParameter(arg.text, names)
+      if (!name) continue
+      const inline = arg.text.includes(":") ? arg.text.slice(arg.text.indexOf(":") + 1) : ""
+      if (PS_SWITCHES.has(name)) {
+        if (arg.colon && !inline) want = ""
+        continue
+      }
+      if (inline) {
+        if (name === "-path" || name === "-literalpath") {
+          paths.push(inline)
+          array = true
+        }
+      } else want = name
+      continue
+    }
+    if (arg.text.startsWith(",")) {
+      if (array) paths.push(arg.text.slice(1))
+      continue
+    }
+    paths.push(arg.text)
+    array = true
+  }
+  return paths
+}
+
+function cmdMutationTargets(cmd: string, words: readonly string[]) {
+  if (cmd === "move") return cmdWrites(cmd, words).flatMap((write) => write.sources)
+  if (!["del", "erase", "rd", "rmdir"].includes(cmd)) return []
+  return words.filter((word) => !cmdWord(unquote(word)).startsWith("/"))
 }
 
 function preview(text: string) {
@@ -697,12 +1055,29 @@ function afterScreenPatterns(patterns: readonly string[], command: string) {
     ),
   ]
 }
+// The ownership check over every line a call hands to a shell: the shell tool's one command, or each line a terminal
+// call submits.
+const assertOwnership = (ctx: Tool.Context, scans: readonly Scan[]) =>
+  ctx.assertWritable?.({
+    files: scans.flatMap((scan) => [...scan.written, ...scan.mutates]),
+    recursive: scans.flatMap((scan) => [...scan.written, ...scan.recursive]),
+    git: scans.flatMap((scan) => scan.git),
+    via: "shell",
+  }) ?? Effect.void
 
 const ask = Effect.fn("ShellTool.ask")(function* (
   ctx: Tool.Context,
   scan: Scan,
-  input: { command: string; afterScreen: Effect.Effect<boolean> },
+  input: {
+    readonly command: string
+    readonly afterScreen: Effect.Effect<boolean>
+    readonly unread?: boolean
+    readonly recalled?: boolean
+    readonly first?: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">
+  },
 ) {
+  yield* assertOwnership(ctx, [scan])
+  if (input.first) yield* ctx.ask(input.first)
   if (scan.dirs.size > 0) {
     const directories = Array.from(scan.dirs)
     const globs = directories.map((dir) => {
@@ -734,6 +1109,16 @@ const ask = Effect.fn("ShellTool.ask")(function* (
     })
   }
 
+  // Owner-only commands refuse the agent marker. Dropping it requires a fresh explicit answer.
+  if (dropsMarker(input.command)) {
+    yield* ctx.ask({
+      permission: PermissionPolicy.AGENT_MARKER,
+      patterns: [input.command],
+      always: [],
+      metadata: { command: input.command, reason: PermissionPolicy.AGENT_MARKER_REASON },
+    })
+  }
+
   const afterScreen = yield* input.afterScreen
   if (scan.patterns.size > 0 || afterScreen) {
     const patterns = Array.from(scan.patterns)
@@ -754,15 +1139,17 @@ const ask = Effect.fn("ShellTool.ask")(function* (
   // not this computer's own (LocalCommand.local: a fetch, a push, a publish, a program Vector does not know, commands a
   // shell reads from its input), a package install, a build that fetches dependencies, or a web address opened in the
   // default browser. Vector does not see where such a command connects, so it asks every time: no saved approval, rule
-  // or auto-accept answers it (PermissionPolicy.requiresApproval).
-  if (scan.patterns.size > 0 && Egress.policy().enabled && LocalCommand.networked(input.command)) {
+  // or auto-accept answers it (PermissionPolicy.requiresApproval). A terminal line Vector cannot read asks too, whatever
+  // its typed text says: the shell may run a recalled or completed line instead, so it counts as a program Vector does
+  // not know.
+  if (scan.patterns.size > 0 && Egress.policy().enabled && (input.unread || LocalCommand.networked(input.command))) {
     yield* ctx.ask({
       permission: PermissionPolicy.NETWORK_COMMAND,
-      patterns: [input.command],
+      patterns: [input.unread ? UNREAD + input.command.trim() : input.command],
       always: [],
       metadata: {
         command: input.command,
-        reason: PermissionPolicy.NETWORK_COMMAND_REASON,
+        reason: input.unread ? UNREAD_NETWORK_REASON : PermissionPolicy.NETWORK_COMMAND_REASON,
       },
     })
   }
@@ -785,6 +1172,15 @@ const ask = Effect.fn("ShellTool.ask")(function* (
   }
 
   if (scan.patterns.size === 0) return afterScreen
+  // A line recalled or completed by the terminal must also ask for any cloud operation it may hide.
+  if (input.recalled) {
+    yield* ctx.ask({
+      permission: PermissionPolicy.CLOUD_UNREAD,
+      patterns: [UNREAD + input.command.trim()],
+      always: [],
+      metadata: { command: input.command, summary: RECALLED_SUMMARY },
+    })
+  }
   // After the shell's own permission, so a session that may not run the command
   // is refused without a cloud prompt. These ask every time, as vector_cloud's
   // own actions do: auto-accept and allow rules never answer them.
@@ -804,6 +1200,12 @@ const ask = Effect.fn("ShellTool.ask")(function* (
   }
   return afterScreen
 })
+
+const UNREAD_NETWORK_REASON =
+  "Vector Local is on, and Vector cannot read what this terminal line runs: the shell recalled, completed or edited part of it. It may connect to the network."
+
+const RECALLED_SUMMARY =
+  "Run a terminal line Vector cannot read: the shell may have recalled it from its history or completed part of it. It may run a Vercel or Supabase command with the command-line tool's own login, outside Vector Cloud."
 
 // Whether Vector Local is on with Web access None, which it also is while the policy is still being resolved.
 function webNone() {
@@ -913,363 +1315,611 @@ const grammar = (wasm: () => Promise<{ default: string }>) =>
     parser.setLanguage(await Language.load(resolveWasm(asset)))
     return parser
   })
-const bashParser = grammar(() =>
-  import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
-    with: { type: "wasm" },
-  }),
+const bashParser = grammar(
+  () =>
+    import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
+      with: { type: "wasm" },
+    }),
 )
-const psParser = grammar(() =>
-  import("tree-sitter-powershell/tree-sitter-powershell.wasm" as string, {
-    with: { type: "wasm" },
-  }),
+const psParser = grammar(
+  () =>
+    import("tree-sitter-powershell/tree-sitter-powershell.wasm" as string, {
+      with: { type: "wasm" },
+    }),
 )
+
+/**
+ * The shell tool's permission scan, asks and admission, for a command line another tool hands to a shell (the terminal
+ * tool's submitted lines). It reads with the child process spawner (git check-ignore, cygpath) and FSUtil, as the shell
+ * does.
+ */
+export const ShellPermission = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner
+  const fs = yield* FSUtil.Service
+  const computer = yield* ComputerSession.Service
+  const sessions = yield* Session.Service
+
+  const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
+    const lines = yield* spawner
+      .lines(ChildProcess.make(shell, ["-lc", 'cygpath -w -- "$1"', "_", text]))
+      .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+    const file = lines[0]?.trim()
+    if (!file) return
+    return FSUtil.normalizePath(file)
+  })
+
+  const resolvePath = Effect.fn("ShellTool.resolvePath")(function* (text: string, root: string, shell: string) {
+    if (process.platform === "win32") {
+      if (Shell.posix(shell) && text.startsWith("/") && FSUtil.windowsPath(text) === text) {
+        const file = yield* cygpath(shell, text)
+        if (file) return file
+      }
+      return FSUtil.normalizePath(path.resolve(root, FSUtil.windowsPath(text)))
+    }
+    return path.resolve(root, text)
+  })
+
+  const argPath = Effect.fn("ShellTool.argPath")(function* (arg: string, cwd: string, ps: boolean, shell: string) {
+    return yield* wordPath(shellWord(arg, cwd, ps, shell), cwd, ps, shell)
+  })
+
+  // The path a command writes to, with bash's and zsh's leading `$HOME` expanded (see targetWord).
+  const targetPath = Effect.fn("ShellTool.targetPath")(function* (
+    arg: string,
+    cwd: string,
+    ps: boolean,
+    shell: string,
+  ) {
+    return yield* wordPath(targetWord(arg, cwd, ps, shell), cwd, ps, shell)
+  })
+
+  // The path a word names once its shell has read it (see shellWord), or nothing when the scan cannot know it.
+  const wordPath = Effect.fn("ShellTool.wordPath")(function* (text: string, cwd: string, ps: boolean, shell: string) {
+    const file = text && prefix(text)
+    if (!file || dynamic(file, ps, Shell.name(shell) === "cmd")) return
+    const next = ps ? provider(file) : file
+    if (!next) return
+    return yield* resolvePath(next, cwd, shell)
+  })
+
+  // Whether git, started in cwd, finds a work tree that holds every path. check-ignore refuses a path outside the
+  // work tree, and a start with none, by the same test git diff uses before it compares two whole files. A path the
+  // scan could not resolve may point anywhere, and with none at all there is nothing to show inside. Nothing the
+  // repository configures runs before the command is approved.
+  const inWorkTree = Effect.fn("ShellTool.inWorkTree")(function* (paths: (string | undefined)[], cwd: string) {
+    const known = paths.filter((item): item is string => item !== undefined)
+    if (known.length === 0 || known.length < paths.length) return false
+    const code = yield* spawner
+      .exitCode(
+        ChildProcess.make("git", ["-c", "core.fsmonitor=false", "check-ignore", "--", ...known], {
+          cwd,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        }),
+      )
+      .pipe(Effect.catch(() => Effect.succeed(128)))
+    return code === 0 || code === 1
+  })
+
+  const collect = Effect.fn("ShellTool.collect")(function* (
+    root: Node,
+    cwd: string,
+    ps: boolean,
+    shell: string,
+    instance: InstanceContext,
+  ) {
+    const scan: Scan = {
+      dirs: new Set<string>(),
+      patterns: new Set<string>(),
+      always: new Set<string>(),
+      writes: new Set<string>(),
+      written: new Set<string>(),
+      mutates: new Set<string>(),
+      recursive: new Set<string>(),
+      git: [],
+      reads: new Set<string>(),
+      cloud: new Map(),
+      gitReads: [],
+    }
+    const shellKind = ShellID.toKind(Shell.name(shell))
+    const win = ps || shellKind === "cmd"
+    const list = commands(root).map((node) => {
+      const command = parts(node)
+      const tokens = command.map((item) => item.text)
+      // PowerShell runs `Microsoft.PowerShell.Management\Get-Content` and its alias `gc` as Get-Content, cmd runs
+      // `ty^pe` as `type`, and bash runs `c''at` as `cat`.
+      const name = ps ? tokens[0]?.toLowerCase().replace(/^[\w.]+\\/, "") : tokens[0]
+      return {
+        node,
+        command,
+        tokens,
+        cmd: ps
+          ? name && (PS_ALIASES.get(name) ?? name)
+          : name === undefined
+            ? name
+            : shellKind === "cmd"
+              ? cmdWord(unquote(name)).toLowerCase()
+              : bashWord(name),
+      }
+    })
+    // `cat .env`, `grep KEY .env.local` or `source .env` read the same secrets the read tool asks for, so they ask
+    // under read too. A name the scan cannot resolve (`"$HOME/.env"`, `%USERPROFILE%\.env`) is asked for as written.
+    // The name is tested as the program gets it, so cmd's `type .e^nv` asks as `type .env` does.
+    const expansion = ps ? PS_EXPANSION : win ? CMD_EXPANSION : BASH_EXPANSION
+    const fold = (item: string) => (win ? item.toLowerCase() : item)
+    const envRead = Effect.fnUntraced(function* (text: string) {
+      const file = fileName(shellWord(text, cwd, ps, shell), win, expansion)
+      if (ENV_FILE.test(fold(file.name))) return yield* readTarget(file.dir + file.name)
+      // A wildcard (`.en?`, `.e*`) or an expansion inside the name (`.e%X:~0,0%nv`, `.e"$X"nv`) asks for each
+      // environment file it would open in its folder or, when the scan cannot list that folder, for one it could
+      // open. A name that is only an expansion (`$file`) may be anything, as `cat $file` may be in bash.
+      // bash's brace expansion (`.e{n,}v`) and zsh's glob syntax (`.e(n|x)v`, `.env(N)`) open names a plain wildcard
+      // would, so each group counts as one.
+      const named = win ? file.name : file.name.replace(/\{[^{}]*(?:,|\.\.)[^{}]*\}/g, "*").replace(/\([^()]*\)/g, "*")
+      const glob = named.replace(expansion, "*")
+      if (!file.name.replace(expansion, "") || !/[*?[]/.test(glob)) return yield* linkedEnv(file.dir + file.name)
+      const folder = /[*?[]/.test(file.dir) ? undefined : yield* wordPath(file.dir || ".", cwd, ps, shell)
+      const names = folder ? yield* entries(folder) : ENV_NAMES
+      // An expansion may begin with the dot a wildcard would not match.
+      const match = wildcard(glob, win, win || !/^[*?[]/.test(file.name))
+      const found = names.filter((item) => ENV_FILE.test(fold(item)) && match.test(fold(item)))
+      for (const item of folder ? found : found.slice(0, 1)) yield* readTarget(file.dir + item)
+    })
+    const entries = (folder: string) =>
+      fs.readDirectoryEntries(folder).pipe(
+        Effect.map((items) => items.map((entry) => entry.name)),
+        Effect.catch(() => Effect.succeed([] as string[])),
+      )
+    // An input redirect opens its file whatever the file is called, and bash's `$(<file)` prints it without running
+    // any command. So every file a redirect reads asks under read, as the read tool asks for it, and for its folder
+    // when that lies outside the project, as `cat` of the same file does. A wildcard opens the one file it matches.
+    const redirectRead = Effect.fnUntraced(function* (text: string) {
+      yield* envRead(text)
+      const word = shellWord(text, cwd, ps, shell)
+      if (DEVICES.has(word.toLowerCase()) || INPUTS.has(word)) return
+      // A target the scan cannot place (`< "$IN"`, `< ~other/x`, `< ~+/x`) may be any file, so it is approved only as
+      // written.
+      if (!win && (new RegExp(BASH_EXPANSION.source).test(word) || /^~[^/]/.test(word))) unread(scan, `< ${text}`)
+      const file = fileName(word, win, expansion)
+      // Inside or outside is decided on the file's real path, as the read tool decides it, so a link in the
+      // repository to a file outside it asks for that folder.
+      const folder = yield* real(yield* wordPath(file.dir || ".", cwd, ps, shell))
+      if (folder && !containsPath(folder, instance)) scan.dirs.add(folder)
+      const resolved = yield* real(
+        /[*?[]/.test(file.name) ? undefined : yield* wordPath(file.dir + file.name, cwd, ps, shell),
+      )
+      if (resolved && !containsPath(resolved, instance)) scan.dirs.add(path.dirname(resolved))
+      const match = wildcard(file.name, win)
+      const opened = resolved
+        ? [resolved]
+        : folder
+          ? (yield* entries(folder)).filter((item) => match.test(fold(item))).map((item) => path.join(folder, item))
+          : []
+      // A name the scan cannot resolve (`< "$IN"`), or a wildcard that matches nothing, is asked for as written.
+      if (opened.length === 0) scan.reads.add(file.dir + file.name)
+      for (const item of opened) scan.reads.add(path.relative(instance.worktree, item))
+    })
+    const real = (item: string | undefined) =>
+      Effect.try({ try: () => (item ? FSUtil.realpath(item) : undefined), catch: (cause) => cause }).pipe(
+        Effect.orElseSucceed(() => item),
+      )
+    // A link to an environment file, or on Windows its 8.3 short name (`ENV~1`), opens it under another name, so the
+    // name it really has is tested too, as the read tool tests both.
+    const linkedEnv = Effect.fnUntraced(function* (word: string) {
+      const resolved = yield* wordPath(word, cwd, ps, shell)
+      if (!resolved) return
+      const real = yield* Effect.try({ try: () => FSUtil.realpath(resolved), catch: (cause) => cause }).pipe(
+        Effect.orElseSucceed(() => undefined),
+      )
+      if (!real || !ENV_FILE.test(win ? path.win32.basename(real).toLowerCase() : path.basename(real))) return
+      scan.reads.add(path.relative(instance.worktree, real))
+    })
+    // A name with a wildcard (`*.env`) is asked for as written, not as the folder it starts in.
+    const readTarget = Effect.fnUntraced(function* (word: string) {
+      const resolved = /[*?[]/.test(word) ? undefined : yield* wordPath(word, cwd, ps, shell)
+      scan.reads.add(resolved ? path.relative(instance.worktree, resolved) : word)
+    })
+    // A directory change anywhere in the command leaves unknown where git diff starts looking for its work tree.
+    const moved = list.some((item) => item.cmd !== undefined && CWD.has(item.cmd))
+
+    for (const item of list) {
+      const tokens = item.tokens
+      const cmd = item.cmd
+      // `git diff` prints any two files once one of them lies outside the work tree (`git diff /dev/null ~/.ssh/id_rsa`),
+      // --no-index or not, so its arguments are paths as much as cat's. A revision resolves inside the workspace.
+      const diff = cmd === "git" && tokens[1] === "diff"
+      const paths: (string | undefined)[] = []
+
+      if (cmd && (FILES.has(cmd) || diff || (shellKind === "cmd" && CMD_FILES.has(cmd)))) {
+        for (const arg of pathArgs(diff ? item.command.slice(1) : item.command, ps, shellKind === "cmd")) {
+          const resolved = yield* argPath(arg, cwd, ps, shell)
+          yield* Effect.logInfo("resolved path", { arg, resolved })
+          paths.push(resolved)
+          if (!resolved || containsPath(resolved, instance)) continue
+          const dir = (yield* fs.isDir(resolved)) ? resolved : path.dirname(resolved)
+          scan.dirs.add(dir)
+        }
+      }
+
+      if (tokens.length && (!cmd || !CWD.has(cmd))) {
+        scan.patterns.add(source(item.node))
+        scan.always.add(BashArity.prefix(tokens).join(" ") + " *")
+      }
+      // Outside a git work tree, or once one of its paths lies outside the work tree, `git diff a b` is
+      // `git diff --no-index a b` and prints both whole files, directories included, so it answers to the rules
+      // written for --no-index, such as the read-only specialists' deny. A path inside the project is not enough: a
+      // nested repository or submodule ends the work tree at its own root, and a .git directory has none.
+      // Without a path (`git diff`, `git diff --stat`) git only shows the work tree's own changes.
+      if (
+        diff &&
+        !tokens.includes("--no-index") &&
+        (instance.project.vcs !== "git" ||
+          ((paths.length > 0 || tokens.includes("--")) && (moved || !(yield* inWorkTree(paths, cwd)))))
+      )
+        scan.patterns.add(["git", "diff", "--no-index", ...tokens.slice(2)].join(" "))
+
+      for (const arg of item.command.slice(1)) yield* envRead(arg.text)
+
+      // A file a command writes by name asks what the edit tool asks, as a redirect's does, so the edit rules and the
+      // prompt guard see it, under PowerShell and cmd as under bash. A copy into a folder writes each source's name
+      // inside it.
+      if (cmd) {
+        const found = ps
+          ? psWrites(cmd, psArguments(item.node))
+          : shellKind === "cmd"
+            ? cmdWrites(cmd, tokens.slice(1))
+            : writes(cmd, tokens.slice(1))
+        for (const write of found) {
+          const resolved = yield* targetPath(write.target, cwd, ps, shell)
+          const into =
+            resolved !== undefined &&
+            write.sources.length > 0 &&
+            (write.folder ||
+              (win ? /[\\/]$/ : /\/$/).test(targetWord(write.target, cwd, ps, shell)) ||
+              (yield* fs.isDir(resolved)))
+          const name = (source: string) =>
+            win ? path.win32.basename(shellWord(source, cwd, ps, shell)) : path.basename(bashWord(source))
+          const files = resolved && into ? write.sources.map((source) => path.join(resolved, name(source))) : [resolved]
+          for (const file of files) {
+            if (file) scan.written.add(file)
+            scan.writes.add(file ? path.relative(instance.worktree, file) : write.target)
+            if (file && !containsPath(file, instance)) scan.dirs.add(path.dirname(file))
+          }
+        }
+      }
+
+      if (cmd) {
+        const mutationCommand = win ? path.win32.basename(cmd).toLowerCase() : path.basename(cmd)
+        const mutates = ps
+          ? psMutationTargets(mutationCommand, psArguments(item.node))
+          : shellKind === "cmd"
+            ? cmdMutationTargets(mutationCommand, tokens.slice(1))
+            : mutationTargets(mutationCommand, tokens.slice(1))
+        for (const target of mutates) {
+          const resolved = yield* targetPath(target, cwd, ps, shell)
+          if (resolved) {
+            scan.mutates.add(resolved)
+            scan.recursive.add(resolved)
+          }
+        }
+      }
+      const leading = item.node.children
+        .filter((node): node is Node => node?.type === "variable_assignment")
+        .map((node) => shellWord(node.text, cwd, ps, shell))
+      const words = [...leading, ...tokens.map((word) => shellWord(word, cwd, ps, shell))]
+      if (cmd && /^git(?:\.exe)?$/i.test(win ? path.win32.basename(cmd) : path.basename(cmd)))
+        scan.gitReads.push({
+          cwd,
+          args: tokens.map((word) => shellWord(word, cwd, ps, shell)),
+          env: Object.fromEntries(
+            leading.flatMap((word) => {
+              const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(word)
+              return match ? [[match[1], match[2]]] : []
+            }),
+          ),
+        })
+      const variables = {
+        GIT_DIR: process.env.GIT_DIR,
+        GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+        GIT_INDEX_FILE: process.env.GIT_INDEX_FILE,
+      }
+      const trees = [
+        ...new Set([instance.project.vcs === "git" ? instance.worktree : instance.directory, ...TaskClaims.trees()]),
+      ]
+      const options: GitMutation.Options = {
+        cwd,
+        env: variables,
+        trees,
+        canonicalize: FileLock.key,
+        gitDirectories: TaskClaims.gitDirectories(),
+      }
+      const classified = GitMutation.classify(words, options)
+      if (classified) {
+        let mutation = classified
+        if (classified.alias) {
+          const env = Object.fromEntries(
+            leading.flatMap((word) => {
+              const match = /^(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)=(.*)$/s.exec(word)
+              return match ? [[match[1], match[2]]] : []
+            }),
+          )
+          const alias = yield* spawner
+            .string(
+              ChildProcess.make(
+                "git",
+                [...classified.gitArgs, "-c", "core.fsmonitor=false", "config", "--get", `alias.${classified.alias}`],
+                { cwd, env, extendEnv: true, stdin: "ignore", stderr: "ignore" },
+              ),
+            )
+            .pipe(Effect.catch(() => Effect.succeed("")))
+          mutation =
+            GitMutation.classify(words, { ...options, aliases: { [classified.alias]: alias.trim() || undefined } }) ??
+            classified
+        }
+        scan.git.push(mutation)
+        mutation.paths.forEach((file) => scan.mutates.add(file))
+      }
+
+      for (const cloud of yield* cloudRequests(tokens, 0)) {
+        const text = source(item.node)
+        scan.cloud.set(
+          [cloud.provider.toLowerCase(), path.basename(cwd), cloud.environment, `shell ${cloud.action}`].join("/"),
+          { ...cloud, command: text.length > 200 ? `${text.slice(0, 200)}…` : text },
+        )
+      }
+    }
+
+    // `while read line; do ...; done < .env`. PowerShell refuses to parse `<`, so its file is never opened.
+    for (const source of inputRedirects(root, ps)) yield* ps ? envRead(source) : redirectRead(source)
+    // `$(<file)` prints a file without running a command, so it is checked like one, approved only as written.
+    if (!ps) {
+      for (const node of root.descendantsOfType("command_substitution")) {
+        if (!node || node.descendantsOfType("command").length > 0) continue
+        if (node.descendantsOfType("file_redirect").length === 0) continue
+        scan.patterns.add(node.text)
+        scan.always.add(node.text)
+      }
+    }
+
+    // A .NET method call runs code without being a command (`[IO.File]::ReadAllText('.env')`), so without this a
+    // statement made only of calls would run with no permission asked at all. Each chain of calls is checked like
+    // a bash statement: approved only as written, and asking under read for an environment file it names.
+    if (ps) {
+      for (const node of root.descendantsOfType("invokation_expression")) {
+        if (!node || node.parent?.type === "invokation_expression") continue
+        scan.patterns.add(node.text)
+        scan.always.add(node.text)
+        for (const text of node.descendantsOfType("string_literal")) if (text) yield* envRead(text.text)
+      }
+
+      // A PowerShell statement need not run a command to act: `${C:\x}` reads a file and `$env:A = 1` changes what a
+      // later command does. So a statement without a command, as well as every assignment and function definition,
+      // is checked like bash's are, approved only as written. One nested in another is part of that one's text.
+      const exact = [
+        ...root
+          .descendantsOfType("statement_list")
+          .flatMap((list) => list?.namedChildren ?? [])
+          .filter((node): node is Node => node !== null && node.type !== "comment" && node.type !== "empty_statement")
+          .filter((node) => node.descendantsOfType("command").length === 0),
+        ...root
+          .descendantsOfType(["assignment_expression", "function_statement"])
+          .filter((node): node is Node => Boolean(node)),
+      ]
+      // A command the grammar cannot parse (`Get-Content $dir/.en?`) may do anything the scan did not see.
+      if (root.hasError) unread(scan, root.text)
+      const ids = new Set(exact.map((node) => node.id))
+      for (const node of exact) {
+        let outer = node.parent
+        while (outer && !ids.has(outer.id)) outer = outer.parent
+        if (outer) continue
+        scan.patterns.add(node.text.trim())
+        scan.always.add(node.text.trim())
+      }
+
+      // A provider variable is a file read or write without a command (`$k = ${C:\Users\me\.ssh\id_rsa}`,
+      // `${C:\Users\me\.bashrc} = 'evil'`), so it asks what the read and edit tools ask for that file, outside
+      // the project too. An item of another provider (`${function:git} = { ... }`) is asked for as written.
+      for (const node of root.descendantsOfType("variable")) {
+        const item = node && providerItem(node.text)
+        if (!node || !item) continue
+        const use = variableUse(node)
+        const resolved = item.file ? yield* resolvePath(item.file, cwd, shell) : undefined
+        const target = resolved ? path.relative(instance.worktree, resolved) : item.name
+        if (use.read) scan.reads.add(target)
+        // The provider globs the path and reads a stream by its file's name, so `${C:\proj\.en?}` and
+        // `${C:\proj\.env::$DATA}` read `.env` the way `Get-Content .en?` does.
+        if (use.read && item.file) yield* envRead(item.file)
+        if (use.write) {
+          scan.writes.add(target)
+          if (resolved) scan.written.add(resolved)
+        }
+        if (resolved && !containsPath(resolved, instance)) scan.dirs.add(path.dirname(resolved))
+        // A drive the scan cannot place (`${Temp:\x}`) is outside the project as far as it knows.
+        if (item.folder) scan.dirs.add(path.win32.dirname(item.name))
+      }
+
+      // `switch -File .env { ... }` reads the file line by line.
+      for (const node of root.descendantsOfType("switch_filename")) {
+        if (!node) continue
+        yield* envRead(node.text)
+        const resolved = yield* argPath(node.text, cwd, ps, shell)
+        if (resolved && !containsPath(resolved, instance)) scan.dirs.add(path.dirname(resolved))
+      }
+    }
+
+    // A target that cannot be resolved (`> "$OUT"`) is asked for as written, so a rule that denies edits denies it.
+    for (const target of redirects(root, ps)) {
+      const resolved = yield* targetPath(target, cwd, ps, shell)
+      if (resolved) scan.written.add(resolved)
+      scan.writes.add(resolved ? path.relative(instance.worktree, resolved) : target)
+      if (!resolved || containsPath(resolved, instance)) continue
+      scan.dirs.add(path.dirname(resolved))
+    }
+
+    // PowerShell's grammar has none of these node types. "Always" approves
+    // only the exact statement, since a changed environment or a redefined
+    // name alters what an already-allowed command does.
+    if (!ps) {
+      for (const node of statements(root)) {
+        const text = source(node)
+        scan.patterns.add(text)
+        scan.always.add(text)
+      }
+    }
+
+    // bash and zsh: a command the grammar cannot parse, or one that hides a command substitution from it, may run
+    // anything the scan did not see. A statement made only of redirects runs a program too (zsh's READNULLCMD).
+    if (!ps && shellKind !== "cmd") {
+      if (root.hasError || hiddenSubstitution(root, Shell.name(shell) === "zsh")) unread(scan, root.text)
+      for (const node of root.descendantsOfType("redirected_statement")) {
+        if (!node) continue
+        if (node.namedChildren.every((child) => child?.type === "file_redirect" || child?.type === "heredoc_redirect"))
+          unread(scan, node.text)
+      }
+    }
+
+    // cmd is read with the bash grammar, which does not know cmd's syntax: in `for /f %a in (.env) do echo %a`, which
+    // reads .env line by line, bash sees `.env` as a command in a subshell. So any cmd word may name an environment
+    // file, and a command the grammar cannot parse is approved only as written.
+    if (shellKind === "cmd") {
+      for (const node of root.descendantsOfType(["word", "string", "raw_string", "concatenation"])) {
+        if (node) yield* envRead(node.text)
+      }
+      if (root.hasError) unread(scan, root.text)
+    }
+
+    return scan
+  })
+
+  return {
+    resolvePath,
+    ask: Effect.fn("ShellPermission.ask")(function* (
+      ctx: Tool.Context,
+      input: {
+        readonly command: string
+        readonly cwd: string
+        readonly shell: string
+        // Vector could not tell exactly what runs: ask for the line only as written, behind the unread prefix. With
+        // Vector Local on it also asks as a network command, since what runs may be any program.
+        readonly unread?: boolean
+        // The shell may have filled the line from its history, its kill ring or a completion, so it may run any command,
+        // a cloud CLI among them: it also asks under PermissionPolicy.CLOUD_UNREAD, every time.
+        readonly recalled?: boolean
+        // The caller's own ask, made after every refusal (the guest guards above and the ownership check) and before
+        // the shell's asks, so a refused line asks nothing: the terminal's ask to run outside the shell sandbox.
+        readonly first?: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">
+      },
+    ) {
+      const instance = yield* InstanceState.context
+      const ps = Shell.ps(input.shell)
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const tree = yield* Effect.acquireRelease(parse(input.command, ps), (tree) =>
+            Effect.sync(() => tree.delete()),
+          )
+          const session = yield* sessions
+            .get(ctx.sessionID)
+            .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)))
+          let rootID = ctx.sessionID
+          let parentID = session ? session.parentID : ctx.parentID
+          const seen = new Set([rootID])
+          while (parentID) {
+            if (seen.has(parentID) || seen.size >= 64)
+              return yield* Effect.die(new Error("The shell's conversation ancestry could not be verified."))
+            seen.add(parentID)
+            const parent = yield* sessions.get(parentID).pipe(Effect.orDie)
+            rootID = parent.id
+            parentID = parent.parentID
+          }
+          const history = () =>
+            rootID === ctx.sessionID
+              ? ctx.history
+                ? ctx.history()
+                : Effect.succeed(ctx.messages)
+              : sessions.messages({ sessionID: rootID }).pipe(Effect.orDie)
+          const controlsDesktop =
+            ComputerCommand.controls(input.command) ||
+            commands(tree.rootNode).some((node) => ComputerCommand.controlsTokens(parts(node).map((item) => item.text)))
+          const checkComputer = Effect.gen(function* () {
+            if (controlsDesktop && (yield* computer.held(rootID)))
+              return yield* Effect.die(
+                new Error(
+                  `Use the computer tool for desktop input and screenshots while ${Hands.NAME} holds the computer.`,
+                ),
+              )
+          })
+          yield* checkComputer
+          const scan = yield* collect(tree.rootNode, input.cwd, ps, input.shell, instance)
+          if (!containsPath(input.cwd, instance)) scan.dirs.add(input.cwd)
+          if (input.unread) unread(scan, input.command)
+          // A guest family may not start a command in, or name, a private task folder, nor run git against a
+          // repository whose history a private task shares. The outside folders the scan resolved count too: a
+          // private folder reached through `~`, a wildcard or `..` appears only there, and must be refused before the
+          // owner is asked about it. These cover what the scan detects; a program can still reach files the scan
+          // never sees, so this is not a filesystem sandbox.
+          if (ctx.assertReadable)
+            yield* ctx.assertReadable({
+              files: [input.cwd, ...scan.dirs, ...[...scan.reads].map((file) => path.resolve(instance.worktree, file))],
+              recursive: true,
+            })
+          if (ctx.assertGitReadable) for (const read of scan.gitReads) yield* ctx.assertGitReadable(read)
+          let confirmed = yield* ask(ctx, scan, {
+            ...input,
+            afterScreen: history().pipe(Effect.flatMap((messages) => computer.completedThisTurn(rootID, messages))),
+          })
+          scan.beforeRun = Effect.gen(function* () {
+            yield* checkComputer
+            if (!confirmed && (yield* computer.completedThisTurn(rootID, yield* history()))) {
+              const answer = yield* ctx.ask({
+                permission: ShellID.ToolID,
+                patterns: afterScreenPatterns(Array.from(scan.patterns), input.command),
+                always: [],
+                metadata: { command: input.command, reason: PermissionPolicy.AFTER_SCREEN_COMMAND_REASON },
+              })
+              if (answer !== "once")
+                return yield* Effect.die(
+                  new Error("This shell command needs a fresh Allow once answer after computer use."),
+                )
+              confirmed = true
+            }
+            yield* checkComputer
+          })
+          return scan
+        }),
+      )
+    }),
+    // Admission, after every ask of the call and right before its lines start or are typed. It is brief and takes the
+    // same file locks as edit, write and apply_patch: the ownership check repeats inside them, so another writer that
+    // claimed a file while the asks waited is refused here, and only then do the files become this session's changes.
+    // One admission for all of a call's lines, so a refused line leaves no claim on a file an earlier line names.
+    beforeRun: (scans: readonly Scan[]) =>
+      Effect.forEach(scans, (scan) => scan.beforeRun ?? Effect.void, { discard: true }),
+    admit: Effect.fn("ShellPermission.admit")(function* (ctx: Tool.Context, scans: readonly Scan[]) {
+      yield* Effect.forEach(scans, (scan) => scan.beforeRun ?? Effect.void, { discard: true })
+      const files = [...new Set(scans.flatMap((scan) => [...scan.written, ...scan.mutates]))]
+      yield* FileLock.withFiles(files)(
+        Effect.gen(function* () {
+          yield* assertOwnership(ctx, scans)
+          for (const file of files) TaskClaims.touch(ctx.sessionID, file)
+        }),
+      )
+    }),
+  }
+})
 
 export const ShellTool = Tool.define(
   ShellID.ToolID,
   Effect.gen(function* () {
     const config = yield* Config.Service
     const spawner = yield* ChildProcessSpawner
-    const fs = yield* FSUtil.Service
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
-    const computer = yield* ComputerSession.Service
-    const sessions = yield* Session.Service
+    const permission = yield* ShellPermission
+    // Background commands (5.H). A build that leaves them out refuses them.
+    const jobs = yield* Effect.serviceOption(ShellJobs.Service)
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
-
-    const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
-      const lines = yield* spawner
-        .lines(ChildProcess.make(shell, ["-lc", 'cygpath -w -- "$1"', "_", text]))
-        .pipe(Effect.catch(() => Effect.succeed([] as string[])))
-      const file = lines[0]?.trim()
-      if (!file) return
-      return FSUtil.normalizePath(file)
-    })
-
-    const resolvePath = Effect.fn("ShellTool.resolvePath")(function* (text: string, root: string, shell: string) {
-      if (process.platform === "win32") {
-        if (Shell.posix(shell) && text.startsWith("/") && FSUtil.windowsPath(text) === text) {
-          const file = yield* cygpath(shell, text)
-          if (file) return file
-        }
-        return FSUtil.normalizePath(path.resolve(root, FSUtil.windowsPath(text)))
-      }
-      return path.resolve(root, text)
-    })
-
-    const argPath = Effect.fn("ShellTool.argPath")(function* (arg: string, cwd: string, ps: boolean, shell: string) {
-      return yield* wordPath(shellWord(arg, cwd, ps, shell), cwd, ps, shell)
-    })
-
-    // The path a word names once its shell has read it (see shellWord), or nothing when the scan cannot know it.
-    const wordPath = Effect.fn("ShellTool.wordPath")(function* (text: string, cwd: string, ps: boolean, shell: string) {
-      const file = text && prefix(text)
-      if (!file || dynamic(file, ps, Shell.name(shell) === "cmd")) return
-      const next = ps ? provider(file) : file
-      if (!next) return
-      return yield* resolvePath(next, cwd, shell)
-    })
-
-    // Whether git, started in cwd, finds a work tree that holds every path. check-ignore refuses a path outside the
-    // work tree, and a start with none, by the same test git diff uses before it compares two whole files. A path the
-    // scan could not resolve may point anywhere, and with none at all there is nothing to show inside. Nothing the
-    // repository configures runs before the command is approved.
-    const inWorkTree = Effect.fn("ShellTool.inWorkTree")(function* (paths: (string | undefined)[], cwd: string) {
-      const known = paths.filter((item): item is string => item !== undefined)
-      if (known.length === 0 || known.length < paths.length) return false
-      const code = yield* spawner
-        .exitCode(
-          ChildProcess.make("git", ["-c", "core.fsmonitor=false", "check-ignore", "--", ...known], {
-            cwd,
-            stdin: "ignore",
-            stdout: "ignore",
-            stderr: "ignore",
-          }),
-        )
-        .pipe(Effect.catch(() => Effect.succeed(128)))
-      return code === 0 || code === 1
-    })
-
-    const collect = Effect.fn("ShellTool.collect")(function* (
-      root: Node,
-      cwd: string,
-      ps: boolean,
-      shell: string,
-      instance: InstanceContext,
-    ) {
-      const scan: Scan = {
-        dirs: new Set<string>(),
-        patterns: new Set<string>(),
-        always: new Set<string>(),
-        writes: new Set<string>(),
-        reads: new Set<string>(),
-        cloud: new Map(),
-      }
-      const shellKind = ShellID.toKind(Shell.name(shell))
-      const win = ps || shellKind === "cmd"
-      const list = commands(root).map((node) => {
-        const command = parts(node)
-        const tokens = command.map((item) => item.text)
-        // PowerShell runs `Microsoft.PowerShell.Management\Get-Content` and its alias `gc` as Get-Content, cmd runs
-        // `ty^pe` as `type`, and bash runs `c''at` as `cat`.
-        const name = ps ? tokens[0]?.toLowerCase().replace(/^[\w.]+\\/, "") : tokens[0]
-        return {
-          node,
-          command,
-          tokens,
-          cmd: ps
-            ? name && (PS_ALIASES.get(name) ?? name)
-            : name === undefined
-              ? name
-              : shellKind === "cmd"
-                ? cmdWord(unquote(name)).toLowerCase()
-                : bashWord(name),
-        }
-      })
-      // `cat .env`, `grep KEY .env.local` or `source .env` read the same secrets the read tool asks for, so they ask
-      // under read too. A name the scan cannot resolve (`"$HOME/.env"`, `%USERPROFILE%\.env`) is asked for as written.
-      // The name is tested as the program gets it, so cmd's `type .e^nv` asks as `type .env` does.
-      const expansion = ps ? PS_EXPANSION : win ? CMD_EXPANSION : BASH_EXPANSION
-      const fold = (item: string) => (win ? item.toLowerCase() : item)
-      const envRead = Effect.fnUntraced(function* (text: string) {
-        const file = fileName(shellWord(text, cwd, ps, shell), win, expansion)
-        if (ENV_FILE.test(fold(file.name))) return yield* readTarget(file.dir + file.name)
-        // A wildcard (`.en?`, `.e*`) or an expansion inside the name (`.e%X:~0,0%nv`, `.e"$X"nv`) asks for each
-        // environment file it would open in its folder or, when the scan cannot list that folder, for one it could
-        // open. A name that is only an expansion (`$file`) may be anything, as `cat $file` may be in bash.
-        // bash's brace expansion (`.e{n,}v`) and zsh's glob syntax (`.e(n|x)v`, `.env(N)`) open names a plain wildcard
-        // would, so each group counts as one.
-        const named = win ? file.name : file.name.replace(/\{[^{}]*(?:,|\.\.)[^{}]*\}/g, "*").replace(/\([^()]*\)/g, "*")
-        const glob = named.replace(expansion, "*")
-        if (!file.name.replace(expansion, "") || !/[*?[]/.test(glob)) return yield* linkedEnv(file.dir + file.name)
-        const folder = /[*?[]/.test(file.dir) ? undefined : yield* wordPath(file.dir || ".", cwd, ps, shell)
-        const names = folder ? yield* entries(folder) : ENV_NAMES
-        // An expansion may begin with the dot a wildcard would not match.
-        const match = wildcard(glob, win, win || !/^[*?[]/.test(file.name))
-        const found = names.filter((item) => ENV_FILE.test(fold(item)) && match.test(fold(item)))
-        for (const item of folder ? found : found.slice(0, 1)) yield* readTarget(file.dir + item)
-      })
-      const entries = (folder: string) =>
-        fs.readDirectoryEntries(folder).pipe(
-          Effect.map((items) => items.map((entry) => entry.name)),
-          Effect.catch(() => Effect.succeed([] as string[])),
-        )
-      // An input redirect opens its file whatever the file is called, and bash's `$(<file)` prints it without running
-      // any command. So every file a redirect reads asks under read, as the read tool asks for it, and for its folder
-      // when that lies outside the project, as `cat` of the same file does. A wildcard opens the one file it matches.
-      const redirectRead = Effect.fnUntraced(function* (text: string) {
-        yield* envRead(text)
-        const word = shellWord(text, cwd, ps, shell)
-        if (DEVICES.has(word.toLowerCase()) || INPUTS.has(word)) return
-        // A target the scan cannot place (`< "$IN"`, `< ~other/x`, `< ~+/x`) may be any file, so it is approved only as
-        // written.
-        if (!win && (new RegExp(BASH_EXPANSION.source).test(word) || /^~[^/]/.test(word))) unread(scan, `< ${text}`)
-        const file = fileName(word, win, expansion)
-        // Inside or outside is decided on the file's real path, as the read tool decides it, so a link in the
-        // repository to a file outside it asks for that folder.
-        const folder = yield* real(yield* wordPath(file.dir || ".", cwd, ps, shell))
-        if (folder && !containsPath(folder, instance)) scan.dirs.add(folder)
-        const resolved = yield* real(
-          /[*?[]/.test(file.name) ? undefined : yield* wordPath(file.dir + file.name, cwd, ps, shell),
-        )
-        if (resolved && !containsPath(resolved, instance)) scan.dirs.add(path.dirname(resolved))
-        const match = wildcard(file.name, win)
-        const opened = resolved
-          ? [resolved]
-          : folder
-            ? (yield* entries(folder)).filter((item) => match.test(fold(item))).map((item) => path.join(folder, item))
-            : []
-        // A name the scan cannot resolve (`< "$IN"`), or a wildcard that matches nothing, is asked for as written.
-        if (opened.length === 0) scan.reads.add(file.dir + file.name)
-        for (const item of opened) scan.reads.add(path.relative(instance.worktree, item))
-      })
-      const real = (item: string | undefined) =>
-        Effect.try({ try: () => (item ? FSUtil.realpath(item) : undefined), catch: (cause) => cause }).pipe(
-          Effect.orElseSucceed(() => item),
-        )
-      // A link to an environment file, or on Windows its 8.3 short name (`ENV~1`), opens it under another name, so the
-      // name it really has is tested too, as the read tool tests both.
-      const linkedEnv = Effect.fnUntraced(function* (word: string) {
-        const resolved = yield* wordPath(word, cwd, ps, shell)
-        if (!resolved) return
-        const real = yield* Effect.try({ try: () => FSUtil.realpath(resolved), catch: (cause) => cause }).pipe(
-          Effect.orElseSucceed(() => undefined),
-        )
-        if (!real || !ENV_FILE.test(win ? path.win32.basename(real).toLowerCase() : path.basename(real))) return
-        scan.reads.add(path.relative(instance.worktree, real))
-      })
-      // A name with a wildcard (`*.env`) is asked for as written, not as the folder it starts in.
-      const readTarget = Effect.fnUntraced(function* (word: string) {
-        const resolved = /[*?[]/.test(word) ? undefined : yield* wordPath(word, cwd, ps, shell)
-        scan.reads.add(resolved ? path.relative(instance.worktree, resolved) : word)
-      })
-      // A directory change anywhere in the command leaves unknown where git diff starts looking for its work tree.
-      const moved = list.some((item) => item.cmd !== undefined && CWD.has(item.cmd))
-
-      for (const item of list) {
-        const tokens = item.tokens
-        const cmd = item.cmd
-        // `git diff` prints any two files once one of them lies outside the work tree (`git diff /dev/null ~/.ssh/id_rsa`),
-        // --no-index or not, so its arguments are paths as much as cat's. A revision resolves inside the workspace.
-        const diff = cmd === "git" && tokens[1] === "diff"
-        const paths: (string | undefined)[] = []
-
-        if (cmd && (FILES.has(cmd) || diff || (shellKind === "cmd" && CMD_FILES.has(cmd)))) {
-          for (const arg of pathArgs(diff ? item.command.slice(1) : item.command, ps, shellKind === "cmd")) {
-            const resolved = yield* argPath(arg, cwd, ps, shell)
-            yield* Effect.logInfo("resolved path", { arg, resolved })
-            paths.push(resolved)
-            if (!resolved || containsPath(resolved, instance)) continue
-            const dir = (yield* fs.isDir(resolved)) ? resolved : path.dirname(resolved)
-            scan.dirs.add(dir)
-          }
-        }
-
-        if (tokens.length && (!cmd || !CWD.has(cmd))) {
-          scan.patterns.add(source(item.node))
-          scan.always.add(BashArity.prefix(tokens).join(" ") + " *")
-        }
-        // Outside a git work tree, or once one of its paths lies outside the work tree, `git diff a b` is
-        // `git diff --no-index a b` and prints both whole files, directories included, so it answers to the rules
-        // written for --no-index, such as the read-only specialists' deny. A path inside the project is not enough: a
-        // nested repository or submodule ends the work tree at its own root, and a .git directory has none.
-        // Without a path (`git diff`, `git diff --stat`) git only shows the work tree's own changes.
-        if (
-          diff &&
-          !tokens.includes("--no-index") &&
-          (instance.project.vcs !== "git" ||
-            ((paths.length > 0 || tokens.includes("--")) && (moved || !(yield* inWorkTree(paths, cwd)))))
-        )
-          scan.patterns.add(["git", "diff", "--no-index", ...tokens.slice(2)].join(" "))
-
-        for (const arg of item.command.slice(1)) yield* envRead(arg.text)
-
-        for (const cloud of yield* cloudRequests(tokens, 0)) {
-          const text = source(item.node)
-          scan.cloud.set(
-            [cloud.provider.toLowerCase(), path.basename(cwd), cloud.environment, `shell ${cloud.action}`].join("/"),
-            { ...cloud, command: text.length > 200 ? `${text.slice(0, 200)}…` : text },
-          )
-        }
-      }
-
-      // `while read line; do ...; done < .env`. PowerShell refuses to parse `<`, so its file is never opened.
-      for (const source of inputRedirects(root, ps)) yield* ps ? envRead(source) : redirectRead(source)
-      // `$(<file)` prints a file without running a command, so it is checked like one, approved only as written.
-      if (!ps) {
-        for (const node of root.descendantsOfType("command_substitution")) {
-          if (!node || node.descendantsOfType("command").length > 0) continue
-          if (node.descendantsOfType("file_redirect").length === 0) continue
-          scan.patterns.add(node.text)
-          scan.always.add(node.text)
-        }
-      }
-
-      // A .NET method call runs code without being a command (`[IO.File]::ReadAllText('.env')`), so without this a
-      // statement made only of calls would run with no permission asked at all. Each chain of calls is checked like
-      // a bash statement: approved only as written, and asking under read for an environment file it names.
-      if (ps) {
-        for (const node of root.descendantsOfType("invokation_expression")) {
-          if (!node || node.parent?.type === "invokation_expression") continue
-          scan.patterns.add(node.text)
-          scan.always.add(node.text)
-          for (const text of node.descendantsOfType("string_literal")) if (text) yield* envRead(text.text)
-        }
-
-        // A PowerShell statement need not run a command to act: `${C:\x}` reads a file and `$env:A = 1` changes what a
-        // later command does. So a statement without a command, as well as every assignment and function definition,
-        // is checked like bash's are, approved only as written. One nested in another is part of that one's text.
-        const exact = [
-          ...root
-            .descendantsOfType("statement_list")
-            .flatMap((list) => list?.namedChildren ?? [])
-            .filter((node): node is Node => node !== null && node.type !== "comment" && node.type !== "empty_statement")
-            .filter((node) => node.descendantsOfType("command").length === 0),
-          ...root
-            .descendantsOfType(["assignment_expression", "function_statement"])
-            .filter((node): node is Node => Boolean(node)),
-        ]
-        // A command the grammar cannot parse (`Get-Content $dir/.en?`) may do anything the scan did not see.
-        if (root.hasError) unread(scan, root.text)
-        const ids = new Set(exact.map((node) => node.id))
-        for (const node of exact) {
-          let outer = node.parent
-          while (outer && !ids.has(outer.id)) outer = outer.parent
-          if (outer) continue
-          scan.patterns.add(node.text.trim())
-          scan.always.add(node.text.trim())
-        }
-
-        // A provider variable is a file read or write without a command (`$k = ${C:\Users\me\.ssh\id_rsa}`,
-        // `${C:\Users\me\.bashrc} = 'evil'`), so it asks what the read and edit tools ask for that file, outside
-        // the project too. An item of another provider (`${function:git} = { ... }`) is asked for as written.
-        for (const node of root.descendantsOfType("variable")) {
-          const item = node && providerItem(node.text)
-          if (!node || !item) continue
-          const use = variableUse(node)
-          const resolved = item.file ? yield* resolvePath(item.file, cwd, shell) : undefined
-          const target = resolved ? path.relative(instance.worktree, resolved) : item.name
-          if (use.read) scan.reads.add(target)
-          // The provider globs the path and reads a stream by its file's name, so `${C:\proj\.en?}` and
-          // `${C:\proj\.env::$DATA}` read `.env` the way `Get-Content .en?` does.
-          if (use.read && item.file) yield* envRead(item.file)
-          if (use.write) scan.writes.add(target)
-          if (resolved && !containsPath(resolved, instance)) scan.dirs.add(path.dirname(resolved))
-          // A drive the scan cannot place (`${Temp:\x}`) is outside the project as far as it knows.
-          if (item.folder) scan.dirs.add(path.win32.dirname(item.name))
-        }
-
-        // `switch -File .env { ... }` reads the file line by line.
-        for (const node of root.descendantsOfType("switch_filename")) {
-          if (!node) continue
-          yield* envRead(node.text)
-          const resolved = yield* argPath(node.text, cwd, ps, shell)
-          if (resolved && !containsPath(resolved, instance)) scan.dirs.add(path.dirname(resolved))
-        }
-      }
-
-      // A target that cannot be resolved (`> "$OUT"`) is asked for as written, so a rule that denies edits denies it.
-      for (const target of redirects(root, ps)) {
-        const resolved = yield* argPath(target, cwd, ps, shell)
-        scan.writes.add(resolved ? path.relative(instance.worktree, resolved) : target)
-        if (!resolved || containsPath(resolved, instance)) continue
-        scan.dirs.add(path.dirname(resolved))
-      }
-
-      // PowerShell's grammar has none of these node types. "Always" approves
-      // only the exact statement, since a changed environment or a redefined
-      // name alters what an already-allowed command does.
-      if (!ps) {
-        for (const node of statements(root)) {
-          const text = source(node)
-          scan.patterns.add(text)
-          scan.always.add(text)
-        }
-      }
-
-      // bash and zsh: a command the grammar cannot parse, or one that hides a command substitution from it, may run
-      // anything the scan did not see. A statement made only of redirects runs a program too (zsh's READNULLCMD).
-      if (!ps && shellKind !== "cmd") {
-        if (root.hasError || hiddenSubstitution(root, Shell.name(shell) === "zsh")) unread(scan, root.text)
-        for (const node of root.descendantsOfType("redirected_statement")) {
-          if (!node) continue
-          if (node.namedChildren.every((child) => child?.type === "file_redirect" || child?.type === "heredoc_redirect"))
-            unread(scan, node.text)
-        }
-      }
-
-      // cmd is read with the bash grammar, which does not know cmd's syntax: in `for /f %a in (.env) do echo %a`, which
-      // reads .env line by line, bash sees `.env` as a command in a subshell. So any cmd word may name an environment
-      // file, and a command the grammar cannot parse is approved only as written.
-      if (shellKind === "cmd") {
-        for (const node of root.descendantsOfType(["word", "string", "raw_string", "concatenation"])) {
-          if (node) yield* envRead(node.text)
-        }
-        if (root.hasError) unread(scan, root.text)
-      }
-
-      return scan
-    })
 
     const shellEnv = Effect.fn("ShellTool.shellEnv")(function* (ctx: Tool.Context, cwd: string) {
       const extra = yield* plugin.trigger(
@@ -1299,6 +1949,7 @@ export const ShellTool = Tool.define(
       const keep = limits.maxBytes * 2
       // The start of the output, kept for the head of a long result; the ring buffer below keeps only the end.
       let start = ""
+      let tail = ""
       let total = 0
       let full = ""
       let last = ""
@@ -1365,64 +2016,71 @@ export const ShellTool = Tool.define(
           const handle = yield* spawner.spawn(command)
 
           const output = yield* Effect.forkScoped(
-            Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
-              const size = Buffer.byteLength(chunk, "utf-8")
-              if (total < limits.maxBytes) start += chunk
-              total += size
-              list.push({ text: chunk, size })
-              used += size
-              while (used > keep) {
-                const item = list[0]
-                if (!item) break
-                cut = true
-                const excess = used - keep
-                if (item.size <= excess) {
-                  list.shift()
-                  used -= item.size
-                  continue
-                }
-                // Trim only the excess: dropping a whole large chunk can discard the entire tail
-                // when a pipe delivers a command's final newline in a separate chunk.
-                const bytes = Buffer.from(item.text, "utf-8")
-                let offset = excess
-                while (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) offset++
-                list[0] = { text: bytes.subarray(offset).toString("utf-8"), size: bytes.length - offset }
-                used -= offset
-              }
+            Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
+              // A guest family's private text is refused before any of it is buffered, saved to a file or shown. The
+              // window keeps the end of the last chunk so a path split across two chunks is still seen.
+              (ctx.assertOutput ? ctx.assertOutput(tail + chunk) : Effect.void).pipe(
+                Effect.andThen(() => {
+                  tail = (tail + chunk).slice(-4096)
+                  const size = Buffer.byteLength(chunk, "utf-8")
+                  if (total < limits.maxBytes) start += chunk
+                  total += size
+                  list.push({ text: chunk, size })
+                  used += size
+                  while (used > keep) {
+                    const item = list[0]
+                    if (!item) break
+                    cut = true
+                    const excess = used - keep
+                    if (item.size <= excess) {
+                      list.shift()
+                      used -= item.size
+                      continue
+                    }
+                    // Trim only the excess: dropping a whole large chunk can discard the entire tail
+                    // when a pipe delivers a command's final newline in a separate chunk.
+                    const bytes = Buffer.from(item.text, "utf-8")
+                    let offset = excess
+                    while (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) offset++
+                    list[0] = { text: bytes.subarray(offset).toString("utf-8"), size: bytes.length - offset }
+                    used -= offset
+                  }
 
-              last = preview(last + chunk)
+                  last = preview(last + chunk)
 
-              if (file) {
-                sink?.write(chunk)
-              } else {
-                full += chunk
-                if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
-                  return trunc.write(full).pipe(
-                    Effect.andThen((next) =>
-                      Effect.sync(() => {
-                        file = next
-                        cut = true
-                        sink = createWriteStream(next, { flags: "a" })
-                        full = ""
-                      }),
-                    ),
-                    Effect.andThen(
-                      ctx.metadata({
-                        metadata: {
-                          output: last,
-                        },
-                      }),
-                    ),
-                  )
-                }
-              }
+                  if (file) {
+                    sink?.write(chunk)
+                  } else {
+                    full += chunk
+                    if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
+                      return trunc.write(full).pipe(
+                        Effect.andThen((next) =>
+                          Effect.sync(() => {
+                            file = next
+                            cut = true
+                            sink = createWriteStream(next, { flags: "a" })
+                            full = ""
+                          }),
+                        ),
+                        Effect.andThen(
+                          ctx.metadata({
+                            metadata: {
+                              output: last,
+                            },
+                          }),
+                        ),
+                      )
+                    }
+                  }
 
-              return ctx.metadata({
-                metadata: {
-                  output: last,
-                },
-              })
-            }),
+                  return ctx.metadata({
+                    metadata: {
+                      output: last,
+                    },
+                  })
+                }),
+              ),
+            ),
           )
 
           const abort = Effect.callback<void>((resume) => {
@@ -1503,6 +2161,55 @@ export const ShellTool = Tool.define(
       }
     })
 
+    // A command started in the background (5.H): spawned as a foreground command would be, sandbox included, then
+    // handed to ShellJobs, which tells the session when it exits.
+    const background = Effect.fn("ShellTool.background")(function* (
+      input: {
+        shell: string
+        command: string
+        cwd: string
+        env: NodeJS.ProcessEnv
+        timeout?: number
+        workspaceRoot: string
+        ops: TaskPromptOps
+        beforeSpawn: Effect.Effect<void>
+      },
+      ctx: Tool.Context,
+      shells: ShellJobs.Interface,
+    ) {
+      const offline = webNone() ? Sandbox.offline(input) : undefined
+      const notice = offline && offline.type !== "refused" ? offline.notice : undefined
+      const first = notice !== undefined && !told.has(ctx.sessionID)
+      if (first) told.add(ctx.sessionID)
+      const spawned = yield* cmd(input.shell, input.command, input.cwd, input.env, input.workspaceRoot, ctx, offline)
+      const shell = yield* shells.start({
+        sessionID: ctx.sessionID,
+        command: input.command,
+        process: spawned,
+        beforeSpawn: input.beforeSpawn,
+        ...(input.timeout === undefined ? {} : { timeout: input.timeout }),
+        ops: input.ops,
+        agent: ctx.agent,
+        messageID: ctx.messageID,
+        ...(ctx.callID ? { callID: ctx.callID } : {}),
+        ...(ctx.assertOutput ? { output: ctx.assertOutput } : {}),
+      })
+      const output = ShellJobs.started(shell)
+      return {
+        title: input.command,
+        metadata: {
+          output: "",
+          exit: null,
+          truncated: false,
+          background: true,
+          shellID: shell.id,
+          ...(shell.outputPath ? { outputPath: shell.outputPath } : {}),
+          ...(notice ? { sandbox: notice } : {}),
+        },
+        output: first ? `${notice}\n\n${output}` : output,
+      }
+    })
+
     return () =>
       Effect.gen(function* () {
         const cfg = yield* config.get()
@@ -1517,72 +2224,49 @@ export const ShellTool = Tool.define(
           parameters: prompt.parameters,
           execute: (params: Parameters, ctx: Tool.Context) =>
             Effect.gen(function* () {
-              const rootID = yield* Effect.gen(function* () {
-                const session = yield* sessions
-                  .get(ctx.sessionID)
-                  .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)))
-                let rootID = ctx.sessionID
-                let parentID = session ? session.parentID : ctx.parentID
-                const seen = new Set([rootID])
-                while (parentID) {
-                  if (seen.has(parentID) || seen.size >= 64)
-                    return yield* Effect.die(new Error("The shell's conversation ancestry could not be verified."))
-                  seen.add(parentID)
-                  const parent = yield* sessions.get(parentID).pipe(Effect.orDie)
-                  rootID = parent.id
-                  parentID = parent.parentID
-                }
-                return rootID
-              })
-              const history = () =>
-                rootID === ctx.sessionID
-                  ? ctx.history
-                    ? ctx.history()
-                    : Effect.succeed(ctx.messages)
-                  : sessions.messages({ sessionID: rootID }).pipe(Effect.orDie)
-              let controlsDesktop = ComputerCommand.controls(params.command)
-              const checkComputer = Effect.gen(function* () {
-                if (controlsDesktop && (yield* computer.held(rootID)))
-                  return yield* Effect.die(
-                    new Error(
-                      `Use the computer tool for desktop input and screenshots while ${Hands.NAME} holds the computer.`,
-                    ),
-                  )
-              })
-              yield* checkComputer
               const instanceCtx = yield* InstanceState.context
               const cwd = params.workdir
-                ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
+                ? yield* permission.resolvePath(params.workdir, instanceCtx.directory, shell)
                 : instanceCtx.directory
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
+              }
+              // A background command is refused before anything is asked when this session may not start one, its
+              // timeout is out of range, or its conversation already runs the most it may (5.H). Start reserves the
+              // place, so the limit is checked there again.
+              const ops = ctx.extra?.promptOps as TaskPromptOps | undefined
+              if (params.background) {
+                const refused =
+                  ShellJobs.refusal({ subagent: ctx.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
+                  (Option.isNone(jobs) || !ops ? ShellJobs.UNAVAILABLE_REFUSAL : undefined) ??
+                  ShellJobs.timeoutRefusal(params.timeout) ??
+                  (Option.isSome(jobs) && (yield* jobs.value.full(ctx.sessionID)) ? ShellJobs.LIMIT_REFUSAL : undefined)
+                if (refused) return yield* Effect.die(new Error(refused))
               }
               const timeout = params.timeout ?? defaultTimeoutMs
               // Refused before anything is asked: with Web access None a command runs only in the sandbox, and this
               // computer has none to run it in.
               const refused = webNone() ? Sandbox.offlineRefusal() : undefined
               if (refused) return yield* Effect.die(new Error(refused))
-              const ps = Shell.ps(shell)
-              const approval = yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
-                    Effect.sync(() => tree.delete()),
-                  )
-                  controlsDesktop ||= commands(tree.rootNode).some((node) =>
-                    ComputerCommand.controlsTokens(parts(node).map((item) => item.text)),
-                  )
-                  yield* checkComputer
-                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
-                  if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
-                  const confirmed = yield* ask(ctx, scan, {
+              const scan = yield* permission.ask(ctx, { command: params.command, cwd, shell })
+              // Reserve resolved targets only after every permission, before any process starts.
+              yield* permission.admit(ctx, [scan])
+              const beforeSpawn = permission.beforeRun([scan])
+              if (params.background && Option.isSome(jobs) && ops)
+                return yield* background(
+                  {
+                    shell,
                     command: params.command,
-                    afterScreen: history().pipe(
-                      Effect.flatMap((messages) => computer.completedThisTurn(rootID, messages)),
-                    ),
-                  })
-                  return { confirmed, patterns: Array.from(scan.patterns) }
-                }),
-              )
+                    cwd,
+                    env: yield* shellEnv(ctx, cwd),
+                    ...(params.timeout === undefined ? {} : { timeout: params.timeout }),
+                    workspaceRoot: instanceCtx.worktree,
+                    ops,
+                    beforeSpawn,
+                  },
+                  ctx,
+                  jobs.value,
+                )
 
               return yield* run(
                 {
@@ -1597,22 +2281,7 @@ export const ShellTool = Tool.define(
                   workspaceRoot: instanceCtx.worktree,
                 },
                 ctx,
-                Effect.gen(function* () {
-                  yield* checkComputer
-                  if (!approval.confirmed && (yield* computer.completedThisTurn(rootID, yield* history()))) {
-                    const answer = yield* ctx.ask({
-                      permission: ShellID.ToolID,
-                      patterns: afterScreenPatterns(approval.patterns, params.command),
-                      always: [],
-                      metadata: { command: params.command, reason: PermissionPolicy.AFTER_SCREEN_COMMAND_REASON },
-                    })
-                    if (answer !== "once")
-                      return yield* Effect.die(
-                        new Error("This shell command needs a fresh Allow once answer after computer use."),
-                      )
-                  }
-                  yield* checkComputer
-                }),
+                beforeSpawn,
               )
             }),
         }

@@ -88,4 +88,26 @@ describe("migrateTerminalState", () => {
       ],
     })
   })
+
+  test("keeps an agent terminal's session, its finished process's exit code and a PTY gone without one", () => {
+    expect(
+      migrateTerminalState({
+        active: "one",
+        all: [
+          { id: "one", title: "dev server", titleNumber: 1, agent: "ses_agent", exitCode: 0 },
+          { id: "two", title: "tests", titleNumber: 2, agent: 7, exitCode: "1" },
+          { id: "three", title: "watch", titleNumber: 3, agent: "ses_agent", gone: true },
+          { id: "four", title: "logs", titleNumber: 4, gone: "yes" },
+        ],
+      }),
+    ).toEqual({
+      active: "one",
+      all: [
+        { id: "one", title: "dev server", titleNumber: 1, agent: "ses_agent", exitCode: 0 },
+        { id: "two", title: "tests", titleNumber: 2 },
+        { id: "three", title: "watch", titleNumber: 3, agent: "ses_agent", gone: true },
+        { id: "four", title: "logs", titleNumber: 4 },
+      ],
+    })
+  })
 })

@@ -153,9 +153,10 @@ for (const permissionMode of process.platform === "win32" ? ["denied"] : ["posix
           path.join(directory, ".earlier-agent", "earlier-agent.json"),
           '{"$schema":"https://earlier-agent.ai/config.json","permission":{"bash":"deny"}}',
         )
-        yield* fs.writeFileString(path.join(directory, "notes"), 'model = "must-not-import"\n')
+        // An unreadable settings file holds nothing to import and never stops loading.
+        yield* fs.writeFileString(path.join(directory, "config"), 'model = "must-not-import"\n')
         yield* fs.writeFileString(path.join(home, ".locked", "locked.json"), '{"model":"must-not-import"}')
-        const locked = [path.join(home, ".Trash"), path.join(home, ".locked"), path.join(directory, "notes")]
+        const locked = [path.join(home, ".Trash"), path.join(home, ".locked"), path.join(directory, "config")]
         yield* Effect.forEach(locked, (item) => permissions.change(item, 0o000))
         yield* Effect.addFinalizer(() =>
           Effect.forEach(locked, (item) => permissions.change(item, 0o755).pipe(Effect.ignore)),
@@ -550,6 +551,84 @@ it.live("does not overwrite active Vector settings or import unrelated and crede
     expect(yield* ConfigImport.run(dir)).toBeUndefined()
     expect(yield* fs.exists(path.join(dir, "vector.jsonc"))).toBe(false)
   }),
+)
+
+it.live("an unrelated extensionless file above a non-git workspace neither stops the import nor is imported", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped()
+    const fs = yield* FSUtil.Service
+    // A shared folder above a non-git workspace, as /tmp is: another program's extensionless backup of source code
+    // that mentions permission sits beside a real neutral settings file.
+    const shared = path.join(root, "shared")
+    const directory = path.join(shared, "app")
+    const backup = path.join(shared, "v03-backup-x1")
+    const source = 'export const rules = {\n  permission: "ask",\n}\n'
+    yield* fs.writeWithDirs(backup, source)
+    yield* fs.writeWithDirs(path.join(shared, "config"), '[permission]\nedit = "deny"\n')
+    yield* fs.ensureDir(directory)
+    const imported = yield* ConfigMigration.discover({
+      directory,
+      worktree: "/",
+      home: root,
+      global: path.join(root, "global"),
+    })
+    expect(imported.map((item) => item.sources)).toEqual([[path.join(shared, "config")]])
+    expect(yield* fs.readJson(path.join(shared, "vector.jsonc"))).toEqual({
+      permission: { edit: "deny" },
+      $schema: "https://vectordev.ai/config.json",
+    })
+    expect(yield* fs.readFileString(backup)).toBe(source)
+  }),
+)
+
+it.live("a broken neutral settings file that names permission still stops the import", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped()
+    const fs = yield* FSUtil.Service
+    const directory = path.join(root, "shared", "app")
+    const broken = path.join(root, "shared", "config")
+    yield* fs.writeWithDirs(broken, 'permission = { edit = "deny"\n')
+    yield* fs.ensureDir(directory)
+    const exit = yield* ConfigMigration.discover({
+      directory,
+      worktree: "/",
+      home: root,
+      global: path.join(root, "global"),
+    }).pipe(Effect.exit)
+    expect(Exit.isFailure(exit) && String(Cause.squash(exit.cause))).toContain(
+      `Cannot import settings from ${broken}. Repair this file before starting Vector.`,
+    )
+    expect(yield* fs.exists(path.join(root, "shared", "vector.jsonc"))).toBe(false)
+  }),
+)
+
+it.live(
+  "config-shaped files of two families above a non-git workspace stop the import; one alone is imported there",
+  () =>
+    Effect.gen(function* () {
+      const root = yield* tmpdirScoped()
+      const fs = yield* FSUtil.Service
+      // Today's fail-closed contract for a shared folder above a non-git workspace, as /tmp is (CI5 owner question):
+      // any config-shaped JSON there is settings, whatever program wrote it.
+      const shared = path.join(root, "shared")
+      const directory = path.join(shared, "app")
+      yield* fs.writeWithDirs(path.join(shared, "a.json"), '{"model":"x/y"}')
+      yield* fs.writeWithDirs(path.join(shared, "b.json"), '{"theme":"dark"}')
+      yield* fs.ensureDir(directory)
+      const input = { directory, worktree: "/", home: root, global: path.join(root, "global") }
+      const exit = yield* ConfigMigration.discover(input).pipe(Effect.exit)
+      expect(Exit.isFailure(exit) && String(Cause.squash(exit.cause))).toContain(
+        `Multiple settings files found in ${shared}.`,
+      )
+      expect(yield* fs.exists(path.join(shared, "vector.jsonc"))).toBe(false)
+      yield* fs.remove(path.join(shared, "b.json"))
+      const imported = yield* ConfigMigration.discover(input)
+      expect(imported.map((item) => item.sources)).toEqual([[path.join(shared, "a.json")]])
+      expect(yield* fs.readJson(path.join(shared, "vector.jsonc"))).toEqual({
+        model: "x/y",
+        $schema: "https://vectordev.ai/config.json",
+      })
+    }),
 )
 
 it.live("refuses ambiguous config families and malformed schema-identified settings", () =>
