@@ -504,6 +504,15 @@ test("Windows driver diagnostic enums match the native allowlists exactly", asyn
     ...COMPUTER_SMOKE_DRIVER_STAGES,
   ])
   expect(COMPUTER_SMOKE_DRIVER_NATIVE_CODES).toEqual([...Computer.ComputerErrorCode.literals, "unknown"])
+  const uia = await readFile(path.join(native, "uia_native.h"), "utf8")
+  const phases = uia.match(/windows_uia_phases\s*\{([^}]+)\};/)?.[1]
+  const names = [...(phases ?? "").matchAll(/L"([^"]+)"/g)].map((match) => match[1])
+  expect(names[0]).toBe("none")
+  const uiaEnumerators = uia.match(/enum class WindowsUiaPhase : uint8_t \{([^}]+)\};/)?.[1]
+  expect(uiaEnumerators?.split(",").map((name) => name.trim().replaceAll("_", "-"))).toEqual(names)
+  expect(COMPUTER_SMOKE_DRIVER_STAGES.slice(COMPUTER_SMOKE_DRIVER_STAGES.indexOf("uia-root-current"))).toEqual(
+    names.slice(1).map((name) => `uia-${name}`),
+  )
   expect(COMPUTER_SMOKE_DRIVER_CAUSES).toHaveLength(40)
   expect(new Set(COMPUTER_SMOKE_DRIVER_CAUSES).size).toBe(40)
   expect(COMPUTER_SMOKE_DRIVER_CAUSES).toContain("core_failure:unknown")

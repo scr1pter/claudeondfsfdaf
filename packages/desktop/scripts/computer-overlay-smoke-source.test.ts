@@ -126,6 +126,37 @@ describe("independent overlay source admission", () => {
       "app.setAccessibilitySupportEnabled(true)",
     )
   })
+  test("the optional UIA observer owns only a shared atomic phase across late native work", async () => {
+    const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+    const header = await readFile(path.join(native, "uia_native.h"), "utf8")
+    const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
+    const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
+    expect(header).toContain("system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic = {})")
+    expect(header).toContain("std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none}")
+    expect(header).toContain("std::atomic<WindowsUiaPhase>::is_always_lock_free")
+    expect(header.match(/friend class NativeUia;/g)).toHaveLength(1)
+    expect(header.match(/enum class WindowsUiaPhase/g)).toHaveLength(1)
+    expect(implementation).toContain("std::shared_ptr<WindowsUiaDiagnostic> diagnostic;")
+    expect(implementation).toContain("actor->diagnostic = std::move(diagnostic)")
+    expect(implementation).toContain("[self = shared_from_this(), promise, ticket, body = std::move(body)]")
+    expect(implementation).toContain("state->phase.store(phase, std::memory_order_relaxed)")
+    expect(implementation).not.toMatch(/WindowsUiaDiagnostic\s*[*&]/)
+    expect(driver).toContain("std::make_shared<WindowsUiaDiagnostic>()")
+    expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic)")
+    expect(driver).toContain("diagnostic->phase.load(std::memory_order_relaxed)")
+    const rootFailure = driver.slice(
+      driver.indexOf("try { root = uia.root(window); }"),
+      driver.indexOf("stage = OverlayDriverStage::stop_hit;"),
+    )
+    expect(rootFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
+    expect(rootFailure).toContain("if (available && diagnostic)")
+    for (const phase of ["uninitialized", "cancellation_unavailable", "timer_unavailable", "expired"])
+      expect(implementation).toContain(`WindowsComObservation::${phase}: note(WindowsUiaPhase::actor_com_${phase})`)
+    expect(implementation).toContain("if (!actor_->diagnostic) return;")
+    expect(
+      implementation.match(/if \(!budget\.current\(\)\) \{ self->note_budget_failure\(budget\); unavailable\(\); \}/g),
+    ).toHaveLength(2)
+  })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))
     expect(graph.entries.map((entry) => entry.path)).toContain("packages/desktop/src/main/computer-overlay.ts")

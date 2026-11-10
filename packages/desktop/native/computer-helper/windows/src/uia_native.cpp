@@ -33,7 +33,11 @@ void desktop_ready() {
   if (!read || used <= sizeof(wchar_t) || used > sizeof(name) || std::wstring_view(name) != L"Default")
     throw Failure{L"secure_desktop", L"The interactive desktop is unavailable."};
 }
+void note_uia(const std::shared_ptr<WindowsUiaDiagnostic>& state, WindowsUiaPhase phase) noexcept {
+  if (state) state->phase.store(phase, std::memory_order_relaxed);
+}
 struct UiaActor {
+  std::shared_ptr<WindowsUiaDiagnostic> diagnostic;
   std::mutex mutex;
   std::condition_variable condition;
   std::deque<std::function<void()>> jobs;
@@ -50,7 +54,13 @@ struct UiaActor {
 };
 struct CallTicket { std::atomic_bool cancelled{false}; uint64_t deadline = 0; std::shared_ptr<UiaActor> actor; };
 thread_local CallTicket* active_ticket = nullptr;
-void current_call() { if (!active_ticket || active_ticket->cancelled.load() || !active_ticket->actor || active_ticket->actor->revoked.load() || now_ms() >= active_ticket->deadline) unavailable(); }
+void current_call() {
+  if (!active_ticket) unavailable();
+  if (active_ticket->cancelled.load()) { if (active_ticket->actor) note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_cancelled); unavailable(); }
+  if (!active_ticket->actor) unavailable();
+  if (active_ticket->actor->revoked.load()) { note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_revoked); unavailable(); }
+  if (now_ms() >= active_ticket->deadline) { note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_expired); unavailable(); }
+}
 bool mutation_result(HRESULT status) {
   if (FAILED(status)) throw Failure{L"changed", L"The native accessibility action could not be confirmed."}; return true;
 }
@@ -127,18 +137,34 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
   std::wstring mutation_name_;
   std::function<bool()> mutation_gate_;
 
+  void note(WindowsUiaPhase phase) const noexcept { note_uia(actor_->diagnostic, phase); }
+  void note_budget_failure(const WindowsComCall& budget) const noexcept {
+    if (!actor_->diagnostic) return;
+    // Only a failed original current() probe samples this existing closed observation. No success
+    // path gains another clock read, cancellation call or budget renewal.
+    switch (budget.observation()) {
+      case WindowsComObservation::uninitialized: note(WindowsUiaPhase::actor_com_uninitialized); return;
+      case WindowsComObservation::cancellation_unavailable: note(WindowsUiaPhase::actor_com_cancellation_unavailable); return;
+      case WindowsComObservation::timer_unavailable: note(WindowsUiaPhase::actor_com_timer_unavailable); return;
+      case WindowsComObservation::expired: note(WindowsUiaPhase::actor_com_expired); return;
+      case WindowsComObservation::current: return;
+    }
+  }
   IUIAutomationElement* native(const UiaElement& value) {
     current_call(); if (!value || !value->native_ || !value->native_->element) unavailable(); return value->native_->element.get();
   }
   std::vector<int> runtime_id(IUIAutomationElement* element) {
-    SAFEARRAY* array = nullptr; current_call();
+    SAFEARRAY* array = nullptr; note(WindowsUiaPhase::runtime_id); current_call();
     if (FAILED(element->GetRuntimeId(&array)) || !array) unavailable();
     struct Array { SAFEARRAY* value; ~Array() { SafeArrayDestroy(value); } } close{array};
     LONG lower = 0, upper = -1;
     VARTYPE kind = VT_EMPTY;
-    if (SafeArrayGetDim(array) != 1 || FAILED(SafeArrayGetVartype(array, &kind)) || kind != VT_I4 || SafeArrayGetElemsize(array) != sizeof(int) ||
-        FAILED(SafeArrayGetLBound(array, 1, &lower)) || FAILED(SafeArrayGetUBound(array, 1, &upper)) || upper < lower || int64_t(upper) - lower >= 64) unavailable();
+    note(WindowsUiaPhase::runtime_shape);
+    if (SafeArrayGetDim(array) != 1 || FAILED(SafeArrayGetVartype(array, &kind)) || kind != VT_I4 || SafeArrayGetElemsize(array) != sizeof(int)) unavailable();
+    note(WindowsUiaPhase::runtime_bounds);
+    if (FAILED(SafeArrayGetLBound(array, 1, &lower)) || FAILED(SafeArrayGetUBound(array, 1, &upper)) || upper < lower || int64_t(upper) - lower >= 64) unavailable();
     std::vector<int> result;
+    note(WindowsUiaPhase::runtime_value);
     for (int64_t offset = 0; offset <= int64_t(upper) - lower; ++offset) { auto index = static_cast<LONG>(int64_t(lower) + offset); int value = 0; if (FAILED(SafeArrayGetElement(array, &index, &value))) unavailable(); result.push_back(value); }
     current_call(); return result;
   }
@@ -147,35 +173,43 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     const auto id = runtime_id(element.get());
     std::erase_if(elements_, [](const auto& value) { return value.expired(); });
     for (const auto& weak : elements_) if (const auto existing = weak.lock(); existing && existing->native_->runtime_id == id) {
-      BOOL same = FALSE; current_call();
+      note(WindowsUiaPhase::wrap_equal); BOOL same = FALSE; current_call();
       if (SUCCEEDED(automation_->CompareElements(element.get(), existing->native_->element.get(), &same)) && same) return existing;
     }
+    note(WindowsUiaPhase::wrap_limit);
     if (elements_.size() >= 8192) unavailable();
     auto storage = std::make_shared<WindowsUiaElement::Storage>(); storage->element = std::move(element); storage->owner = actor_; storage->runtime_id = id;
     auto result = std::shared_ptr<WindowsUiaElement>(new WindowsUiaElement(++sequence_, std::move(storage))); elements_.push_back(result); return result;
   }
   void prepare() {
-    current_call(); desktop_ready(); if (automation_) return;
+    current_call(); note(WindowsUiaPhase::prepare_desktop); desktop_ready(); if (automation_) return;
     winrt::com_ptr<IUIAutomation> automation;
     winrt::com_ptr<IUIAutomationTreeWalker> walker;
     winrt::com_ptr<IUIAutomationCacheRequest> structural;
+    note(WindowsUiaPhase::prepare_create);
     if (FAILED(CoCreateInstance(CLSID_CUIAutomation8, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(automation.put())))) unavailable();
-    const auto timeouts = automation.try_as<IUIAutomation2>();
-    if (!timeouts || FAILED(timeouts->put_ConnectionTimeout(50)) || FAILED(timeouts->put_TransactionTimeout(50)) ||
-        FAILED(automation->get_ControlViewWalker(walker.put())) || FAILED(automation->CreateCacheRequest(structural.put())) ||
-        FAILED(structural->put_TreeScope(TreeScope_Element))) unavailable();
+    note(WindowsUiaPhase::prepare_interface); const auto timeouts = automation.try_as<IUIAutomation2>();
+    if (!timeouts) unavailable();
+    note(WindowsUiaPhase::prepare_connection); if (FAILED(timeouts->put_ConnectionTimeout(50))) unavailable();
+    note(WindowsUiaPhase::prepare_transaction); if (FAILED(timeouts->put_TransactionTimeout(50))) unavailable();
+    note(WindowsUiaPhase::prepare_walker); if (FAILED(automation->get_ControlViewWalker(walker.put()))) unavailable();
+    note(WindowsUiaPhase::prepare_cache); if (FAILED(automation->CreateCacheRequest(structural.put()))) unavailable();
+    note(WindowsUiaPhase::prepare_scope); if (FAILED(structural->put_TreeScope(TreeScope_Element))) unavailable();
     winrt::com_ptr<IUIAutomationCondition> control;
-    if (FAILED(automation->get_ControlViewCondition(control.put())) || FAILED(structural->put_TreeFilter(control.get()))) unavailable();
+    note(WindowsUiaPhase::prepare_control); if (FAILED(automation->get_ControlViewCondition(control.put()))) unavailable();
+    note(WindowsUiaPhase::prepare_filter); if (FAILED(structural->put_TreeFilter(control.get()))) unavailable();
     for (const auto property : {UIA_ProcessIdPropertyId, UIA_ControlTypePropertyId, UIA_BoundingRectanglePropertyId,
          UIA_IsPasswordPropertyId, UIA_IsEnabledPropertyId, UIA_HasKeyboardFocusPropertyId, UIA_IsKeyboardFocusablePropertyId,
-         UIA_IsValuePatternAvailablePropertyId, UIA_IsTextPatternAvailablePropertyId, UIA_ValueIsReadOnlyPropertyId}) if (FAILED(structural->AddProperty(property))) unavailable();
+         UIA_IsValuePatternAvailablePropertyId, UIA_IsTextPatternAvailablePropertyId, UIA_ValueIsReadOnlyPropertyId}) {
+      note(WindowsUiaPhase::prepare_property); if (FAILED(structural->AddProperty(property))) unavailable();
+    }
     current_call();
     automation_ = std::move(automation); walker_ = std::move(walker); structural_ = std::move(structural);
   }
  public:
-  static std::shared_ptr<NativeUia> make() {
+  static std::shared_ptr<NativeUia> make(std::shared_ptr<WindowsUiaDiagnostic> diagnostic) {
     const auto self = std::shared_ptr<NativeUia>(new NativeUia());
-    const auto actor = self->actor_;
+    const auto actor = self->actor_; actor->diagnostic = std::move(diagnostic);
     // Native interfaces and provider calls are confined to this owned MTA. Late calls are quarantined;
     // a timeout never creates replacement threads or lets old work publish into a new observation.
     std::thread([weak = std::weak_ptr<NativeUia>(self), actor] {
@@ -211,55 +245,58 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     using Result = std::invoke_result_t<Body>;
     auto promise = std::make_shared<std::promise<Result>>(); auto result = promise->get_future();
     auto ticket = std::make_shared<CallTicket>(); ticket->deadline = now_ms() + 50; ticket->actor = actor_;
+    note(WindowsUiaPhase::actor_admission);
     { std::lock_guard lock(actor_->mutex); if (actor_->closed || actor_->quarantined || actor_->jobs.size() >= 8) unavailable();
-      actor_->jobs.push_back([self = shared_from_this(), promise, ticket, body = std::move(body)]() mutable {
+      note(WindowsUiaPhase::actor_queued); actor_->jobs.push_back([self = shared_from_this(), promise, ticket, body = std::move(body)]() mutable {
         active_ticket = ticket.get();
-        try { WindowsComCall budget; current_call(); if (!budget.current()) unavailable(); self->prepare();
-          auto value = body(); current_call(); if (!budget.current()) unavailable(); promise->set_value(std::move(value)); }
+        try { self->note(WindowsUiaPhase::actor_budget); WindowsComCall budget;
+          self->note(WindowsUiaPhase::actor_current); current_call(); self->note(WindowsUiaPhase::actor_current_budget); if (!budget.current()) { self->note_budget_failure(budget); unavailable(); } self->prepare();
+          auto value = body(); self->note(WindowsUiaPhase::actor_current); current_call(); self->note(WindowsUiaPhase::actor_current_budget); if (!budget.current()) { self->note_budget_failure(budget); unavailable(); } self->note(WindowsUiaPhase::actor_complete); promise->set_value(std::move(value)); }
         catch (...) { try { promise->set_exception(std::current_exception()); } catch (...) {} }
         active_ticket = nullptr;
       }); actor_->condition.notify_one(); }
     const auto deadline = std::chrono::steady_clock::time_point(std::chrono::milliseconds(ticket->deadline));
     if (result.wait_until(deadline) != std::future_status::ready || now_ms() >= ticket->deadline) {
-      ticket->cancelled.store(true); actor_->revoked.store(true); DWORD thread = 0; std::deque<std::function<void()>> discarded;
+      note(WindowsUiaPhase::actor_expired); ticket->cancelled.store(true); actor_->revoked.store(true); DWORD thread = 0; std::deque<std::function<void()>> discarded;
       { std::lock_guard lock(actor_->mutex); actor_->quarantined = true; discarded.swap(actor_->jobs); thread = actor_->thread; actor_->condition.notify_all(); }
       if (thread) (void)CoCancelCall(thread, 0); unavailable();
     }
     return result.get();
   }
   UiaSecurity security(const UiaElement& value) {
-    auto element = native(value); winrt::com_ptr<IUIAutomationElement> cached;
+    note(WindowsUiaPhase::security_cache); auto element = native(value); winrt::com_ptr<IUIAutomationElement> cached;
     if (FAILED(element->BuildUpdatedCache(structural_.get(), cached.put())) || !cached) unavailable();
-    const auto property = [&](PROPERTYID id, VARTYPE expected, VARIANT& result) {
-      current_call(); if (FAILED(cached->GetCachedPropertyValueEx(id, TRUE, &result)) || result.vt != expected) unavailable();
+    const auto property = [&](PROPERTYID id, VARTYPE expected, VARIANT& result, WindowsUiaPhase phase) {
+      note(phase); current_call(); if (FAILED(cached->GetCachedPropertyValueEx(id, TRUE, &result)) || result.vt != expected) unavailable();
     };
     Variant pid, type, password, enabled, focus, keyboard, available, text_available;
-    property(UIA_ProcessIdPropertyId, VT_I4, pid.value); property(UIA_ControlTypePropertyId, VT_I4, type.value);
-    current_call(); if (FAILED(cached->GetCachedPropertyValueEx(UIA_IsPasswordPropertyId, TRUE, &password.value))) unavailable();
-    property(UIA_IsEnabledPropertyId, VT_BOOL, enabled.value);
-    property(UIA_HasKeyboardFocusPropertyId, VT_BOOL, focus.value); property(UIA_IsKeyboardFocusablePropertyId, VT_BOOL, keyboard.value);
-    property(UIA_IsValuePatternAvailablePropertyId, VT_BOOL, available.value);
-    property(UIA_IsTextPatternAvailablePropertyId, VT_BOOL, text_available.value);
+    property(UIA_ProcessIdPropertyId, VT_I4, pid.value, WindowsUiaPhase::security_pid); property(UIA_ControlTypePropertyId, VT_I4, type.value, WindowsUiaPhase::security_type);
+    note(WindowsUiaPhase::security_password); current_call(); if (FAILED(cached->GetCachedPropertyValueEx(UIA_IsPasswordPropertyId, TRUE, &password.value))) unavailable();
+    property(UIA_IsEnabledPropertyId, VT_BOOL, enabled.value, WindowsUiaPhase::security_enabled);
+    property(UIA_HasKeyboardFocusPropertyId, VT_BOOL, focus.value, WindowsUiaPhase::security_focus); property(UIA_IsKeyboardFocusablePropertyId, VT_BOOL, keyboard.value, WindowsUiaPhase::security_keyboard);
+    property(UIA_IsValuePatternAvailablePropertyId, VT_BOOL, available.value, WindowsUiaPhase::security_value_pattern);
+    property(UIA_IsTextPatternAvailablePropertyId, VT_BOOL, text_available.value, WindowsUiaPhase::security_text_pattern);
+    note(WindowsUiaPhase::security_pid);
     if (pid.value.lVal <= 0) unavailable();
     UiaSecurity result; result.pid = static_cast<DWORD>(pid.value.lVal); result.control_type = type.value.lVal; result.role = role(result.control_type);
     result.value_pattern = available.value.boolVal != VARIANT_FALSE; result.text_pattern = text_available.value.boolVal != VARIANT_FALSE;
-    const auto classification = classify_uia_password(result.control_type,
+    note(WindowsUiaPhase::security_classify); const auto classification = classify_uia_password(result.control_type,
         password.value.vt == VT_BOOL ? std::optional<bool>(password.value.boolVal != VARIANT_FALSE) : std::nullopt, result.value_pattern, result.text_pattern);
     if (!classification) unavailable(); result.password = *classification; result.enabled = enabled.value.boolVal != VARIANT_FALSE;
     result.focused = focus.value.boolVal != VARIANT_FALSE; result.keyboard_focusable = keyboard.value.boolVal != VARIANT_FALSE; result.value_pattern = available.value.boolVal != VARIANT_FALSE;
     if (result.value_pattern) {
-      Variant read; current_call(); if (SUCCEEDED(cached->GetCachedPropertyValueEx(UIA_ValueIsReadOnlyPropertyId, TRUE, &read.value)) && read.value.vt == VT_BOOL) result.read_only = read.value.boolVal != VARIANT_FALSE;
+      note(WindowsUiaPhase::security_value_readonly); Variant read; current_call(); if (SUCCEEDED(cached->GetCachedPropertyValueEx(UIA_ValueIsReadOnlyPropertyId, TRUE, &read.value)) && read.value.vt == VT_BOOL) result.read_only = read.value.boolVal != VARIANT_FALSE;
     }
     if (!result.password && result.text_pattern) {
-      winrt::com_ptr<IUIAutomationTextPattern> pattern; winrt::com_ptr<IUIAutomationTextRange> range;
+      note(WindowsUiaPhase::security_text_readonly); winrt::com_ptr<IUIAutomationTextPattern> pattern; winrt::com_ptr<IUIAutomationTextRange> range;
       current_call(); if (SUCCEEDED(element->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(pattern.put()))) && pattern && SUCCEEDED(pattern->get_DocumentRange(range.put())) && range) {
         Variant read; current_call(); if (SUCCEEDED(range->GetAttributeValue(UIA_IsReadOnlyAttributeId, &read.value)) && read.value.vt == VT_BOOL) result.text_read_only = read.value.boolVal != VARIANT_FALSE;
       }
     }
-    RECT bounds{}; if (SUCCEEDED(cached->get_CachedBoundingRectangle(&bounds))) {
+    note(WindowsUiaPhase::security_bounds); RECT bounds{}; if (SUCCEEDED(cached->get_CachedBoundingRectangle(&bounds))) {
       WindowsRect rect{bounds.left, bounds.top, int64_t(bounds.right) - bounds.left, int64_t(bounds.bottom) - bounds.top}; if (rect.valid()) result.bounds = rect;
     }
-    current_call(); return result;
+    note(WindowsUiaPhase::security_current); current_call(); return result;
   }
   UiaName name(const UiaElement& value) {
     BSTR name = nullptr; current_call(); if (FAILED(native(value)->get_CurrentName(&name))) unavailable();
@@ -269,17 +306,20 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     current_call(); return UiaName{safe, length <= 500 && safe == raw};
   }
   UiaElement root(const WindowsWindow& window) {
-    const auto actual = observe_windows_availability(WindowsAvailabilityBackend::system());
+    note(WindowsUiaPhase::root_availability); const auto actual = observe_windows_availability(WindowsAvailabilityBackend::system());
     require_windows_surface(actual, &window.owner.process.token);
     require_windows_surface(actual, &window.physical_owner.process.token);
     DWORD pid = 0;
+    note(WindowsUiaPhase::root_target);
     if (!eligible_windows_window(window) || GetWindowThreadProcessId(window.surface, &pid) != window.surface_thread_id || pid != window.owner.process.pid ||
         GetAncestor(window.surface, GA_ROOT) != window.hwnd || !windows_owner_current(window.owner) || !windows_owner_current(window.physical_owner)) unavailable();
     winrt::com_ptr<IUIAutomationElement> root;
-    current_call(); if (FAILED(automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put()))) unavailable();
+    note(WindowsUiaPhase::root_element); current_call(); if (FAILED(automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put()))) unavailable();
     UIA_HWND handle = nullptr;
+    note(WindowsUiaPhase::root_handle);
     if (!root || FAILED(root->get_CurrentNativeWindowHandle(&handle)) || reinterpret_cast<HWND>(handle) != window.surface) unavailable();
-    auto value = wrap(std::move(root)); if (security(value).pid != window.owner.process.pid || GetWindowThreadProcessId(window.surface, &pid) != window.surface_thread_id || pid != window.owner.process.pid) unavailable(); return value;
+    note(WindowsUiaPhase::root_wrap); auto value = wrap(std::move(root)); const auto observed = security(value);
+    note(WindowsUiaPhase::root_pid); if (observed.pid != window.owner.process.pid || GetWindowThreadProcessId(window.surface, &pid) != window.surface_thread_id || pid != window.owner.process.pid) unavailable(); return value;
   }
   UiaElement parent(const UiaElement& element) {
     winrt::com_ptr<IUIAutomationElement> parent;
@@ -485,9 +525,9 @@ void require_uia_mutation_gate(const std::function<bool()>& gate) {
   if(!current)throw Failure{L"changed",L"Physical input detection no longer permits the accessibility action."};
 }
 
-WindowsUiaBackend WindowsUiaBackend::system() {
-  const auto native = NativeUia::make(); WindowsUiaBackend backend;
-  backend.root = [native](const auto& window) { if (!windows_window_current(window)) unavailable(); return native->call([native, window] { return native->root(window); }); };
+WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic) {
+  const auto native = NativeUia::make(diagnostic); WindowsUiaBackend backend;
+  backend.root = [native, diagnostic](const auto& window) { note_uia(diagnostic, WindowsUiaPhase::root_current); if (!windows_window_current(window)) unavailable(); return native->call([native, window] { return native->root(window); }); };
   backend.security = [native](const auto& element) { return native->call([native, element] { return native->security(element); }); };
   backend.name = [native](const auto& element) { return native->call([native, element] { return native->name(element); }); };
   backend.value = [native](const auto& element) { return native->call([native, element] { return native->value(element); }); };
