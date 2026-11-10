@@ -1169,6 +1169,16 @@ export function registerHostedHeartbeatHook(id: string, hook: HostedHeartbeatHoo
     throw new Error("A hosted heartbeat hook must have one unique id.")
   heartbeatHooks.set(id, hook)
 }
+/**
+ * Tests only: takes the hook under `id` out (or puts `hook` there) and returns the one that was there, so a test file
+ * that registers its own hook can run in one process with files that load hosted-jobs-runtime.ts, and give it back.
+ */
+export function swapHostedHeartbeatHookForTest(id: string, hook: HostedHeartbeatHook | undefined) {
+  const previous = heartbeatHooks.get(id)
+  if (hook) heartbeatHooks.set(id, hook)
+  else heartbeatHooks.delete(id)
+  return previous
+}
 export function utcHour(at: number) {
   return new Date(at).toISOString().slice(0, 13)
 }

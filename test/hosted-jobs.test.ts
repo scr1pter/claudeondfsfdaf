@@ -1062,6 +1062,11 @@ describe.skipIf(!valkeyURL)("the jobs' scripts on Valkey", () => {
   const client = valkeyURL ? new RedisClient(valkeyURL) : undefined
   const send = async (command: (string | number)[]) =>
     (await client!.send(String(command[0]), command.slice(1).map(String))) ?? null
+  // Bun's client speaks RESP3, where ZSCORE answers a double; the store's REST API answers the score as a string.
+  const zscore = async (args: (string | number)[]) => {
+    const score = await zscore([...args])
+    return score === null ? null : String(score)
+  }
   const { ENQUEUE, REFUND, SLOT, RECUR, MODELS } = HOSTED_JOB_SCRIPTS
   beforeEach(async () => {
     await client!.send("FLUSHDB", [])
@@ -1075,8 +1080,8 @@ describe.skipIf(!valkeyURL)("the jobs' scripts on Valkey", () => {
     expect(await enqueue("b", 2)).toBe(2)
     expect(await enqueue("c", 2)).toBe(0)
     expect(Number(await send(["PTTL", "c:night"]))).toBeGreaterThan(80_000_000)
-    expect(await send(["ZSCORE", "c:due", "a"])).toBe("5")
-    expect(await send(["ZSCORE", "c:index", "b"])).toBe("7")
+    expect(await zscore(["c:due", "a"])).toBe("5")
+    expect(await zscore(["c:index", "b"])).toBe("7")
     expect(Number(await send(["EVAL", REFUND, 1, "c:night"]))).toBe(1)
     expect(Number(await send(["EVAL", REFUND, 1, "c:night"]))).toBe(0)
     expect(Number(await send(["EVAL", REFUND, 1, "c:night"]))).toBe(0)
@@ -1088,7 +1093,7 @@ describe.skipIf(!valkeyURL)("the jobs' scripts on Valkey", () => {
     expect(await recur("r1")).toBe(1)
     expect(await recur("r1")).toBe(1)
     expect(await recur("r2")).toBe(0)
-    expect(await send(["ZSCORE", "c:rdue", "acct:r1"])).toBe("9")
+    expect(await zscore(["c:rdue", "acct:r1"])).toBe("9")
     await send(["EVAL", MODELS, 1, "c:models", DEEPSEEK, 100, "deepseek", 60_000])
     await send(["EVAL", MODELS, 1, "c:models", DEEPSEEK, 200, "deepseek", 60_000])
     expect(await send(["HGET", "c:models", `c:${DEEPSEEK}`])).toBe("2")

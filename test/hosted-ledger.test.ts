@@ -978,6 +978,11 @@ describe.skipIf(!valkeyURL)("the ledger's scripts on Valkey", () => {
   const client = valkeyURL ? new RedisClient(valkeyURL) : undefined
   const send = async (command: (string | number)[]) =>
     (await client!.send(String(command[0]), command.slice(1).map(String))) ?? null
+  // Bun's client speaks RESP3, where ZSCORE answers a double; the store's REST API answers the score as a string.
+  const zscore = async (args: (string | number)[]) => {
+    const score = await zscore([...args])
+    return score === null ? null : String(score)
+  }
   beforeEach(async () => {
     await client!.send("FLUSHDB", [])
   })
@@ -1033,7 +1038,7 @@ describe.skipIf(!valkeyURL)("the ledger's scripts on Valkey", () => {
     expect(await open("s1", -1, now)).toEqual(["ok", 15])
     expect(await open("s2", -1, now)).toEqual(["busy"])
     expect(await open("s1", -1, now)).toEqual(["exists"])
-    expect(await send(["ZSCORE", hostedLapseKey(), id])).toBe(String(now + 30 * MINUTE))
+    expect(await zscore([hostedLapseKey(), id])).toBe(String(now + 30 * MINUTE))
     // Renewed ten minutes in: the first block ran 10, so 20 of the 30 are free for the next.
     expect(await open("s1", 0, now + 10 * MINUTE)).toEqual(["ok", 15])
     expect(JSON.parse(String(await send(["HGET", settle, "hb-s1-0"])))).toMatchObject({ endedAt: now + 10 * MINUTE })
@@ -1050,7 +1055,7 @@ describe.skipIf(!valkeyURL)("the ledger's scripts on Valkey", () => {
     expect(await send(["EVAL", HOSTED_LEDGER_SCRIPTS.MARK, 1, settle, "hb-s1-0", '{"marked":true}'])).toBe(1)
     expect(await send(["EVAL", HOSTED_LEDGER_SCRIPTS.MARK, 1, settle, "hb-none-0", "{}"])).toBe(0)
     expect(await send(["EVAL", HOSTED_LEDGER_SCRIPTS.FINISH, 2, settle, hostedSettleDueKey(), "hb-s1-0", id])).toBe(1)
-    expect(await send(["ZSCORE", hostedSettleDueKey(), id])).toBeNull()
+    expect(await zscore([hostedSettleDueKey(), id])).toBeNull()
     // CLOSE only the block the session is on; LAPSE parks a block whose hold lapsed, charged its whole hold.
     const closeArgs = ["s1", 0, now + 25 * MINUTE, now + 25 * MINUTE, id, now + DAY]
     expect(
@@ -1083,8 +1088,8 @@ describe.skipIf(!valkeyURL)("the ledger's scripts on Valkey", () => {
     ).toBe(1)
     expect(JSON.parse(String(await send(["HGET", settle, "hb-s1-1"])))).toMatchObject({ endedAt: now + 30 * MINUTE })
     expect(await send(["HLEN", running])).toBe(0)
-    expect(await send(["ZSCORE", hostedLapseKey(), id])).toBeNull()
-    expect(await send(["ZSCORE", hostedSettleDueKey(), id])).toBe(String(lapsedAt))
+    expect(await zscore([hostedLapseKey(), id])).toBeNull()
+    expect(await zscore([hostedSettleDueKey(), id])).toBe(String(lapsedAt))
     expect(await open("s3", -1, lapsedAt)).toEqual(["ok", 5])
     expect(
       await send([
@@ -1137,8 +1142,8 @@ describe.skipIf(!valkeyURL)("the ledger's scripts on Valkey", () => {
       purpose: "hosted",
       at: now,
     })
-    expect(await send(["ZSCORE", heldKey, hold.replace(":50000", ":22000")])).toBe(String(now + DAY))
-    expect(await send(["ZSCORE", heldKey, hold])).toBeNull()
+    expect(await zscore([heldKey, hold.replace(":50000", ":22000")])).toBe(String(now + DAY))
+    expect(await zscore([heldKey, hold])).toBeNull()
     expect(
       await send([
         "EVAL",

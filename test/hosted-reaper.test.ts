@@ -13,6 +13,7 @@ import {
   reapHostedSessions,
   registerHostedJobsRunner,
   runHostedNightly,
+  swapHostedJobsRunnerForTest,
 } from "../api/_lib/hosted-crons"
 import { hostedAccount, hostedRunningKey, readLine } from "../api/_lib/hosted-ledger"
 import { computerName, hostedComputerKey, hostedReconcileKey } from "../api/_lib/hosted-provider"
@@ -306,14 +307,20 @@ describe("the rest of the reaper's pass", () => {
     w.provider.computers.get(NAME())!.status = "running"
     w.fakes.store.remove(hostedReconcileKey())
     const ran: number[] = []
-    registerHostedJobsRunner(async ({ clock }) => {
-      ran.push(clock())
-    })
-    w.advance(MINUTE)
-    const result = await reap(w)
-    expect(result.reconcile).toMatchObject({ ran: true, stopped: [NAME()] })
-    expect(ran).toEqual([w.fakes.clock.now])
-    expect(result.jobs).toBe(true)
+    // Another test file in the same process may have loaded hosted-jobs-runtime.ts, which registers the real runner.
+    const previous = swapHostedJobsRunnerForTest(undefined)
+    try {
+      registerHostedJobsRunner(async ({ clock }) => {
+        ran.push(clock())
+      })
+      w.advance(MINUTE)
+      const result = await reap(w)
+      expect(result.reconcile).toMatchObject({ ran: true, stopped: [NAME()] })
+      expect(ran).toEqual([w.fakes.clock.now])
+      expect(result.jobs).toBe(true)
+    } finally {
+      swapHostedJobsRunnerForTest(previous)
+    }
   })
 
   test("a block nothing closed is charged its whole hold by the reaper's settle pass", async () => {

@@ -18,7 +18,7 @@ import { HANDOFF_ALERT_GAP_MS, HANDOFF_ALERT_TITLE, handoffAlertHook } from "../
 import { HOSTED_JOB_SCRIPTS, type JobOptions } from "../api/_lib/hosted-jobs"
 import { handleHostedJobs } from "../api/_lib/hosted-jobs-api"
 import { computerName } from "../api/_lib/hosted-provider"
-import { registerHostedHeartbeatHook } from "../api/_lib/hosted-sessions"
+import { registerHostedHeartbeatHook, swapHostedHeartbeatHookForTest } from "../api/_lib/hosted-sessions"
 import { configuredPlanModels } from "../api/_lib/model-plan-config"
 import { ledgerBackend, type LedgerBackend } from "./hosted-fixture"
 import { ACCOUNT_ID, HOUR, daemonBeat, hostedSessionEnvironment, hostedWorld, invoke, type HostedWorld } from "./hosted-sessions-fixture"
@@ -33,13 +33,18 @@ let ledger: LedgerBackend
 let restore = () => {}
 const alerts: { account: string; title: string; tag?: string }[] = []
 
-// This file does not import hosted-jobs-runtime.ts, which registers the same hook with the real push sender.
+// This file does not import hosted-jobs-runtime.ts, which registers the same hook with the real push sender; another
+// file in the same process may have, so its hook is set aside here and given back after this file.
+const runtimeHandoff = swapHostedHeartbeatHookForTest("handoff", undefined)
 registerHostedHeartbeatHook(
   "handoff",
   handoffAlertHook(async (account, alert) => {
     alerts.push({ account, ...alert })
   }),
 )
+afterAll(() => {
+  swapHostedHeartbeatHookForTest("handoff", runtimeHandoff)
+})
 
 beforeAll(async () => {
   ledger = await ledgerBackend()

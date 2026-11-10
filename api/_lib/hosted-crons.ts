@@ -112,6 +112,16 @@ export function registerHostedJobsRunner(runner: DueJobsRunner) {
   dueJobs = runner
 }
 
+/**
+ * Tests only: puts `runner` in place of the registered one (none for undefined) and returns the one it replaced, so a
+ * test file can run in one process with files that load hosted-jobs-runtime.ts, and give it back.
+ */
+export function swapHostedJobsRunnerForTest(runner: DueJobsRunner | undefined) {
+  const previous = dueJobs
+  dueJobs = runner
+  return previous
+}
+
 // ── The reaper ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type ReapResult = {

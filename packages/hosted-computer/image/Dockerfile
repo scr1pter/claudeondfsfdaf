@@ -20,11 +20,12 @@ RUN set -eu; \
     [ "$VECTOR_MIN_DISK_GENERATION" -le "$VECTOR_IMAGE_GENERATION" ]
 
 RUN apk add --no-cache \
-      bash ca-certificates coreutils findutils util-linux e2fsprogs tar gzip \
+      bash ca-certificates coreutils findutils util-linux setpriv e2fsprogs tar gzip \
       nftables nodejs git \
       chromium font-dejavu font-liberation \
       xvfb xauth x11vnc xdotool ffmpeg \
-    && { [ -x /usr/bin/tar ] || ln -s "$(command -v tar)" /usr/bin/tar; }
+    && { [ -x /usr/bin/tar ] || ln -s "$(command -v tar)" /usr/bin/tar; } \
+    && { [ -x /usr/bin/setpriv ] || ln -s "$(command -v setpriv)" /usr/bin/setpriv; }
 
 RUN set -eu; \
     addgroup -g 10010 share; addgroup -g 10011 x; \
