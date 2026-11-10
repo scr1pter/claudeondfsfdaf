@@ -146,14 +146,15 @@ start_display() {
 }
 
 # start_vnc: the VNC server on a Unix socket only the viewer user can open (its folder is the display user's, group
-# viewer); never TCP.
+# viewer); never TCP. -rfbport 0 turns off the IPv4 port and -rfbportv6 0 the IPv6 one, which the VNC library would
+# otherwise still open on 5900.
 start_vnc() {
   local socket=/run/vector/vnc/vnc.sock i
   rm -f "$socket"
   (
     umask 0117
     spawn_as "$DISPLAY_USER" "$VIEWER" "$XGROUP" /run/vector/log/vnc.log \
-      x11vnc -display "$X_DISPLAY" -auth "$XAUTH" -unixsockonly "$socket" -forever -shared -nopw -norc -quiet
+      x11vnc -display "$X_DISPLAY" -auth "$XAUTH" -rfbport 0 -rfbportv6 0 -unixsock "$socket" -forever -shared -nopw -norc -quiet
   )
   for i in $(seq 1 50); do
     [[ -S $socket ]] && return 0

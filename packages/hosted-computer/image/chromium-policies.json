@@ -6,6 +6,8 @@
     "[::1]:6080",
     "file://*",
     "view-source:*",
+    "devtools://*",
+    "chrome://inspect",
     "chrome://settings/passwords",
     "chrome://password-manager"
   ],
@@ -19,7 +21,6 @@
   "BrowserAddPersonEnabled": false,
   "BrowserGuestModeEnabled": false,
   "IncognitoModeAvailability": 1,
-  "DeveloperToolsAvailability": 2,
   "ExtensionInstallBlocklist": ["*"],
   "DefaultGeolocationSetting": 2,
   "DefaultNotificationsSetting": 2,

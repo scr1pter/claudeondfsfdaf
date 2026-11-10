@@ -187,8 +187,10 @@ describe("the boot steps (boot-lib.sh), with stand-in programs", () => {
 
   test("the display has no TCP, VNC is a Unix socket only, and the services drop to their own users", () => {
     expect(lib).toContain("-nolisten tcp")
-    expect(lib).toContain("-unixsockonly")
-    expect(lib).not.toMatch(/x11vnc[^\n]*-rfbport/)
+    // x11vnc has no -unixsockonly: -unixsock plus port 0 for both TCP listeners (IPv4 and the library's own IPv6 one).
+    expect(lib).toContain('x11vnc -display "$X_DISPLAY" -auth "$XAUTH" -rfbport 0 -rfbportv6 0 -unixsock "$socket"')
+    expect(lib).not.toContain("-unixsockonly")
+    expect(lib).not.toMatch(/x11vnc[^\n]*-rfbport(v6)? [1-9]/)
     expect(lib).toContain('spawn_as "$VIEWER" "$VIEWER" "" /run/vector/log/viewer.log node /opt/vector/viewer-proxy.mjs')
     expect(lib).toContain("--no-new-privs --inh-caps=-all --bounding-set=-all")
     expect(lib).toContain(`install -d -o "$DISPLAY_USER" -g "$VIEWER" -m 2750 /run/vector/vnc`)
@@ -239,20 +241,25 @@ describe("the firewall", () => {
 
 describe("the browser policy", () => {
   test("bars the run-API host and the local viewer; no password manager, autofill, devtools or extensions", () => {
-    expect(policy.URLBlocklist).toEqual(expect.arrayContaining([Hosted.RUN_API_HOST, "localhost:6080", "127.0.0.1:6080", "file://*"]))
+    // DevTools windows are barred by blocking their pages (devtools://), which Chromium checks before it opens one.
+    expect(policy.URLBlocklist).toEqual(
+      expect.arrayContaining([Hosted.RUN_API_HOST, "localhost:6080", "127.0.0.1:6080", "file://*", "devtools://*", "chrome://inspect"]),
+    )
     expect(policy).toMatchObject({
       PasswordManagerEnabled: false,
       AutofillCreditCardEnabled: false,
       AutofillAddressEnabled: false,
-      DeveloperToolsAvailability: 2,
       ExtensionInstallBlocklist: ["*"],
       BrowserSignin: 0,
       SyncDisabled: true,
       DownloadDirectory: DOWNLOADS_DIR,
       QuicAllowed: false,
     })
-    // hostd drives the browser over its debugging pipe; the policy must not take that away.
+    // hostd drives the browser over its debugging pipe; the policy must not take that away. DeveloperToolsAvailability 2
+    // would: it also refuses debugging-protocol sessions to pages, even over --remote-debugging-pipe, so the credential
+    // guard could never attach ("Session with given id not found").
     expect(policy.RemoteDebuggingAllowed).toBeUndefined()
+    expect(policy.DeveloperToolsAvailability).toBeUndefined()
   })
 
   test("boot.sh adds the run host it was booted with (a preview's own host) to the blocklist", () => {

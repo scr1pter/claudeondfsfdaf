@@ -2072,6 +2072,9 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   fields (`secure_field`) and pressing inside CAPTCHAs (`blocked`), and fails closed when a frame does not answer. The
   hand-over reason goes to the server as `Hosted.Heartbeat.handoff` (credential, payment_details, captcha, other); the
   agent's own words never do.
+- **DevTools.** The browser policy bars DevTools windows by blocking their pages (`devtools://*`, and
+  `chrome://inspect`), not with `DeveloperToolsAvailability: 2`: that policy also refuses debugging-protocol sessions to
+  pages, even over `--remote-debugging-pipe`, so the credential guard could not attach.
 - **Git.** "While the agent's process group is stopped" is done for every process of the agent's user. Token steps run
   as the git user in bare mirrors only hostd configures, with hooks, helpers, proxies and URL rewrites switched off on
   the command line; the token is an HTTP header in git's environment, scoped to https://github.com/. No git process of
@@ -2083,8 +2086,9 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   kills the call's process group and any agent process started during the call that is no longer under the agent's main
   process (a daemon, a double fork). The agent and what it keeps under it stay. The agent marks a call's bounds on
   `/v1/tool`; the agent-side hook belongs to the computer-use build.
-- **"Viewer proxy on localhost VNC"** is stricter: the VNC server listens on a Unix socket only (`-unixsockonly`, never
-  TCP, not even loopback), in a folder only the viewer user can enter, so no other process on the computer can reach it.
+- **"Viewer proxy on localhost VNC"** is stricter: the VNC server listens on a Unix socket only (`-unixsock`, with
+  `-rfbport 0 -rfbportv6 0` closing both TCP ports; never TCP, not even loopback), in a folder only the viewer user can
+  enter, so no other process on the computer can reach it.
 - **Viewer proxy.** Checks the token's session, not the computer's name, which the computer does not know (a session
   runs on one computer). It speaks HTTP itself over `node:net`, so the same code runs on Node and under the tests. Only
   RFB 3.8 with no VNC password; the shared flag is forced on; a view token's keyboard, pointer and clipboard messages are
