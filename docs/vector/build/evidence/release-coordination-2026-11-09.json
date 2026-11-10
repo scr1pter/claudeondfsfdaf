@@ -1,0 +1,72 @@
+{
+  "kind": "release-coordination-local-validation-v1",
+  "observedAtUtc": "2026-11-10T02:28:42.910612+00:00",
+  "sourceBaseline": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+  "branch": "release-coordination",
+  "scope": "Local Windows compatibility diagnostics and narrowly scoped test-fixture correction; not full release qualification.",
+  "environment": {
+    "platform": "win32-x64",
+    "bun": "1.3.14",
+    "shell": "Windows PowerShell 5.1",
+    "modelProvider": "synthetic loopback fixtures only"
+  },
+  "accountingCompatibility": {
+    "command": "From packages/core: bun run test test/spend-guard.test.ts test/session-runner-billed-cost.test.ts test/session-accounting-scale.test.ts",
+    "execution": "Three files batched for local diagnostics; no full release-gate claim.",
+    "passed": 94,
+    "failed": 0,
+    "assertions": 10453,
+    "seconds": 54.51,
+    "simulatedScale": "One billion logical input tokens across 10000 priced attempts; no billion-token provider inference or production-scale performance claim."
+  },
+  "initialEngineDiagnostics": {
+    "command": "From packages/engine: bun run test test/session/usage.test.ts test/session/title-usage.test.ts test/session/skill-credit.test.ts test/session/fork-cache.test.ts",
+    "passed": 51,
+    "failed": 2,
+    "assertions": 244,
+    "seconds": 90.49,
+    "qualification": "Batched execution differs from release runbook one-file-at-a-time procedure; failure was isolated before attribution."
+  },
+  "isolatedNegativeControl": {
+    "sourceFixtureGitObject": "f3abd1d4cdcb00caa22afd38f3777e1642f1e3d1",
+    "command": "From packages/engine: bun run test test/session/skill-credit.test.ts",
+    "passed": 0,
+    "failed": 2,
+    "seconds": 39.95,
+    "failure": "Both cases reached skill.id with no draft because the prerequisite check never passed."
+  },
+  "causeProbe": {
+    "originalPackageScript": "test -f src/fixed.ts",
+    "beforeFileExistsExit": 1,
+    "afterRegularFileExistsExit": 1,
+    "redactedStderr": "bun: command not found: test",
+    "attribution": "Fixture portability failure on this machine; not evidence of a production learning failure.",
+    "replacementSemantics": {
+      "missingFileExit": 1,
+      "regularFileExit": 0,
+      "directoryExit": 1
+    }
+  },
+  "correctedFixture": {
+    "file": "packages/engine/test/session/learning-fixture.ts",
+    "sha256": "8324270ea3de4b9bc380d9d6c840daf630bc0c25fcdc028a6684d978981df1f4",
+    "change": "Five package scripts use the installed Bun runtime to test regular-file existence; outer CHECK, fake-model sequence and all learning assertions unchanged.",
+    "command": "From packages/engine: bun run test test/session/skill-credit.test.ts",
+    "passed": 2,
+    "failed": 0,
+    "assertions": 7,
+    "seconds": 49.64,
+    "postTestEdit": "Prettier changed formatting only; corrected command strings and behavior unchanged."
+  },
+  "productionCodeChanged": false,
+  "otherAgentsBranchesModified": false,
+  "ciRerunsDispatched": 0,
+  "realProviderCalls": 0,
+  "providerCredentialReads": 0,
+  "remainingQualification": [
+    "Full exact-candidate CI and SDK/generated checks",
+    "Authenticated Mac and Windows release-candidate acceptance",
+    "Owner privacy/residual-risk review",
+    "Protected publication approval; no release published by these checks"
+  ]
+}
