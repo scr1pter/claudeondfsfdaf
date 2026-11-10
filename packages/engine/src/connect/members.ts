@@ -43,6 +43,8 @@ export interface Sources {
   readonly skills: readonly { readonly name: string; readonly description?: string }[]
   readonly workflows: readonly WorkflowSource[]
   readonly mcp: Readonly<Record<string, McpSource>>
+  /** MCP servers whose config says `type: "remote"`: their code runs on another host, not on this computer. */
+  readonly remoteMcp?: ReadonlySet<string>
   /** `ToolRegistry.ids()`, in the HTTP view only. Without it, members reached through a tool are left out. */
   readonly tools?: readonly string[]
   /** Whether this repository has the GitHub agent's workflow file. */
@@ -104,8 +106,9 @@ const decode = Schema.decodeUnknownOption(Connect.Member)
 /**
  * The list, in a fixed order: adapters, the agents, the helpers, the desktop's own work, the members reached through
  * a tool, skills, saved workflows and MCP servers. With Vector Local on, a member that is otherwise ready but runs in
- * a cloud or sends code past this computer and the listed model servers reads "off". Each id appears once (the first
- * source wins), and a member the schema does not accept is left out.
+ * a cloud or sends code past this computer and the listed model servers reads "off"; an MCP server keeps MCP's own
+ * status, because MCP applies Vector Local to its servers itself. Each id appears once (the first source wins), and a
+ * member the schema does not accept is left out.
  */
 export function compose(sources: Sources): Connect.Member[] {
   const candidates: MemberInput[] = [
@@ -116,14 +119,17 @@ export function compose(sources: Sources): Connect.Member[] {
     ...toolMembers(sources),
     ...sources.skills.map(skillMember),
     ...sources.workflows.map(workflowMember),
-    ...Object.entries(sources.mcp).map(([name, status]) => mcpMember(name, status)),
+    ...Object.entries(sources.mcp).map(([name, status]) =>
+      mcpMember(name, status, sources.remoteMcp?.has(name) === true),
+    ),
     githubAgentMember(sources.githubAgent === true),
   ]
   const seen = new Set<string>()
   return candidates.flatMap((candidate) => {
     if (seen.has(candidate.id)) return []
     seen.add(candidate.id)
-    return Option.match(decode(gate(candidate, sources.local)), { onNone: () => [], onSome: (member) => [member] })
+    const gated = candidate.kind === "mcp" ? candidate : gate(candidate, sources.local)
+    return Option.match(decode(gated), { onNone: () => [], onSome: (member) => [member] })
   })
 }
 
@@ -285,14 +291,17 @@ function workflowMember(workflow: WorkflowSource): MemberInput {
   }
 }
 
-function mcpMember(name: string, source: McpSource): MemberInput {
+function mcpMember(name: string, source: McpSource, remote: boolean): MemberInput {
   const base = {
     id: `mcp:${name}`,
     kind: "mcp" as const,
     title: words(name, 120),
-    summary: "An MCP server you configured. The agent reaches it through the tools it offers.",
+    summary: remote
+      ? "An MCP server you configured that runs on another host. The agent reaches it through the tools it offers."
+      : "An MCP server you configured. The agent reaches it through the tools it offers.",
     owner: "user" as const,
-    place: "local" as const,
+    // A remote server's code runs on a host the user has an account with, never on this computer.
+    place: remote ? ("your-cloud" as const) : ("local" as const),
     reach: `mcp:${name.replace(/[^A-Za-z0-9_.:-]/g, "-")}`.slice(0, 128),
   }
   if (source.status === "connected") return { ...base, state: "ready" }

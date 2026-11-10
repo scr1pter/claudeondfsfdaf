@@ -209,11 +209,13 @@ export function comparable(previous: Connect.Target | undefined, current: Connec
 
 /**
  * Labels this review's findings against an earlier review of the working tree or the index. A finding that matches an
- * earlier one (core's `matchPrior`: by id, then by place and a similar title) is still open, or stays dismissed when a
- * person dismissed it; one that matches none is new. Each earlier finding is claimed once, by the first match in
- * VectorScope's order. An earlier finding nothing matched is fixed, appended with an empty body, but only when its
- * file is still among `changed` (when given): one in a file this review no longer covers is left out with a note,
- * because connect cannot tell. Earlier findings already fixed are not matched again.
+ * earlier one (core's `matchPrior`: by id, then by place and a similar title) is still open, whatever status the
+ * earlier run saved: a saved run is session data, and only a person's click dismisses a finding (CW-17), so an
+ * earlier `dismissed` never hides a finding this review raised. One that matches none is new. Each earlier finding is
+ * claimed once, by the first match in VectorScope's order. An earlier finding nothing matched is fixed, appended with
+ * an empty body, but only when its file is still among `changed` (when given): one in a file this review no longer
+ * covers is left out with a note, because connect cannot tell. Earlier findings already fixed are not matched again,
+ * and an earlier dismissed one nothing matched is left out rather than called fixed.
  */
 export function compareWorktree(input: {
   readonly previous: readonly Connect.Finding[]
@@ -238,8 +240,8 @@ export function compareWorktree(input: {
     const match = matchPrior(located, pool)
     if (!match) return { ...finding, status: "new" }
     const index = pool.indexOf(match)
-    const [claimed] = available.splice(index, 1)
-    return { ...finding, status: claimed.source.status === "dismissed" ? "dismissed" : "still-open" }
+    available.splice(index, 1)
+    return { ...finding, status: "still-open" }
   })
   const changed = input.changed ? new Set(input.changed.flatMap((path) => normalizePath(path) ?? [])) : undefined
   const gone = available.filter((entry) => entry.source.status !== "dismissed")

@@ -270,7 +270,7 @@ describe("comparing two reviews", () => {
       finding("a", { line: 14 }),
       // A new id two lines away with a similar title: still open, by place.
       finding("b2", { path: "src/shared.ts", line: 22, title: "Missing null check on the user" }),
-      // A person dismissed it before, so it stays dismissed.
+      // The earlier run saved it as dismissed, but a saved run never dismisses: only a person's click does (CW-17).
       finding("d2", { path: "src/dismissed.ts", title: "Problem d" }),
       // Nothing like it before.
       finding("n", { path: "src/new.ts" }),
@@ -287,7 +287,7 @@ describe("comparing two reviews", () => {
     expect(result.findings.map((entry) => [entry.id, entry.status])).toEqual([
       ["a", "still-open"],
       ["b2", "still-open"],
-      ["d2", "dismissed"],
+      ["d2", "still-open"],
       ["n", "new"],
       ["e", "new"],
       ["c", "fixed"],
@@ -314,6 +314,16 @@ describe("comparing two reviews", () => {
     })
     expect(result.findings.map((entry) => [entry.id, entry.status])).toEqual([["a", "fixed"]])
     expect(result.notes[0]).toContain("1 earlier finding is in files this review no longer covers")
+  })
+
+  test("a saved run that calls a finding dismissed cannot hide the blocking finding this review raised", () => {
+    // A run saved in the session is data any client could have written; dismissal comes only from a person's click.
+    const result = ConnectFindings.compareWorktree({
+      previous: [finding("x", { severity: "blocking", status: "dismissed" })],
+      current: [finding("x", { severity: "blocking" })],
+    })
+    expect(result.findings.map((entry) => [entry.id, entry.status])).toEqual([["x", "still-open"]])
+    expect(result.findings.every(ConnectFindings.active)).toBe(true)
   })
 
   test("each earlier finding is claimed once, by the first match in VectorScope's order", () => {

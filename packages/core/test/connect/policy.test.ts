@@ -542,3 +542,76 @@ describe("check 1: settings the changes edit", () => {
     expect(ConnectPolicy.SETTINGS_NOTE).toContain("vector review")
   })
 })
+
+describe("check 1 through links", () => {
+  test("a settings link fires the check when the changes edit what it points to", () => {
+    // .gitattributes -> config/attrs, and .vector -> settings/vector: the review reads the targets.
+    const links: ConnectPolicy.SettingsLink[] = [
+      { path: ".gitattributes", target: "config/attrs" },
+      { path: ".vector", target: "settings/vector" },
+    ]
+    expect(ConnectPolicy.editedSettings(["src/a.ts", "config/attrs"], links)).toEqual(["config/attrs"])
+    expect(ConnectPolicy.editedSettings(["Settings/Vector/review.md"], links)).toEqual(["Settings/Vector/review.md"])
+    expect(ConnectPolicy.editedSettings(["config/attrs.bak", "settings/vectorx/review.md"], links)).toEqual([])
+    // Without the links, the same changes look harmless; that is the gap the links close.
+    expect(ConnectPolicy.editedSettings(["config/attrs"])).toEqual([])
+  })
+
+  test("a link Vector could not resolve fires the check; one that leaves the repository does not", () => {
+    expect(ConnectPolicy.editedSettings(["src/a.ts"], [{ path: ".vector/review.json" }])).toEqual([
+      ".vector/review.json",
+    ])
+    expect(ConnectPolicy.editedSettings(["src/a.ts"], [{ path: ".vector", outside: true }])).toEqual([])
+  })
+})
+
+describe("links the read check need not walk again", () => {
+  const deciders = ["*", ".docker/config.json", "**/.docker/config.json", ".kube/*", "**/.kube/*", "*.env", "*.env.*"]
+
+  test("no rule tells a package link in node_modules from its real folder", () => {
+    expect(
+      ConnectPolicy.sameBeneath(
+        deciders,
+        "packages/app/node_modules/foo",
+        "node_modules/.bun/foo@1.0.0/node_modules/foo",
+      ),
+    ).toBe(true)
+    // A link to the repository's own top level is told apart: ".kube/*" matches ".kube/config" there, not beneath it.
+    expect(ConnectPolicy.sameBeneath(deciders, "vendor/self", "")).toBe(false)
+    expect(ConnectPolicy.sameBeneath(["*", "**/.kube/*"], "vendor/self", "store/self")).toBe(true)
+  })
+
+  test("a rule anchored on the link's name, or on its real name, tells them apart", () => {
+    expect(ConnectPolicy.sameBeneath(deciders, ".kube", "conf/kube")).toBe(false)
+    expect(ConnectPolicy.sameBeneath(["packages/*"], "packages/a", "lib/a")).toBe(false)
+    expect(ConnectPolicy.sameBeneath(["lib/*"], "packages/a", "lib/a")).toBe(false)
+    expect(ConnectPolicy.sameBeneath(["**/.kube/*"], "x/.kube", "y/real")).toBe(false)
+    // Letter case: a rule that may match the link's name in another case still counts.
+    expect(ConnectPolicy.sameBeneath([".KUBE/*"], ".kube", "conf/kube")).toBe(false)
+    expect(ConnectPolicy.sameBeneath(["a?/*"], "ab", "zz")).toBe(false)
+  })
+
+  test("whenever it says the names are the same, every rule decides both alike", () => {
+    const patterns = [...deciders, "src/*", "*/secrets/*", "?b/*", "a*b/*"]
+    const pairs = [
+      ["a/b", "c/d"],
+      ["src/x", "lib/x"],
+      ["ab", "cb"],
+      ["node_modules/foo", "store/foo"],
+      ["x/secrets", "y/secrets"],
+      ["axb", "ayb"],
+    ]
+    const rests = ["f.ts", ".kube/config", "secrets/k", "deep/.docker/config.json", "a.env", "x.env.local", "b/c"]
+    for (const [a, b] of pairs)
+      for (const pattern of patterns) {
+        if (!ConnectPolicy.sameBeneath([pattern], a, b)) continue
+        for (const rest of rests)
+          expect([pattern, a, rest, Wildcard.match(`${a}/${rest}`, pattern)]).toEqual([
+            pattern,
+            a,
+            rest,
+            Wildcard.match(`${b}/${rest}`, pattern),
+          ])
+      }
+  })
+})

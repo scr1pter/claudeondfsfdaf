@@ -1,8 +1,12 @@
 import { afterEach, describe, expect } from "bun:test"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { ConfigProvider, Effect, Exit, Fiber, Layer } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
+import { Global } from "@vectordevai/core/global"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -10,9 +14,11 @@ import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Connect } from "@vectordevai/schema/connect"
+import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import type { ConnectAdapter } from "@/connect/adapter"
 import { ConnectHub } from "@/connect/hub"
 import { ConnectMembers } from "@/connect/members"
+import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import type { SessionPrompt } from "@/session/prompt"
@@ -174,6 +180,24 @@ function asker(answer: (request: Ask) => "yes" | "no" = () => "yes") {
   return { asks, ask }
 }
 
+const paid: Connect.Consent = {
+  permission: "connect_model",
+  patterns: ["paid/model"],
+  always: ["paid/model"],
+  message: "Review on paid/model.",
+  model: "paid/model",
+  sendsTo: "provider:paid",
+  maxCostUsd: 2,
+}
+
+const fixBatch: Connect.Consent = {
+  permission: "connect_write",
+  patterns: ["src/a.ts"],
+  always: [],
+  message: "Fix 1 finding.",
+  findings: ["f1"],
+}
+
 const review = (sessionID: SessionID, directory: string, extra: Partial<Connect.ReviewRequest> = {}) =>
   ({
     to: "vectorscope",
@@ -213,7 +237,8 @@ const say = (sessionID: SessionID, text: string) =>
   })
 
 // What the connect tool does with a finished run: it returns `metadata(run)`, which the session keeps on the part.
-const save = (sessionID: SessionID, parentID: MessageID, run: Connect.Run) =>
+// `cut` saves it as a part the processor marked as an error when the run was cut off, which keeps its metadata.
+const save = (sessionID: SessionID, parentID: MessageID, run: Connect.Run, cut = false) =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const message = yield* sessions.updateMessage({
@@ -237,16 +262,95 @@ const save = (sessionID: SessionID, parentID: MessageID, run: Connect.Run) =>
       type: "tool",
       callID: `call_${run.id}`,
       tool: "connect",
-      state: {
-        status: "completed",
-        input: {},
-        output: "",
-        title: "Review",
-        metadata: ConnectHub.metadata(run),
-        time: { start: 1, end: 2 },
-      },
+      state: cut
+        ? {
+            status: "error",
+            input: {},
+            error: "Tool execution aborted",
+            metadata: ConnectHub.metadata(run),
+            time: { start: 1, end: 2 },
+          }
+        : {
+            status: "completed",
+            input: {},
+            output: "",
+            title: "Review",
+            metadata: ConnectHub.metadata(run),
+            time: { start: 1, end: 2 },
+          },
     })
   })
+
+// An automatic compaction after the context overflowed: its marker, its summary, then the user's message replayed.
+const overflow = (sessionID: SessionID, text: string) =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const marker = yield* sessions.updateMessage({
+      id: MessageID.ascending(),
+      role: "user",
+      sessionID,
+      agent: "build",
+      model,
+      time: { created: Date.now() },
+    })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: marker.id,
+      sessionID,
+      type: "compaction",
+      auto: true,
+      overflow: true,
+    })
+    const summary = yield* sessions.updateMessage({
+      id: MessageID.ascending(),
+      role: "assistant",
+      sessionID,
+      mode: "compaction",
+      agent: "compaction",
+      summary: true,
+      path: { cwd: "/tmp", root: "/tmp" },
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: model.modelID,
+      providerID: model.providerID,
+      parentID: marker.id,
+      time: { created: Date.now() },
+    })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: summary.id,
+      sessionID,
+      type: "text",
+      text: "Summary of the conversation so far.",
+    })
+    return yield* say(sessionID, text)
+  })
+
+// Vector Local on, as the owner turns it on in their own config, for the length of `body`.
+const withLocal = <A, E, R>(body: Effect.Effect<A, E, R>) => {
+  const file = path.join(Global.Path.config, "vector.json")
+  const apply = () => {
+    Config.refreshLocal()
+    Config.confirmLocal()
+  }
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const before = existsSync(file) ? readFileSync(file, "utf8") : undefined
+      mkdirSync(path.dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify({ local: { enabled: true } }))
+      apply()
+      return before
+    }),
+    () => body,
+    (before) =>
+      Effect.sync(() => {
+        if (before === undefined) rmSync(file, { force: true })
+        else writeFileSync(file, before)
+        apply()
+        rmSync(Config.localConfirmedFile(), { force: true })
+      }),
+  )
+}
 
 const setup = (permission?: PermissionV1.Ruleset) =>
   Effect.gen(function* () {
@@ -334,6 +438,18 @@ describe("lifecycle", () => {
           metadata: ConnectHub.metadata(run),
         } as SessionV1.Part),
       ).toBeUndefined()
+      // Nor does a synthetic one: a client can send a synthetic text part with any metadata.
+      expect(
+        ConnectHub.fromPart({
+          id: PartID.ascending(),
+          messageID: MessageID.ascending(),
+          sessionID: requester.id,
+          type: "text",
+          text: "",
+          synthetic: true,
+          metadata: ConnectHub.metadata(run),
+        } as SessionV1.Part),
+      ).toBeUndefined()
       expect((yield* hub.runs({ sessionID: requester.id })).map((item) => item.id)).toEqual([run.id])
     }),
   )
@@ -347,7 +463,11 @@ describe("lifecycle", () => {
         Effect.gen(function* () {
           signal = context.abort
           const helper = yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })
-          yield* context.helper!.prompt({ sessionID: helper.id, parts: [{ type: "text", text: "review" }] })
+          yield* context.helper!.prompt({
+            sessionID: helper.id,
+            agent: "review",
+            parts: [{ type: "text", text: "review" }],
+          })
           return yield* Effect.never
         })
       const fiber = yield* hub
@@ -482,6 +602,143 @@ describe("checks before anything is asked", () => {
     }),
   )
 
+  it.instance(
+    "a review started in a subfolder checks the whole repository, named from its top level",
+    () =>
+      Effect.gen(function* () {
+        const { directory, hub, requester } = yield* setup()
+        const app = path.join(directory, "app")
+        yield* write(directory, "app/src/a.ts", "export {}")
+        const start = () => hub.run({ request: review(requester.id, app), call: asker() })
+        expect((yield* start()).result?.state).toBe("completed")
+        // The kube config sits at the repository's top level, outside the folder, where a reviewer can still read it.
+        yield* write(directory, ".kube/config")
+        const rooted = yield* start()
+        expect(rooted.result?.refusal).toBe("read-rule")
+        expect(rooted.result?.summary).toContain(".kube/config")
+        expect(seen.length).toBe(1)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "a session's rule written against the repository's top level holds for a review of a subfolder",
+    () =>
+      Effect.gen(function* () {
+        const { directory, hub, requester } = yield* setup([
+          { permission: "read", pattern: "app/secrets/*", action: "deny" },
+        ])
+        yield* write(directory, "app/secrets/key.txt")
+        const run = yield* hub.run({ request: review(requester.id, path.join(directory, "app")), call: asker() })
+        expect(run.result?.refusal).toBe("read-rule")
+        expect(run.result?.summary).toContain("app/secrets/key.txt")
+        expect(run.result?.summary).toContain('"app/secrets/*"')
+        expect(seen).toEqual([])
+      }),
+    { git: true },
+  )
+
+  it.instance("a folder outside the instance is checked from the top of its own repository", () =>
+    Effect.gen(function* () {
+      const { hub, requester } = yield* setup()
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-outside-"))),
+        (dir) => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })),
+      )
+      yield* write(outside, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(outside, "pkg/src/a.ts", "export {}")
+      yield* write(outside, ".kube/config")
+      const run = yield* hub.run({ request: review(requester.id, path.join(outside, "pkg")), call: asker() })
+      expect(run.result?.refusal).toBe("read-rule")
+      expect(run.result?.summary).toContain(".kube/config")
+      expect(seen).toEqual([])
+    }),
+  )
+
+  it.instance("a folder the check cannot list refuses the review (fail closed)", () =>
+    Effect.gen(function* () {
+      // Permissions do not hold for root or on Windows, so there is nothing to check there.
+      if (process.platform === "win32" || process.getuid?.() === 0) return
+      const { directory, hub, requester } = yield* setup()
+      yield* write(directory, "locked/inner/a.ts")
+      const locked = path.join(directory, "locked")
+      // Execute without read: a reviewer can still open a file whose name it knows, but nothing can list the folder.
+      yield* Effect.promise(() => fs.chmod(locked, 0o111))
+      const run = yield* hub
+        .run({ request: review(requester.id, directory), call: asker() })
+        .pipe(Effect.ensuring(Effect.promise(() => fs.chmod(locked, 0o755))))
+      expect(run.result?.refusal).toBe("read-rule")
+      expect(run.result?.summary).toContain("could not check")
+      expect(seen).toEqual([])
+    }),
+  )
+
+  it.instance("Vector Local refuses a member that says it is ready but sends code to a provider, with no ask", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup()
+      const { asks, ask } = asker()
+      script.describe = (id) => member(id, ["read"], { sendsTo: "provider:x" })
+      const local = yield* withLocal(hub.run({ request: review(requester.id, directory), call: { ask } }))
+      expect(local.result?.refusal).toBe("unavailable")
+      expect(local.result?.summary).toContain("Off in Vector Local")
+      expect(asks).toEqual([])
+      expect(seen).toEqual([])
+      script.describe = (id) => member(id, ["read"], { place: "vector-cloud" })
+      const cloud = yield* withLocal(hub.run({ request: review(requester.id, directory), call: { ask } }))
+      expect(cloud.result?.refusal).toBe("unavailable")
+      expect(asks).toEqual([])
+      expect(seen).toEqual([])
+      // With Vector Local off, the same member takes the run.
+      const allowed = yield* hub.run({ request: review(requester.id, directory), call: { ask } })
+      expect(allowed.result?.state).toBe("completed")
+    }),
+  )
+
+  it.instance("a request the schema refuses ends refused for its input, unrecorded and without asking", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup()
+      const { asks, ask } = asker()
+      const bad = [
+        review(requester.id, directory, { target: { kind: "branch", base: "--output=x" } }),
+        review(requester.id, directory, { target: { kind: "branch", base: "main branch" } }),
+        review(requester.id, directory, { budget: { maxCostUsd: 0 } }),
+        { ...review(requester.id, directory), requester: { kind: "agent" } } as ConnectHub.StartRequest,
+        fix(requester.id, directory, Connect.RunID.create(), []),
+        fix(requester.id, directory, Connect.RunID.create(), ["f1", "f1"]),
+      ]
+      for (const request of bad) {
+        const run = yield* hub.run({ request, call: { ask } })
+        expect(run.status).toBe("done")
+        expect(run.result?.state).toBe("refused")
+        expect(run.result?.refusal).toBe("input")
+        expect(run.result?.summary).toContain("not valid")
+        if (request.action === "review") expect(run.result?.verdict).toBe("not-reviewed")
+      }
+      expect(asks).toEqual([])
+      expect(seen).toEqual([])
+      expect(yield* hub.runs()).toEqual([])
+    }),
+  )
+
+  it.instance("a subagent cannot hand work off; a workflow stage in a child session can", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, sessions } = yield* setup()
+      const child = yield* sessions.create({ parentID: requester.id, title: "Subagent" })
+      const refused = yield* hub.run({ request: review(child.id, directory), call: asker() })
+      expect(refused.result?.refusal).toBe("not-allowed")
+      expect(refused.result?.summary).toContain("subagent")
+      expect(seen).toEqual([])
+      const stage = yield* hub.run({
+        request: {
+          ...review(child.id, directory),
+          requester: { kind: "workflow", sessionID: child.id },
+        } as ConnectHub.StartRequest,
+        call: asker(),
+      })
+      expect(stage.result?.state).toBe("completed")
+    }),
+  )
+
   it.instance("unknown, listed-only and unready members take no hand-off", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup()
@@ -538,6 +795,49 @@ describe("checks before anything is asked", () => {
     }),
   )
 
+  it.instance("an overflow compaction that replays the user's message is not a new request", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, message } = yield* setup()
+      for (let index = 0; index < 5; index++) {
+        const run = yield* hub.run({ request: review(requester.id, directory), call: asker() })
+        expect(run.result?.state).toBe("completed")
+        yield* save(requester.id, message.id, run)
+      }
+      // The context overflowed: the compaction copies "review my changes" into a new message after its summary.
+      yield* overflow(requester.id, "review my changes")
+      expect((yield* hub.request(requester.id)).requestID).toBe(message.id)
+      const sixth = yield* hub.run({ request: review(requester.id, directory), call: asker() })
+      expect(sixth.result?.refusal).toBe("limit")
+
+      // Text a client marked ignored is not the user writing either.
+      const sessions = yield* Session.Service
+      const hidden = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: requester.id,
+        agent: "build",
+        model,
+        time: { created: Date.now() },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: hidden.id,
+        sessionID: requester.id,
+        type: "text",
+        text: "context the client attached",
+        ignored: true,
+      })
+      expect((yield* hub.request(requester.id)).requestID).toBe(message.id)
+
+      // The user writing again starts the next request.
+      const next = yield* say(requester.id, "thanks, review once more")
+      expect((yield* hub.request(requester.id)).requestID).toBe(next.id)
+      expect((yield* hub.run({ request: review(requester.id, directory), call: asker() })).result?.state).toBe(
+        "completed",
+      )
+    }),
+  )
+
   it.effect("VECTOR_EXPERIMENTAL_CONNECT is off unless it or VECTOR_EXPERIMENTAL turns it on", () =>
     Effect.gen(function* () {
       const read = (input: Record<string, unknown>) =>
@@ -555,69 +855,86 @@ describe("checks before anything is asked", () => {
     }),
   )
 
-  off.instance("connected tools stay off without VECTOR_EXPERIMENTAL_CONNECT", () =>
+  off.instance("connected tools stay off without VECTOR_EXPERIMENTAL_CONNECT, and nothing shows the refused run", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup()
+      const events = yield* EventV2Bridge.Service
+      const published: string[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => void (event.type === Connect.Event.RunUpdated.type && published.push(event.type))),
+      )
       const { asks, ask } = asker()
-      const run = yield* hub.run({ request: review(requester.id, directory), call: { ask } })
+      const updates: Connect.Run[] = []
+      const run = yield* hub.run({
+        request: review(requester.id, directory),
+        call: { ask, update: (next) => Effect.sync(() => void updates.push(next)) },
+      })
+      yield* unsubscribe
+      expect(run.status).toBe("done")
       expect(run.result?.refusal).toBe("not-allowed")
       expect(asks).toEqual([])
       expect(seen).toEqual([])
+      // No event, no update, no ledger entry and no activity in the registry.
+      expect(published).toEqual([])
+      expect(updates).toEqual([])
+      expect(yield* hub.runs()).toEqual([])
+      expect((yield* hub.members()).find((item) => item.id === "vectorscope")?.activity).toBeUndefined()
     }),
   )
 })
 
 describe("consent", () => {
-  it.instance("connect is asked per run, connect_model once per request, connect_write every time", () =>
+  it.instance("connect is asked per run and connect_model once per request", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup()
       const { asks, ask } = asker()
-      const model: Connect.Consent = {
-        permission: "connect_model",
-        patterns: ["paid/model"],
-        always: ["paid/model"],
-        message: "Review on paid/model.",
-        model: "paid/model",
-        sendsTo: "provider:paid",
-        maxCostUsd: 2,
-      }
-      const write: Connect.Consent = {
-        permission: "connect_write",
-        patterns: ["src/a.ts"],
-        always: [],
-        message: "Fix 1 finding.",
-        findings: ["f1"],
-      }
       script.handle = (_request, context) =>
         Effect.gen(function* () {
-          yield* context.ask(model)
-          yield* context.ask(model)
-          yield* context.ask(write)
-          yield* context.ask(write)
+          yield* context.ask(paid)
+          yield* context.ask(paid)
           return clean()
         })
       yield* hub.run({ request: review(requester.id, directory), call: { ask } })
       yield* hub.run({ request: review(requester.id, directory), call: { ask } })
-      const permissions = asks.map((item) => item.permission)
-      expect(permissions).toEqual([
-        "connect",
-        "connect_model",
-        "connect_write",
-        "connect_write",
-        "connect",
-        "connect_write",
-        "connect_write",
-      ])
+      expect(asks.map((item) => item.permission)).toEqual(["connect", "connect_model", "connect"])
       expect(asks[0].patterns).toEqual(["vectorscope.review"])
-      expect(asks.filter((item) => item.permission === "connect_write").every((item) => item.always.length === 0)).toBe(
-        true,
-      )
       expect(asks[1].metadata).toMatchObject({ model: "paid/model", sendsTo: "provider:paid", maxCostUsd: 2 })
 
       yield* say(requester.id, "review again")
       yield* hub.run({ request: review(requester.id, directory), call: { ask } })
       expect(asks.filter((item) => item.permission === "connect_model").length).toBe(2)
     }),
+  )
+
+  it.instance(
+    "connect_write reaches the user every time, never saved, or is refused while a rule could answer it",
+    () =>
+      Effect.gen(function* () {
+        // The requester allows everything and the caller's ask accepts whatever it is asked, as a client's auto-accept.
+        const { directory, hub, requester } = yield* setup([{ permission: "*", pattern: "*", action: "allow" }])
+        const { asks, ask } = asker()
+        script.handle = (_request, context) =>
+          Effect.gen(function* () {
+            yield* context.ask(fixBatch)
+            yield* context.ask(fixBatch)
+            return clean()
+          })
+        const viaCall = yield* hub.run({ request: review(requester.id, directory), call: { ask } })
+        const viaPermission = yield* hub.run({ request: review(requester.id, directory) })
+        const writes = asks.filter((item) => item.permission === "connect_write")
+        if (PermissionPolicy.requiresApproval("connect_write", [], fixBatch.patterns)) {
+          // Once requiresApproval covers it (CW-07), no rule or auto-accept answers it: it is asked each time.
+          expect(viaCall.result?.state).toBe("completed")
+          expect(writes.length).toBe(2)
+          expect(writes.every((item) => item.always.length === 0)).toBe(true)
+        } else {
+          // Until then nothing keeps an allow rule, a saved approval or an auto-accept from answering it, so it is
+          // refused before it is asked, by either way of asking.
+          expect(writes).toEqual([])
+          expect(viaCall.result?.refusal).toBe("permission")
+          expect(viaPermission.result?.refusal).toBe("permission")
+        }
+      }),
   )
 
   it.instance("the user's no refuses the run; a deny rule on connect refuses through Permission", () =>
@@ -667,43 +984,118 @@ describe("the helper handle", () => {
       const theirs = yield* sessions.create({ parentID: stranger.id, internal: "vectorscope.review" })
       const plain = yield* sessions.create({ parentID: requester.id })
       const research = yield* sessions.create({ parentID: requester.id, internal: "research.lead" })
-      const mine = yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })
+      // A helper the requester already had before this run, such as an earlier run's reviewer.
+      const before = yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })
       const exits: Record<string, boolean> = {}
       let kept: ConnectAdapter.HelperHandle | undefined
+      let mine: SessionID | undefined
       script.handle = (_request, context) =>
         Effect.gen(function* () {
           const helper = context.helper!
           kept = helper
+          // The run's own helper, made while it is going, as VectorScope makes its reviewer sessions.
+          mine = (yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })).id
           const attempt = (name: string, sessionID: SessionID) =>
-            helper.prompt({ sessionID, parts: [{ type: "text", text: "x" }] }).pipe(
+            helper.prompt({ sessionID, agent: "review", parts: [{ type: "text", text: "x" }] }).pipe(
               Effect.exit,
               Effect.map((exit) => void (exits[name] = Exit.isSuccess(exit))),
             )
           yield* attempt("requester", requester.id)
+          yield* attempt("before", before.id)
           yield* attempt("stranger", stranger.id)
           yield* attempt("theirs", theirs.id)
           yield* attempt("plain", plain.id)
           yield* attempt("research", research.id)
-          yield* attempt("mine", mine.id)
+          yield* attempt("mine", mine)
           exits.cancelRequester = Exit.isSuccess(yield* Effect.exit(helper.cancel(requester.id)))
+          exits.cancelBefore = Exit.isSuccess(yield* Effect.exit(helper.cancel(before.id)))
           return clean()
         })
       const run = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
       expect(exits).toEqual({
         requester: false,
+        before: false,
         stranger: false,
         theirs: false,
         plain: false,
         research: false,
         mine: true,
         cancelRequester: false,
+        cancelBefore: false,
       })
-      expect(prompts).toEqual([mine.id])
-      expect(run.result?.sessions).toEqual([mine.id])
+      expect(prompts).toEqual([mine!])
+      expect(run.result?.sessions).toEqual([mine!])
       // A handle kept past the end of its run reaches nothing.
-      const late = yield* Effect.exit(kept!.prompt({ sessionID: mine.id, parts: [{ type: "text", text: "x" }] }))
+      const late = yield* Effect.exit(
+        kept!.prompt({ sessionID: mine!, agent: "review", parts: [{ type: "text", text: "x" }] }),
+      )
       expect(Exit.isFailure(late)).toBe(true)
-      expect(prompts).toEqual([mine.id])
+      expect(prompts).toEqual([mine!])
+    }),
+  )
+
+  it.instance("a prompt through the handle keeps the member's rules: no tools, budget or other agent", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, sessions } = yield* setup()
+      const { ops, prompts } = recorder()
+      const exits: Record<string, boolean> = {}
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          const helper = context.helper!
+          const mine = (yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })).id
+          const attempt = (name: string, extra: Partial<SessionPrompt.PromptInput>) =>
+            helper.prompt({ sessionID: mine, parts: [{ type: "text", text: "x" }], ...extra }).pipe(
+              Effect.exit,
+              Effect.map((exit) => void (exits[name] = Exit.isSuccess(exit))),
+            )
+          yield* attempt("tools", { agent: "review", tools: { bash: true, edit: true } })
+          yield* attempt("budget", { agent: "review", budget: { usd: 100 } })
+          yield* attempt("noReply", { agent: "review", noReply: true })
+          yield* attempt("build", { agent: "build" })
+          yield* attempt("none", {})
+          yield* attempt("security", { agent: "security" })
+          yield* attempt("review", { agent: "review" })
+          return clean()
+        })
+      yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      expect(exits).toEqual({
+        tools: false,
+        budget: false,
+        noReply: false,
+        build: false,
+        none: false,
+        security: true,
+        review: true,
+      })
+      expect(prompts.length).toBe(2)
+    }),
+  )
+
+  it.instance("an earlier run's helper is not the next run's", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, sessions } = yield* setup()
+      const { ops, prompts } = recorder()
+      let first: SessionID | undefined
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          first = (yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })).id
+          yield* context.helper!.prompt({ sessionID: first, agent: "review", parts: [{ type: "text", text: "x" }] })
+          return clean()
+        })
+      yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      let reached: boolean | undefined
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            context.helper!.prompt({ sessionID: first!, agent: "review", parts: [{ type: "text", text: "x" }] }),
+          )
+          reached = Exit.isSuccess(exit)
+          return clean()
+        })
+      const second = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      expect(reached).toBe(false)
+      expect(prompts).toEqual([first!])
+      expect(second.result?.sessions).toEqual([])
     }),
   )
 
@@ -789,6 +1181,50 @@ describe("results persist with the session", () => {
   )
 })
 
+describe("runs saved in a session after a restart", () => {
+  it.instance("a run cut off mid-way reads as cancelled, and the session's saved runs are listed", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, message } = yield* setup()
+      const done = yield* hub.run({ request: review(requester.id, directory), call: asker() })
+      yield* save(requester.id, message.id, done)
+      // The tool part of a run that was going when Vector stopped: the processor marks it an error and keeps it.
+      const id = Connect.RunID.create()
+      const cut: Connect.Run = {
+        id,
+        request: { ...done.request, id },
+        status: "running",
+        progress: { message: "Reading the diff", at: done.time.created + 2 },
+        time: { created: done.time.created + 1, started: done.time.created + 1 },
+      }
+      yield* save(requester.id, message.id, cut, true)
+
+      yield* disposeAllInstancesEffect
+      yield* Effect.gen(function* () {
+        const fresh = yield* ConnectHub.Service
+        const found = yield* fresh.get(id, requester.id)
+        expect(found?.status).toBe("done")
+        expect(found?.progress).toBeUndefined()
+        expect(found?.result).toMatchObject({
+          state: "cancelled",
+          verdict: "not-reviewed",
+          summary: ConnectHub.STOPPED_SUMMARY,
+        })
+        expect(yield* fresh.cancel(id)).toBe(false)
+        // The ledger is only a cache: the session's own runs are listed, newest first; without a session, the
+        // ledger alone.
+        expect((yield* fresh.runs({ sessionID: requester.id })).map((run) => [run.id, run.status])).toEqual([
+          [id, "done"],
+          [done.id, "done"],
+        ])
+        expect(yield* fresh.runs()).toEqual([])
+        // A cut-off review is nothing to compare with.
+        const compared = yield* fresh.run({ request: review(requester.id, directory, { since: id }), call: asker() })
+        expect(compared.result?.refusal).toBe("input")
+      }).pipe(provideInstance(directory))
+    }),
+  )
+})
+
 describe("members", () => {
   it.instance("the list has the adapters, the agents, the helpers, and Hands as not in this build", () =>
     Effect.gen(function* () {
@@ -837,6 +1273,76 @@ describe("members", () => {
       // Each helper Vector names is listed, or covered by another member.
       expect(Object.keys(ConnectMembers.HELPERS).every((name) => /^[a-z]+(-[a-z]+)*$/.test(name))).toBe(true)
     }),
+  )
+})
+
+describe("MCP servers in the registry", () => {
+  it.effect("a remote MCP server is listed where its code runs, and keeps MCP's own status", () =>
+    Effect.sync(() => {
+      const list = (local: boolean) =>
+        new Map(
+          ConnectMembers.compose({
+            adapters: [],
+            agents: [],
+            skills: [],
+            workflows: [],
+            mcp: {
+              docs: { status: "connected" },
+              tracker: { status: "connected" },
+              blocked: { status: "failed", error: "Off in Vector Local: not allowed" },
+            },
+            remoteMcp: new Set(["tracker", "blocked"]),
+            local,
+          }).map((item) => [item.id, item]),
+        )
+      expect(list(false).get("mcp:docs")).toMatchObject({ place: "local", state: "ready" })
+      expect(list(false).get("mcp:tracker")).toMatchObject({ place: "your-cloud", state: "ready" })
+      expect(list(false).get("mcp:tracker")?.summary).toContain("another host")
+      // Under Vector Local, MCP decides: a remote server it connected stays ready, one it refused is off.
+      expect(list(true).get("mcp:tracker")).toMatchObject({ place: "your-cloud", state: "ready" })
+      expect(list(true).get("mcp:blocked")).toMatchObject({ place: "your-cloud", state: "off" })
+      expect(list(true).get("mcp:docs")).toMatchObject({ place: "local", state: "ready" })
+    }),
+  )
+})
+
+describe("the read scan", () => {
+  // The build agent's read rules that matter here: everything allowed but the kube and docker configs.
+  const rules: PermissionV1.Ruleset = [
+    { permission: "read", pattern: "*", action: "allow" },
+    { permission: "read", pattern: ".docker/config.json", action: "ask" },
+    { permission: "read", pattern: "**/.docker/config.json", action: "ask" },
+    { permission: "read", pattern: ".kube/*", action: "ask" },
+    { permission: "read", pattern: "**/.kube/*", action: "ask" },
+  ]
+
+  it.effect("a package store is walked once, not again through every link to it", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-scan-"))),
+      (root) =>
+        Effect.promise(async () => {
+          const patterns = ConnectPolicy.readPatterns(rules)
+          // 2 top-level entries, 50 packages with a file each in the store, and a workspace linking to each: 153
+          // entries walked once; walking each link again would make 203.
+          for (let index = 0; index < 50; index++) {
+            await fs.mkdir(path.join(root, "store", `pkg${index}`), { recursive: true })
+            await fs.writeFile(path.join(root, "store", `pkg${index}`, "index.js"), "")
+          }
+          await fs.mkdir(path.join(root, "ws/node_modules"), { recursive: true })
+          for (let index = 0; index < 50; index++)
+            await fs.symlink(path.join(root, "store", `pkg${index}`), path.join(root, "ws/node_modules", `pkg${index}`))
+          expect(await ConnectHub.scan(root, patterns, rules, { limit: 180 })).toEqual({})
+          // A link a rule names by its own name is still walked under that name.
+          await fs.mkdir(path.join(root, "conf/kube"), { recursive: true })
+          await fs.writeFile(path.join(root, "conf/kube/config"), "")
+          await fs.symlink(path.join(root, "conf/kube"), path.join(root, ".kube"))
+          const linked = await ConnectHub.scan(root, patterns, rules)
+          expect("block" in linked && linked.block?.path).toBe(".kube/config")
+          // Past the limit, the scan says so and the hub refuses.
+          expect(await ConnectHub.scan(root, patterns, rules, { limit: 10 })).toEqual({ tooMany: true })
+        }),
+      (root) => Effect.promise(() => fs.rm(root, { recursive: true, force: true })),
+    ),
   )
 })
 

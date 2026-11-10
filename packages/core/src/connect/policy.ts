@@ -507,8 +507,9 @@ export function readPatterns(requester: Ruleset, review: Ruleset = reviewRules()
 
 /**
  * Whether reviewing would let VectorScope read a file its requester could not read without a question: the requester's
- * rules deny or ask for it (no matching rule is an ask), and VectorScope's review rules do not deny it. `path` is
- * relative to the review directory, as the read tool asks.
+ * rules deny or ask for it (no matching rule is an ask), and VectorScope's review rules do not deny it. `path` is the
+ * name the read tool asks with: relative to the instance's worktree (the repository's top level), not to the folder
+ * the review was started in.
  */
 export function readBlock(
   path: string,
@@ -584,6 +585,49 @@ export function covers(outer: string, inner: string): boolean {
   return false
 }
 
+/**
+ * Whether no pattern can tell a file beneath `a` from the same file beneath `b`: each one matches `a/<rest>` exactly
+ * when it matches `b/<rest>`, for every rest. The hub's read check uses it to skip walking a link to a directory again
+ * under the link's own name when the rules would decide every file there as they do under its real name. It errs
+ * toward false (letter case is ignored on one side only, and `covers` may miss a containment).
+ */
+export function sameBeneath(patterns: readonly string[], a: string, b: string): boolean {
+  return patterns.every((pattern) => beneathWithin(pattern, a, b) && beneathWithin(pattern, b, a))
+}
+
+// Every text beneath `from` the pattern matches, it also matches beneath `to` with the same rest.
+function beneathWithin(pattern: string, from: string, to: string): boolean {
+  // A rest is never empty (a file beneath has a name), so a state at the pattern's end matches nothing there.
+  const wide = residues(pattern, from, true).filter((rest) => rest !== "")
+  if (wide.length === 0) return true
+  const narrow = residues(pattern, to, false)
+  return wide.every((rest) => narrow.some((other) => covers(other, rest)))
+}
+
+// What is left of the pattern after it matched `<prefix>/`: one rest for each place the match can stand. Read wide, it
+// ignores letter case and matches more; read narrow, it keeps case and matches less.
+function residues(pattern: string, prefix: string, wide: boolean): string[] {
+  const p = chars(pattern, wide)
+  const close = (states: Set<number>) => {
+    // A Set visits what is added while it is walked, so a run of stars closes in one pass.
+    for (const index of states) if (p[index] === "*") states.add(index + 1)
+    return states
+  }
+  let states = close(new Set([0]))
+  for (const char of (prefix ? `${prefix}/` : "").replaceAll("\\", "/").split("")) {
+    const next = new Set<number>()
+    for (const index of states) {
+      if (index >= p.length) continue
+      const at = p[index]
+      if (at === "*") next.add(index)
+      else if (at === "?" || at === char || (wide && at.toLowerCase() === char.toLowerCase())) next.add(index + 1)
+    }
+    states = close(next)
+    if (states.size === 0) return []
+  }
+  return [...states].map((index) => p.slice(index).join(""))
+}
+
 /** False only when no text matches both patterns. Letter case is ignored, so it errs toward an overlap. */
 export function overlaps(a: string, b: string): boolean {
   const x = chars(a, true).map((char) => char.toLowerCase())
@@ -622,14 +666,33 @@ export const SETTINGS_NOTE =
 const SETTINGS = new Set([...SETTINGS_PATHS, ".vector"].map((path) => path.toLowerCase()))
 
 /**
- * The changed paths that are VectorScope's settings files, or the `.vector` directory itself. Letter case is ignored,
- * because on a case-insensitive disk `.vector/Review.json` is the file the review reads. Pass both sides of a rename.
+ * A settings path that is a link, or lies beneath one, in the working tree a review reads. The review reads its
+ * settings through links, so what it reads is the target.
  */
-export function editedSettings(changed: readonly string[]): string[] {
-  return changed.filter((path) => {
-    const clean = normalizePath(path) ?? path.trim().replaceAll("\\", "/")
-    return SETTINGS.has(clean.toLowerCase())
+export interface SettingsLink {
+  /** `.vector`, or one of `SETTINGS_PATHS`, whose real path differs from its own. */
+  readonly path: string
+  /** The real path, relative to the repository's root. Absent when Vector could not resolve it. */
+  readonly target?: string
+  /** The target lies outside the repository, so the reviewed changes cannot edit what it reads. */
+  readonly outside?: boolean
+}
+
+/**
+ * The changed paths that are VectorScope's settings files, or the `.vector` directory itself, or that a settings link
+ * resolves to (or lies beneath, for a linked directory). Letter case is ignored, because on a case-insensitive disk
+ * `.vector/Review.json` is the file the review reads. Pass both sides of a rename. A link Vector could not resolve is
+ * returned itself (fail closed); one whose target lies outside the repository is not, since no change can edit it.
+ */
+export function editedSettings(changed: readonly string[], links: readonly SettingsLink[] = []): string[] {
+  const clean = (path: string) => (normalizePath(path) ?? path.trim().replaceAll("\\", "/")).toLowerCase()
+  const targets = links.flatMap((link) => (link.target === undefined ? [] : [clean(link.target)]))
+  const edited = changed.filter((path) => {
+    const name = clean(path)
+    return SETTINGS.has(name) || targets.some((target) => name === target || name.startsWith(`${target}/`))
   })
+  const unresolved = links.filter((link) => link.target === undefined && !link.outside).map((link) => link.path)
+  return [...new Set([...edited, ...unresolved])]
 }
 
 // ---------------------------------------------------------------------------------------------------------------

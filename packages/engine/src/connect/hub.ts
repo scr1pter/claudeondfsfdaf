@@ -6,12 +6,14 @@ import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, 
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ConnectFindings } from "@vectordevai/core/connect/findings"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
+import { FSUtil } from "@vectordevai/core/fs-util"
 import { WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Wildcard } from "@vectordevai/core/util/wildcard"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Connect } from "@vectordevai/schema/connect"
+import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
@@ -25,6 +27,7 @@ import { Session } from "@/session/session"
 import { Skill } from "@/skill"
 import { DesktopTasks } from "@/task/desktop"
 // Types only, as everywhere in connect: the hub must stay out of the prompt loop's module graph.
+import type { SessionPrompt } from "@/session/prompt"
 import type { TaskPromptOps } from "@/tool/task"
 import type { Tool } from "@/tool/tool"
 import type { ConnectAdapter } from "./adapter"
@@ -35,16 +38,19 @@ import { ConnectMembers } from "./members"
 //
 // A hand-off starts from an agent's tool call, a workflow stage or a person, never from a member. Before anything is
 // asked the hub checks, in order: the member and its action exist; every effect the member declared is one connect
-// accepts (`read`, `write`) and the requester's own rules do not deny the permission it maps to; the member is ready;
-// for a review, the per-request cap and the requester's read rules over every file in the directory. Only then does it
-// ask `connect` in the requester's session, and hand the work to the adapter with a context that asks the rest
+// accepts (`read`, `write`) and the requester's own rules do not deny the permission it maps to; the member is ready
+// (Vector Local included); for a review, the per-request cap and the requester's read rules over every file the
+// reviewer could read (the repository from its top level, not only the folder the review starts in). Only then does
+// it ask `connect` in the requester's session, and hand the work to the adapter with a context that asks the rest
 // (`connect_model`, `connect_write`) and reports progress. The adapter reaches the prompt loop only through a helper
 // handle that accepts the run's own hidden helper sessions, and only the vectorscope adapter gets one.
 //
-// Results persist with the session: the caller saves `metadata(run)` in the `connect` tool part (or a connect note),
-// and `get`, `since` and `fix` find a run there after a restart. The in-memory ledger keeps the last 50 runs of each
-// instance as a cache and holds what is running, so a run can be cancelled from anywhere. The hub itself makes no
-// network call and no model call: only adapters do work, through the handle.
+// Results persist with the session: the caller saves `metadata(run)` in the `connect` tool part, and `get`, `runs`,
+// `since` and `fix` find a run there after a restart. Only a `connect` tool part in an assistant message counts: a
+// client can write a synthetic text part with any metadata, so a note carries no run until CW-08 gives notes a form a
+// client cannot write. The in-memory ledger keeps the last 50 runs of each instance as a cache and holds what is
+// running, so a run can be cancelled from anywhere. The hub itself makes no network call and no model call: only
+// adapters do work, through the handle.
 
 /** The most runs the in-memory ledger keeps per instance. Runs still going are never dropped. */
 export const LEDGER_SIZE = 50
@@ -52,8 +58,17 @@ export const LEDGER_SIZE = 50
 export const METADATA_KEY = "connect"
 /** The members that receive a helper handle. */
 export const HELPER_MEMBERS: ReadonlySet<string> = new Set(["vectorscope"])
-/** The most files and directories the read check looks at before it refuses (fail closed). */
-export const MAX_SCAN = 500_000
+/** The agents each helper member's sessions may be prompted as, through the helper handle. */
+export const HELPER_AGENTS: Readonly<Record<string, ReadonlySet<string>>> = {
+  vectorscope: new Set(["review", "security"]),
+}
+/**
+ * The most files and directories the read check looks at before it refuses (fail closed). A link to a directory is
+ * walked again under its own name only when a rule could tell the names apart, so a package store is walked once.
+ */
+export const MAX_SCAN = 2_000_000
+/** What a run saved in a session reads as when it never ended there: Vector stopped while it was going. */
+export const STOPPED_SUMMARY = "Vector stopped before this hand-off ended."
 
 /** What the caller of a hand-off supplies; the hub adds the run id and the request id. */
 export type StartRequest =
@@ -114,25 +129,61 @@ export function metadata(run: Connect.Run): Record<string, unknown> {
 }
 
 /**
- * The run a stored part carries: a `connect` tool part, or a synthetic note with a run in its metadata. Anything
- * else, or a run the schema does not accept, is no run.
+ * The run a stored part carries: only a `connect` tool part. A text part, synthetic or not, carries none, because a
+ * client can write one with any metadata. A run the schema does not accept is no run.
  */
 export function fromPart(part: SessionV1.Part): Connect.Run | undefined {
-  const raw =
-    part.type === "tool" && part.tool === "connect" && "metadata" in part.state
-      ? part.state.metadata?.[METADATA_KEY]
-      : part.type === "text" && part.synthetic
-        ? part.metadata?.[METADATA_KEY]
-        : undefined
+  if (part.type !== "tool" || part.tool !== "connect" || !("metadata" in part.state)) return undefined
+  const raw = part.state.metadata?.[METADATA_KEY]
   if (raw === undefined) return undefined
   return Option.getOrUndefined(decodeRun(raw))
 }
 
-/** Whether a stored message is one the user wrote, rather than a note Vector wrote into the session. */
+/** The runs a stored message carries: those in its `connect` tool parts, and only when the agent wrote it. */
+export function fromMessage(message: SessionV1.WithParts): Connect.Run[] {
+  if (message.info.role !== "assistant") return []
+  return message.parts.flatMap((part) => fromPart(part) ?? [])
+}
+
+/**
+ * A run as read back from a session. One that never ended there (its tool part was cut off by a stop, a crash or a
+ * restart, and no ledger holds it) is not going any more: it reads as cancelled.
+ */
+export function settled(run: Connect.Run): Connect.Run {
+  if (run.status === "done") return run
+  const { progress: _, ...rest } = run
+  return {
+    ...rest,
+    status: "done",
+    result: {
+      state: "cancelled",
+      ...(run.request.action === "review" ? { verdict: "not-reviewed" as const, target: run.request.target } : {}),
+      summary: STOPPED_SUMMARY,
+      findings: [],
+      sessions: [],
+      notes: [],
+    },
+  }
+}
+
+/**
+ * Whether a stored message is one the user wrote, rather than a note Vector wrote into the session. Text marked
+ * ignored is not the user's words, as for the engine's own request sizing (`SessionTaskSize.real`).
+ */
 export function written(message: SessionV1.WithParts): boolean {
   if (message.info.role !== "user") return false
   return message.parts.some((part) =>
-    part.type === "text" ? !part.synthetic : part.type === "file" || part.type === "agent" || part.type === "subtask",
+    part.type === "text"
+      ? !part.synthetic && !part.ignored
+      : part.type === "file" || part.type === "agent" || part.type === "subtask",
+  )
+}
+
+/** Whether a stored message is the marker of an automatic compaction after the context overflowed. */
+export function overflowMarker(message: SessionV1.WithParts): boolean {
+  return (
+    message.info.role === "user" &&
+    message.parts.some((part) => part.type === "compaction" && part.auto && part.overflow === true)
   )
 }
 
@@ -153,6 +204,8 @@ interface Entry {
   readonly sessions: Set<SessionID>
   /** Sessions connect made to place the run's helpers (CW-14); helpers may be their children. */
   readonly places: Set<SessionID>
+  /** The requester's child sessions when the run was admitted: an earlier run's helpers, never this run's. */
+  earlier?: ReadonlySet<SessionID>
   /** Consents already asked in this run. */
   readonly asked: Set<string>
   readonly controller: AbortController
@@ -174,6 +227,8 @@ interface Admission {
 
 const refusal = (code: Connect.RefusalCode, message: string) =>
   new Connect.Refusal({ code, message: clip(message, 2_000) })
+
+const OFF = "Connected tools are off in this build (VECTOR_EXPERIMENTAL_CONNECT)."
 
 /** The hub's layer over the given adapters. Tests pass fakes; the engine passes `ADAPTERS`. */
 export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
@@ -208,19 +263,56 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       })
 
       // Runs recorded in a session since the user last wrote, newest first, read without loading the whole history.
+      // An automatic compaction after the context overflowed copies the user's last message into a new one (the
+      // replay, right after the compaction's marker and its summary); that copy is not the user writing again, so the
+      // walk goes on to the message it copied, and the runs before the overflow still count in the request.
       const recorded = Effect.fnUntraced(function* (sessionID: SessionID) {
         const runs: Connect.Run[] = []
-        const found = yield* sessions
+        let requestID: string | undefined
+        // A message the user may have written, until the messages before it show whether it is a replay.
+        let candidate: string | undefined
+        let step: "summary" | "marker" = "summary"
+        yield* sessions
           .findMessage(sessionID, (message) => {
-            if (written(message)) return true
-            for (const part of message.parts) {
-              const run = fromPart(part)
-              if (run) runs.push(run)
+            if (candidate !== undefined) {
+              if (step === "summary" && message.info.role === "assistant" && message.info.summary === true) {
+                step = "marker"
+                return false
+              }
+              if (step === "marker" && overflowMarker(message)) {
+                candidate = undefined
+                return false
+              }
+              requestID = candidate
+              return true
             }
+            if (written(message)) {
+              candidate = message.info.id
+              step = "summary"
+              return false
+            }
+            runs.push(...fromMessage(message))
             return false
           })
           .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
-        return { requestID: Option.getOrUndefined(Option.map(found, (message) => message.info.id)), runs }
+        return { requestID: requestID ?? candidate, runs }
+      })
+
+      // Runs saved in a session, newest first and each once, as `settled` reads them; at most `limit` of them.
+      const stored = Effect.fnUntraced(function* (
+        sessionID: SessionID,
+        limit: number,
+        match: (run: Connect.Run) => boolean = () => true,
+      ) {
+        const found = new Map<string, Connect.Run>()
+        yield* sessions
+          .findMessage(sessionID, (message) => {
+            for (const run of fromMessage(message))
+              if (!found.has(run.id) && match(run)) found.set(run.id, settled(run))
+            return found.size >= limit
+          })
+          .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
+        return [...found.values()].slice(0, limit)
       })
 
       const request: Interface["request"] = Effect.fn("ConnectHub.request")(function* (sessionID: SessionID) {
@@ -234,26 +326,30 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const entry = state.runs.get(runID)
         if (entry && (sessionID === undefined || entry.run.request.requester.sessionID === sessionID)) return entry.run
         if (!sessionID) return undefined
-        let match: Connect.Run | undefined
-        yield* sessions
-          .findMessage(sessionID, (message) =>
-            message.parts.some((part) => {
-              const run = fromPart(part)
-              if (run?.id !== runID) return false
-              match = run
-              return true
-            }),
-          )
-          .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
-        return match
+        const [found] = yield* stored(
+          sessionID,
+          1,
+          (run) => run.id === runID && run.request.requester.sessionID === sessionID,
+        )
+        return found
       })
 
+      // With a session, the runs it saved join the ledger's (the ledger wins on an id), so the list survives a
+      // restart: the ledger is only a cache.
       const runs: Interface["runs"] = Effect.fn("ConnectHub.runs")(function* (input) {
         const state = yield* InstanceState.get(ledger)
-        return [...state.runs.values()]
+        const sessionID = input?.sessionID
+        const live = [...state.runs.values()]
           .map((entry) => entry.run)
-          .filter((run) => input?.sessionID === undefined || run.request.requester.sessionID === input.sessionID)
-          .toSorted((a, b) => b.time.created - a.time.created || (a.id < b.id ? 1 : -1))
+          .filter((run) => sessionID === undefined || run.request.requester.sessionID === sessionID)
+        const known = new Set(live.map((run) => run.id))
+        const saved = sessionID
+          ? (yield* stored(sessionID, LEDGER_SIZE)).filter(
+              (run) => !known.has(run.id) && run.request.requester.sessionID === sessionID,
+            )
+          : []
+        const all = [...live, ...saved].toSorted((a, b) => b.time.created - a.time.created || (a.id < b.id ? 1 : -1))
+        return sessionID === undefined ? all : all.slice(0, LEDGER_SIZE)
       })
 
       const cancel: Interface["cancel"] = Effect.fn("ConnectHub.cancel")(function* (runID, scope) {
@@ -288,6 +384,16 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           const checked = Option.getOrUndefined(decodeConsent(consent))
           if (!checked)
             return yield* Effect.die(new Error("A connect adapter asked a consent connect does not accept."))
+          // `connect_write` must reach the user every time. Only `requiresApproval` keeps a rule, a saved approval or a
+          // client's auto-accept from answering it, so while it does not cover `connect_write` nothing is written.
+          if (
+            checked.permission === "connect_write" &&
+            !PermissionPolicy.requiresApproval(checked.permission, [], checked.patterns)
+          )
+            return yield* refusal(
+              "permission",
+              "Connect writes only after asking you each time, and this build cannot yet keep a rule or a saved approval from answering that question, so connect did not write anything.",
+            )
           const state = yield* InstanceState.get(ledger)
           const requestID = entry.run.request.requestID
           const key = `${checked.permission}\u0000${checked.patterns.join("\u0000")}`
@@ -332,26 +438,48 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             for (const pattern of checked.patterns) approve(state, `${requestID}\u0000${pattern}`)
         })
 
-      // Accepts only the run's own hidden helper sessions while the run is going (HelperHandle).
+      // Accepts only the run's own hidden helper sessions while the run is going (HelperHandle): made during this run
+      // (not one of the requester's children from before it, such as an earlier run's helpers) and not held by another
+      // run going now. A prompt keeps the member's fixed rules: it may not swap the session's tools, re-arm its
+      // budget or skip its reply, and runs only as one of the member's own agents.
       const helperFor = (entry: Entry, ops: TaskPromptOps, member: string): ConnectAdapter.HelperHandle => {
         const requester = entry.run.request.requester.sessionID
+        const refuse = (sessionID: SessionID, why: string) =>
+          Effect.die(new Error(`Connect's helper handle refused session ${sessionID}: ${why}`))
         const admit = Effect.fnUntraced(function* (sessionID: SessionID) {
-          const refuse = (why: string) =>
-            Effect.die(new Error(`Connect's helper handle refused session ${sessionID}: ${why}`))
-          if (entry.run.status !== "running") return yield* refuse("the run is not going")
-          if (sessionID === requester) return yield* refuse("it is the requester's own session")
+          if (entry.run.status !== "running") return yield* refuse(sessionID, "the run is not going")
+          if (sessionID === requester) return yield* refuse(sessionID, "it is the requester's own session")
           const info = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
-          if (!info) return yield* refuse("there is no such session")
-          if (!info.internal?.startsWith(`${member}.`)) return yield* refuse(`it is not a hidden ${member} helper`)
+          if (!info) return yield* refuse(sessionID, "there is no such session")
+          if (!info.internal?.startsWith(`${member}.`))
+            return yield* refuse(sessionID, `it is not a hidden ${member} helper`)
           const parent = info.parentID
           if (!parent || (parent !== requester && !entry.places.has(parent)))
-            return yield* refuse("its parent is not this run's requester")
-          if (!entry.sessions.has(sessionID) && entry.sessions.size >= Connect.MAX_SESSIONS)
-            return yield* refuse(`the run already made ${Connect.MAX_SESSIONS} helper sessions`)
+            return yield* refuse(sessionID, "its parent is not this run's requester")
+          if (!entry.earlier || entry.earlier.has(sessionID))
+            return yield* refuse(sessionID, "it was made before this run started")
+          if (!entry.sessions.has(sessionID)) {
+            const state = yield* InstanceState.get(ledger)
+            for (const other of state.runs.values())
+              if (other !== entry && other.run.status !== "done" && other.sessions.has(sessionID))
+                return yield* refuse(sessionID, "another run going now holds it")
+            if (entry.sessions.size >= Connect.MAX_SESSIONS)
+              return yield* refuse(sessionID, `the run already made ${Connect.MAX_SESSIONS} helper sessions`)
+          }
         })
+        const agents = HELPER_AGENTS[member] ?? new Set<string>()
+        const checkInput = (input: SessionPrompt.PromptInput) => {
+          if (input.tools !== undefined) return refuse(input.sessionID, "a prompt may not change the session's tools")
+          if (input.budget !== undefined) return refuse(input.sessionID, "a prompt may not set the session's budget")
+          if (input.noReply !== undefined) return refuse(input.sessionID, "a prompt may not skip its reply")
+          if (input.agent === undefined || !agents.has(input.agent))
+            return refuse(input.sessionID, `it may be prompted only as ${[...agents].join(" or ") || "no agent"}`)
+          return Effect.void
+        }
         return {
           prompt: (input) =>
             Effect.gen(function* () {
+              yield* checkInput(input)
               yield* admit(input.sessionID)
               entry.sessions.add(input.sessionID)
               return yield* ops.prompt(input)
@@ -380,8 +508,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const admit = Effect.fnUntraced(function* (entry: Entry, saved: readonly Connect.Run[]) {
         const request = entry.run.request
         const requester = request.requester
-        if (!flags.experimentalConnect)
-          return yield* refusal("not-allowed", "Connected tools are off in this build (VECTOR_EXPERIMENTAL_CONNECT).")
+        if (!flags.experimentalConnect) return yield* refusal("not-allowed", OFF)
         if (request.background)
           return yield* refusal("input", "Background hand-offs are not available yet. Run it in the foreground.")
         const session = requester.sessionID
@@ -392,6 +519,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         // A member's own helper session never starts a hand-off (no chains).
         if (session?.internal)
           return yield* refusal("not-allowed", "A helper session cannot hand work to another member.")
+        // Nor does a subagent (a child session the task tool made): only the conversation's own agent, a person or a
+        // workflow stage hands work off.
+        if (requester.kind === "agent" && session?.parentID)
+          return yield* refusal("not-allowed", "A subagent cannot hand work to another member.")
         const adapter = entry.adapter
         if (!adapter) return yield* refusal("unknown", `Connect has no member named ${clip(request.to, 200)}.`)
         if (!adapter.handle)
@@ -413,10 +544,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         if (!narrowed.ok) return yield* narrowed.refusal
         if (Option.isNone(decodeMember(member)))
           return yield* refusal("unavailable", `${request.to} described itself in a shape connect does not accept.`)
-        if (member.state !== "ready")
+        // Vector Local governs every member here as in the registry: one that runs in a cloud, or sends code past this
+        // computer and the listed model servers, is off whatever it says of itself.
+        const ready = ConnectMembers.gate(member, (yield* config.localPolicy()).enabled)
+        if (ready.state !== "ready")
           return yield* refusal(
             "unavailable",
-            `${member.title} is not ready${member.reason ? `: ${member.reason}` : "."}`,
+            `${member.title} is not ready${ready.reason ? `: ${ready.reason}` : "."}`,
           )
         const directory = yield* Effect.promise(() => isDirectory(request.directory))
         if (!path.isAbsolute(request.directory) || !directory)
@@ -443,6 +577,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           ...(member.sendsTo ? { sendsTo: member.sendsTo } : {}),
         })
         const spend = yield* spendOf(requester.sessionID)
+        // What the requester already had, so the helper handle reaches only the sessions this run makes.
+        entry.earlier = new Set(
+          requester.sessionID ? (yield* sessions.children(requester.sessionID)).map((child) => child.id) : [],
+        )
         const remainingUsd =
           spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0)) : undefined
         const ops = entry.call.promptOps
@@ -466,7 +604,12 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const earlier = Effect.fnUntraced(function* (request: Connect.ReviewRequest, requester: Connect.Requester) {
         const since = request.since!
         const found = yield* get(since, requester.sessionID)
-        if (!found?.result || found.request.action !== "review")
+        // Only a review that did its work compares: a refused, failed or cancelled one has nothing to compare with.
+        if (
+          !found?.result ||
+          found.request.action !== "review" ||
+          (found.result.state !== "completed" && found.result.state !== "partial")
+        )
           return yield* refusal("input", `There is no earlier review ${since} in this session to compare with.`)
         if (!ConnectFindings.comparable(found.result.target ?? found.request.target, request.target))
           return yield* refusal(
@@ -487,12 +630,16 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return found
       })
 
+      // The reviewer reads the whole worktree with no external-directory question, and the read tool names each file
+      // relative to it, so the check walks from where the reviewer's reads start, under the names it asks with.
       const checkReads = Effect.fnUntraced(function* (directory: string, rules: PermissionV1.Ruleset) {
         const patterns = ConnectPolicy.readPatterns(rules)
         if (patterns.length === 0) return
-        const scanned = yield* Effect.tryPromise(() => scan(directory, patterns, rules)).pipe(
-          Effect.orElseSucceed(() => ({ error: true as const })),
-        )
+        const instance = yield* InstanceState.context
+        const scanned = yield* Effect.tryPromise(async () => {
+          const place = await reviewRoot(directory, instance)
+          return scan(place.root, patterns, rules, { prefixes: place.prefixes })
+        }).pipe(Effect.orElseSucceed(() => ({ error: true as const })))
         if ("error" in scanned)
           return yield* refusal(
             "read-rule",
@@ -501,7 +648,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         if ("tooMany" in scanned)
           return yield* refusal(
             "read-rule",
-            `This directory holds more than ${MAX_SCAN.toLocaleString("en-US")} files, too many for connect to check against this session's read rules, so it did not review it.`,
+            `This repository holds more than ${MAX_SCAN.toLocaleString("en-US")} files, too many for connect to check against this session's read rules, so it did not review it.`,
           )
         if (scanned.block) return yield* ConnectPolicy.readRefusal(scanned.block)
       })
@@ -530,14 +677,26 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       })
 
       const run: Interface["run"] = Effect.fn("ConnectHub.run")(function* (input: StartInput) {
-        const state = yield* InstanceState.get(ledger)
         const id = Connect.RunID.create()
-        const requester = input.request.requester
-        const saved = requester.sessionID ? yield* recorded(requester.sessionID) : undefined
-        const request = yield* decodeRequest({ ...input.request, id, requestID: saved?.requestID ?? id }).pipe(
-          Effect.orDie,
-        )
         const created = yield* Clock.currentTimeMillis
+        // With connected tools off nothing is read, recorded or published: no run list, event or registry shows it.
+        if (!flags.experimentalConnect) return unrecorded(id, input.request, created, "not-allowed", OFF)
+        // The caller's request may carry anything a model or a client sent (the tool passes its arguments on), so it
+        // is held to the schema first; one the schema refuses ends refused with `input`, unrecorded, before anything
+        // is read or asked.
+        const decoded = yield* decodeRequest({ ...input.request, id, requestID: id }).pipe(Effect.exit)
+        if (Exit.isFailure(decoded))
+          return unrecorded(
+            id,
+            input.request,
+            created,
+            "input",
+            `The hand-off request is not valid, so connect did not start it: ${clip(why(decoded.cause), 600)}`,
+          )
+        const state = yield* InstanceState.get(ledger)
+        const requester = decoded.value.requester
+        const saved = requester.sessionID ? yield* recorded(requester.sessionID) : undefined
+        const request: Connect.Request = { ...decoded.value, requestID: saved?.requestID ?? id }
         const entry: Entry = {
           run: { id, request, status: "queued", time: { created } },
           adapter: byID.get(request.to),
@@ -582,6 +741,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const skillList = yield* skills.all()
         const workflows = yield* library.list().pipe(Effect.orElseSucceed(() => []))
         const status = yield* mcp.status()
+        const remoteMcp = new Set(
+          Object.entries((yield* config.get()).mcp ?? {}).flatMap(([name, entry]) =>
+            entry && typeof entry === "object" && "type" in entry && entry.type === "remote" ? [name] : [],
+          ),
+        )
         const githubAgent = yield* Effect.promise(() => isFile(path.join(ctx.worktree, WORKFLOW_FILE)))
         const tasks = input?.sessionID
           ? yield* desktop
@@ -598,6 +762,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           skills: skillList,
           workflows,
           mcp: status,
+          remoteMcp,
           ...(input?.tools ? { tools: input.tools } : {}),
           githubAgent,
           ...(tasks ? { desktop: { workspaces: active("workspace:"), swarm: active("swarm:") } } : {}),
@@ -763,6 +928,43 @@ function ended(entry: Entry, state: "refused" | "failed" | "cancelled", summary:
   }
 }
 
+/**
+ * A run refused before it was recorded: connected tools are off, or the request is not valid. It carries the caller's
+ * request as given (it was never decoded, so `metadata` may save nothing for it) and is neither kept in the ledger nor
+ * published.
+ */
+function unrecorded(
+  id: Connect.RunID,
+  request: StartRequest,
+  created: number,
+  code: Connect.RefusalCode,
+  message: string,
+): Connect.Run {
+  const given = (typeof request === "object" && request !== null ? request : {}) as Partial<Connect.Request>
+  return {
+    id,
+    request: { ...given, id, requestID: id } as Connect.Request,
+    status: "done",
+    result: {
+      state: "refused",
+      refusal: code,
+      ...(given.action === "review" ? { verdict: "not-reviewed" as const } : {}),
+      summary: clip(message, Connect.MAX_SUMMARY),
+      findings: [],
+      sessions: [],
+      notes: [],
+    },
+    time: { created, ended: created },
+  }
+}
+
+/** Why the schema refused a value, in a line. */
+function why(cause: Cause.Cause<unknown>) {
+  const error = Cause.squash(cause)
+  const text = error instanceof Error ? error.message : String(error)
+  return text.replace(/\s+/g, " ").trim() || "it does not match the shape connect accepts"
+}
+
 /** A rule's deny or the user's no, as a refusal; anything else is not one. */
 function refusalOf(cause: Cause.Cause<unknown>, consent: Connect.Consent, nobody: boolean) {
   for (const reason of cause.reasons) {
@@ -799,31 +1001,81 @@ function aborted(signal: AbortSignal) {
 }
 
 /**
+ * Where a review's reads are checked from, and the other names its files are asked under. Inside the instance's
+ * worktree (the repository's top level) a reviewer reads any file with no external-directory question, VectorScope
+ * reviews from that top level, and the read tool names each file relative to it; so a folder inside the worktree is
+ * checked from the worktree's top, under those names. A folder of an instance that is not in git (worktree "/") is
+ * checked from the folder itself, and its files are also named as the read tool names them there, relative to "/". A
+ * folder outside the instance (a task's own worktree) is checked from the nearest folder at or above it that holds
+ * `.git`, its repository's top level, or from the folder itself.
+ */
+export async function reviewRoot(
+  directory: string,
+  instance: { readonly directory: string; readonly worktree: string },
+): Promise<{ readonly root: string; readonly prefixes: readonly string[] }> {
+  const folder = await realpath(directory)
+  const worktree = instance.worktree === "/" ? undefined : await realpath(instance.worktree).catch(() => undefined)
+  if (worktree && FSUtil.contains(worktree, folder)) return { root: worktree, prefixes: [] }
+  const home = await realpath(instance.directory).catch(() => undefined)
+  if (instance.worktree === "/" && home && FSUtil.contains(home, folder)) {
+    const named = [path.resolve(directory), folder].map((value) => path.relative("/", value).replaceAll("\\", "/"))
+    return { root: folder, prefixes: [...new Set(named)].filter(Boolean) }
+  }
+  for (let current = folder; ; current = path.dirname(current)) {
+    if (await exists(path.join(current, ".git"))) return { root: current, prefixes: [] }
+    if (path.dirname(current) === current) return { root: folder, prefixes: [] }
+  }
+}
+
+/**
  * Looks for a file or directory the review must not read, as `ConnectPolicy.readBlock` decides it: tracked, untracked
- * and ignored files alike, never inside `.git`. A directory is entered only when one of the patterns could match
- * something beneath it. A link to a directory inside the review directory is followed under its own name, once,
- * because a reviewer reading through it asks with that name; a link that leaves the directory is an external read,
- * which review sessions are denied.
+ * and ignored files alike, never inside `.git`. Each entry is named relative to `root`, and also under each of
+ * `prefixes` (other names the read tool asks with). A directory is entered only when one of the patterns could match
+ * something beneath it. A link to a directory inside `root` is walked again under its own name, once, when some rule
+ * could tell a file reached through it from the same file under its real name (`ConnectPolicy.sameBeneath`), because a
+ * reviewer reading through it asks with that name; otherwise its files are checked where they really lie. A link that
+ * leaves `root` is an external read, which review sessions are denied. A folder that vanished during the walk holds
+ * nothing to read; any other error throws, and the caller refuses (fail closed).
  */
 export async function scan(
   root: string,
   patterns: readonly string[],
   rules: PermissionV1.Ruleset,
-  limit = MAX_SCAN,
+  options: { readonly limit?: number; readonly prefixes?: readonly string[] } = {},
 ): Promise<{ readonly block?: NonNullable<ReturnType<typeof ConnectPolicy.readBlock>> } | { readonly tooMany: true }> {
+  const limit = options.limit ?? MAX_SCAN
+  const prefixes = options.prefixes ?? []
   const review = ConnectPolicy.reviewRules()
+  // Every pattern that can decide a read: the requester's read rules, the ask when none matches, and VectorScope's.
+  const deciders = [...new Set(["*", ...[...rules, ...review].filter(readRule).map((rule) => rule.pattern)])]
   const home = await realpath(root)
   const visited = new Set<string>([home])
-  const beneath = (relative: string) => patterns.some((pattern) => ConnectPolicy.overlaps(pattern, `${relative}/*`))
-  const blocked = (relative: string) =>
-    patterns.some((pattern) => Wildcard.match(relative, pattern))
-      ? ConnectPolicy.readBlock(relative, rules, review)
-      : undefined
+  const names = (relative: string) => [
+    relative,
+    ...prefixes.map((prefix) => (relative ? `${prefix}/${relative}` : prefix)),
+  ]
+  const beneath = (relative: string) =>
+    names(relative).some((name) => patterns.some((pattern) => ConnectPolicy.overlaps(pattern, `${name}/*`)))
+  const blocked = (relative: string) => {
+    for (const name of names(relative)) {
+      if (!patterns.some((pattern) => Wildcard.match(name, pattern))) continue
+      const block = ConnectPolicy.readBlock(name, rules, review)
+      if (block) return block
+    }
+    return undefined
+  }
+  const telling = (link: string, real: string) => {
+    const reals = names(real)
+    return names(link).some((name, index) => !ConnectPolicy.sameBeneath(deciders, name, reals[index]!))
+  }
   const stack = [""]
   let seen = 0
   while (stack.length > 0) {
     const dir = stack.pop()!
-    const entries = await readdir(path.join(root, dir), { withFileTypes: true }).catch(() => [])
+    const entries = await readdir(path.join(root, dir), { withFileTypes: true }).catch((error: unknown) => {
+      if (dir !== "" && gone(error)) return []
+      throw error
+    })
     for (const entry of entries) {
       if (entry.name === ".git") continue
       seen += 1
@@ -839,11 +1091,30 @@ export async function scan(
       const target = await realpath(path.join(root, relative)).catch(() => undefined)
       if (!target || visited.has(target) || !(target === home || target.startsWith(home + path.sep))) continue
       if (!(await isDirectory(target))) continue
+      const real = path.relative(home, target).replaceAll("\\", "/")
+      // Where the walk never goes (.git), its files are checked only through the link.
+      if (!real.split("/").includes(".git") && !telling(relative, real)) continue
       visited.add(target)
       stack.push(relative)
     }
   }
   return {}
+}
+
+function readRule(rule: PermissionV1.Rule) {
+  return Wildcard.match("read", rule.permission)
+}
+
+/** An error that says the folder is no longer there (removed, or replaced by a file, while the walk ran). */
+function gone(error: unknown) {
+  const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+  return code === "ENOENT" || code === "ENOTDIR"
+}
+
+async function exists(target: string) {
+  return stat(target)
+    .then(() => true)
+    .catch(() => false)
 }
 
 async function isDirectory(target: string) {

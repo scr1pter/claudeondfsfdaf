@@ -21,11 +21,18 @@ export const TAG = "untrusted_review_findings"
 /** About how much of the model's context the findings block may take before bodies are left out. */
 export const MAX_BLOCK_CHARS = 40_000
 
-const OPENER = /<(?=\s*\/?\s*untrusted)/gi
+// Invisible format characters (zero-width spaces and joiners, word joiners, direction marks) that could sit between
+// "<" and the tag name, and the characters a model may read as "<": fullwidth, small, angle brackets and quotes.
+const FORMAT = /\p{Cf}/gu
+const LESS = /[<\uFF1C\uFE64\u2039\u2329\u27E8\u27EA\u3008\u276C\u276E]/g
 
-/** Neutralises every `<untrusted…` and `</untrusted…` in untrusted text, so it cannot end its block or start one. */
+/**
+ * Untrusted text with every "<" (and every character that reads like one) escaped, after invisible format characters
+ * are dropped, so nothing in it can read as a tag: it cannot end its block, start another, or hide either behind a
+ * zero-width character or a fullwidth bracket.
+ */
 export function escapeUntrusted(text: string): string {
-  return text.replace(OPENER, "&lt;")
+  return text.replace(FORMAT, "").replace(LESS, "&lt;")
 }
 
 /** Where code went, in plain words. "local" is said only for this computer or a model server the user lists. */
