@@ -37,12 +37,12 @@ enum class OverlayDriverStage : uint8_t {
   uia_prepare_cache, uia_prepare_scope, uia_prepare_control, uia_prepare_filter, uia_prepare_property, uia_root_availability,
   uia_root_target, uia_root_element, uia_root_handle, uia_root_wrap, uia_runtime_id, uia_runtime_shape,
   uia_runtime_bounds, uia_runtime_value, uia_wrap_equal, uia_wrap_limit, uia_security_cache, uia_security_pid,
-  uia_security_type, uia_security_password, uia_security_enabled, uia_security_focus, uia_security_keyboard, uia_security_keyboard_query_failed, uia_security_keyboard_variant_invalid, uia_security_value_pattern,
-  uia_security_text_pattern, uia_security_classify, uia_security_value_readonly, uia_security_text_readonly, uia_security_bounds, uia_security_current,
+  uia_security_type, uia_security_password, uia_security_enabled, uia_security_focus, uia_security_keyboard, uia_security_keyboard_query_failed, uia_security_keyboard_variant_invalid, uia_security_value_pattern, uia_security_value_pattern_query_failed, uia_security_value_pattern_variant_invalid, uia_security_value_pattern_marker, uia_security_value_pattern_probe, uia_security_value_pattern_probe_invalid, uia_security_value_pattern_probe_empty, uia_security_value_pattern_probe_no_interface,
+  uia_security_text_pattern, uia_security_text_pattern_query_failed, uia_security_text_pattern_variant_invalid, uia_security_text_pattern_marker, uia_security_text_pattern_probe, uia_security_text_pattern_probe_invalid, uia_security_text_pattern_probe_empty, uia_security_text_pattern_probe_no_interface, uia_security_classify, uia_security_value_readonly, uia_security_text_readonly, uia_security_bounds, uia_security_current,
   uia_root_pid, uia_actor_current, uia_actor_current_budget, uia_actor_complete, uia_actor_expired, uia_actor_cancelled,
   uia_actor_revoked, uia_actor_com_uninitialized, uia_actor_com_cancellation_unavailable, uia_actor_com_timer_unavailable, uia_actor_com_expired
 };
-inline constexpr std::array<std::wstring_view, 91> overlay_driver_stages{
+inline constexpr std::array<std::wstring_view, 105> overlay_driver_stages{
   L"dpi", L"parent", L"files", L"observe-parent", L"observe-bootstrap", L"isolation",
   L"token", L"desktop", L"ready-write", L"envelope-read", L"envelope-shape", L"request",
   L"foreground", L"guardian-create", L"backend-create", L"uia-create", L"uia-available", L"window-observe",
@@ -54,8 +54,8 @@ inline constexpr std::array<std::wstring_view, 91> overlay_driver_stages{
   L"uia-prepare-cache", L"uia-prepare-scope", L"uia-prepare-control", L"uia-prepare-filter", L"uia-prepare-property", L"uia-root-availability",
   L"uia-root-target", L"uia-root-element", L"uia-root-handle", L"uia-root-wrap", L"uia-runtime-id", L"uia-runtime-shape",
   L"uia-runtime-bounds", L"uia-runtime-value", L"uia-wrap-equal", L"uia-wrap-limit", L"uia-security-cache", L"uia-security-pid",
-  L"uia-security-type", L"uia-security-password", L"uia-security-enabled", L"uia-security-focus", L"uia-security-keyboard", L"uia-security-keyboard-query-failed", L"uia-security-keyboard-variant-invalid", L"uia-security-value-pattern",
-  L"uia-security-text-pattern", L"uia-security-classify", L"uia-security-value-readonly", L"uia-security-text-readonly", L"uia-security-bounds", L"uia-security-current",
+  L"uia-security-type", L"uia-security-password", L"uia-security-enabled", L"uia-security-focus", L"uia-security-keyboard", L"uia-security-keyboard-query-failed", L"uia-security-keyboard-variant-invalid", L"uia-security-value-pattern", L"uia-security-value-pattern-query-failed", L"uia-security-value-pattern-variant-invalid", L"uia-security-value-pattern-marker", L"uia-security-value-pattern-probe", L"uia-security-value-pattern-probe-invalid", L"uia-security-value-pattern-probe-empty", L"uia-security-value-pattern-probe-no-interface",
+  L"uia-security-text-pattern", L"uia-security-text-pattern-query-failed", L"uia-security-text-pattern-variant-invalid", L"uia-security-text-pattern-marker", L"uia-security-text-pattern-probe", L"uia-security-text-pattern-probe-invalid", L"uia-security-text-pattern-probe-empty", L"uia-security-text-pattern-probe-no-interface", L"uia-security-classify", L"uia-security-value-readonly", L"uia-security-text-readonly", L"uia-security-bounds", L"uia-security-current",
   L"uia-root-pid", L"uia-actor-current", L"uia-actor-current-budget", L"uia-actor-complete", L"uia-actor-expired", L"uia-actor-cancelled",
   L"uia-actor-revoked", L"uia-actor-com-uninitialized", L"uia-actor-com-cancellation-unavailable", L"uia-actor-com-timer-unavailable", L"uia-actor-com-expired"
 };

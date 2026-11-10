@@ -174,8 +174,6 @@ describe("independent overlay source admission", () => {
       ["ControlType", "VT_I4"],
       ["IsEnabled", "VT_BOOL"],
       ["HasKeyboardFocus", "VT_BOOL"],
-      ["IsValuePatternAvailable", "VT_BOOL"],
-      ["IsTextPatternAvailable", "VT_BOOL"],
     ])
       expect(security).toContain(`property(UIA_${property}PropertyId, ${kind},`)
     expect(security).toContain("classify_uia_keyboard_focusable(keyboard_status, keyboard.value)")
@@ -191,6 +189,56 @@ describe("independent overlay source admission", () => {
     )
     expect(implementation).toContain("live.keyboard_focusable != old.keyboard_focusable")
     expect(implementation).toContain("value.boolVal == VARIANT_TRUE")
+  })
+  test("pattern flags require explicit booleans or exact unsupported-marker capability proofs", async () => {
+    const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+    const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
+    const reader = implementation.slice(
+      implementation.indexOf("struct PatternPhases"),
+      implementation.indexOf("IUIAutomationElement* native("),
+    )
+    expect(reader).toContain("cached->GetCachedPropertyValueEx(property, TRUE, &reported.value)")
+    expect(reader).toContain("if (status != S_OK) { note(phases.query_failed); unavailable(); }")
+    const boolean = reader.slice(
+      reader.indexOf("if (reported.value.vt == VT_BOOL)"),
+      reader.indexOf("// Availability defaults"),
+    )
+    expect(boolean).toContain("if (reported.value.boolVal == VARIANT_TRUE) return true;")
+    expect(boolean).toContain("if (reported.value.boolVal == VARIANT_FALSE) return false;")
+    expect(boolean).toContain("note(phases.variant_invalid); unavailable();")
+    expect(reader).toContain("if (reported.value.vt != VT_UNKNOWN || !reported.value.punkVal)")
+    const marker = reader.indexOf(
+      "automation_->CheckNotSupported(reported.value, &unsupported) != S_OK || unsupported != TRUE",
+    )
+    const probe = reader.indexOf("element->GetCurrentPatternAs(pattern, IID_PPV_ARGS(capability.put()))")
+    expect(marker).toBeGreaterThan(reader.indexOf("if (reported.value.vt == VT_BOOL)"))
+    expect(probe).toBeGreaterThan(marker)
+    expect(reader.match(/GetCurrentPatternAs/g)).toHaveLength(1)
+    expect(reader).toContain("GetCurrentPatternAs(pattern, IID_PPV_ARGS(capability.put())); current_call();")
+    expect(reader).toContain("classify_uia_pattern_support(probed, static_cast<bool>(capability))")
+    const refused = reader.slice(reader.indexOf("if (!support)"), reader.indexOf("return *support;"))
+    expect(refused).toContain(
+      "probed == S_OK && !capability ? phases.probe_empty : probed == E_NOINTERFACE ? phases.probe_no_interface : phases.probe_invalid",
+    )
+    expect(refused).toContain("unavailable();")
+    expect(refused).not.toMatch(/current_call|GetCurrentPatternAs|return/)
+    expect(implementation).toContain("if (status == S_OK && interface_present) return true;")
+    expect(implementation).toContain("if (status == UIA_E_NOTSUPPORTED && !interface_present) return false;")
+    expect(reader).not.toMatch(/get_CurrentValue|get_DocumentRange|GetAttributeValue|GetText/)
+    const security = implementation.slice(
+      implementation.indexOf("UiaSecurity security("),
+      implementation.indexOf("UiaName name("),
+    )
+    for (const pattern of ["Value", "Text"]) {
+      const call = `pattern_available<IUIAutomation${pattern}Pattern>(cached.get(), element, UIA_Is${pattern}PatternAvailablePropertyId, UIA_${pattern}PatternId,`
+      expect(security).toContain(call)
+      expect(security.indexOf(call)).toBeLessThan(security.indexOf("classify_uia_password("))
+    }
+    expect(security).toContain("result.value_pattern = value_pattern; result.text_pattern = text_pattern;")
+    expect(security).not.toContain("GetCachedPropertyValueEx(UIA_IsValuePatternAvailablePropertyId, FALSE")
+    expect(security).not.toContain("GetCachedPropertyValueEx(UIA_IsTextPatternAvailablePropertyId, FALSE")
+    expect(implementation).toContain("if (status == S_OK && interface_present) return true;")
+    expect(implementation).toContain("if (status == UIA_E_NOTSUPPORTED && !interface_present) return false;")
   })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))

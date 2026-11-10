@@ -18,18 +18,18 @@ enum class WindowsUiaPhase : uint8_t {
   prepare_scope, prepare_control, prepare_filter, prepare_property, root_availability, root_target,
   root_element, root_handle, root_wrap, runtime_id, runtime_shape, runtime_bounds,
   runtime_value, wrap_equal, wrap_limit, security_cache, security_pid, security_type,
-  security_password, security_enabled, security_focus, security_keyboard, security_keyboard_query_failed, security_keyboard_variant_invalid, security_value_pattern, security_text_pattern,
+  security_password, security_enabled, security_focus, security_keyboard, security_keyboard_query_failed, security_keyboard_variant_invalid, security_value_pattern, security_value_pattern_query_failed, security_value_pattern_variant_invalid, security_value_pattern_marker, security_value_pattern_probe, security_value_pattern_probe_invalid, security_value_pattern_probe_empty, security_value_pattern_probe_no_interface, security_text_pattern, security_text_pattern_query_failed, security_text_pattern_variant_invalid, security_text_pattern_marker, security_text_pattern_probe, security_text_pattern_probe_invalid, security_text_pattern_probe_empty, security_text_pattern_probe_no_interface,
   security_classify, security_value_readonly, security_text_readonly, security_bounds, security_current, root_pid,
   actor_current, actor_current_budget, actor_complete, actor_expired, actor_cancelled, actor_revoked,
   actor_com_uninitialized, actor_com_cancellation_unavailable, actor_com_timer_unavailable, actor_com_expired
 };
-inline constexpr std::array<std::wstring_view, 54> windows_uia_phases{
+inline constexpr std::array<std::wstring_view, 68> windows_uia_phases{
   L"none", L"root-current", L"actor-admission", L"actor-queued", L"actor-budget", L"prepare-desktop",
   L"prepare-create", L"prepare-interface", L"prepare-connection", L"prepare-transaction", L"prepare-walker", L"prepare-cache",
   L"prepare-scope", L"prepare-control", L"prepare-filter", L"prepare-property", L"root-availability", L"root-target",
   L"root-element", L"root-handle", L"root-wrap", L"runtime-id", L"runtime-shape", L"runtime-bounds",
   L"runtime-value", L"wrap-equal", L"wrap-limit", L"security-cache", L"security-pid", L"security-type",
-  L"security-password", L"security-enabled", L"security-focus", L"security-keyboard", L"security-keyboard-query-failed", L"security-keyboard-variant-invalid", L"security-value-pattern", L"security-text-pattern",
+  L"security-password", L"security-enabled", L"security-focus", L"security-keyboard", L"security-keyboard-query-failed", L"security-keyboard-variant-invalid", L"security-value-pattern", L"security-value-pattern-query-failed", L"security-value-pattern-variant-invalid", L"security-value-pattern-marker", L"security-value-pattern-probe", L"security-value-pattern-probe-invalid", L"security-value-pattern-probe-empty", L"security-value-pattern-probe-no-interface", L"security-text-pattern", L"security-text-pattern-query-failed", L"security-text-pattern-variant-invalid", L"security-text-pattern-marker", L"security-text-pattern-probe", L"security-text-pattern-probe-invalid", L"security-text-pattern-probe-empty", L"security-text-pattern-probe-no-interface",
   L"security-classify", L"security-value-readonly", L"security-text-readonly", L"security-bounds", L"security-current", L"root-pid",
   L"actor-current", L"actor-current-budget", L"actor-complete", L"actor-expired", L"actor-cancelled", L"actor-revoked",
   L"actor-com-uninitialized", L"actor-com-cancellation-unavailable", L"actor-com-timer-unavailable", L"actor-com-expired"
@@ -105,6 +105,9 @@ struct WindowsUiaBackend {
 std::wstring sanitize_uia(std::wstring_view text, size_t maximum = 500);
 // A documented negative default never authorizes focus. Query/type failures remain unavailable.
 std::optional<bool> classify_uia_keyboard_focusable(HRESULT status, const VARIANT& value) noexcept;
+// Used only after the exact reserved unsupported-property marker, for known typed Value/Text IDs.
+// Unknown, conflicting and arbitrary failed results never establish absence.
+std::optional<bool> classify_uia_pattern_support(HRESULT status, bool interface_present) noexcept;
 // Metadata only: never a Dispatcher callback, UIA query, provider RPC or native input operation.
 void require_uia_mutation_gate(const std::function<bool()>&);
 // Unsupported IsPassword is acceptable only for documented nontext controls with positively absent
