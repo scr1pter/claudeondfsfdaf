@@ -20,7 +20,7 @@ inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-inline constexpr std::array<std::wstring_view, 140> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 146> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -45,7 +45,11 @@ inline constexpr std::array<std::wstring_view, 140> windows_privileged_stages{
   L"capture-window-device", L"capture-window-interop", L"capture-window-factory-ticket",
   L"capture-window-factory", L"capture-window-factory-current", L"capture-window-factory-context",
   L"capture-window-factory-retired", L"capture-window-item-ticket",
-  L"capture-window-item-create", L"capture-window-item-expired-cancelled", L"capture-window-item-expired-denied", L"capture-window-item-expired-other",
+  L"capture-window-item-create", L"capture-window-item-expired-cancelled",
+    L"capture-window-item-full-cancelled-setup-lt25-rpc-lt25", L"capture-window-item-full-cancelled-setup-lt25-rpc-from25to49",
+    L"capture-window-item-full-cancelled-setup-lt25-rpc-ge50", L"capture-window-item-full-cancelled-setup-ge25-rpc-lt25",
+    L"capture-window-item-full-cancelled-setup-ge25-rpc-from25to49", L"capture-window-item-full-cancelled-setup-ge25-rpc-ge50",
+    L"capture-window-item-expired-denied", L"capture-window-item-expired-other",
   L"capture-window-item-current-cancelled", L"capture-window-item-current-denied", L"capture-window-item-current-other", L"capture-window-item-current",
   L"capture-window-item-acquisition-expired", L"capture-window-item-full-ticket-expired",
     L"capture-window-item-full-expired-setup-lt25-rpc-lt25", L"capture-window-item-full-expired-setup-lt25-rpc-from25to49",

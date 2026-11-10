@@ -150,6 +150,18 @@ CaptureReadPhase capture_item_ticket_expiry(std::optional<int64_t> setup_ms, std
   return *rpc_span_ms < 50 ? CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_from25to49 : CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_ge50;
 }
 
+CaptureReadPhase capture_item_cancelled_ticket_expiry(std::optional<int64_t> setup_ms, std::optional<int64_t> rpc_span_ms) noexcept {
+  switch (capture_item_ticket_expiry(setup_ms, rpc_span_ms)) {
+    case CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_lt25: return CaptureReadPhase::window_item_full_cancelled_setup_lt25_rpc_lt25;
+    case CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_from25to49: return CaptureReadPhase::window_item_full_cancelled_setup_lt25_rpc_from25to49;
+    case CaptureReadPhase::window_item_full_expired_setup_lt25_rpc_ge50: return CaptureReadPhase::window_item_full_cancelled_setup_lt25_rpc_ge50;
+    case CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_lt25: return CaptureReadPhase::window_item_full_cancelled_setup_ge25_rpc_lt25;
+    case CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_from25to49: return CaptureReadPhase::window_item_full_cancelled_setup_ge25_rpc_from25to49;
+    case CaptureReadPhase::window_item_full_expired_setup_ge25_rpc_ge50: return CaptureReadPhase::window_item_full_cancelled_setup_ge25_rpc_ge50;
+    default: return CaptureReadPhase::window_item_expired_cancelled;
+  }
+}
+
 bool capture_surface_geometry(const CaptureSurface& surface) noexcept {
   if (surface.bounds.valid()) return true;
   const auto canonical = [](const WindowsRect& value) {

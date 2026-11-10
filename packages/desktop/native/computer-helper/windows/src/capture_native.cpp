@@ -243,6 +243,13 @@ WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::functio
         phase = cancelled ? CaptureReadPhase::window_item_expired_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_expired_denied : CaptureReadPhase::window_item_expired_other;
       if (observation == WindowsComObservation::current)
         phase = cancelled ? CaptureReadPhase::window_item_current_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_current_denied : CaptureReadPhase::window_item_current_other;
+      if (observation == WindowsComObservation::expired && cancelled && item_budget == 50) {
+        // Failure-only closing sample; success and the existing acceptance/HRESULT checks are unchanged.
+        const auto rpc_finished = Clock::now();
+        if (rpc_finished < deadline)
+          phase = capture_item_cancelled_ticket_expiry(std::chrono::duration_cast<std::chrono::milliseconds>(rpc_started - item_setup).count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(rpc_finished - rpc_started).count());
+      }
     }
     winrt::check_hresult(created);
     phase = CaptureReadPhase::window_item_current;
