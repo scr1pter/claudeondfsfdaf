@@ -204,9 +204,9 @@ test("a queued @Hands message is checked again when the queue sends it, and stay
   page,
 }) => {
   const events: unknown[] = []
-  // The session is still running, so Enter queues the message behind it.
+  // The session is still running. Alt+Enter explicitly queues instead of the default Enter-to-steer behavior.
   let status: Record<string, unknown> = { [sessionID]: { type: "busy" } }
-  const { composer, prompts } = await openComposer(page, ready, capable, {
+  const { composer, prompts, messageLookups } = await openComposer(page, ready, capable, {
     events: () => events.splice(0),
     status: () => status,
   })
@@ -214,10 +214,11 @@ test("a queued @Hands message is checked again when the queue sends it, and stay
   await expect(page.locator('[data-computer-row="feature"]')).toContainText("Let Vector use apps on your computer")
   await page.keyboard.press("Enter")
   await composer.pressSequentially("open my receipts")
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("Alt+Enter")
   const dock = page.locator('[data-component="session-followup-dock"]')
   await expect(dock).toContainText("open my receipts")
   await expect(composer.locator('[data-type="computer"]')).toHaveCount(0)
+  expect(prompts).toEqual([])
 
   // Hands is turned off while the message waits. When the run ends, the queue sends it and the dispatch check refuses.
   await setPrefs(page, { enabled: false })
@@ -226,12 +227,15 @@ test("a queued @Hands message is checked again when the queue sends it, and stay
   await expect(page.getByText(`Set up ${Hands.NAME} first`)).toBeVisible()
   await expect(page.getByRole("button", { name: "Set up", exact: true })).toBeVisible()
   await expect(dock).toContainText("open my receipts")
+  await expect(dock.locator('[data-component="session-followup-row"][data-failed]')).toContainText("open my receipts")
   expect(prompts).toEqual([])
 
-  // Turned on again, the dock's Send sends that message once, with its marker.
+  // Turned on again, the failed row's Retry sends that message once, with its marker.
   await setPrefs(page, { enabled: true })
-  await dock.getByRole("button", { name: "Steer", exact: true }).click()
+  await dock.getByRole("button", { name: "Retry", exact: true }).click()
   await expect.poll(() => prompts.length).toBe(1)
+  expect(messageLookups).toHaveLength(1)
+  expect(prompts[0]).toMatchObject({ messageID: messageLookups[0] })
   const parts = (prompts[0] as { parts: { metadata?: Record<string, unknown> }[] }).parts
   expect(parts.filter((part) => part.metadata?.[Hands.MARKER]).map((part) => part.metadata?.[Hands.MARKER])).toEqual([
     { kind: "feature" },
@@ -294,9 +298,10 @@ test("a message sent while a queued @Hands message is checked at dispatch queues
   await expect(page.locator('[data-computer-row="feature"]')).toContainText("Let Vector use apps on your computer")
   await page.keyboard.press("Enter")
   await composer.pressSequentially("open my receipts")
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("Alt+Enter")
   const dock = page.locator('[data-component="session-followup-dock"]')
   await expect(dock).toContainText("open my receipts")
+  expect(prompts).toEqual([])
 
   // The dispatch check's engine request waits for the test, well within its 5 s limit.
   let release = () => {}
@@ -357,6 +362,7 @@ async function openComposer(
   server: { events?: () => unknown[]; status?: () => unknown } = {},
 ) {
   const prompts: unknown[] = []
+  const messageLookups: string[] = []
   await installFakeComputer(page, script, {
     directory,
     project: { id: "project-computer-mentions", worktree: directory, vcs: "git", name: "Computer mentions" },
@@ -407,6 +413,38 @@ async function openComposer(
   await page.route(/\/find\/file(?:\?|$)/, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   )
+  // Retry checks the durable claim before sending. A refusal has no saved user row; the generic mock's empty 200
+  // would falsely confirm delivery and drop it. Only a prompt actually accepted below may answer as delivered.
+  await page.route(new RegExp(`/session/${sessionID}/message/[^/?]+(?:\\?|$)`), (route) => {
+    const messageID = new URL(route.request().url()).pathname.split("/").at(-1) ?? ""
+    messageLookups.push(messageID)
+    const saved = prompts.find(
+      (value) => !!value && typeof value === "object" && "messageID" in value && value.messageID === messageID,
+    )
+    if (!saved || typeof saved !== "object" || !("parts" in saved) || !Array.isArray(saved.parts))
+      return route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: '{"error":"Not found"}',
+      })
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify({
+        info: {
+          id: messageID,
+          sessionID,
+          role: "user",
+          time: { created: 1 },
+          ...("agent" in saved ? { agent: saved.agent } : {}),
+          ...("model" in saved ? { model: saved.model } : {}),
+        },
+        parts: saved.parts,
+      }),
+    })
+  })
   await page.route(/\/session\/[^/]+\/prompt_async(?:\?|$)/, (route) => {
     prompts.push(route.request().postDataJSON())
     return route.fulfill({ status: 204, body: "" })
@@ -428,5 +466,5 @@ async function openComposer(
   await expect(composer).toBeVisible()
   await composer.focus()
   await expect(composer).toBeFocused()
-  return { composer, prompts }
+  return { composer, prompts, messageLookups }
 }
