@@ -150,6 +150,33 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
       case WindowsComObservation::current: return;
     }
   }
+  struct PatternPhases { WindowsUiaPhase read, query_failed, variant_invalid, marker, probe, probe_invalid, probe_empty, probe_no_interface; };
+  template<class Pattern> bool pattern_available(IUIAutomationElement* cached, IUIAutomationElement* element,
+                                                PROPERTYID property, PATTERNID pattern, PatternPhases phases) {
+    Variant reported; note(phases.read); current_call();
+    const auto status = cached->GetCachedPropertyValueEx(property, TRUE, &reported.value);
+    if (status != S_OK) { note(phases.query_failed); unavailable(); }
+    if (reported.value.vt == VT_BOOL) {
+      if (reported.value.boolVal == VARIANT_TRUE) return true;
+      if (reported.value.boolVal == VARIANT_FALSE) return false;
+      note(phases.variant_invalid); unavailable();
+    }
+    // Availability defaults are not evidence of absence. Only UIA's exact reserved marker can
+    // request a metadata-only typed probe; no value, text or document range is read here.
+    // CheckNotSupported: "TRUE if the provided VARIANT contains the Not Supported identifier".
+    // https://github.com/MicrosoftDocs/sdk-api/blob/docs/sdk-api-src/content/uiautomationclient/nf-uiautomationclient-iuiautomation-checknotsupported.md
+    if (reported.value.vt != VT_UNKNOWN || !reported.value.punkVal) { note(phases.variant_invalid); unavailable(); }
+    note(phases.marker); current_call(); BOOL unsupported = FALSE;
+    if (automation_->CheckNotSupported(reported.value, &unsupported) != S_OK || unsupported != TRUE) unavailable();
+    note(phases.probe); current_call(); winrt::com_ptr<Pattern> capability;
+    const auto probed = element->GetCurrentPatternAs(pattern, IID_PPV_ARGS(capability.put())); current_call();
+    const auto support = classify_uia_pattern_support(probed, static_cast<bool>(capability));
+    if (!support) {
+      note(probed == S_OK && !capability ? phases.probe_empty : probed == E_NOINTERFACE ? phases.probe_no_interface : phases.probe_invalid);
+      unavailable();
+    }
+    return *support;
+  }
   IUIAutomationElement* native(const UiaElement& value) {
     current_call(); if (!value || !value->native_ || !value->native_->element) unavailable(); return value->native_->element.get();
   }
@@ -269,7 +296,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     const auto property = [&](PROPERTYID id, VARTYPE expected, VARIANT& result, WindowsUiaPhase phase) {
       note(phase); current_call(); if (FAILED(cached->GetCachedPropertyValueEx(id, TRUE, &result)) || result.vt != expected) unavailable();
     };
-    Variant pid, type, password, enabled, focus, keyboard, available, text_available;
+    Variant pid, type, password, enabled, focus, keyboard;
     property(UIA_ProcessIdPropertyId, VT_I4, pid.value, WindowsUiaPhase::security_pid); property(UIA_ControlTypePropertyId, VT_I4, type.value, WindowsUiaPhase::security_type);
     note(WindowsUiaPhase::security_password); current_call(); if (FAILED(cached->GetCachedPropertyValueEx(UIA_IsPasswordPropertyId, TRUE, &password.value))) unavailable();
     property(UIA_IsEnabledPropertyId, VT_BOOL, enabled.value, WindowsUiaPhase::security_enabled);
@@ -286,16 +313,22 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     if (!keyboard_focusable) {
       note(FAILED(keyboard_status) ? WindowsUiaPhase::security_keyboard_query_failed : WindowsUiaPhase::security_keyboard_variant_invalid); unavailable();
     }
-    property(UIA_IsValuePatternAvailablePropertyId, VT_BOOL, available.value, WindowsUiaPhase::security_value_pattern);
-    property(UIA_IsTextPatternAvailablePropertyId, VT_BOOL, text_available.value, WindowsUiaPhase::security_text_pattern);
+    const auto value_pattern = pattern_available<IUIAutomationValuePattern>(cached.get(), element, UIA_IsValuePatternAvailablePropertyId, UIA_ValuePatternId,
+        {WindowsUiaPhase::security_value_pattern, WindowsUiaPhase::security_value_pattern_query_failed, WindowsUiaPhase::security_value_pattern_variant_invalid,
+         WindowsUiaPhase::security_value_pattern_marker, WindowsUiaPhase::security_value_pattern_probe, WindowsUiaPhase::security_value_pattern_probe_invalid,
+         WindowsUiaPhase::security_value_pattern_probe_empty, WindowsUiaPhase::security_value_pattern_probe_no_interface});
+    const auto text_pattern = pattern_available<IUIAutomationTextPattern>(cached.get(), element, UIA_IsTextPatternAvailablePropertyId, UIA_TextPatternId,
+        {WindowsUiaPhase::security_text_pattern, WindowsUiaPhase::security_text_pattern_query_failed, WindowsUiaPhase::security_text_pattern_variant_invalid,
+         WindowsUiaPhase::security_text_pattern_marker, WindowsUiaPhase::security_text_pattern_probe, WindowsUiaPhase::security_text_pattern_probe_invalid,
+         WindowsUiaPhase::security_text_pattern_probe_empty, WindowsUiaPhase::security_text_pattern_probe_no_interface});
     note(WindowsUiaPhase::security_pid);
     if (pid.value.lVal <= 0) unavailable();
     UiaSecurity result; result.pid = static_cast<DWORD>(pid.value.lVal); result.control_type = type.value.lVal; result.role = role(result.control_type);
-    result.value_pattern = available.value.boolVal != VARIANT_FALSE; result.text_pattern = text_available.value.boolVal != VARIANT_FALSE;
+    result.value_pattern = value_pattern; result.text_pattern = text_pattern;
     note(WindowsUiaPhase::security_classify); const auto classification = classify_uia_password(result.control_type,
         password.value.vt == VT_BOOL ? std::optional<bool>(password.value.boolVal != VARIANT_FALSE) : std::nullopt, result.value_pattern, result.text_pattern);
     if (!classification) unavailable(); result.password = *classification; result.enabled = enabled.value.boolVal != VARIANT_FALSE;
-    result.focused = focus.value.boolVal != VARIANT_FALSE; result.keyboard_focusable = *keyboard_focusable; result.value_pattern = available.value.boolVal != VARIANT_FALSE;
+    result.focused = focus.value.boolVal != VARIANT_FALSE; result.keyboard_focusable = *keyboard_focusable;
     if (result.value_pattern) {
       note(WindowsUiaPhase::security_value_readonly); Variant read; current_call(); if (SUCCEEDED(cached->GetCachedPropertyValueEx(UIA_ValueIsReadOnlyPropertyId, TRUE, &read.value)) && read.value.vt == VT_BOOL) result.read_only = read.value.boolVal != VARIANT_FALSE;
     }
@@ -579,6 +612,14 @@ std::wstring sanitize_uia(std::wstring_view text, size_t maximum) {
 std::optional<bool> classify_uia_keyboard_focusable(HRESULT status, const VARIANT& value) noexcept {
   if (FAILED(status) || value.vt != VT_BOOL || (value.boolVal != VARIANT_FALSE && value.boolVal != VARIANT_TRUE)) return {};
   return value.boolVal == VARIANT_TRUE;
+}
+std::optional<bool> classify_uia_pattern_support(HRESULT status, bool interface_present) noexcept {
+  if (status == S_OK && interface_present) return true;
+  // Microsoft: UIA_E_NOTSUPPORTED means the provider "explicitly does not support the specified
+  // property or control pattern". Null plus that exact status is the only accepted negative probe.
+  // https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/WinAuto/uiauto-error-codes.md
+  if (status == UIA_E_NOTSUPPORTED && !interface_present) return false;
+  return {};
 }
 std::optional<bool> classify_uia_password(int control_type, std::optional<bool> reported, bool value_pattern, bool text_pattern) noexcept {
   if (reported) return reported;

@@ -1,4 +1,5 @@
 #include "uia_native.h"
+#include <uiautomation.h>
 #include <stdexcept>
 
 namespace vector::computer {
@@ -48,6 +49,31 @@ size_t run_uia_native_tests() {
     }
     value.vt = VT_BOOL; value.boolVal = 1;
     require(!classify_uia_keyboard_focusable(S_OK, value), "uia-native.keyboard-noncanonical-boolean-not-positive");
+  });
+  test([] {
+    require(classify_uia_pattern_support(S_OK, true) == true, "uia-native.typed-pattern-positive-interface");
+    require(classify_uia_pattern_support(UIA_E_NOTSUPPORTED, false) == false, "uia-native.typed-pattern-documented-negative-capability");
+    for (const auto status : std::array<HRESULT, 6>{S_FALSE, E_FAIL, E_NOINTERFACE, E_ACCESSDENIED, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_TIMEOUT})
+      for (const bool present : {false, true}) require(!classify_uia_pattern_support(status, present), "uia-native.typed-pattern-unknown-outcomes-refused");
+    require(!classify_uia_pattern_support(S_OK, false) && !classify_uia_pattern_support(UIA_E_NOTSUPPORTED, true),
+        "uia-native.typed-pattern-contradictory-outcomes-refused");
+  });
+  test([] {
+    const auto absent = classify_uia_pattern_support(UIA_E_NOTSUPPORTED, false), present = classify_uia_pattern_support(S_OK, true);
+    require(absent.has_value() && present.has_value(), "uia-native.typed-pattern-proof-required-before-password-classification");
+    for (const int type : {50000, 50011, 50032}) {
+      require(classify_uia_password(type, {}, *absent, *absent) == false, "uia-native.documented-pattern-absence-permits-only-nontext-password-fallback");
+      require(!classify_uia_password(type, {}, *present, *absent) && !classify_uia_password(type, {}, *absent, *present) &&
+          !classify_uia_password(type, {}, *present, *present), "uia-native.either-present-pattern-blocks-missing-password-fallback");
+    }
+    for (const int type : {50004, 50025, 50030, 59999})
+      require(!classify_uia_password(type, {}, *absent, *absent), "uia-native.typed-pattern-absence-cannot-unlock-text-or-custom-password");
+    Fixture fixture; fixture.state.value_pattern = *present; fixture.state.text_pattern = *present;
+    fixture.state.read_only = false; fixture.state.text_read_only = true; WindowsUiaObserver observer(fixture.backend, [&] { return fixture.clock; });
+    require(!observer.focused(fixture.window).security.editable(), "uia-native.pattern-fallback-preserves-readonly-conflicts");
+    fixture.state.text_read_only.reset();
+    require(!observer.focused(fixture.window).security.editable() && fixture.values == 0 && fixture.names == 0,
+        "uia-native.pattern-fallback-preserves-unknown-readonly-without-content-reads");
   });
   test([] { require(sanitize_uia(L"abc\n\r\txyz\u202e\u200b") == L"abcxyz", "uia-native.control-bidi-stripping"); });
   test([] { require(sanitize_uia(std::wstring(600, L'a')).size() == 500 && sanitize_uia(L"abcd", 2) == L"ab", "uia-native.string-cap"); });
