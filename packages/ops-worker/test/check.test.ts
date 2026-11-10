@@ -35,7 +35,7 @@ describe("probe", () => {
     const headers = new Headers(calls[0]!.init.headers)
     expect(headers.get("authorization")).toBeNull()
     expect(headers.get("cookie")).toBeNull()
-    expect(headers.get("user-agent")).toContain("VectorOps")
+    expect(headers.get("user-agent")).toMatch(/^Vector\/Ops /)
   })
 
   test("2xx and 304 are up", async () => {

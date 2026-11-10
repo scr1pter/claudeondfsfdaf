@@ -2360,7 +2360,6 @@ raceNoLLMServer.instance(
       }
     }),
   { trusted: true, config: cfg },
-  3_000,
 )
 
 noLLMServer.instance(

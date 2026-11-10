@@ -48,6 +48,10 @@ import { Truncate } from "@/tool/truncate"
 import { Format } from "../../src/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Review } from "../../src/review/run"
+import { ReviewModel } from "../../src/review/model"
+import { Auth } from "@/auth"
+import { ModelCatalog } from "@vectordevai/core/model-catalog"
+import { TestConfig } from "../fixture/config"
 import { TestInstance, trustWorkspace } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
@@ -448,6 +452,82 @@ describe("Review.run: the Codium review token stop", () => {
           ["judge", "ok"],
         ])
         expect(under.selection.inline.map((item) => item.id)).toEqual([ID])
+      }),
+    TIMEOUT,
+  )
+
+  // P4d (F61): the CLI and GitHub reviews resolve the review model, and an explicit triageModel, through
+  // resolveReviewModel; the runner picks the plan's pair only without a triageModel. This case runs the resolver on the
+  // review model only and copies the kind it returns onto this file's loopback models (FIRST stands in for the triage
+  // model), which run the passes. The resolver's answer for each input, an `exact` triageModel among them, is pinned in
+  // model.test.ts, and the stop for a kind set by hand in the case above; the caller wiring is not run here (F78).
+  it.instance(
+    "the kind resolveReviewModel returns for a Vector Codium model is the one the runner's token stop reads",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer
+        const codiumModel = {
+          id: ModelV2.ID.make("vector-flash"),
+          providerID: ProviderV2.ID.make("vector-plan"),
+          api: { id: "vector-flash", url: "https://models.invalid/v1", npm: "@ai-sdk/openai-compatible" },
+          name: "Vector Flash",
+          capabilities: {
+            temperature: true,
+            reasoning: false,
+            attachment: false,
+            toolcall: true,
+            input: { text: true, audio: false, image: false, video: false, pdf: false },
+            output: { text: true, audio: false, image: false, video: false, pdf: false },
+            interleaved: false,
+          },
+          cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: { context: 128_000, output: 8_000 },
+          status: "active",
+          options: {},
+          headers: {},
+          release_date: "2026-01-01",
+        } satisfies Provider.Model
+        // Only what resolveReviewModel reads for an exact local model: the model, its server line, the user's config
+        // and the provider's sign-in.
+        const resolved = yield* ReviewModel.resolveReviewModel({
+          trigger: "local",
+          exact: "vector-plan/vector-flash",
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(Provider.Service, {
+                getModel: () => Effect.succeed(codiumModel),
+                line: () => Effect.succeed(undefined),
+              }),
+              TestConfig.layer(),
+              Layer.mock(Auth.Service, { get: () => Effect.succeed(undefined) }),
+              Layer.mock(ModelCatalog.Service, { get: () => Effect.succeed({}) }),
+            ),
+          ),
+        )
+        const costKind = resolved.costKind
+
+        yield* llm.pushMatch(REVIEW, big())
+        yield* llm.pushMatch(VERIFY, verdict("confirmed", "Reproduced."))
+        const triaged = yield* Review.run(
+          input(directory, { model: { ...CHECK, costKind }, triage: { ...FIRST, costKind } }),
+        )
+        expect(triaged.specialists.map((item) => [item.name, item.status, item.detail])).toEqual([
+          ["review", "ok", undefined],
+          ["verify", "skipped", "budget"],
+        ])
+
+        // No triage (no listed review roles, or a same-lab pair): the review model's own kind decides.
+        yield* llm.pushMatch(REVIEW, big())
+        yield* llm.pushMatch(VERIFY, verdict("confirmed", "Reproduced."))
+        const single = yield* Review.run(
+          input(directory, { model: { ...CHECK, costKind }, triage: { ...CHECK, costKind } }),
+        )
+        expect(single.specialists.map((item) => [item.name, item.status, item.detail])).toEqual([
+          ["review", "ok", undefined],
+          ["verify", "skipped", "budget"],
+        ])
+        expect((yield* llm.hits).filter(VERIFY)).toEqual([])
       }),
     TIMEOUT,
   )

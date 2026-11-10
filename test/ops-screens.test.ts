@@ -52,7 +52,7 @@ const GOOD = "b".repeat(40)
 const BAD = "c".repeat(40)
 const MONITOR = "mon_aaaaaaaaaaaaaaaa"
 
-let world = new OpsWorld(MEDIA)
+let world: OpsWorld
 const quiet: AlertSender = async () => ({ sent: 0, failed: 0, removed: 0 })
 
 beforeEach(() => {

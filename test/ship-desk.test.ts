@@ -211,7 +211,7 @@ const SVG = new TextEncoder().encode(
 
 // ── The world ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-let world = new OpsWorld(MEDIA)
+let world: OpsWorld
 let bucket = mediaBucket(() => world.now)
 let alerts: { account: string; title: string; tag?: string }[] = []
 const recordAlert: ShipDeskAlert = async (account, alert) => {

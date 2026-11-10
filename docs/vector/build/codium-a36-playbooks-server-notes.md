@@ -107,6 +107,11 @@ Run one file at a time with `--timeout 30000`: root tests from `test/`, package 
 has run in CI yet. Never exercised anywhere: a real upload to and download from R2. The SigV4 signer itself is checked
 against AWS's published example in `test/r2-presign.test.ts` (A37).
 
+**Status on 8 Nov 2026.** A36 went up with the A36–A43 batch (head `aa35701e`). `test/playbooks-api.test.ts` passed in
+Vector Codium run 41942473092, Codium tests job 126966439936 (15 pass). That run was red only in its Remote relay job,
+and the next run, 41958430737 (head `31820732`), was green. For `packages/core/test/playbooks/commands.test.ts` the
+file-level result is unconfirmed: the job logs read hold only their last ~5,000 lines, and this file is not in them.
+
 Typecheck:
 - `packages/schema` and `packages/core`: `tsgo --noEmit`, clean.
 - Root `tsconfig.json` (api): clean.

@@ -1,6 +1,6 @@
 # Codium implementation notes
 
-Updated October 30, 2026. These notes describe the committed build on `codium`; they do not replace the contract or the owner's tier decisions.
+Updated November 8, 2026. These notes describe the committed build on `codium`; they do not replace the contract or the owner's tier decisions.
 
 ## Recovered state
 
@@ -2187,3 +2187,364 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   job is ready, did not finish or could not start in time; never the job's own words (P7).
 - **Routes.** `/api/hosted/jobs/:id` serves jobs (`jb_…`) and recurring jobs (`jr_…`); cancelling is
   `POST {action: "cancel"}` for both.
+
+## Lane status (8 Nov 2026)
+
+From read-only GitHub queries (cited by run and job id only) and local git reads on 8 Nov 2026. This is package D1's
+record: it changes docs only (no code, test or workflow) and has no notes file of its own. Earlier sections are
+unchanged.
+
+- **Latest green run.** Vector Codium run 42138157347 (push, head `5a079cbd`) passed all 14 jobs; its Codium tests job
+  127631456285 finished at 2026-11-06T00:45:50Z.
+  - Typecheck jobs: api 127631456479, schema 127631456592, core 127631456275, engine 127631456220, app 127631456492,
+    desktop 127631456686, web 127631456454, cloud 127631456623, relay 127631456255, ops-worker 127631456407.
+  - Codium tests 127631456285: the picker's 248 of 248 files passed on the step that sets `VECTOR_TEST_REDIS_URL` and
+    `VECTOR_TEST_POSTGRES_URL`, then the HttpApi exerciser gates and `check:generated` passed.
+  - Codium browser specs 127631456384; Remote relay dry run and local smoke 127631456398; Ops Worker dry run and
+    miniflare smoke 127631455750.
+  - Before this record was committed, the remote's `codium` was `5a079cbd` and its only `codium*` branch, and no later
+    Vector Codium run existed.
+- **The P7 failures it closed.** Run 42134490728 (head `d5975d28`, the P7 review): Codium tests job 127619053399 passed
+  246 of 248 files, failing the Valkey cases of `test/on-call.test.ts` and `test/ship-desk.test.ts`; Ops Worker job
+  127619054092 failed its miniflare smoke because the Workers runtime refused the string export `KILL_KEY` of
+  `packages/ops-worker/src/index.ts` ("Incorrect type for map entry 'KILL_KEY'") and did not start. `025d75da` removed
+  that export and fixed both Valkey tests. Its run 42136600777 passed the Ops Worker job (127626223269, the first
+  passing miniflare smoke), but Codium tests job 127626223012 passed 247 of 248, failing
+  `packages/core/test/vault/vault.test.ts`. `5a079cbd` changed only that test, so its prune count no longer depends on
+  the vault's random chunking key, and its run is the green one above.
+- **P6 and P5.** P6 run 41942473092 (head `aa35701e`) failed only in Remote relay job 126966440346, at its
+  `wrangler dev --local` smoke step; its other 11 jobs passed, Codium tests job 126966439936 with 223 of 223 files.
+  `31820732` kept the relay entry's `CONTROL_OBJECT` string module-private, and its run 41958430737 was green. P5 run
+  41759865557 (head `0cef8b91`) was green.
+- **Batched pushes.** A29–A35 (`f254efc5` to `298cc87f`) went up with the P5 head `0cef8b91`, A36–A43 (`12481086` to
+  `fbc8ef1f`, A36 last) with the P6 head `aa35701e`, and A44–A50 (`305e45c9` to `01781909`) with the P7 head `d5975d28`.
+  No Vector Codium run has one of those package commits as its head: after run 41272142017 on `d13d91e3`, the runs are
+  on `0cef8b91`, `aa35701e`, `31820732`, `d5975d28`, `025d75da` and `5a079cbd`. Earlier records that say "Nothing was
+  pushed" or "has not run in CI" describe their own day; the runs above are the first that include those packages.
+- **test.yml and typecheck.yml.** Both run only on pushes to main, pull requests (typecheck.yml: to main) and
+  workflow_dispatch. test.yml's latest run on codium is 41268039624 (workflow_dispatch, head `295ab95e`, 1 Nov,
+  success), so no A29–A50 commit has run in test.yml. Its unit jobs run `bun turbo test` without the engine (the engine
+  has its own shards), and `turbo.json` at `295ab95e` defines test tasks only for engine, core, app, ui and session-ui;
+  unit (windows) job 124734865943 shows only the ui, core, app and session-ui test tasks. So
+  `packages/client/test/import-boundaries.test.ts` and `packages/sdk/js/test/server-startup.test.ts` did not run there,
+  and the "Not run anywhere" bullet of `codium-a21-contract-notes.md` still holds; it is left unchanged, although its
+  last clause leaves out workflow_dispatch. typecheck.yml has never run on codium (no run listed for the branch).
+- **vector-codium-e2e.yml has never run.** The file is on codium only (not on main) and is dispatch only. GitHub has no
+  workflow registered under that file name (get_workflow answers 404) and no run of it. Running it needs the owner's
+  `codium-test` environment (§8.2 steps 2 and 6).
+- **The A30 drafts.** They exist only on the owner's Mac: branch `codium-legal` at `94a5004e`, unpushed
+  (`codium-a30-legal-notes.md`, "Where the work is"). This clone has no such object and the remote no such branch. The
+  lane does not recreate them.
+- **Owner step 9 stopped after A28.** The last merge of codium into self-evolving is `d4402136` ("Merge codium A26-A28
+  into self-evolving", parents `c3f7bed3` and `d13d91e3`), and `git merge-base origin/self-evolving origin/codium` is
+  `d13d91e3`. The 29 commits after it, `f254efc5` (A29) to `5a079cbd`, are not in self-evolving (`git cherry` marks all
+  29 `+`). Nothing was merged; the merge stays the owner's step (§8.2 step 9). A read-only
+  `git merge-tree --write-tree --name-only` of self-evolving `f062bcce` and codium `5a079cbd` (the remote heads on 8
+  Nov), with a throwaway object directory so no ref moved and no object entered the shared store, reports content
+  conflicts in 7 files:
+  - `packages/app/src/components/settings-v2/general.tsx`
+  - `packages/app/src/components/settings-v2/memory-model.ts`
+  - `packages/app/src/components/settings-v2/settings-memory.css`
+  - `packages/app/src/components/settings-v2/settings-registry.ts`
+  - `packages/app/src/context/settings.tsx`
+  - `packages/engine/src/server/routes/instance/httpapi/handlers/memory.ts`
+  - `packages/engine/src/tool/task.ts`
+- **Phase reviews still to run.** P3 covered A17–A20 (`14bc7d42..a5cad27a`, `codium-p3-repairs.md`), P5 A29–A35, P6
+  A37–A43 and P7 A44 and A47–A50 ("P7 review decisions" above). No phase review covers A21–A28 (P4;
+  `codium-p4-repairs.md` does not exist yet), A36, A45 or A46; the next packages close them. A15 (`73cd78a4`) and A16
+  (`071dfe37`) lie between P2's `d04a2808` and P3's range, so no recorded phase-review range includes them; each record
+  names its own independent review (line 3 of `codium-a15-catalog-notes.md` and `codium-a16-callers-notes.md`). The
+  order under "Next phase order and external gates" (A10–A14) is the order of its own day.
+- **Records refreshed on 8 Nov 2026.** Eight records got one dated status line each: `codium-a17-admission-notes.md`,
+  `codium-a17-context-decision.md`, `codium-a18-models-status-notes.md`, `codium-a36-playbooks-server-notes.md`,
+  `codium-a40-remote-api-notes.md`, `codium-a44-vault-api-notes.md`, `codium-a45-desktop-vault-notes.md` and
+  `codium-a48-release-guard-notes.md`. `codium-a46-ops-worker-notes.md` got a dated status sub-list under "Not done",
+  and `codium-a21-contract-notes.md` was checked and left unchanged (above). A job log read through the lane's GitHub
+  tools holds at most its last ~5,000 lines, so the files the picker runs before the middle of `packages/engine`
+  (`packages/app`, `packages/core` and `packages/desktop` among them) are not visible in the P6 and P7 Codium tests
+  logs; the A36 and A45 lines say so and leave the file-level result unconfirmed.
+- **D1 readings.** The brief's A46 item named run 42138157347 for the passing miniflare smoke; it first passed one run
+  earlier, in 42136600777 (job 127626223269), and the A46 status names both. The A44 line's Postgres path is an
+  inference from the step's environment and `test/brain-vault-fixture.ts` (`vaultBackend` picks `PostgresVaultBackend`
+  when `VECTOR_TEST_POSTGRES_URL` is set), since the job log names no Postgres marker for that file, and the line says
+  so. Deferred: the other stale lines of earlier records, review coverage for A15 and A16, `MODEL-PLANS.md`, and A51
+  onward. This record's own push and its Vector Codium run are recorded by the next package.
+- **8 Nov 2026 (P4a).** Run 42439456526 (push, head `dc64a6a5`, D1's commit of this record) completed with success,
+  all 14 jobs green. Its Codium tests job 128605353887 shows 248 of 248 picker files passing, the HttpApi exerciser at
+  `pass=309 fail=0` and `check:generated` passing; the job ids are in `codium-p4-repairs.md` ("CI before this review").
+- **8 Nov 2026 (P4b).** Run 42442788455 (push, head `46236dce`, P4a's commit) and run 42444316138 (push, head
+  `3082bb2c`, another session's commit) both completed with success, 14 of 14 jobs each; each Codium tests log shows 248
+  of 248 picker files passing, the HttpApi exerciser at `pass=309 fail=0` and "Check generated client" passing.
+  typecheck.yml run 42444321838 and test.yml run 42444319661, both dispatched on `3082bb2c`, completed with success. Job
+  ids are in `codium-p4-repairs.md` ("CI before P4b"). P4b repaired the research report's Spend line (F16) and hands on
+  two findings it did not repair: F18 (the engine review model is never `costKind "codium"`, so the P5 review token stop
+  can miss a Codium review) to P4d, and F28 (A41's phone usage alert can repeat while the desktop notification keeps
+  failing) to the P6 addendum, the package that appends the A36 review to `codium-p6-repairs.md`, since A41 is in P6's
+  range; both are under "P4 review decisions" below and stay open here until those packages record them. P4c adds a
+  dated line here with the Vector Codium run id and conclusion for P4b's own commit, once that run has completed.
+- **8 Nov 2026 (P4c).** Run 42450985342 (push, head `c7b6376a`, P4b's commit) was queued when P4c began and completed
+  with success, 14 of 14 jobs; its Codium tests job 128639976336 passed every step, and the last part of its log shows
+  the last HttpApi exerciser gate at `pass=309 fail=0` followed by `check:generated` (the picker's file count was not
+  read). Job ids are in `codium-p4-repairs.md` ("CI before P4c"); `origin/codium` was still `c7b6376a` when it was
+  read. P4c repaired F43 (a sanitized export kept a lifecycle record's aggregate tokens) and F46 (a client edit through
+  `PATCH` part.update could relabel step usage) and records its readings and hand-offs under "P4 review decisions"
+  below. Its changes were left uncommitted for the lane lead, so its commit, push
+  and Vector Codium run are recorded by the package that pushes them.
+- **8 Nov 2026 (P4d).** Run 42457442687 (push, head `39db0daf`, P4c's commit, which the lead committed and pushed)
+  completed with success, 14 of 14 jobs; its Codium tests job 128659369695 passed every step, and the last 290 lines of
+  its log show the last HttpApi exerciser gate at `pass=309 fail=0` followed by `check:generated` (the picker's file
+  count was not read). Job ids are in `codium-p4-repairs.md` ("CI before P4d"); `origin/codium` was still `39db0daf`
+  when it was read. P4d repaired F60 (a mixed review's wording printed `vector-plan/<model>`) and F61 (P4b's F18: the
+  engine review model was never `"codium"`, so the P5 review token stop could miss a Codium review), which closes F18.
+  It records the A27 public-copy divergences as owner decisions O1 to O9 and two hand-offs to Codex (F63, F64) under
+  "P4 review decisions" below. With P4d, P4 is closed for A21 to A28; its open items are listed in
+  `codium-p4-repairs.md` ("P4 summary"). At the time of this record (8 Nov 2026) P4d's changes were not yet committed;
+  the package that pushes them adds a dated line here with the commit sha and its Vector Codium run id and conclusion.
+
+## P4 review decisions (8 Nov 2026)
+
+Contract readings from P4a's review of A21 and A22 ([codium-p4-repairs.md](codium-p4-repairs.md)), which changed no
+source. P4b, P4c and P4d add theirs below.
+
+- **A21's done criterion covers the client only.** Spec §5 A21's "Done: `check:generated` green" checks
+  `packages/client/src/generated` and `src/generated-effect`. `vector-codium.yml` has no drift check for the legacy SDK
+  (`packages/sdk/openapi.json`, `packages/sdk/js/src/gen`, `src/v2/gen`), which A21 also regenerated. That half was
+  verified here by running `./packages/sdk/js/script/build.ts` at `dc64a6a5`: it left `packages/sdk` unchanged, with no
+  untracked file, although A49 and P7 had changed schema and server source since the last regeneration (A45). Packages
+  that change the public schema keep running both generators (AGENTS.md); an SDK drift check in CI would be a workflow
+  change of its own.
+- **Ancillary usage is still only added.** The A21 and A22 decisions let AncillaryUsage route on its model's provider id
+  because nothing subtracts it; at `dc64a6a5` that still holds (`projector.ts:662-686` only adds).
+- **A failed V2 compaction stays counted.** Compaction.Failed (`projector.ts:700-718`) adds the usage it reports, Codium
+  or not, and creates no row, so no revert takes it back. §4.2's "revert, removal and moves keep working" applies to
+  the records that have rows: steps, parts, messages and compaction summaries. The provider bills the failed request
+  too (`compaction.ts:245`).
+- **`Billing.Kind` is a closed literal.** It decodes only `"codium"`, and a record carrying any other `billing` fails to
+  decode as a whole (`billing.test.ts`, "a billing value other than codium is refused", six schemas). A second billing
+  kind therefore needs a decoder that tolerates unknown kinds, released before any writer of the new kind, as §6 asks
+  of cost kinds.
+- **The stored-flag rule governs the totals.** The A21 decision "Accounting reads the stored flag, never `Billing.of`"
+  and the A22 decision "Records are routed by their own stored flag on both sides" cover cost, unpriced steps,
+  `codium_steps` and tokens, and hold at `dc64a6a5`. The own-only provenance bit that A25 added beside them
+  (`knownOwnOnly`, `tokens_own_only`) is a separate proof that reads the provider id through
+  `Billing.hasOwnIdentity`, the same way when a record is added and when it is subtracted; P4c reviews it with A25.
+- **`Billing.of` is for display, and it also answers for a V1 user message.** It reads `model.providerID`, which V1
+  user messages carry, so a caller that means assistant work filters by role first. Aggregate callers that read a
+  session's `model.providerID` do so on purpose, as §6's fallback for an older engine. A21 and A22 added no caller;
+  P4b to P4d check the A23 to A28 callers.
+- **Database downgrade (label plan §6, accepted).** An engine without A22 reads a flagged step as an ordinary one. When
+  it reverts or removes such a step, it subtracts the step's stored tokens, which were never added, and one unpriced
+  step, and leaves `codium_steps` alone. In a Codium-only session the token totals then go negative (`SessionTokens` is
+  `Schema.Finite`, so nothing fails to encode), and after an upgrade `codium_steps` can exceed `unpriced_steps`,
+  against the A22 decision's `codium_steps ≤ unpriced_steps`. No clamp is added (A21 decision); only the owner's test
+  sessions hold Codium steps. No reader shows the difference below 0: `CodiumUsage.ownUnpricedSteps`
+  (`packages/core/src/codium-usage.ts:13-15`) clamps it with `Math.max(0, …)` for the TUI and app surfaces, and the
+  task note (`packages/engine/src/tool/task.ts:316,342`) prints its pricing sentence only when it is above 0. In such a
+  session the clamp can hide an own unknown step. Nothing about the downgrade is handed on.
+- **An unknown cost kind on self-evolving is a hand-off (F6).** Label plan §6 asks the self-evolving branch to decode a
+  persisted cost kind it does not know as `"unknown"`. At `origin/self-evolving` `e0bfa00b`, `RunBudget.CostKind` is
+  still the closed literal (`packages/schema/src/run-budget.ts:26` there) and `Task.BudgetScope.costKind` reads it
+  (`packages/schema/src/task.ts:46` there), so a newer kind still fails the decode of a record's `budgetScopes`. The
+  codium lane does not change self-evolving; this is handed to the self-evolving lane and owner step 9.
+- **The public share keeps the raw model id in its model-switched notice (F10).** `publicArchive` writes
+  `Model changed to <providerID>/<id>` (`packages/core/src/share/archive.ts:121` at `dc64a6a5`, already there at
+  `4fde1a49`), so a shared Codium session shows `vector-plan/<model>`. It holds no amount, token figure or plan tier
+  name, and label plan §3.7 leaves the public share unchanged, so it is accepted here; any change of that wording is
+  label-surface copy for P4d.
+
+P4b's readings, from its review of A23 and A24 (`4fde1a49..b4c05481` and the A24 follow-ups; findings F16 to F34 in
+`codium-p4-repairs.md`):
+
+- **The research Spend line follows label plan §3.2, not the A23 wording (F16).** §3.2 says a Codium-only report has no
+  Spend line and a mixed one reads `$0.12 at list prices + Codium`; A23 wrote `- Spend: Codium`, and the V1 judge's
+  re-save (`packages/engine/src/session/prompt.ts:1230-1233`, which the label plan does not list) dropped `+ Codium`.
+  The contract wins. All three writers now call `SpendGuard.reportSpend` in `packages/core/src/spend-guard.ts`, beside
+  `formatUsd`. The helper is not in `research/report.ts`, a pure renderer that would then load the guard, the event
+  module and the database through it, and not in `codium-usage.ts`, which the app imports. Reports saved before the
+  repair are not rewritten: one keeps `- Spend: Codium`, or a judged mixed one its line without `+ Codium`, until its
+  run saves another version.
+- **F16's tests reach beyond the brief's file list.** Besides `packages/core/test/spend-guard.test.ts` (listed), one
+  case each went into `packages/core/test/session/research-v2.test.ts`,
+  `packages/engine/test/tool/research-note.test.ts` and `packages/engine/test/session/research-judge.test.ts`, which the
+  list does not name: the helper's own cases would still pass with any call site put back to its old expression, so each
+  writer needs a test that saves a report. The engine cases record their Codium step in the test's guard rather than
+  running a Codium provider turn, because Codium's destination is fixed (label plan C5); they prove the writer's reading
+  of a real guard snapshot. The core V2 case runs the scripted research on a `vector-plan` model, so its steps are
+  Codium by the runner's own classification. P4b's plan had put the helper in `research/report.ts` with cases in
+  `research/report.test.ts`; both moved to the guard and its listed test file, for the reason above.
+- **Known-Codium desktop runs carry no desktop budget (F19).** A subagent of such a run on its own configured model
+  spends own-key dollars that the desktop windows do not stop mid-run, since no `budgetUsd` is sent. That spend is
+  measured afterwards, counts in the windows and blocks later own-key runs, and the engine's own caps still apply.
+  Accepted: D-3 and C8 say the desktop "neither blocks such a run … nor reserves `budgetUsd`", and the A23 decision
+  records why no `usd: 0` budget is sent (the budget schema is strictly positive, and headroom checks would refuse
+  it).
+- **Check-ins rely on `summarizeUsage` (F20).** `UsageReport.fromSummary` adds no `vector-plan` filter of its own: both
+  senders read the bundled engine, which already leaves Codium out, and label plan §6 rules out skew between desktop
+  main and engine.
+- **Turns that end during a pending refresh share it (F27).** The 15-second read after a Codium turn is coalesced: turns
+  ending while it is pending get that one read, and a debit that lands later shows at the next focus or Refresh. Spec
+  A24 asks for one refresh after a turn ends, not one per turn.
+- **The Host locally exemption is the dashboard's label only (F30).** `9c5bc861` lets `agent-dashboard-model.ts` keep
+  its `CodiumUsage` import, its two `billing?: "codium"` declarations, its `billing === "codium"` branch and its
+  `withCodium` call, and renames the test to "have no account or plan access". Label plan §3.1 and §3.2 (the agent
+  dashboard row) and C7 (`features/agents/agent-dashboard-model.ts:241-250`) put that label in this file; any other
+  Codium, account, credits, pricing or plan text there, or anywhere else in the agents feature, still fails the test.
+- **`Billing.of` callers from A23 and A24 read assistant work or a session on purpose (F34).** Each filters to assistant
+  messages or their parts first, or reads a session's or favourite model's provider id as label plan §6's fallback.
+  `reviewProgressSpend` (`features/pull-requests/ai-review.ts:1600-1602`) also reads the review prompt, whose model is
+  the pass's own, so it gives the same answer; the rest of `ai-review.ts` is A26's and P4d's.
+- **Hand-off to P4d (F18).** `packages/engine/src/review/model.ts:128-135` calls `costKindOf` without `codium`, against
+  label plan §4.3, so `resolveReviewModel` never answers `"codium"`. A Codium review with an explicit `triageModel`,
+  with no listed review roles, or with a same-lab pair never applies `CODIUM_REVIEW_TOKEN_STOP` (`review/run.ts:400`),
+  and its unused or empty run reports `"unknown"` (`run.ts:310,339`). Repair:
+  `codium: Billing.isCodium(model.providerID)` in that call, with a `test/review/model.test.ts` case and a
+  `panel.test.ts` case that reaches the stop with an explicit `triageModel` without building `costKind: "codium"` by
+  hand. Not done in P4b: label plan C11 (spec A26) owns `review/model.ts`, and the repair changes review budgets and
+  footers and the P5 stop. It needs no Codex-owned file: `github.review.ts` keeps calling `resolveReviewModel` as it is.
+  8 Nov 2026 (P4d): repaired as F61 (R1) in `packages/engine/src/review/model.ts`; see `codium-p4-repairs.md`, "A26
+  review footer", and P4d's readings below.
+- **Hand-off to the P6 addendum (F28, A41).** In `packages/app/src/components/settings-vector-codium.tsx:66-100` the
+  phone usage alert (A41, `4caf1073`) is sent before the desktop notification, and a failed desktop `notify` removes the
+  dedupe key, so while it keeps failing every later run of that effect with Usage open sends the phone alert again. The
+  effect runs again when a status read changes a value it reads (the share left moving from 19% to 18%, or a good read
+  after a failed one); `reconcile` leaves an unchanged read silent. A24's desktop path (off by default, one alert per
+  account, plan and renewal, retry after a failed notify) is as spec A24 asks. The A41 interaction is outside P4b's
+  range and past the P6 review, so it goes to the P6 addendum (the package that appends the A36 review to
+  `codium-p6-repairs.md`). Its regression test: both switches on, the desktop `notify` rejects on two status reads whose
+  share left differs (19% then 18% left), and exactly one `sendPhoneAlert` call (one `phoneAlerts.send`) is expected.
+
+P4c's readings, from its review of A25 (`b4c05481..295ab95e`; findings F35 to F56 in `codium-p4-repairs.md`, section
+"A25 output boundaries"):
+
+- **A sanitized export strips the lifecycle record's aggregate tokens whatever its proof (F43).** C10 and the A25
+  decision say editable lifecycle metadata never authorizes printed aggregate tokens, so `sanitizeLegacy` passes
+  `metadata.subagent` through `taskMetadata`, the walker run JSON uses; a proven `info.tokens` stays beside it. Only
+  `metadata.subagent` is walked: the rest of session metadata is the caller's (any client sets it through
+  `PATCH /session/:id`), and walking the whole object would strip figures under unrelated root `usage` or `tasks` keys
+  and add a `metadata` key a session lacked. The walker keeps its name and only gains `export`, so the self-evolving
+  merge, which edits the same function (its `workflow` branch) and `sanitizeLegacy` (`...data,`), still merges both
+  files cleanly. The raw export is a backup under D-2 and is unchanged.
+- **Hand-off to self-evolving: a sanitized legacy export there carries `ancillaryUsage`.** At `origin/self-evolving`
+  `a03b9718`, `sanitizeLegacy` starts its result with `...data,` ("The privacy, guest-input and usage markers travel
+  with the archive"), so its output keeps the archive's `ancillaryUsage`: `SessionEvent.AncillaryUsage` records of
+  title and memory model calls, with `billing` and `tokens`. After the codium-into-self-evolving merge, Codium title
+  and memory tokens would print in a sanitized export. The self-evolving lane or the owner's step-9 merge resolution
+  must leave `ancillaryUsage` (or at least its `tokens`) out of the sanitized output. The new `export-sanitize.test.ts`
+  case "ancillary usage stays out, so Codium title and memory tokens never reach a sanitized export" passes on codium
+  and fails on a merged tree that keeps the spread, so the merge sees it. Self-evolving's `setPublicMetadata` keeps
+  clients from replacing `metadata.subagent` there, but F43's strip is still needed on that branch for genuine records
+  that copied flagless Codium tokens. The codium lane does not change self-evolving.
+- **`vector stats` keeps its own-text formatter beside Codium (F40), an accepted A25 reading.** Label plan §2's table
+  reads `Cost unknown + Codium`, `free + Codium` or `ChatGPT plan + Codium` when the own work beside Codium is
+  unpriced, free or plan work; stats prints `$0.00 + Codium`. §2 also keeps each surface's own-text formatter and wraps
+  it with `withCodium`. Stats' formatter has always printed `$X.XX`, so an own-unpriced session without Codium reads
+  `$0.00` too (the "No Codium: unchanged" row), and §3.6's `vector stats` row gives the mixed form as
+  `$12.40 + Codium`. Printing "Cost unknown" only beside Codium would split one formatter by Codium presence, and
+  changing it for every session is outside C9. Stats could detect the unknown case from `unpriced` and the session
+  counts; free and plan work cannot be told apart in stored data. It is A25's surface, not copy for P4d.
+- **`part.update` refuses edits to step usage (F46), repaired.** The brief's check that "a client-supplied provenance
+  flag cannot relabel own-key usage as Codium or the reverse" is read to cover a step-finish part's `billing` flag and
+  its figures sent through `PATCH /session/:id/message/:messageID/part/:partID`, not only the session proof flags (F45),
+  since the engine trusts token provenance only from its own writes. Readings: (1) the guard is in the HttpApi handler,
+  not in `Session.updatePart` or the projector, because the engine's processor writes steps through
+  `Session.updatePart`, and replay and import, which reach the projector, already invalidate the proof; (2) usage is
+  `type`, `billing`, `cost`, `unpriced` (absent and `false` read alike) and `tokens`, so an edit to a step's `reason` or
+  `snapshot` still passes; (3) a part sent under another session or message than the one it is stored under is refused
+  whatever its type, since the projector never moves a stored row and an accepted move only re-routed figures; (4)
+  creating a step-finish part through `PATCH` is refused and creating any other part is not; (5) `BadRequest` was
+  already in the endpoint's declared errors, so no HttpApi shape changed and no client or SDK was regenerated. A review
+  of P4c's uncommitted first draft found this entry reading the edit path as "accepted for now" with a fix that needed
+  regeneration; both were withdrawn before commit.
+- **A run with no readings is unmeasured (F48).** When the guard read and the session read before the run both fail,
+  `measuredRun` has no Codium evidence (the before count is unknown, and a modern row carries `codiumSteps`, so the
+  legacy fallback does not apply), and the run is recorded once as unmeasured whatever its model, as before A25. No
+  change: C8 rules out a dollar event for a known Codium-only run, and this run is not known to be one.
+- **The A25 notes' `975b523b` run is unverifiable (F54).** The brief says the commit "does not exist on the remote".
+  GitHub still serves the object, but no branch holds it and the lane clone lacks it; its change, author and author
+  date match `d505d566`, which was committed again onto `4bc40a87` after run 41261226062 was created, and the commit
+  API gives no parent to compare its tree with codium's A24 source. The notes' line 3 stays as written, under a dated
+  status paragraph, and the claim is not repeated.
+- **Privacy hand-off to the lead (F44), open.** `--sanitize` keeps the lifecycle record's text fields (`title`,
+  `resultSummary`, `reason`, `error`, `successCriteria`, `ownedPaths`, `dependsOn`, `resultRef`, `batchID`,
+  `notification.text`, `mailbox[].text`) and other client metadata. It predates Codium and C10 covers only Codium
+  figures, so it is a separate task, not a P4 repair. Its target: in `sanitizeLegacy`, after `taskMetadata`, redact
+  those string fields of `metadata.subagent` with the existing `redact()` (or pass non-lifecycle metadata through
+  `data("session-metadata", ...)`), with an `export-sanitize.test.ts` case asserting a steer prompt's text is absent.
+  P4c's attempt to queue it as a task suggestion timed out without a task id, so it stays with the lead's queue.
+- **The brief's server file (F56).** The brief names `packages/server/src/handlers/session.ts`; A25 changed
+  `packages/server/src/handlers/event.ts`. Both were read and neither needed a change.
+- **The WP31 note guard is on self-evolving (F38).** `TaskNotify.render` at `a03b9718` (`task/notify.ts:180` there)
+  prints tokens only with `tokensOwnOnly === true`. The A25 notes' other WP31 obligations (combined own and delegated
+  proof in workflow usage, `WorkflowOwner.get.report`, `WorkflowReport` text and `workflow.tokens`) were not audited
+  here and stay with the integration.
+- **Range.** `git log b4c05481..295ab95e` also holds the test-only `44c35f1c` and `9c5bc861`, which P4b reviewed with
+  the other A24 follow-ups; P4c read `d505d566` and `4bc40a87` only for the A25 notes' claims.
+
+P4d's readings, from its review of A26 to A28 (`295ab95e..d13d91e3`; findings F57 to F78 in `codium-p4-repairs.md`,
+sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
+
+- **F61 is repaired in `review/model.ts`, not in Codex's file.** Label plan §4.3 and C11 give the engine review cost
+  kind to `packages/engine/src/review/model.ts`, which spec A26 owns, so `resolveReviewModel` now passes
+  `codium: Billing.isCodium(model.providerID)`. `github.review.ts` keeps calling it as it is, so GitHub Codium reviews
+  now meet the P5 token stop too. The repair adds the stop for a Codium review with an explicit `triageModel`, with no
+  listed review roles and with a same-lab pair, and an unused Codium run reports `"codium"`. It also removes the dollar
+  price, the dollar cap, the CLI's dollar estimate and the dollar estimate in a GitHub review's "too large" note from a
+  Codium model that has a catalog price; the catalog ships Codium models unpriced (`provider.ts:1806`), so that case is
+  defensive, and label plan §2 rules out dollar figures for Codium work. Step and time limits are unchanged.
+- **Mixed review wording renames only the Codium model (F60).** Each Codium model of a mixed review's model list reads
+  `Vector Codium · <model>` (label plan §2), and the existing `<models> · <own figure> + Codium` layout stays, as in
+  the app's per-pass lines (`ai-review.ts:1889-1891`):
+  `anthropic/claude-sonnet-4-5 + Vector Codium · vector-velocity · $0.21 + Codium`. With `·` as the separator,
+  `$0.21` follows the Codium model, so it could be read as that model's cost; a layout with a figure per model would be
+  a separate change, and the tests pin the exact strings so any reorder is deliberate. The figure is own-key spend, so
+  P1 holds; the review of P4d's repairs agreed and asked for no change. If the owner or the label plan wants an
+  unambiguous layout later, the own figures move next to the own models
+  (`anthropic/claude-sonnet-4-5 · $0.21 + Vector Codium · vector-velocity · Codium`) and the exact-string pins in
+  `format.test.ts`, `review.render.test.ts` and `codium-no-figures.test.ts` change with it. The pattern is built from
+  `Billing.CODIUM_PROVIDER_ID` (label plan C1). `vector review --json` keeps the raw id: it is machine output, and
+  §3.4's JSON row is `{ kind, model }`.
+- **The public share's notice is an owner decision (O9, P4a's F10).** P4a accepted it under label plan §3.7. §3.7 keeps
+  billing, token and cost fields out of `PublicSession` and says nothing about the notice's text, while §2 says
+  `vector-plan` is never printed as a provider name; as label-surface copy it goes to the owner with the other copy
+  findings. No change.
+- **Public-copy divergences are owner decisions (F71, O1 to O8).** The brief allows wording changes only towards text
+  the contract states verbatim, and the contract's own text is not safe to adopt: §1.3's Plus variants 1 and 2 and
+  Ultra variants 1 and 2 conflict with H4, and its fallbacks name models that are not served while `ROUTE_ACCEPTANCES`
+  is empty. So nothing was changed, the spec's text was not adopted either, and each item records what changes for
+  either answer.
+- **A27's Velocity and Labs claims stay open owner decisions (O4, O5).** The deviation "A27 public presentation" cites
+  an approved owner override for "planned 550B+" and an "explicit no-Labs scope". No lane document holds either, and
+  `codium-p5-repairs.md` lists both ("Vector Labs on the pricing page", "the 550B Velocity wording") as pending. H2
+  bans a parameter count, and the lander (`Lander.astro`, `landing-copy.test.ts:183-189`) and investor page
+  (`test/investor-page.test.ts:177-201`, whose README guard bans "Planned" and `\d+B\+`) word Velocity differently
+  again. P4d changes none of it.
+- **The listing's staleness bound is accepted (F66).** `listedPerks` fails closed on any read error, but a value read
+  just before an outage stays for the 30 s switch cache plus the config route's `s-maxage=60` and
+  `stale-while-revalidate=30`, about 2 minutes in all; a switch never written reads `on` (A11). Both are read as A11 and
+  §4.14 behaviour; tightening the route's cache is the owner's one-line call.
+- **Hand-offs to Codex (F63, F64).** `github.evidence.ts`'s `formatCost` omits "on your keys" from the mixed line (label
+  plan §3.8) and prints `$0.00 + Codium` beside own free work (§2); `github.review.ts:692-695` logs
+  `Spent $0.0000 + Codium` while own steps have reported $0. Both files are Codex's (spec §0.5) and were not edited. The
+  proposed regressions are in the repairs doc; no test was added here, because it would fail until Codex repairs them.
+- **Test placement (F78).** R1's regressions are in `packages/engine/test/review/model.test.ts` and `panel.test.ts`,
+  the two files P4b's F18 named; the brief's list has no engine review-model test file. The panel case puts the
+  resolver's kind on the file's loopback models, which run the passes, with a mock layer of only the four services
+  `resolveReviewModel` reads (Provider's `getModel` and `line`, Config, Auth, ModelCatalog). `model.test.ts`'s own
+  service layer is private to that file, and test files do not import each other, so the case builds its four mocks
+  rather than reusing it.
+- **The panel case stays, retitled (P4d review).** The review of P4d's repairs found that the panel case mostly
+  repeats `model.test.ts` (the resolver's `"codium"` answer) and the existing "on Vector Codium the check and the judge
+  do not start past the stop" case, builds a mock layer, and was titled "explicit triageModel" while its triage model is
+  the `FIRST` fixture with the resolved kind copied onto it. It is kept, as P4b's hand-off asked for a `panel.test.ts`
+  case that reaches the stop without writing `costKind: "codium"` by hand, and it fails against the previous source
+  (the kind was `"unknown"`). Its title now says what it checks: "the kind resolveReviewModel returns for a Vector
+  Codium model is the one the runner's token stop reads". Its mocks follow `model.test.ts`, which mocks the same
+  services. A real Provider with a Codium listing can be built the way `test/provider/model-plans.test.ts` does (the
+  core `codium-gateway` fixture, with its own FreeModels and ModelPlans service stand-ins and a gateway server), which
+  is more setup than this one case needs; P4d left that as it is. Neither test drives the CLI or GitHub caller from the resolver into `Review.run`; F78 records that gap and why no
+  end-to-end case was added (the caller harnesses fake both ends, and Codium's fixed destination cannot be served by
+  the loopback LLM server).
+- **A27's commit message lists no `api/_lib/model-plan-*.ts` edit (F67).** `4e993a62` edited
+  `api/_lib/model-plan-config.ts` (an export) and `api/_lib/model-plan-status.ts` (the listing and its cache check),
+  and its one-line message lists neither, against spec §0 item 5. Pushed commits are not amended, so the list is
+  recorded in F67.

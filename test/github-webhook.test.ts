@@ -39,7 +39,7 @@ import { APP_SLUG, DAY, invoke, MAX, OpsWorld, OTHER, PRO, ULTRA, WEBHOOK_SECRET
 // production deployment to the ops Worker (A46's own code, in memory), hands App-bot pull requests to Ship Desk's
 // intake and drops the settings of repositories an uninstall or a removal takes away. Nothing reaches GitHub.
 
-let world = new OpsWorld()
+let world: OpsWorld
 beforeEach(() => {
   world = new OpsWorld()
   // api/github/webhook.ts registers Ship Desk's intake when it loads (WP A49); these cases register their own.

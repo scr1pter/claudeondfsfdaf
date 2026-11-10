@@ -101,5 +101,8 @@ test("mixed app readouts retain proven own figures alongside Codium", () => {
     expect(label).toContain("$0.12")
     expect(label).toContain("Codium")
     expect(label).not.toContain("$0.00")
+    // Label plan §2: never the vector-plan provider id; a Codium model reads "Vector Codium · <model>".
+    expect(label).not.toContain("vector-plan")
   }
+  expect(labels[0]).toContain("own/coder + Vector Codium · vector-flash · $0.12 + Codium")
 })

@@ -20,7 +20,7 @@ import type { Resolution } from "./ssrf"
 export type ProbeResult = { outcome: ProbeOutcome; reason: ProbeReason; status?: number; ms: number }
 
 export const PROBE_HEADERS = Object.freeze({
-  "user-agent": "VectorOps/1 (+https://vectordev.ai/docs/codium)",
+  "user-agent": "Vector/Ops (+https://vectordev.ai/docs/codium)",
   accept: "*/*",
   "cache-control": "no-cache",
 })

@@ -57,6 +57,11 @@ Typecheck: the root `tsconfig.json` (api) is clean with `tsgo --noEmit`. Root te
 `VECTOR_TEST_REDIS_URL` is set. This Mac has no Valkey; only their TypeScript copies in `test/ops-fixture.ts` ran here.
 The Codium lane picks up the new test file; it has not run in CI yet.
 
+**Status on 8 Nov 2026.** Pushed with the A44–A50 batch (head `d5975d28`). `test/release-guard.test.ts` first ran in CI
+in Vector Codium run 42134490728, after the P7 review changed it: Codium tests job 127619053399 shows 37 pass and none
+skipped, so the Valkey case ran. That job failed on two other files. The file passed again (37) in the green run
+42138157347, job 127631456285.
+
 **Never exercised anywhere:** GitHub's real API (installation tokens, compare, commit-to-pulls, the GraphQL
 `revertPullRequest` mutation, git data writes), a real App registration, and the deployed Worker calling the deployed
 API. The fake follows GitHub's documented shapes; the owner's acceptance step for the App (github-app.md) should include

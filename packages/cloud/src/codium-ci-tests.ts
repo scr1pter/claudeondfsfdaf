@@ -65,6 +65,14 @@ export function browserCommand(specs: readonly string[]) {
   return ["run", "test:e2e", ...specs.map((spec) => path.posix.relative(BROWSER_DIRECTORY, spec))]
 }
 
+/** Runs an attempt until it exits 0, waiting each delay in turn after a failure, and answers the last exit status. */
+export async function retried(attempt: () => Promise<number>, delays: readonly number[]): Promise<number> {
+  const status = await attempt()
+  if (status === 0 || !delays.length) return status
+  await Bun.sleep(delays[0])
+  return retried(attempt, delays.slice(1))
+}
+
 function git(root: string, ...args: string[]) {
   const result = Bun.spawnSync(["git", ...args], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.toString().trim()}`)
@@ -115,10 +123,15 @@ async function main(argv: readonly string[]) {
   const owners = new Map(files.map((file) => [file, owningDirectory(file, exists)]))
 
   // Desktop packaging fixtures need the locked Electron runtime, as packages/desktop/scripts/test.ts installs it.
+  // GitHub's release download can fail for a moment (a 504 in Vector Codium run 42464293147). The installer writes
+  // path.txt only after a whole download and extract, so an attempt that failed starts over when it is tried again.
   if ([...owners.values()].includes("packages/desktop")) {
     const desktop = path.join(root, "packages/desktop")
     const installer = createRequire(path.join(desktop, "package.json")).resolve("electron/install.js")
-    const status = await run([process.execPath, "--no-env-file", installer], desktop, "Electron runtime")
+    const status = await retried(
+      () => run([process.execPath, "--no-env-file", installer], desktop, "Electron runtime"),
+      [15_000, 60_000],
+    )
     if (status !== 0) return status
   }
 

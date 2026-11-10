@@ -46,7 +46,7 @@ const ENVIRONMENT = {
   VECTOR_OPS_GUARD_CAP_COST_200_USD: undefined,
 }
 
-let world = new OpsWorld(ENVIRONMENT)
+let world: OpsWorld
 beforeEach(() => {
   world = new OpsWorld(ENVIRONMENT)
 })

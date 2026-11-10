@@ -577,7 +577,12 @@ export class FakeGithub {
   }
 }
 
-/** Every fake, reset per test. */
+// The world whose environment is set. A world made while another is open would take the open one's ops settings as the
+// environment to put back, so they would stay set for every later file in the same `bun test` process (test.yml runs
+// all of test/ in one).
+let open: OpsWorld | undefined
+
+/** Every fake, reset per test. Make one per test (in beforeEach) and close it after (in afterEach). */
 export class OpsWorld {
   fakes = codiumFakes({ now: NOW })
   worker = new Worker()
@@ -590,6 +595,8 @@ export class OpsWorld {
   restore = () => {}
 
   constructor(overrides: Record<string, string | undefined> = {}) {
+    if (open) throw new Error("An OpsWorld is still open: close it before making another")
+    open = this
     this.restore = codiumTestEnvironment({ ...OPS_ENVIRONMENT, ...overrides })
     registerOpsScripts(this.fakes.store)
     registerRecordScripts(this.fakes.store, this.fakes.clock)
@@ -600,6 +607,7 @@ export class OpsWorld {
   close() {
     registerRepoBindingReader(undefined)
     this.restore()
+    if (open === this) open = undefined
   }
 
   advance(ms: number) {

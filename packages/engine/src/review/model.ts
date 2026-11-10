@@ -1,4 +1,5 @@
 import { isFreeModel } from "@vectordevai/schema/free-model"
+import { Billing } from "@vectordevai/schema/billing"
 import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 // Which model a review runs on (section 2.9), what it costs (section 5.5), and the 32k context floor.
 
@@ -125,7 +126,10 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   // A review on a server on this computer, or on a private one on the model server list in effect (the user's or the
   // company's, without an edit still held for the owner), has no per-token price.
   const local = (yield* provider.line(model))?.local ?? false
+  // Label plan §4.3: a Vector Codium model is "codium" before any catalog price or sign-in, so it has no dollar price
+  // and the runner holds it to the review token stop.
   const costKind = SpendGuard.costKindOf({
+    codium: Billing.isCodium(model.providerID),
     free: isFreeModel(model),
     oauthPlan:
       signIn?.type === "oauth" &&

@@ -9,6 +9,7 @@ import { Effect, Schema } from "effect"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
 import { SessionArchive } from "@vectordevai/core/share/archive"
+import { taskMetadata } from "./run/usage-output"
 
 function redact(kind: string, id: string, value: string) {
   return value.trim() ? `[redacted:${kind}:${id}]` : value
@@ -181,6 +182,10 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
   return {
     info: {
       ...info,
+      // A child's lifecycle record copies its session totals and proof; editable metadata never certifies them.
+      ...(data.info.metadata?.subagent === undefined
+        ? {}
+        : { metadata: { ...data.info.metadata, subagent: taskMetadata(data.info.metadata.subagent) } }),
       title: redact("session-title", data.info.id, data.info.title),
       directory: redact("session-directory", data.info.id, data.info.directory),
       summary: !data.info.summary
