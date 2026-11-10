@@ -13,7 +13,8 @@
     "./vite": "./vite.js",
     "./index.css": "./src/index.css",
     "./judge": "./src/features/judge/verified-completion.ts",
-    "./ops": "./src/features/cloud/ops/ops-requests.ts"
+    "./ops": "./src/features/cloud/ops/ops-requests.ts",
+    "./hosted": "./src/features/cloud/hosted/hosted-requests.ts"
   },
   "scripts": {
     "typecheck": "tsgo -b",

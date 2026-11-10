@@ -223,3 +223,48 @@ bucket or phone yet.
   job that changes a repository cannot leave a pull request. Approve works for any pull request a report names.
 - **The agent's side.** Vector's CLI on the computer must send the report itself (the job's prompt says how). That is the
   computer-use build's.
+
+## The clients and the budget workflow (WP A56)
+
+The desktop's composer has "Run on my cloud computer", with the most the job can use of the month shown first (a band,
+never an amount). While a session runs, a purple-edged bar above the composer says "Vector is using its cloud
+computer" and offers Watch, Take over, Give back, Files and Stop; the live view opens in its own sandboxed window that
+loads nothing but the computer's own viewer page. The phone's Cloud computer page shows the same, plus Done by
+Morning's jobs and reports. When the computer's credential guard hands the computer to the subscriber, the session list
+says so and their phone gets one title-only alert ("Vector needs you on its cloud computer", tag `computer`). None of
+this shows until `computer` is listed (or for `VECTOR_HOSTED_ALLOW_ACCOUNTS`), and Vector Local blocks it.
+
+### The budget workflow
+
+`.github/workflows/vector-hosted-budget.yml` keeps the `vector-hosted` team's Spend Management budget above what its
+subscribers could spend: once a day (06:17 UTC) and whenever you dispatch it, it sets
+max(current budget, spend this cycle + 1.3 × Vector's worst case for the rest of the cycle). The worst case is
+`GET /api/hosted/admin/budget?cycleEnd=<ms>`: every Max and Ultra account's cloud computer hours left, the full hours of
+every period that starts before the cycle ends, and every computer's disk, at the provider's worst-case rates. It never
+lowers the budget (lower it yourself if you want to), never sets more than your ceiling, never turns on pausing and never
+changes the spend webhook. Its log says only raised, unchanged, capped or failed, because this repository's Actions logs
+are public. A capped or failed run fails, so you see it; a failure changes nothing.
+
+Setup (only after the hosted team, its budget and its spend webhook exist, step 1 of "The provider"):
+
+1. **The environment.** The `hosted-production` GitHub environment, with you as required reviewer (contract §6.1). The
+   workflow refuses to run without a required reviewer, so each daily run waits for your approval in GitHub: that click
+   is when you look before the budget goes up.
+2. **The token.** In the hosted team, a member with the Billing role (or you as Owner) creates an access token scoped to
+   the `vector-hosted` team only. Store it as the environment secret `VECTOR_HOSTED_BUDGET_VERCEL_TOKEN`. Never use a
+   main-team token.
+3. **The read secret.** Store the same value as Vercel's `VECTOR_HOSTED_BUDGET_READ_SECRET` (step 3 of "Sessions, the
+   reaper and the nightly job") as the environment secret of that name.
+4. **The variables.** Environment (or repository) variables: `VECTOR_HOSTED_VERCEL_TEAM_ID` (the hosted team's
+   `team_…` id), `VECTOR_HOSTED_BILLING_DAY` (the day of the month the hosted team's billing cycle starts, 1 to 28; see
+   the team's billing page) and `VECTOR_HOSTED_BUDGET_MAX_USD` (the most this workflow may ever set, in whole dollars).
+5. **Try it.** Dispatch the workflow once from the default branch with `VECTOR_HOSTED_BUDGET_AUTOMATION` unset: it is
+   skipped. Then set the repository variable `VECTOR_HOSTED_BUDGET_AUTOMATION=true`, dispatch it again, approve the run
+   and check the team's budget page. The workflow runs the Vercel CLI `vercel@65.3.1` (`VERCEL_CLI_VERSION` in
+   `packages/cloud/src/hosted-budget.ts`) and reads `vercel billing budgets inspect --json` (or the older
+   `vercel budgets` form). The JSON field names are read leniently because Vercel documents only the table's columns; if
+   the first run says the answer could not be read, nothing changed: tell Claude what fields the CLI printed (not their
+   values) and the reader is adjusted.
+
+Turning it off: unset `VECTOR_HOSTED_BUDGET_AUTOMATION`. The spend webhook still drains new sessions at 75% and stops
+them at 100%, whatever the budget is.

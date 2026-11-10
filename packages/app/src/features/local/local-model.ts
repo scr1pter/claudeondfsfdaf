@@ -110,6 +110,7 @@ const NAMES: Record<string, string> = {
   "brain-vault": "Brain Vault",
   "ship-desk": "Ship Desk",
   "production-checks": "Production checks",
+  "cloud-computer": "Cloud computer",
   "release-notes": "Release notes",
   "site-assets": "Release note pictures",
   updates: "Updates",

@@ -204,6 +204,11 @@ export type SessionView = {
   wrapBy?: number
   takeover?: { since: number; until: number }
   download?: { requestedAt: number; readyAt?: number }
+  /**
+   * The computer is waiting for the person (WP A56): its credential guard met a password, one-time-code or card field,
+   * or a CAPTCHA, and handed the computer over. Sent only while the agent has control; taking over answers it.
+   */
+  handoff?: { reason: Handoff; since: number }
 }
 
 /**

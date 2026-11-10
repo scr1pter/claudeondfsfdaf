@@ -9,6 +9,7 @@ import type { VectorAccountPlatform } from "../vector-account"
 import type { ReportsPlatform } from "../support-reports"
 import type { PhoneAlertEvent } from "./settings"
 import type { OpsMergeRequest, OpsRequest } from "../features/cloud/ops/ops-requests"
+import type { HostedRequest } from "../features/cloud/hosted/hosted-requests"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -151,6 +152,33 @@ export type OpsPlatform = {
   merge(input: OpsMergeRequest): Promise<{ ok: true; message: string } | { ok: false; code?: string; message: string }>
 }
 
+/**
+ * The cloud computer through the desktop's main process (WP A56): the composer's "Run on my cloud computer", the bar
+ * above the composer and the live view window. No token reaches the app.
+ */
+export type HostedPlatform = {
+  /** One of the requests in features/cloud/hosted/hosted-requests.ts, answered with vectordev.ai's body or its refusal. */
+  request(
+    input: HostedRequest,
+  ): Promise<
+    { ok: true; body: Record<string, unknown> } | { ok: false; status?: number; code?: string; message: string }
+  >
+  /** Opens the session's live view in its own sandboxed window: watch, or control during a take-over. */
+  liveView(input: {
+    id: string
+    mode: "view" | "control"
+  }): Promise<{ ok: true } | { ok: false; status?: number; code?: string; message: string }>
+  /** Asks for the session's files and opens the download in the browser once they are packed. */
+  files(input: {
+    id: string
+  }): Promise<{ ok: true; ready?: boolean } | { ok: false; status?: number; code?: string; message: string }>
+  /** Opens a job's pull request or a recording link in the browser. */
+  open(input: {
+    kind: "pull-request" | "recording"
+    url: string
+  }): Promise<{ ok: true } | { ok: false; message: string }>
+}
+
 export type FatalRendererErrorLog = {
   error: string
   url: string
@@ -223,6 +251,9 @@ type PlatformBase = {
 
   /** Production checks (desktop only; WP A50): Settings → Production, with merges from the person's own GitHub sign-in. */
   ops?: OpsPlatform
+
+  /** The cloud computer (desktop only; WP A56): "Run on my cloud computer", take-over and the live view window. */
+  hosted?: HostedPlatform
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {

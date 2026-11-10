@@ -744,14 +744,25 @@ export async function requireOwnSession(account: string, id: unknown, fetcher: t
   return record
 }
 
-/** The account's sessions, newest first (at most 50), with live ones first. */
+/**
+ * The account's sessions, newest first (at most 50), with live ones first. A running session whose computer handed
+ * itself to the person (its credential guard or a CAPTCHA, WP A54) says so (`handoff`, WP A56), so the person's
+ * surfaces can ask them to take over.
+ */
 export async function listHostedSessions(account: string, fetcher: typeof fetch = fetch) {
   const ids = await store(["ZREVRANGE", hostedSessionsKey(account), 0, 49], fetcher)
   const views: Hosted.SessionView[] = []
   for (const id of Array.isArray(ids) ? ids : []) {
     if (typeof id !== "string") continue
     const record = await readSessionRecord(id, fetcher)
-    if (record && record.account === account) views.push(sessionView(record))
+    if (!record || record.account !== account) continue
+    const view = sessionView(record)
+    if (record.state === "running") {
+      const handoff = (await readBeat(record.id, fetcher).catch(() => undefined))?.handoff
+      if (handoff && Hosted.HANDOFFS.includes(handoff.reason) && Number.isSafeInteger(handoff.since))
+        view.handoff = { reason: handoff.reason, since: handoff.since }
+    }
+    views.push(view)
   }
   return views.sort(
     (a, b) => Number(b.state !== "ended") - Number(a.state !== "ended") || b.createdAt - a.createdAt,

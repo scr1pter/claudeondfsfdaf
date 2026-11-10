@@ -2548,3 +2548,65 @@ sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
   `api/_lib/model-plan-config.ts` (an export) and `api/_lib/model-plan-status.ts` (the listing and its cache check),
   and its one-line message lists neither, against spec §0 item 5. Pushed commits are not amended, so the list is
   recorded in F67.
+
+## A56 Hosted clients and budget workflow (9 Nov 2026)
+
+- **The live view is its own window, not a pane in the app's window.** The contract names a "live-view pane (sandboxed
+  webview)". Vector's app windows carry the preload with the whole IPC bridge and keep `webviewTag` off, as the billing
+  and research windows do. A separate `BrowserWindow` (`packages/desktop/src/main/hosted-window.ts`) gives the same
+  isolation with less reach: no preload, `sandbox`, `contextIsolation`, no `webviewTag`, an in-memory partition per
+  session (`vector-live-view-<id>`, cleared on close), every request outside the computer's own viewer origin cancelled
+  (https page, wss socket), new windows, downloads, title changes and every permission refused, and Vector Local's
+  `cloud-computer` source applied to its session. One window per session; asking again (control after a take-over)
+  loads the new link in it. Its background, and the viewer page's own frame, are the purple edge.
+- **Files outside A56's list.** `packages/app/src/features/cloud/hosted/` (`hosted-requests.ts`, the only requests the
+  screens may send and the only links they may open, exported as `@vectordevai/app/hosted`; `hosted-model.ts`, lenient
+  decoders and copy; `hosted-composer.tsx` and `hosted.css`, the button, the bar and the dialogs), the composer
+  (`components/prompt-input.tsx`: one hook, the bar, and the button beside attach in both layouts), the desktop bridge
+  (`ipc.ts`, `preload/index.ts`, `preload/types.ts`, `renderer/index.tsx`, `context/platform.tsx` `HostedPlatform`),
+  `egress-filter.ts` (a `cloud-computer` session kind), core `local-mode/sources.ts` and the app's source name,
+  `api/_lib/hosted-handoff.ts` and its registration in `hosted-jobs-runtime.ts`, `api/_lib/hosted-sessions.ts`
+  (`listHostedSessions` adds `handoff`), `packages/schema/src/hosted.ts` (`SessionView.handoff`), the phone's
+  `phone.css`, `packages/cloud/src/hosted-budget.ts`, docs and tests.
+- **"Vector needs you".** A54 hands the computer to the person when its credential guard meets a password, one-time-code
+  or card field or a CAPTCHA, and reports only the reason. A running session's view now carries
+  `handoff {reason, since}` (not during a take-over), and the screens ask the person to take over. The heartbeat's route
+  sends one title-only phone alert per new hand-over ("Vector needs you on its cloud computer", tag `computer`, P7): a
+  hand-over whose `since` is the beat's own time. So the cloud computer is now one of the server senders A38 said `alerts`
+  should wait for.
+- **Done by Morning has screens here.** A55 left its screens to A56, whose list does not name them. The start dialog has
+  a Done by Morning tab (success criteria, "aims to deliver by" a local time within the next day) while `overnight` is
+  listed; a jobs dialog lists jobs, reports, the second lab's verdict per criterion, recording links (owner-only R2
+  links, opened in the browser) and Approve, which asks the server for the pull request's address and opens it in the
+  browser (S9: nothing merges). The phone shows the same list.
+- **The phone does not start or queue jobs.** The pre-start ceiling comes from `/api/model-plans/estimate`, which takes
+  account and run tokens only ("a browser session is not an estimate caller"), so the phone could not show it. The phone
+  watches, takes over, gives back, stops, fetches files and handles jobs; starting stays on the desktop, which shows the
+  ceiling first. Links the server gives the phone (the live view, files, a pull request) open as links the person taps
+  (`rel="noopener noreferrer"`), because a link opened after a request may be blocked as a pop-up on iOS.
+- **Polling.** Every composer in a window shares one status reader: every 15 seconds while a session is live, every 60
+  seconds otherwise, never while the window is hidden. The status route allows 600 reads an hour per account.
+- **The budget workflow talks to Vercel through its CLI.** Vercel documents no REST endpoint for the Spend Management
+  amount; it documents `vercel billing budgets inspect|set` (3 Nov 2026), earlier `vercel budgets` (changelog of 23 Oct
+  2026), with the Owner or Billing role. The contract's "never `--pause`" names that CLI's flag. The script passes only
+  `--amount`, `--json`, `--scope` and `--non-interactive` (anything else throws), tries both command forms (a usage
+  error moves to the next), and pins `vercel@65.3.1` (published 26 Oct 2026, the newest at least two weeks old). Vercel
+  documents only the table's columns, so the JSON is read leniently (`amount`, `spent`, nested under `budget` or the
+  team entry of `budgets`, `…Cents` fields divided); anything unreadable fails the run without a change. Whether 65.3.1
+  has `--json` on `inspect` is not verified here; the first dispatch shows it.
+- **Readings of the budget formula.** "Never lowers within a cycle": the formula is max(current, …), so the workflow
+  never lowers the budget at all; lowering is the owner's. "The rest of the cycle": Vector does not know the hosted
+  team's billing cycle, so the owner names its start day in `VECTOR_HOSTED_BILLING_DAY` (1–28) and the cycle ends on
+  the next such day, UTC; the server's worst case already counts the periods that start before then. Dollars are summed
+  in whole cents and the result rounded up to whole dollars (the CLI takes whole dollars).
+- **Additions to protect the owner.** A required ceiling, `VECTOR_HOSTED_BUDGET_MAX_USD` (not in the contract): the
+  workflow never sets more, and a capped run fails so the owner sees it. It refuses to create a budget (the owner creates
+  it with its spend webhook first), confirms the new amount by reading it back, and prints no amount, because this
+  repository's Actions logs are public. It runs only from the default branch, and a guard job without secrets first
+  checks that `hosted-production` has a required reviewer, so each daily run waits for the owner's approval.
+- **A57 work left in the tree.** The earlier A56 attempt's tree also held account-deletion work written on 6 November:
+  `api/_lib/codium-erase.ts`, `codium-tombstone.ts`, `api/account/deletions.ts`, and edits to `api/account/delete.ts`,
+  `api/_lib/codium-provision.ts` (`forgetAccountOutbox`), `model-plan-account.ts` (the tombstone checks),
+  `ops-cleanup.ts`, `ops-worker.ts` (`opsErasable`), `vercel.json` (the deletions cron), `test/account-delete.test.ts`
+  and `packages/web/test/codium-configuration.test.ts`. That is contract A57's file list and P5, so it was neither
+  reviewed as A56 nor committed: it stays uncommitted in the working tree for A57.

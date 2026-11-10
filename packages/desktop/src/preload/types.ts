@@ -129,6 +129,20 @@ export type OpsAPI = {
   merge: (input: { repository: string; number: number; headSha?: string }) => Promise<OpsMergeResult>
 }
 
+import type { HostedActionResult, HostedResult } from "../main/hosted-client"
+export type { HostedActionResult, HostedResult } from "../main/hosted-client"
+
+/**
+ * The cloud computer (WP A56): the composer's "Run on my cloud computer", the bar above the composer and the live view
+ * window. The account token stays in the main process.
+ */
+export type HostedAPI = {
+  request: (input: unknown) => Promise<HostedResult>
+  liveView: (input: { id: string; mode: "view" | "control" }) => Promise<HostedActionResult>
+  files: (input: { id: string }) => Promise<HostedActionResult>
+  open: (input: { kind: "pull-request" | "recording"; url: string }) => Promise<HostedActionResult>
+}
+
 /** Brain Vault on this computer (WP A45): Settings → Memory → Backup. The vault key stays in the main process. */
 export type VaultAPI = {
   status: () => Promise<VaultStatus>
@@ -884,6 +898,7 @@ export type ElectronAPI = {
   phoneAlerts: PhoneAlertsAPI
   vault: VaultAPI
   ops: OpsAPI
+  hosted: HostedAPI
   askHelpAssistant: (input: {
     messages: { role: "user" | "assistant"; content: string }[]
     context: string

@@ -111,6 +111,7 @@ import {
 } from "@/features/research/research-model"
 import type { Research } from "@vectordevai/schema/research"
 import { LocalStatusPill } from "@/features/local/status-pill"
+import { HostedBar, HostedRunButton, useHostedComputer } from "@/features/cloud/hosted/hosted-composer"
 import { useLocalStatus } from "@/features/local/use-local"
 import "@/features/research/research.css"
 
@@ -261,6 +262,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const settings = useSettings()
   const language = useLanguage()
   const platform = usePlatform()
+  // The cloud computer (WP A56): "Run on my cloud computer" and the bar that says Vector is using it.
+  const cloudComputer = useHostedComputer()
   const tabs = () => props.controls.session.tabs
   let editorRef!: HTMLDivElement
   let fileInputRef: HTMLInputElement | undefined
@@ -2063,6 +2066,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           </button>
         </div>
       </Show>
+      <HostedBar computer={cloudComputer} />
       <Switch>
         <Match when={props.controls.newLayoutDesigns}>
           <div class="flex flex-col gap-3">
@@ -2421,6 +2425,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     onStop={() => dictation?.stop()}
                   />
                 </Show>
+                <HostedRunButton computer={cloudComputer} prompt={delegationPromptText} />
                 <button
                   data-action="prompt-attach"
                   type="button"
@@ -2518,7 +2523,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 if (!(target instanceof HTMLElement)) return
                 if (
                   target.closest(
-                    '[data-action="prompt-attach"], [data-action="prompt-submit"], [data-action="prompt-mic"]',
+                    '[data-action="prompt-attach"], [data-action="prompt-submit"], [data-action="prompt-mic"], [data-action="prompt-hosted"]',
                   )
                 ) {
                   return
@@ -2621,6 +2626,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       onStop={() => dictation?.stop()}
                     />
                   </Show>
+                  <HostedRunButton computer={cloudComputer} prompt={delegationPromptText} />
                   <button
                     data-action="prompt-attach"
                     type="button"

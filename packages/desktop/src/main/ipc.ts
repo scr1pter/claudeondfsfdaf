@@ -17,6 +17,8 @@ import { listReports, reportStatuses, sendBugReport } from "./bug-report"
 import { REMOTE_STARTING, remoteLink, remoteNotify } from "./remote-runtime"
 import { vaultBackup, vaultStarting } from "./vault-runtime"
 import { createDesktopOps } from "./ops"
+import { createHostedClient } from "./hosted-client"
+import { openLiveViewWindow } from "./hosted-window"
 import { resolveGithubAccess } from "./github-access"
 import { askHelpAssistant, type HelpInput } from "./help-assistant"
 import { clearLocalMemory, readLocalMemory, writeLocalMemory } from "./local-memory"
@@ -425,6 +427,17 @@ export function registerIpcHandlers(deps: Deps) {
   handle("ops-request", (_event, input: unknown) => desktopOps.request(input))
   handle("ops-image", (_event, input: unknown) => desktopOps.image(input))
   handle("ops-merge", (_event, input: unknown) => desktopOps.merge(input))
+  // The cloud computer (WP A56). The account token stays in the main process; the renderer gets vectordev.ai's answers,
+  // and the live view opens in its own sandboxed window (hosted-window.ts), never in the app's window.
+  const hosted = createHostedClient({
+    token: () => vectorAccount.token(),
+    openLiveView: (target) => openLiveViewWindow(target, BrowserWindow.getFocusedWindow()),
+    openExternal: (url) => shell.openExternal(url),
+  })
+  handle("hosted-request", (_event, input: unknown) => hosted.request(input))
+  handle("hosted-live-view", (_event, input: unknown) => hosted.liveView(input))
+  handle("hosted-files", (_event, input: unknown) => hosted.files(input))
+  handle("hosted-open", (_event, input: unknown) => hosted.open(input))
   handle("help-assistant-ask", (_event, input: HelpInput) => askHelpAssistant(input))
   handle("agent-teams-list", (_event, scope?: { sourcePath?: string; parentSessionId?: string }) =>
     listAgentTeams(scope),

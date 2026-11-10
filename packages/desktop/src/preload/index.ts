@@ -100,6 +100,12 @@ const api: ElectronAPI = {
     image: (input) => ipcRenderer.invoke("ops-image", input),
     merge: (input) => ipcRenderer.invoke("ops-merge", input),
   },
+  hosted: {
+    request: (input) => ipcRenderer.invoke("hosted-request", input),
+    liveView: (input) => ipcRenderer.invoke("hosted-live-view", input),
+    files: (input) => ipcRenderer.invoke("hosted-files", input),
+    open: (input) => ipcRenderer.invoke("hosted-open", input),
+  },
   askHelpAssistant: (input) => ipcRenderer.invoke("help-assistant-ask", input),
   agentTeams: {
     list: (scope) => ipcRenderer.invoke("agent-teams-list", scope),

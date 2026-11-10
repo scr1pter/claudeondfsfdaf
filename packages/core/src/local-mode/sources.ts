@@ -433,6 +433,17 @@ export const SOURCES: readonly Source[] = [
     note: "Ship Desk's screenshots come from storage through links vectordev.ai signs; merging a pull request uses your own GitHub sign-in (github)",
   },
   {
+    id: "cloud-computer",
+    purpose: "account",
+    hosts: VECTOR,
+    sends: "Your Vector sign-in, the job you send to your cloud computer, and the take-over, stop and live view actions you choose",
+    why: "The cloud computer Vector runs for you: starting jobs, the pre-start estimate, take-over and the live view",
+    local: "blocked",
+    where: ["desktop"],
+    callSites: ["packages/desktop/src/main/hosted-client.ts", "packages/desktop/src/main/hosted-window.ts"],
+    note: "The live view window loads only the computer's own viewer page, at the address vectordev.ai gives with a single-use pass; session files and pull requests open in your browser",
+  },
+  {
     id: "phone-alerts",
     purpose: "account",
     hosts: VECTOR,

@@ -356,3 +356,17 @@ a.phone-button {
   color: var(--phone-muted);
   font-size: 13px;
 }
+
+/* The cloud computer (WP A56): the same purple edge the computer's live view page and the desktop's bar draw. */
+.phone-computer {
+  border: 2px solid #7c3aed;
+  background: color-mix(in srgb, #7c3aed 10%, transparent);
+}
+
+.phone-computer--needs-you {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--phone-warn) 35%, transparent);
+}
+
+.phone-alert-line {
+  color: var(--phone-warn);
+}
