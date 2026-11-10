@@ -974,7 +974,9 @@ describe("vector github review against a fake GitHub", () => {
       const again = reviewer({ findings: () => repeated(11, 37) })
       const { result } = await job(w, again)
       expect(result.exitCode).toBe(0)
-      expect(again.calls[0]?.prior.find((entry) => entry.id === parseFindingMarker(posted.body)?.id)?.also).toEqual([37])
+      expect(again.calls[0]?.prior.find((entry) => entry.id === parseFindingMarker(posted.body)?.id)?.also).toEqual([
+        37,
+      ])
       expect(posts(w, /\/pulls\/7\/reviews$/)).toHaveLength(1)
       expect(w.fake.reviewComments).toHaveLength(1)
     },
@@ -2087,4 +2089,21 @@ test("Codium progress, sticky footer and durable review count contain no private
   expect(sticky(w)?.body).not.toContain("987")
   expect(sticky(w)?.body).not.toContain("$99")
   expect(state(w)).toMatchObject({ costUsd: 0, tokens: [0, 0], codiumReviews: 1 })
+}, 30_000)
+
+test("mixed Codium review progress reports only positive own spend", async () => {
+  await using w = await world()
+  const base = reviewer()
+  const review = {
+    calls: base.calls,
+    run: async (input: RunInput): Promise<ReviewOutcome> => {
+      input.onProgress?.({ type: "cost", kind: "free", codium: true, costUsd: 0 })
+      input.onProgress?.({ type: "cost", kind: "priced", codium: true, costUsd: 0.12 })
+      return { ...(await base.run(input)), cost: { ...COST, codium: true, costUsd: 0.12 } }
+    },
+  }
+  const result = await job(w, review)
+  expect(result.log).toContain("Spent: Codium")
+  expect(result.log).toContain("Spent $0.1200 + Codium")
+  expect(result.log.join("\n")).not.toContain("Spent $0.0000")
 }, 30_000)

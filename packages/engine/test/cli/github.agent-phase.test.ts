@@ -136,7 +136,7 @@ function issueComment(input: { number: number; id: number; body: string; pr?: bo
 
 describe("the agent phase's task", () => {
   it.instance(
-    "channel credentials are removed from logs and bundle text while session history stays intact",
+    "channel credentials and Actions commands are safe in logs while session history stays intact",
     () =>
       Effect.gen(function* () {
         const test = yield* setup()
@@ -156,7 +156,8 @@ describe("the agent phase's task", () => {
         const values = [CHANNEL.githubToken, CHANNEL.cliToken, ...Object.values(CHANNEL.keys)]
         const command = `printf '%s' '${values.join(" ")}' >/dev/null; printf 'checked\\n'`
         yield* test.llm.tool("bash", { command, description: "Check output handling" })
-        yield* test.llm.text(`Checked ${values.join(" ")}.`)
+        const commands = "::warning::fixture\rinline ##[add-mask]fixture\r\n::error::fixture"
+        yield* test.llm.text(`Checked ${values.join(" ")}.\n${commands}`)
         yield* test.llm.text(`Checked ${CHANNEL.githubToken}`)
         const run = yield* phase({
           env: stepEnv({
@@ -174,6 +175,12 @@ describe("the agent phase's task", () => {
         expect(values.map((value) => output.includes(value))).toEqual(values.map(() => false))
         expect(output).toContain("[redacted]")
         expect(output).toContain("checked")
+        const logs = run.lines.join("\n")
+        expect(logs).toContain("Vector output: ::warning::fixture")
+        expect(logs).toContain("inline ## [add-mask]fixture")
+        expect(logs).toContain("Vector output: ::error::fixture")
+        expect(logs).not.toContain("##[")
+        expect(logs.split(/\r\n|\r|\n/).some((line) => line.trimStart().startsWith("::"))).toBe(false)
         expect(run.lines.filter((line) => line.startsWith("Images "))).toHaveLength(1)
         expect(run.lines.filter((line) => line.startsWith("error: Failed to download image: "))).toEqual([
           "error: Failed to download image: https://github.com/user-attachments/../[redacted]",
@@ -184,6 +191,7 @@ describe("the agent phase's task", () => {
         const messages = yield* sessions.messages({ sessionID: SessionID.make(sessionID!) })
         const history = JSON.stringify(messages)
         expect(values.map((value) => history.includes(value))).toEqual(values.map(() => true))
+        expect(history).toContain(JSON.stringify(commands).slice(1, -1))
         expect(guard.outside()).toEqual([])
       }),
     { git: true },

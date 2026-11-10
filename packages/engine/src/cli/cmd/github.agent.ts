@@ -46,6 +46,7 @@ import { WRITE_PERMISSIONS, createReviewGitHub } from "./github.review-api"
 import { TASK_MENTIONS, mentionsFrom } from "./github.route"
 import { GithubRunHelpers } from "./github.run-helpers"
 import { GithubSecrets } from "./github.secrets"
+import { sanitizeActionsLog } from "./github.output"
 import { githubFetch } from "./github.shared"
 
 // Fixed log lines. None names a plan, a price or a billing state, and none uses an INV-H1 word.
@@ -176,8 +177,8 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
         credentials,
         services: input.services,
         consent,
-        log: (line) => (input.log ?? console.log)(credentials.redact(line)),
-        error: (line) => (input.error ?? console.error)(credentials.redact(line)),
+        log: (line) => (input.log ?? console.log)(sanitizeActionsLog(credentials.redact(line))),
+        error: (line) => (input.error ?? console.error)(sanitizeActionsLog(credentials.redact(line))),
         worktree: ctx.worktree,
         signal,
         run,

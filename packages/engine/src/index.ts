@@ -135,6 +135,7 @@ const cli = yargs(args)
       options: opts,
       vector: isVectorCli || GithubSecrets.credentials.loaded(),
       accountRequired: !openCommands.has(command) && !control,
+      githubActions: process.env.GITHUB_ACTIONS === "true",
       local: runLocal,
       account: async () => {
         const { ensureVectorAccount } = await import("./cli/vector-account")

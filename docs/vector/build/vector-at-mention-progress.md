@@ -1054,3 +1054,12 @@ For each package, record its commit, the focused tests and typechecks run locall
 ## Owner checks recorded
 
 None yet (contract section 4).
+
+### V19 evidence and Actions output (2026-11-10)
+
+- The canonical feature branch now includes the separate merge and credential-output repair checkpoints. The `c65d6b5d1` push passed all 23 mandatory package typechecks with no cached results; draft PR #25 tracks the lane. Exact-head CI remains separate evidence.
+- Main's tested fixture-race repair is integrated as `3d027edae`. V19 adds explicit Codium turn counts and the approved provenance-safe mixed line, without including any Codium currency or token subtotal. Zero mixed review progress no longer prints a zero currency amount.
+- Actions status is silent through both the published account gate and the status handler, for `codium` and `credits`. New actual CLI cases are CI-only.
+- The agent uses one output helper to neutralize both Actions command protocols. The in-process phase regression covers credential and command text in real tool/model output and proves raw history survives. Publisher reuse follows in V21.
+- Validation passed: evidence 24 cases, status 1, Actions output 1, command gate 6, mixed-review progress 1, and actual in-process phase 1: 34 distinct cases with 154 assertions. Each file ran separately with fresh XDG config/data/state/cache roots and a 30-second test timeout. The first invocation failed in network-guard preload because the default execution sandbox could not bind the local fake listener; no test body ran. Granting the local listener access while retaining the strict network guard resolved that environment issue. Engine typecheck, formatting and the targeted diff check passed. The parent independently reviewed the entire source slice, including the published-entrypoint account-gate correction.
+- The two actual CLI alias cases await CI; they were not run locally. V19 source and focused acceptance are complete. Mandatory pre-push checks and exact-head lane CI remain pending for this new checkpoint; no release or live-owner acceptance is claimed.

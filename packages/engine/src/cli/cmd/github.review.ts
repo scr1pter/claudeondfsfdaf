@@ -692,7 +692,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       onProgress: (event) =>
         log(
           event.type === "cost"
-            ? event.kind === "codium"
+            ? event.kind === "codium" || (event.codium && event.costUsd === 0)
               ? "Spent: Codium"
               : `Spent $${event.costUsd.toFixed(4)}${event.codium ? " + Codium" : ""}`
             : `${event.name}: ${event.status}`,

@@ -1784,7 +1784,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Files:** `packages/engine/src/cli/cmd/github.evidence.ts` (`measureCost`, `formatCost`); the engine log points that print Codium status in Actions; `packages/engine/test/cli/github.evidence.test.ts`.
 - **Changes:** the strings of Codium's label plan §3.8, exactly, so V19 and Codium's A26 assert the same text:
   - **Codium-only turns:** `**Cost:** Codium · Vector Codium · <model name> · N turns`.
-  - **Mixed:** `**Cost:** $0.12 + Codium · 48.2k in / 3.1k out on your keys · 4 turns` (the price and token counts are the own-key part only; `MeasuredCost` gains `codiumTurns`).
+  - **Mixed:** `**Cost:** $0.12 + Codium · 48.2k in / 3.1k out from other models · 4 turns` (the price and token counts exclude Codium; `MeasuredCost` gains `codiumTurns`). Portable messages do not preserve whether a zero-cost non-Codium turn used a free model or an OAuth plan, so a zero subtotal omits the price and does not claim either provenance. Current account credentials cannot establish historical provenance. This evidence-specific clarification does not change labels backed by durable review-pass `costKind`.
   - **Status notices:** Codium status and usage notices are suppressed when `GITHUB_ACTIONS=true`.
 - **Tests:**
   - Codium-only;
