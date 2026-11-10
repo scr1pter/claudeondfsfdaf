@@ -207,8 +207,8 @@ provider, account, sharing and usage-check-in disclosures before publication.
 >
 > The drafter is withheld for guest sessions, held traces, models marked as
 > able to train on prompts, and runs stopped or warned by the budget guard.
-> These checks use Vector's configuration and model metadata; they are not a
-> guarantee about a provider's retention practices. Helper usage is charged
+> These checks use Vector's configuration and model metadata; they do not
+> establish how a provider retains data. Helper usage is charged
 > to the run that launched it. Turning off the model drafter still permits
 > deterministic skill drafts while skill learning remains enabled; turning
 > skill learning off prevents new skill drafts. Choosing Share writes an
@@ -244,8 +244,8 @@ from that workstream's owner. Preparing this list changes no setting.
       **workflow exploration off**. Do not describe these as proven general savings.
 - [ ] Accept per-conversation helper limits of **8 running / 32 per request /
       $25 at catalog prices**; guests **4 / 8 / $5**. Acknowledge that several
-      conversations can exceed those counts in aggregate, and that these controls
-      are not an invoice guarantee.
+      conversations can exceed those counts in aggregate. Provider invoices may
+      differ from these catalog-price estimates.
 - [ ] Accept **no automatic resume after restart**, steer-by-default follow-ups,
       and a desktop queue that drains only while a Vector window is open.
 - [ ] Accept the existing workflow approval policy and ceilings: an ask by

@@ -170,5 +170,40 @@
     "allPowerSamplesAC": true,
     "realProviderCalls": 0,
     "qualification": "Selected first-navigation DOM-observation comparison on one Windows host, not full timeline/platform/model-cost qualification. Existing-conversation medians modestly slower in both orders; no general speedup claim."
+  },
+  "releaseCopyFollowup": {
+    "observedAtUtc": "2026-11-10T05:03:54.702596+00:00",
+    "failedRevision": "4cf195e933bdfe4726eccad37049d7c05b1d2431",
+    "job": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42750351623/job/129612337257",
+    "jobExitCode": 1,
+    "failedStep": "Run website release copy tests",
+    "otherJobSteps": "Application unit tests, generated-client check, HttpApi exerciser and hosted API tests passed on the failed job.",
+    "cause": "Two negative caveats in the coordinator-added owner draft contained a term prohibited by the existing release-copy rules.",
+    "repair": "Reword provider-retention and invoice caveats while retaining their meaning; no copy assertion or application behavior changed.",
+    "targetedLocalVerification": {
+      "platform": "Windows x64",
+      "command": "From packages/web: GITHUB_ACTIONS=false bun test test/release-113-docs.test.ts test/release-113-multiagent-docs.test.ts --test-name-pattern \"copy rules\"",
+      "passed": 2,
+      "failed": 0,
+      "filtered": 17,
+      "assertions": 426,
+      "seconds": 0.464,
+      "exitCode": 0
+    },
+    "fullLocalCommandBeforeRepair": {
+      "command": "From packages/web: GITHUB_ACTIONS=false bun test test/release-copy.test.ts test/release-113-docs.test.ts test/release-113-multiagent-docs.test.ts test/docs-settings.test.ts test/deployed-schemas.test.ts",
+      "passed": 23,
+      "reportedFailed": 4,
+      "reportedErrors": 1,
+      "assertions": 678,
+      "seconds": 3.94,
+      "exitCode": 1,
+      "additionalObservedWindowsIssues": [
+        "MAX_RUNNING source extraction did not match its expected constant pattern.",
+        "release-copy.test.ts raised ENOENT for a Windows file-URL-derived pathname."
+      ],
+      "qualification": "These additional local failures were not repaired or included in the targeted two-test pass. No full website-suite pass is claimed."
+    },
+    "linuxVerification": "Await fresh exact-head CI after this correction; no local Linux run or old-head success reused."
   }
 }
