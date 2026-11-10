@@ -69,6 +69,20 @@ const LEASE_RELEASE = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redi
 if (OUTBOX_SCRIPTS.LOCK_CHECK !== LEASE_CHECK || OUTBOX_SCRIPTS.LOCK_RELEASE !== LEASE_RELEASE)
   throw new Error("The outbox lock's scripts no longer match the billing lease's.")
 
+/** A Redis SCAN glob (`*`, `?` and backslash escapes) as a regular expression over the whole key. */
+function globPattern(pattern: string) {
+  const literal = (char: string) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  let source = ""
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index]!
+    if (char === "\\" && index + 1 < pattern.length) source += literal(pattern[++index]!)
+    else if (char === "*") source += ".*"
+    else if (char === "?") source += "."
+    else source += literal(char)
+  }
+  return new RegExp(`^${source}$`, "s")
+}
+
 /**
  * Enough of Valkey for Codium: strings with NX/PX, hashes, sorted sets, expiry on the fake clock, and the scripts
  * Codium sends, each recognised by its exact text and run as TypeScript (the account lease, the pool's, the
@@ -139,7 +153,10 @@ export class FakeStore {
       case "SCAN": {
         const pattern = args[args.indexOf("MATCH") + 1] ?? "*"
         const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern
-        return ["0", this.keys().filter((key) => key.startsWith(prefix))]
+        if (!/[*?\\]/.test(prefix)) return ["0", this.keys().filter((key) => key.startsWith(prefix))]
+        // A pattern with a wildcard before its end (account deletion's sweep, WP A57): a Redis glob.
+        const glob = globPattern(pattern)
+        return ["0", this.keys().filter((key) => glob.test(key))]
       }
       case "SMEMBERS":
         return [...this.members(args[0]!)]

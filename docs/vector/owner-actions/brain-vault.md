@@ -60,8 +60,9 @@ Never put a key in this repository, a chat or a ticket.
   among the four.
 - **When a plan ends, or moves to Plus** (no Brain Vault), the vault turns read-only and the person gets one email naming
   the day it will be deleted, 30 days later. A plan with Brain Vault before then keeps it. During a payment dispute or a fraud warning nothing is deleted, not even
-  versions past their 30 days. Account deletion erases the vault at once (A57 wires the full deletion; the `vault`
-  provisioner already erases it when an account closes).
+  versions past their 30 days. Account deletion erases the vault at once, wrapped key first (A57's erase step; the
+  `vault` provisioner also erases it when an account closes). If the vault service cannot be reached, the deletion
+  waits, keeps the account's identity, and the account-deletion cron (`/api/account/deletions`) tries again.
 - **Deleting from R2** waits until every upload link signed for an object has stopped working (15 minutes and a
   5-minute grace): an upload through a live link after the delete would recreate the object where nothing counts or
   finds it. So what a commit, a forget or a vault deletion queues within those minutes of an upload is deleted by the
@@ -78,5 +79,4 @@ nothing changes in the app until you list it. The free GitHub backend shows on e
 
 ## Not done here
 
-- Account deletion's full erase marker and retries (A57).
 - The legal read, the privacy page's `#vault` paragraph, and listing `vault` (A60).

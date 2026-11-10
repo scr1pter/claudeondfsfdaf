@@ -2610,3 +2610,71 @@ sections "A26 review footer", "A27 copy and listing" and "A28 account page"):
   `ops-cleanup.ts`, `ops-worker.ts` (`opsErasable`), `vercel.json` (the deletions cron), `test/account-delete.test.ts`
   and `packages/web/test/codium-configuration.test.ts`. That is contract A57's file list and P5, so it was neither
   reviewed as A56 nor committed: it stays uncommitted in the working tree for A57.
+
+## A57 Account deletion (9 Nov 2026)
+
+- **Started from the 6 November draft.** The account-deletion work an earlier attempt left uncommitted (see the A56
+  entry) was read through, kept, corrected and finished here; nothing in it was reverted.
+- **How the start and enqueue paths "check" the tombstone.** Checkout and plan changes read the tombstone themselves,
+  because they can run for an account with no snapshot. Reconcile reads it, so no notification, sweep or request can
+  reopen the account, and once its records are erased it answers `ended`/`closing` without writing anything back.
+  `readEntitlement` reads it when the snapshot is gone, so every `requireEntitlement` caller gets 409
+  `MODEL_PLAN_ACCOUNT_CLOSING`, not "no plan". Every other start or enqueue path (chat, hosted starts and jobs, Remote
+  tickets, vault writes, push, ops, the vote, Release Guard and Ship Desk intake) sees the tombstone through the closing
+  snapshot, which the deletion writes in the same request right after it revokes the account's tokens. Those paths do
+  not read the tombstone key, so chat and status pay no extra store call. If the closing snapshot cannot be written (the
+  store or the billing lease is unavailable), the deletion stops there with the tokens already revoked, and the cron
+  retries it; until then services keep the account's last snapshot.
+- **Order.** The contract fixes tombstone, then billing, then erase. Tokens are revoked first, then the snapshot is
+  closed, then billing is cancelled, so a deletion stopped at the close step still leaves the CLI and desktop tokens
+  dead. A failed close answers `BILLING_DELETION_FAILED`, as a failed billing step did before.
+- **The cleanup cron is a new route**, `GET /api/account/deletions` (every 10 minutes, `CRON_SECRET`, in `vercel.json`);
+  §4.19 names no deletion cron. It continues each unfinished deletion from its stage, backs off from 10 minutes to
+  6 hours, and emails the owner after six failed passes (account id and part names only). Fifteen minutes after the
+  identity is gone it runs every erase part once more, for anything a request already past its checks wrote, then
+  finishes the deletion.
+- **Store keys beyond §4.6.** `tombstones:due` (a sorted set of unfinished deletions by due time) and
+  `tombstone:<account>:lease` (one deletion run at a time per account, 2 minutes). The tombstone holds times, a pass
+  count, the stage and the ids of failed parts only (never an email or an error message), has no expiry while the
+  deletion runs, and is kept 180 days after it finishes, past Stripe's retries, the replay window and the usual dispute
+  window, so a late notification cannot write a record back.
+- **The erase marker** is the tombstone's `erasedAt`, written only after every configured part succeeded. The identity
+  is deleted only after it. Usage counts are erased before the identity, as before; a failure there is reported, not
+  retried.
+- **What is erased beyond the contract's list, and what is kept.** "Snapshots" is read as the cloud computer's saved
+  disks (deleted at the provider by A52/A53's erase) and the entitlement snapshot (deleted with the account's own
+  records). The account's own records also include its billing record, status cache, reconcile mark, collection pause,
+  in-flight set, place in the period-end index, waiting outbox items and dead letters, and the provisioners' applied
+  versions. A last part, `keys`, deletes every other key in the server's erase modes whose name carries the account id
+  as a whole word: per-period meters, cached estimates (A18's hand-off), the cloud computer's hourly and daily fair-use
+  counts, Done by Morning's nightly counts, the no-run spend counter, and anything a later package keys by the account.
+  It is one SCAN over the store with a MATCH glob (the hosted ledger's erase already scans this way), stops at the
+  request's deadline, and is finished by the cron if the store is too large for one pass. Kept on purpose, as P5's
+  pseudonymous ledger lines: the hosted ledger's lines (HMAC of the account), the pool debits
+  (`debits:<account>:<keyHash>`) and the spend counters keyed by the pool's hash (`held:`, `day:`, `purpose:`,
+  `model-spend:`, `model-reservations:`), all expiring with their period; also the run-token revocation mark (35 days),
+  the billing lease while held, the disabled OpenRouter keys and Stripe's records. A32 handed the `day:` buckets to A57;
+  they are pool-keyed spend figures, so they are kept as ledger lines and expire 40 days after their period.
+- **Modes.** A live server erases under both prefixes (records written under `test` before a live key was set); a test
+  server erases under `test` only, as `eraseModes` already did, so the new sweep never touches a live record from a
+  preview.
+- **The ops Worker's data is erased with the ops services switched off.** `opsErasable()` (address and shared secret)
+  lets `erase` through while `VECTOR_OPS_ENABLED` is false; every other Worker action still needs `opsConfigured()`.
+- **`registerErasePart`** (not in the contract) lets another package add a part that runs before the account's own
+  records, which then wait for it. It is meant for the Codex integration commit (A59): Codex's repository bindings and
+  run records are not reachable from Claude's code today, so they are not erased until A59 registers a part.
+- **Answers.** New codes: 503 `DELETION_UNAVAILABLE` (the tombstone could not be written; nothing changed), 409
+  `ACCOUNT_DELETION_IN_PROGRESS` (another run holds the lease), 503 `ACCOUNT_ERASE_PENDING` (some records are not erased
+  yet). `REVOCATION_FAILED`, `BILLING_DELETION_FAILED` and `DELETION_FAILED` keep their codes; after the tombstone they
+  carry `{pending: true, stage}` and say that deletion has started and Vector finishes it. A finished deletion's answer
+  adds `codium: "erased"`. The request leaves erase parts not started within 20 seconds to the cron, because the desktop
+  app waits 30 seconds.
+- **Test fakes.** The Codium store fake's SCAN now also understands a glob with a wildcard before its end (prefix
+  patterns behave exactly as before). `test/account-delete-api.test.ts`'s minimal store answers SCAN and ZSCAN with an
+  empty page, since the deletion now scans the outbox and the store; no expectation there changed.
+- **Files outside A57's list:** `api/_lib/codium-tombstone.ts` and `api/account/deletions.ts` (new),
+  `model-plan-account.ts` (the tombstone in reconcile, `readEntitlement`, checkout and change; `closingFacts` takes a
+  missing record), `codium-provision.ts` (`forgetAccountOutbox`), `codium-keys.ts` (`codiumKeyRoot`, so the sweep
+  spells no key), `ops-worker.ts` and `ops-cleanup.ts` (`opsErasable`), `vercel.json`, the store fake, the two test
+  files above, `packages/web/test/codium-configuration.test.ts` (the new cron), `docs/vector/MODEL-PLANS.md` and
+  `docs/vector/owner-actions/brain-vault.md`.

@@ -57,7 +57,16 @@ export function opsWorkerOrigin(): URL | undefined {
 
 /** Whether this server can call the Worker: VECTOR_OPS_ENABLED, its address and the shared secret. */
 export function opsConfigured() {
-  return opsEnabled() && opsWorkerOrigin() !== undefined && internalConfigured("ops")
+  return opsEnabled() && opsErasable()
+}
+
+/**
+ * Whether the Worker can still be asked to erase an account: its address and the shared secret, whether or not
+ * VECTOR_OPS_ENABLED is still true, so account deletion (P5, WP A57) erases what the Worker holds after the owner turns
+ * the ops services off. Every other action needs `opsConfigured()`.
+ */
+export function opsErasable() {
+  return opsWorkerOrigin() !== undefined && internalConfigured("ops")
 }
 
 function unavailable() {
@@ -85,7 +94,7 @@ export async function opsCall(
   now = Date.now(),
 ): Promise<Record<string, unknown>> {
   const origin = opsWorkerOrigin()
-  if (!opsEnabled() || !origin || !internalConfigured("ops")) throw unavailable()
+  if ((!opsEnabled() && action !== "erase") || !origin || !internalConfigured("ops")) throw unavailable()
   if (action !== "flags" && (typeof body.account !== "string" || !ACCOUNT.test(body.account))) throw unavailable()
   let response: Response
   try {

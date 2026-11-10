@@ -78,6 +78,10 @@ describe("Codium deployment configuration", () => {
       { path: "/api/ops/guard", schedule: "*/10 * * * *" },
       { path: "/api/ops/cleanup", schedule: "40 4 * * *" },
     ])
+    // WP A57: the account-deletion cleanup finishes deletions a service outage stopped, and runs each one's follow-up pass.
+    expect(crons.filter((cron) => /^\/api\/account\//.test(cron.path))).toEqual([
+      { path: "/api/account/deletions", schedule: "*/10 * * * *" },
+    ])
     for (const cron of crons) {
       const pathname = new URL(cron.path, "https://fixture.example.test").pathname
       expect(await Bun.file(new URL(`.${pathname}.ts`, root)).exists()).toBe(true)

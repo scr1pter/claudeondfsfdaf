@@ -579,6 +579,10 @@
     {
       "path": "/api/ops/cleanup",
       "schedule": "40 4 * * *"
+    },
+    {
+      "path": "/api/account/deletions",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

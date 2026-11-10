@@ -32,6 +32,7 @@ import {
   stripeObjectId,
 } from "./codium-risk.js"
 import { codiumKey, openRouterKeyName } from "./codium-keys.js"
+import { accountDeleting, deletingRefusal } from "./codium-tombstone.js"
 import {
   eraseFounding,
   FOUNDING,
@@ -513,6 +514,9 @@ export async function readEntitlement(
   })
   if (fresh) return fresh
   if (stored) return stored
+  // An account whose records deletion erased (WP A57) has no snapshot and keeps none: it is closing, not "no plan".
+  if (await accountDeleting(account, fetcher))
+    return buildSnapshot(closingFacts(account, undefined, undefined, "request"), undefined, now)
   for (let waited = 0; waited < MISSING_WAIT_MS; waited += MISSING_STEP_MS) {
     await new Promise((resolve) => setTimeout(resolve, MISSING_STEP_MS))
     const written = await readSnapshot(account, fetcher)
@@ -544,6 +548,11 @@ export async function reconcileModelPlanAccount(
     async (verify) => {
       const stored = await readSnapshotForWrite(id, fetcher)
       const account = await readModelPlanAccount(id, fetcher)
+      // Account deletion (WP A57) sets a tombstone before anything else: from then on nothing reconcile does may reopen
+      // the account, and once its records are erased reconcile answers "closing" and writes nothing back.
+      const deleting = await accountDeleting(id, fetcher)
+      if (!account && deleting)
+        return buildSnapshot(closingFacts(id, undefined, stored.previous, source), stored.previous, now, stored.version)
       if (!account)
         return commitSnapshot(
           { account: id, state: "none", plan: null, periodStart: 0, periodEnd: 0, cancelAtPeriodEnd: false, source },
@@ -552,7 +561,11 @@ export async function reconcileModelPlanAccount(
           now,
           verify,
         )
-      if (account.closing) {
+      if (account.closing || deleting) {
+        if (!account.closing) {
+          await verify()
+          await saveAccount(id, { ...account, closing: true }, fetcher)
+        }
         // The snapshot that ends access goes first, as for every state that stops the key (see below).
         const closed = await commitSnapshot(
           closingFacts(id, account, stored.previous, source),
@@ -780,7 +793,7 @@ function history(account: Account) {
 /** A deleted account's snapshot: ended for good, keeping the plan and period it last had for the owner's records. */
 function closingFacts(
   id: string,
-  account: Account,
+  account: Account | undefined,
   previous: EntitlementSnapshot | undefined,
   source: SnapshotSource,
 ): SnapshotFacts {
@@ -793,7 +806,7 @@ function closingFacts(
     periodStart: previous?.periodStart ?? 0,
     periodEnd: previous?.periodEnd ?? 0,
     cancelAtPeriodEnd: false,
-    ...history(account),
+    ...(account ? history(account) : {}),
     source,
   }
 }
@@ -3054,6 +3067,7 @@ export async function modelPlanChange(
     user.id,
     async (verify) => {
       const account = await readModelPlanAccount(user.id, fetcher)
+      if (account && (await accountDeleting(user.id, fetcher))) throw deletingRefusal()
       if (!account || account.closing || riskState(account)) throw changeUnavailable()
       const listed = await subscriptions(account.customer, fetcher)
       const standing = planStanding(user.id, account, listed, now)
@@ -3230,7 +3244,8 @@ export async function modelPlanCheckout(
     user.id,
     async (verify) => {
       const previous = await readModelPlanAccount(user.id, fetcher)
-      if (previous?.closing)
+      // A tombstone (WP A57) refuses checkout for an account being deleted even when it has no Codium record yet.
+      if (previous?.closing || (await accountDeleting(user.id, fetcher)))
         throw new ApiError(409, "MODEL_PLAN_ACCOUNT_CLOSING", "This account is being deleted. Checkout is closed.")
       // An account a lost dispute, a fraud warning or the owner holds buys nothing: reconcile would never grant what it
       // paid for. Refused before any customer, reservation or session is made.

@@ -16,7 +16,7 @@ import { forgetGuardAccount } from "./ops-guard.js"
 import { eraseAccountOpsHealth } from "./ops-health.js"
 import { eraseAccountOpsRecords, incidentIndexKey, incidentKey } from "./ops-incidents.js"
 import { eraseAccountOpsSettings } from "./ops-settings.js"
-import { opsCall, opsConfigured } from "./ops-worker.js"
+import { opsCall, opsConfigured, opsErasable } from "./ops-worker.js"
 import { persistentStore } from "./persistent-store.js"
 import {
   cardIndexKey,
@@ -84,13 +84,14 @@ async function indexMembers(key: string, fetcher: typeof fetch) {
 }
 
 /**
- * Erases everything ops holds for an account, in both Stripe modes: the Worker's data (while the Worker can be called),
- * the ops settings, incidents and Release Guard records, Ship Desk's cards with their images, domain health, and the
- * guard's and cleanup's own records. Account deletion (A57) can call this one function; the ops provisioner does the
- * same on `closing`. Throws when a part cannot be reached, so the caller tries again.
+ * Erases everything ops holds for an account, in both Stripe modes: the Worker's data (while its address and secret are
+ * set, even with VECTOR_OPS_ENABLED off), the ops settings, incidents and Release Guard records, Ship Desk's cards with
+ * their images, domain health, and the guard's and cleanup's own records. Account deletion (A57) calls this one
+ * function; the ops provisioner does the same on `closing`. Throws when a part cannot be reached, so the caller tries
+ * again.
  */
 export async function eraseAccountOps(account: string, fetcher: typeof fetch = fetch, now = Date.now()) {
-  if (opsConfigured()) await opsCall("erase", { account }, fetcher, now)
+  if (opsErasable()) await opsCall("erase", { account }, fetcher, now)
   await eraseAccountOpsSettings(account, fetcher)
   await eraseAccountOpsRecords(account, fetcher, now)
   await eraseAccountShipDesk(account, fetcher, now)
