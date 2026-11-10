@@ -1,11 +1,16 @@
 import { RedisClient } from "bun"
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
-import { createHash, createHmac } from "node:crypto"
+import { createHmac } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { checkCodiumFunding, CODIUM_FUNDING_MAX_AGE_MS, readCodiumFunding } from "../../../api/_lib/codium-funding"
+import {
+  checkCodiumFunding,
+  CODIUM_FUNDING_MAX_AGE_MS,
+  readCodiumFunding,
+  requireCodiumSales,
+} from "../../../api/_lib/codium-funding"
 import {
   codiumLedger,
   codiumLedgerSummary,
@@ -13,10 +18,9 @@ import {
   recordCodiumCharge,
 } from "../../../api/_lib/codium-ledger"
 import {
+  keyExpiresAt,
   modelPlanCheckout,
   modelPlanCredential,
-  modelTopupCheckout,
-  readModelPlanAccount,
   reconcileModelPlanAccount,
 } from "../../../api/_lib/model-plan-account"
 import { verifyModelPlanWebhook } from "../../../api/_lib/model-plan-stripe"
@@ -52,7 +56,8 @@ const redis = (command: readonly (string | number)[]) =>
   database.send(String(command[0]), command.slice(1).map(String)) as Promise<unknown>
 
 const user = { id: "44444444-4444-4444-8444-444444444444", email: "buyer@example.test" }
-const accountKey = `vector:model-plans:account:${user.id}`
+// Stripe test mode keeps every Codium key in the test namespace.
+const accountKey = `vector:codium:test:account:${user.id}`
 const DAY = 86_400
 
 type Charge = {
@@ -99,6 +104,9 @@ const resend = { failing: false }
 const environment = [
   "NODE_ENV",
   "VERCEL_ENV",
+  "CODIUM_STRIPE_MODE",
+  "CODIUM_TEST_CREDIT_CAP_USD",
+  "VECTOR_ADMIN_EMAILS",
   "MODEL_PLANS_ENABLED",
   "MODEL_CREDIT_MARKUP_PERCENT",
   "STRIPE_SECRET_KEY",
@@ -119,12 +127,7 @@ const environment = [
   "CODIUM_OPENROUTER_FEE_PERCENT",
   "CRON_SECRET",
   "VECTOR_CLI_TOKEN_SECRET",
-  ...[10, 50, 100, 200].flatMap((price) => [
-    `STRIPE_MODEL_TOPUP_${price}_PRICE_ID`,
-    `MODEL_TOPUP_${price}_CREDITS_USD`,
-    `STRIPE_MODEL_PLAN_${price}_PRICE_ID`,
-    `MODEL_PLAN_${price}_CREDITS_USD`,
-  ]),
+  ...[10, 50, 100, 200].flatMap((price) => [`STRIPE_MODEL_PLAN_${price}_PRICE_ID`, `MODEL_PLAN_${price}_CREDITS_USD`]),
 ]
 const previous = new Map(environment.map((key) => [key, process.env[key]]))
 
@@ -170,6 +173,35 @@ const server = Bun.serve({
         return Response.json({ id: "cus_buyer", metadata: { vector_account_id: user.id } })
       if (url.pathname === "/v1/subscriptions")
         return Response.json({ data: stripe.subscriptions.map(expandedSubscription), has_more: false })
+      if (url.pathname.startsWith("/v1/subscriptions/")) {
+        const subscription = stripe.subscriptions.find((value) => value.id === parts[3])
+        if (!subscription) return new Response(null, { status: 404 })
+        if (request.method === "DELETE") subscription.status = "canceled"
+        if (request.method === "POST") {
+          if (body["pause_collection[behavior]"])
+            subscription.pause_collection = { behavior: body["pause_collection[behavior]"] }
+          if (body.pause_collection === "") subscription.pause_collection = null
+          const metadata = subscription.metadata as Record<string, unknown>
+          if (body["metadata[vector_risk_pause]"] !== undefined)
+            metadata.vector_risk_pause = body["metadata[vector_risk_pause]"]
+        }
+        return Response.json(expandedSubscription(subscription))
+      }
+      if (url.pathname === "/v1/invoices" && request.method === "GET")
+        return Response.json({
+          data: [...stripe.invoices.values()].filter(
+            (invoice) =>
+              (!url.searchParams.get("customer") || invoice.customer === url.searchParams.get("customer")) &&
+              (!url.searchParams.get("subscription") ||
+                invoice.subscription === url.searchParams.get("subscription")) &&
+              (!url.searchParams.get("status") || invoice.status === url.searchParams.get("status")),
+          ),
+          has_more: false,
+        })
+      if (url.pathname.startsWith("/v1/invoices/")) {
+        const invoice = stripe.invoices.get(parts[3]!)
+        return invoice ? Response.json(invoice) : new Response(null, { status: 404 })
+      }
       if (url.pathname === "/v1/disputes")
         return Response.json({
           data: stripe.disputes.filter(
@@ -323,6 +355,11 @@ beforeEach(async () => {
     NODE_ENV: "development",
     MODEL_PLANS_ENABLED: "true",
     STRIPE_SECRET_KEY: "sk_test_fixture",
+    CODIUM_STRIPE_MODE: "test",
+    // Test mode caps each key at CODIUM_TEST_CREDIT_CAP_USD; these tests follow the fixture plans' full credits.
+    CODIUM_TEST_CREDIT_CAP_USD: "200",
+    // Test checkout is open only to admins: the buyer and the parallel buyers below.
+    VECTOR_ADMIN_EMAILS: [user.email, "1@example.test", "2@example.test", "3@example.test", "4@example.test"].join(","),
     STRIPE_MODEL_PLAN_WEBHOOK_SECRET: "whsec_fixture",
     STRIPE_MODEL_PLAN_PORTAL_CONFIG_ID: "bpc_fixture",
     MODEL_PLAN_KEY_ENCRYPTION_SECRET: "cd".repeat(32),
@@ -346,10 +383,8 @@ beforeEach(async () => {
   ])
     delete process.env[key]
   for (const price of [10, 50, 100, 200]) {
-    process.env[`STRIPE_MODEL_TOPUP_${price}_PRICE_ID`] = `price_topup${price}`
     process.env[`STRIPE_MODEL_PLAN_${price}_PRICE_ID`] = `price_monthly${price}`
     // Fixture allowances only, unrelated to any live conversion.
-    process.env[`MODEL_TOPUP_${price}_CREDITS_USD`] = String(price / 2)
     process.env[`MODEL_PLAN_${price}_CREDITS_USD`] = String(price / 2)
   }
 })
@@ -377,7 +412,7 @@ function charge(input: Partial<Charge> & { amount: number }) {
     paid: true,
     refunded: false,
     disputed: false,
-    // Each charge a second after the last, as real ones are: the ledger splits spend among top-ups oldest first.
+    // Each charge a second after the last, as real ones are, so the ledger lists them in order.
     created: Math.floor(Date.UTC(2026, 9, 17) / 1000) + sequence,
     balance_transaction: { id: `txn_buyer${sequence}`, amount: input.amount, fee, net: input.amount - fee },
     refunds: { data: [], has_more: false },
@@ -410,7 +445,11 @@ function subscribe(price = 10, start = Math.floor(Date.now() / 1000) - 3600) {
     customer: "cus_buyer",
     status: "active",
     cancel_at_period_end: false,
-    metadata: { vector_account_id: user.id, vector_model_credits_usd: String(price / 2) },
+    metadata: {
+      vector_account_id: user.id,
+      vector_plan: `vector-${price}`,
+      vector_model_credits_usd: String(price / 2),
+    },
     items: {
       data: [
         {
@@ -430,27 +469,6 @@ function subscribe(price = 10, start = Math.floor(Date.now() / 1000) - 3600) {
   }
   stripe.subscriptions = [subscription]
   return { subscription, invoice, charge: paid, start, end }
-}
-
-/** A completed top-up checkout, paid in full. */
-async function topUp(price = 10) {
-  await modelTopupCheckout(user, `codium-topup-${price}`, fetcher)
-  const session = [...stripe.sessions.values()].at(-1)!
-  const paid = charge({ amount: price * 100 })
-  const payment = {
-    id: `pi_buyer${sequence}`,
-    customer: "cus_buyer",
-    currency: "usd",
-    status: "succeeded",
-    amount: price * 100,
-    amount_received: price * 100,
-    metadata: session.metadata,
-    latest_charge: paid.id,
-  }
-  stripe.payments.set(payment.id, payment)
-  paid.payment_intent = payment.id
-  Object.assign(session, { status: "complete", payment_status: "paid", payment_intent: payment.id })
-  return { session, payment, charge: paid }
 }
 
 const event = (type: string, object: Record<string, unknown>, id = `evt_${type}_${sequence}`) => ({
@@ -476,7 +494,7 @@ describe("payment notifications grant and remove credits without anyone acting",
       limit: 25,
       disabled: false,
       limit_reset: null,
-      expires_at: new Date(paid.end * 1000).toISOString(),
+      expires_at: keyExpiresAt(paid.end),
     })
     // Stripe retries and the dashboard's resend deliver the same notification again; nothing changes.
     await reconcileModelPlanEvent(completed, fetcher)
@@ -498,7 +516,7 @@ describe("payment notifications grant and remove credits without anyone acting",
       limit: 5,
       usage: 0,
       disabled: false,
-      expires_at: new Date(renewal.end * 1000).toISOString(),
+      expires_at: keyExpiresAt(renewal.end),
     })
   })
 
@@ -518,7 +536,7 @@ describe("payment notifications grant and remove credits without anyone acting",
     expect(openRouter.keys.get("codium_key_2")?.data).toMatchObject({
       limit: 25,
       disabled: false,
-      expires_at: new Date(upgrade.end * 1000).toISOString(),
+      expires_at: keyExpiresAt(upgrade.end),
     })
     await reconcileModelPlanEvent(event("invoice.paid", upgrade.invoice), fetcher)
     expect((await codiumLedger(fetcher)).find((value) => value.charge === upgrade.charge.id)).toMatchObject({
@@ -562,43 +580,23 @@ describe("payment notifications grant and remove credits without anyone acting",
     expect(activeKeys()).toHaveLength(0)
   })
 
-  test("a top-up grants its credits at once and later top-ups add to them", async () => {
-    const first = await topUp(10)
-    await reconcileModelPlanEvent(event("checkout.session.completed", first.session), fetcher)
-    expect(openRouter.keys.get("codium_key_1")?.data).toMatchObject({ limit: 5, expires_at: null, disabled: false })
-    openRouter.keys.get("codium_key_1")!.data.usage = 2
-    const second = await topUp(50)
-    await reconcileModelPlanEvent(event("checkout.session.completed", second.session), fetcher)
-    await reconcileModelPlanEvent(event("checkout.session.completed", second.session), fetcher)
-    expect(openRouter.keys.size).toBe(1)
-    expect(openRouter.keys.get("codium_key_1")?.data).toMatchObject({ limit: 30, usage: 2, disabled: false })
-    expect((await readModelPlanAccount(user.id, fetcher))?.purchases).toHaveLength(2)
-
-    // A dispute on the first top-up takes its credits away until Stripe says the dispute was won.
-    first.charge.disputed = true
-    stripe.disputes = [
-      { charge: first.charge.id, payment_intent: first.payment.id, status: "needs_response", balance_transactions: [] },
-    ]
-    await reconcileModelPlanEvent(event("charge.dispute.created", { charge: first.charge.id }), fetcher)
-    expect(openRouter.keys.get("codium_key_1")?.data).toMatchObject({ limit: 25 })
-    stripe.disputes = [
-      { charge: first.charge.id, payment_intent: first.payment.id, status: "won", balance_transactions: [] },
-    ]
-    await reconcileModelPlanEvent(event("charge.dispute.closed", { charge: first.charge.id }), fetcher)
-    expect(openRouter.keys.get("codium_key_1")?.data).toMatchObject({ limit: 30 })
-  })
-
   test("simultaneous notifications for one payment all succeed and grant once", async () => {
-    const bought = await topUp(10)
-    const completed = event("checkout.session.completed", bought.session)
+    await redis(["SET", accountKey, JSON.stringify({ customer: "cus_buyer" })])
+    const paid = subscribe(10)
+    const completed = event("checkout.session.completed", {
+      id: "cs_subscription",
+      customer: "cus_buyer",
+      mode: "subscription",
+      status: "complete",
+    })
     // Stripe delivers several notifications about one payment at the same moment; each waits its turn for the lease.
     const results = await Promise.allSettled(
       [
         completed,
         completed,
-        event("payment_intent.succeeded", { ...bought.payment }),
-        event("charge.succeeded", { ...bought.charge }),
-        event("charge.updated", { ...bought.charge }),
+        event("invoice.paid", paid.invoice),
+        event("charge.succeeded", { ...paid.charge }),
+        event("charge.updated", { ...paid.charge }),
       ].map((value) => reconcileModelPlanEvent(value, fetcher)),
     )
     expect(results.filter((result) => result.status === "rejected")).toEqual([])
@@ -610,7 +608,7 @@ describe("payment notifications grant and remove credits without anyone acting",
     await redis(["SET", accountKey, JSON.stringify({ customer: "cus_buyer" })])
     subscribe(10)
     // A notification holds the account's lease for a moment, as it does while it creates the month's key.
-    const lease = `vector:billing-mutation:${createHash("sha256").update(`model-plan:${user.id}`).digest("hex")}`
+    const lease = `vector:codium:test:lease:${user.id}`
     await redis(["SET", lease, "webhook", "PX", "600"])
     expect((await modelPlanCredential(user.id, fetcher)).key).toBe("codium-secret-1")
   })
@@ -646,8 +644,9 @@ describe("sales follow Vector's OpenRouter balance", () => {
     })
     expect(emails).toHaveLength(0)
 
-    const bought = await topUp(200)
-    await reconcileModelPlanEvent(event("checkout.session.completed", bought.session), fetcher)
+    await modelPlanCheckout(user, "vector-200", fetcher)
+    const bought = subscribe(200)
+    await reconcileModelPlanEvent(event("invoice.paid", bought.invoice), fetcher)
     openRouter.keys.get("codium_key_4")!.data.usage = 0.004
     // Owed $99.996 rounds up to $100.00. Its checkout's reservation still counts too, as does room for the largest
     // purchase: ($100 + $100 + $100) with the default 10% and $20 margin is $350, and $300 is there.
@@ -670,7 +669,6 @@ describe("sales follow Vector's OpenRouter balance", () => {
     expect(String(emails[0]!.text)).toContain("Credits customers already bought keep working.")
 
     const paused = { code: "CODIUM_SALES_PAUSED", statusCode: 503 }
-    await expect(modelTopupCheckout(user, "codium-topup-10", fetcher)).rejects.toMatchObject(paused)
     await expect(modelPlanCheckout(user, "vector-10", fetcher)).rejects.toMatchObject(paused)
     expect(stripe.sessions.size).toBe(1)
     // Credits already bought keep working while sales are paused.
@@ -699,23 +697,21 @@ describe("sales follow Vector's OpenRouter balance", () => {
     const now = Date.now() + 27 * 60 * 60_000
     expect(await checkCodiumFunding(fetcher, now)).toMatchObject({ status: "open", balance: 30000, notified: true })
     expect(emails.at(-1)).toMatchObject({ subject: "Vector Codium sales reopened" })
-    expect((await modelTopupCheckout(user, "codium-topup-10", fetcher, now)).url).toStartWith(
-      "https://checkout.stripe.com/",
-    )
+    // Once the buyer's month has ended, a new checkout opens again.
+    bought.subscription.status = "canceled"
+    expect((await modelPlanCheckout(user, "vector-10", fetcher, now)).url).toStartWith("https://checkout.stripe.com/")
   })
 
   test("purchases made between checks cannot together sell more than the balance covers", async () => {
     funded(300)
     expect(await checkCodiumFunding(fetcher)).toMatchObject({ status: "open", required: 13000 })
-    // Four buyers open $200 top-ups ($100 of fixture credits each) at the same moment. With the 10% and $20 margin the $300
+    // Four buyers open $200 plans ($100 of fixture credits each) at the same moment. With the 10% and $20 margin the $300
     // balance covers two: a third would need ($100 × 3) × 1.1 + $20 = $350.
     const buyers = ["1", "2", "3", "4"].map((digit) => ({
       id: user.id.replace(/^4/, digit),
       email: `${digit}@example.test`,
     }))
-    const results = await Promise.allSettled(
-      buyers.map((buyer) => modelTopupCheckout(buyer, "codium-topup-200", fetcher)),
-    )
+    const results = await Promise.allSettled(buyers.map((buyer) => modelPlanCheckout(buyer, "vector-200", fetcher)))
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2)
     expect(
       results.flatMap((result) => (result.status === "rejected" ? [(result.reason as { code: string }).code] : [])),
@@ -732,47 +728,17 @@ describe("sales follow Vector's OpenRouter balance", () => {
     expect(emails).toHaveLength(1)
   })
 
-  test("one buyer's paid top-ups keep their reservations, so buying again and again cannot oversell", async () => {
-    funded(300)
-    expect(await checkCodiumFunding(fetcher)).toMatchObject({ status: "open", required: 13000 })
-    // The same buyer pays for $200 top-ups ($100 of fixture credits each) one after another, before the next check counts any
-    // of them as owed. The $300 balance covers two: a third would need ($100 × 3) × 1.1 + $20 = $350.
-    const outcomes = await [1, 2, 3].reduce(
-      async (previous) => [
-        ...(await previous),
-        await topUp(200).then(
-          async (bought) => {
-            await reconcileModelPlanEvent(event("checkout.session.completed", bought.session), fetcher)
-            return "sold"
-          },
-          (error: { code: string }) => error.code,
-        ),
-      ],
-      Promise.resolve<string[]>([]),
-    )
-    expect(outcomes).toEqual(["sold", "sold", "CODIUM_SALES_PAUSED"])
-    expect(stripe.sessions.size).toBe(2)
-    expect(activeKeys()).toEqual([expect.objectContaining({ limit: 200 })])
-    // The next check counts both paid purchases as owed and, until their reservations lapse, as reserved too.
-    expect(await checkCodiumFunding(fetcher)).toMatchObject({
-      status: "paused",
-      owed: 20000,
-      reserved: 20000,
-      required: 57000,
-    })
-  })
-
   test("a buyer's new checkout gives back the reservation of the one it closes, and a reservation lapses after its checkout closes", async () => {
     funded(300)
     await checkCodiumFunding(fetcher)
-    // Switching packs again and again closes each earlier checkout and holds only the latest one.
-    await modelTopupCheckout(user, "codium-topup-200", fetcher)
-    await modelTopupCheckout(user, "codium-topup-100", fetcher)
-    await modelTopupCheckout(user, "codium-topup-200", fetcher)
+    // Switching plans again and again closes each earlier checkout and holds only the latest one.
+    await modelPlanCheckout(user, "vector-200", fetcher)
+    await modelPlanCheckout(user, "vector-100", fetcher)
+    await modelPlanCheckout(user, "vector-200", fetcher)
     expect(await checkCodiumFunding(fetcher)).toMatchObject({ status: "open", reserved: 10000, required: 24000 })
     // A checkout Stripe has already closed gives its reservation back too.
     stripe.sessions.get("cs_buyer3")!.status = "expired"
-    await modelTopupCheckout(user, "codium-topup-100", fetcher)
+    await modelPlanCheckout(user, "vector-100", fetcher)
     expect(await checkCodiumFunding(fetcher)).toMatchObject({ status: "open", reserved: 5000, required: 18500 })
     // Two hours on, every checkout opened now has closed and its reservation has lapsed.
     expect(await checkCodiumFunding(fetcher, Date.now() + 2 * 60 * 60_000)).toMatchObject({ reserved: 0 })
@@ -781,32 +747,29 @@ describe("sales follow Vector's OpenRouter balance", () => {
   test("the owner doc's test run needs $50 above the first-sale minimum for its funding check to answer open", async () => {
     // The first-sale minimum: the largest purchase's credits ($100 of fixture credits) × 1.1 + $20 = $130.
     funded(130)
-    // The run buys the $10 plan and a $10 top-up, then refunds both.
+    // The run buys the $10 plan, then refunds it.
     await modelPlanCheckout(user, "vector-10", fetcher)
     const plan = subscribe(10)
     await reconcileModelPlanEvent(event("invoice.paid", plan.invoice), fetcher)
-    const bought = await topUp(10)
-    await reconcileModelPlanEvent(event("checkout.session.completed", bought.session), fetcher)
-    expect(activeKeys()).toHaveLength(2)
-    Object.assign(bought.charge, { amount_refunded: 1000, refunded: true })
-    await reconcileModelPlanEvent(event("charge.refunded", { ...bought.charge }), fetcher)
+    expect(activeKeys()).toHaveLength(1)
     Object.assign(plan.charge, { amount_refunded: 1000, refunded: true })
     await reconcileModelPlanEvent(event("charge.refunded", { ...plan.charge }), fetcher)
-    // Nothing is owed any more, but both checkouts are still reserved, so the bare minimum falls short.
+    // Nothing is owed any more, but the checkout is still reserved, so the bare minimum falls short:
+    // ($5 + $100) × 1.1 + $20 = $135.50.
     expect(await checkCodiumFunding(fetcher)).toMatchObject({
       status: "paused",
       owed: 0,
-      reserved: 1000,
-      required: 14100,
+      reserved: 500,
+      required: 13550,
     })
     funded(180)
-    expect(await checkCodiumFunding(fetcher)).toMatchObject({ status: "open", owed: 0, reserved: 1000 })
+    expect(await checkCodiumFunding(fetcher)).toMatchObject({ status: "open", owed: 0, reserved: 500 })
   })
 
   test("a sale without a recent check runs one, and sales stay closed while OpenRouter cannot be read", async () => {
     funded(300)
     openRouter.unavailable = true
-    await expect(modelTopupCheckout(user, "codium-topup-10", fetcher)).rejects.toMatchObject({
+    await expect(modelPlanCheckout(user, "vector-10", fetcher)).rejects.toMatchObject({
       code: "CODIUM_SALES_PAUSED",
     })
     expect(stripe.sessions.size).toBe(0)
@@ -819,14 +782,14 @@ describe("sales follow Vector's OpenRouter balance", () => {
 
     openRouter.unavailable = false
     await checkCodiumFunding(fetcher)
-    await modelTopupCheckout(user, "codium-topup-10", fetcher)
+    await modelPlanCheckout(user, "vector-10", fetcher)
     const checked = await readCodiumFunding(fetcher)
     expect(checked).toMatchObject({ status: "open", balance: 30000 })
 
     // A stale reading is checked again before the next sale; a failed check closes sales and is saved as a pause.
     openRouter.unavailable = true
     const later = Date.now() + CODIUM_FUNDING_MAX_AGE_MS + 1000
-    await expect(modelTopupCheckout(user, "codium-topup-50", fetcher, later)).rejects.toMatchObject({
+    await expect(modelPlanCheckout(user, "vector-50", fetcher, later)).rejects.toMatchObject({
       code: "CODIUM_SALES_PAUSED",
     })
     expect(await readCodiumFunding(fetcher)).toMatchObject({
@@ -846,9 +809,7 @@ describe("sales follow Vector's OpenRouter balance", () => {
     openRouter.unavailable = true
     const minute = Date.now() + 60_000
     await expect(checkCodiumFunding(fetcher, minute)).rejects.toMatchObject({ code: "CODIUM_FUNDING_UNAVAILABLE" })
-    await expect(modelTopupCheckout(user, "codium-topup-10", fetcher, minute)).rejects.toMatchObject({
-      code: "CODIUM_SALES_PAUSED",
-    })
+    await expect(requireCodiumSales(fetcher, minute)).rejects.toMatchObject({ code: "CODIUM_SALES_PAUSED" })
     await expect(modelPlanCheckout(user, "vector-10", fetcher, minute)).rejects.toMatchObject({
       code: "CODIUM_SALES_PAUSED",
     })
@@ -867,7 +828,7 @@ describe("sales follow Vector's OpenRouter balance", () => {
     const reopened = minute + 1_200_000
     expect(await checkCodiumFunding(fetcher, reopened)).toMatchObject({ status: "open", notified: true })
     expect(emails.at(-1)).toMatchObject({ subject: "Vector Codium sales reopened" })
-    expect((await modelTopupCheckout(user, "codium-topup-10", fetcher, reopened)).url).toStartWith(
+    expect((await modelPlanCheckout(user, "vector-10", fetcher, reopened)).url).toStartWith(
       "https://checkout.stripe.com/",
     )
   })
@@ -877,7 +838,7 @@ describe("sales follow Vector's OpenRouter balance", () => {
     other("second", { name: "Owner desktop", limit: 1 })
     openRouter.ignoreOffset = true
     await expect(checkCodiumFunding(fetcher)).rejects.toMatchObject({ code: "CODIUM_FUNDING_UNAVAILABLE" })
-    await expect(modelTopupCheckout(user, "codium-topup-10", fetcher)).rejects.toMatchObject({
+    await expect(modelPlanCheckout(user, "vector-10", fetcher)).rejects.toMatchObject({
       code: "CODIUM_SALES_PAUSED",
     })
     openRouter.ignoreOffset = false
@@ -951,41 +912,24 @@ describe("the private profit ledger", () => {
       openRouterFee: 138,
       profit: 2187,
     })
-    const bought = await topUp(10)
-    await reconcileModelPlanEvent(event("charge.succeeded", { ...bought.charge }), fetcher)
-    await reconcileModelPlanEvent(event("checkout.session.completed", bought.session), fetcher)
-    expect(await entry(bought.charge.id)).toMatchObject({
-      kind: "topup",
-      product: "codium-topup-10",
-      price: 1000,
-      stripeFee: 59,
-      stripeNet: 941,
-      credits: 500,
-      openRouterFee: 28,
-      profit: 413,
-    })
-    expect(await codiumLedger(fetcher)).toHaveLength(2)
+    expect(await codiumLedger(fetcher)).toHaveLength(1)
 
-    // Half the top-up refunded: half its credits and the refunded money leave the books.
-    Object.assign(bought.charge, { amount_refunded: 500 })
-    await reconcileModelPlanEvent(event("charge.refunded", { ...bought.charge }), fetcher)
-    expect(await entry(bought.charge.id)).toMatchObject({
-      refunded: 500,
-      stripeNet: 441,
-      credits: 250,
-      openRouterFee: 14,
-      profit: 177,
-    })
-    expect(openRouter.keys.get("codium_key_2")?.data.limit).toBe(2.5)
-    // A refund's own updates name its charge and rewrite the same entry.
-    await reconcileModelPlanEvent(event("charge.refund.updated", { id: "re_buyer", charge: bought.charge.id }), fetcher)
-    expect(await codiumLedger(fetcher)).toHaveLength(2)
-    expect(await entry(bought.charge.id)).toMatchObject({ refunded: 500, profit: 177 })
+    // A refund, and the refund's own updates, which name its charge, rewrite the same entry.
+    Object.assign(monthly.charge, { amount_refunded: 500 })
+    await reconcileModelPlanEvent(event("charge.refunded", { ...monthly.charge }), fetcher)
+    expect(await entry(monthly.charge.id)).toMatchObject({ refunded: 500, stripeNet: 4325 })
+    await reconcileModelPlanEvent(
+      event("charge.refund.updated", { id: "re_buyer", charge: monthly.charge.id }),
+      fetcher,
+    )
+    expect(await codiumLedger(fetcher)).toHaveLength(1)
+    expect(await entry(monthly.charge.id)).toMatchObject({ refunded: 500, stripeNet: 4325 })
   })
 
   test("a slow notification that read the charge before a refund cannot undo the refund's entry", async () => {
-    const bought = await topUp(10)
-    await reconcileModelPlanEvent(event("checkout.session.completed", bought.session), fetcher)
+    await redis(["SET", accountKey, JSON.stringify({ customer: "cus_buyer" })])
+    const bought = subscribe(10)
+    await reconcileModelPlanEvent(event("invoice.paid", bought.invoice), fetcher)
     // Notification A reads the charge before the refund, then stalls before it writes.
     let resume = () => {}
     const stalled = new Promise<void>((resolve) => (resume = resolve))
@@ -1007,56 +951,6 @@ describe("the private profit ledger", () => {
     setTimeout(resume, 300)
     await Promise.all([first, second])
     expect(await entry(bought.charge.id)).toMatchObject({ refunded: 1000, credits: 0 })
-  })
-
-  test("a top-up spent before a lost dispute or a refund still costs what was spent", async () => {
-    const first = await topUp(10)
-    await reconcileModelPlanEvent(event("checkout.session.completed", first.session), fetcher)
-    // The buyer spends $4.90 of the top-up's $5 of fixture credits, then disputes the charge and wins nothing back.
-    openRouter.keys.get("codium_key_1")!.data.usage = 4.9
-    first.charge.disputed = true
-    stripe.disputes = [
-      {
-        charge: first.charge.id,
-        payment_intent: first.payment.id,
-        status: "lost",
-        balance_transactions: [{ amount: -1000, fee: 1500, net: -2500 }],
-      },
-    ]
-    await reconcileModelPlanEvent(event("charge.dispute.closed", { charge: first.charge.id }), fetcher)
-    expect(openRouter.keys.get("codium_key_1")?.data).toMatchObject({ limit: 0, disabled: true })
-    // Stripe's net is the $9.41 kept less the $25 withdrawal; the $4.90 spent and OpenRouter's 5.5% on it are Vector's.
-    expect(await entry(first.charge.id)).toMatchObject({
-      disputed: true,
-      granted: 500,
-      credits: 490,
-      reversedSpend: 490,
-      openRouterFee: 27,
-      profit: 941 - 2500 - 490 - 27,
-    })
-
-    // A second top-up first pays for that spend: the buyer can use $20.10 of its $25, and nothing is lost.
-    const second = await topUp(50)
-    await reconcileModelPlanEvent(event("checkout.session.completed", second.session), fetcher)
-    await reconcileModelPlanEvent(event("charge.succeeded", { ...second.charge }), fetcher)
-    expect(await entry(first.charge.id)).toMatchObject({ credits: 0, reversedSpend: 0 })
-    expect((await codiumLedgerSummary(fetcher)).totals).toMatchObject({ credits: 2500, reversedSpend: 0 })
-
-    // Spent to its limit and then half refunded, it costs everything spent, not the $12.50 still paid for. The spend
-    // above what is still paid for goes to the reversed top-ups oldest first.
-    openRouter.keys.get("codium_key_1")!.data.usage = 25
-    Object.assign(second.charge, { amount_refunded: 2500 })
-    await reconcileModelPlanEvent(event("charge.refunded", { ...second.charge }), fetcher)
-    expect(openRouter.keys.get("codium_key_1")?.data).toMatchObject({ limit: 12.5, disabled: true })
-    expect(await entry(first.charge.id)).toMatchObject({ credits: 500, reversedSpend: 500 })
-    expect(await entry(second.charge.id)).toMatchObject({ granted: 2500, credits: 2000, reversedSpend: 750 })
-    expect((await codiumLedgerSummary(fetcher)).totals).toMatchObject({ credits: 2500, reversedSpend: 1250 })
-
-    // A third top-up pays for that spend in turn, so the reversals cost nothing beyond what is paid for.
-    const third = await topUp(200)
-    await reconcileModelPlanEvent(event("checkout.session.completed", third.session), fetcher)
-    await reconcileModelPlanEvent(event("charge.succeeded", { ...third.charge }), fetcher)
-    expect((await codiumLedgerSummary(fetcher)).totals).toMatchObject({ credits: 1250 + 10000, reversedSpend: 0 })
   })
 
   test("a disputed month costs what was spent before it, plus Stripe's dispute fee, until the dispute is won", async () => {

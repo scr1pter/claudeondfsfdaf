@@ -16,3 +16,18 @@ packages/core/src/database/migration.gen.ts linguist-generated
 # Prompts and tool descriptions go to the model as written, so a Windows checkout must not add carriage returns to them.
 /packages/engine/src/**/*.txt text eol=lf
 /packages/core/src/**/*.txt text eol=lf
+
+# Exact qualified task and archived matched instrument bytes for the additional round.
+docs/benchmarks/agentic-heavy-v1/harbor/** -text whitespace=cr-at-eol
+scripts/benchmarks/matched-agentic-round-two/** -text whitespace=cr-at-eol
+scripts/benchmarks/heavy-round-two/** -text whitespace=cr-at-eol
+# Unified-diff blank context lines intentionally contain their leading space.
+docs/benchmarks/agentic-heavy-v1/additional-round-qualification/financial-only.diff -text whitespace=-blank-at-eol,cr-at-eol
+# Preserve portable navigation-overlay control/provenance bytes.
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/overlay-provenance.json -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/helper.diff -text whitespace=cr-at-eol
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/project-navigation-control.cjs -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/test_overlay.py -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/OVERLAY.md -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/materialize.py -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/qualify.py -text

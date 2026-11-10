@@ -1,0 +1,78 @@
+{
+  "kind": "publication-accounting-post-push-validation-v1",
+  "recordedAtUtc": "2026-11-05T04:22:26.491951+00:00",
+  "codeRevision": "89525f448be3d2c650af528b1328d210e822d149",
+  "sourceBase": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+  "branch": "publication-accounting",
+  "push": {
+    "command": "git -c credential.username=scr1pter -c credential.interactive=false push -u origin publication-accounting",
+    "environment": {
+      "GIT_TERMINAL_PROMPT": "0",
+      "bunVersionOnPath": "1.3.14"
+    },
+    "exitCode": 0,
+    "hookPath": ".husky/pre-push",
+    "hookScript": "#!/bin/sh\nset -e\n# Check if bun version matches package.json\n# keep in sync with packages/script/src/index.ts semver qualifier\nbun -e '\nimport { semver } from \"bun\";\nconst pkg = await Bun.file(\"package.json\").json();\nconst expectedBunVersion = pkg.packageManager?.split(\"@\")[1];\nif (!expectedBunVersion) {\n  throw new Error(\"packageManager field not found in root package.json\");\n}\nconst expectedBunVersionRange = `^${expectedBunVersion}`;\nif (!semver.satisfies(process.versions.bun, expectedBunVersionRange)) {\n  throw new Error(`This script requires bun@${expectedBunVersionRange}, but you are using bun@${process.versions.bun}`);\n}\nif (process.versions.bun !== expectedBunVersion) {\n  console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);\n}\n'\nbun typecheck",
+    "validationCommand": "bun typecheck",
+    "expandedValidationCommand": "bun turbo typecheck",
+    "successfulPackageTypechecks": 23,
+    "totalPackageTypechecks": 23,
+    "actualOutputExcerpt": [
+      "$ bun turbo typecheck",
+      " Tasks:    23 successful, 23 total",
+      "Cached:    21 cached, 23 total",
+      "  Time:    38.055s ",
+      " * [new branch]      publication-accounting -> publication-accounting",
+      "branch 'publication-accounting' set up to track 'origin/publication-accounting'."
+    ]
+  },
+  "postPushVerification": {
+    "commands": [
+      "git rev-parse HEAD",
+      "git ls-remote --heads origin publication-accounting",
+      "git status --short"
+    ],
+    "exitCode": 0,
+    "localHead": "89525f448be3d2c650af528b1328d210e822d149",
+    "remoteHead": "89525f448be3d2c650af528b1328d210e822d149",
+    "remoteRef": "refs/heads/publication-accounting",
+    "localAndRemoteMatch": true,
+    "worktreeClean": true,
+    "actualOutputExcerpt": [
+      "89525f448be3d2c650af528b1328d210e822d149",
+      "89525f448be3d2c650af528b1328d210e822d149\trefs/heads/publication-accounting"
+    ],
+    "statusShortOutput": ""
+  },
+  "regressionValidation": {
+    "negativeControlSubsetTests": 16,
+    "negativeControlPassed": 4,
+    "negativeControlFailed": 12,
+    "negativeControlAssertions": 138,
+    "fixedNewControlsPassed": 24,
+    "fixedNewControlAssertions": 252,
+    "processorUsageTestsPassed": 109,
+    "processorUsageAssertions": 704,
+    "promptAbortBackgroundTestsPassed": 37,
+    "existingSkips": 8,
+    "promptAbortBackgroundAssertions": 160,
+    "finalCombinedControlsPassed": 32,
+    "finalCombinedControlAssertions": 324,
+    "failedTests": 0,
+    "standaloneEngineTypecheckExitCode": 0,
+    "formatAndDiffChecksPassed": true,
+    "targetedLintErrors": 0,
+    "targetedLintPreexistingWarnings": 7,
+    "independentSourceReview": "no blocking regression",
+    "suiteCountsOverlapNotAdditive": true
+  },
+  "scope": {
+    "paidSavingsMeasured": false,
+    "providerInferenceCalls": 0,
+    "nativeBenchmarkRuns": 0,
+    "benchmarkApplicationsOrEvaluatorsModified": false,
+    "privateMachinePathsIncluded": false,
+    "credentialsOrTokensIncluded": false,
+    "limitation": "Financial guard fallback applies only before guard-recording entry. A rolled-back terminal part remains absent and its part-derived SessionInfo subtotal may remain zero; no durable-write retry or universal storage/guard-failure recovery is claimed."
+  }
+}

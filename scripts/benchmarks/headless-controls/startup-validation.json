@@ -1,0 +1,47 @@
+{
+  "kind": "prospective-headless-startup-validation-v1",
+  "baseRevision": "7324b427b29d18abbc0b946a49674d35791c4843",
+  "defaultMode": "maximum-request",
+  "optionalMode": "per-request",
+  "liveCurrentStudyChanged": false,
+  "defaultFullRequestBoundUsd": 5.73,
+  "actualRequestReservationCodeUnchanged": true,
+  "frozenR2Changed": false,
+  "nativeWireModelToolsPricesCapsAndHistoricalLiabilitiesChanged": false,
+  "tests": [
+    {
+      "suite": "startup and carried-history controls",
+      "run": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "suite": "paired and financial regressions",
+      "run": 66,
+      "passed": 66,
+      "failed": 0
+    },
+    {
+      "suite": "wrapper closed admission controls",
+      "run": 9,
+      "passed": 9,
+      "failed": 0
+    }
+  ],
+  "negativeControl": {
+    "baseOptInRegressionExpectedFailure": true,
+    "providerCalls": 0
+  },
+  "totalTestsRun": 85,
+  "totalTestsPassed": 85,
+  "totalFailures": 0,
+  "providerCalls": 0,
+  "liveControllerCalls": 0,
+  "BunOrChromeOrNativeCliLaunched": false,
+  "runtimeQualification": "not_run_for_changed_prospective_instrument",
+  "requiredBeforePaidUse": [
+    "independent operator source review within existing authorization",
+    "new source and plan freeze",
+    "actual native fake-provider qualification"
+  ]
+}

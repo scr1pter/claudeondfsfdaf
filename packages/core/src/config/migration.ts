@@ -105,6 +105,8 @@ export const run = Effect.fn("ConfigMigration.run")(function* (
           return
       }
 
+      // The only extensionless settings file is the neutral `config` (TOML). Any other extensionless file, such as a
+      // backup or a script in a shared folder above a non-git workspace, is not settings, so it never stops startup.
       const candidates = yield* Effect.forEach(
         entries.value.filter(
           (entry) =>
@@ -112,7 +114,7 @@ export const run = Effect.fn("ConfigMigration.run")(function* (
             !excluded.test(entry.name) &&
             (local
               ? /\.local\.jsonc?$/.test(entry.name)
-              : (/\.(?:jsonc?|toml)$/.test(entry.name) || !entry.name.includes(".")) && !/\.local\./.test(entry.name)),
+              : (/\.(?:jsonc?|toml)$/.test(entry.name) || entry.name === "config") && !/\.local\./.test(entry.name)),
         ),
         Effect.fnUntraced(function* (entry) {
           const file = path.join(directory, entry.name)

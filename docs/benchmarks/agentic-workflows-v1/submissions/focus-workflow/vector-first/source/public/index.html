@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Workflow Runner</title>
+    <style>
+      :root { color-scheme: light; font: 15px/1.5 system-ui, sans-serif; color: #182f43; background: #f4f5f7; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { max-width: 1180px; margin: auto; padding: 36px 24px 60px; }
+      header { display: flex; justify-content: space-between; gap: 24px; align-items: center; border-bottom: 1px solid #d8dfe5; padding-bottom: 24px; margin-bottom: 28px; }
+      h1 { font-size: clamp(28px, 4vw, 36px); letter-spacing: -1.2px; margin: 3px 0; }
+      h2 { font-size: 19px; margin: 0 0 12px; letter-spacing: -.3px; }
+      h3 { font-size: 18px; margin: 0; overflow-wrap: anywhere; }
+      p { margin: 8px 0; }
+      .eyebrow { text-transform: uppercase; letter-spacing: 2px; font-size: 11px; font-weight: 750; color: #526a7c; }
+      .muted, small { color: #526577; }
+      .connection { font-size: 12px; text-align: right; max-width: 180px; }
+      .layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 28px; align-items: start; }
+      .panel, article { background: white; border: 1px solid #d8dfe5; border-radius: 12px; padding: 22px; }
+      .panel { margin-bottom: 20px; }
+      article { margin-bottom: 16px; min-width: 0; }
+      label { display: block; margin: 15px 0 6px; font-weight: 600; font-size: 13px; }
+      input, select, textarea, button { font: inherit; max-width: 100%; padding: 10px 12px; border-radius: 6px; }
+      input, select, textarea { width: 100%; border: 1px solid #aebcc7; background: #fff; color: #182f43; }
+      textarea { font: 12px/1.6 ui-monospace, Consolas, monospace; resize: vertical; min-height: 255px; tab-size: 2; }
+      button { background: #254d71; color: white; border: 1px solid #254d71; cursor: pointer; font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+      button:hover { background: #183b5b; }
+      button:disabled { cursor: wait; opacity: .6; }
+      :focus-visible { outline: 3px solid #3885c4; outline-offset: 3px; }
+      .submit { margin-top: 16px; width: 100%; }
+      .secondary { color: #254d71; background: white; border-color: #bccbd7; }
+      .secondary:hover { background: #edf3f8; }
+      .danger { color: #923c32; border-color: #d8b8b3; }
+      .card-head, .section-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+      .card-head > div { min-width: 0; }
+      .section-head { align-items: baseline; margin: 0 0 14px; }
+      .section-head h2 { margin: 0; }
+      .status { font: 700 11px/1.5 ui-monospace, Consolas, monospace; border-radius: 4px; background: #eaf0f5; padding: 4px 8px; color: #435b70; flex-shrink: 0; }
+      .status[data-status="running"] { background: #e2effc; color: #20588d; }
+      .status[data-status="succeeded"] { background: #e5f2eb; color: #246345; }
+      .status[data-status="failed"], .status[data-status="blocked"] { background: #faeae5; color: #943c30; }
+      .status[data-status="cancelled"] { background: #ececf0; color: #5f6072; }
+      .meta { font-size: 12px; color: #526577; margin-top: 6px; }
+      .progress { height: 3px; background: #edf0f3; margin: 17px 0 4px; overflow: hidden; border-radius: 3px; }
+      .progress span { display: block; height: 100%; background: #578d72; }
+      .job { border-top: 1px solid #e6ebef; padding: 14px 0; min-width: 0; }
+      .job:first-child { border-top: 0; }
+      .job-title { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+      .job-title strong { font-size: 14px; overflow-wrap: anywhere; }
+      .job-key { font: 11px ui-monospace, Consolas, monospace; color: #526577; }
+      .history { overflow: auto; margin-top: 10px; background: #f6f8fa; border-radius: 5px; padding: 8px 10px; }
+      .attempt { font: 11px/1.9 ui-monospace, Consolas, monospace; white-space: nowrap; }
+      pre { font: 11px/1.7 ui-monospace, Consolas, monospace; max-height: 150px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid #e6ebef; padding-top: 15px; margin-top: 2px; }
+      [role="alert"] { color: #a32a25; font-size: 13px; overflow-wrap: anywhere; }
+      [role="alert"]:empty { display: none; }
+      .events { margin-top: 16px; border-top: 1px solid #e6ebef; padding-top: 16px; }
+      .events h4 { margin: 0 0 10px; font-size: 13px; }
+      .events ol { max-height: 260px; overflow: auto; padding: 0; margin: 0; list-style: none; }
+      .events li { font: 11px/1.8 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; padding: 3px 0; }
+      .empty { padding: 36px 24px; border: 1px dashed #b7c6d2; border-radius: 12px; color: #526577; }
+      #legacy { margin-top: 34px; border-top: 1px solid #d8dfe5; padding-top: 24px; }
+      #jobs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+      #jobs article { margin-bottom: 0; }
+      footer { margin-top: 36px; color: #526577; font-size: 11px; }
+      @media (max-width: 780px) { .layout { grid-template-columns: 1fr; gap: 12px; } .composer { display: contents; } #legacy-form { order: 2; } main { padding: 22px 16px 40px; } header { gap: 10px; align-items: start; } .connection { max-width: 105px; } #jobs { grid-template-columns: 1fr; } .panel, article { padding: 18px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><div class="eyebrow">Local execution / durable history</div><h1>Workflow Runner</h1><p class="muted">Small jobs. Connected steps. Every attempt accounted for.</p></div>
+        <p id="connection" class="connection" role="status">Connecting to local runner...</p>
+      </header>
+      <div class="layout">
+        <aside class="composer" aria-label="Create work">
+          <form id="workflow-form" class="panel">
+            <h2>Compose a workflow</h2>
+            <p class="muted">Define your jobs and the steps they depend on.</p>
+            <label for="workflow-name">Workflow name</label><input id="workflow-name" name="name" required maxlength="120" placeholder="e.g. Publish checks" />
+            <label for="concurrency">Concurrency</label><select id="concurrency" name="concurrency"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select>
+            <label for="definition">Workflow definition</label><textarea id="definition" name="definition" required spellcheck="false" aria-describedby="definition-help">[
+  {
+    "key": "lint",
+    "name": "Lint",
+    "kind": "succeed"
+  },
+  {
+    "key": "test",
+    "name": "Tests",
+    "kind": "fail_once",
+    "dependsOn": ["lint"],
+    "maxAttempts": 2
+  }
+]</textarea>
+            <p id="definition-help" class="meta">JSON job array. Kinds: succeed, fail, fail_once, block. Dependencies use job keys. Block waits for an external release.</p>
+            <button class="submit" type="submit">Create workflow</button><p id="workflow-error" role="alert"></p>
+          </form>
+          <form id="legacy-form" class="panel">
+            <h2>New legacy job</h2><p class="meta">The original single-job queue, preserved.</p>
+            <label for="job-name">Job name</label><input id="job-name" name="name" required maxlength="120" />
+            <label for="job-kind">Job behavior</label><select id="job-kind" name="kind"><option value="succeed">Succeed</option><option value="fail">Fail</option><option value="fail_once">Fail once</option><option value="block">Wait for release</option></select>
+            <button class="submit" type="submit">Create job</button><p id="legacy-error" role="alert"></p>
+          </form>
+        </aside>
+        <section aria-label="Workflow list">
+          <div class="section-head"><h2>Workflows</h2><span id="summary" class="meta">Loading...</span></div>
+          <p id="action-error" role="alert"></p><div id="workflows"></div>
+        </section>
+      </div>
+      <section id="legacy" aria-label="Legacy jobs"><div class="section-head"><h2>Legacy jobs</h2><span class="meta">Original records &amp; new single jobs</span></div><div id="jobs"></div></section>
+      <footer>Runs on your machine. History persists across restarts. Crash recovery is at least once; external side effects may repeat.</footer>
+    </main>
+    <script>
+      const $ = selector => document.querySelector(selector);
+      const opened = new Set(), cards = new Map(), eventData = new Map(), cancelling = new Set();
+      let refreshing = false, legacySnapshot = "";
+      const node = (tag, text, className) => {
+        const element = document.createElement(tag);
+        if (text !== undefined) element.textContent = text;
+        if (className) element.className = className;
+        return element;
+      };
+      const status = value => { const el = node("span", value, "status"); el.dataset.status = value; return el; };
+      const time = value => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      async function api(path, options) {
+        const response = await fetch(path, options), data = await response.json();
+        if (!response.ok) throw new Error(data.error?.message || "Request failed");
+        return data;
+      }
+      function render(workflow) {
+        const events = eventData.get(workflow.id) || [];
+        const fingerprint = JSON.stringify([workflow, opened.has(workflow.id), events, cancelling.has(workflow.id)]);
+        const prior = cards.get(workflow.id);
+        if (prior?.fingerprint === fingerprint) return prior.element;
+        const article = node("article");
+        article.setAttribute("aria-label", "Workflow " + workflow.name);
+        article.dataset.workflowId = workflow.id;
+        const head = node("div", undefined, "card-head"), info = node("div");
+        info.append(node("h3", workflow.name), node("div", workflow.jobs.length + " jobs / concurrency " + workflow.concurrency + " / updated " + time(workflow.updatedAt), "meta"));
+        const badge = status(workflow.status); badge.dataset.testid = "workflow-status";
+        head.append(info, badge);
+        const progress = node("div", undefined, "progress"), bar = node("span");
+        bar.style.width = (workflow.jobs.filter(j => j.status === "succeeded").length / workflow.jobs.length * 100) + "%";
+        progress.append(bar); article.append(head, progress);
+        const jobs = node("div");
+        for (const job of workflow.jobs) {
+          const row = node("div", undefined, "job"), title = node("div", undefined, "job-title");
+          title.append(node("strong", job.name), status(job.status));
+          row.append(title, node("div", job.key + " / " + job.kind + (job.dependsOn.length ? " / after " + job.dependsOn.join(", ") : " / no dependencies"), "meta job-key"));
+          if (job.attempts.length) {
+            const history = node("div", undefined, "history");
+            history.setAttribute("aria-label", "Attempts for " + job.name);
+            for (const attempt of job.attempts) history.append(node("div", "#" + attempt.number + "  " + attempt.status + "  / PID " + (attempt.pid ?? "unavailable") + "  / " + time(attempt.startedAt) + " - " + (attempt.finishedAt ? time(attempt.finishedAt) : "in progress"), "attempt"));
+            row.append(history);
+          } else row.append(node("div", "No attempts yet", "meta"));
+          if (job.error) { const error = node("p", job.error); if (job.status === "failed") error.setAttribute("role", "alert"); row.append(error); }
+          if (job.result) row.append(node("pre", job.result));
+          jobs.append(row);
+        }
+        article.append(jobs);
+        const actions = node("div", undefined, "actions");
+        const view = node("button", "View events " + workflow.name, "secondary");
+        view.type = "button"; view.dataset.action = "events";
+        view.setAttribute("aria-expanded", String(opened.has(workflow.id)));
+        view.addEventListener("click", async () => {
+          if (opened.has(workflow.id)) opened.delete(workflow.id); else opened.add(workflow.id);
+          await refresh();
+        });
+        actions.append(view);
+        if (["queued", "running"].includes(workflow.status)) {
+          const cancel = node("button", "Cancel workflow " + workflow.name, "secondary danger");
+          cancel.type = "button"; cancel.dataset.action = "cancel"; cancel.disabled = cancelling.has(workflow.id);
+          cancel.addEventListener("click", async () => {
+            if (cancelling.has(workflow.id)) return;
+            cancelling.add(workflow.id); cancel.disabled = true; $("#action-error").textContent = "";
+            try { await api("/api/workflows/" + workflow.id + "/cancel", { method: "POST" }); }
+            catch (error) { $("#action-error").textContent = error.message; }
+            finally { cancelling.delete(workflow.id); await refresh(); }
+          });
+          actions.append(cancel);
+        }
+        article.append(actions);
+        if (opened.has(workflow.id)) {
+          const region = node("section", undefined, "events"); region.setAttribute("aria-label", "Events for " + workflow.name);
+          region.append(node("h4", "Event history"));
+          const list = node("ol");
+          for (const event of events) list.append(node("li", String(event.seq).padStart(2, "0") + "  " + time(event.createdAt) + "  " + event.type + (event.jobKey ? " / " + event.jobKey : "") + (event.attempt ? " / attempt " + event.attempt : "")));
+          region.append(list); article.append(region);
+        }
+        cards.set(workflow.id, { fingerprint, element: article });
+        return article;
+      }
+      async function refresh() {
+        if (refreshing) return;
+        refreshing = true;
+        try {
+          const [workflows, legacy] = await Promise.all([api("/api/workflows"), api("/api/jobs")]);
+          await Promise.all([...opened].map(async id => eventData.set(id, (await api("/api/workflows/" + id + "/events?after=0")).events)));
+          const focused = document.activeElement, activeId = focused?.closest("[data-workflow-id]")?.dataset.workflowId, activeAction = focused?.dataset.action;
+          const elements = workflows.workflows.map(render);
+          if (!elements.length) elements.push(node("div", "No workflows yet. Compose your first set of connected jobs.", "empty"));
+          const container = $("#workflows");
+          if (elements.length !== container.children.length || elements.some((el, i) => container.children[i] !== el)) container.replaceChildren(...elements);
+          if (activeId && activeAction && !document.contains(focused)) cards.get(activeId)?.element.querySelector('[data-action="' + activeAction + '"]')?.focus({ preventScroll: true });
+          $("#summary").textContent = workflows.workflows.length + " total / " + workflows.workflows.filter(w => ["queued", "running"].includes(w.status)).length + " active";
+          const snapshot = JSON.stringify(legacy.jobs);
+          if (snapshot !== legacySnapshot) {
+            legacySnapshot = snapshot;
+            $("#jobs").replaceChildren(...(legacy.jobs.length ? legacy.jobs.map(job => {
+              const article = node("article"), head = node("div", undefined, "card-head");
+              article.setAttribute("aria-label", "Legacy job " + job.name);
+              head.append(node("h3", job.name), status(job.status));
+              article.append(head, node("div", job.kind + " / attempt " + job.attempt, "meta"));
+              if (job.result || job.error) { const details = node("pre", job.result || job.error); if (job.error) details.setAttribute("role", "alert"); article.append(details); }
+              return article;
+            }) : [node("p", "No legacy jobs yet.", "muted")]));
+          }
+          $("#connection").textContent = "Last synced " + time(Date.now()) + " / polls every 0.7s";
+        } catch (error) { $("#connection").textContent = "Connection interrupted. Retrying..."; }
+        finally { refreshing = false; }
+      }
+      function submit(formId, errorId, path, createBody, idempotent) {
+        const form = $(formId);
+        let submitting = false;
+        form.addEventListener("invalid", event => { $(errorId).textContent = event.target.validationMessage; }, true);
+        form.addEventListener("submit", async event => {
+          event.preventDefault();
+          if (submitting) return;
+          submitting = true; const button = form.querySelector('button[type="submit"]'); button.disabled = true; $(errorId).textContent = "";
+          try {
+            const body = createBody(new FormData(form));
+            await api(path, { method: "POST", headers: { "Content-Type": "application/json", ...(idempotent ? { "Idempotency-Key": crypto.randomUUID() } : {}) }, body: JSON.stringify(body) });
+            form.querySelector('input[name="name"]').value = "";
+            await refresh();
+          } catch (error) { $(errorId).textContent = error instanceof SyntaxError ? "Workflow definition must be valid JSON: " + error.message : error.message; }
+          finally { submitting = false; button.disabled = false; }
+        });
+      }
+      submit("#workflow-form", "#workflow-error", "/api/workflows", data => ({ name: data.get("name"), concurrency: Number(data.get("concurrency")), jobs: JSON.parse(data.get("definition")) }), true);
+      submit("#legacy-form", "#legacy-error", "/api/jobs", data => ({ name: data.get("name"), kind: data.get("kind") }), false);
+      refresh(); setInterval(refresh, 700);
+    </script>
+  </body>
+</html>

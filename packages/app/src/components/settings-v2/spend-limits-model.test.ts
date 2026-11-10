@@ -84,3 +84,24 @@ describe("spend summary", () => {
     expect(meta.startsWith("unmeasured · Parallel agent · ")).toBe(true)
   })
 })
+
+test("mixed Codium dollar windows retain own spend and the Codium label", () => {
+  expect(
+    summaryLine({
+      all: { day: { ...window(0.12, 0), billing: "codium" }, month: { ...window(0.24, 0), billing: "codium" } },
+    }),
+  ).toBe("Today: $0.12 + Codium · This month: $0.24 + Codium")
+  expect(
+    recentRunMeta({
+      id: "1",
+      projectPath: "/p",
+      runId: "r",
+      provider: "vector-plan",
+      model: "flash",
+      at: "2026-09-27T10:00:00.000Z",
+      source: "parallel",
+      billing: "codium",
+      costUsd: 0.12,
+    }).startsWith("$0.12 + Codium · "),
+  ).toBe(true)
+})

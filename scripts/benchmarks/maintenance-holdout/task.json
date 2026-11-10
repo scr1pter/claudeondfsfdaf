@@ -1,0 +1,19 @@
+{
+  "name": "ledgerdesk-maintenance-v1",
+  "promptFile": "instrument/BUILD_SPEC.md",
+  "workspacePromptFile": "BUILD_SPEC.md",
+  "seedDirectory": "instrument/seed",
+  "expectedApiGroups": 50,
+  "expectedBrowserChecks": 0,
+  "expectedPrerequisiteChecks": 4,
+  "expectedTotalChecks": 54,
+  "evaluatorCommand": ["{python}", "{task}/gate_bridge.py", "--app", "{app}", "--out", "{out}", "--runtime", "{bun}", "--node", "{node}", "--typescript", "{typescript}", "--mode", "bun-qualification"],
+  "evaluatorReport": "evaluation.json",
+  "evaluatorTimeoutSeconds": 180,
+  "setupCommand": [],
+  "protectedFiles": [],
+  "generatedDirectories": [],
+  "additionalPrompt": "Maintain and upgrade the existing product; preserve its working legacy features, accounts, usage ingestion, quotes, client and CLI. Complete all requested migration and connected workflow requirements. Use the fixed seven-role team; the existing frontend_worker identity owns CLI, SDK and declarations. Keep the private reference and independent evaluator unread and unchanged. Browser tools remain available for optional local inspection, but this workload's required interfaces are the local API, CLI and typed SDK. The lead must personally verify all three after final judge review. Report incomplete work candidly.",
+  "seedPolicy": "A working v1 seed is intentionally supplied; record actual partial seed passes, never fabricate an empty-seed zero.",
+  "qualificationStatus": "source_authored_runtime_pending"
+}

@@ -61,6 +61,8 @@ export const Spend = Event.define({
     capUsd: optional(Schema.Finite),
     steps: NonNegativeInt,
     unpricedSteps: NonNegativeInt,
+    // Steps that ran on Vector Codium. The guard counts them apart: its unpricedSteps counts only unknown steps.
+    codiumSteps: optional(NonNegativeInt),
     costKind: RunBudget.CostKind,
     estimate: optional(Schema.Struct({ lowUsd: Schema.Finite, highUsd: Schema.Finite })),
   },

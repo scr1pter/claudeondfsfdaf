@@ -1,0 +1,16 @@
+{
+  "name": "relay-directory",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local durable roster imports with a JSON CLI and typed SDK",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": { "types": "./sdk.d.mts", "import": "./sdk.mjs" }
+  },
+  "scripts": {
+    "start": "node app.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

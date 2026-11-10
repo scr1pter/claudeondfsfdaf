@@ -2,6 +2,7 @@ import { Agent } from "@/agent/agent"
 import { Provider } from "@/provider/provider"
 import { LLM } from "@/session/llm"
 import { MessageID, SessionID } from "@/session/schema"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { Slug } from "@vectordevai/core/util/slug"
 import { LLMEvent } from "@vectordevai/llm"
 import { Effect, Stream } from "effect"
@@ -28,9 +29,10 @@ export const projectCopyHandlers = HttpApiBuilder.group(InstanceHttpApi, "projec
       if (!text) return Slug.create()
       const fallback = yield* provider.defaultModel().pipe(Effect.catch(() => Effect.succeed(undefined)))
       if (!fallback) return Slug.create()
-      const model =
-        (yield* provider.getSmallModel(fallback.providerID, fallback.modelID)) ??
-        (yield* provider.getModel(fallback.providerID, fallback.modelID))
+      const small = yield* provider.getSmallModel(fallback.providerID, fallback.modelID)
+      // A Codium default without a helper model gets a plain name rather than one on its own model.
+      if (!small && fallback.providerID === ModelPlanStatus.PROVIDER_ID) return Slug.create()
+      const model = small ?? (yield* provider.getModel(fallback.providerID, fallback.modelID))
       const sessionID = SessionID.descending()
       const result = yield* llm
         .stream({
@@ -48,6 +50,8 @@ export const projectCopyHandlers = HttpApiBuilder.group(InstanceHttpApi, "projec
           tools: {},
           model,
           sessionID,
+          // A name, like a title: Codium counts it as one.
+          purpose: "title",
           retries: 2,
           messages: [
             {

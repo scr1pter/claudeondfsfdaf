@@ -58,6 +58,7 @@ import { Format } from "../../src/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Auth } from "@/auth"
 import { ResearchRun } from "../../src/tool/research-run"
+import { TaskLimits } from "../../src/task/limits"
 import type { SessionID } from "../../src/session/schema"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "./effect"
@@ -171,6 +172,8 @@ const root = LayerNode.group([
   FreeModelGuests.node,
   ResearchStore.node,
   ResearchRun.node,
+  // The conversation's subagent slots, which tests of a research lead's reservation read.
+  TaskLimits.node,
   // Where the user's own files live (their RULES.md, MEMORY.md and global AGENTS.md), for tests that write one.
   Global.node,
   LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),

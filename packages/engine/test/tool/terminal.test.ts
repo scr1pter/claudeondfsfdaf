@@ -11,6 +11,7 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { Location } from "@vectordevai/core/location"
 import { buildLocationServiceMap, LocationServiceMap } from "@vectordevai/core/location-services"
 import { Pty } from "@vectordevai/core/pty"
+import { PtyID } from "@vectordevai/core/pty/schema"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Config } from "@/config/config"
@@ -116,6 +117,246 @@ const failure = (exit: Exit.Exit<unknown, unknown>) => {
   if (Exit.isSuccess(exit)) throw new Error("expected the call to fail")
   return String(Cause.squash(exit.cause))
 }
+
+// Replace only PTY I/O: these tests still execute the real tool, permission scan and wait loop on every platform.
+const syntheticPty = (frames: { text: string; exitCode?: number }[], onRead?: (count: number) => void) => {
+  const created: Pty.Info[] = []
+  const reads: (Pty.ReadInput | undefined)[] = []
+  const state = { text: "", frame: 0 }
+  return {
+    created,
+    reads,
+    layer: Layer.mock(Pty.Service, {
+      create: (input, owner) =>
+        Effect.sync(() => {
+          const info: Pty.Info = {
+            id: PtyID.ascending(),
+            title: input.title ?? "Synthetic terminal",
+            command: input.command ?? "synthetic",
+            args: input.args ?? [],
+            cwd: input.cwd ?? "",
+            status: "running",
+            pid: 0,
+            ...(owner ? { owner } : {}),
+          }
+          created.push(info)
+          return info
+        }),
+      read: (id, input) =>
+        Effect.sync(() => {
+          const info = created.find((item) => item.id === id)
+          if (!info) throw new Error("Synthetic terminal was not created")
+          reads.push(input)
+          const frame = frames[state.frame++]
+          if (frame) {
+            state.text += frame.text
+            if (frame.exitCode !== undefined) {
+              info.status = "exited"
+              info.exitCode = frame.exitCode
+            }
+          }
+          onRead?.(reads.length)
+          const start = input?.cursor ?? 0
+          const output = state.text.slice(start, input?.limit === undefined ? undefined : start + input.limit)
+          return { info, output, start, cursor: start + output.length, end: state.text.length }
+        }),
+    }),
+  }
+}
+
+const withSyntheticPty = <A, E, R>(layer: Layer.Layer<Pty.Service>, body: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    return yield* body.pipe(provideInstance(dir), Effect.provide(buildLocationServiceMap([[Pty.node, layer]])))
+  })
+
+describe("tool.terminal open readiness", () => {
+  it.live("waits past a startup banner for delayed readiness in one open call", () => {
+    const pty = syntheticPty([{ text: "Starting\n" }, { text: "" }, { text: "READY\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const asked: Ask[] = []
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY$", timeout: 2000, cursor: 999 },
+          context(asked),
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "running",
+          matched: "pattern",
+          cursor: "Starting\nREADY\n".length,
+        })
+        expect(opened.output).toContain("Starting\nREADY\n")
+        expect(opened.output).toContain("Matched the pattern.")
+        expect(pty.reads).toHaveLength(3)
+        expect(pty.created).toHaveLength(1)
+        expect(pty.created[0].owner).toEqual({ kind: "agent", sessionID: "ses_terminal" })
+        expect(asked.map((ask) => ask.permission)).toEqual(["bash"])
+      }),
+    )
+  })
+
+  it.live("keeps the first-output behavior when open has no readiness pattern", () => {
+    const pty = syntheticPty([{ text: "Starting\n" }, { text: "" }, { text: "READY\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup" }, context())
+        expect(opened.metadata).toMatchObject({ action: "open", status: "running", cursor: "Starting\n".length })
+        expect(opened.metadata.matched).toBeUndefined()
+        expect(opened.output).toContain("Starting")
+        expect(opened.output).not.toContain("READY")
+        expect(pty.reads).toHaveLength(2)
+      }),
+    )
+  })
+
+  it.live("matches readiness across output chunks after cleaning ANSI colors and CRLF", () => {
+    const frames = [{ text: "\x1b[32mREA" }, { text: "DY\x1b[0m\r" }, { text: "\nhttp://localhost:3000\r\n" }]
+    const pty = syntheticPty(frames)
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY\\nhttp://localhost:3000$", timeout: 2000 },
+          context(),
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          status: "running",
+          matched: "pattern",
+          cursor: frames.map((frame) => frame.text).join("").length,
+        })
+        expect(opened.output).toContain("READY\nhttp://localhost:3000\n")
+        expect(opened.output).not.toContain("\x1b")
+        expect(opened.output).not.toContain("\r")
+        expect(pty.reads).toHaveLength(3)
+      }),
+    )
+  })
+
+  it.live("reports an early nonzero exit without claiming readiness", () => {
+    const pty = syntheticPty([{ text: "Startup failed\n", exitCode: 7 }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup", pattern: "^READY$" }, context())
+        expect(opened.metadata).toMatchObject({ action: "open", status: "exited", exitCode: 7, matched: "exit" })
+        expect(opened.output).toContain("Startup failed")
+        expect(opened.output).toContain("exited with code 7")
+        expect(opened.output).not.toContain("Matched the pattern.")
+      }),
+    )
+  })
+
+  it.live("retains a nonzero exit when the same output frame also matches readiness", () => {
+    const pty = syntheticPty([{ text: "READY\n", exitCode: 7 }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup", pattern: "^READY$" }, context())
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "exited",
+          exitCode: 7,
+          matched: "pattern",
+          cursor: "READY\n".length,
+        })
+        expect(opened.output).toContain("Matched the pattern.")
+        expect(opened.output).toContain("exited with code 7")
+      }),
+    )
+  })
+
+  it.live("treats an invalid readiness regex as literal text", () => {
+    const pty = syntheticPty([{ text: "Listening a(b\r\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute({ action: "open", command: "echo startup", pattern: "a(b" }, context())
+        expect(opened.metadata).toMatchObject({ action: "open", status: "running", matched: "pattern" })
+        expect(opened.output).toContain("Listening a(b\n")
+      }),
+    )
+  })
+
+  it.live("returns a running terminal and cursor when readiness times out", () => {
+    const pty = syntheticPty([{ text: "Starting\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY$", timeout: 100 },
+          context(),
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "running",
+          cursor: "Starting\n".length,
+          matched: "timeout",
+        })
+        expect(opened.output).toContain("Gave up after 100 ms.")
+        expect(opened.output).toContain("Starting")
+      }),
+    )
+  })
+
+  it.live("stops readiness waiting on abort while retaining the terminal's actual status", () => {
+    const abort = new AbortController()
+    const pty = syntheticPty([{ text: "Starting\n" }], (count) => {
+      if (count === 2) abort.abort()
+    })
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const opened = yield* tool.execute(
+          { action: "open", command: "echo startup", pattern: "^READY$", timeout: 2000 },
+          { ...context(), abort: abort.signal },
+        )
+        expect(opened.metadata).toMatchObject({
+          action: "open",
+          id: pty.created[0].id,
+          status: "running",
+          cursor: "Starting\n".length,
+        })
+        expect(opened.metadata.matched).toBeUndefined()
+        expect(opened.output).toContain("Stopped waiting: the call was aborted.")
+        expect(pty.reads).toHaveLength(2)
+      }),
+    )
+  })
+
+  it.live("creates no terminal when permission for a readiness open is denied", () => {
+    const pty = syntheticPty([{ text: "READY\n" }])
+    return withSyntheticPty(
+      pty.layer,
+      Effect.gen(function* () {
+        const tool = yield* init()
+        const refused = yield* tool
+          .execute(
+            { action: "open", command: "echo startup", pattern: "^READY$" },
+            context([], { reject: (ask) => ask.permission === "bash" }),
+          )
+          .pipe(Effect.exit)
+        expect(failure(refused)).toContain("rejected bash")
+        expect(pty.created).toEqual([])
+        expect(pty.reads).toEqual([])
+      }),
+    )
+  })
+})
 
 describe("tool.terminal", () => {
   ptyTest("opens a command line through the configured shell, as the shell tool runs it", () =>

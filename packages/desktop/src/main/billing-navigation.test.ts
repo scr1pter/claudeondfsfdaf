@@ -12,12 +12,15 @@ const site = "https://vectordev.ai"
 
 test("Stripe's return to the account page says how billing ended", () => {
   expect(billingReturn(`${site}/account?model_plan=success`, site)).toBe("completed")
-  expect(billingReturn(`${site}/account?model_topup=success`, site)).toBe("completed")
-  // A plan change or cancellation finished in the portal.
+  // An upgrade's checkout, from /change, returns with change=upgrade.
+  expect(billingReturn(`${site}/account?model_plan=success&change=upgrade`, site)).toBe("completed")
+  // A card update (payment_method_update) or a cancellation finished in the portal.
   expect(billingReturn(`${site}/account?model_plan=updated`, site)).toBe("completed")
   expect(billingReturn(`${site}/account?model_plan=ending`, site)).toBe("completed")
   expect(billingReturn(`${site}/account?model_plan=cancelled`, site)).toBe("cancelled")
-  expect(billingReturn(`${site}/account?model_topup=cancelled`, site)).toBe("cancelled")
+  // Codium sells no top-ups: a top-up return is only the account page, never a finished purchase.
+  expect(billingReturn(`${site}/account?model_topup=success`, site)).toBe("closed")
+  expect(billingReturn(`${site}/account?model_topup=cancelled`, site)).toBe("closed")
   // The portal's own link back.
   expect(billingReturn(`${site}/account`, site)).toBe("closed")
   expect(billingReturn(`${site}/account/`, site)).toBe("closed")

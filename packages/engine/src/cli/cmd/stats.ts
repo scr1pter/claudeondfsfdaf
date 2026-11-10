@@ -1,17 +1,24 @@
-import { Effect } from "effect"
+import { Billing } from "@vectordevai/schema/billing"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
+import { DateTime, Effect, Schema } from "effect"
 import { effectCmd } from "../effect-cmd"
 import { Session } from "@/session/session"
 import { NotFoundError } from "@/storage/storage"
 import { Database } from "@vectordevai/core/database/database"
 import { SessionMessageTable, SessionTable } from "@vectordevai/core/session/sql"
-import { and, eq, gte } from "drizzle-orm"
+import { EventTable } from "@vectordevai/core/event/sql"
+import { SessionEvent } from "@vectordevai/schema/session-event"
+import { and, eq, gte, inArray } from "drizzle-orm"
 import { Project } from "@/project/project"
 import { InstanceRef } from "@/effect/instance-ref"
 
 interface SessionStats {
   totalSessions: number
   totalMessages: number
+  codiumResponses: number
+  ownResponses: number
   totalCost: number
+  unpricedSteps: number
   totalTokens: {
     input: number
     output: number
@@ -35,6 +42,7 @@ interface SessionStats {
         }
       }
       cost: number
+      billing?: "codium"
     }
   >
   dateRange: {
@@ -45,10 +53,10 @@ interface SessionStats {
   costPerDay: number
   tokensPerSession: number
   medianTokensPerSession: number
-  // What Vector's hidden helpers (a Vectorscope review, autocomplete) spent. It is part of the cost and token totals
+  // What Vector's hidden helpers (reviews, autocomplete, titles and memory learning) spent. It is part of the totals
   // above, but the helpers are not sessions of the user's, so they are left out of the session and message counts and
   // the per-session figures.
-  helpers: { cost: number; tokens: number }
+  helpers: { cost: number; tokens: number; codiumResponses: number }
 }
 
 export const StatsCommand = effectCmd({
@@ -116,7 +124,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
     return days
   })()
 
-  let filteredSessions = cutoffTime > 0 ? sessions.filter((session) => session.time.updated >= cutoffTime) : sessions
+  let filteredSessions = sessions
 
   if (projectFilter !== undefined) {
     if (projectFilter === "") {
@@ -126,11 +134,17 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
       filteredSessions = filteredSessions.filter((session) => session.projectID === projectFilter)
     }
   }
+  const selected = new Set(filteredSessions.map((session) => session.id))
+  filteredSessions =
+    cutoffTime > 0 ? filteredSessions.filter((session) => session.time.updated >= cutoffTime) : filteredSessions
 
   const stats: SessionStats = {
     totalSessions: filteredSessions.length,
     totalMessages: 0,
+    codiumResponses: 0,
+    ownResponses: 0,
     totalCost: 0,
+    unpricedSteps: 0,
     totalTokens: {
       input: 0,
       output: 0,
@@ -150,7 +164,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
     costPerDay: 0,
     tokensPerSession: 0,
     medianTokensPerSession: 0,
-    helpers: { cost: 0, tokens: 0 },
+    helpers: { cost: 0, tokens: 0, codiumResponses: 0 },
   }
 
   if (filteredSessions.length > 1000) {
@@ -166,6 +180,44 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
   let latestTime = 0
 
   const sessionTotalTokens: number[] = []
+  const ancillaryRows = (yield* db
+    .select({ data: EventTable.data })
+    .from(EventTable)
+    .innerJoin(SessionTable, eq(EventTable.aggregate_id, SessionTable.id))
+    .where(
+      and(
+        inArray(EventTable.type, SessionEvent.AncillaryUsageStored),
+        projectFilter === undefined ? undefined : eq(SessionTable.project_id, filteredSessions[0].projectID),
+      ),
+    )
+    .all()
+    .pipe(Effect.orDie))
+    .map((event) => Schema.decodeUnknownSync(SessionEvent.AncillaryUsage.data)(event.data))
+    .filter((usage) => selected.has(usage.sessionID))
+  // Local archive imports preserve the identity of the paid attempt while remapping sessions/event IDs.
+  // Conflicting copies have no reliable amount or date, so retain one unknown request instead of choosing a copy.
+  const attempts = new Map<string, (typeof ancillaryRows)[number] | undefined>()
+  const receiptsBySession = new Map<string, typeof ancillaryRows>()
+  const inWindow = new Set<string>()
+  const same = Schema.toEquivalence(SessionEvent.AncillaryUsage.data)
+  for (const usage of ancillaryRows) {
+    const receipts = receiptsBySession.get(usage.sessionID) ?? []
+    receipts.push(usage)
+    receiptsBySession.set(usage.sessionID, receipts)
+    if (DateTime.toEpochMillis(usage.timestamp) >= cutoffTime) inWindow.add(usage.usageID)
+    if (!attempts.has(usage.usageID)) {
+      attempts.set(usage.usageID, usage)
+      continue
+    }
+    const previous = attempts.get(usage.usageID)
+    if (previous && !same(previous, { ...usage, sessionID: previous.sessionID })) attempts.set(usage.usageID, undefined)
+  }
+  const ancillary = [...attempts.values()].filter(
+    (usage): usage is (typeof ancillaryRows)[number] =>
+      usage !== undefined && DateTime.toEpochMillis(usage.timestamp) >= cutoffTime,
+  )
+  const uncertain = (usage: (typeof ancillaryRows)[number]) =>
+    !!usage.unpriced || !!usage.incomplete || usage.cost === undefined || usage.tokens === undefined
 
   const results = yield* Effect.forEach(
     filteredSessions,
@@ -181,11 +233,21 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
             message.info.time.created >= cutoffTime && !(message.info.role === "assistant" && message.info.forked),
         )
         const v1Steps = messages.flatMap((message) =>
-          message.info.role === "assistant" ? [{ cost: message.info.cost, tokens: message.info.tokens }] : [],
+          message.info.role === "assistant"
+            ? [
+                {
+                  cost: message.info.cost,
+                  tokens: message.info.tokens,
+                  unpriced: !!message.info.unpriced,
+                  billing: Billing.of(message.info),
+                  model: `${message.info.providerID}/${message.info.modelID}`,
+                },
+              ]
+            : [],
         )
-        // A V2-engine session keeps its replies and compaction summaries in the session message table instead.
+        // V2 rows keep raw context tokens too. Read their identity before deriving any printed statistic.
         const v2Steps =
-          cutoffTime > 0 && all.length === 0
+          all.length === 0
             ? (yield* db
                 .select()
                 .from(SessionMessageTable)
@@ -197,72 +259,174 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
                 )
                 .all()
                 .pipe(Effect.orDie)).flatMap((row) => {
-                const data = row.data as { cost?: number; tokens?: (typeof v1Steps)[number]["tokens"] }
-                return (row.type === "assistant" || row.type === "compaction") && data.tokens
-                  ? [{ cost: data.cost ?? 0, tokens: data.tokens }]
-                  : []
+                const data = row.data as {
+                  cost?: number
+                  tokens?: (typeof v1Steps)[number]["tokens"]
+                  unpriced?: boolean
+                  billing?: string
+                  model?: { providerID: string; id: string }
+                }
+                if ((row.type !== "assistant" && row.type !== "compaction") || !data.tokens) return []
+                const billing =
+                  Billing.of(data) ||
+                  (!data.model && session.codiumSteps === undefined && Billing.of(session)) ||
+                  undefined
+                return [
+                  {
+                    cost: data.cost ?? 0,
+                    storedBilling: data.billing === "codium",
+                    tokens: data.tokens,
+                    unpriced: !!data.unpriced,
+                    billing,
+                    model: data.model ? `${data.model.providerID}/${data.model.id}` : undefined,
+                    compaction: row.type === "compaction",
+                  },
+                ]
               })
             : []
         const steps = [...v1Steps, ...v2Steps]
-
+        // A helper request on Vector Codium added one Codium step to the session's counters and no cost or tokens: the
+        // other receipts come back out of its cost and tokens, the Codium ones out of its Codium steps.
+        const sessionReceipts = receiptsBySession.get(session.id) ?? []
+        const receipts = sessionReceipts.filter((usage) => !Billing.of(usage))
+        const recordedCodium = Math.max(0, (session.codiumSteps ?? 0) - (sessionReceipts.length - receipts.length))
+        // A compaction row names no model. Unflagged, it is the session's own work, as main counts it, unless the
+        // session shows Codium: then it is counted as neither own nor Codium.
+        const codiumSession = (session.codiumSteps ?? 0) > 0 || Boolean(Billing.of(session))
+        const own = steps.filter(
+          (step) =>
+            !step.billing &&
+            (step.model
+              ? Billing.hasOwnIdentity({ providerID: step.model.split("/")[0] })
+              : "compaction" in step && step.compaction && !codiumSession),
+        )
+        const observedCodium = steps.filter((step) => Boolean(step.billing)).length
+        const codiumResponses = cutoffTime > 0 ? observedCodium : Math.max(observedCodium, recordedCodium)
+        const legacy = session.tokensOwnOnly !== true || observedCodium > recordedCodium
+        const legacyCodiumCost =
+          messages.reduce(
+            (sum, message) =>
+              sum +
+              (message.info.role === "assistant" && Billing.of(message.info)
+                ? message.parts.reduce(
+                    (total, part) => total + (part.type === "step-finish" && part.billing !== "codium" ? part.cost : 0),
+                    0,
+                  )
+                : 0),
+            0,
+          ) + v2Steps.reduce((sum, step) => sum + (step.billing && !step.storedBilling ? step.cost : 0), 0)
+        // Every Codium record added one unpriced step to the session's counters, but only a flagged one, or a Codium
+        // receipt projected since the flag, added a Codium step as well: 1.99.112 recorded Codium steps and helper
+        // requests as ordinary unpriced steps. So every Codium record seen comes out of the unpriced steps, or the
+        // Codium steps where those are more.
+        const codiumUnpriced = Math.max(
+          session.codiumSteps ?? 0,
+          messages.reduce(
+            (sum, message) =>
+              sum +
+              (message.info.role === "assistant"
+                ? message.parts.filter(
+                    (part) =>
+                      part.type === "step-finish" &&
+                      (part.billing === "codium" || (Boolean(Billing.of(message.info)) && part.unpriced === true)),
+                  ).length
+                : 0),
+            0,
+          ) +
+            v2Steps.filter((step) => step.storedBilling || (step.billing && step.unpriced)).length +
+            sessionReceipts.filter((usage) => Billing.of(usage) && (usage.billing === "codium" || uncertain(usage)))
+              .length,
+        )
+        const ownCost = own.reduce((sum, step) => sum + (step.cost || 0), 0)
+        // Remove every projected ancillary receipt from lifetime counters before adding the deduplicated attempts
+        // globally. Transcript/archive duplication outside ancillary usage is not changed by this calculation.
         const sessionCost =
-          cutoffTime > 0 ? steps.reduce((sum, step) => sum + (step.cost || 0), 0) : (session.cost ?? 0)
-        const sessionTokens =
           cutoffTime > 0
+            ? ownCost
+            : Math.max(
+                0,
+                (session.cost ?? 0) - legacyCodiumCost - receipts.reduce((sum, usage) => sum + (usage.cost ?? 0), 0),
+                ownCost,
+              )
+        const lifetimeTokens = session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+        const sessionTokens =
+          cutoffTime > 0 || legacy
             ? {
-                input: steps.reduce((sum, step) => sum + (step.tokens.input || 0), 0),
-                output: steps.reduce((sum, step) => sum + (step.tokens.output || 0), 0),
-                reasoning: steps.reduce((sum, step) => sum + (step.tokens.reasoning || 0), 0),
+                input: own.reduce((sum, step) => sum + (step.tokens.input || 0), 0),
+                output: own.reduce((sum, step) => sum + (step.tokens.output || 0), 0),
+                reasoning: own.reduce((sum, step) => sum + (step.tokens.reasoning || 0), 0),
                 cache: {
-                  read: steps.reduce((sum, step) => sum + (step.tokens.cache?.read || 0), 0),
-                  write: steps.reduce((sum, step) => sum + (step.tokens.cache?.write || 0), 0),
+                  read: own.reduce((sum, step) => sum + (step.tokens.cache?.read || 0), 0),
+                  write: own.reduce((sum, step) => sum + (step.tokens.cache?.write || 0), 0),
                 },
               }
-            : (session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
-        let sessionToolUsage: Record<string, number> = {}
-        let sessionModelUsage: Record<
-          string,
-          {
-            messages: number
-            tokens: { input: number; output: number; cache: { read: number; write: number } }
-            cost: number
-          }
-        > = {}
-
-        for (const message of messages) {
-          if (message.info.role === "assistant") {
-            const modelKey = `${message.info.providerID}/${message.info.modelID}`
-            if (!sessionModelUsage[modelKey]) {
-              sessionModelUsage[modelKey] = {
-                messages: 0,
-                tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-                cost: 0,
+            : {
+                input: Math.max(
+                  0,
+                  lifetimeTokens.input - receipts.reduce((sum, usage) => sum + (usage.tokens?.input ?? 0), 0),
+                ),
+                output: Math.max(
+                  0,
+                  lifetimeTokens.output - receipts.reduce((sum, usage) => sum + (usage.tokens?.output ?? 0), 0),
+                ),
+                reasoning: Math.max(
+                  0,
+                  lifetimeTokens.reasoning - receipts.reduce((sum, usage) => sum + (usage.tokens?.reasoning ?? 0), 0),
+                ),
+                cache: {
+                  read: Math.max(
+                    0,
+                    lifetimeTokens.cache.read -
+                      receipts.reduce((sum, usage) => sum + (usage.tokens?.cache.read ?? 0), 0),
+                  ),
+                  write: Math.max(
+                    0,
+                    lifetimeTokens.cache.write -
+                      receipts.reduce((sum, usage) => sum + (usage.tokens?.cache.write ?? 0), 0),
+                  ),
+                },
               }
-            }
-            sessionModelUsage[modelKey].messages++
-            sessionModelUsage[modelKey].cost += message.info.cost || 0
-
-            if (message.info.tokens) {
-              sessionModelUsage[modelKey].tokens.input += message.info.tokens.input || 0
-              sessionModelUsage[modelKey].tokens.output +=
-                (message.info.tokens.output || 0) + (message.info.tokens.reasoning || 0)
-              sessionModelUsage[modelKey].tokens.cache.read += message.info.tokens.cache?.read || 0
-              sessionModelUsage[modelKey].tokens.cache.write += message.info.tokens.cache?.write || 0
-            }
-          }
-
+        const sessionToolUsage: Record<string, number> = {}
+        const sessionModelUsage: SessionStats["modelUsage"] = {}
+        for (const step of steps) {
+          if (!step.model || (!step.billing && !Billing.hasOwnIdentity({ providerID: step.model.split("/")[0] })))
+            continue
+          const usage = (sessionModelUsage[step.model] ??= {
+            messages: 0,
+            tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+            cost: 0,
+            ...(step.billing ? { billing: step.billing } : {}),
+          })
+          usage.messages++
+          if (step.billing || !Billing.hasOwnIdentity({ providerID: step.model.split("/")[0] })) continue
+          usage.cost += step.cost || 0
+          usage.tokens.input += step.tokens.input || 0
+          usage.tokens.output += (step.tokens.output || 0) + (step.tokens.reasoning || 0)
+          usage.tokens.cache.read += step.tokens.cache?.read || 0
+          usage.tokens.cache.write += step.tokens.cache?.write || 0
+        }
+        for (const message of messages) {
           for (const part of message.parts) {
-            if (part.type === "tool" && part.tool) {
-              sessionToolUsage[part.tool] = (sessionToolUsage[part.tool] || 0) + 1
-            }
+            if (part.type === "tool" && part.tool) sessionToolUsage[part.tool] = (sessionToolUsage[part.tool] || 0) + 1
           }
         }
 
         return {
-          // Updates such as a share or a rename also bump a session, so a window counts only sessions with messages in it.
           active: cutoffTime === 0 || messages.length > 0 || v2Steps.length > 0,
           helper: session.internal !== undefined,
+          // A Codium step is billed to the plan, not of unknown price: the session's unpriced steps include its Codium
+          // steps, which are shown as Codium instead.
+          unpricedSteps:
+            cutoffTime > 0
+              ? steps.filter((step) => step.unpriced && !step.billing).length
+              : Math.max(
+                  0,
+                  CodiumUsage.ownUnpricedSteps(session.unpricedSteps, codiumUnpriced) -
+                    receipts.filter(uncertain).length,
+                ),
           messageCount: messages.length + v2Steps.length,
+          codiumResponses,
+          ownResponses: own.length,
           sessionCost,
           sessionTokens,
           sessionTotalTokens:
@@ -286,17 +450,20 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
   for (const result of active) {
     earliestTime = Math.min(earliestTime, result.earliestTime)
     latestTime = Math.max(latestTime, result.latestTime)
-    if (result.helper) {
-      stats.helpers.cost += result.sessionCost
-      stats.helpers.tokens += result.sessionTotalTokens
-    }
+    stats.helpers.cost += result.helper ? result.sessionCost : 0
+    stats.helpers.tokens += result.helper ? result.sessionTotalTokens : 0
+    stats.helpers.codiumResponses += result.helper ? result.codiumResponses : 0
     // A helper's replies are Vector's own, not messages in the user's sessions.
     if (!result.helper) {
-      sessionTotalTokens.push(result.sessionTotalTokens)
+      if (result.sessionTotalTokens > 0 || result.codiumResponses === 0)
+        sessionTotalTokens.push(result.sessionTotalTokens)
       stats.totalMessages += result.messageCount
     }
 
+    stats.codiumResponses += result.codiumResponses
+    stats.ownResponses += result.ownResponses
     stats.totalCost += result.sessionCost
+    stats.unpricedSteps += result.unpricedSteps
     stats.totalTokens.input += result.sessionTokens.input
     stats.totalTokens.output += result.sessionTokens.output
     stats.totalTokens.reasoning += result.sessionTokens.reasoning
@@ -315,6 +482,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
           cost: 0,
         }
       }
+      if (usage.billing) stats.modelUsage[model].billing = usage.billing
       stats.modelUsage[model].messages += usage.messages
       stats.modelUsage[model].tokens.input += usage.tokens.input
       stats.modelUsage[model].tokens.output += usage.tokens.output
@@ -322,6 +490,54 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
       stats.modelUsage[model].tokens.cache.write += usage.tokens.cache.write
       stats.modelUsage[model].cost += usage.cost
     }
+  }
+
+  stats.unpricedSteps += [...attempts].filter(([id, usage]) => !usage && inWindow.has(id)).length
+  for (const usage of ancillary) {
+    // A helper request on Vector Codium is billed to the plan: one Codium response of Vector's helpers, never tokens,
+    // dollars or an unknown cost.
+    if (Billing.of(usage)) {
+      const plan = (stats.modelUsage[`${usage.model.providerID}/${usage.model.id}`] ??= {
+        messages: 0,
+        tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+        cost: 0,
+      })
+      plan.messages++
+      plan.billing = "codium"
+      stats.codiumResponses++
+      stats.helpers.codiumResponses++
+      const when = DateTime.toEpochMillis(usage.timestamp)
+      earliestTime = Math.min(earliestTime, when)
+      latestTime = Math.max(latestTime, when)
+      continue
+    }
+    const cost = usage.cost ?? 0
+    const tokens = usage.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    stats.totalCost += cost
+    stats.helpers.cost += cost
+    stats.unpricedSteps += Number(uncertain(usage))
+    stats.totalTokens.input += tokens.input
+    stats.totalTokens.output += tokens.output
+    stats.totalTokens.reasoning += tokens.reasoning
+    stats.totalTokens.cache.read += tokens.cache.read
+    stats.totalTokens.cache.write += tokens.cache.write
+    stats.helpers.tokens += tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+    const modelKey = `${usage.model.providerID}/${usage.model.id}`
+    const current = stats.modelUsage[modelKey] ?? {
+      messages: 0,
+      tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      cost: 0,
+    }
+    current.messages++
+    current.cost += cost
+    current.tokens.input += tokens.input
+    current.tokens.output += tokens.output + tokens.reasoning
+    current.tokens.cache.read += tokens.cache.read
+    current.tokens.cache.write += tokens.cache.write
+    stats.modelUsage[modelKey] = current
+    const at = DateTime.toEpochMillis(usage.timestamp)
+    earliestTime = Math.min(earliestTime, at)
+    latestTime = Math.max(latestTime, at)
   }
 
   const rangeDays = Math.max(1, Math.ceil((latestTime - earliestTime) / MS_IN_DAY))
@@ -334,7 +550,9 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
   stats.costPerDay = stats.totalCost / effectiveDays
   // The average and the median both cover the user's sessions only; what the helpers used is in stats.helpers.
   stats.tokensPerSession =
-    sessionCount > 0 ? sessionTotalTokens.reduce((sum, tokens) => sum + tokens, 0) / sessionCount : 0
+    sessionTotalTokens.length > 0
+      ? sessionTotalTokens.reduce((sum, tokens) => sum + tokens, 0) / sessionTotalTokens.length
+      : 0
   sessionTotalTokens.sort((a, b) => a - b)
   const mid = Math.floor(sessionTotalTokens.length / 2)
   stats.medianTokensPerSession =
@@ -374,22 +592,52 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
   const cost = isNaN(stats.totalCost) ? 0 : stats.totalCost
   const costPerDay = isNaN(stats.costPerDay) ? 0 : stats.costPerDay
   const tokensPerSession = isNaN(stats.tokensPerSession) ? 0 : stats.tokensPerSession
-  console.log(renderRow("Total Cost", `$${cost.toFixed(2)}`))
-  if (stats.helpers.cost > 0 || stats.helpers.tokens > 0)
+  const ownTokens =
+    stats.totalTokens.input +
+    stats.totalTokens.output +
+    stats.totalTokens.reasoning +
+    stats.totalTokens.cache.read +
+    stats.totalTokens.cache.write
+  // Only Codium work: no own response, tokens, dollars or unknown cost to show, so Codium stands in for them.
+  const codiumOnly =
+    stats.codiumResponses > 0 && stats.ownResponses === 0 && !ownTokens && !cost && !(stats.unpricedSteps > 0)
+  console.log(
+    renderRow(
+      "Recorded Cost",
+      CodiumUsage.withCodium(
+        cost || !codiumOnly ? `$${cost.toFixed(2)}${stats.unpricedSteps > 0 ? " + unknown" : ""}` : undefined,
+        stats.codiumResponses,
+      ),
+    ),
+  )
+  if (stats.unpricedSteps > 0)
+    console.log(renderRow("Unpriced/incomplete requests", stats.unpricedSteps.toLocaleString()))
+  if (stats.helpers.cost > 0 || stats.helpers.tokens > 0 || stats.helpers.codiumResponses > 0)
     console.log(
       renderRow(
         "  of which Vector's helpers",
-        `$${stats.helpers.cost.toFixed(2)} · ${formatNumber(stats.helpers.tokens)} tokens`,
+        CodiumUsage.withCodium(
+          stats.helpers.cost || stats.helpers.tokens
+            ? `$${stats.helpers.cost.toFixed(2)} · ${formatNumber(stats.helpers.tokens)} tokens`
+            : undefined,
+          stats.helpers.codiumResponses,
+        ),
       ),
     )
-  console.log(renderRow("Avg Cost/Day", `$${costPerDay.toFixed(2)}`))
-  console.log(renderRow("Avg Tokens/Session", formatNumber(Math.round(tokensPerSession))))
+  console.log(
+    renderRow("Avg Recorded Cost/Day", codiumOnly && !costPerDay ? Billing.LABEL : `$${costPerDay.toFixed(2)}`),
+  )
+  console.log(renderRow("Avg Tokens/Session", codiumOnly ? Billing.LABEL : formatNumber(Math.round(tokensPerSession))))
   const medianTokensPerSession = isNaN(stats.medianTokensPerSession) ? 0 : stats.medianTokensPerSession
-  console.log(renderRow("Median Tokens/Session", formatNumber(Math.round(medianTokensPerSession))))
-  console.log(renderRow("Input", formatNumber(stats.totalTokens.input)))
-  console.log(renderRow("Output", formatNumber(stats.totalTokens.output)))
-  console.log(renderRow("Cache Read", formatNumber(stats.totalTokens.cache.read)))
-  console.log(renderRow("Cache Write", formatNumber(stats.totalTokens.cache.write)))
+  console.log(
+    renderRow("Median Tokens/Session", codiumOnly ? Billing.LABEL : formatNumber(Math.round(medianTokensPerSession))),
+  )
+  console.log(renderRow("Uncached Input", codiumOnly ? Billing.LABEL : formatNumber(stats.totalTokens.input)))
+  console.log(renderRow("Visible Output", codiumOnly ? Billing.LABEL : formatNumber(stats.totalTokens.output)))
+  console.log(renderRow("Reasoning", codiumOnly ? Billing.LABEL : formatNumber(stats.totalTokens.reasoning)))
+  console.log(renderRow("Cache Read", codiumOnly ? Billing.LABEL : formatNumber(stats.totalTokens.cache.read)))
+  console.log(renderRow("Cache Write", codiumOnly ? Billing.LABEL : formatNumber(stats.totalTokens.cache.write)))
+  if (stats.codiumResponses > 0 && !codiumOnly) console.log(renderRow("Other usage", "+ Codium"))
   console.log("└────────────────────────────────────────────────────────┘")
   console.log()
 
@@ -403,10 +651,16 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
     console.log("├────────────────────────────────────────────────────────┤")
 
     for (const [model, usage] of modelsToDisplay) {
-      console.log(`│ ${model.padEnd(54)} │`)
+      const label = usage.billing ? `Vector Codium · ${model.slice(model.indexOf("/") + 1)}` : model
+      console.log(`│ ${label.padEnd(54)} │`)
       console.log(renderRow("  Messages", usage.messages.toLocaleString()))
-      console.log(renderRow("  Input Tokens", formatNumber(usage.tokens.input)))
-      console.log(renderRow("  Output Tokens", formatNumber(usage.tokens.output)))
+      if (usage.billing) {
+        console.log(renderRow("  Usage", Billing.LABEL))
+        console.log("├────────────────────────────────────────────────────────┤")
+        continue
+      }
+      console.log(renderRow("  Uncached Input", formatNumber(usage.tokens.input)))
+      console.log(renderRow("  Output + Reasoning", formatNumber(usage.tokens.output)))
       console.log(renderRow("  Cache Read", formatNumber(usage.tokens.cache.read)))
       console.log(renderRow("  Cache Write", formatNumber(usage.tokens.cache.write)))
       console.log(renderRow("  Cost", `$${usage.cost.toFixed(4)}`))
@@ -417,6 +671,8 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
     console.log("└────────────────────────────────────────────────────────┘")
   }
   console.log()
+
+  if (stats.codiumResponses > 0) console.log('Vector Codium usage: see "vector codium".')
 
   // Tool Usage section
   if (Object.keys(stats.toolUsage).length > 0) {

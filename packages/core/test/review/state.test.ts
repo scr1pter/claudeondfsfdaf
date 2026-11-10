@@ -107,6 +107,24 @@ describe("encodeState and decodeState", () => {
     expect(raw.u).toEqual([2, 0])
   })
 
+  test("Codium review counts use k while c remains dollars and old states stay readable", () => {
+    const state = { ...FULL, codiumReviews: 2 }
+    const raw = rawJson(encodeState(state))
+    expect(raw.k).toBe(2)
+    expect(raw.c).toBe(0.37)
+    expect(decodeState(encodeState(state))).toEqual(state)
+    delete raw.k
+    expect(decodeState(base64url(JSON.stringify(raw)))).toEqual(FULL)
+    expect(decodeState(encodeState({ ...FULL, codiumReviews: 0 }))?.codiumReviews).toBe(0)
+  })
+
+  test.each([-1, "4", null, 2.9])("Codium counts decode leniently without changing dollars: %j", (value) => {
+    const raw = { ...rawJson(encodeState(FULL)), k: value }
+    const decoded = decodeState(base64url(JSON.stringify(raw)))
+    expect(decoded?.codiumReviews).toBe(value === 2.9 ? 2 : 0)
+    expect(decoded?.costUsd).toBe(FULL.costUsd)
+  })
+
   test("cap titles at 60 characters", () => {
     const state = { ...emptyState(), findings: [summaryFinding(1, { title: "x".repeat(90) })] }
     expect(decodeState(encodeState(state))?.findings[0]?.title).toBe("x".repeat(60))
@@ -810,6 +828,75 @@ describe("nextState", () => {
   test("a carry moves the head without counting a review", () => {
     const next = nextState(previous, { head: HEAD, base: BASE, mode: "carry", now: NOW })
     expect(next).toMatchObject({ head: HEAD, reviews: 1, costUsd: 0.1, tokens: [1_000, 100] })
+  })
+
+  test("Codium adds one review, no numeric usage, and preserves own dollars under c", () => {
+    const next = nextState(previous, {
+      head: HEAD,
+      base: BASE,
+      mode: "full",
+      now: NOW,
+      cost: { ...cost, kind: "codium", model: "vector-plan/vector-velocity", tokensOwnOnly: true },
+    })
+    expect(next).toMatchObject({ reviews: 2, codiumReviews: 1, costUsd: 0.1, tokens: [1_000, 100] })
+    expect(next.month).toEqual(previous.month)
+    const raw = rawJson(encodeState(next))
+    expect(raw).toMatchObject({ c: 0.1, k: 1, t: [1_000, 100] })
+    const carried = nextState(next, { head: HEAD, base: BASE, mode: "carry", now: NOW, cost })
+    expect(carried).toMatchObject({ reviews: 2, codiumReviews: 1, costUsd: 0.1, tokens: [1_000, 100] })
+  })
+
+  test("failed Codium activity increments once and carry does not count it again", () => {
+    const codium: ReviewCost = { ...cost, kind: "codium", model: "vector-plan/vector-velocity" }
+    const failed = nextState(previous, { head: HEAD, base: BASE, mode: "full", now: NOW, cost: codium, failed: true })
+    expect(failed).toMatchObject({ head: OLD, failed: true, reviews: 2, codiumReviews: 1, costUsd: 0.1 })
+    const carried = nextState(failed, { head: HEAD, base: BASE, mode: "carry", now: NOW, cost: codium })
+    expect(carried).toMatchObject({ reviews: 2, codiumReviews: 1, costUsd: 0.1, tokens: [1_000, 100] })
+  })
+
+  test.each([undefined, false, true])("mixed activity retains dollars and requires fresh token proof: %j", (proof) => {
+    const next = nextState(previous, {
+      head: HEAD,
+      base: BASE,
+      mode: "full",
+      now: NOW,
+      cost: { ...cost, kind: "unknown", codium: true, tokensOwnOnly: proof },
+    })
+    expect(next).toMatchObject({ reviews: 2, codiumReviews: 1, costUsd: 0.31 })
+    expect(next.month).toEqual({ key: "2026-09", costUsd: 0.31 })
+    expect(next.tokens).toEqual(proof ? [49_200, 3_200] : previous.tokens)
+  })
+
+  test("legacy Codium model prefixes exclude inseparable tokens and distinguish mixed own dollars", () => {
+    const legacy = nextState(previous, {
+      head: HEAD,
+      base: BASE,
+      mode: "full",
+      now: NOW,
+      cost: { ...cost, kind: "unknown", model: "vector-plan/vector-velocity + vector-plan/other" },
+    })
+    expect(legacy).toMatchObject({ reviews: 2, codiumReviews: 1, costUsd: 0.1, tokens: previous.tokens })
+    const mixed = nextState(legacy, {
+      head: HEAD,
+      base: BASE,
+      mode: "full",
+      now: NOW,
+      cost: { ...cost, model: "vector-plan/vector-velocity + anthropic/claude-sonnet-4-5" },
+    })
+    expect(mixed).toMatchObject({ reviews: 3, codiumReviews: 2, costUsd: 0.31, tokens: previous.tokens })
+    const own = nextState(mixed, { head: HEAD, base: BASE, mode: "full", now: NOW, cost })
+    expect(own).toMatchObject({ reviews: 4, codiumReviews: 2, costUsd: 0.52, tokens: [49_200, 3_200] })
+  })
+
+  test("explicit mixed activity retains own cost even if the selected model is Codium", () => {
+    const next = nextState(undefined, {
+      head: HEAD,
+      base: BASE,
+      mode: "full",
+      now: NOW,
+      cost: { ...cost, kind: "unknown", model: "vector-plan/vector-velocity", codium: true, tokensOwnOnly: true },
+    })
+    expect(next).toMatchObject({ reviews: 1, codiumReviews: 1, costUsd: 0.21, tokens: [48_200, 3_100] })
   })
 
   test("earlier summary findings take their new status and line, and an inline comment takes over an id", () => {

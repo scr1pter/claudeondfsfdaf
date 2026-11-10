@@ -16,6 +16,8 @@ import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
 import { PublicSession } from "@vectordevai/schema/public-session"
+import { Billing } from "@vectordevai/schema/billing"
+import { SessionAccounting } from "./accounting"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -28,6 +30,11 @@ type Usage = {
   cost: number
   // The step ran on a model with no listed price; it counts towards the session's unpriced_steps.
   unpriced?: boolean
+  // The step ran on Vector Codium. Only the flag stored on the record routes it, never the provider id: a Codium step
+  // recorded before the flag existed was counted as an ordinary step, so it must be subtracted as one.
+  billing?: "codium"
+  // Proof about this contribution, derived from its stored identity rather than any serialized aggregate marker.
+  ownOnly: boolean
   tokens: {
     input: number
     output: number
@@ -36,16 +43,39 @@ type Usage = {
   }
 }
 
-function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] | unknown): Usage | undefined {
+function usage(part: unknown, message?: typeof MessageTable.$inferSelect.data): Usage | undefined {
   if (typeof part !== "object" || part === null) return undefined
   const value = part as Record<string, unknown>
   if (value.type !== "step-finish") return undefined
   if (!("cost" in value) || !("tokens" in value)) return undefined
+  const providerID =
+    message?.role === "assistant" && "providerID" in message && typeof message.providerID === "string"
+      ? message.providerID
+      : undefined
+  const codiumMessage = message && "billing" in message && message.billing === "codium"
   return {
     cost: value.cost as Usage["cost"],
     unpriced: value.unpriced === true,
+    billing: value.billing === "codium" ? "codium" : undefined,
+    ownOnly: knownOwnOnly(value.billing, codiumMessage ? undefined : providerID),
     tokens: value.tokens as Usage["tokens"],
   }
+}
+
+function partUsage(db: DatabaseService, row: typeof PartTable.$inferSelect) {
+  return Effect.gen(function* () {
+    const message = yield* db
+      .select({ data: MessageTable.data })
+      .from(MessageTable)
+      .where(and(eq(MessageTable.id, row.message_id), eq(MessageTable.session_id, row.session_id)))
+      .get()
+      .pipe(Effect.orDie)
+    return usage(row.data, message?.data)
+  })
+}
+
+function knownOwnOnly(billing: unknown, providerID?: string) {
+  return billing === "codium" || Billing.hasOwnIdentity({ providerID })
 }
 
 function rowUsage(row: typeof SessionMessageTable.$inferSelect | undefined): Usage | undefined {
@@ -57,7 +87,13 @@ function rowUsage(row: typeof SessionMessageTable.$inferSelect | undefined): Usa
 function messageUsage(message: SessionMessage.Message): Usage | undefined {
   if (message.type !== "assistant" && message.type !== "compaction") return undefined
   if (message.cost === undefined || message.tokens === undefined) return undefined
-  return { cost: message.cost, unpriced: message.unpriced === true, tokens: message.tokens }
+  return {
+    cost: message.cost,
+    unpriced: message.unpriced === true,
+    billing: message.billing,
+    tokens: message.tokens,
+    ownOnly: knownOwnOnly(message.billing, message.type === "assistant" ? message.model.providerID : undefined),
+  }
 }
 
 function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {
@@ -83,8 +119,13 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     metadata: info.metadata,
     cost: info.cost ?? 0,
     unpriced_steps: info.unpricedSteps ?? 0,
+    codium_steps: info.codiumSteps ?? 0,
     subagent_cost: info.subagentCost ?? 0,
     subagent_unpriced_steps: info.subagentUnpricedSteps ?? 0,
+    subagent_codium_steps: info.subagentCodiumSteps ?? 0,
+    // Serialized flags are read projections, never authority to certify imported or replayed accounting.
+    tokens_own_only: false,
+    subagent_tokens_own_only: false,
     subagent_tokens_input: info.subagentTokens?.input ?? 0,
     subagent_tokens_output: info.subagentTokens?.output ?? 0,
     subagent_tokens_reasoning: info.subagentTokens?.reasoning ?? 0,
@@ -125,14 +166,21 @@ function applyUsage(
   previous?: Usage,
 ) {
   return Effect.gen(function* () {
+    if (yield* EventV2.Replaying) yield* SessionAccounting.invalidate(db, sessionID)
+    else yield* SessionAccounting.contribute(db, sessionID, value.ownOnly && (previous?.ownOnly ?? true))
+    // Each record is routed by its own flag on both sides, so a replaced, reverted, removed or moved Codium step takes
+    // back exactly what it added.
+    const next = contribution(value)
+    const prior = contribution(previous)
     const delta = {
-      cost: value.cost * sign - (previous?.cost ?? 0),
-      unpriced: Number(Boolean(value.unpriced)) * sign - Number(Boolean(previous?.unpriced)),
-      input: value.tokens.input * sign - (previous?.tokens.input ?? 0),
-      output: value.tokens.output * sign - (previous?.tokens.output ?? 0),
-      reasoning: value.tokens.reasoning * sign - (previous?.tokens.reasoning ?? 0),
-      read: value.tokens.cache.read * sign - (previous?.tokens.cache.read ?? 0),
-      write: value.tokens.cache.write * sign - (previous?.tokens.cache.write ?? 0),
+      cost: next.cost * sign - prior.cost,
+      unpriced: next.unpriced * sign - prior.unpriced,
+      codium: next.codium * sign - prior.codium,
+      input: next.input * sign - prior.input,
+      output: next.output * sign - prior.output,
+      reasoning: next.reasoning * sign - prior.reasoning,
+      read: next.read * sign - prior.read,
+      write: next.write * sign - prior.write,
     }
     if (Object.values(delta).every((value) => value === 0)) return
     yield* db
@@ -140,6 +188,7 @@ function applyUsage(
       .set({
         cost: sql`${SessionTable.cost} + ${delta.cost}`,
         unpriced_steps: sql`${SessionTable.unpriced_steps} + ${delta.unpriced}`,
+        codium_steps: sql`${SessionTable.codium_steps} + ${delta.codium}`,
         tokens_input: sql`${SessionTable.tokens_input} + ${delta.input}`,
         tokens_output: sql`${SessionTable.tokens_output} + ${delta.output}`,
         tokens_reasoning: sql`${SessionTable.tokens_reasoning} + ${delta.reasoning}`,
@@ -160,6 +209,7 @@ function applyUsage(
       .set({
         subagent_cost: sql`${SessionTable.subagent_cost} + ${delta.cost}`,
         subagent_unpriced_steps: sql`${SessionTable.subagent_unpriced_steps} + ${delta.unpriced}`,
+        subagent_codium_steps: sql`${SessionTable.subagent_codium_steps} + ${delta.codium}`,
         subagent_tokens_input: sql`${SessionTable.subagent_tokens_input} + ${delta.input}`,
         subagent_tokens_output: sql`${SessionTable.subagent_tokens_output} + ${delta.output}`,
         subagent_tokens_reasoning: sql`${SessionTable.subagent_tokens_reasoning} + ${delta.reasoning}`,
@@ -175,8 +225,26 @@ function applyUsage(
   })
 }
 
+// What one record adds to the session totals. A Codium step is one unpriced step and one Codium step and nothing else:
+// its tokens stay on the record, for compaction and the context meter, but every token total leaves them out.
+function contribution(value: Usage | undefined) {
+  if (value?.billing === "codium")
+    return { cost: 0, unpriced: 1, codium: 1, input: 0, output: 0, reasoning: 0, read: 0, write: 0 }
+  return {
+    cost: value?.cost ?? 0,
+    unpriced: Number(Boolean(value?.unpriced)),
+    codium: 0,
+    input: value?.tokens.input ?? 0,
+    output: value?.tokens.output ?? 0,
+    reasoning: value?.tokens.reasoning ?? 0,
+    read: value?.tokens.cache.read ?? 0,
+    write: value?.tokens.cache.write ?? 0,
+  }
+}
+
 function run(db: DatabaseService, event: SessionEvent.Event) {
   return Effect.gen(function* () {
+    if (yield* EventV2.Replaying) yield* SessionAccounting.invalidate(db, event.data.sessionID)
     const decodeRow = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type })
     const updateMessage = (message: SessionMessage.Message) => {
@@ -280,6 +348,7 @@ const layer = Layer.effectDiscard(
     const { db } = yield* Database.Service
     yield* events.project(SessionEvent.MessageImported, (event) =>
       Effect.gen(function* () {
+        yield* SessionAccounting.invalidate(db, event.data.sessionID)
         yield* insertMessage(db, event, event.data.message)
         // Revert and removal subtract a row's usage, so importing one adds it, as a replayed V1 archive does.
         const usage = messageUsage(event.data.message)
@@ -296,6 +365,8 @@ const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
+        if (event.data.sessionID !== event.data.info.id)
+          return yield* Effect.die(new Error("Session identity mismatch"))
         const stored = yield* db
           .insert(SessionTable)
           .values(sessionRow(event.data.info))
@@ -304,6 +375,22 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+        if (
+          (event.data.info.cost ?? 0) !== 0 ||
+          (event.data.info.subagentCost ?? 0) !== 0 ||
+          (event.data.info.unpricedSteps ?? 0) !== 0 ||
+          (event.data.info.subagentUnpricedSteps ?? 0) !== 0 ||
+          (event.data.info.codiumSteps ?? 0) !== 0 ||
+          (event.data.info.subagentCodiumSteps ?? 0) !== 0 ||
+          [event.data.info.tokens, event.data.info.subagentTokens].some(
+            (tokens) =>
+              tokens &&
+              [tokens.input, tokens.output, tokens.reasoning, tokens.cache.read, tokens.cache.write].some(
+                (value) => value !== 0,
+              ),
+          )
+        )
+          yield* SessionAccounting.contribute(db, stored.sessionID, false)
         if (event.data.info.workspaceID) {
           yield* db
             .update(WorkspaceTable)
@@ -315,14 +402,19 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) => {
+      if (event.data.sessionID !== event.data.info.id) return Effect.die(new Error("Session identity mismatch"))
       // The usage columns belong to the step accounting below. A patch carries the totals it read before publishing,
       // so writing them back would erase every step that settled in between, such as one landing while a title is
       // generated or a subagent's record is updated.
       const {
         cost: _,
         unpriced_steps: _unpriced,
+        codium_steps: _codium,
         subagent_cost: _subagentCost,
         subagent_unpriced_steps: _subagentUnpriced,
+        subagent_codium_steps: _subagentCodium,
+        tokens_own_only: _tokensOwnOnly,
+        subagent_tokens_own_only: _subagentTokensOwnOnly,
         subagent_tokens_input: _subagentInput,
         subagent_tokens_output: _subagentOutput,
         subagent_tokens_reasoning: _subagentReasoning,
@@ -340,7 +432,15 @@ const layer = Layer.effectDiscard(
         .set({ ...settings, time_updated: sql`max(${SessionTable.time_updated}, ${settings.time_updated ?? 0})` })
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
-        .pipe(Effect.orDie)
+        .pipe(
+          Effect.orDie,
+          Effect.andThen(
+            Effect.gen(function* () {
+              if (yield* EventV2.Replaying) return yield* SessionAccounting.invalidate(db, event.data.sessionID)
+              yield* SessionAccounting.contribute(db, event.data.sessionID, true)
+            }),
+          ),
+        )
     })
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
@@ -366,6 +466,7 @@ const layer = Layer.effectDiscard(
         const time_created = event.data.info.time.created
         const id = event.data.info.id
         const sessionID = event.data.info.sessionID
+        if (yield* EventV2.Replaying) yield* SessionAccounting.invalidate(db, sessionID)
         const data = messageData(event.data.info)
         yield* db
           .insert(MessageTable)
@@ -373,6 +474,24 @@ const layer = Layer.effectDiscard(
           .onConflictDoUpdate({ target: MessageTable.id, set: { data } })
           .run()
           .pipe(Effect.orDie)
+        if (event.data.info.role === "assistant") {
+          if (event.data.info.forked) yield* SessionAccounting.invalidate(db, sessionID)
+          if (!Billing.hasOwnIdentity(event.data.info)) {
+            const parts = yield* db
+              .select({ data: PartTable.data })
+              .from(PartTable)
+              .where(and(eq(PartTable.message_id, id), eq(PartTable.session_id, sessionID)))
+              .all()
+              .pipe(Effect.orDie)
+            if (
+              parts.some(
+                (part) =>
+                  part.data.type === "step-finish" && (!("billing" in part.data) || part.data.billing !== "codium"),
+              )
+            )
+              yield* SessionAccounting.contribute(db, sessionID, false)
+          }
+        }
         if (event.data.info.role === "assistant" && event.data.info.time.completed !== undefined)
           yield* db
             .update(SessionTable)
@@ -391,7 +510,7 @@ const layer = Layer.effectDiscard(
           .all()
           .pipe(Effect.orDie)
         for (const row of rows) {
-          const previous = usage(row.data)
+          const previous = yield* partUsage(db, row)
           if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
         }
         yield* db
@@ -409,7 +528,7 @@ const layer = Layer.effectDiscard(
           .where(and(eq(PartTable.id, event.data.partID), eq(PartTable.session_id, event.data.sessionID)))
           .get()
           .pipe(Effect.orDie)
-        const previous = row && usage(row.data)
+        const previous = row && (yield* partUsage(db, row))
         if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
         yield* db
           .delete(PartTable)
@@ -423,6 +542,7 @@ const layer = Layer.effectDiscard(
         const id = event.data.part.id
         const messageID = event.data.part.messageID
         const sessionID = event.data.part.sessionID
+        if (yield* EventV2.Replaying) yield* SessionAccounting.invalidate(db, sessionID)
         const data = partData(event.data.part)
         const row = yield* db.select().from(PartTable).where(eq(PartTable.id, id)).get().pipe(Effect.orDie)
         yield* db
@@ -431,8 +551,14 @@ const layer = Layer.effectDiscard(
           .onConflictDoUpdate({ target: PartTable.id, set: { data } })
           .run()
           .pipe(Effect.orDie)
-        const previous = row && usage(row.data)
-        const next = usage(event.data.part)
+        const previous = row && (yield* partUsage(db, row))
+        const message = yield* db
+          .select({ data: MessageTable.data })
+          .from(MessageTable)
+          .where(and(eq(MessageTable.id, messageID), eq(MessageTable.session_id, sessionID)))
+          .get()
+          .pipe(Effect.orDie)
+        const next = usage(event.data.part, message?.data)
         if (next && row?.session_id === sessionID)
           return yield* applyUsage(db, sessionID, next, 1, event.data.time, previous)
         if (previous) yield* applyUsage(db, row.session_id, previous, -1, event.data.time)
@@ -515,11 +641,18 @@ const layer = Layer.effectDiscard(
           return
         }
         const previous = rowUsage(row)
+        const assistant = decodeMessage({ ...row.data, id: row.id, type: row.type })
         yield* run(db, event)
         yield* applyUsage(
           db,
           event.data.sessionID,
-          event.data,
+          {
+            ...event.data,
+            ownOnly: knownOwnOnly(
+              event.data.billing,
+              assistant.type === "assistant" ? assistant.model.providerID : undefined,
+            ),
+          },
           1,
           DateTime.toEpochMillis(event.data.timestamp),
           previous,
@@ -538,6 +671,12 @@ const layer = Layer.effectDiscard(
               event.data.incomplete ||
               event.data.cost === undefined ||
               event.data.tokens === undefined,
+            // Nothing subtracts ancillary usage, so its model's provider id can route it as well as the flag.
+            billing:
+              event.data.billing === "codium" || Billing.isCodium(event.data.model.providerID) ? "codium" : undefined,
+            ownOnly:
+              knownOwnOnly(event.data.billing, event.data.model.providerID) ||
+              Billing.isCodium(event.data.model.providerID),
             tokens: event.data.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           },
           1,
@@ -568,6 +707,8 @@ const layer = Layer.effectDiscard(
           {
             cost: event.data.cost,
             unpriced: event.data.unpriced === true,
+            billing: event.data.billing,
+            ownOnly: knownOwnOnly(event.data.billing),
             tokens: event.data.tokens,
           },
           1,
@@ -585,6 +726,8 @@ const layer = Layer.effectDiscard(
           {
             cost: event.data.cost,
             unpriced: event.data.unpriced === true,
+            billing: event.data.billing,
+            ownOnly: knownOwnOnly(event.data.billing),
             tokens: event.data.tokens,
           },
           1,

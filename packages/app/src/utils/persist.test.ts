@@ -83,6 +83,15 @@ describe("persist localStorage resilience", () => {
     expect(storageApi.getItem("value")).toBeNull()
   })
 
+  test("quota eviction never removes queued follow-ups", () => {
+    storage.setItem("vector.followup.dat:queue:server:ses_1", "x".repeat(1000))
+    storage.setItem("vector.small", "y")
+    persistTesting.localStorageWithPrefix("vector.quota.evict").setItem("value", '{"value":1}')
+
+    expect(storage.getItem("vector.followup.dat:queue:server:ses_1")).toBe("x".repeat(1000))
+    expect(storage.getItem("vector.small")).toBeNull()
+  })
+
   test("disables only the failing scope when storage throws", () => {
     const bad = persistTesting.localStorageWithPrefix("vector.throw.scope")
     bad.setItem("value", '{"value":1}')

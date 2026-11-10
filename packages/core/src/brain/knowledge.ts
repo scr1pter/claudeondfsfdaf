@@ -1,5 +1,6 @@
 export * as BrainKnowledge from "./knowledge"
 
+import { Billing } from "@vectordevai/schema/billing"
 import { createHash, randomBytes } from "node:crypto"
 import { constants as fsConstants } from "node:fs"
 import fs from "node:fs/promises"
@@ -61,6 +62,7 @@ import { BrainStructure } from "./structure"
 import { BrainVector } from "./vector"
 import { BrainWorker } from "./worker/host"
 import type { BrainWorkerProtocol } from "./worker/protocol"
+import type { CostKind } from "../review/types"
 
 // Documents in the brain: what the user gives Vector to know (a PDF, a Word file, a spec in Markdown, the repository's
 // own docs), read on this computer into sections, passages and typed records, and kept in brain.db beside memory.
@@ -201,15 +203,15 @@ export type DistillRun = {
   readonly model: string
   /** The hidden helper session the request ran in. */
   readonly session: string
-  readonly tokens: {
+  readonly tokens?: {
     readonly input: number
     readonly output: number
     readonly reasoning: number
     readonly cacheRead: number
     readonly cacheWrite: number
   }
-  readonly cost: number
-  readonly costKind: "free" | "priced" | "plan" | "local" | "unknown"
+  readonly cost?: number
+  readonly costKind: CostKind
   readonly dropped: BrainDistill.Dropped
   readonly error?: string
 }
@@ -1428,6 +1430,14 @@ function make(input: {
     const ids = yield* db
       .transaction((tx) =>
         Effect.gen(function* () {
+          // Extraction may finish after the user changed visibility or forgot the document. Read the current row in
+          // the write transaction so an old worker cannot publish shared items or recreate a forgotten document.
+          const current = yield* tx
+            .select({ visibility: BrainDocumentTable.visibility })
+            .from(BrainDocumentTable)
+            .where(eq(BrainDocumentTable.id, document.id))
+            .get()
+          if (!current) return undefined
           yield* tx.delete(BrainSectionTable).where(eq(BrainSectionTable.document_id, document.id)).run()
           for (const batch of chunks(structured.sections, 500))
             yield* tx
@@ -1465,7 +1475,7 @@ function make(input: {
               type: item.type,
               ref: item.ref,
               document_id: document.id,
-              visibility: document.visibility,
+              visibility: current.visibility,
               status: item.status,
               hold_reason: item.hold_reason,
               length: [...item.terms.values()].reduce((sum, count) => sum + count, 0),
@@ -1544,7 +1554,7 @@ function make(input: {
           for (const item of moved) {
             yield* tx
               .update(BrainItemTable)
-              .set({ document_id: document.id, visibility: document.visibility })
+              .set({ document_id: document.id, visibility: current.visibility })
               .where(eq(BrainItemTable.id, item.record.item))
               .run()
             yield* tx
@@ -1582,6 +1592,7 @@ function make(input: {
         }),
       )
       .pipe(Effect.orDie)
+    if (!ids) return
     // The keyword index: each item's postings are written again, since a heading it sits under may have moved.
     const touched = [...ids.values()]
     const before = new Set<number>()
@@ -1923,7 +1934,7 @@ function make(input: {
           action: event.action,
           actor: event.actor,
           ...(lineage.includes(event.entry_id) ? {} : { record: event.entry_id }),
-          ...(event.detail ? { detail: event.detail } : {}),
+          ...(event.detail ? { detail: historyDetail(event.action, event.detail) } : {}),
         }),
       ),
       ...arrivals,
@@ -3456,16 +3467,27 @@ function make(input: {
           // Sections, items, passages, records, postings, vectors and jobs go with their document.
           yield* tx.delete(BrainDocumentTable).where(inArray(BrainDocumentTable.id, documents)).run()
           // An old chat cannot quietly add it back; the user always can.
-          if (options.tombstone)
+          if (options.tombstone) {
             for (const version of versions)
               yield* tx
                 .insert(BrainTombstoneTable)
-                .values({ repository_id: place.repository, norm_hash: documentTombstone(version.hash), until: now + FORGOTTEN })
+                .values({
+                  repository_id: place.repository,
+                  norm_hash: documentTombstone(version.hash),
+                  until: now + FORGOTTEN,
+                })
                 .onConflictDoUpdate({
                   target: [BrainTombstoneTable.repository_id, BrainTombstoneTable.norm_hash],
                   set: { until: now + FORGOTTEN },
                 })
                 .run()
+            // Explicit forgetting also withdraws the cached document index. Keep no title, document id or content in
+            // this cross-process revocation marker; ordinary repository scan cleanup does not invalidate the prefix.
+            yield* tx
+              .insert(BrainEventTable)
+              .values({ entry_id: "", repository_id: place.repository, at: now, action: "forgotten", actor: "user" })
+              .run()
+          }
         }),
       )
       .pipe(Effect.orDie)
@@ -3586,23 +3608,37 @@ function make(input: {
       }
       if (change.title && (row.status === "queued" || row.status === "reading")) state.titled.add(id)
       yield* db
-        .update(BrainDocumentTable)
-        .set({
-          ...(change.title ? { title: BrainCard.clip(BrainScan.stripHidden(change.title), 80) } : {}),
-          // The hold stays recorded, so the approval holds when the document is read again.
-          ...(change.action === "approve" && row.status === "held"
-            ? { status: row.unread.length > 0 ? ("partial" as const) : ("searchable" as const) }
-            : {}),
-          updated_at: now,
-        })
-        .where(eq(BrainDocumentTable.id, id))
-        .run()
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .update(BrainDocumentTable)
+              .set({
+                ...(change.title ? { title: BrainCard.clip(BrainScan.stripHidden(change.title), 80) } : {}),
+                // The hold stays recorded, so the approval holds when the document is read again.
+                ...(change.action === "approve" && row.status === "held"
+                  ? { status: row.unread.length > 0 ? ("partial" as const) : ("searchable" as const) }
+                  : {}),
+                updated_at: now,
+              })
+              .where(eq(BrainDocumentTable.id, id))
+              .run()
+            // Titles, searchable items and the trigger's revocation counter become private in the same commit.
+            if (change.visibility) {
+              yield* tx
+                .update(BrainDocumentTable)
+                .set({ visibility: change.visibility })
+                .where(eq(BrainDocumentTable.id, id))
+                .run()
+              yield* tx
+                .update(BrainItemTable)
+                .set({ visibility: change.visibility })
+                .where(eq(BrainItemTable.document_id, id))
+                .run()
+            }
+            yield* revise(place.repository)
+          }),
+        )
         .pipe(Effect.orDie)
-      if (change.visibility && change.visibility !== row.visibility) {
-        yield* db.update(BrainDocumentTable).set({ visibility: change.visibility }).where(eq(BrainDocumentTable.id, id)).run().pipe(Effect.orDie)
-        yield* db.update(BrainItemTable).set({ visibility: change.visibility }).where(eq(BrainItemTable.document_id, id)).run().pipe(Effect.orDie)
-      }
-      yield* revise(place.repository)
       return "updated" as const
     }
     const item = yield* db
@@ -3921,8 +3957,7 @@ function make(input: {
           kept: items.length,
           duplicate: input.records.length - items.length,
           dropped: input.run.dropped,
-          tokens: input.run.tokens,
-          cost: input.run.cost,
+          ...(input.run.costKind === "codium" ? {} : { tokens: input.run.tokens, cost: input.run.cost }),
           costKind: input.run.costKind,
           ...(input.run.error ? { error: input.run.error } : {}),
         },
@@ -4036,7 +4071,7 @@ function make(input: {
           at: event.at,
           action: event.action,
           actor: event.actor,
-          ...(event.detail ? { detail: event.detail } : {}),
+          ...(event.detail ? { detail: historyDetail(event.action, event.detail) } : {}),
         }),
       ),
     }
@@ -7103,4 +7138,22 @@ async function workingFiles(root: string) {
       (await UntrustedGit.run(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])).split("\0").filter(Boolean),
     ),
   ]
+}
+
+
+// Old distillation receipts keep internal measurements; public history projects only the Codium attribution.
+function historyDetail(action: string, detail: Record<string, unknown>) {
+  if (
+    action !== "distilled" ||
+    !(
+      detail.costKind === "codium" ||
+      detail.billing === "codium" ||
+      (typeof detail.model === "string" && Billing.isCodium(detail.model.split("/")[0]))
+    )
+  )
+    return detail
+  const projected: Record<string, unknown> = { ...detail, costKind: "codium" }
+  delete projected.tokens
+  delete projected.cost
+  return projected
 }

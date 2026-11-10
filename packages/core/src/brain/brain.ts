@@ -19,6 +19,7 @@ import { BrainPaths } from "./paths"
 import { BrainPrivate } from "./private"
 import { BrainScan } from "./scan"
 import type { BrainSchema } from "./schema"
+import { SkillStore } from "./skill-store"
 import {
   BrainAnchorTable,
   BrainCodeFileTable,
@@ -91,7 +92,10 @@ export const BUDGET = {
  * (an entry and a later correction of it) come newest first, so the model can tell which one is current. `documents`
  * says some lines are document cards, which the wrapper then calls data, never instructions.
  */
-export function recallText(lines: readonly string[], options?: { readonly newest?: boolean; readonly documents?: boolean }) {
+export function recallText(
+  lines: readonly string[],
+  options?: { readonly newest?: boolean; readonly documents?: boolean },
+) {
   if (lines.length === 0) return ""
   return [
     "<vector_memory_recall>",
@@ -122,11 +126,18 @@ export const RESEARCH_FACETS: readonly BrainSchema.Facet[] = ["format", "sources
 /** When the optional model learner runs: with Vector Local on (the default), with any model, or never. */
 export type ModelLearner = "local-only" | "always" | "off"
 
-/** What Vector may learn on its own (section 7.4): at all, which facets, and whether a model may help. */
+/**
+ * What Vector may learn on its own (section 7.4): at all, which facets, and whether a model may help; how it learns
+ * skills and drafts them; and what it does with workflow insights.
+ */
 export type LearnSettings = {
   readonly learning: boolean
   readonly facets: Readonly<Record<BrainSchema.Facet, boolean>>
   readonly modelLearner: ModelLearner
+  readonly skills: BrainSchema.SkillLearning
+  readonly skillDrafter: BrainSchema.SkillDrafter
+  readonly workflow: BrainSchema.WorkflowLearning
+  readonly workflowExplore: boolean
 }
 
 /** Tokens of how-you-work lines a role gets, its wrapper counted: a subagent at every size, and a reviewer. */
@@ -167,6 +178,11 @@ export type Evidence =
    * BrainKnowledge.quoted checks; the brain then checks it states the memory.
    */
   | { readonly type: "document"; readonly path: string; readonly quote: string; readonly verified: boolean }
+  /**
+   * A run that turned a check green, for a learned skill: the check, and the request it ran for. `verified`: the engine
+   * saw the check fail and then pass in that run.
+   */
+  | { readonly type: "run"; readonly command: string; readonly requestID: string; readonly verified: boolean }
 
 export type Proposal = {
   readonly kind: BrainSchema.LearnedKind
@@ -216,6 +232,10 @@ export type Refusal =
   | "limit"
   | "put-away"
   | "not-a-term"
+  /** A learned skill, which only Settings > Memory > Skills and `vector memory skills` change. */
+  | "skill-entry"
+  /** A learned skill names a command outside its allow lists, or text a skill may not hold. */
+  | "unsafe-command"
 
 export type WriteResult =
   | {
@@ -292,6 +312,8 @@ export type Stats = {
   readonly learned: number
   readonly digestTokens: number
   readonly learning: boolean
+  /** Learned skills of the repository in use and waiting for review, which the counts above leave out. */
+  readonly skills: { readonly active: number; readonly review: number }
 }
 
 export type Consolidation = {
@@ -356,7 +378,11 @@ export interface Interface {
   readonly posting: (
     place: Place,
     input: { readonly sessionIDs: readonly string[] },
-  ) => Effect.Effect<{ readonly habits: readonly string[]; readonly facts: readonly string[]; readonly cards: readonly string[] }>
+  ) => Effect.Effect<{
+    readonly habits: readonly string[]
+    readonly facts: readonly string[]
+    readonly cards: readonly string[]
+  }>
   /** The scoring half of recall: entries that bear on a request, best first, before any budget. */
   readonly candidates: (
     place: Place,
@@ -432,6 +458,10 @@ export interface Interface {
     readonly learning?: boolean
     readonly facets?: Partial<Record<BrainSchema.Facet, boolean>>
     readonly modelLearner?: ModelLearner
+    readonly skills?: BrainSchema.SkillLearning
+    readonly skillDrafter?: BrainSchema.SkillDrafter
+    readonly workflow?: BrainSchema.WorkflowLearning
+    readonly workflowExplore?: boolean
   }) => Effect.Effect<LearnSettings>
   /**
    * "Erase what Vector learned in this session": forgets every entry Vector learned whose only evidence is that session,
@@ -510,7 +540,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .run()
       .pipe(Effect.orDie)
 
-  const event = (row: Pick<Row, "id" | "repository_id">, action: string, actor: "user" | "agent" | "vector", detail?: Record<string, unknown>) =>
+  const event = (
+    row: Pick<Row, "id" | "repository_id">,
+    action: string,
+    actor: "user" | "agent" | "vector",
+    detail?: Record<string, unknown>,
+  ) =>
     db
       .insert(BrainEventTable)
       .values({ entry_id: row.id, repository_id: row.repository_id, at: Date.now(), action, actor, detail })
@@ -554,12 +589,14 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .pipe(Effect.orDie)
     if (!stat || !stat.isFile()) {
       if (!known) return
-      yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          yield* tx.delete(BrainEntryTable).where(eq(BrainEntryTable.source_file, source.path)).run()
-          yield* tx.delete(BrainSourceTable).where(eq(BrainSourceTable.path, source.path)).run()
-        }),
-      ).pipe(Effect.orDie)
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.delete(BrainEntryTable).where(eq(BrainEntryTable.source_file, source.path)).run()
+            yield* tx.delete(BrainSourceTable).where(eq(BrainSourceTable.path, source.path)).run()
+          }),
+        )
+        .pipe(Effect.orDie)
       return yield* bump(source.repository)
     }
     const mtime = Math.round(stat.mtimeMs)
@@ -654,7 +691,13 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             .delete(BrainEntryTable)
             .where(
               rows.length
-                ? and(eq(BrainEntryTable.source_file, source.path), notInArray(BrainEntryTable.id, rows.map((row) => row.id)))
+                ? and(
+                    eq(BrainEntryTable.source_file, source.path),
+                    notInArray(
+                      BrainEntryTable.id,
+                      rows.map((row) => row.id),
+                    ),
+                  )
                 : eq(BrainEntryTable.source_file, source.path),
             )
             .run()
@@ -685,7 +728,11 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
 
   // --- Reading ----------------------------------------------------------------------------------------------------
 
-  const visibleRows = Effect.fnUntraced(function* (place: Place, personal: boolean, statuses: readonly BrainSchema.Status[]) {
+  const visibleRows = Effect.fnUntraced(function* (
+    place: Place,
+    personal: boolean,
+    statuses: readonly BrainSchema.Status[],
+  ) {
     return yield* db
       .select()
       .from(BrainEntryTable)
@@ -757,9 +804,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       ...(options.personal && !outward ? [personalFiles.memory] : []),
     ]
     const sources = new Map(
-      (yield* db.select().from(BrainSourceTable).where(inArray(BrainSourceTable.path, paths)).all().pipe(Effect.orDie)).map(
-        (row) => [row.path, row],
-      ),
+      (yield* db
+        .select()
+        .from(BrainSourceTable)
+        .where(inArray(BrainSourceTable.path, paths))
+        .all()
+        .pipe(Effect.orDie)).map((row) => [row.path, row]),
     )
     // An outward role hears how the owner works, never about them: no MEMORY.md item, no fact and nothing learned
     // beside a private document, only the decisions, lessons and past failures with nothing particular in them, and of
@@ -775,7 +825,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     const pinned = rows
       .filter((row) => row.pinned && !row.tier0 && row.kind !== "review" && !row.stale)
       .toSorted((a, b) => a.created_at - b.created_at)
-      .reduce<Row[]>((kept, row) => (tokensOf(kept) + Token.estimate(line(row)) > BUDGET.pinned ? kept : [...kept, row]), [])
+      .reduce<Row[]>(
+        (kept, row) => (tokensOf(kept) + Token.estimate(line(row)) > BUDGET.pinned ? kept : [...kept, row]),
+        [],
+      )
     const shown = new Set([...rows.filter((row) => row.tier0).map((row) => row.id), ...pinned.map((row) => row.id)])
     const rest = rows.filter((row) => !shown.has(row.id) && row.kind !== "review" && row.kind !== "rule")
     const rules = paths
@@ -783,7 +836,9 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .flatMap((file) => {
         const text = sources.get(file)?.digest
         if (!text) return []
-        return [`${file === personalFiles.rules ? "Your rules (RULES.md in your Vector settings)" : `Repository rules (${label(place, file)})`}:\n${text}`]
+        return [
+          `${file === personalFiles.rules ? "Your rules (RULES.md in your Vector settings)" : `Repository rules (${label(place, file)})`}:\n${text}`,
+        ]
       })
     const memory = sources.get(personalFiles.memory)?.digest
     const advisory = Boolean(memory || pinned.length || rest.length)
@@ -839,7 +894,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     return rows
       .flatMap((row): Candidate[] => {
         const lexical = scored.get(row.id)
-        const pathHit = row.paths.length > 0 && files.some((file) => row.paths.some((pattern) => matches(pattern, file)))
+        const pathHit =
+          row.paths.length > 0 && files.some((file) => row.paths.some((pattern) => matches(pattern, file)))
         // A term comes only to a request that names it, whatever else it shares, and then it leads: it says what the
         // request's own words mean.
         const named = row.kind === "term" && BrainLearn.names(input.query, row.term_key ?? "")
@@ -847,7 +903,9 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         const relevant =
           row.kind === "term"
             ? named
-            : pathHit || (lexical !== undefined && (lexical.matched.length >= 2 || (query.size <= 2 && lexical.matched.length >= 1)))
+            : pathHit ||
+              (lexical !== undefined &&
+                (lexical.matched.length >= 2 || (query.size <= 2 && lexical.matched.length >= 1)))
         if (!relevant) return []
         const recency = Math.max(0.5, 0.995 ** ((now - (row.last_used_at ?? row.updated_at)) / HOUR))
         const proven = BrainCredit.lift({ helpful: row.helpful, harmful: row.harmful, ignored: 0 }, row)
@@ -889,8 +947,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       // Counted as sent, with the longer header, so recall never passes its budget.
       .reduce<Candidate[]>(
         (kept, item) =>
-          Token.estimate(recallText([...kept, item].map((candidate) => candidate.line), { newest: true })) >
-          input.budget
+          Token.estimate(
+            recallText(
+              [...kept, item].map((candidate) => candidate.line),
+              { newest: true },
+            ),
+          ) > input.budget
             ? kept
             : [...kept, item],
         [],
@@ -922,12 +984,22 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     }
   })
 
-  const lines = Effect.fn("Brain.lines")(function* (place: Place, ids: readonly string[], options: { personal: boolean }) {
+  const lines = Effect.fn("Brain.lines")(function* (
+    place: Place,
+    ids: readonly string[],
+    options: { personal: boolean },
+  ) {
     if (ids.length === 0) return new Map<string, string>()
     const rows = yield* db
       .select()
       .from(BrainEntryTable)
-      .where(and(inArray(BrainEntryTable.id, [...ids]), visible(place, options.personal), eq(BrainEntryTable.status, "active")))
+      .where(
+        and(
+          inArray(BrainEntryTable.id, [...ids]),
+          visible(place, options.personal),
+          eq(BrainEntryTable.status, "active"),
+        ),
+      )
       .all()
       .pipe(Effect.orDie)
     return new Map(rows.map((row) => [row.id, line(row)]))
@@ -1023,7 +1095,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
           a.row.id.localeCompare(b.row.id),
       )
       .reduce<Row[]>(
-        (kept, item) => (Token.estimate(wrap([...kept, item.row].map(line))) > input.budget ? kept : [...kept, item.row]),
+        (kept, item) =>
+          Token.estimate(wrap([...kept, item.row].map(line))) > input.budget ? kept : [...kept, item.row],
         [],
       )
     if (picked.length === 0) return { ids: [], tokens: 0 }
@@ -1093,7 +1166,9 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       : rows.toSorted((a, b) => (b.last_used_at ?? b.updated_at) - (a.last_used_at ?? a.updated_at))
     const picked = ranked
       .slice(0, input.limit ?? 5)
-      .reduce<Row[]>((kept, row) => (kept.map(line).join("\n").length + line(row).length > BUDGET.search && kept.length ? kept : [...kept, row]), [])
+      .reduce<
+        Row[]
+      >((kept, row) => (kept.map(line).join("\n").length + line(row).length > BUDGET.search && kept.length ? kept : [...kept, row]), [])
     yield* used(
       picked.map((row) => row.id),
       input.sessionID,
@@ -1126,7 +1201,13 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       ? yield* db
           .select()
           .from(BrainEntryTable)
-          .where(and(inArray(BrainEntryTable.id, row.related), visible(place, options.personal), eq(BrainEntryTable.status, "active")))
+          .where(
+            and(
+              inArray(BrainEntryTable.id, row.related),
+              visible(place, options.personal),
+              eq(BrainEntryTable.status, "active"),
+            ),
+          )
           .all()
           .pipe(Effect.orDie)
       : []
@@ -1191,9 +1272,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
           : input.filter === "all"
             ? ["active", "proposed", "quarantined", "archived", "superseded"]
             : ["active"]
-    const rows = (yield* visibleRows(place, true, statuses)).filter(
-      (row) => !input.scope || row.scope === input.scope,
-    )
+    const rows = (yield* visibleRows(place, true, statuses)).filter((row) => !input.scope || row.scope === input.scope)
     const query = input.query?.trim().toLowerCase()
     if (!query) return rows.toSorted(byPlace).map(toEntry)
     const terms = BrainLexical.terms(query)
@@ -1231,7 +1310,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
   })
 
   // Every facet is learned, and the model learner runs only with Vector Local on, until the user says otherwise
-  // (section 7.4).
+  // (section 7.4). Skills wait for review and are drafted by a model only with Vector Local on, and learned workflow
+  // defaults apply without exploring, until the owner chooses otherwise; no repository's config can choose for them.
   const learnSettings = Effect.fn("Brain.learnSettings")(function* () {
     const row = yield* db
       .select()
@@ -1245,6 +1325,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         BrainLearn.FACETS.map((facet) => [facet, row?.learn_facets?.[facet] !== false]),
       ) as Record<BrainSchema.Facet, boolean>,
       modelLearner: row?.model_learner ?? "local-only",
+      skills: row?.skill_learning ?? "review",
+      skillDrafter: row?.skill_drafter ?? "local-only",
+      workflow: row?.workflow_learning ?? "apply",
+      workflowExplore: row?.workflow_explore ?? false,
     } satisfies LearnSettings
   })
 
@@ -1252,12 +1336,20 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     learning?: boolean
     facets?: Partial<Record<BrainSchema.Facet, boolean>>
     modelLearner?: ModelLearner
+    skills?: BrainSchema.SkillLearning
+    skillDrafter?: BrainSchema.SkillDrafter
+    workflow?: BrainSchema.WorkflowLearning
+    workflowExplore?: boolean
   }) {
     const current = yield* learnSettings()
     const next = {
       learning: change.learning ?? current.learning,
       learn_facets: { ...current.facets, ...change.facets },
       model_learner: change.modelLearner ?? current.modelLearner,
+      skill_learning: change.skills ?? current.skills,
+      skill_drafter: change.skillDrafter ?? current.skillDrafter,
+      workflow_learning: change.workflow ?? current.workflow,
+      workflow_explore: change.workflowExplore ?? current.workflowExplore,
     }
     yield* db
       .insert(BrainStateTable)
@@ -1269,12 +1361,20 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
   })
 
   // Every write that changes memory leaves one evidence row, so this counts merges into known entries as well as new
-  // ones, and the agent cannot pile writes onto one entry past the per-message cap either.
+  // ones, and the agent cannot pile writes onto one entry past the per-message cap either. A learned skill's evidence
+  // is Vector's own and counts toward no message's memory writes.
   const written = Effect.fn("Brain.written")(function* (sessionID: string, since: number) {
     const rows = yield* db
       .select({ id: BrainEvidenceTable.id })
       .from(BrainEvidenceTable)
-      .where(and(eq(BrainEvidenceTable.session_id, sessionID), sql`${BrainEvidenceTable.created_at} >= ${since}`))
+      .innerJoin(BrainEntryTable, eq(BrainEntryTable.id, BrainEvidenceTable.entry_id))
+      .where(
+        and(
+          eq(BrainEvidenceTable.session_id, sessionID),
+          sql`${BrainEvidenceTable.created_at} >= ${since}`,
+          ne(BrainEntryTable.kind, "skill"),
+        ),
+      )
       .all()
       .pipe(Effect.orDie)
     return rows.length
@@ -1305,7 +1405,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
 
   // Evidence is kept only as far as it was checked, and never with a secret or a hidden character in it: get and export
   // show it, and get sends it to the provider.
-  const evidenceRow = (entry: string, evidence: Evidence | undefined, sessionID: string | undefined, checked: boolean) => {
+  const evidenceRow = (
+    entry: string,
+    evidence: Evidence | undefined,
+    sessionID: string | undefined,
+    checked: boolean,
+  ) => {
     const base = {
       entry_id: entry,
       session_id: sessionID ?? null,
@@ -1316,7 +1421,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       command: null,
     }
     if (!evidence || evidence.type === "user") return { ...base, type: "user" as const }
-    if (evidence.type === "message") return { ...base, type: "message" as const, quote: checked ? scrub(evidence.quote) : null }
+    if (evidence.type === "message")
+      return { ...base, type: "message" as const, quote: checked ? scrub(evidence.quote) : null }
     if (evidence.type === "file")
       return {
         ...base,
@@ -1327,6 +1433,13 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       }
     if (evidence.type === "document")
       return { ...base, type: "document" as const, path: evidence.path, quote: checked ? scrub(evidence.quote) : null }
+    if (evidence.type === "run")
+      return {
+        ...base,
+        type: "run" as const,
+        quote: evidence.requestID,
+        command: checked ? scrub(evidence.command) : null,
+      }
     return { ...base, type: "check" as const, command: checked ? scrub(evidence.command) : null }
   }
 
@@ -1339,7 +1452,9 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         and(
           eq(BrainEvidenceTable.entry_id, row.entry_id),
           eq(BrainEvidenceTable.type, row.type),
-          row.session_id === null ? isNull(BrainEvidenceTable.session_id) : eq(BrainEvidenceTable.session_id, row.session_id),
+          row.session_id === null
+            ? isNull(BrainEvidenceTable.session_id)
+            : eq(BrainEvidenceTable.session_id, row.session_id),
           row.path === null ? isNull(BrainEvidenceTable.path) : eq(BrainEvidenceTable.path, row.path),
           row.quote === null ? isNull(BrainEvidenceTable.quote) : eq(BrainEvidenceTable.quote, row.quote),
           row.command === null ? isNull(BrainEvidenceTable.command) : eq(BrainEvidenceTable.command, row.command),
@@ -1430,6 +1545,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
   })
 
   const propose = Effect.fn("Brain.propose")(function* (place: Place, proposal: Proposal) {
+    if (proposal.supersedes && (yield* skillEntry(proposal.supersedes))) return refuse("skill-entry", SKILL_ENTRY)
     const agent = proposal.origin === "agent"
     // What a file the user imported says waits for them, however it reads, so a changed file cannot plant memory in use.
     const imported = proposal.origin === "import"
@@ -1445,8 +1561,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     if (proposal.kind === "term" && !term)
       return refuse("not-a-term", 'A term reads "When I say X, I mean Y". Save anything else as a preference.')
     const facet =
-      proposal.facet ??
-      (term ? "vocabulary" : proposal.kind === "preference" ? BrainLearn.facetOf(cleaned) : undefined)
+      proposal.facet ?? (term ? "vocabulary" : proposal.kind === "preference" ? BrainLearn.facetOf(cleaned) : undefined)
     if (settings && facet && !settings.facets[facet])
       return refuse(
         "learning-off",
@@ -1458,7 +1573,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     // A password, passphrase or PIN given with its value is a secret in any wording. What is worth remembering is where
     // the secret is kept, never the secret itself.
     if (agent && BrainScan.credential(cleaned))
-      return refuse("secret", "That gives a password or passphrase. Memory never stores secrets; save where it is kept instead.")
+      return refuse(
+        "secret",
+        "That gives a password or passphrase. Memory never stores secrets; save where it is kept instead.",
+      )
     const redacted = BrainScan.redact(cleaned)
     if (redacted.redacted && BrainScan.remainder(redacted.text) < 16)
       return refuse("secret", "That is a secret. Memory never stores secrets, keys, tokens or passwords.")
@@ -1510,13 +1628,17 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       )
     // A replacement keeps the scope of what it replaces, and only the user's words change what the user wrote.
     if (previous?.scope === "personal" && !own)
-      return refuse("not-found", `${previous.id} is the user's own memory; quote what they said about themselves to change it.`)
+      return refuse(
+        "not-found",
+        `${previous.id} is the user's own memory; quote what they said about themselves to change it.`,
+      )
     if (previous?.origin === "user" && !said)
       return refuse(
         "user-entry",
         `${previous.id} is the user's own entry; quote what they said to change it, or ask them to edit it in Settings > Memory.`,
       )
-    const scope: BrainSchema.Scope = (previous?.scope ?? proposal.scope) === "personal" && own ? "personal" : "repository"
+    const scope: BrainSchema.Scope =
+      (previous?.scope ?? proposal.scope) === "personal" && own ? "personal" : "repository"
     const repository = scope === "personal" ? PERSONAL : place.repository
     // What Vector's learner keeps for this repository because it names someone or something in particular ("always
     // cc jane@acme.com", "always ask Priya before merging", "never deploy to acme-prod on Fridays") is memory of the
@@ -1733,7 +1855,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .transaction((tx) =>
         Effect.gen(function* () {
           yield* tx.insert(BrainEntryTable).values(row).run()
-          yield* tx.insert(BrainEvidenceTable).values(evidenceRow(id, evidence, proposal.sessionID, verified)).run()
+          yield* tx
+            .insert(BrainEvidenceTable)
+            .values(evidenceRow(id, evidence, proposal.sessionID, verified))
+            .run()
           // A replacement that waits leaves the entry it replaces in use until it is approved.
           if (previous && status === "active")
             yield* tx
@@ -1793,7 +1918,9 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .orderBy(desc(BrainEventTable.id))
       .get()
       .pipe(Effect.orDie)
-    const previous = [step?.detail?.previous, step?.detail?.pending].find((value): value is string => typeof value === "string")
+    const previous = [step?.detail?.previous, step?.detail?.pending].find(
+      (value): value is string => typeof value === "string",
+    )
     if (!previous) return undefined
     return yield* db
       .select()
@@ -1889,14 +2016,38 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     yield* db
       .update(BrainEntryTable)
       .set({ status: "archived", updated_at: Date.now() })
-      .where(inArray(BrainEntryTable.id, excess.map((row) => row.id)))
+      .where(
+        inArray(
+          BrainEntryTable.id,
+          excess.map((row) => row.id),
+        ),
+      )
       .run()
       .pipe(Effect.orDie)
     yield* Effect.forEach(excess, (row) => event(row, "archived", "vector"), { discard: true })
     return excess.length
   })
 
-  const update = Effect.fn("Brain.update")(function* (place: Place, id: string, change: Change, actor: "user" | "agent") {
+  // A learned skill lives outside every place's memory, so `find` never returns one; these checks say why it cannot be
+  // changed here rather than that it is not there.
+  const skillEntry = Effect.fnUntraced(function* (id: string) {
+    const row = yield* db
+      .select({ kind: BrainEntryTable.kind })
+      .from(BrainEntryTable)
+      .where(eq(BrainEntryTable.id, id))
+      .get()
+      .pipe(Effect.orDie)
+    return row?.kind === "skill"
+  })
+
+  // The changed content and the event that advances its revocation counter commit together.
+  const update = Effect.fn("Brain.update")(function* (
+    place: Place,
+    id: string,
+    change: Change,
+    actor: "user" | "agent",
+  ) {
+    if (yield* skillEntry(id)) return refuse("skill-entry", SKILL_ENTRY)
     const row = yield* find(place, id, true)
     if (!row) return undefined
     const learned = LEARNED.includes(row.origin)
@@ -1905,7 +2056,11 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       return refuse("user-entry", `${row.id} is the user's own; ask them to change it in Settings > Memory.`)
     const now = Date.now()
     if (change.text !== undefined) {
-      if (!learned) return refuse("file-entry", `${row.id} comes from ${row.source_file ? path.basename(row.source_file) : "a file"}; edit that file.`)
+      if (!learned)
+        return refuse(
+          "file-entry",
+          `${row.id} comes from ${row.source_file ? path.basename(row.source_file) : "a file"}; edit that file.`,
+        )
       const cleaned = BrainScan.stripHidden(change.text).replace(/\s+/g, " ").trim()
       if (!cleaned) return refuse("empty", "Nothing to save.")
       if (cleaned.length > LIMIT.user) return refuse("too-long", `Keep one memory to ${LIMIT.user} characters.`)
@@ -1945,7 +2100,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       yield* event(row, "filed", actor, { facet: change.facet })
     }
     if (change.pinned !== undefined) {
-      yield* db.update(BrainEntryTable).set({ pinned: change.pinned }).where(eq(BrainEntryTable.id, id)).run().pipe(Effect.orDie)
+      yield* db
+        .update(BrainEntryTable)
+        .set({ pinned: change.pinned })
+        .where(eq(BrainEntryTable.id, id))
+        .run()
+        .pipe(Effect.orDie)
       yield* event(row, change.pinned ? "pinned" : "unpinned", actor)
     }
     if (change.action === "approve" && (row.status === "proposed" || row.status === "quarantined")) {
@@ -1972,9 +2132,17 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       return { type: "merged" as const, entry: toEntry({ ...row, status: "archived" }) }
     }
     if ((change.action === "archive" || change.action === "restore" || change.action === "undo") && !learned)
-      return refuse("file-entry", `${row.id} comes from ${row.source_file ? path.basename(row.source_file) : "a file"}; edit that file.`)
+      return refuse(
+        "file-entry",
+        `${row.id} comes from ${row.source_file ? path.basename(row.source_file) : "a file"}; edit that file.`,
+      )
     if (change.action === "archive" && row.status === "active") {
-      yield* db.update(BrainEntryTable).set({ status: "archived", updated_at: now }).where(eq(BrainEntryTable.id, id)).run().pipe(Effect.orDie)
+      yield* db
+        .update(BrainEntryTable)
+        .set({ status: "archived", updated_at: now })
+        .where(eq(BrainEntryTable.id, id))
+        .run()
+        .pipe(Effect.orDie)
       yield* event(row, "archived", actor)
     }
     // Undo takes back what Vector learned: the entry is put away as the user's decision, which only they reverse, a
@@ -1984,7 +2152,11 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
-            yield* tx.update(BrainEntryTable).set({ status: "archived", updated_at: now }).where(eq(BrainEntryTable.id, id)).run()
+            yield* tx
+              .update(BrainEntryTable)
+              .set({ status: "archived", updated_at: now })
+              .where(eq(BrainEntryTable.id, id))
+              .run()
             yield* tx
               .insert(BrainTombstoneTable)
               .values({ ...tombstoneOf(row), until: now + 180 * DAY })
@@ -2018,7 +2190,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             if (actor === "user")
               yield* tx
                 .delete(BrainTombstoneTable)
-                .where(and(eq(BrainTombstoneTable.repository_id, row.repository_id), eq(BrainTombstoneTable.norm_hash, row.norm_hash)))
+                .where(
+                  and(
+                    eq(BrainTombstoneTable.repository_id, row.repository_id),
+                    eq(BrainTombstoneTable.norm_hash, row.norm_hash),
+                  ),
+                )
                 .run()
           }),
         )
@@ -2028,7 +2205,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     yield* bump(row.repository_id)
     const next = yield* find(place, id, true)
     return next ? { type: "merged" as const, entry: toEntry(next) } : undefined
-  })
+  }, (effect) => db.transaction(() => effect).pipe(Effect.orDie))
 
   // Forgetting is a real delete: the row and its evidence go, and only a hash of the text stays so it is not learned
   // again for 180 days.
@@ -2047,10 +2224,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             .run()
           yield* tx.delete(BrainUseTable).where(eq(BrainUseTable.entry_id, row.id)).run()
           yield* tx.delete(BrainEventTable).where(eq(BrainEventTable.entry_id, row.id)).run()
+          yield* event(row, "forgotten", "user")
         }),
       )
       .pipe(Effect.orDie)
-    yield* event(row, "forgotten", "user")
     yield* bump(row.repository_id)
   })
 
@@ -2061,11 +2238,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     if (row.origin === "failure-memory" && row.source_file && row.signature) {
       // Failure memory is Vector's own file, so forgetting a record removes it there.
       yield* Effect.promise(() => removeFailure(row.source_file!, row.signature!))
-      yield* db
-        .delete(BrainSourceTable)
-        .where(eq(BrainSourceTable.path, row.source_file))
-        .run()
-        .pipe(Effect.orDie)
+      yield* db.delete(BrainSourceTable).where(eq(BrainSourceTable.path, row.source_file)).run().pipe(Effect.orDie)
     }
     yield* forgetRow(row)
     return "forgotten" as const
@@ -2077,7 +2250,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       inArray(BrainEntryTable.origin, [...LEARNED]),
       repositories ? inArray(BrainEntryTable.repository_id, repositories) : undefined,
     )
-    const rows = yield* db.select({ id: BrainEntryTable.id }).from(BrainEntryTable).where(where).all().pipe(Effect.orDie)
+    const rows = yield* db
+      .select({ id: BrainEntryTable.id })
+      .from(BrainEntryTable)
+      .where(where)
+      .all()
+      .pipe(Effect.orDie)
     // Kept originals of the documents erased below, which are not redacted, go with them.
     const kept =
       scope === "personal"
@@ -2093,7 +2271,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             )
             .all()
             .pipe(Effect.orDie)
-    yield* db
+    const skills = yield* db
       .transaction((tx) =>
         Effect.gen(function* () {
           yield* tx.delete(BrainEntryTable).where(where).run()
@@ -2105,10 +2283,33 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             .delete(BrainTombstoneTable)
             .where(repositories ? inArray(BrainTombstoneTable.repository_id, repositories) : undefined)
             .run()
-          if (rows.length) yield* tx.delete(BrainUseTable).where(inArray(BrainUseTable.entry_id, rows.map((row) => row.id))).run()
+          if (rows.length)
+            yield* tx
+              .delete(BrainUseTable)
+              .where(
+                inArray(
+                  BrainUseTable.entry_id,
+                  rows.map((row) => row.id),
+                ),
+              )
+              .run()
+          // A content-free event advances the durable revocation counter in this transaction. An all-memory erase
+          // uses the personal scope, which every digest observes, even after this event is eventually pruned.
+          yield* tx
+            .insert(BrainEventTable)
+            .values({
+              entry_id: "",
+              repository_id: scope === "all" || scope === "personal" ? PERSONAL : place.repository,
+              at: Date.now(),
+              action: "forgotten",
+              actor: "user",
+            })
+            .run()
           // Documents belong to a repository whoever added them, so erasing personal memory keeps them. Sections,
-          // passages, records and postings go with their document and item.
-          if (scope === "personal") return
+          // passages, records and postings go with their document and item. So do learned skills and workflow insights,
+          // which are kept per repository; the repository's marker went with its tombstones above.
+          if (scope === "personal") return 0
+          const skills = yield* SkillStore.eraseScope(tx, repositories)
           yield* tx
             .delete(BrainUseTable)
             .where(
@@ -2154,6 +2355,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             })
             .where(repositories ? inArray(BrainStateTable.repository_id, repositories) : undefined)
             .run()
+          return skills
         }),
       )
       .pipe(Effect.orDie)
@@ -2165,7 +2367,15 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         (yield* db
           .select({ hash: BrainDocumentTable.content_hash })
           .from(BrainDocumentTable)
-          .where(and(eq(BrainDocumentTable.stored, true), inArray(BrainDocumentTable.content_hash, kept.map((copy) => copy.hash))))
+          .where(
+            and(
+              eq(BrainDocumentTable.stored, true),
+              inArray(
+                BrainDocumentTable.content_hash,
+                kept.map((copy) => copy.hash),
+              ),
+            ),
+          )
           .all()
           .pipe(Effect.orDie)).map((row) => row.hash),
       )
@@ -2173,7 +2383,9 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         Promise.all(
           kept
             .filter((copy) => !still.has(copy.hash))
-            .map((copy) => fs.rm(BrainPaths.original(BrainPaths.documents(dirs.data), copy.hash, copy.format), { force: true })),
+            .map((copy) =>
+              fs.rm(BrainPaths.original(BrainPaths.documents(dirs.data), copy.hash, copy.format), { force: true }),
+            ),
         ),
       )
     }
@@ -2192,19 +2404,23 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         .pipe(Effect.orDie)
       yield* db
         .delete(BrainSourceTable)
-        .where(scope === "all" ? sql`${BrainSourceTable.path} LIKE ${"%" + path.sep + "failures" + path.sep + "%"}` : eq(BrainSourceTable.path, failureFile(place)))
+        .where(
+          scope === "all"
+            ? sql`${BrainSourceTable.path} LIKE ${"%" + path.sep + "failures" + path.sep + "%"}`
+            : eq(BrainSourceTable.path, failureFile(place)),
+        )
         .run()
         .pipe(Effect.orDie)
     }
     if (scope === "all") yield* db.run("VACUUM").pipe(Effect.orDie)
     yield* bump(scope === "personal" ? PERSONAL : place.repository)
-    return rows.length
+    return rows.length + skills
   })
 
   // What Vector learned in one session alone: its entries whose every piece of evidence came from that session. An
   // entry another session also taught, or the user wrote, stays; what goes is forgotten, so it is not learned again.
   const eraseSession = Effect.fn("Brain.eraseSession")(function* (place: Place, sessionID: string) {
-    const rows = (yield* db
+    const rows = yield* db
       .select()
       .from(BrainEntryTable)
       .where(
@@ -2221,7 +2437,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         ),
       )
       .all()
-      .pipe(Effect.orDie))
+      .pipe(Effect.orDie)
     const others = rows.length
       ? new Set(
           (yield* db
@@ -2242,7 +2458,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       : new Set<string>()
     const only = rows.filter((row) => !others.has(row.id))
     yield* Effect.forEach(only, forgetRow, { discard: true })
-    return only.length
+    // Skills that session taught go back to the text other sessions taught, or go (SkillStore.eraseSession).
+    const skills = yield* db
+      .transaction((tx) => SkillStore.eraseSession(tx, place.repository, sessionID))
+      .pipe(Effect.orDie)
+    if (skills.changed > 0) yield* bump(place.repository)
+    return only.length + skills.removed
   })
 
   // --- Tidying ----------------------------------------------------------------------------------------------------
@@ -2266,8 +2487,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .where(eq(BrainStateTable.repository_id, PERSONAL))
       .get()
       .pipe(Effect.orDie)
+    // A repository's learned skills decay with it.
     for (const [repository, since] of [
       [place.repository, state?.consolidated_at],
+      [SkillStore.namespace(place.repository), state?.consolidated_at],
       [PERSONAL, personalState?.at],
     ] as const) {
       const factor = since ? BrainCredit.factor(now - since) : 1
@@ -2338,7 +2561,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
           .toSorted((a, b) => order.get(a.id)! - order.get(b.id)!)
         for (const other of matches) {
           if (gone.has(row.id)) break
-          const keeper = rank(other) > rank(row) || (rank(other) === rank(row) && other.status === "active") ? other : row
+          const keeper =
+            rank(other) > rank(row) || (rank(other) === rank(row) && other.status === "active") ? other : row
           const loser = keeper === row ? other : row
           if (loser.pinned) continue
           const kept = { body: keeper.body, terms: decoded.get(keeper.id)! }
@@ -2389,9 +2613,17 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
           continue
         }
         // 3. Unused for 90 days, or more often harmful than helpful: archived, where the user can restore it.
-        if (!row.pinned && ((now - (row.last_used_at ?? row.created_at) > 90 * DAY && row.uses < 2) || row.harmful > row.helpful)) {
+        if (
+          !row.pinned &&
+          ((now - (row.last_used_at ?? row.created_at) > 90 * DAY && row.uses < 2) || row.harmful > row.helpful)
+        ) {
           counts.archived++
-          yield* db.update(BrainEntryTable).set({ status: "archived", updated_at: now }).where(eq(BrainEntryTable.id, row.id)).run().pipe(Effect.orDie)
+          yield* db
+            .update(BrainEntryTable)
+            .set({ status: "archived", updated_at: now })
+            .where(eq(BrainEntryTable.id, row.id))
+            .run()
+            .pipe(Effect.orDie)
           yield* event(row, "archived", "vector")
         }
       }
@@ -2401,7 +2633,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     //    Every entry in use is checked against its newest cited line on every tidy. The capacity cap keeps that to a
     //    few hundred entries, and each cited file is read once.
     const cited = yield* db
-      .select({ entry: BrainEvidenceTable.entry_id, path: BrainEvidenceTable.path, quote: BrainEvidenceTable.quote, stale: BrainEntryTable.stale })
+      .select({
+        entry: BrainEvidenceTable.entry_id,
+        path: BrainEvidenceTable.path,
+        quote: BrainEvidenceTable.quote,
+        stale: BrainEntryTable.stale,
+      })
       .from(BrainEvidenceTable)
       .innerJoin(BrainEntryTable, eq(BrainEntryTable.id, BrainEvidenceTable.entry_id))
       .where(
@@ -2419,12 +2656,18 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     const contents = new Map<string, string>()
     for (const item of new Map(cited.map((row) => [row.entry, row])).values()) {
       const target = path.resolve(place.root, item.path!)
-      if (!contents.has(target)) contents.set(target, normalise(yield* Effect.promise(() => fs.readFile(target, "utf8").catch(() => ""))))
+      if (!contents.has(target))
+        contents.set(target, normalise(yield* Effect.promise(() => fs.readFile(target, "utf8").catch(() => ""))))
       const content = contents.get(target)
       const stale = !content || !content.includes(normalise(item.quote!))
       if (stale === item.stale) continue
       if (stale) counts.stale++
-      yield* db.update(BrainEntryTable).set({ stale }).where(eq(BrainEntryTable.id, item.entry)).run().pipe(Effect.orDie)
+      yield* db
+        .update(BrainEntryTable)
+        .set({ stale })
+        .where(eq(BrainEntryTable.id, item.entry))
+        .run()
+        .pipe(Effect.orDie)
     }
     // 4b. Mirrors of files that are gone, such as a removed worktree's or Parallel Workspace's rules and BRAIN.md, leave
     //     the brain: nothing else removes them, and every query of the repository scans them. So does the failure
@@ -2502,7 +2745,16 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .run()
       .pipe(Effect.orDie)
     yield* db.delete(BrainTombstoneTable).where(lt(BrainTombstoneTable.until, now)).run().pipe(Effect.orDie)
-    yield* db.delete(BrainUseTable).where(lt(BrainUseTable.at, now - 30 * DAY)).run().pipe(Effect.orDie)
+    yield* db
+      .delete(BrainUseTable)
+      .where(lt(BrainUseTable.at, now - 30 * DAY))
+      .run()
+      .pipe(Effect.orDie)
+    // 6. Learned skills keep their own rules (SkillStore.tidy): they never merge, and drafts wait 60 days.
+    const skills = yield* SkillStore.tidy(db, place, now)
+    counts.archived += skills.archived
+    counts.dropped += skills.dropped
+    counts.stale += skills.stale
     for (const repository of [place.repository, PERSONAL])
       yield* db
         .insert(BrainStateTable)
@@ -2525,6 +2777,12 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .all()
       .pipe(Effect.orDie)
     const shown = yield* digest(place, { personal: true, index: true })
+    const skills = yield* db
+      .select({ status: BrainEntryTable.status })
+      .from(BrainEntryTable)
+      .where(eq(BrainEntryTable.repository_id, SkillStore.namespace(place.repository)))
+      .all()
+      .pipe(Effect.orDie)
     return {
       active: rows.filter((row) => row.status === "active").length,
       review: rows.filter((row) => row.status === "proposed" || row.status === "quarantined").length,
@@ -2533,6 +2791,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       learned: rows.filter((row) => LEARNED.includes(row.origin) && row.status === "active").length,
       digestTokens: shown.tokens,
       learning: yield* learning(),
+      skills: {
+        active: skills.filter((row) => row.status === "active").length,
+        review: skills.filter((row) => row.status === "proposed" || row.status === "quarantined").length,
+      },
     }
   })
 
@@ -2591,11 +2853,15 @@ function parse(source: { readonly type: "rules" | "memory" | "brain" | "failures
   return BrainParse.failures(content)
 }
 
-function itemHold(source: { readonly type: string; readonly held: boolean }, item: BrainParse.Item): BrainSchema.Hold | undefined {
+function itemHold(
+  source: { readonly type: string; readonly held: boolean },
+  item: BrainParse.Item,
+): BrainSchema.Hold | undefined {
   if (BrainScan.hidden(item.text)) return "hidden-unicode"
   if (source.held) return "untrusted-repository"
   // A person's own rules and MEMORY.md are instructions by design; memory a repository ships or Vector recorded is not.
-  if ((source.type === "brain" || source.type === "failures") && BrainScan.instructionLike(item.text)) return "instruction-like"
+  if ((source.type === "brain" || source.type === "failures") && BrainScan.instructionLike(item.text))
+    return "instruction-like"
   return undefined
 }
 
@@ -2640,11 +2906,18 @@ function render(
   const marks = BrainParse.headings(content)
   const section = (line: number) => marks.findLast((mark) => mark.line < line)
   const alone = marks.filter((mark, index) =>
-    rows.every((row) => (row.source_line ?? 0) < mark.line || (row.source_line ?? 0) > (marks[index + 1]?.line ?? Infinity)),
+    rows.every(
+      (row) => (row.source_line ?? 0) < mark.line || (row.source_line ?? 0) > (marks[index + 1]?.line ?? Infinity),
+    ),
   )
   const entries = [
     ...alone.map((mark) => ({ line: mark.line, text: mark.text, row: undefined, heading: undefined })),
-    ...active.map((row) => ({ line: row.source_line ?? 0, text: `- ${row.body}`, row, heading: section(row.source_line ?? 0) })),
+    ...active.map((row) => ({
+      line: row.source_line ?? 0,
+      text: `- ${row.body}`,
+      row,
+      heading: section(row.source_line ?? 0),
+    })),
   ].toSorted((a, b) => a.line - b.line)
   const kept = entries.reduce<{ lines: string[]; rows: Row[]; headed: number[] }>(
     (list, entry) => {
@@ -2709,7 +2982,8 @@ export function normHash(text: string) {
 
 const ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
 
-function base32(bytes: Uint8Array) {
+/** Bytes in the brain's base32 alphabet, which entry ids are written in. */
+export function base32(bytes: Uint8Array) {
   let bits = 0
   let value = 0
   let out = ""
@@ -2726,7 +3000,11 @@ function base32(bytes: Uint8Array) {
 }
 
 function fileId(file: string, key: string) {
-  return `f${base32(createHash("sha256").update(`${file}\0${normalise(key)}`).digest()).slice(0, 6)}`
+  return `f${base32(
+    createHash("sha256")
+      .update(`${file}\0${normalise(key)}`)
+      .digest(),
+  ).slice(0, 6)}`
 }
 
 function encode(terms: ReadonlyMap<string, number>) {
@@ -2773,6 +3051,8 @@ export function order<C extends Pick<Candidate, "origin" | "terms" | "updatedAt"
   }, [])
   return { ordered: groups.flat(), newest: groups.some((group) => group.length > 1) }
 }
+
+const SKILL_ENTRY = "That is a learned skill. Change learned skills in Settings > Memory > Skills."
 
 /** Texts this alike may be one entry's wordings. They are one entry only when one says nothing the other does not. */
 const SIMILAR = 0.72
@@ -2841,7 +3121,7 @@ function publicHost(value: string) {
 // A quote counts as evidence only for a memory it states whole and the same way round; a cited file's path counts as
 // part of its quote.
 function supports(text: string, evidence: Exclude<Evidence, { readonly type: "user" }>) {
-  if (evidence.type === "check") return BrainLexical.named(text, evidence.command)
+  if (evidence.type === "check" || evidence.type === "run") return BrainLexical.named(text, evidence.command)
   return BrainLexical.states(text, evidence.quote, evidence.type === "file" ? evidence.path : "")
 }
 
@@ -2885,7 +3165,8 @@ function tombstoneOf(row: Row) {
   }
 }
 
-function toEntry(row: Row): BrainSchema.Entry {
+/** An entry row as the brain hands it out. A learned skill's own fields are BrainSkill's to add. */
+export function toEntry(row: Row): BrainSchema.Entry {
   return {
     id: row.id,
     scope: row.scope,
@@ -2899,7 +3180,9 @@ function toEntry(row: Row): BrainSchema.Entry {
     uses: row.uses,
     stale: row.stale,
     ...(row.hold_reason ? { hold: row.hold_reason } : {}),
-    ...(row.source_file ? { source: { file: row.source_file, ...(row.source_line ? { line: row.source_line } : {}) } } : {}),
+    ...(row.source_file
+      ? { source: { file: row.source_file, ...(row.source_line ? { line: row.source_line } : {}) } }
+      : {}),
     ...(row.superseded_by ? { supersededBy: row.superseded_by } : {}),
     related: row.related,
     ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}),

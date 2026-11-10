@@ -1,4 +1,4 @@
-import { release199, upcomingRelease } from "./vector-releases"
+import { release113, release199, upcomingRelease } from "./vector-releases"
 
 // The tables and lists the documentation pages interpolate.
 export const spendRows = [
@@ -17,6 +17,10 @@ export const spendRows = [
   [
     "Your keys, your bill",
     "Connect your own provider account to start. From 1.99.99, guarded personal OpenRouter free access works independently of the free models provided by Vector, which a signed-in Vector account gets only while Vector's service has them switched on. Keep that account free: no credit purchase, payment method, automatic top-ups, paid upstream BYOK credentials, or default or enforced paid plugins. When free limits or eligible endpoints are unavailable, wait; the guarded route does not switch to paid models or providers. Other provider connections have their own pricing.",
+  ],
+  [
+    "Subagent spend ceiling",
+    `${release113.since} the subagents one request starts share one spend ceiling, $25 at catalog prices by default ($5 for guests), set with budget.subagents.usd in your user config or in Settings → Agents → Limits; a repository cannot set it. Only priced steps and steps of unknown cost count toward it, so free, plan and local models are bounded by the subagent counts alone. At 80% the agent is told; at the ceiling each subagent stops after the step that crossed it and keeps its work, the main agent carries on, and the request starts no new subagents. Your next request starts a fresh ceiling. See Limits on the Subagents page.`,
   ],
 ]
 
@@ -204,7 +208,7 @@ export const crew = [
     summary: "Finds code fast",
     hue: 25,
     readOnly: true,
-    role: "Finds files by pattern, searches code for keywords, and answers questions about how the codebase works. Runs on your provider's small model when one is available. Never edits.",
+    role: `Finds files by pattern, searches code for keywords, and answers questions about how the codebase works. Runs on your provider's small model when one is available. Never edits. ${release113.since} it runs on the small model only when that model can call tools and is known to cost less than yours, and otherwise on your model without high effort.`,
   },
   {
     label: "judge",
@@ -275,15 +279,15 @@ export const subagentKinds = [
   ],
   [
     "When Vector uses them",
-    "Vector's agent decides on its own, and it delegates only when splitting the work costs less than doing it. An independent part that is substantial on its own, roughly five or more files or a long check-and-repair loop, or broad research that would flood its context, goes to a subagent, and several such parts are launched together so they run at the same time while the agent keeps the integration and the final checks. Each subagent starts with a fresh context and re-reads what it needs, so ordinary multi-file changes, fixes, lookups and answers it does itself. It calls a specialist when part of the task fits that specialist's focus. You do not have to ask for either.",
+    `Vector's agent decides on its own, and it delegates only when splitting the work costs less than doing it. An independent part that is substantial on its own, roughly five or more files or a long check-and-repair loop, or broad research that would flood its context, goes to a subagent, and several such parts are launched together so they run at the same time while the agent keeps the integration and the final checks. Each subagent starts with a fresh context and re-reads what it needs, so ordinary multi-file changes, fixes, lookups and answers it does itself. It calls a specialist when part of the task fits that specialist's focus. You do not have to ask for either. ${release113.since} on ordinary (Work) and Thorough requests the agent may hand off independent, substantial parts, broad searches, and new work you send while it is busy; Light requests, and requests where you said "no subagents", start only the subagents you name with @.`,
   ],
   [
     "How many",
-    "A small task gets no subagents; a big one gets one per independent part. Vector sets no cap on either kind. Your computer and your provider's rate limits are the practical limits, and each one spends its own tokens.",
+    `A small task gets no subagents; a big one gets one per independent part. Up to desktop 1.99.112, Vector set no cap on either kind: your computer and your provider's rate limits were the practical limits, and each one spends its own tokens. ${release113.since} at most 8 subagents run at once in a conversation, one request starts at most 32, and the subagents of one request share a $25 spend ceiling (4, 8 and $5 for guests). The main agent's launches past the at-once limit wait for a free slot; past the per-request count they are refused. Change the limits with budget.subagents or in Settings → Agents → Limits.`,
   ],
   [
     "While they run",
-    "By default the main agent waits for their results, then carries on with what they found. In the desktop app it can also leave one running in the background while it does other work, and picks up the result when that one finishes.",
+    `By default the main agent waits for their results, then carries on with what they found. In the desktop app it can also leave one running in the background while it does other work, and picks up the result when that one finishes. ${release113.since} it launches them in the background by default and keeps working, and each report arrives on its own; Move to background frees the main turn from one it is waiting for.`,
   ],
   [
     "Who they answer to",
@@ -295,9 +299,12 @@ export const subagentKinds = [
   ],
   [
     "Where they work",
-    "In your session's checkout, not a separate worktree. Vector refuses to start one whose assigned paths overlap another running subagent's.",
+    `In your session's checkout, not a separate worktree. Vector refuses to start one whose assigned paths overlap another running subagent's. ${release113.since} in your checkout, or in a git worktree of its own when the agent launches it with isolation: "worktree"; its changes then come back for you or the agent to review, merge or discard.`,
   ],
-  ["How deep", "One level. By default, subagents cannot start subagents of their own."],
+  [
+    "How deep",
+    `One level. By default, subagents cannot start subagents of their own. ${release113.since} one level by default, two at most: a subagent's own subagents are the deepest level, and a fork or a workflow agent starts none.`,
+  ],
   [
     "In Plan mode",
     "Vector does not start subagents, and of the built-in specialists it uses only Explore, Review and Security, which cannot edit.",
@@ -455,18 +462,15 @@ export const faqs = [
   },
   {
     question: "Can several agents work on one repository?",
-    answer:
-      "Yes, in two ways. Inside one session, Vector's agent starts subagents on its own for big tasks and runs them in the same checkout. For separate responsibilities, create agent workspaces: each works on its own copy or Git worktree, and you decide which changes are reviewed and merged.",
+    answer: `Yes, in two ways. Inside one session, Vector's agent starts subagents on its own for big tasks and runs them in the same checkout. For separate responsibilities, create agent workspaces: each works on its own copy or Git worktree, and you decide which changes are reviewed and merged. ${release113.since} ordinary (Work) and Thorough requests may delegate too, and a subagent may work in a Git worktree of its own (isolation: "worktree"), whose changes you review, merge or discard.`,
   },
   {
     question: "What is the difference between a subagent and a subagent specialist?",
-    answer:
-      "A subagent is general purpose: it takes whatever self-contained piece of the task Vector's agent hands it. Vector starts them for big tasks, one per independent part, and does small tasks itself. A subagent specialist is one of eight named agents, such as Review or Debug, with a fixed focus and its own permissions. Agents you define yourself count as custom specialists. Vector uses both on its own, and both appear in the chat and in Background tasks.",
+    answer: `A subagent is general purpose: it takes whatever self-contained piece of the task Vector's agent hands it. Vector starts them for big tasks, one per independent part, and does small tasks itself. A subagent specialist is one of eight named agents, such as Review or Debug, with a fixed focus and its own permissions. Agents you define yourself count as custom specialists. Vector uses both on its own, and both appear in the chat and in Background tasks. ${release113.since} ordinary (Work) and Thorough requests may delegate independent, substantial parts too, and a subagent may work in a Git worktree of its own (isolation: "worktree").`,
   },
   {
     question: "Is there a limit on how many subagents Vector runs?",
-    answer:
-      "No. Vector sets no cap, though it starts subagents only for big tasks. Your computer and your provider's rate limits are the practical limits, and each subagent spends its own tokens. By default, subagents cannot start subagents of their own.",
+    answer: `Up to desktop 1.99.112, no: Vector set no cap, though it starts subagents only for big tasks, so your computer and your provider's rate limits are the practical limits, and each subagent spends its own tokens. By default, subagents cannot start subagents of their own. ${release113.since} yes. At most 8 subagents run at once in a conversation and the rest wait for a free slot, one request starts at most 32, and the subagents of one request stop at a shared $25 spend ceiling at catalog prices (4, 8 and $5 for guests). Change them with budget.subagents in your user config or in Settings → Agents → Limits; a repository may only lower the counts. Subagents nest two levels at most.`,
   },
   {
     question: "Can I stop Vector from using subagents?",

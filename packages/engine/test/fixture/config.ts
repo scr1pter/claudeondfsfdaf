@@ -12,6 +12,7 @@ export function make(overrides: Partial<Config.Interface> = {}) {
     storedMcp: () => Effect.succeed({}),
     invalidate: () => Effect.void,
     directories: () => Effect.succeed([]),
+    loaded: () => Effect.succeed({ files: [], directories: [] }),
     trustedPath: () => Effect.succeed(undefined),
     waitForDependencies: () => Effect.void,
     permissionCeiling: () => Effect.succeed(undefined),
@@ -19,6 +20,7 @@ export function make(overrides: Partial<Config.Interface> = {}) {
     localPolicy: () => Effect.succeed(Config.local()),
     trust: () => Effect.succeed({ workspace: "", fingerprint: "", trusted: false, ignored: false, settings: false }),
     approve: () => Effect.void,
+    inheritTrust: () => Effect.succeed(false),
     ...overrides,
   })
 }

@@ -1,0 +1,298 @@
+{
+  "kind": "maintenance-native-gate-bridge-v1",
+  "verdict": "product_failure",
+  "sourceIntegrityStatus": "unchanged",
+  "checks": [
+    {
+      "name": "source-syntax",
+      "category": "prerequisite",
+      "status": "passed"
+    },
+    {
+      "name": "server-readiness",
+      "category": "prerequisite",
+      "status": "passed"
+    },
+    {
+      "name": "no-external-dependencies",
+      "category": "prerequisite",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-health",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-list-accounts",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-get-account",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-list-usage",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-quote",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-create-account",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-record-usage",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "legacy-workspace-isolation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "unknown-route",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "authentication-required",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "migration-v2-envelope",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "migration-exact-backup",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "migration-restart-idempotent",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "checksum-corruption-refused",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "future-version-refused",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invalid-legacy-refused",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "stale-owner-lock-recovery",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "second-live-owner-refused",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "usage-exact-replay",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "usage-conflicting-replay",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "usage-input-validation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "usage-utc-month-boundary",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "usage-concurrent-deduplication",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "account-plan-validation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invoice-snapshot-arithmetic",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invoice-exact-replay",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invoice-conflicting-replay",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invoice-concurrent-period-uniqueness",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "reader-write-denied",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "billing-key-account-scope",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "key-management-owner-only",
+      "category": "api",
+      "status": "failed",
+      "error": "AssertionError: acceptance assertion failed"
+    },
+    {
+      "name": "revocation-immediate",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "revoked-idempotent-replay-denied",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "revoked-inflight-body-denied",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invoice-workspace-isolation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invoice-account-scope-isolation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "late-usage-preserves-issued-invoice",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "invoice-restart-durability",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "credit-balance-arithmetic",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "credit-exact-replay",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "credit-conflicting-replay",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "overcredit-atomic-rejection",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "concurrent-credit-limit",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "credit-input-validation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "credit-workspace-isolation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "sdk-connected-workflows",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "sdk-strict-types",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "sdk-api-error-contract",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "cli-connected-workflows",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "cli-error-and-secret-contract",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "authored-source-unchanged",
+      "category": "prerequisite",
+      "status": "passed"
+    }
+  ],
+  "summary": {
+    "api": {
+      "passed": 49,
+      "failed": 1,
+      "not_run": 0
+    },
+    "browser": {
+      "passed": 0,
+      "failed": 0,
+      "not_run": 0
+    },
+    "prerequisite": {
+      "passed": 4,
+      "failed": 0,
+      "not_run": 0
+    }
+  },
+  "allIndependentRowsRetained": true,
+  "checksPassed": 53,
+  "checksTotal": 54
+}

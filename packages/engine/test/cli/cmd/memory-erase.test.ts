@@ -7,7 +7,7 @@ import { eraseWarning, erasedMessage } from "@/cli/cmd/memory"
 describe("vector memory erase", () => {
   test("asks first, naming the Deep research a repository's erase and an erase of everything take", () => {
     expect(eraseWarning("repository")).toBe(
-      "This erases what Vector learned in this repository, its failure memory and Deep research runs included. Run it again with --yes to confirm.",
+      "This erases what Vector learned in this repository, its failure memory, skills, workflow insights and Deep research runs included. Run it again with --yes to confirm.",
     )
     expect(eraseWarning("all")).toBe(
       "This erases everything Vector learned, in every repository and about you, and every Deep research run. Run it again with --yes to confirm.",

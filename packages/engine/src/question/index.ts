@@ -5,6 +5,7 @@ import { SessionID } from "@/session/schema"
 import { QuestionID } from "./schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { QuestionV1 } from "@vectordevai/schema/question-v1"
+import { TaskPlace } from "@/task/place"
 
 export const Option = QuestionV1.Option
 export type Option = typeof Option.Type
@@ -24,9 +25,16 @@ export const Replied = QuestionV1.Replied
 export const Rejected = QuestionV1.Rejected
 export const Event = QuestionV1.Event
 
-export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("QuestionRejectedError", {}) {
+/** What a caller tells its model when no one answered a question in time (`sizing.subagents.ask_timeout`). */
+export const TIMED_OUT =
+  "No one answered within the time limit. Continue with your best judgement and state your assumption in your report."
+
+export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("QuestionRejectedError", {
+  /** No one answered in time: the caller carries on with its own judgement rather than stopping its turn. */
+  timedOut: Schema.optional(Schema.Boolean),
+}) {
   override get message() {
-    return "The user dismissed this question"
+    return this.timedOut ? TIMED_OUT : "The user dismissed this question"
   }
 }
 
@@ -56,6 +64,11 @@ export interface Interface {
     answers: ReadonlyArray<Answer>
   }) => Effect.Effect<void, NotFoundError>
   readonly reject: (requestID: QuestionID) => Effect.Effect<void, NotFoundError>
+  /**
+   * Withdraws an unanswered question as timed out, failing only its asker with `RejectedError({ timedOut: true })`.
+   * Returns whether it was still pending.
+   */
+  readonly expire: (requestID: string) => Effect.Effect<boolean>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
@@ -84,37 +97,38 @@ const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Question.ask")(function* (input: {
-      sessionID: SessionID
-      questions: ReadonlyArray<Info>
-      tool?: Tool
-    }) {
-      const pending = (yield* InstanceState.get(state)).pending
-      const id = QuestionID.ascending()
-      yield* Effect.logInfo("asking", { id, questions: input.questions.length })
+    const ask = Effect.fn("Question.ask")(
+      function* (input: { sessionID: SessionID; questions: ReadonlyArray<Info>; tool?: Tool }) {
+        const pending = (yield* InstanceState.get(state)).pending
+        const id = QuestionID.ascending()
+        yield* Effect.logInfo("asking", { id, questions: input.questions.length })
 
-      const deferred = yield* Deferred.make<ReadonlyArray<Answer>, RejectedError>()
-      const info: Request = {
-        id,
-        sessionID: input.sessionID,
-        questions: input.questions,
-        tool: input.tool,
-      }
-      pending.set(id, { info, deferred })
-      yield* events.publish(Event.Asked, info)
+        const deferred = yield* Deferred.make<ReadonlyArray<Answer>, RejectedError>()
+        const info: Request = {
+          id,
+          sessionID: input.sessionID,
+          questions: input.questions,
+          tool: input.tool,
+        }
+        pending.set(id, { info, deferred })
+        yield* events.publish(Event.Asked, info)
 
-      return yield* Deferred.await(deferred).pipe(
-        // A question whose asker stopped waiting is withdrawn, so clients stop showing it.
-        Effect.onInterrupt(() =>
-          pending.has(id) ? events.publish(Event.Rejected, { sessionID: info.sessionID, requestID: id }) : Effect.void,
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            pending.delete(id)
-          }),
-        ),
-      )
-    })
+        return yield* Deferred.await(deferred).pipe(
+          // A question whose asker stopped waiting is withdrawn, so clients stop showing it.
+          Effect.onInterrupt(() =>
+            pending.has(id)
+              ? events.publish(Event.Rejected, { sessionID: info.sessionID, requestID: id })
+              : Effect.void,
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              pending.delete(id)
+            }),
+          ),
+        )
+      },
+      (effect, input) => TaskPlace.atHome(input.sessionID)(effect),
+    )
 
     const reply = Effect.fn("Question.reply")(function* (input: {
       requestID: QuestionID
@@ -152,12 +166,23 @@ const layer = Layer.effect(
       yield* Deferred.fail(existing.deferred, new RejectedError())
     })
 
+    const expire = Effect.fn("Question.expire")(function* (requestID: string) {
+      const pending = (yield* InstanceState.get(state)).pending
+      const existing = pending.get(requestID as QuestionID)
+      if (!existing) return false
+      pending.delete(existing.info.id)
+      yield* Effect.logInfo("expired", { requestID })
+      yield* events.publish(Event.Rejected, { sessionID: existing.info.sessionID, requestID: existing.info.id })
+      yield* Deferred.fail(existing.deferred, new RejectedError({ timedOut: true }))
+      return true
+    })
+
     const list = Effect.fn("Question.list")(function* () {
       const pending = (yield* InstanceState.get(state)).pending
       return Array.from(pending.values(), (x) => x.info)
     })
 
-    return Service.of({ ask, reply, reject, list })
+    return Service.of({ ask, reply, reject, expire, list })
   }),
 )
 

@@ -582,6 +582,43 @@ describe("vector run (non-interactive subprocess)", () => {
     60_000,
   )
 
+  // A background command (5.H) reports back in a follow-up turn after the parent goes idle. The run used to exit at
+  // that idle, disposing its instance, which killed the command before its exit note was sent.
+  cliIt.concurrent(
+    "waits for a background command and prints the turn that answers its exit note before exiting",
+    ({ llm, vector }) =>
+      Effect.gen(function* () {
+        const toolResults = (hit: { body: Record<string, unknown> }) =>
+          (Array.isArray(hit.body.messages) ? hit.body.messages : []).some(
+            (message) => isRecord(message) && message.role === "tool",
+          )
+        const asking = (text: string) => (hit: { body: Record<string, unknown> }) =>
+          lastUserText(hit.body).includes(text)
+        yield* llm.pushMatch(
+          (hit) => asking("run the slow check")(hit) && !toolResults(hit),
+          reply().tool("bash", {
+            command: "sleep 2 && printf BACKGROUND_DONE",
+            description: "Run the slow check",
+            background: true,
+          }),
+        )
+        yield* llm.pushMatch((hit) => asking("run the slow check")(hit) && toolResults(hit), reply().text("started it"))
+        yield* llm.pushMatch(
+          (hit) => asking("shell-notification")(hit) && asking("BACKGROUND_DONE")(hit),
+          reply().text("the check printed its marker"),
+        )
+
+        const result = yield* vector.run("run the slow check", {
+          extraArgs: ["--dangerously-skip-permissions"],
+          timeoutMs: 50_000,
+        })
+
+        vector.expectExit(result, 0)
+        expect(result.stdout).toBe("started it\nthe check printed its marker\n")
+      }),
+    60_000,
+  )
+
   cliIt.concurrent(
     "stops waiting on a background subagent that shows no activity, and fails the run",
     ({ llm, vector }) =>

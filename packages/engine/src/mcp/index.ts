@@ -36,6 +36,7 @@ import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
 import { McpEvent } from "@vectordevai/schema/mcp-event"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
+import { TaskPlace } from "@/task/place"
 
 const DEFAULT_TIMEOUT = 30_000
 // Longest single stderr chunk that is written to the log.
@@ -324,6 +325,12 @@ const layer = Layer.effect(
 
     const DISABLED_RESULT: CreateResult = { status: { status: "disabled" } }
 
+    const disabledByIsolation = Effect.fn("MCP.disabledByIsolation")(function* () {
+      const ctx = yield* InstanceState.context
+      if (!TaskPlace.isTaskDirectory(ctx.directory) && !TaskPlace.isTaskDirectory(ctx.worktree)) return false
+      return (yield* cfgSvc.get()).sizing?.subagents?.isolation?.mcp !== true
+    })
+
     const connectRemote = Effect.fn("MCP.connectRemote")(function* (
       key: string,
       mcp: ConfigMCPV1.Info & { type: "remote" },
@@ -496,6 +503,7 @@ const layer = Layer.effect(
 
     const create = Effect.fn("MCP.create")(
       function* (key: string, mcp: ConfigMCPV1.Info) {
+        if (yield* disabledByIsolation()) return DISABLED_RESULT
         if (mcp.enabled === false) {
           return DISABLED_RESULT
         }
@@ -620,7 +628,6 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make<State>(
       Effect.fn("MCP.state")(function* () {
         const cfg = yield* cfgSvc.get()
-        const bridge = yield* EffectBridge.make()
         const config = cfg.mcp ?? {}
         const s: State = {
           config: {},
@@ -631,6 +638,13 @@ const layer = Layer.effect(
           removed: new Set(),
           timeouts: {},
         }
+        if (yield* disabledByIsolation()) {
+          for (const [name, entry] of Object.entries(config)) {
+            if (validMcpName(name) && isMcpConfigured(entry)) s.status[name] = { status: "disabled" }
+          }
+          return s
+        }
+        const bridge = yield* EffectBridge.make()
 
         // Register cleanup before connecting: an interrupted load (a stop during cold start) closes this scope
         // before the retry, and every client already stored in s.clients must be closed with it.
@@ -1121,6 +1135,7 @@ const layer = Layer.effect(
     })
 
     const requireMcpConfig = Effect.fnUntraced(function* (mcpName: string) {
+      if (yield* disabledByIsolation()) return yield* new NotFoundError({ name: mcpName })
       const mcpConfig = yield* getMcpConfig(mcpName)
       if (!mcpConfig) return yield* new NotFoundError({ name: mcpName })
       return mcpConfig

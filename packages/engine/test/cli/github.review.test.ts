@@ -2066,3 +2066,25 @@ function lastUserText(body: Record<string, unknown>) {
 function isJson(value: unknown): value is Json {
   return typeof value === "object" && value !== null
 }
+
+test("Codium progress, sticky footer and durable review count contain no private figures", async () => {
+  await using w = await world()
+  const base = reviewer()
+  const review = {
+    calls: base.calls,
+    run: async (input: RunInput): Promise<ReviewOutcome> => {
+      input.onProgress?.({ type: "cost", kind: "codium", codium: true, costUsd: 0 })
+      return {
+        ...(await base.run(input)),
+        cost: { ...COST, kind: "codium", codium: true, model: "vector-plan/vector-flash", costUsd: 99, input: 987654 },
+      }
+    },
+  }
+  const result = await job(w, review)
+  expect(result.log).toContain("Spent: Codium")
+  expect(result.log.join("\n")).not.toContain("Spent $0.0000")
+  expect(sticky(w)?.body).toContain("Vector Codium · vector-flash · Codium")
+  expect(sticky(w)?.body).not.toContain("987")
+  expect(sticky(w)?.body).not.toContain("$99")
+  expect(state(w)).toMatchObject({ costUsd: 0, tokens: [0, 0], codiumReviews: 1 })
+}, 30_000)

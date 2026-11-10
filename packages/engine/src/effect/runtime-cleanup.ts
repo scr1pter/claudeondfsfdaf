@@ -1,3 +1,5 @@
+import { shutdown } from "./instance-registry"
+
 const callbacks = new Set<() => Promise<void>>()
 
 // Modules register after creating a runtime. CLI shutdown must not initialize
@@ -7,6 +9,8 @@ export function registerRuntimeCleanup(dispose: () => Promise<void>) {
 }
 
 export async function disposeRuntimes() {
+  // Background work the runtimes stop from here on is interrupted by the shutdown, not cancelled.
+  shutdown()
   const pending = [...callbacks]
   callbacks.clear()
   const timeout = Promise.withResolvers<never>()

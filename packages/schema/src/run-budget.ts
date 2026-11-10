@@ -20,9 +20,10 @@ export const StopReason = Schema.Literals(["cap", "predicted", "unpriced", "step
 export type StopReason = typeof StopReason.Type
 
 // How a model's steps are billed: priced at catalog list rates, free, covered by a subscription plan, local (a model
-// server on this computer or a listed private address, with no price configured), or unknown because the catalog
-// has no price. Vectorscope and the run guard share it.
-export const CostKind = Schema.Literals(["free", "priced", "plan", "local", "unknown"]).annotate({
+// server on this computer or a listed private address, with no price configured), unknown because the catalog
+// has no price, or codium: billed to the account's Vector Codium plan on vectordev.ai and never priced locally.
+// Vectorscope and the run guard share it.
+export const CostKind = Schema.Literals(["free", "priced", "plan", "local", "unknown", "codium"]).annotate({
   identifier: "CostKind",
 })
 export type CostKind = typeof CostKind.Type
@@ -37,6 +38,8 @@ export const Snapshot = Schema.Struct({
   spentUsd: Schema.Finite,
   steps: NonNegativeInt,
   unpricedSteps: NonNegativeInt,
+  // Steps that ran on Vector Codium. The guard counts them apart: its unpricedSteps counts only unknown steps.
+  codiumSteps: optional(NonNegativeInt),
   costKind: optional(CostKind),
 }).annotate({ identifier: "SpendSnapshot" })
 export type Snapshot = Schema.Schema.Type<typeof Snapshot>

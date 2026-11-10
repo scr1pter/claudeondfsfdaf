@@ -89,6 +89,42 @@ describe("global reload", () => {
     }),
   )
 
+  // A dev server has no end, so waiting for it would keep the old settings, spend ceiling included, indefinitely (5.H).
+  it.instance("does not wait for a running background command, and the reload stops it", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const job = yield* jobs.start({
+        type: "shell",
+        metadata: { background: true, command: "bun run dev" },
+        run: Effect.never,
+      })
+      expect((yield* jobs.get(job.id))?.status).toBe("running")
+
+      yield* disposeAllInstancesAndEmitGlobalDisposed()
+
+      expect(yield* jobs.get(job.id)).toBeUndefined()
+    }),
+  )
+
+  it.instance("still waits for a background subagent while a background command runs beside it", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const release = yield* Deferred.make<void>()
+      yield* jobs.start({ type: "shell", metadata: { background: true, command: "bun run dev" }, run: Effect.never })
+      const task = yield* jobs.start({
+        type: "task",
+        metadata: { background: true },
+        run: Deferred.await(release).pipe(Effect.as("found it")),
+      })
+
+      yield* disposeAllInstancesAndEmitGlobalDisposed()
+      expect((yield* jobs.get(task.id))?.status).toBe("running")
+
+      yield* Deferred.succeed(release, undefined)
+      yield* reloaded(jobs, task.id)
+    }),
+  )
+
   it.instance("reloads an idle instance right away", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service

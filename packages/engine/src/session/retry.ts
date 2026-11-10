@@ -25,6 +25,7 @@ export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
 export const RETRY_MAX_ATTEMPTS = 10
 export const RETRY_MAX_MS = 15 * 60_000
+const CODIUM_CONCURRENCY = "MODEL_PLAN_CONCURRENCY"
 
 function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
@@ -149,37 +150,45 @@ export function policy(opts: {
   set: (input: { attempt: number; message: string; action?: Retryable["action"]; next: number }) => Effect.Effect<void>
 }) {
   return Schedule.fromStepWithMetadata(
-    Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
-      const error = opts.parse(meta.input)
-      const api = SessionV1.APIError.isInstance(error) ? error : undefined
-      const retryIn = (wait: number, retry: Retryable) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis
-          yield* opts.set({
-            attempt: meta.attempt,
-            message: retry.message,
-            action: retry.action,
-            next: now + wait,
+    Effect.sync(() => {
+      // Waiting for other requests does not spend the provider-failure attempt budget.
+      let waits = 0
+      return (meta: Schedule.InputMetadata<unknown>) => {
+        const error = opts.parse(meta.input)
+        const api = SessionV1.APIError.isInstance(error) ? error : undefined
+        const retryIn = (wait: number, retry: Retryable) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            yield* opts.set({
+              attempt: meta.attempt,
+              message: retry.message,
+              action: retry.action,
+              next: now + wait,
+            })
+            return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
           })
-          return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
-        })
-      const gateway = pinned.gateway
-      const kind = gateway?.classify(error, opts.provider)
-      if (kind === "stop") return Cause.done(meta.attempt)
-      if (gateway && kind === "wait") {
-        const left = gateway.remaining()
-        if (left <= 0) return Cause.done(meta.attempt)
-        const wait = Math.max(delay(meta.attempt, api), gateway.minDelayMs ?? RETRY_INITIAL_DELAY)
-        return retryIn(Math.min(wait, RETRY_MAX_DELAY_NO_HEADERS, left), {
-          message: retryable(error, opts.provider)?.message ?? "Provider is busy",
-        })
+        const gateway = pinned.gateway
+        const kind = gateway?.classify(error, opts.provider)
+        if (kind === "stop") return Cause.done(meta.attempt)
+        if (gateway && kind === "wait") {
+          const left = gateway.remaining()
+          if (left <= 0) return Cause.done(meta.attempt)
+          waits++
+          const wait = Math.max(delay(waits, api), gateway.minDelayMs ?? RETRY_INITIAL_DELAY)
+          return retryIn(Math.min(wait, RETRY_MAX_DELAY_NO_HEADERS, left), {
+            message: retryable(error, opts.provider)?.message ?? "Provider is busy",
+          })
+        }
+        const retry = retryable(error, opts.provider)
+        if (!retry) return Cause.done(meta.attempt)
+        // Outside a pinned GitHub run, retain main's concurrency waiting and bounded failure retries.
+        const waiting = api?.data.metadata?.code === CODIUM_CONCURRENCY
+        if (waiting) waits++
+        const counted = meta.attempt - waits
+        const wait = delay(waiting ? waits : counted, api)
+        if (counted > RETRY_MAX_ATTEMPTS || meta.elapsed + wait > RETRY_MAX_MS) return Cause.done(meta.attempt)
+        return retryIn(wait, retry)
       }
-      const retry = retryable(error, opts.provider)
-      if (!retry) return Cause.done(meta.attempt)
-      const wait = delay(meta.attempt, api)
-      // A provider that keeps failing must end the run with its last error instead of retrying unattended forever.
-      if (meta.attempt > RETRY_MAX_ATTEMPTS || meta.elapsed + wait > RETRY_MAX_MS) return Cause.done(meta.attempt)
-      return retryIn(wait, retry)
     }),
   )
 }

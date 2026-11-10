@@ -1211,6 +1211,110 @@ describe("tool.shell permissions", () => {
     }),
   )
 
+  // PowerShell's Copy-Item and Move-Item (`cp`, `mv`, `copy`, `cpi`, `move`, `mi`) and Tee-Object (`tee`), and cmd's copy
+  // and move, write a file by name as cp, mv and tee do under bash (section 8.2). So the file each writes asks what the
+  // edit tool asks, and the prompt guard sees a copy onto a global prompt file whatever the shell. Off Windows,
+  // PowerShell's `cp`, `mv` and `tee` are the native tools.
+  it.live("asks edit for the file a PowerShell or cmd copy, move or tee writes", () =>
+    Effect.gen(function* () {
+      for (const name of ["pwsh", "cmd"] as const) {
+        for (const item of yield* scanShells(name)) {
+          yield* withShell(
+            item,
+            Effect.gen(function* () {
+              const tmp = yield* tmpdirScoped({ git: true })
+              const outside = yield* tmpdirScoped()
+              yield* Effect.promise(() => fs.mkdir(path.join(tmp, "out"), { recursive: true }))
+              const away = path.join(outside, "vector.json")
+              const relative = (file: string) => path.relative(tmp, file).replaceAll("\\", "/")
+              yield* runIn(
+                tmp,
+                Effect.gen(function* () {
+                  // Every ask up to the shell's own, which stops the command before it runs.
+                  const asked = Effect.fnUntraced(function* (command: string) {
+                    const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+                    yield* fail(
+                      { command },
+                      {
+                        ...ctx,
+                        ask: (req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) =>
+                          Effect.sync(() => {
+                            requests.push(req)
+                            if (req.permission === "bash") throw new Error("stop before running")
+                          }),
+                      },
+                    )
+                    const edit = requests.find((r) => r.permission === "edit")?.patterns
+                    return {
+                      command,
+                      edit: edit?.map((file) => file.replaceAll("\\", "/")),
+                      dirs: requests.find((r) => r.permission === "external_directory")?.patterns ?? [],
+                    }
+                  })
+                  const cases: Array<[string, string[] | undefined]> =
+                    name === "pwsh"
+                      ? [
+                          ["cp a.txt b.txt", ["b.txt"]],
+                          [`cp planted.json ${away}`, [relative(away)]],
+                          [`Copy-Item -Destination ${away} -Path planted.json`, [relative(away)]],
+                          // A named source leaves the first position to the destination.
+                          ["Copy-Item -Path a.txt b.txt -Force", ["b.txt"]],
+                          ["Copy-Item -LiteralPath:a.txt -Dest:b.txt -Recurse:$false", ["b.txt"]],
+                          ["Move-Item a.txt b.txt -ErrorAction SilentlyContinue", ["b.txt"]],
+                          ["move a.txt b.txt", ["b.txt"]],
+                          ["mi -Path a.txt -Destination b.txt", ["b.txt"]],
+                          // Into a folder, each source keeps its name.
+                          ["Copy-Item a.txt,c.txt out", ["out/a.txt", "out/c.txt"]],
+                          ["Get-Date | Tee-Object -FilePath log.txt", ["log.txt"]],
+                          ["Get-Date | tee -Append log.txt", ["log.txt"]],
+                          ["Get-Date | Tee-Object -Variable now", undefined],
+                          // Without a destination the cmdlets copy or move into the current location.
+                          ["Copy-Item a.txt", ["a.txt"]],
+                          [`Copy-Item ${away}`, ["vector.json"]],
+                          [`Move-Item -Path ${away}`, ["vector.json"]],
+                          ...((process.platform === "win32"
+                            ? [
+                                // On Windows cp, mv and tee are the cmdlets' aliases.
+                                ["mv a.txt b.txt -ErrorAction SilentlyContinue", ["b.txt"]],
+                              ]
+                            : [
+                                // Elsewhere they run the native tools, which read their words as under bash.
+                                ["cp -t out a.txt", ["out/a.txt"]],
+                                [`cp -t ${outside} vector.json`, [relative(away)]],
+                                ["mv a.txt c.txt out", ["out/a.txt", "out/c.txt"]],
+                                ["Get-Date | tee one.log two.log", ["one.log", "two.log"]],
+                                ["cp a.txt", undefined],
+                              ]) satisfies Array<[string, string[] | undefined]>),
+                        ]
+                      : [
+                          ["copy /Y a.txt b.txt", ["b.txt"]],
+                          // A path that starts with a slash is a switch to cmd, so off Windows the file is reached
+                          // relatively.
+                          [
+                            `copy planted.json ${process.platform === "win32" ? away : relative(away)}`,
+                            [relative(away)],
+                          ],
+                          ["move a.txt out", ["out/a.txt"]],
+                          // Without a destination copy writes into the current folder.
+                          ["copy a.txt", ["a.txt"]],
+                          [`copy /Y ${process.platform === "win32" ? away : relative(away)}`, ["vector.json"]],
+                          ["move a.txt", undefined],
+                        ]
+                  for (const [command, edit] of cases)
+                    expect(yield* asked(command)).toEqual({
+                      command,
+                      edit,
+                      dirs: edit?.some((file) => file.endsWith("vector.json")) ? [glob(path.join(outside, "*"))] : [],
+                    })
+                }),
+              )
+            }),
+          )
+        }
+      }
+    }),
+  )
+
   each("asks for edit permission for the files a redirect writes", () =>
     Effect.gen(function* () {
       const outside = yield* tmpdirScoped()

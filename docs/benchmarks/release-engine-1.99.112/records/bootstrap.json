@@ -1,0 +1,30 @@
+{
+  "bundle": "/home/runner/work/_temp/vector-release-evidence/app/out/main/sidecar.js",
+  "entryKind": "packaged-sidecar",
+  "identityFile": "/home/runner/work/_temp/vector-release-evidence/provenance.json",
+  "out": "/home/runner/work/_temp/vector-release-evidence/study",
+  "dependencyPackage": "/home/runner/work/_temp/vector-release-evidence/app/package.json",
+  "identity": {
+    "schemaVersion": 1,
+    "sourceSha": "dfc98974329f17c6814a923ac12ebe38b6673f38",
+    "version": "1.99.112",
+    "channel": "prod",
+    "platform": "linux-x64",
+    "entrySha256": "3f9f2e1ebd21ad091b51a7a8d80555319e233b8532b23df241fd6f26e5a8482b",
+    "catalogSha256": "a96b465110dd2fcc38e0dcca1a4115e12ea43ddaafdb0ebf587e15026767bf14",
+    "artifact": {
+      "repository": "scr1pter/claudeondfsfdaf",
+      "runId": 40781089625,
+      "runAttempt": 1,
+      "artifactId": 12857033760,
+      "archiveSha256": "bf52c5056b7fbfff459c25cf30bc1d2687462b9caf7f39f085a369bddee52e64",
+      "installerSha256": "75b461bdc5848ff1f14239ba25a2f26ac322773a70730a574eac074fa2a82868",
+      "asarSha256": "57ec5e2a826fb0c919b0777774e31e56a5457bd44960f3c60e39304d580c9289",
+      "catalogArtifactId": 12858090022,
+      "catalogArchiveSha256": "4c247d70f4804f2f9918893b24bf25d7483560c14510f7db463010add97ad7de"
+    },
+    "scope": "Exact packaged sidecar bytes hosted under Node with an IPC adapter; not the full Electron application"
+  },
+  "project": "/home/runner/work/_temp/vector-release-evidence/study/project",
+  "providerOrigin": "http://127.0.0.1:41529"
+}

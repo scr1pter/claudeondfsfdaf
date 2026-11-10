@@ -1028,6 +1028,21 @@ For each package, record its commit, the focused tests and typechecks run locall
   - V30: a CLI-level Codium journey, which needs a fake-vectordev.ai seam, because `github.cloud.ts`'s `SITE` and the gate's heartbeat are fixed to `https://vectordev.ai`.
   - Owner (section 4 step 1): whether one missed heartbeat should end a run (deviation V18c item 4).
 
+
+### Resume integration with main (2026-11-09)
+
+- Base: `vector-at-mention` at `15069641b7940ddabcfd3c49d921984505c089f7` (V18c).
+- Main: `0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c`, the merged multiagent, self-evolving and Codium A00–A28 build.
+- Work resumes in a fresh worktree; the earlier incomplete local source remains untouched. This merge does not install the v3 workflow, activate a hosted service or publish a CLI.
+- Three conflicts were resolved:
+  - `index.ts`: keep main's owner/workflow and local-policy command gate, with the GitHub channel loaded before account verification and the four control commands excluded from that verification.
+  - `vector-account.ts`: keep the channel-backed credentials alongside main's browser-login nonce and token-purpose changes.
+  - `session/retry.ts`: retain main's separate accounting of concurrency waits and provider failures while preserving the GitHub run's pinned stop and wait policy. A wait under the pinned rule also leaves the ordinary failure retry budget intact.
+- The merge also brings main's Codium evidence projection and review cost labels. V19 builds on these rather than replacing them with the earlier reducer.
+- Added regression: twelve pinned gateway waits followed by ten ordinary provider-failure retries still allow all ten failures before stopping on the next one.
+- Validation: the frozen dependency install passed. Independent source review cleared all three conflict resolutions and twelve files changed by both branches that merged automatically. Focused runtime checks cover 100 distinct passing cases: retry 41, command gate 5, agent Codium 10, agent phase 16, workflow compliance 28. The new retry fixture initially used a boolean where the metadata schema requires a string; correcting that fixture made all 41 retry cases pass. The initial Codium file passed nine cases and found one stale expectation: main now stops unpinned run-limit, daily-limit and model-unavailable responses immediately. The corrected retry case passed separately; these are ten distinct cases, not an added full rerun. Each file ran separately with four fresh XDG roots and a 30-second test timeout.
+- The mandatory pre-push hook and exact-head lane CI remain pending. The previous V18c exact-head run `42465949815` remains red at its CLI credential-output assertion; that repair follows this merge as a separate source checkpoint. No full CI success, live owner acceptance or release is claimed.
+
 ## Owner checks recorded
 
 None yet (contract section 4).

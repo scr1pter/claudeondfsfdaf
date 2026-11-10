@@ -1,0 +1,361 @@
+{
+  "kind": "delivery-outbox-contracts-outbox-partial-original-source-publication",
+  "status": "complete_pair_original_flags_preserved",
+  "atUtc": "2026-11-02T05:10:45.444528+00:00",
+  "scope": "Both original application archives and separately identified current authored support code; no normalization of app or supplemental bytes.",
+  "vectorCandidateProductGitRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "codexExecution": "Separately pinned CLI; completed only the missing arm under unchanged frozen candidate/task/plan pins, not a rerun of a prior original Codex arm.",
+  "taskAndEvaluator": {
+    "runtimeTaskSha256": "a20b22b9e3f8c7d4768b5db5d19fb09e8f3b33efff64ccf49b7b895ee74d2ce7",
+    "sourceOnlyFreezeSha256": "1cf4a6d349f4b458a249266b82cb150139779ec7e45aa629bca275625562be17",
+    "instrumentGitRevision": "770dbe484ab2479f8ff41edc9b22a9f98c2a911f",
+    "agentVisibleTaskSha256": "34fb7d00f6cbdf0d42bb3ed489b78f7091e5378f833580dd20a67bf051161509",
+    "browserAccessMode": "shared-client"
+  },
+  "bytePreservation": "Original app bytes are copied exactly with -text attributes. The external authored support script is a separate supplement, not a seventeenth original archive file.",
+  "exclusionPolicy": {
+    "originalArchiveExcludedFiles": 0,
+    "otherExclusions": [],
+    "rationale": "All original archive paths, including hidden pins, are retained: 16 Vector and 17 Codex. Four authored scripts outside those archives are separately published supplements; no generated runtime artifacts or blanket exclusions."
+  },
+  "submissions": [
+    {
+      "id": "vector-first",
+      "runtime": "vector",
+      "attempt": "attempt-00",
+      "sourceDirectory": "vector-first/source",
+      "originalArchiveFileCount": 16,
+      "includedFileCount": 16,
+      "excludedFileCount": 0,
+      "includedFiles": {
+        ".bun-version": {
+          "sha256": "56b0485099b6c5427d3b68c042fd05b632d5e52e924c5064473389812227164c",
+          "bytes": 7
+        },
+        ".node-version": {
+          "sha256": "a1c56e968c358e10872d64220b3ae759ffe7feaffc4da95fae425dbcca43fe44",
+          "bytes": 8
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "fixtures/provider.ts": {
+          "sha256": "b69416cb8ee8a664b1489a93dd5583ce8e9a455a33fc279ff8088bb3c71fef11",
+          "bytes": 8781
+        },
+        "fixtures/tickets.json": {
+          "sha256": "fb5a4c7c077db171ad00fd260b1091a6f377e3bd6b96f8901cb82a6ccb8cd4f4",
+          "bytes": 454
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "scripts/build.ts": {
+          "sha256": "a64e104755e1bc7da02f4d8e47df364a983db5b697a65eee91114bc691600251",
+          "bytes": 531
+        },
+        "server/index.ts": {
+          "sha256": "5d9a296a37fe2480e89c64780f57de32af258b6a4ae9159269139702a7f2c3f2",
+          "bytes": 13907
+        },
+        "TASK.md": {
+          "sha256": "34fb7d00f6cbdf0d42bb3ed489b78f7091e5378f833580dd20a67bf051161509",
+          "bytes": 10025
+        },
+        "tests/outbox.test.ts": {
+          "sha256": "a6a9dfb995c1ffd8845905b30dd379655a48c97827cb449adc1437e9838b9999",
+          "bytes": 12949
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "87dedd26b4dd12911ec0daf7dafe179702c2d3ce96d45f9290aa34db60facd3b",
+          "bytes": 1068
+        },
+        "tests/support.ts": {
+          "sha256": "1f37445d77dfa0b2e16cfe702caffb70e082b2e5f7ba8c3b6a7076c44b73fb90",
+          "bytes": 3205
+        },
+        "tsconfig.json": {
+          "sha256": "16bfe7b04a8c0d6176bd037e49cd3376d04deab59bde034875a2e166c563e34f",
+          "bytes": 335
+        },
+        "web/app.js": {
+          "sha256": "eeb05830203e3481157909272ccd32073e01347bd0bac94afcfc5b10687f33f3",
+          "bytes": 6955
+        },
+        "web/index.html": {
+          "sha256": "875cca62b0e40b3a3be2374b13c0f23f0ecb76733d01543a5263b9b2c850b74a",
+          "bytes": 1084
+        },
+        "web/style.css": {
+          "sha256": "8e6d0dc4b57037481e187c45faa4f75c62bd48eb8be29d1ca890e5462386f1c6",
+          "bytes": 1936
+        }
+      },
+      "excludedFiles": {},
+      "originalArchiveInventorySha256": "216e3999dc456fb6106a120355b7dfcbba739ab9c84fe2ca7795262b6159e954",
+      "publishedSourceInventorySha256": "216e3999dc456fb6106a120355b7dfcbba739ab9c84fe2ca7795262b6159e954",
+      "hiddenAuthoredFilesInspectedAndIncluded": [
+        ".bun-version",
+        ".node-version"
+      ],
+      "independentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 18,
+        "browserPassed": 8,
+        "requiredChecksPassed": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true
+      },
+      "originalCoordinatorStopReason": "coordinator_review_required",
+      "originalAutomaticBrowserAuditStatus": "review_required",
+      "originalAutomaticGateRewritten": false
+    },
+    {
+      "id": "codex-first",
+      "runtime": "codex",
+      "attempt": "attempt-00",
+      "sourceDirectory": "codex-first/source",
+      "originalArchiveFileCount": 17,
+      "includedFileCount": 17,
+      "excludedFileCount": 0,
+      "includedFiles": {
+        ".bun-version": {
+          "sha256": "56b0485099b6c5427d3b68c042fd05b632d5e52e924c5064473389812227164c",
+          "bytes": 7
+        },
+        ".node-version": {
+          "sha256": "a1c56e968c358e10872d64220b3ae759ffe7feaffc4da95fae425dbcca43fe44",
+          "bytes": 8
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "fixtures/provider.ts": {
+          "sha256": "b69416cb8ee8a664b1489a93dd5583ce8e9a455a33fc279ff8088bb3c71fef11",
+          "bytes": 8781
+        },
+        "fixtures/tickets.json": {
+          "sha256": "fb5a4c7c077db171ad00fd260b1091a6f377e3bd6b96f8901cb82a6ccb8cd4f4",
+          "bytes": 454
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "README.md": {
+          "sha256": "07b6ef59ccde956b9375e717331ee19bc74c5965df09f66449bb602c11bd9246",
+          "bytes": 2369
+        },
+        "scripts/build.ts": {
+          "sha256": "f3c9b0fd1e7ff6225b6b0b60778ab6f60102e4a39b0507245802faff6479e274",
+          "bytes": 185
+        },
+        "server/index.ts": {
+          "sha256": "7b61c4119029addc82b04e663b09c38a684a8fbbf4b629f0bf7aa309e3f18b92",
+          "bytes": 12755
+        },
+        "TASK.md": {
+          "sha256": "34fb7d00f6cbdf0d42bb3ed489b78f7091e5378f833580dd20a67bf051161509",
+          "bytes": 10025
+        },
+        "tests/outbox.test.ts": {
+          "sha256": "01ce6e4ac5c42481bb486ac4a773254816b7b0305b373ec5360a5e0e6de48a9c",
+          "bytes": 12446
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "e635a5f317d4ae0b83f703f27f35c3bb3b59305b0a45723c138a1a3935035a29",
+          "bytes": 804
+        },
+        "tests/support.ts": {
+          "sha256": "7d6b1ff0c8e6ff46543a04a2edd2fb16b4f78d77e335342eed881b0b5347f44c",
+          "bytes": 5270
+        },
+        "tsconfig.json": {
+          "sha256": "16bfe7b04a8c0d6176bd037e49cd3376d04deab59bde034875a2e166c563e34f",
+          "bytes": 335
+        },
+        "web/app.js": {
+          "sha256": "8bf93a79a06e5e3fa0dcce21ca971d59149e88a5a3ba1d86babaf87c85263688",
+          "bytes": 6968
+        },
+        "web/index.html": {
+          "sha256": "60a7cabf538db2fc94cd51e0f495a50a5fc9d0ddb53e1d77ac61bd7fb5928e00",
+          "bytes": 1329
+        },
+        "web/style.css": {
+          "sha256": "b3c212c62eb6371ba114f510f26da72daf32db84714d4da516cac40df319a9ac",
+          "bytes": 2479
+        }
+      },
+      "excludedFiles": {},
+      "originalArchiveInventorySha256": "0dd8caebb288d5afc1602c5f630b759c11e5a7170aaac7c420f3929d92c6b9e0",
+      "publishedSourceInventorySha256": "0dd8caebb288d5afc1602c5f630b759c11e5a7170aaac7c420f3929d92c6b9e0",
+      "hiddenAuthoredFilesInspectedAndIncluded": [
+        ".bun-version",
+        ".node-version"
+      ],
+      "independentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 18,
+        "browserPassed": 8,
+        "requiredChecksPassed": 26,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true
+      },
+      "originalCoordinatorStopReason": "coordinator_review_required",
+      "originalAutomaticBrowserAuditStatus": "review_required",
+      "originalAutomaticGateRewritten": false
+    }
+  ],
+  "supplementalAuthoredFiles": [
+    {
+      "path": "vector-first/supplemental-authored/support-data/browser-check.mjs",
+      "logicalOrigin": "support-data/browser-check.mjs",
+      "sha256": "caeaf11ca69caaf8d4538c1b8ff16a07b352874fe82759d678f711b97fedcd0f",
+      "bytes": 7826,
+      "outsideOriginalApplicationArchive": true,
+      "originalImmutableSourceManifestCoveredFile": false,
+      "locationClass": "Declared mutable DATA_DIR outside the app source",
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedAddFileCreationRecords": 1,
+        "currentHashMatchesLoggedCreationContent": true,
+        "subsequentLoggedScriptPatches": 0,
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    },
+    {
+      "path": "codex-first/supplemental-authored/support-data/browser-races.mjs",
+      "logicalOrigin": "support-data/browser-races.mjs",
+      "sha256": "6b76c2eff5ea8e61c492e4ab81217498e87124a112d551fdd52422f53c371774",
+      "bytes": 4266,
+      "outsideOriginalApplicationArchive": true,
+      "originalImmutableSourceManifestCoveredFile": false,
+      "locationClass": "Declared mutable DATA_DIR outside the app source",
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedCreationCandidates": 1,
+        "currentHashMatchesLoggedCreationContent": null,
+        "creationContentEquivalenceEstablished": false,
+        "creationExtractionLimit": "Simple here-string extraction did not reproduce current bytes; nested shell escaping was not decoded. This does not establish an unlogged mutation.",
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    },
+    {
+      "path": "codex-first/supplemental-authored/support-data/browser-restart.mjs",
+      "logicalOrigin": "support-data/browser-restart.mjs",
+      "sha256": "0febeda18d31c7d21a5316e2cd2b4a4ab0bdd079db4efe473bd96c529098698d",
+      "bytes": 2076,
+      "outsideOriginalApplicationArchive": true,
+      "originalImmutableSourceManifestCoveredFile": false,
+      "locationClass": "Declared mutable DATA_DIR outside the app source",
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedCreationCandidates": 1,
+        "currentHashMatchesLoggedCreationContent": null,
+        "creationContentEquivalenceEstablished": false,
+        "creationExtractionLimit": "Simple here-string extraction did not reproduce current bytes; nested shell escaping was not decoded. This does not establish an unlogged mutation.",
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    },
+    {
+      "path": "codex-first/supplemental-authored/support-data/browser-verify.mjs",
+      "logicalOrigin": "support-data/browser-verify.mjs",
+      "sha256": "190e6b5562a1672089f0515ab66003ee7b2e85544984ba3bc322b38d33f700f9",
+      "bytes": 3369,
+      "outsideOriginalApplicationArchive": true,
+      "originalImmutableSourceManifestCoveredFile": false,
+      "locationClass": "Declared mutable DATA_DIR outside the app source",
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedCreationCandidates": 1,
+        "currentHashMatchesLoggedCreationContent": null,
+        "creationContentEquivalenceEstablished": false,
+        "creationExtractionLimit": "Simple here-string extraction did not reproduce current bytes; nested shell escaping was not decoded. This does not establish an unlogged mutation.",
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    }
+  ],
+  "manualReviewLineage": {
+    "cases": {
+      "vector": {
+        "originalStopReason": "coordinator_review_required",
+        "originalAuditStatus": "review_required",
+        "manualDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "originalRunModifiedByManualReview": false,
+        "manualReviewIsSeparate": true,
+        "hardFenceOrAdherenceProven": false
+      },
+      "codex": {
+        "originalStopReason": "coordinator_review_required",
+        "originalAuditStatus": "review_required",
+        "manualDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "originalRunModifiedByManualReview": false,
+        "manualReviewIsSeparate": true,
+        "hardFenceOrAdherenceProven": false
+      }
+    },
+    "originalFlagsChargesAndSourcesRetained": true,
+    "repairsRerunsOrRefunds": false,
+    "continuation": "Only the previously missing Codex arm was continued under the immutable pre-Vector plan/task pins; the original Vector record was not rerun or rewritten."
+  },
+  "qualityImageScope": {
+    "appliesTo": [
+      "vector",
+      "codex"
+    ],
+    "independentReviewImagesPerRuntime": [
+      {
+        "viewportWidth": 390,
+        "state": "queued"
+      },
+      {
+        "viewportWidth": 390,
+        "state": "delivered"
+      }
+    ],
+    "independentDesktopImageProvided": false,
+    "authoredManualAuditDesktopPngIsIndependentReviewEvidence": false
+  },
+  "scan": {
+    "includedApplicationFilesScanned": 33,
+    "supplementalAuthoredFilesScanned": 4,
+    "blockedFindings": 0,
+    "categories": [
+      "absoluteWindowsUserPath",
+      "absolutePosixUserPath",
+      "providerKey",
+      "privateKey",
+      "credentialAssignment",
+      "privateStudyIdentifier"
+    ],
+    "limitations": "Bounded pattern scan, not formal secret assurance."
+  },
+  "gitBlobVerification": {
+    "statusAtPreparation": "Not asserted staged or committed",
+    "afterStagingCommand": "python verify.py --git-index",
+    "meaning": "Static default mode checks app and supplement bytes/attributes independently; index mode also compares every included source byte with its staged Git blob."
+  },
+  "executionByPublicationAuthor": {
+    "bunRuns": 0,
+    "providerCalls": 0,
+    "modelCalls": 0,
+    "applicationTestsRun": 0,
+    "appsStarted": 0
+  },
+  "interpretation": "Both functional gates pass; original coordinator flags and separate bounded manual dispositions remain. Static quality and three-task cost results are reported separately without general production assurance.",
+  "completedAtUtc": "2026-11-02T05:37:28.890576+00:00"
+}

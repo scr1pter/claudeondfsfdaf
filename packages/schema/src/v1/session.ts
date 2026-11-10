@@ -1,6 +1,7 @@
 export * as SessionV1 from "./session"
 
 import { Effect, Schema, Types } from "effect"
+import { Billing } from "../billing"
 import { define, inventory } from "../event"
 import { FileDiff } from "../file-diff"
 import { Project } from "../project"
@@ -78,6 +79,8 @@ export const BudgetStopError = namedError("BudgetStopError", {
   spentUsd: Schema.optional(Schema.Finite),
   capUsd: Schema.optional(Schema.Finite),
   unpricedSteps: Schema.optional(NonNegativeInt),
+  // The run's Vector Codium steps, which the guard counts apart from its unpriced (unknown) steps.
+  codiumSteps: Schema.optional(NonNegativeInt),
   estimate: Schema.optional(Schema.Struct({ lowUsd: Schema.Finite, highUsd: Schema.Finite })),
 })
 
@@ -264,6 +267,8 @@ export const StepFinishPart = Schema.Struct({
   cost: Schema.Finite,
   // The model lists no price, so cost is 0 because nothing could be charged, not because the step was free.
   unpriced: Schema.optional(Schema.Boolean),
+  // The step ran on Vector Codium: its usage shows as "Codium", never as tokens or dollars.
+  billing: optional(Billing.Kind),
   tokens: Schema.Struct({
     total: Schema.optional(Schema.Finite),
     input: Schema.Finite,
@@ -370,6 +375,14 @@ export const User = Schema.Struct({
     modelID: Model.ID,
     variant: Schema.optional(Schema.String),
   }),
+  // What the sender chose when it differs from `model`: Codium Auto, which ran this message on `model`. The session
+  // stays on the choice, and a picker shows it.
+  selected: Schema.optional(
+    Schema.Struct({
+      providerID: Provider.ID,
+      modelID: Model.ID,
+    }),
+  ),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   executionMode: Schema.optional(Schema.Union([Schema.Literal("normal"), Schema.Literal("fast")])),
@@ -499,6 +512,8 @@ export const Assistant = Schema.Struct({
   cost: Schema.Finite,
   // At least one step of this message ran on a model that lists no price; cost leaves those steps out.
   unpriced: Schema.optional(Schema.Boolean),
+  // The message ran on Vector Codium: its usage shows as "Codium", never as tokens or dollars.
+  billing: optional(Billing.Kind),
   tokens: Schema.Struct({
     total: Schema.optional(Schema.Finite),
     input: Schema.Finite,
@@ -513,6 +528,16 @@ export const Assistant = Schema.Struct({
   variant: Schema.optional(Schema.String),
   // The size Vector gave the request this message answers, when it sized it.
   size: Schema.optional(TaskSize.Tier),
+  // A learned workflow default this request ran with, and why. `variant` stays the user's own pick.
+  workflow: Schema.optional(
+    Schema.Struct({
+      effort: Schema.optional(Schema.Literal("default")),
+      split: Schema.optional(Schema.Literal("solo")),
+      subagentModel: Schema.optional(Schema.Literal("small")),
+      source: Schema.Literals(["learned", "explore"]),
+      reason: Schema.String,
+    }),
+  ),
   finish: Schema.optional(Schema.String),
   // Copied into this session by a fork. Its spend was counted in the original session, so it carries no cost and
   // usage totals skip it; its tokens stay so the context in use is still shown.
@@ -593,9 +618,16 @@ export const SessionInfo = Schema.Struct({
   cost: optional(Schema.Finite),
   // Steps that ran on a model with no listed price; cost leaves them out, so a session with any is not fully priced.
   unpricedSteps: optional(NonNegativeInt),
+  // How many of those unpriced steps ran on Vector Codium; own unpriced steps are unpricedSteps − codiumSteps.
+  codiumSteps: optional(NonNegativeInt),
+  // True only when the accounting boundary proves the aggregate contains own-model tokens only.
+  tokensOwnOnly: optional(Schema.Boolean),
+  subagentTokensOwnOnly: optional(Schema.Boolean),
   // What the subagent sessions below this one spent, which cost leaves out, and how many of their steps were unpriced.
   subagentCost: optional(Schema.Finite),
   subagentUnpricedSteps: optional(NonNegativeInt),
+  // How many of the subagent unpriced steps ran on Vector Codium.
+  subagentCodiumSteps: optional(NonNegativeInt),
   // The tokens those sessions used, which tokens leaves out.
   subagentTokens: optional(SessionTokens),
   tokens: optional(SessionTokens),

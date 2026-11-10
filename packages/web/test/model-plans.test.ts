@@ -3,7 +3,6 @@ import { createHmac } from "node:crypto"
 import { paidModelPlan, protectModelPlanKey, revealModelPlanKey } from "../../../api/_lib/model-plan-account"
 import {
   modelPlans,
-  modelTopups,
   modelCreditMarkup,
   publicModelPlans,
   configuredPlanModels,
@@ -12,8 +11,11 @@ import {
 } from "../../../api/_lib/model-plan-config"
 import { modelPlanRequest, requireModelPlanContext, streamModelPlanResponse } from "../../../api/_lib/model-plan-chat"
 import { verifyModelPlanWebhook } from "../../../api/_lib/model-plan-stripe"
-import { IncomingMessage, ServerResponse } from "node:http"
-import { Socket } from "node:net"
+import { createServer, IncomingMessage, ServerResponse } from "node:http"
+import { Socket, type AddressInfo } from "node:net"
+import config from "../../../api/model-plans/config"
+import { readModelPlanConfig } from "../src/lib/model-plans"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 const names = [
   "MODEL_PLANS_ENABLED",
@@ -21,12 +23,7 @@ const names = [
   "MODEL_PLAN_KEY_ENCRYPTION_SECRET",
   "MODEL_CREDIT_MARKUP_PERCENT",
   "STRIPE_MODEL_PLAN_WEBHOOK_SECRET",
-  ...[10, 50, 100, 200].flatMap((price) => [
-    `MODEL_PLAN_${price}_CREDITS_USD`,
-    `STRIPE_MODEL_PLAN_${price}_PRICE_ID`,
-    `MODEL_TOPUP_${price}_CREDITS_USD`,
-    `STRIPE_MODEL_TOPUP_${price}_PRICE_ID`,
-  ]),
+  ...[10, 50, 100, 200].flatMap((price) => [`MODEL_PLAN_${price}_CREDITS_USD`, `STRIPE_MODEL_PLAN_${price}_PRICE_ID`]),
 ]
 const saved = new Map(names.map((name) => [name, process.env[name]]))
 afterEach(() =>
@@ -88,9 +85,9 @@ describe("subscription configuration", () => {
     })
     expect(modelPlans().map((plan) => plan.price)).toEqual([10, 50, 100, 200])
     expect(modelPlans().map((plan) => plan.credits)).toEqual([0, 0, 0, 0])
-    expect(modelTopups().map((pack) => pack.credits)).toEqual([0, 0, 0, 0])
     expect(publicModelPlans().plans.every((plan) => !plan.available)).toBe(true)
-    expect(publicModelPlans().topups.every((pack) => !pack.available)).toBe(true)
+    // Codium sells monthly plans only: the public configuration offers no top-ups.
+    expect(publicModelPlans()).not.toHaveProperty("topups")
     expect(publicModelPlans().product).toBe("Vector Codium")
     expect(publicModelPlans()).not.toHaveProperty("markupPercent")
     expect(publicModelPlans().models.map((model) => model.id)).toEqual([
@@ -106,7 +103,7 @@ describe("subscription configuration", () => {
   test("the public configuration carries no credit amounts, model prices or limits", () => {
     names.forEach((name) => delete process.env[name])
     const config = publicModelPlans()
-    for (const offer of [...config.plans, ...config.topups])
+    for (const offer of config.plans)
       expect(
         Object.keys(offer).every((key) => ["id", "name", "price", "available", "multiple", "tasks"].includes(key)),
       ).toBe(true)
@@ -129,9 +126,8 @@ describe("subscription configuration", () => {
     const original = publicModelPlans()
     process.env.MODEL_CREDIT_MARKUP_PERCENT = "100"
     process.env.MODEL_PLAN_10_CREDITS_USD = "0.5"
-    process.env.MODEL_TOPUP_100_CREDITS_USD = "70"
+    process.env.MODEL_PLAN_100_CREDITS_USD = "70"
     expect(publicModelPlans().plans.map((plan) => plan.tasks)).toEqual(original.plans.map((plan) => plan.tasks))
-    expect(publicModelPlans().topups.map((plan) => plan.tasks)).toEqual(original.topups.map((plan) => plan.tasks))
     expect(original.plans.map((plan) => plan.multiple)).toEqual([undefined, 5, 10, 20])
     expect(original.plans[0]!.tasks).toEqual([
       [50, 500],
@@ -141,11 +137,12 @@ describe("subscription configuration", () => {
       [5, 50],
     ])
   })
-  test("premium models reserve their full context and reply at the reviewed prices", () => {
+  test("captured premium models reserve their native window and reply at every captured rate tier", () => {
     delete process.env.MODEL_PLAN_MODELS_JSON
     for (const id of ["moonshotai/kimi-k3.1-pro", "google/gemini-4-argon"]) {
       const model = configuredPlanModels().find((model) => model.id === id)!
-      expect(modelPlanRequestCredits(model)).toBeCloseTo(0.33792, 8)
+      expect(modelPlanRequestCredits(model, "vector-50")).toBe(2.179072)
+      expect(modelPlanRequestCredits(model, "vector-100")).toBe(4.358144)
       expect(model.description).toContain("Uses credits faster")
     }
   })
@@ -154,11 +151,11 @@ describe("subscription configuration", () => {
     process.env.MODEL_CREDIT_MARKUP_PERCENT = "30"
     expect(modelCreditMarkup()).toBe(30)
     expect(modelPlans()[0].credits).toBe(7.69)
-    expect(modelTopups()[3].credits).toBe(153.84)
+    expect(modelPlans()[3].credits).toBe(153.84)
     process.env.MODEL_PLAN_10_CREDITS_USD = "7"
     expect(modelPlans()[0].credits).toBe(7)
     process.env.MODEL_CREDIT_MARKUP_PERCENT = "NaN"
-    expect(() => modelTopups()).toThrow()
+    expect(() => modelPlans()).toThrow()
   })
   test("invalid or unprofitable credit configurations fail closed", () => {
     process.env.MODEL_PLAN_10_CREDITS_USD = "11"
@@ -170,15 +167,13 @@ describe("subscription configuration", () => {
   })
   test("allowances require whole cents without rejecting valid floating-point representations", () => {
     process.env.MODEL_PLAN_10_CREDITS_USD = "7.125"
-    process.env.MODEL_TOPUP_10_CREDITS_USD = "7.125"
     expect(modelPlans()[0].credits).toBe(0)
-    expect(modelTopups()[0].credits).toBe(0)
-    process.env.MODEL_TOPUP_200_CREDITS_USD = "133.33"
-    expect(modelTopups()[3].credits).toBe(133.33)
+    process.env.MODEL_PLAN_200_CREDITS_USD = "133.33"
+    expect(modelPlans()[3].credits).toBe(133.33)
   })
   test("configured paid models require bounded positive pricing and valid context", () => {
     process.env.MODEL_PLAN_MODELS_JSON = JSON.stringify([model])
-    expect(configuredPlanModels()).toEqual([model])
+    expect(configuredPlanModels()).toEqual([{ ...model, minPlan: "vector-10", weight: (0.1 + 0.3) / 1.5 }])
     for (const invalid of [
       { ...model, inputPrice: 0 },
       { ...model, id: "fixture/coder:free" },
@@ -187,6 +182,28 @@ describe("subscription configuration", () => {
       process.env.MODEL_PLAN_MODELS_JSON = JSON.stringify([invalid])
       expect(() => configuredPlanModels()).toThrow()
     }
+  })
+})
+
+describe("the public configuration route", () => {
+  test("carries only listed perks and accepted models, and every in-repo decoder still reads it", async () => {
+    names.forEach((name) => delete process.env[name])
+    const server = createServer((request, response) => void config(request, response))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/model-plans/config`
+    const send = (_url: string, init: RequestInit) => fetch(url, init)
+    const response = await fetch(url)
+    const body = await response.json()
+    expect(response.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=30")
+    expect(body).toMatchObject({ product: "Vector Codium", enabled: false, listed: [], models: [] })
+    expect(body.plans.map((plan: { price: number }) => plan.price)).toEqual([10, 50, 100, 200])
+    expect(
+      body.plans.every((plan: { available: boolean; tasks: unknown[] }) => !plan.available && !plan.tasks.length),
+    ).toBe(true)
+    expect(readModelPlanConfig(body)).toMatchObject({ enabled: false, plans: expect.any(Array) })
+    expect(await ModelPlanStatus.fetchOffers(send)).toMatchObject({ enabled: false })
+    expect(await ModelPlanStatus.salesOpen(send)).toBe(false)
+    server.close()
   })
 })
 
@@ -421,6 +438,21 @@ describe("gateway request policy", () => {
       ).rejects.toMatchObject({ statusCode: status })
       expect(response.getHeader("retry-after")).toBe("300")
     }
+  })
+  test("a client that stops reading cannot hold the stream past the request's deadline", async () => {
+    // An unattached response never drains, as a connection whose client stopped reading but stayed open.
+    const response = new ServerResponse(new IncomingMessage(new Socket()))
+    const frame = new TextEncoder().encode(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "fixture" } }] })}\n\n`,
+    )
+    const upstream = new Response(new ReadableStream({ pull: (controller) => controller.enqueue(frame) }), {
+      headers: { "content-type": "text/event-stream" },
+    })
+    const streamed = streamModelPlanResponse(upstream, response, undefined, AbortSignal.timeout(50)).then(
+      () => "returned",
+      () => "ended",
+    )
+    expect(await Promise.race([streamed, Bun.sleep(5_000).then(() => "stalled")])).toBe("ended")
   })
   test("preserves coding tools but pins model, pricing, privacy, and generation budget", () => {
     const result = modelPlanRequest(

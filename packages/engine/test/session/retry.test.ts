@@ -4,7 +4,7 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import type { NamedError } from "@vectordevai/core/util/error"
 import { APICallError } from "ai"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Duration, Effect, Exit, Pull, Schedule, Schema } from "effect"
+import { Duration, Effect, Exit, Fiber, Pull, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { SessionRetry } from "../../src/session/retry"
@@ -162,6 +162,42 @@ describe("session.retry.delay", () => {
       expect(Exit.isSuccess(first)).toBe(true)
       expect(Exit.isFailure(late) && Pull.isDoneCause(late.cause)).toBe(true)
     }),
+  )
+
+  it.effect("pinned gateway waits preserve the later provider-failure retry budget", () =>
+    Effect.gen(function* () {
+      const waiting = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+        new SessionV1.APIError({
+          message: "Provider is busy",
+          isRetryable: false,
+          responseHeaders: { "retry-after-ms": "0" },
+          metadata: { code: "MODEL_PLAN_CONCURRENCY", codium: "unavailable" },
+        }).toObject(),
+      )
+      SessionRetry.pinGateway({
+        classify: (error) =>
+          SessionV1.APIError.isInstance(error) && error.data.metadata?.code === "MODEL_PLAN_CONCURRENCY"
+            ? "wait"
+            : undefined,
+        remaining: () => 60_000,
+        minDelayMs: 0,
+      })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: retryProvider,
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: () => Effect.void,
+        }),
+      )
+      const waits = yield* Effect.forEach(Array.from({ length: 12 }), () => Effect.exit(step(waiting)))
+      const failures = yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_ATTEMPTS + 1 }), () =>
+        Effect.exit(step(apiError({ "retry-after-ms": "0" }))),
+      )
+      expect(waits.every(Exit.isSuccess)).toBe(true)
+      expect(failures.slice(0, SessionRetry.RETRY_MAX_ATTEMPTS).every(Exit.isSuccess)).toBe(true)
+      const last = failures[SessionRetry.RETRY_MAX_ATTEMPTS]
+      expect(Exit.isFailure(last) && Pull.isDoneCause(last.cause)).toBe(true)
+    }).pipe(Effect.ensuring(Effect.sync(() => SessionRetry.pinGateway(undefined)))),
   )
 
   it.effect("policy stops when a single retry-after hint passes 15 minutes", () =>
@@ -426,4 +462,155 @@ describe("session.message-v2.fromError", () => {
       message: "An error occurred while processing your request.",
     })
   })
+})
+
+describe("session.retry Codium answers", () => {
+  const codium = ProviderV2.ID.make("vector-plan")
+  // A Codium gateway answer as the engine records it: through the AI SDK's APICallError and the provider parser.
+  const answer = (statusCode: number, code: string, headers: Record<string, string> = {}, dispatched = false) => {
+    const result = MessageV2.fromError(
+      new APICallError({
+        message: "Gateway answer",
+        url: "https://vectordev.ai/api/model-plans/chat",
+        requestBodyValues: {},
+        statusCode,
+        responseHeaders: headers,
+        responseBody: JSON.stringify({
+          error: { code, message: "Gateway answer.", ...(dispatched ? { dispatched: true } : {}) },
+        }),
+        isRetryable: statusCode === 429 || statusCode >= 500,
+      }),
+      { providerID: codium },
+    )
+    if (!SessionV1.APIError.isInstance(result)) throw new Error("expected APIError")
+    return result
+  }
+  const policy = () =>
+    Schedule.toStepWithMetadata(
+      SessionRetry.policy({
+        provider: retryProvider,
+        parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+        set: () => Effect.void,
+      }),
+    )
+
+  test("final answers are never retried, whatever their status", () => {
+    for (const [status, code] of [
+      [429, "MODEL_PLAN_DAILY_LIMIT"],
+      [429, "MODEL_PLAN_RUN_LIMIT"],
+      [429, "MODEL_PLAN_BRAIN_SHARE"],
+      [503, "MODEL_PLAN_POOL_UNAVAILABLE"],
+      [503, "MODEL_PLANS_CONFIGURATION"],
+      [503, "MODEL_PLAN_MODEL_UNAVAILABLE"],
+      [401, "MODEL_PLAN_RUN_EXPIRED"],
+      [426, "CODIUM_UPDATE_REQUIRED"],
+      [400, "MODEL_PLAN_ADDONS"],
+    ] as const) {
+      const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(answer(status, code))
+      expect({ code, retry: SessionRetry.retryable(error, retryProvider) }).toEqual({ code, retry: undefined })
+      expect(error.data.metadata).toMatchObject({ code })
+      // None of these is a credit answer, so nothing offers a purchase for a daily, run or Brain limit.
+      expect(error.data.metadata?.codium).toBe("unavailable")
+    }
+  })
+
+  test("temporary answers are retried after their retry-after, and a transient gateway failure as any 5xx", () => {
+    for (const [status, code] of [
+      [503, "MODEL_PLAN_RENEWING"],
+      [429, "MODEL_PLAN_BUSY"],
+      [429, "MODEL_PLAN_CONCURRENCY"],
+      [402, "MODEL_PLAN_CAPACITY"],
+      [503, "MODEL_PLAN_UPSTREAM"],
+    ] as const) {
+      const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(answer(status, code, { "retry-after": "30" }))
+      expect({ code, retry: SessionRetry.retryable(error, retryProvider) !== undefined }).toEqual({ code, retry: true })
+      expect(error.data.metadata?.codium).toBeUndefined()
+      expect(SessionRetry.delay(1, error)).toBe(30_000)
+    }
+  })
+
+  test("an answer given after the gateway dispatched the request is final, since each resend is committed again", () => {
+    for (const [status, code] of [
+      [429, "MODEL_PLAN_BUSY"],
+      [402, "MODEL_PLAN_CAPACITY"],
+      [503, "MODEL_PLAN_UPSTREAM"],
+      [503, "MODEL_PLAN_UNAVAILABLE"],
+    ] as const) {
+      const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+        answer(status, code, { "retry-after": "30" }, true),
+      )
+      expect({ code, retry: SessionRetry.retryable(error, retryProvider) }).toEqual({ code, retry: undefined })
+      expect(error.data.metadata).toMatchObject({ codium: "unavailable", kind: "unavailable", code })
+      expect(error.data.message).not.toContain("See plans")
+    }
+  })
+
+  it.effect("waiting for the account's other requests is bounded by 15 minutes, not by the attempt count", () =>
+    Effect.gen(function* () {
+      const step = yield* policy()
+      // A zero wait keeps the test clock still; the bound under test is the count.
+      const waiting = answer(429, "MODEL_PLAN_CONCURRENCY", { "retry-after-ms": "0" })
+      const exits = yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_ATTEMPTS * 3 }), () =>
+        Effect.exit(step(waiting)),
+      )
+      expect(exits.every(Exit.isSuccess)).toBe(true)
+      // Counted failures still end the run after their own bound.
+      const renewing = answer(503, "MODEL_PLAN_RENEWING", { "retry-after-ms": "0" })
+      const counted = yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_ATTEMPTS + 1 }), () =>
+        Effect.exit(step(renewing)),
+      )
+      expect(counted.slice(0, SessionRetry.RETRY_MAX_ATTEMPTS).every(Exit.isSuccess)).toBe(true)
+      const last = counted[SessionRetry.RETRY_MAX_ATTEMPTS]
+      expect(Exit.isFailure(last) && Pull.isDoneCause(last.cause)).toBe(true)
+      // The time bound still holds for the waits.
+      const fresh = yield* policy()
+      yield* Effect.exit(fresh(waiting))
+      yield* TestClock.adjust(Duration.minutes(14))
+      const late = yield* Effect.exit(
+        fresh(answer(429, "MODEL_PLAN_CONCURRENCY", { "retry-after-ms": String(2 * 60_000) })),
+      )
+      expect(Exit.isFailure(late) && Pull.isDoneCause(late.cause)).toBe(true)
+    }),
+  )
+
+  it.effect("waiting for the account's other requests does not lengthen a later failure's backoff", () =>
+    Effect.gen(function* () {
+      const step = yield* policy()
+      const waiting = answer(429, "MODEL_PLAN_CONCURRENCY", { "retry-after-ms": "0" })
+      yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_ATTEMPTS }), () => step(waiting))
+      // The gateway's transient failures come from an HTTP answer without a retry-after: the first counted failure
+      // waits the first backoff step, as it would without the waits before it.
+      const upstream = yield* step(answer(503, "MODEL_PLAN_UPSTREAM")).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      )
+      yield* TestClock.adjust(Duration.millis(SessionRetry.RETRY_INITIAL_DELAY))
+      const first = yield* Fiber.join(upstream)
+      expect(Duration.toMillis(first.duration)).toBe(SessionRetry.RETRY_INITIAL_DELAY)
+      // A later wait still takes the gateway's retry-after, whatever the counted failures before it.
+      const again = yield* step(answer(429, "MODEL_PLAN_CONCURRENCY", { "retry-after-ms": "500" })).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      )
+      yield* TestClock.adjust(Duration.millis(500))
+      expect(Duration.toMillis((yield* Fiber.join(again)).duration)).toBe(500)
+      // The next counted failure takes the second step.
+      const second = yield* step(answer(503, "MODEL_PLAN_UPSTREAM")).pipe(Effect.forkChild({ startImmediately: true }))
+      yield* TestClock.adjust(Duration.millis(SessionRetry.RETRY_INITIAL_DELAY * SessionRetry.RETRY_BACKOFF_FACTOR))
+      expect(Duration.toMillis((yield* Fiber.join(second)).duration)).toBe(
+        SessionRetry.RETRY_INITIAL_DELAY * SessionRetry.RETRY_BACKOFF_FACTOR,
+      )
+    }),
+  )
+
+  it.effect("a renewing plan keeps the normal attempt bound", () =>
+    Effect.gen(function* () {
+      const step = yield* policy()
+      const renewing = answer(503, "MODEL_PLAN_RENEWING", { "retry-after-ms": "0" })
+      const exits = yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_ATTEMPTS + 1 }), () =>
+        Effect.exit(step(renewing)),
+      )
+      expect(exits.slice(0, SessionRetry.RETRY_MAX_ATTEMPTS).every(Exit.isSuccess)).toBe(true)
+      const last = exits[SessionRetry.RETRY_MAX_ATTEMPTS]
+      expect(Exit.isFailure(last) && Pull.isDoneCause(last.cause)).toBe(true)
+    }),
+  )
 })

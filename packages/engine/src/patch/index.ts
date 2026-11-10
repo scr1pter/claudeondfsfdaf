@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import * as path from "path"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { recoverEnvelope } from "@vectordevai/core/patch"
 import * as Bom from "../util/bom"
 
 export const PatchSchema = Schema.Struct({
@@ -182,8 +183,9 @@ function stripHeredoc(input: string): string {
   return input
 }
 
-export function parsePatch(patchText: string): { hunks: Hunk[] } {
-  const cleaned = stripHeredoc(patchText.trim())
+export function parsePatch(patchText: string): { hunks: Hunk[]; recoveredMissingBegin?: true } {
+  const envelope = recoverEnvelope(patchText)
+  const cleaned = stripHeredoc(envelope.patchText.trim())
   const lines = cleaned.split("\n")
   const hunks: Hunk[] = []
   let i = 0
@@ -237,7 +239,7 @@ export function parsePatch(patchText: string): { hunks: Hunk[] } {
     }
   }
 
-  return { hunks }
+  return { hunks, ...(envelope.recoveredMissingBegin ? { recoveredMissingBegin: true } : {}) }
 }
 
 // Apply patch functionality

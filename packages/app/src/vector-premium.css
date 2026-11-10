@@ -2824,6 +2824,18 @@ html[data-vector-navigation-resizing] * {
 [data-component="free-model-training-notice"] {
   color: var(--vx-amber);
 }
+/* "Codium · Pro" or "Preview · Ultra": a Codium model the plan does not include. Choosing it opens Change plan. */
+:is(.vector-model-popover, .vector-select-model-dialog) [data-slot="model-row-badge"] {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--picker-muted) 14%, transparent);
+  color: var(--picker-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
 :is(.vector-model-popover, .vector-select-model-dialog) [data-slot="model-row-region"] {
   flex: none;
   padding: 0 6px;

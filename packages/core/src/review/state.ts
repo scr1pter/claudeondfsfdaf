@@ -2,6 +2,7 @@
 // sticky summary, and the rules (section 1.5) that decide what happened to each earlier finding.
 
 import { DEFAULT_MENTIONS, parseReviewCommand } from "./command"
+import { Billing } from "@vectordevai/schema/billing"
 import { mapLine, touched, type DiffFile } from "./diff"
 import type { TeamPattern } from "./prompt"
 import { namedLines } from "./select"
@@ -367,21 +368,39 @@ export interface NextStateInput {
   notedHead?: string
 }
 
+export function reviewCostHasCodium(cost: ReviewCost): boolean {
+  return cost.kind === "codium" || cost.codium === true || cost.model.split(" + ").some(codiumModel)
+}
+
+export function reviewCostIsCodium(cost: ReviewCost): boolean {
+  // Explicit mixed activity keeps its own kind. Older summaries had only the provider-qualified model name.
+  return cost.kind === "codium" || (cost.codium !== true && cost.model.split(" + ").every(codiumModel))
+}
+
+function codiumModel(model: string): boolean {
+  return Billing.isCodium(model.trim().split("/")[0])
+}
+
 export function nextState(prev: ReviewState | undefined, input: NextStateInput): ReviewState {
   const before = prev ?? emptyState()
-  const spent = input.cost?.costUsd ?? 0
-  const tokensIn = input.cost ? input.cost.input + input.cost.cacheRead + input.cost.cacheWrite : 0
+  const cost = input.mode === "carry" ? undefined : input.cost
+  const codium = cost ? reviewCostHasCodium(cost) : false
+  const own = cost && !reviewCostIsCodium(cost) ? cost : undefined
+  const tokens = own && (!codium || own.tokensOwnOnly === true) ? own : undefined
+  const spent = own?.costUsd ?? 0
+  const tokensIn = tokens ? tokens.input + tokens.cacheRead + tokens.cacheWrite : 0
   const month = monthKey(input.now)
   const next: ReviewState = {
     v: 1,
-    reviews: before.reviews + (input.mode !== "carry" && input.cost ? 1 : 0),
+    reviews: before.reviews + (cost ? 1 : 0),
     costUsd: money(before.costUsd + spent),
-    tokens: [before.tokens[0] + tokensIn, before.tokens[1] + (input.cost?.output ?? 0)],
+    tokens: [before.tokens[0] + tokensIn, before.tokens[1] + (tokens?.output ?? 0)],
     month: { key: month, costUsd: money((before.month?.key === month ? before.month.costUsd : 0) + spent) },
     unreviewed: input.failed ? [...before.unreviewed] : [...new Set(input.unreviewed ?? [])],
     inlinePosted: before.inlinePosted + (input.posted ?? 0),
     findings: summaryFindings(before.findings, input),
   }
+  if (before.codiumReviews !== undefined || codium) next.codiumReviews = (before.codiumReviews ?? 0) + (codium ? 1 : 0)
   const head = input.failed ? before.head : input.head
   const base = input.failed ? before.base : input.base
   if (head) next.head = head
@@ -483,6 +502,7 @@ interface CompactState {
   b?: string
   r: number
   c: number
+  k?: number
   t: [number, number]
   m?: [string, number]
   u: number[]
@@ -534,6 +554,7 @@ function encodeRaw(state: ReviewState): string {
   }
   if (state.head) compact.h = state.head
   if (state.base) compact.b = state.base
+  if (state.codiumReviews !== undefined) compact.k = count(state.codiumReviews)
   if (state.month) compact.m = [state.month.key, state.month.costUsd]
   if (state.failed) compact.f = 1
   if (state.notedHead) compact.n = state.notedHead
@@ -570,6 +591,7 @@ export function decodeState(payload: string): ReviewState | undefined {
   }
   if (isSha(raw.h)) state.head = raw.h
   if (isSha(raw.b)) state.base = raw.b
+  if (raw.k !== undefined) state.codiumReviews = count(raw.k)
   if (Array.isArray(raw.m) && typeof raw.m[0] === "string" && /^\d{4}-\d{2}$/.test(raw.m[0]))
     state.month = { key: raw.m[0], costUsd: amount(raw.m[1]) }
   if (raw.f === 1) state.failed = true

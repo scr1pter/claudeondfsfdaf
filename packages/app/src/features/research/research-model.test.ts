@@ -412,3 +412,10 @@ describe("the report card", () => {
     expect(formatPreference(undefined)).toBe("Write Deep research results as a report.")
   })
 })
+
+test("Codium research labels preserve operational step limits without dollar caps", () => {
+  expect(capLabel({ depth: "focused", local: false, codium: true })).toBe("Codium · 80 steps")
+  expect(capLabel({ depth: "deep", local: false, codium: true, own: { usd: 5, steps: 120 } })).toBe(
+    "Codium · 120 steps",
+  )
+})

@@ -1,0 +1,39 @@
+{
+  "kind": "independent browser evaluator static/pure validation",
+  "appBrowserRuns": 0,
+  "modelCalls": 0,
+  "bunInvocations": 0,
+  "nodeSyntax": "passed",
+  "pureNodeTests": {
+    "passed": 15,
+    "failed": 0,
+    "scope": "Navigation, CSV, loopback refusal,40-check inventory, delayed/absent/ambiguous native-select options, and Vite build CLI option parsing; no app behavior claim. Later-position positional Vite roots are equivalent; unsupported options/ambiguous roots reject explicitly."
+  },
+  "browserCheckCount": 40,
+  "newFiles": {
+    "browser-eval.cjs": "545108f62fde8c9e973d16d3fbff3d57ddd4704bc36c2f9452aa516445182b79",
+    "browser-eval.test.cjs": "2b1619246116030bcf1a17ce42586e41050928654b11ef480795895ec690aa79",
+    "build-output.cjs": "750621a2481622099c7f3dbff405ab5a86d3f706a7eb97a35787709ac78e3a35"
+  },
+  "publicContractSource": "BUILD_SPEC.md",
+  "notes": [
+    "Explicit fresh persistent owned Chrome profile; outer evaluator supplies isolated APPDATA/LOCALAPPDATA.",
+    "DOM content readiness rather than networkidle supports permitted persistent SSE.",
+    "Per-domain prerequisites produce not_run, never passed; real API readback validates persisted UI actions.",
+    "All five required export buttons exercised; stock-history reason/delta/date, exact byte attachment flows, new visible alerts, separate invitee context, live role/data/membership changes included.",
+    "Viewport overflow is measured after two animation frames, identically for every arm;2px rounding allowance, contained tables/boards may scroll.",
+    "Screenshots across desktop/mobile are collected as evidence; visual quality remains a blinded human rubric.",
+    "Main evaluator separately verifies restart,concurrency,negative security,storage and broader API cases.",
+    "No delivered app implementation or credentials/API configuration was read or copied.",
+    "Navigation supports inline actions and the specified Open navigation mobile toggle. Wholly offcanvas CSS-visible links are treated as unavailable until the owned menu opens.",
+    "Native selects wait for asynchronous option loading; exactly one matching option is still required. Three pure select controls pass.",
+    "Vite positional root is parsed after recognized flag/value pairs too. Unsupported residual arguments require explicit manual output review instead of silently selecting a wrong output."
+  ],
+  "countAssumptionReview": {
+    "identityIsolation": "Unique synthetic owner per evaluation; newly created workspace distinct from API evaluation organization/accounts.",
+    "exactCounts": "Exactly one UI-created fulfilled order and one paid invoice; expected revenue3548cents. These assertions intentionally catch cross-tenant/global aggregate leakage.",
+    "lowerBounds": "Open/completed task counts use>=1; no assumption about global user or account counts.",
+    "activityLimit": "Uses the public limit50; verifies required workflow events within the fresh UI workspace."
+  },
+  "prelaunchRevision": "prelaunch-v3; v1 and v2 freezes/sources preserved"
+}

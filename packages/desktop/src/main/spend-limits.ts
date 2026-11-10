@@ -33,6 +33,7 @@ export type SpendSource = "session" | "parallel" | "scheduled"
 // spend read as proof of cheapness, and would let a day of unmeasured runs sit
 // under a cap it never tested.
 export type SpendEvent = {
+  billing?: "codium"
   id: string
   projectPath: string
   runId: string
@@ -45,6 +46,7 @@ export type SpendEvent = {
 }
 
 export type SpendDayTotal = {
+  billing?: "codium"
   day: string
   projectPath: string
   costUsd: number
@@ -79,6 +81,7 @@ export type SpendPolicy = {
 }
 
 export type SpendAllowanceInput = {
+  billing?: "codium"
   runId: string
   source: SpendSource
   at?: Date
@@ -106,6 +109,7 @@ export type SpendAllowance = {
 }
 
 export type SpendWindowTotal = {
+  billing?: "codium"
   costUsd: number
   tokens: number
   runs: number
@@ -188,6 +192,7 @@ export function createSpendLedger(input: { userDataPath: string }) {
     update((state) => prune({ ...state, events: [...state.events, event] }, at))
 
   const recordSpend = async (spend: {
+    billing?: "codium"
     projectPath: string
     runId: string
     provider: string
@@ -206,6 +211,7 @@ export function createSpendLedger(input: { userDataPath: string }) {
       provider: spend.provider,
       model: spend.model,
       source: spend.source,
+      ...(spend.billing === "codium" ? { billing: "codium" as const } : {}),
       // Spend never runs backwards. A runtime reporting a negative cost is
       // reporting a parse failure, and subtracting it would hand back headroom
       // under a cap that has already been spent.
@@ -223,6 +229,7 @@ export function createSpendLedger(input: { userDataPath: string }) {
   // provider reported nothing, which is marked unmeasured exactly once — and
   // never once the run has already reported real cost.
   const recordRunCost = async (spend: {
+    billing?: "codium"
     projectPath: string
     runId: string
     provider: string
@@ -245,14 +252,23 @@ export function createSpendLedger(input: { userDataPath: string }) {
       // same step that makes the spend visible to a check.
       reservations.delete(spend.runId)
       const recorded = state.events.filter((event) => event.runId === spend.runId)
-      if (total === undefined && recorded.length) return state
+      // A later Codium drain can leave the own totals unchanged. Annotate the run already in the ledger without
+      // appending a fake zero-dollar event or losing the fact that the run used both kinds of model.
+      const marked =
+        spend.billing === "codium" && recorded.some((event) => event.billing !== "codium")
+          ? {
+              ...state,
+              events: state.events.map((event) =>
+                event.runId === spend.runId ? { ...event, billing: "codium" as const } : event,
+              ),
+            }
+          : state
       const costUsd =
         total === undefined ? undefined : Math.max(total - sum(recorded.map((event) => event.costUsd ?? 0)), 0)
       const tokens =
-        total === undefined || totalTokens === undefined
-          ? 0
-          : Math.max(totalTokens - sum(recorded.map((event) => event.tokens ?? 0)), 0)
-      if (costUsd !== undefined && costUsd <= 0 && tokens <= 0) return state
+        totalTokens === undefined ? 0 : Math.max(totalTokens - sum(recorded.map((event) => event.tokens ?? 0)), 0)
+      if (costUsd !== undefined && costUsd <= 0 && tokens <= 0) return marked
+      if (total === undefined && recorded.length && tokens <= 0) return marked
       appended = {
         id: randomUUID(),
         projectPath: spend.projectPath,
@@ -260,11 +276,14 @@ export function createSpendLedger(input: { userDataPath: string }) {
         provider: spend.provider,
         model: spend.model,
         source: spend.source,
+        ...(spend.billing === "codium" || recorded.some((event) => event.billing === "codium")
+          ? { billing: "codium" as const }
+          : {}),
         costUsd,
         tokens: tokens > 0 ? tokens : undefined,
         at: at.toISOString(),
       }
-      return prune({ ...state, events: [...state.events, appended] }, at)
+      return prune({ ...marked, events: [...marked.events, appended] }, at)
     })
     return appended
   }
@@ -272,6 +291,10 @@ export function createSpendLedger(input: { userDataPath: string }) {
   const checkAllowance = (allowance: SpendAllowanceInput) => serial(() => evaluate(allowance))
 
   const evaluate = async (allowance: SpendAllowanceInput): Promise<SpendAllowance> => {
+    if (allowance.billing === "codium") {
+      // The account gateway caps Codium. It spends no dollars from this local ledger.
+      return { allowed: true, state: "ok", unmeasuredRuns: 0 }
+    }
     const state = await load()
     const at = allowance.at ?? new Date()
     // A scheduled run is the unattended case; a session or parallel agent was
@@ -495,6 +518,9 @@ function windowTotal(state: SpendLedgerState, filter: { day?: string; month?: st
     costUsd: sum(days.map((day) => day.costUsd)) + sum(events.map((event) => event.costUsd ?? 0)),
     tokens: sum(days.map((day) => day.tokens)) + sum(events.map((event) => event.tokens ?? 0)),
     runs: sum(days.map((day) => day.runs)) + runs.size,
+    ...(days.some((day) => day.billing === "codium") || events.some((event) => event.billing === "codium")
+      ? { billing: "codium" as const }
+      : {}),
     // A run that reported cost even once is measured, so a late-reporting
     // provider retroactively stops counting against the unmeasured tally.
     unmeasuredRuns:
@@ -531,6 +557,9 @@ function prune(state: SpendLedgerState, at: Date): SpendLedgerState {
       costUsd: (existing?.costUsd ?? 0) + sum(group.events.map((event) => event.costUsd ?? 0)),
       tokens: (existing?.tokens ?? 0) + sum(group.events.map((event) => event.tokens ?? 0)),
       runs: (existing?.runs ?? 0) + runs.size,
+      ...(existing?.billing === "codium" || group.events.some((event) => event.billing === "codium")
+        ? { billing: "codium" as const }
+        : {}),
       unmeasuredRuns: (existing?.unmeasuredRuns ?? 0) + [...runs].filter((runId) => !measured.has(runId)).length,
     }
   })
@@ -578,6 +607,7 @@ function collapse(events: SpendEvent[]) {
       const counted = group.filter((event) => event.tokens !== undefined)
       return {
         ...group[group.length - 1],
+        ...(group.some((event) => event.billing === "codium") ? { billing: "codium" as const } : {}),
         costUsd: measured.length ? sum(measured.map((event) => event.costUsd ?? 0)) : undefined,
         tokens: counted.length ? sum(counted.map((event) => event.tokens ?? 0)) : undefined,
       }

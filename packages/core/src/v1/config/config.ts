@@ -33,6 +33,78 @@ const LogLevelRef = Schema.Literals(["DEBUG", "INFO", "WARN", "ERROR"]).annotate
   description: "Log level",
 })
 
+// Defaults of the subagent and workflow limits, by config key. A repository's value only narrows them (the engine's
+// projectExecutableConfig), and the runtime limits start from them.
+export const SubagentDefaults = { running: 8, per_request: 32, usd: 25 } as const
+export const WorkflowDefaults = {
+  max_agents: 100,
+  concurrency: 16,
+  // steps defaults to max_agents times this.
+  steps_per_agent: 40,
+  per_agent_steps: 60,
+  minutes: 120,
+  runs: 1,
+} as const
+
+const between = (minimum: number, maximum: number) => Schema.Int.check(Schema.isBetween({ minimum, maximum }))
+
+const BudgetSubagents = Schema.Struct({
+  ...RunBudget.Info.fields,
+  running: Schema.optional(between(1, 16)).annotate({
+    description: "Subagents that run at once in one conversation; the rest wait for a free slot (default: 8)",
+  }),
+  per_request: Schema.optional(between(1, 1000)).annotate({
+    description: "New subagents one request may start, at any depth (default: 32)",
+  }),
+})
+
+const BudgetWorkflow = Schema.Struct({
+  max_agents: Schema.optional(between(1, 1000)).annotate({ description: "Agents one run may start (default: 100)" }),
+  concurrency: Schema.optional(between(1, 16)).annotate({
+    description: "Agents of one run working at once, also bounded by this computer's processors (default: 16)",
+  }),
+  usd: Schema.optional(Schema.Finite.check(Schema.isGreaterThan(0))).annotate({
+    description: "Spend ceiling of one run at catalog prices (default: none; the subagent ceiling still applies)",
+  }),
+  tokens: Schema.optional(PositiveInt).annotate({ description: "Tokens one run may use (default: none)" }),
+  steps: Schema.optional(PositiveInt).annotate({ description: "Model steps of one run (default: 40 per agent)" }),
+  per_agent_steps: Schema.optional(PositiveInt).annotate({ description: "Model steps of one agent (default: 60)" }),
+  minutes: Schema.optional(between(1, 1440)).annotate({ description: "Minutes one run may take (default: 120)" }),
+  runs: Schema.optional(between(1, 4)).annotate({
+    description: "Workflow runs at once in one conversation (default: 1)",
+  }),
+})
+
+const SizingSubagents = Schema.Struct({
+  fork: Schema.optional(Schema.Boolean).annotate({
+    description: "Let the agent start subagents from its whole conversation, sharing its prompt cache (default: true)",
+  }),
+  models: Schema.optional(Schema.mutable(Schema.Array(Schema.String)).check(Schema.isMaxLength(32))).annotate({
+    description:
+      'Models a subagent may be given that cost more than the agent\'s own or run on another provider: "provider/model" entries. "provider/*" and "*" only widen which providers count; the cost rule still applies.',
+  }),
+  ask_timeout: Schema.optional(between(1, 1440)).annotate({
+    description:
+      "Minutes a subagent's permission request or question waits for you before it is declined, never approved (default: it waits)",
+  }),
+  isolation: Schema.optional(
+    Schema.Struct({
+      lsp: Schema.optional(Schema.Boolean).annotate({
+        description: "Start language servers in a subagent's own worktree (default: false)",
+      }),
+      mcp: Schema.optional(Schema.Boolean).annotate({
+        description: "Start local MCP servers in a subagent's own worktree (default: false)",
+      }),
+      link: Schema.optional(Schema.mutable(Schema.Array(Schema.String)).check(Schema.isMaxLength(16))).annotate({
+        description: "Git-ignored directories, such as node_modules, linked into a subagent's own worktree",
+      }),
+      max_kept: Schema.optional(between(1, 200)).annotate({
+        description: "Changed worktrees kept waiting for your review (default: 20)",
+      }),
+    }),
+  ).annotate({ description: "Worktrees of subagents launched with isolation" }),
+})
+
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String).annotate({
     description: "JSON schema reference for configuration validation",
@@ -185,6 +257,13 @@ export const Info = Schema.Struct({
           }),
         }),
       ),
+      subagents: Schema.optional(BudgetSubagents).annotate({
+        description:
+          "Limits for the subagents one request starts: how many run at once in a conversation (running), how many one request may start (per_request), and the spend ceiling they share (usd, default 25 at catalog prices; only priced and unknown steps count toward it). A repository may only lower running and per_request, and its usd is ignored.",
+      }),
+      workflow: Schema.optional(BudgetWorkflow).annotate({
+        description: "Ceilings of a workflow run. A repository may only lower them.",
+      }),
     }),
   ).annotate({
     description:
@@ -194,11 +273,19 @@ export const Info = Schema.Struct({
     Schema.Struct({
       auto: Schema.optional(Schema.Boolean).annotate({
         description:
-          "Size each request, so a greeting gets a direct reply and only work you ask to be thorough, or that the agent finds large, gets subagents (default: true). false gives every request the full harness.",
+          "Size each request, so a greeting gets a direct reply and a small action is done directly: Work and Thorough requests may hand work to subagents; Light and Chat do not (default: true). false gives every request the full harness.",
       }),
       judge: Schema.optional(TaskSize.JudgeMode).annotate({
         description:
           "When Vector runs LLM-as-a-judge after a run that changed files: off, thorough (large tasks only) or changes (every task that changed files). Default: off for those runs. A prompt's own judge setting overrides it. Deep research's citation judge reads it too, and runs when it is unset: unset or thorough checks Deep reports and Focused ones that cite 8 or more notes, changes checks every report, and off turns it off.",
+      }),
+      learn: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Use learned workflow defaults when you leave effort on Default: drop Thorough's extra effort, skip subagents or give them a cheaper model, only where this repository's checked runs passed as often for less (default: true). false keeps the size's defaults. Your own picks always win, and spend caps are unchanged.",
+      }),
+      subagents: Schema.optional(SizingSubagents).annotate({
+        description:
+          "How subagents run: forks, per-call models, how long a helper's unanswered request waits, and worktree isolation. Read from your user config; a repository may only turn forks off, narrow models and shorten your ask_timeout.",
       }),
     }),
   ).annotate({ description: "Task sizing: how much harness, reasoning and verification each request gets." }),

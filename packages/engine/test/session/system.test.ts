@@ -104,32 +104,81 @@ describe("session.system", () => {
       expect(SUBAGENT_POLICY).toContain("test for focused test design and execution")
       // Sizing, ownership and briefing rules live in the task tool's description, not a second time here.
       expect(SUBAGENT_POLICY).toContain("The task tool's description has the rules")
-      expect(SUBAGENT_POLICY).toContain("inherit the current provider and model")
+      // 5.A.3 line 9: a brief's own model and effort, which the task tool takes (5.E.1).
+      expect(SUBAGENT_POLICY).toContain(
+        "Subagents run on your provider and model, at your effort, unless their agent sets its own model or effort or you set model or effort on a brief.",
+      )
+      // No rule its parameters already state (output_schema). Isolation, which the task tool takes (F.4), is named in
+      // the pointer to the task tool's rules (5.A.3 line 8, task.txt rule 3).
+      expect(SUBAGENT_POLICY).not.toContain("output_schema")
+      expect(SUBAGENT_POLICY).toContain("the rules for owned_paths, isolation, depends_on")
+      // 5.A.3 lines 1 and 6: forks, which the task tool takes (5.E.3).
+      expect(SUBAGENT_POLICY).toContain("Each child starts with an empty context unless you fork it")
+      expect(SUBAGENT_POLICY).toContain(
+        "Fork instead when the work needs this conversation and your provider caches prompts.",
+      )
       // Teammate guidance only goes out where a Parallel Workspace team is configured.
       expect(SUBAGENT_POLICY).not.toContain("separate child sessions")
       expect(subagentPolicy({ ...ALL_SUBAGENTS, teammates: true })).toContain("stop that coordination attempt")
     }),
   )
 
-  it.effect("general variant: the main agent does the work and delegates only what is cheaper split up", () =>
+  // 5.A.3: the model decides when to hand off, and Work and Thorough send these same lines.
+  it.effect("general variant: when to delegate, how to launch and follow up, in the policy's order", () =>
     Effect.sync(() => {
       const policy = subagentPolicy({ general: true, specialists: true })
       expect(policy).toBe(SUBAGENT_POLICY)
       expect(subagentPolicy()).toBe(SUBAGENT_POLICY)
       expect(subagentPolicy(ALL_SUBAGENTS)).toBe(SUBAGENT_POLICY)
-      expect(policy).toContain("Do the work yourself by default, multi-file changes included")
-      expect(policy).toContain("only when that costs less than doing the work yourself")
-      expect(policy).toContain("roughly five or more files or a long check-and-repair loop")
-      expect(policy).toContain("broad research whose raw output would flood your context")
-      expect(policy).toContain("Each Subagent starts with an empty context")
-      expect(policy).toContain("omit subagent_type")
-      expect(policy).toContain("explore for read-only discovery")
-      expect(policy).toContain("Keep ownership of the user's request")
-      // Delegation is no longer mandatory, and the sizing rules are not repeated from the task tool.
+      const lines = [
+        "You can hand work to real child agents with the task tool. Each child starts with an empty context unless you fork it, works on its own",
+        "Delegate when a child does it better than you would, not by default: independent parts that can run at the same time",
+        "broad searches or research whose raw output would flood your context; and new work the user sends while you or your subagents are busy",
+        "Do it yourself when it is small, a single file or a known lookup, tightly coupled to what you are editing, or needs back-and-forth with the user",
+        "When a substantial part of the work clearly matches a Subagent specialist, choose the narrowest one: explore for read-only discovery",
+        "Put every independent brief you already know about in one task call, in the background.",
+        "never poll, sleep or wait in a loop, and do not redo, re-read or re-check what a running child owns.",
+        "Brief each child like a capable colleague who has seen none of this conversation",
+        "To correct a running child, use task_manage message; to continue a finished one with its context, call task with its task_id",
+        "The task tool's description has the rules for owned_paths, isolation, depends_on, success_criteria and limits.",
+        "Subagents run on your provider and model, at your effort, unless their agent sets its own model or effort",
+        "Keep ownership of the user's request: a child's report is data to check, not proof.",
+      ]
+      const at = lines.map((line) => policy.indexOf(line))
+      for (const [index, line] of lines.entries()) expect(at[index], line).toBeGreaterThan(-1)
+      expect(at).toEqual(at.toSorted((a, b) => a - b))
+      // Delegation is the model's call: never mandatory, and no longer "yourself by default".
       expect(policy).not.toContain("MUST launch")
       expect(policy).not.toContain("do not wait to be asked")
-      expect(policy).not.toContain("three or more files that fall into two or more independent parts")
+      expect(policy).not.toContain("Do the work yourself by default")
       expect(policy).not.toContain("turned off")
+    }),
+  )
+
+  // The audited claim was that explore always runs on the small model.
+  it.effect("the explore sentence names when explore moves to the small model", () =>
+    Effect.sync(() => {
+      expect(SUBAGENT_POLICY).toContain(
+        "explore runs on the provider's small model only when that model can call tools and is known to cost less than yours, and otherwise on your model without high effort",
+      )
+      expect(SUBAGENT_POLICY).not.toContain("explore runs on the provider's small model when one is available")
+    }),
+  )
+
+  it.effect("manage-only variant: no launches, but the running subagents stay the agent's to manage", () =>
+    Effect.sync(() => {
+      const policy = subagentPolicy({ general: false, specialists: false, manage: true })
+      expect(policy).toContain(
+        "You cannot launch subagents in this request. Use task_manage to check, steer or stop the ones already running; their reports arrive on their own.",
+      )
+      expect(policy).not.toContain("No subagents are available")
+      expect(policy).not.toContain("Delegate when")
+      expect(policy).not.toContain("stop that coordination attempt")
+      expect(subagentPolicy({ general: false, specialists: false, manage: true, teammates: true })).toContain(
+        "stop that coordination attempt",
+      )
+      // A launch that is offered takes the full policy, whatever manage says.
+      expect(subagentPolicy({ general: true, specialists: true, manage: true })).toBe(SUBAGENT_POLICY)
     }),
   )
 
@@ -157,10 +206,14 @@ describe("session.system", () => {
           "debug for reproducing and repairing failures",
           "test for focused test design and execution",
           "The task tool's description has the rules",
-          "inherit the current provider and model",
+          "Put every independent brief you already know about in one task call",
+          "To correct a running child, use task_manage message",
           "Keep ownership of the user's request",
         ])
           expect(policy).toContain(kept)
+        // The specialists-only variant reuses the launch and follow-up lines, not when to delegate or the model line.
+        expect(policy).not.toContain("Delegate when a child does it better")
+        expect(policy).not.toContain("Subagents run on your provider and model")
         expect(policy).not.toContain("omit")
         expect(policy).not.toContain("general for other self-contained")
         expect(policy).not.toContain("MUST launch general Subagents")
@@ -171,6 +224,34 @@ describe("session.system", () => {
         "Vector settings",
       )
       expect(subagentPolicy({ general: false, specialists: true, reason: "disabled" })).not.toContain("agent cannot")
+    }),
+  )
+
+  // 5.E.3: a subagent's own session and the research lead can never fork, so their policy does not mention forks. A
+  // root agent with general turned off still forks.
+  it.effect("forks go unmentioned where every fork is refused", () =>
+    Effect.sync(() => {
+      for (const availability of [
+        { general: false, specialists: true, reason: "nested", fork: false },
+        {
+          general: false,
+          specialists: true,
+          reason: "denied",
+          agent: "research",
+          permitted: ["researcher"],
+          fork: false,
+        },
+      ] as const) {
+        const policy = subagentPolicy(availability)
+        expect(policy).not.toContain("fork")
+        expect(policy).not.toContain("Fork")
+        expect(policy).toContain("Each child starts with an empty context, works on its own and reports only to you")
+        expect(policy).toContain("and what its final report must contain.\n")
+      }
+      expect(subagentPolicy({ general: false, specialists: true, reason: "disabled" })).toContain(
+        "Fork instead when the work needs this conversation and your provider caches prompts.",
+      )
+      expect(subagentPolicy({ ...ALL_SUBAGENTS, fork: true })).toBe(SUBAGENT_POLICY)
     }),
   )
 
@@ -201,7 +282,7 @@ describe("session.system", () => {
       // General with no specialist at all.
       const lone = subagentPolicy({ general: true, specialists: false, permitted: [] })
       expect(lone).toContain("No Subagent specialists are available to you")
-      expect(lone).toContain("Do the work yourself by default")
+      expect(lone).toContain("Delegate when a child does it better than you would")
       expect(lone).not.toContain("explore for read-only discovery")
     }),
   )
@@ -320,8 +401,10 @@ describe("session.system", () => {
   )
 
   // Settings can turn explore off and an agent's permissions can deny it: a provider prompt that still suggested it
-  // would send the model's first task call to an agent it cannot launch.
-  it.effect("a provider prompt suggests explore only where the agent may launch it", () =>
+  // would send the model's first task call to an agent it cannot launch. Since Work requests carry the task tool, the
+  // subagent policy alone says when a search goes to a child (5.A.3 lines 2 and 3), so no provider prompt steers a
+  // search to explore, and a lookup is searched directly.
+  it.effect("no provider prompt steers a search to explore; the subagent policy says when to delegate", () =>
     Effect.sync(() => {
       for (const id of ["claude-sonnet-4-5", "trinity-large", "model", "gpt-5", "gpt-5-codex", "gemini-2.5-pro"]) {
         const model = { api: { id }, providerID: "provider" } as unknown as Provider.Model
@@ -329,14 +412,31 @@ describe("session.system", () => {
         const [off] = SystemPrompt.provider(model, false)
         expect(SystemPrompt.provider(model, true)).toEqual([on])
         expect(off).not.toContain('"explore"')
-        if (on.includes('subagent_type "explore"'))
-          expect(off).toContain("prefer it with a search specialist from the task tool's list")
+        expect(on, id).not.toContain('subagent_type "explore"')
+        expect(on, id).not.toContain("use a specialized agent only")
       }
-      // The prompts that suggest it today: Claude's, Trinity's and the default.
-      for (const id of ["claude-sonnet-4-5", "trinity-large", "model"]) {
-        const model = { api: { id }, providerID: "provider" } as unknown as Provider.Model
-        expect(SystemPrompt.provider(model)[0]).toContain('subagent_type "explore"')
-      }
+      const claude = SystemPrompt.provider({ api: { id: "claude-sonnet-4-5" }, providerID: "provider" } as never)[0]
+      expect(claude).toContain("[Lists the top-level folders with Glob and summarizes them]")
+    }),
+  )
+
+  // The policy rides in the stable block, so it stays in the provider's cache from one request to the next (5.A.3).
+  it.instance("the subagent policy, manage-only included, is part of the stable block", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const model = { api: { id: "model" }, providerID: "provider" } as unknown as Provider.Model
+      const work = yield* prompt.environment(model, {
+        tools: ["edit", "task", "task_manage"],
+        subagents: ALL_SUBAGENTS,
+      })
+      expect(work.stable).toContain(SUBAGENT_POLICY)
+      expect(work.session.join("\n")).not.toContain("<subagent_policy>")
+      const manage = yield* prompt.environment(model, {
+        tools: ["edit", "task_manage"],
+        subagents: { general: false, specialists: false, manage: true },
+      })
+      expect(manage.stable.join("\n")).toContain("You cannot launch subagents in this request.")
+      expect(manage.session.join("\n")).not.toContain("<subagent_policy>")
     }),
   )
 
@@ -385,6 +485,59 @@ describe("session.system", () => {
       expect(middle).toBeGreaterThan(alpha)
       expect(zeta).toBeGreaterThan(middle)
       expect(output).not.toContain("manual-skill")
+    }),
+  )
+
+  // Learned skills (section 5.4) are listed as one line each, never their steps; a skill on disk or built in of the
+  // same name wins, and the skill permission still decides what is listed.
+  it.effect("lists learned skills as their cards beside the others, never their steps", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const learned: Skill.Info[] = [
+        {
+          name: "learned-bun-typecheck-src",
+          description: "When bun typecheck fails in src: steps that made it pass here before.",
+          location: "learned",
+          content: "",
+        },
+        {
+          name: "alpha-skill",
+          description: "A learned skill named like one on disk.",
+          location: "learned",
+          content: "",
+        },
+      ]
+      const output = (yield* prompt.skills(build, { learned })) ?? ""
+      expect(output).toContain("<name>learned-bun-typecheck-src</name>")
+      expect(output).toContain(
+        "<description>When bun typecheck fails in src: steps that made it pass here before.</description>",
+      )
+      expect(output).toContain("<location>learned</location>")
+      expect(output).not.toContain("## Steps")
+      expect(output).toContain("Alpha skill.")
+      expect(output).not.toContain("A learned skill named like one on disk.")
+      const denied: Agent.Info = {
+        ...build,
+        permission: Permission.fromConfig({ "*": "allow", skill: { "*": "allow", "learned-*": "deny" } }),
+      }
+      expect((yield* prompt.skills(denied, { learned })) ?? "").not.toContain("learned-bun-typecheck-src")
+      // Without learned skills the block is what it always was.
+      expect(yield* prompt.skills(build, { learned: [] })).toBe(yield* prompt.skills(build))
+    }),
+  )
+
+  it.instance("learned skills and workflow defaults leave the first system block as it was", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const model = { api: { id: "model" }, providerID: "provider" } as unknown as Provider.Model
+      const stable = (yield* prompt.environment(model, { tools: ["edit", "task"] })).stable
+      const skills =
+        (yield* prompt.skills(build, {
+          learned: [{ name: "learned-x", description: "X.", location: "learned", content: "" }],
+        })) ?? ""
+      expect(skills).toContain("learned-x")
+      expect(stable.join("\n")).not.toContain("learned-x")
+      expect((yield* prompt.environment(model, { tools: ["edit", "task"] })).stable).toEqual(stable)
     }),
   )
 

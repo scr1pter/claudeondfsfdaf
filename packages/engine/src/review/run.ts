@@ -5,6 +5,7 @@
 // estimates; reported usage can exceed them, so they are not a hard billing cap.
 
 import path from "path"
+import { Billing } from "@vectordevai/schema/billing"
 import { Cause, Duration, Effect, Exit, Option, Scope } from "effect"
 import type { EventV2 } from "@vectordevai/core/event"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -47,6 +48,7 @@ import {
 } from "@vectordevai/core/review/schema"
 import { selectFindings, wantsNits } from "@vectordevai/core/review/select"
 import type {
+  CostKind,
   Finding,
   FocusHunk,
   ModelFinding,
@@ -61,7 +63,7 @@ import type {
   Trigger,
   Trust,
 } from "@vectordevai/core/review/types"
-import { measureCost } from "@/cli/cmd/github.evidence"
+import { measureCost, reviewUsageMessages } from "@/cli/cmd/github.evidence"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Permission } from "@/permission"
 import type { Provider } from "@/provider/provider"
@@ -87,7 +89,10 @@ export interface RunInput {
   focus?: FocusHunk[]
   skipped: SkippedFile[]
   headFiles?: { path: string; text: string; exact: boolean }[]
-  context: Pick<PromptInput, "related" | "history" | "requirements" | "instructions" | "teamDismissed" | "humanComments">
+  context: Pick<
+    PromptInput,
+    "related" | "history" | "requirements" | "instructions" | "teamDismissed" | "humanComments"
+  >
   pr?: PromptInput["pr"]
   prior: PriorFinding[]
   rules: string
@@ -99,7 +104,11 @@ export interface RunInput {
   allowDirs?: string[]
   checks?: boolean
   knownPath: (path: string) => Promise<boolean>
-  onProgress?: (e: { type: "specialist"; name: string; status: string } | { type: "cost"; costUsd: number }) => void
+  onProgress?: (
+    e:
+      | { type: "specialist"; name: string; status: string }
+      | { type: "cost"; costUsd: number; kind?: CostKind; codium?: boolean },
+  ) => void
   onCheckpoint?: (spent: ReviewCost) => Promise<void>
   baseRef?: string // the base branch name, for the prompt
   rulesSource?: PromptInput["rulesSource"] // defaults to the working tree for local and desktop runs
@@ -114,6 +123,7 @@ interface Track {
   name: Name
   sessionID: SessionID
   price?: ReviewPrice // set when this session's model is priced and the review has a dollar cap
+  cost?: Provider.Model["cost"] // actual invocation rates, including its long-context tiers
   cap: number
   steps: number
   seen: Set<string>
@@ -191,7 +201,7 @@ export const run: (
   const tracks = new Map<string, Track>()
   const reservations = new Map<Name, { turn: number; finalize: number }>()
   const sessionIDs: SessionID[] = []
-  const state = { spent: 0, reported: 0, uncertain: 0, incomplete: false }
+  const state = { spent: 0, reported: 0, codium: false, ownReported: false, uncertain: 0, incomplete: false }
   const scope = yield* Scope.make()
 
   const progress = (event: Progress) =>
@@ -209,10 +219,19 @@ export const run: (
     reservations.set(name, { turn, finalize })
     return true
   }
-  const nextCost = (track: Pick<Track, "context" | "cached" | "price">) =>
-    track.price ? nextStepCostUsd(track.context + NEXT_STEP_SLACK, track.price, track.cached) : 0
+  const nextCost = (track: Pick<Track, "context" | "cached" | "price" | "cost">) => {
+    const cost = track.cost && Session.costAt(track.cost, track.context + NEXT_STEP_SLACK)
+    const price = track.price && ((cost && SpendGuard.priceOf(cost)) ?? track.price)
+    return price ? nextStepCostUsd(track.context + NEXT_STEP_SLACK, price, track.cached) : 0
+  }
   // Usage is settled by the processor lease before retry/continuation admission. Events only report progress.
+  const identities = new Map<string, SessionV1.Assistant>()
   const unsubscribe = yield* events.listen((event) => {
+    if (event.type === SessionV1.Event.MessageUpdated.type) {
+      const info = (event.data as EventV2.Data<typeof SessionV1.Event.MessageUpdated>).info
+      if (info.role === "assistant" && tracks.has(info.sessionID)) identities.set(info.id, info)
+      return Effect.void
+    }
     if (event.type === SessionV1.Event.PartUpdated.type) {
       const part = (event.data as EventV2.Data<typeof SessionV1.Event.PartUpdated>).part
       const track = tracks.get(part.sessionID)
@@ -220,8 +239,19 @@ export const run: (
       if (part.type !== "step-finish" || track.seen.has(part.id)) return Effect.void
       track.seen.add(part.id)
       track.steps++
-      state.reported += part.cost
-      return progress({ type: "cost", costUsd: state.reported })
+      const info = identities.get(part.messageID)
+      const codium = Boolean(Billing.of(part) || (info && Billing.of(info)))
+      if (codium) state.codium = true
+      if (!codium && info && Billing.hasOwnIdentity(info)) {
+        state.reported += part.cost
+        state.ownReported = true
+      }
+      return progress({
+        type: "cost",
+        costUsd: state.reported,
+        kind: state.codium && !state.ownReported ? "codium" : "unknown",
+        ...(state.codium ? { codium: true } : {}),
+      })
     }
     if (event.type === Permission.Event.Asked.type) {
       // Nothing is set to ask, so nothing should; if something does, it is refused rather than left waiting.
@@ -242,9 +272,9 @@ export const run: (
         Effect.catch(() => Effect.succeed({ messages: [], complete: false })),
       ),
     )
-    const recorded = messages
-      .flatMap((entry) => entry.messages)
-      .filter((message) => message.info.role !== "assistant" || !message.info.forked)
+    const recorded = reviewUsageMessages(messages.flatMap((entry) => entry.messages)).filter(
+      (message) => message.info.role !== "assistant" || !message.info.forked,
+    )
     const measured = measureCost(recorded)
     // Admission can refuse the first request after an empty assistant marker is stored. No admitted attempt
     // means no provider spend; an attempted request without usage must still remain unknown.
@@ -252,33 +282,47 @@ export const run: (
       children.length === 0 &&
       [...tracks.values()].every((track) => track.attempts === 0 && track.finalizeAttempts === 0)
     const assistant = recorded.flatMap((message) => (message.info.role === "assistant" ? [message.info] : []))
+    const own = assistant.filter(Billing.hasOwnIdentity)
+    const codium = assistant.some((message) => Billing.of(message)) || (unused && input.model.costKind === "codium")
+    const unknown = assistant.some((message) => !Billing.of(message) && !Billing.hasOwnIdentity(message))
     const incomplete =
       messages.some((entry) => !entry.complete) ||
-      assistant.some((message) => message.unpriced || !Number.isFinite(message.cost) || message.cost < 0)
+      unknown ||
+      own.some((message) => message.unpriced || !Number.isFinite(message.cost) || message.cost < 0)
     // Each model a reply came from, with its cost kind when it is one this review chose.
     const chosen = triaged ? [input.model, triage] : [input.model]
     const used = [...new Set(assistant.map((message) => `${message.providerID}/${message.modelID}`))]
-    const kinds = used.map((name) => chosen.find((model) => nameOf(model) === name)?.costKind)
+    const kinds = [...new Set(own.map((message) => `${message.providerID}/${message.modelID}`))].map(
+      (name) => chosen.find((model) => nameOf(model) === name)?.costKind,
+    )
     const known = kinds.every((kind) => kind !== undefined)
     return {
+      ...(codium ? { codium: true } : {}),
+      tokensOwnOnly: true,
       costUsd: measured && Number.isFinite(measured.costUsd) ? measured.costUsd : 0,
       input: measured?.input ?? 0,
       output: measured?.output ?? 0,
       reasoning: measured?.reasoning ?? 0,
       cacheRead: measured?.cacheRead ?? 0,
       cacheWrite: measured?.cacheWrite ?? 0,
-      ...(!measured && !unused ? { usageMissing: true } : {}),
+      ...((!measured && !unused) || measured?.usageMissing ? { usageMissing: true } : {}),
       kind:
-        (!measured && !unused) || incomplete || (measured !== undefined && !Number.isFinite(measured.costUsd))
-          ? "unknown"
-          : !used.length
-            ? input.model.costKind
-            : known
-              ? combineCostKinds(kinds.filter((kind) => kind !== undefined))
-              : (measured?.costUsd ?? 0) > 0
-                ? "priced"
-                : "unknown",
-      model: !used.length ? nameOf(input.model) : known ? used.join(" + ") : "Multiple models",
+        codium && !own.length && !unknown
+          ? "codium"
+          : (!measured && !unused) || incomplete || (measured !== undefined && !Number.isFinite(measured.costUsd))
+            ? "unknown"
+            : !used.length
+              ? input.model.costKind
+              : known
+                ? combineCostKinds(kinds.filter((kind) => kind !== undefined))
+                : (measured?.costUsd ?? 0) > 0
+                  ? "priced"
+                  : "unknown",
+      model: !used.length
+        ? nameOf(input.model)
+        : known || (codium && !own.length)
+          ? used.join(" + ")
+          : "Multiple models",
     } satisfies ReviewCost
   })
 
@@ -287,18 +331,38 @@ export const run: (
     const measured = yield* Effect.forEach([...tracks.values()], (track) =>
       sessions.messages({ sessionID: track.sessionID }).pipe(
         Effect.map((messages) => {
-          const cost = measureCost(messages)
-          if (!cost) return []
-          return [
-            {
-              name: track.name,
-              model: `${cost.provider}/${cost.model}`,
-              ...(Number.isFinite(cost.costUsd) && cost.unpriced === 0 ? { costUsd: cost.costUsd } : {}),
-              input: cost.input + cost.cacheRead + cost.cacheWrite,
-              output: cost.output + cost.reasoning,
-              cacheRead: cost.cacheRead,
-            } satisfies ReviewPass,
-          ]
+          const groups = Map.groupBy(
+            reviewUsageMessages(messages).filter((message) => message.info.role === "assistant"),
+            (message) => {
+              const info = message.info as SessionV1.Assistant
+              return `${info.providerID}/${info.modelID}/${Billing.of(info) ?? "own"}`
+            },
+          )
+          return [...groups.values()].flatMap((group) => {
+            const cost = measureCost(group)
+            if (!cost) return []
+            const model = `${cost.provider}/${cost.model}`
+            const costKind: CostKind = cost.codium
+              ? "codium"
+              : cost.unknownTurns || cost.unpriced
+                ? "unknown"
+                : ([input.model, triage].find((chosen) => nameOf(chosen) === model)?.costKind ??
+                  (cost.costUsd > 0 ? "priced" : "unknown"))
+            return [
+              {
+                name: track.name,
+                model,
+                costKind,
+                ...(!cost.codium && (costKind === "priced" || (costKind === "unknown" && cost.costUsd > 0))
+                  ? { costUsd: cost.costUsd }
+                  : {}),
+                ...(cost.usageMissing ? { usageMissing: true } : {}),
+                input: cost.input + cost.cacheRead + cost.cacheWrite,
+                output: cost.output + cost.reasoning,
+                cacheRead: cost.cacheRead,
+              } satisfies ReviewPass,
+            ]
+          })
         }),
         Effect.catch(() => Effect.succeed([])),
       ),
@@ -371,6 +435,7 @@ export const run: (
             track.denied = true
             return
           }
+          track.cost = request.model.cost
           const estimate = nextCost(track)
           if (!reserve(track.name, estimate, track.finalizing ? 0 : estimate)) {
             track.stop = "budget"
@@ -579,7 +644,9 @@ export const run: (
     const claims = triaged
       ? (report.priorStatus ?? []).flatMap((entry) => {
           const prior = open.get(entry.id)
-          return entry.status === "fixed" && prior && !reported.has(prior.id) ? [{ ...prior, reason: entry.reason }] : []
+          return entry.status === "fixed" && prior && !reported.has(prior.id)
+            ? [{ ...prior, reason: entry.reason }]
+            : []
         })
       : []
     const verifyText =
@@ -618,7 +685,9 @@ export const run: (
     // After a triage pass only what the review model confirmed is reported: a candidate it rejected, gave no verdict
     // for, or never saw because the double-check was skipped or failed is left out.
     const unchecked = new Set(
-      triaged ? candidates.filter((finding) => verdicts.get(finding.id) !== "confirmed").map((finding) => finding.id) : [],
+      triaged
+        ? candidates.filter((finding) => verdicts.get(finding.id) !== "confirmed").map((finding) => finding.id)
+        : [],
     )
     const kept = normalized.filter((finding) => verdicts.get(finding.id) !== "rejected")
     const findings = kept

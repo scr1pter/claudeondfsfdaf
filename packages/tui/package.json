@@ -39,6 +39,7 @@
     "./util/error": "./src/util/error.ts",
     "./util/locale": "./src/util/locale.ts",
     "./util/persistence": "./src/util/persistence.ts",
+    "./util/presentation": "./src/util/presentation.ts",
     "./util/record": "./src/util/record.ts",
     "./logo": "./src/logo.ts",
     "./ui/dialog": "./src/ui/dialog.tsx",

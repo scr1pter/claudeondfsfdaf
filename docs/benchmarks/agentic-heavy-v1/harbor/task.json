@@ -1,0 +1,18 @@
+{
+  "name": "harbor-heavy",
+  "classification": "new heavy application development holdout; reference controls are not paid outcomes",
+  "promptFile": "BUILD_SPEC.md",
+  "workspacePromptFile": "BUILD_SPEC.md",
+  "seedDirectory": "seed",
+  "evaluatorCommand": ["{python}", "{task}/evaluate.py", "--app", "{app}", "--out", "{out}", "--bun", "{bun}", "--node", "{node}", "--playwright-module", "{playwright_module}", "--chrome", "{chrome}"],
+  "evaluatorReport": "evaluation.json",
+  "evaluatorTimeoutSeconds": 1200,
+  "expectedApiGroups": 28,
+  "expectedBrowserChecks": 32,
+  "expectedPrerequisiteChecks": 4,
+  "expectedTotalChecks": 64,
+  "generatedDirectories": ["dist"],
+  "protectedFiles": ["bun.lock", "UI_CONTRACT.md"],
+  "setupCommand": ["{bun}", "--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts"],
+  "additionalPrompt": "Read BUILD_SPEC.md and UI_CONTRACT.md as the authoritative public task. Build the complete connected product from the empty scaffold. Preserve all required verification and use the fixed matched native team. Use only the supplied common browser client for browser operations. No prior implementation, independent evaluator or other application may be inspected. All data is synthetic and local."
+}

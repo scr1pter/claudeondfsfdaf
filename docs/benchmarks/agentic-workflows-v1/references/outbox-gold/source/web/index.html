@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Support desk</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+  <header><h1>Support desk</h1><p>Synthetic customer conversations · local demo</p><button id="refresh">Refresh</button><button id="process">Process queue</button><p id="activity" aria-live="polite"></p></header>
+  <div id="error" role="alert" hidden></div>
+  <div class="workspace"><nav aria-label="Tickets" id="tickets"></nav><section aria-labelledby="subject">
+    <h2 id="subject">Select a ticket</h2><p id="summary"></p>
+    <div id="messages" aria-live="polite"></div>
+    <form id="compose"><label for="reply">Reply</label><textarea id="reply" name="reply" rows="4"></textarea><p><button type="submit">Save draft</button><span id="editing"></span></p></form>
+  </section></div>
+</main><script type="module" src="/app.js"></script></body>
+</html>

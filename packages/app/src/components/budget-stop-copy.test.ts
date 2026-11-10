@@ -135,3 +135,23 @@ describe("budgetStopCopy", () => {
     )
   })
 })
+
+test("Codium-only step stops expose no dollar cap, while mixed stops retain own-key dollars", () => {
+  const copy = budgetStopCopy({
+    reason: "steps",
+    message: "Step limit reached",
+    spentUsd: 0,
+    capUsd: 5,
+    codiumSteps: 3,
+  })
+  expect(copy.spent).toBeUndefined()
+  expect(copy.continueLabel).toBe("Continue with a new step limit")
+  const mixed = budgetStopCopy({
+    reason: "cap",
+    message: "Spend cap reached",
+    spentUsd: 5.02,
+    capUsd: 5,
+    codiumSteps: 3,
+  })
+  expect(mixed.spent).toBe("$5.02 of $5.00 spent · Codium steps not counted")
+})

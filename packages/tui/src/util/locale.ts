@@ -1,3 +1,6 @@
+import { Billing } from "@vectordevai/schema/billing"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
+import type { Session } from "@vectordevai/sdk/v2"
 export function titlecase(str: string) {
   return str.replace(/\b\w/g, (c) => c.toUpperCase())
 }
@@ -82,19 +85,80 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 
 // A session's recorded cost, said honestly. A step on a model that lists no price adds nothing to the cost, so a total
 // with such steps is only a lower bound, and one made of nothing else is unknown rather than $0.00.
-export function spend(cost: number | undefined, unpricedSteps: number | undefined) {
-  if (!unpricedSteps) return usd.format(cost ?? 0)
-  if (!cost) return "cost unknown"
-  return `${usd.format(cost)} + unpriced`
+export function spend(cost: number | undefined, unpricedSteps: number | undefined, codiumSteps = 0) {
+  const unknown = CodiumUsage.ownUnpricedSteps(unpricedSteps, codiumSteps)
+  const own = unknown
+    ? cost
+      ? `${usd.format(cost)} + unpriced`
+      : "cost unknown"
+    : codiumSteps && !cost
+      ? undefined
+      : usd.format(cost ?? 0)
+  return CodiumUsage.withCodium(own, codiumSteps)
+}
+
+type Spend = Pick<
+  Session,
+  | "cost"
+  | "unpricedSteps"
+  | "codiumSteps"
+  | "subagentCost"
+  | "subagentUnpricedSteps"
+  | "subagentCodiumSteps"
+  | "model"
+  | "tokensOwnOnly"
+  | "subagentTokensOwnOnly"
+>
+type BillingMessage = {
+  role?: string
+  billing?: string
+  unpriced?: boolean
+  providerID?: string
+  model?: { providerID?: string }
+}
+
+// Old engines cannot partition mixed totals. Keep their own dollars, but never expose inseparable Codium tokens.
+export function legacyCodium(
+  session: Spend | undefined,
+  messages: readonly BillingMessage[] = [],
+  children: readonly Spend[] = [],
+): boolean {
+  return (
+    CodiumUsage.hasCodium(session, messages, children) &&
+    (session?.tokensOwnOnly !== true || session?.subagentTokensOwnOnly !== true)
+  )
 }
 
 // What a session's work cost: its own steps plus everything its subagents spent, which the backend keeps apart.
 export function sessionSpend(
-  session: { cost?: number; unpricedSteps?: number; subagentCost?: number; subagentUnpricedSteps?: number } | undefined,
-) {
+  session: Spend | undefined,
+  messages: readonly BillingMessage[] = [],
+  children: readonly Spend[] = [],
+): { cost: number; unpriced: number; codium: number } {
+  const legacy = legacyCodium(session, messages, children)
+  const knownOwn = legacy
+    ? Math.max(
+        messages.filter((message) => message.role === "assistant" && message.unpriced && !Billing.of(message)).length,
+        session?.tokensOwnOnly !== true ? 0 : CodiumUsage.ownUnpricedSteps(session.unpricedSteps, session.codiumSteps),
+      ) +
+      Math.max(
+        session?.subagentTokensOwnOnly !== true
+          ? 0
+          : CodiumUsage.ownUnpricedSteps(session.subagentUnpricedSteps, session.subagentCodiumSteps),
+        children.reduce((sum, child) => {
+          const spend = sessionSpend(child)
+          return sum + CodiumUsage.ownUnpricedSteps(spend.unpriced, spend.codium)
+        }, 0),
+      )
+    : 0
   return {
     cost: (session?.cost ?? 0) + (session?.subagentCost ?? 0),
-    unpriced: (session?.unpricedSteps ?? 0) + (session?.subagentUnpricedSteps ?? 0),
+    unpriced: legacy
+      ? Math.max(1, (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0)) + knownOwn
+      : (session?.unpricedSteps ?? 0) + (session?.subagentUnpricedSteps ?? 0),
+    codium: legacy
+      ? Math.max(1, (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0))
+      : (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0),
   }
 }
 
@@ -104,3 +168,10 @@ export function pluralize(count: number, singular: string, plural: string): stri
 }
 
 export * as Locale from "./locale"
+
+/** Raw context quantities require an identified own provider; Codium shows only its percentage. */
+export function context(tokens: number, limit: number | undefined, message: Parameters<typeof Billing.of>[0]) {
+  const percent = limit ? `${Math.round((tokens / limit) * 100)}%` : undefined
+  if (!Billing.hasOwnIdentity(message)) return Billing.of(message) && percent ? `${percent} of context` : undefined
+  return percent ? `${number(tokens)} (${percent})` : number(tokens)
+}

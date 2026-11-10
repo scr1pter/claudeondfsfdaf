@@ -1,0 +1,232 @@
+{
+  "kind": "workflow-runner-focus-workflow-original-source-publication",
+  "atUtc": "2026-11-02T02:10:49.268121+00:00",
+  "scope": "Original synthetic Workflow Runner sources from both complete focus-workflow repeat arms; every settled attempt, no blind-review normalization or result selection",
+  "bytePreservation": "All included source bytes match the original source archives and their contemporaneous source-manifest.json inventories. Source Git attributes disable line-ending normalization. No application changes or formatter edits.",
+  "candidateProductGitRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+  "exclusionPolicy": {
+    "exactTopLevelPrefix": ".verification/",
+    "rationale": "Exclude only inspected generated verification runtime artifacts, preserving their hash inventory if present. Neither focus-workflow source archive contains this prefix or any excluded files. Authored tests and scripts are retained.",
+    "genericNestedBuildDistExclusions": false,
+    "excludedContentsPublished": false,
+    "excludedHashesPublished": true,
+    "otherExclusions": []
+  },
+  "scan": {
+    "includedSourceFilesScanned": 33,
+    "blockedFindings": 0,
+    "categories": [
+      "absoluteWindowsUserPath",
+      "providerKey",
+      "privateKey",
+      "credentialAssignment",
+      "companyDataIdentifier"
+    ],
+    "method": "Full byte/hash inventory, UTF-8 source pattern scan and file-list inspection; no raw runtime artifacts or configuration copied",
+    "limitations": "Pattern scanning is bounded evidence, not a formal secret audit."
+  },
+  "executionByPublicationAuthor": {
+    "bunRuns": 0,
+    "providerCalls": 0,
+    "modelCalls": 0,
+    "applicationTestsRun": 0
+  },
+  "taskAndEvaluator": {
+    "agentVisibleTaskSha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+    "taskSha256": "bc418928e76adaebed02f7de9339d23c881c0d10bca33adb7b4b5002b6de7547",
+    "instrumentGitRevision": "c027c80637c993fb9e873407403f2c4f6a1333c3",
+    "rootManifestSha256": "26627463d87bb6a251ebdf50e91efea43084fb8949095b966af458841717a62f",
+    "apiEvaluatorSha256": "ce4837bff913f1670a6c1f7d2b2bd7323cc667b422aee2b4ae343bbc21c93cc4",
+    "browserCheckSha256": "d68122e788b73e7e70b541a9c9807ae3b6962d0fe496987fb49243558caa0562",
+    "instrumentRevision": "postlaunch-keyboard-v2; unchanged from corrected development baseline"
+  },
+  "interpretation": "Gate outcomes are those of the completed original arms, with both authored source inventories unchanged. Publication performs no application reruns. Source file counts are provenance, not quality or cost evidence. No savings or quality claims are made here.",
+  "submissions": [
+    {
+      "id": "codex-first",
+      "runtime": "codex",
+      "attempt": "attempt-00",
+      "allSettledRunAttemptsPublished": true,
+      "settledRunAttemptCount": 1,
+      "originalArchiveId": "aw2/codex/attempts/attempt-00/source",
+      "sourceDirectory": "codex-first/source",
+      "originalArchiveFileCount": 17,
+      "includedFileCount": 17,
+      "excludedFileCount": 0,
+      "originalArchiveInventorySha256": "620f7a03d3ec51d515314745bfd248ef20f8797488b01e6652089e3ba22003b6",
+      "publishedSourceInventorySha256": "620f7a03d3ec51d515314745bfd248ef20f8797488b01e6652089e3ba22003b6",
+      "includedFiles": {
+        ".gitignore": {
+          "sha256": "750088237782bb7edf2f1fd92cc8a97fee6c4491a2605b44d08d64ace821e14e",
+          "bytes": 41
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "public/index.html": {
+          "sha256": "f14f6cf7646083a5af230a00d4c0fbe496b4bb67f6c08eb756d2eea386c8c95a",
+          "bytes": 29080
+        },
+        "README.md": {
+          "sha256": "0b15c0e14925f71e497820911efbbdbed7251438118597cf229e387eacb65d3d",
+          "bytes": 2827
+        },
+        "scripts/build.ts": {
+          "sha256": "550c9901b63d0140977cb5d98129a3cfe013c9a0fdad7cf9dc2941ba38e9dbb8",
+          "bytes": 289
+        },
+        "server/index.ts": {
+          "sha256": "736957ca10deea8504225b5081b4c7dfcd82f16580c28ef7faea3c1167d5bc3c",
+          "bytes": 5469
+        },
+        "server/model.ts": {
+          "sha256": "9303be4e8f89409a5c835c4fa3c472ff26eed8d2c51a0a949cde54aeb0725850",
+          "bytes": 4243
+        },
+        "server/runner.ts": {
+          "sha256": "ca85dace42503be48fc6a9f06430ab6c2b151b45fb8abc555d7ee1662abe4fc6",
+          "bytes": 7455
+        },
+        "server/store.ts": {
+          "sha256": "9d4d47c0f0011c57b4a0f83ae6d24347f0eb5b3697bfc1f73705779c9cdaf44b",
+          "bytes": 6057
+        },
+        "server/worker.ts": {
+          "sha256": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+          "bytes": 1353
+        },
+        "sql/v1.sql": {
+          "sha256": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+          "bytes": 404
+        },
+        "sql/v2.sql": {
+          "sha256": "9bfd9e9c5381140e181a43524bfdb2dca68bd1e0fcf7d7af1185787e3e689770",
+          "bytes": 1275
+        },
+        "TASK.md": {
+          "sha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+          "bytes": 9789
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912",
+          "bytes": 903
+        },
+        "tests/workflows.test.ts": {
+          "sha256": "771591298062ecda60044e24a57a02231c7992036ed6f1444c749bcbd78b32b3",
+          "bytes": 22760
+        },
+        "tsconfig.json": {
+          "sha256": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+          "bytes": 332
+        }
+      },
+      "excludedFiles": {},
+      "independentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 17,
+        "failedChecks": [],
+        "attemptReportId": "aw2/codex/attempts/attempt-00/evaluation/evaluation.json"
+      }
+    },
+    {
+      "id": "vector-first",
+      "runtime": "vector",
+      "attempt": "attempt-00",
+      "allSettledRunAttemptsPublished": true,
+      "settledRunAttemptCount": 1,
+      "originalArchiveId": "aw2/vector/attempts/attempt-00/source",
+      "sourceDirectory": "vector-first/source",
+      "originalArchiveFileCount": 16,
+      "includedFileCount": 16,
+      "excludedFileCount": 0,
+      "originalArchiveInventorySha256": "d65f5bf1a5238e2d30709b43c86d8f55970e28e8141a8c69efd3bd3f362d4dde",
+      "publishedSourceInventorySha256": "d65f5bf1a5238e2d30709b43c86d8f55970e28e8141a8c69efd3bd3f362d4dde",
+      "includedFiles": {
+        ".gitignore": {
+          "sha256": "750088237782bb7edf2f1fd92cc8a97fee6c4491a2605b44d08d64ace821e14e",
+          "bytes": 41
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "public/index.html": {
+          "sha256": "eb8369a9829eebd420c210c41e5603681de75fd8d46f44443db88bad8bfadd21",
+          "bytes": 17660
+        },
+        "README.md": {
+          "sha256": "81b6a6a0e4c4b673b8ae59e517f797ff9cb00d8b656105c3d38119bc8978f72a",
+          "bytes": 3816
+        },
+        "scripts/browser-check.mjs": {
+          "sha256": "27cd79b804495d4454fe9beea45d7885936eaba2215b5ebea22311ba617d1301",
+          "bytes": 8004
+        },
+        "scripts/build.ts": {
+          "sha256": "7b8f488e9f72315161d67bbf500450676acc8402065faa29767ff90ed9a19f28",
+          "bytes": 273
+        },
+        "server/index.ts": {
+          "sha256": "d51b68c8339d8da0867a37865ce82e1fabdd7bcfa0566ca94957fbc4fb8627d2",
+          "bytes": 3104
+        },
+        "server/runner.ts": {
+          "sha256": "6719ae34df013d23df927a7ff8ed6bb7dc4fb6e37249bd7090420573c117bb45",
+          "bytes": 18482
+        },
+        "server/worker.ts": {
+          "sha256": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+          "bytes": 1353
+        },
+        "sql/v1.sql": {
+          "sha256": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+          "bytes": 404
+        },
+        "sql/v2.sql": {
+          "sha256": "27881c401a672af7dee40de55fa87c7b35266d2261668e5b0a9d302d5531c458",
+          "bytes": 1319
+        },
+        "TASK.md": {
+          "sha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+          "bytes": 9789
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912",
+          "bytes": 903
+        },
+        "tests/workflows.test.ts": {
+          "sha256": "93d373a42a095aa60af33d2bde782fd594e95ff44481be1a0370096b89b29dd7",
+          "bytes": 18276
+        },
+        "tsconfig.json": {
+          "sha256": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+          "bytes": 332
+        }
+      },
+      "excludedFiles": {},
+      "independentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 16,
+        "failedChecks": [],
+        "attemptReportId": "aw2/vector/attempts/attempt-00/evaluation/evaluation.json"
+      }
+    }
+  ]
+}

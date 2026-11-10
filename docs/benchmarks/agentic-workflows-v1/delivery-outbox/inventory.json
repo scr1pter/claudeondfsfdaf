@@ -1,0 +1,31 @@
+{
+  "version": "delivery-outbox-inventory-v1-draft",
+  "checks": [
+    {"name":"api.01.fixture-and-readiness","kind":"api","expected":"Protected local fixture and pins intact; ready app exposes an independent loopback fixture; data outside source."},
+    {"name":"api.02.existing-draft-workflow","kind":"api","expected":"Fixture tickets, ordered persistent draft creation, retrieval and editing work."},
+    {"name":"api.03.invalid-input-atomicity","kind":"api","expected":"Invalid bodies, JSON and admission IDs fail without partially mutating messages/outbox."},
+    {"name":"api.04.durable-admission","kind":"api","expected":"Queued immutable envelope and exactly one outbox row commit before admission returns; no transmission yet."},
+    {"name":"api.05.admission-idempotency","kind":"api","expected":"Concurrent exact admission retries coalesce; request IDs bind one message; conflicting admissions return 409."},
+    {"name":"api.06.accepted-delivery","kind":"api","expected":"Explicit drain commits matching provider receipt and durable attempt count; repeat drain has no new effect."},
+    {"name":"api.07.rejection-and-bounded-pass","kind":"api","expected":"Rejected attempt becomes retryable with error; one drain makes at most one attempt per eligible message."},
+    {"name":"api.08.retry-stable-envelope","kind":"api","expected":"Explicit retry after transient failure retains key/body and succeeds once; terminal retry rejected."},
+    {"name":"api.09.lost-accepted-response","kind":"api","expected":"Lost response after provider acceptance remains unresolved; stable-key retry reconciles one existing receipt."},
+    {"name":"api.10.queued-cancellation","kind":"api","expected":"Cancelling queued work prevents transmission; cancellation persists and is idempotent; retry rejected."},
+    {"name":"api.11.inflight-preaccept-cancellation","kind":"api","expected":"Provider cancellation tombstone resolves held preaccept send; late completion cannot resurrect it."},
+    {"name":"api.12.acceptance-wins-cancellation","kind":"api","expected":"Committed receipt wins a cancellation race and survives a later lost send response."},
+    {"name":"api.13.concurrent-drains","kind":"api","expected":"Overlapping drains cannot duplicate logical delivery, provider effect or durable outbox membership."},
+    {"name":"api.14.restart-after-admission","kind":"api","expected":"Queued work, body, key and outbox survive hard restart without premature transmission."},
+    {"name":"api.15.restart-before-acceptance","kind":"api","expected":"A hard stop in held preaccept work is recoverable with the original key and one eventual receipt."},
+    {"name":"api.16.restart-after-acceptance","kind":"api","expected":"Provider receipt survives hard app stop; next drain reconciles the same accepted effect without duplication."},
+    {"name":"api.17.terminal-history-durable","kind":"api","expected":"Delivered/cancelled history, attempts and receipts persist; terminal operations cannot mutate envelope or resend."},
+    {"name":"api.18.ticket-and-queue-isolation","kind":"api","expected":"Multiple-ticket replies retain independent outcomes and ordered, duplicate-free durable history."},
+    {"name":"browser.01.browse-compose-edit","kind":"browser","expected":"Accessible ticket navigation, saved draft and editing work through visible controls."},
+    {"name":"browser.02.validation-preserves-input","kind":"browser","expected":"Invalid save has a visible useful error and retains entered text without creating a message."},
+    {"name":"browser.03.queue-is-truthful","kind":"browser","expected":"Queue action shows queued status, no receipt/delivered claim and no editable admitted body."},
+    {"name":"browser.04.delivery-details","kind":"browser","expected":"Process queue shows accepted state, real receipt, message identity and attempt details after refresh."},
+    {"name":"browser.05.retry-workflow","kind":"browser","expected":"Provider failure is visible with Retry; explicit retry uses same key and converges to receipt."},
+    {"name":"browser.06.preaccept-cancel-workflow","kind":"browser","expected":"Cancel before provider acceptance visibly settles cancelled, with no provider receipt/effect."},
+    {"name":"browser.07.too-late-cancel-workflow","kind":"browser","expected":"Unknown send is not shown delivered; too-late cancellation shows actual receipt and useful explanation."},
+    {"name":"browser.08.narrow-restart-workflow","kind":"browser","expected":"At 390px, queue/details controls are reachable and committed work survives app restart and page refresh."}
+  ]
+}

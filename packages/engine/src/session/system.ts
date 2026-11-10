@@ -12,6 +12,7 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
+import { providerPromptFile } from "./provider-prompt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { GENERAL_SUBAGENT } from "@/agent/subagent-kind"
@@ -26,9 +27,9 @@ import { ToolRegistry } from "@/tool/registry"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 
 /**
- * The provider's prompt. Some suggest the explore specialist for a search that spans several areas; with `explore`
- * false (Settings turned explore off, or this agent may not launch it) a task call naming it would fail, so they point
- * at the task tool's list instead.
+ * The provider's prompt. None names the explore specialist now: the subagent policy says when a search goes to a child
+ * (5.A.3). With `explore` false (Settings turned explore off, or this agent may not launch it) a mention would send a
+ * task call to an agent it cannot launch, so any would point at the task tool's list instead.
  */
 export function provider(model: Provider.Model, explore = true) {
   const prompt = providerPrompt(model)
@@ -37,20 +38,22 @@ export function provider(model: Provider.Model, explore = true) {
   ]
 }
 
-function providerPrompt(model: Provider.Model) {
-  if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3")) return PROMPT_BEAST
-  if (model.api.id.includes("gpt")) {
-    if (model.api.id.includes("codex")) {
-      return PROMPT_CODEX
-    }
-    return PROMPT_GPT
-  }
-  if (model.api.id.includes("gemini-")) return PROMPT_GEMINI
-  if (model.api.id.includes("claude")) return PROMPT_ANTHROPIC
-  if (model.api.id.toLowerCase().includes("trinity")) return PROMPT_TRINITY
-  if (model.api.id.toLowerCase().includes("kimi")) return PROMPT_KIMI
-  return PROMPT_DEFAULT
+const PROVIDER_PROMPTS: Record<ReturnType<typeof providerPromptFile>, string> = {
+  "anthropic.txt": PROMPT_ANTHROPIC,
+  "beast.txt": PROMPT_BEAST,
+  "codex.txt": PROMPT_CODEX,
+  "default.txt": PROMPT_DEFAULT,
+  "gemini.txt": PROMPT_GEMINI,
+  "gpt.txt": PROMPT_GPT,
+  "kimi.txt": PROMPT_KIMI,
+  "trinity.txt": PROMPT_TRINITY,
 }
+
+function providerPrompt(model: Provider.Model) {
+  return PROVIDER_PROMPTS[providerPromptFile(model.api.id)]
+}
+
+export { providerPromptFile }
 
 /** What the current agent may launch through the task tool in this session. */
 export type SubagentAvailability = {
@@ -66,6 +69,10 @@ export type SubagentAvailability = {
   permitted?: readonly string[]
   /** A Parallel Workspace team is configured, so send_teammate_message is offered and its guidance applies. */
   teammates?: boolean
+  /** Neither launch is offered, but task_manage is: the subagents already running stay the agent's to manage. */
+  manage?: boolean
+  /** False where every fork is refused (a subagent's own session, the research lead), so forks go unmentioned. */
+  fork?: boolean
 }
 
 export const ALL_SUBAGENTS: SubagentAvailability = { general: true, specialists: true }
@@ -110,7 +117,6 @@ export function subagentAvailability(input: {
   }
 }
 
-const SUBAGENT_INTRO = "You can delegate work to real child agents with the task tool when it is available."
 /** The built-in Subagent specialists and their focus. Custom specialists appear only in the task tool's list. */
 const SUBAGENT_FOCUS: ReadonlyArray<readonly [name: string, focus: string]> = [
   ["explore", "read-only discovery"],
@@ -129,20 +135,31 @@ function specialistFocus(permitted?: readonly string[]) {
   if (listed.length === 0) return ""
   return `: ${listed.map(([name, focus]) => `${name} for ${focus}`).join("; ")}`
 }
-// Ownership (owned_paths, depends_on, success_criteria) and briefing rules live in the task tool's description alone,
-// and the default to do the work yourself, with its size threshold, in this policy alone, so a request does not carry
-// them twice.
-const SUBAGENT_ORCHESTRATION = [
-  "The task tool's description has the rules for sizing, owned_paths, depends_on, success_criteria and writing a brief.",
-  "Delegated batches run in the background by default: briefly say what you launched and keep chatting or doing independent work. Use task_manage for truthful user-requested status, bounded inspection, corrections, stop, or an event-driven wait when a result is required; never poll. Foreground is explicit only when you cannot continue without results.",
-  "Subagents inherit the current provider and model unless an agent is explicitly configured with another model; explore runs on the provider's small model when one is available.",
+// When to delegate, how to launch and how to follow up live here; the parameter rules (owned_paths, isolation,
+// depends_on, success_criteria) and the limits live in the task tool's description, so a request carries each rule
+// once. Work and Thorough send the same lines, so the stable block stays cached across sizes.
+const subagentIntro = (fork: boolean) =>
+  `You can hand work to real child agents with the task tool. Each child starts with an empty context${fork ? " unless you fork it" : ""}, works on its own and reports only to you; the user does not see its report.`
+const SUBAGENT_WHEN = [
+  "Delegate when a child does it better than you would, not by default: independent parts that can run at the same time as each other or as your own work, each substantial (several files, or a long check-and-repair loop); broad searches or research whose raw output would flood your context; and new work the user sends while you or your subagents are busy, when it does not depend on what is running.",
+  "Do it yourself when it is small, a single file or a known lookup, tightly coupled to what you are editing, or needs back-and-forth with the user: a child reads everything again and costs more.",
 ]
+const subagentOrchestration = (fork: boolean) => [
+  "Put every independent brief you already know about in one task call, in the background. Say in one line what you launched, then keep doing work that does not overlap, or end your turn. Vector notifies you when each one finishes: never poll, sleep or wait in a loop, and do not redo, re-read or re-check what a running child owns.",
+  `Brief each child like a capable colleague who has seen none of this conversation: the goal and why, what you already know, files and constraints, whether to edit or only research, how to verify, and what its final report must contain.${fork ? " Fork instead when the work needs this conversation and your provider caches prompts." : ""}`,
+  "To correct a running child, use task_manage message; to continue a finished one with its context, call task with its task_id rather than starting a new one; stop children whose work is no longer needed; answer the user's status questions from task_manage list or inspect.",
+  "The task tool's description has the rules for owned_paths, isolation, depends_on, success_criteria and limits.",
+]
+const SUBAGENT_MODELS =
+  "Subagents run on your provider and model, at your effort, unless their agent sets its own model or effort or you set model or effort on a brief. explore runs on the provider's small model only when that model can call tools and is known to cost less than yours, and otherwise on your model without high effort; a learned workflow default can move general subagents to that small model on the same terms."
 const SUBAGENT_TEAMMATES = [
   "Task-tool sibling subagents are separate child sessions; they are not automatically members of a Parallel Workspace team. Require send_teammate_message only when a workspace team is actually configured.",
   "If send_teammate_message reports that no team is configured, stop that coordination attempt. Do not search outside the workspace for team state, inspect Vector application data, logs, or packaged resources, or create a team marker. Continue independently and report the unavailable exchange to the parent.",
 ]
 const SUBAGENT_OWNERSHIP =
-  "Keep ownership of the user's request: inspect subagent results, integrate them, run final verification, and explain the completed outcome to the user. A subagent summary is not proof of completion."
+  "Keep ownership of the user's request: a child's report is data to check, not proof. Integrate the results, run the final verification yourself, and tell the user the outcome."
+const SUBAGENT_MANAGE =
+  "You cannot launch subagents in this request. Use task_manage to check, steer or stop the ones already running; their reports arrive on their own."
 
 /** Why general Subagents are off, so a permission rule is never reported to the user as the Settings switch. */
 function generalOffLine(input: SubagentAvailability) {
@@ -160,33 +177,36 @@ function generalOffLine(input: SubagentAvailability) {
 
 function subagentPolicyLines(input: SubagentAvailability): string[] {
   const focus = specialistFocus(input.permitted)
+  const teammates = input.teammates ? SUBAGENT_TEAMMATES : []
+  const fork = input.fork !== false
   if (input.general)
     return [
-      SUBAGENT_INTRO,
-      // Every Subagent starts from an empty context and pays for its own prompt and reading, so delegation is for
-      // work that is cheaper split up, not the default for multi-file changes.
-      "Do the work yourself by default, multi-file changes included. Launch a general Subagent (omit subagent_type) only when that costs less than doing the work yourself: for an independent part that is itself substantial, roughly five or more files or a long check-and-repair loop, and can proceed alongside your own work, or for broad research whose raw output would flood your context. Each Subagent starts with an empty context and reads everything again, so splitting small parts across Subagents costs more than doing them.",
+      subagentIntro(fork),
+      ...SUBAGENT_WHEN,
       input.specialists
-        ? `When a substantial part of the work clearly matches a Subagent specialist, choose the narrowest one${focus}. The same size rule applies: small fixes, single-file changes and lookups you do yourself.`
+        ? `When a substantial part of the work clearly matches a Subagent specialist, choose the narrowest one${focus}.`
         : "No Subagent specialists are available to you.",
-      ...SUBAGENT_ORCHESTRATION,
-      ...(input.teammates ? SUBAGENT_TEAMMATES : []),
+      ...subagentOrchestration(fork),
+      SUBAGENT_MODELS,
+      ...teammates,
       SUBAGENT_OWNERSHIP,
     ]
   if (input.specialists)
     return [
-      SUBAGENT_INTRO,
+      subagentIntro(fork),
       `${generalOffLine(input)} Every task call must set subagent_type to a Subagent specialist from the task tool's list; never request general.`,
-      "Do the work that no specialist covers yourself, big tasks included, and keep integration and final verification yourself.",
+      "Do the work that no specialist covers yourself, big tasks included.",
       `Use a Subagent specialist only when a substantial part of the work clearly matches its focus, and choose the narrowest one in the task tool's list${focus}. Otherwise do that part yourself, as you do small fixes, single-file changes and lookups.`,
-      ...SUBAGENT_ORCHESTRATION,
-      ...(input.teammates ? SUBAGENT_TEAMMATES : []),
+      ...subagentOrchestration(fork),
+      ...teammates,
       SUBAGENT_OWNERSHIP,
     ]
+  // The request may not launch, but the subagents already running stay the agent's to manage.
+  if (input.manage) return [SUBAGENT_MANAGE, ...teammates]
   // Child sessions and read-only specialists cannot delegate, but teammate guidance still applies to them.
   return [
     "No subagents are available in this session; do the work yourself and do not call the task tool.",
-    ...(input.teammates ? SUBAGENT_TEAMMATES : []),
+    ...teammates,
   ]
 }
 
@@ -261,7 +281,14 @@ export interface Interface {
     model: Provider.Model,
     options?: EnvironmentOptions,
   ) => Effect.Effect<{ stable: string[]; session: string[] }>
-  readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
+  /**
+   * `learned` are the session's learned skills as its listing shows them this step (LearnedSkill.listing): one line
+   * each, never a procedure. A skill on disk or built in with the same name wins.
+   */
+  readonly skills: (
+    agent: Agent.Info,
+    options?: { readonly learned?: readonly Skill.Info[] },
+  ) => Effect.Effect<string | undefined>
   readonly mcp: (agent: Agent.Info, permission?: PermissionV1.Ruleset) => Effect.Effect<string | undefined>
 }
 
@@ -364,10 +391,22 @@ const layer = Layer.effect(
         return { stable, session }
       }),
 
-      skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {
+      skills: Effect.fn("SystemPrompt.skills")(function* (
+        agent: Agent.Info,
+        options?: { readonly learned?: readonly Skill.Info[] },
+      ) {
         if (Permission.disabled(["skill"], agent.permission).has("skill")) return
 
-        const list = yield* skill.available(agent)
+        const available = yield* skill.available(agent)
+        const named = options?.learned?.length ? new Set((yield* skill.all()).map((item) => item.name)) : new Set()
+        const list = [
+          ...available,
+          ...(options?.learned ?? []).filter(
+            (learned) =>
+              !named.has(learned.name) &&
+              Permission.evaluate("skill", learned.name, agent.permission).action !== "deny",
+          ),
+        ]
 
         return [
           "Skills provide specialized instructions and workflows for specific tasks.",

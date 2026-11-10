@@ -5,6 +5,7 @@ import { fileURLToPath } from "url"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainSchema } from "@vectordevai/core/brain/schema"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { ResearchStore } from "@vectordevai/core/research/store"
 import { FSUtil } from "@vectordevai/core/fs-util"
@@ -156,8 +157,13 @@ export const MemoryTool = Tool.define<
               sessionID: ctx.sessionID,
               requestID: ctx.messageID,
             })
-            if (!got) return refused("get", `No document card, passage or page ${params.id}${params.text ? ` ${params.text}` : ""} here.`)
-            if (got.type !== "text") return { title: `Memory ${got.id}`, output: got.text, metadata: { action: "get", id: got.id } }
+            if (!got)
+              return refused(
+                "get",
+                `No document card, passage or page ${params.id}${params.text ? ` ${params.text}` : ""} here.`,
+              )
+            if (got.type !== "text")
+              return { title: `Memory ${got.id}`, output: got.text, metadata: { action: "get", id: got.id } }
             return {
               title: `Memory ${got.id}`,
               output: SessionMemory.document(got.id),
@@ -198,6 +204,10 @@ export const MemoryTool = Tool.define<
             }
           }
 
+          // A learned skill is changed only in Settings > Memory > Skills, never by the agent.
+          if (params.id && (params.action === "forget" || params.action === "update") && BrainSkill.ID.test(params.id))
+            return refused(params.action, SKILL_ENTRY)
+
           // Writes: what the session took in decides whether they wait for the user. Once a session is compacted the
           // agent gets a summary instead of the messages before it, but the summary carries whatever they brought in,
           // so the whole session counts.
@@ -215,19 +225,23 @@ export const MemoryTool = Tool.define<
               ? yield* knowledge.quoted(place, { id: params.file, quote: params.quote, personal })
               : undefined
           if (quoted?.type === "refused") return refused(params.action, quoted.message)
-          const sources = [...read.documents, ...(quoted ? [quoted.document] : [])]
-          const hold = guest
-            ? "guest"
-            : place.held
-              ? "untrusted-repository"
-              : (SessionMemory.taint([...history, ...ctx.messages]) ??
-                sources.flatMap((document) => (document.hold && OUTSIDE.includes(document.hold) ? [document.hold] : []))[0])
           // A document forgotten since it was read was the user's to keep private too.
-          const privately = read.missing.length > 0 || sources.some((document) => document.visibility === "private")
+          const decided = SessionMemory.writeHold({
+            guest,
+            agent: SessionMemory.agentStarted(),
+            held: place.held,
+            messages: [...history, ...ctx.messages],
+            sources: [...read.documents, ...(quoted ? [quoted.document] : [])],
+            missing: read.missing.length,
+          })
+          const hold = decided.hold
+          const privately = decided.private
 
           // An entry the agent may not see here is one it may not change either.
-          const target = params.id && params.action !== "add" ? yield* brain.get(place, params.id, { personal }) : undefined
-          if (params.id && params.action !== "add" && !target) return refused(params.action, `No memory ${params.id} here.`)
+          const target =
+            params.id && params.action !== "add" ? yield* brain.get(place, params.id, { personal }) : undefined
+          if (params.id && params.action !== "add" && !target)
+            return refused(params.action, `No memory ${params.id} here.`)
           // The agent changes only what is in use. What was put away, replaced or waits for review is the user's to
           // bring back or decide on, so neither an update nor a forget may touch it.
           const unused = target ? inactive(target.entry) : undefined
@@ -238,11 +252,19 @@ export const MemoryTool = Tool.define<
             // The agent only puts an entry away; the user deletes for good in Settings > Memory. A session that read
             // outside content may not put anything away at all, so planted text cannot wipe what Vector knows, and
             // what the user wrote (or a file says) is theirs to put away.
-            if (hold) return refused("forget", "This session took in outside content, so ask the user to forget it in Settings > Memory.")
+            if (hold)
+              return refused(
+                "forget",
+                "This session took in outside content, so ask the user to forget it in Settings > Memory.",
+              )
             if (target?.entry.origin !== "agent")
-              return refused("forget", `${params.id} is the user's own, so ask them to put it away in Settings > Memory.`)
+              return refused(
+                "forget",
+                `${params.id} is the user's own, so ask them to put it away in Settings > Memory.`,
+              )
             const result = yield* brain.update(place, params.id, { action: "archive" }, "agent")
-            if (!result || result.type === "refused") return refused("forget", result?.type === "refused" ? result.message : `No memory ${params.id} here.`)
+            if (!result || result.type === "refused")
+              return refused("forget", result?.type === "refused" ? result.message : `No memory ${params.id} here.`)
             return {
               title: `Put away ${params.id}`,
               output: `Put away ${params.id}. The user can restore it in Settings > Memory.`,
@@ -309,7 +331,12 @@ export const MemoryTool = Tool.define<
             )
           const evidence =
             quoted && params.file && params.quote
-              ? { type: "document" as const, path: params.file.replace(/^\[|\]$/g, ""), quote: params.quote, verified: true }
+              ? {
+                  type: "document" as const,
+                  path: params.file.replace(/^\[|\]$/g, ""),
+                  quote: params.quote,
+                  verified: true,
+                }
               : yield* verify(params, ctx, place.root, git)
           const result = yield* brain.propose(place, {
             kind: params.kind ?? "lesson",
@@ -330,7 +357,8 @@ export const MemoryTool = Tool.define<
           })
           if (result.type === "refused") return refused(params.action, result.message)
           // Derived from the card it quotes, and related to what else it bears on.
-          if (evidence?.type === "document") yield* knowledge.derive(place, { entry: result.entry, from: evidence.path })
+          if (evidence?.type === "document")
+            yield* knowledge.derive(place, { entry: result.entry, from: evidence.path })
           // A write that put words in use, rather than finding them there or holding them, is something learned.
           const learned = result.type === "added" || result.type === "superseded" || result.type === "promoted"
           return {
@@ -366,10 +394,17 @@ function keepable(file: string, root: string, messages: readonly SessionV1.WithP
   if (file === "message") {
     const pasted = SessionMemory.request(messages)
       .flatMap((message) => message.parts)
-      .flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored && !SessionMemory.outside(part) ? [part.text] : []))
+      .flatMap((part) =>
+        part.type === "text" && !part.synthetic && !part.ignored && !SessionMemory.outside(part) ? [part.text] : [],
+      )
       .toSorted((a, b) => b.length - a.length)[0]
     if (!pasted || pasted.length < 400) return "There is no long text in the user's message to keep."
-    const first = pasted.split("\n").find((line) => line.trim())?.replace(/^#+\s*/, "").trim() ?? "Pasted text"
+    const first =
+      pasted
+        .split("\n")
+        .find((line) => line.trim())
+        ?.replace(/^#+\s*/, "")
+        .trim() ?? "Pasted text"
     return { type: "text" as const, name: `${first.slice(0, 60)}.md`, text: pasted }
   }
   const target = path.resolve(root, file)
@@ -399,7 +434,8 @@ function keptLine(document: BrainSchema.Document, result: "queued" | "version" |
   if (result === "unchanged") return `Already kept as [${document.id}] ("${document.title}").`
   if (document.status === "held")
     return `Kept ${name} for the user's review (${holdReason(document.hold)}). It is not used until they approve it.`
-  if (document.status === "failed") return `Vector could not read ${document.name}: ${document.error ?? "it could not be read"}.`
+  if (document.status === "failed")
+    return `Vector could not read ${document.name}: ${document.error ?? "it could not be read"}.`
   if (document.status === "queued" || document.status === "reading")
     return `Reading ${name}; its cards come in once it is read.`
   return `Kept ${name}${result === "version" ? `, replacing version ${document.version - 1}` : ""}: ${document.stats.records} records from ${document.stats.sections} sections, searchable now. Its cards come in when they bear on a request, and get(${document.id}) shows its outline. The user can forget it in Settings > Memory.`
@@ -421,20 +457,28 @@ const verify = Effect.fnUntraced(function* (
   git: Git.Interface,
 ) {
   if (params.command)
-    return { type: "check" as const, command: params.command, verified: SessionMemory.checked(ctx.messages, params.command) }
+    return {
+      type: "check" as const,
+      command: params.command,
+      verified: SessionMemory.checked(ctx.messages, params.command),
+    }
   if (params.file && params.quote) {
     const target = path.resolve(root, params.file)
     const file = path.relative(root, target).split(path.sep).join("/")
     // The file as the default branch has it, so a line the agent wrote this session, a file it created, or a pull
     // request checked out for review (whose commit is HEAD) cannot vouch for itself.
-    const base = FSUtil.contains(root, target) && !SessionMemory.touched(ctx.messages, target, root) ? yield* git.defaultBranch(root) : undefined
+    const base =
+      FSUtil.contains(root, target) && !SessionMemory.touched(ctx.messages, target, root)
+        ? yield* git.defaultBranch(root)
+        : undefined
     const committed = base ? yield* git.show(root, base.ref, file) : ""
     return {
       type: "file" as const,
       path: file,
       quote: params.quote,
       ...(committed ? { hash: createHash("sha256").update(committed).digest("hex").slice(0, 16) } : {}),
-      verified: committed !== "" && normal(params.quote).length >= 6 && normal(committed).includes(normal(params.quote)),
+      verified:
+        committed !== "" && normal(params.quote).length >= 6 && normal(committed).includes(normal(params.quote)),
     }
   }
   if (params.quote)
@@ -442,7 +486,10 @@ const verify = Effect.fnUntraced(function* (
       type: "message" as const,
       quote: params.quote,
       // Personal memory follows the user everywhere, so it takes what they said in the message this step answers.
-      verified: SessionMemory.quoted(params.scope === "personal" ? SessionMemory.request(ctx.messages) : ctx.messages, params.quote),
+      verified: SessionMemory.quoted(
+        params.scope === "personal" ? SessionMemory.request(ctx.messages) : ctx.messages,
+        params.quote,
+      ),
     }
   return undefined
 })
@@ -460,10 +507,13 @@ function describe(entry: BrainSchema.Entry) {
 
 function evidenceLine(item: BrainSchema.Evidence) {
   if (item.type === "message") return item.quote ? `the user said "${item.quote}"` : "a quote Vector could not check"
-  if (item.type === "file") return item.quote ? `${item.path ?? "a file"}: "${item.quote}"` : `${item.path ?? "a file"}, unchecked`
-  if (item.type === "check") return item.command ? `\`${item.command}\` passed after failing` : "a check Vector could not confirm"
+  if (item.type === "file")
+    return item.quote ? `${item.path ?? "a file"}: "${item.quote}"` : `${item.path ?? "a file"}, unchecked`
+  if (item.type === "check")
+    return item.command ? `\`${item.command}\` passed after failing` : "a check Vector could not confirm"
   if (item.type === "file-item") return "a file"
-  if (item.type === "document") return item.quote ? `[${item.path ?? "a document"}]: "${item.quote}"` : `[${item.path ?? "a document"}], unchecked`
+  if (item.type === "document")
+    return item.quote ? `[${item.path ?? "a document"}]: "${item.quote}"` : `[${item.path ?? "a document"}], unchecked`
   return "the user saved it"
 }
 
@@ -479,8 +529,7 @@ function kept(entry: BrainSchema.Entry) {
   return entry.scope === "personal" || entry.private === true
 }
 
-/** Why a document's content counts as outside content: how it came in. */
-const OUTSIDE: readonly BrainSchema.Hold[] = ["web", "mcp", "subagent", "guest", "untrusted-repository"]
+const SKILL_ENTRY = "That is a learned skill. The user changes learned skills in Settings > Memory > Skills."
 
 function written(result: Exclude<Brain.WriteResult, { type: "refused" }>, replaced: BrainSchema.Entry | undefined) {
   const id = result.entry.id

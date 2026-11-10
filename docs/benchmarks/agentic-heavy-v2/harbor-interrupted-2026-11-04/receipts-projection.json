@@ -1,0 +1,2358 @@
+[
+  {
+    "seq": 1341,
+    "actor": "foundry-codex",
+    "reservedUsd": 0.96793,
+    "measuredUsd": 0.0330085,
+    "usage": {
+      "input_tokens": 12516,
+      "input_tokens_details": {
+        "cache_write_tokens": 12513,
+        "cached_tokens": 0
+      },
+      "output_tokens": 172,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 12688
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4218.0
+  },
+  {
+    "seq": 1342,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.08794,
+    "measuredUsd": 0.0163123,
+    "usage": {
+      "input_tokens": 17610,
+      "input_tokens_details": {
+        "cache_write_tokens": 5094,
+        "cached_tokens": 12513
+      },
+      "output_tokens": 232,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 17842
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 6765.0
+  },
+  {
+    "seq": 1343,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.097595,
+    "measuredUsd": 0.0045417,
+    "usage": {
+      "input_tokens": 17864,
+      "input_tokens_details": {
+        "cache_write_tokens": 254,
+        "cached_tokens": 17607
+      },
+      "output_tokens": 214,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 18078
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 5797.0
+  },
+  {
+    "seq": 1344,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.13471,
+    "measuredUsd": 0.0053377,
+    "usage": {
+      "input_tokens": 19069,
+      "input_tokens_details": {
+        "cache_write_tokens": 246,
+        "cached_tokens": 17607
+      },
+      "output_tokens": 53,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 19122
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2296.0
+  },
+  {
+    "seq": 1345,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.098205,
+    "measuredUsd": 0.043893,
+    "usage": {
+      "input_tokens": 17546,
+      "input_tokens_details": {
+        "cache_write_tokens": 16402,
+        "cached_tokens": 0
+      },
+      "output_tokens": 60,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 17606
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 1797.0
+  },
+  {
+    "seq": 1346,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.10687,
+    "measuredUsd": 0.0036896000000000003,
+    "usage": {
+      "input_tokens": 18099,
+      "input_tokens_details": {
+        "cache_write_tokens": 235,
+        "cached_tokens": 17861
+      },
+      "output_tokens": 131,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 18230
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3407.0
+  },
+  {
+    "seq": 1347,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.246045,
+    "measuredUsd": 0.018098799999999998,
+    "usage": {
+      "input_tokens": 23915,
+      "input_tokens_details": {
+        "cache_write_tokens": 6059,
+        "cached_tokens": 17853
+      },
+      "output_tokens": 116,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 24031
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3688.0
+  },
+  {
+    "seq": 1348,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.210365,
+    "measuredUsd": 0.0170237,
+    "usage": {
+      "input_tokens": 22452,
+      "input_tokens_details": {
+        "cache_write_tokens": 6047,
+        "cached_tokens": 16402
+      },
+      "output_tokens": 26,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 22478
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 1719.0
+  },
+  {
+    "seq": 1349,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.122945,
+    "measuredUsd": 0.005323100000000001,
+    "usage": {
+      "input_tokens": 18922,
+      "input_tokens_details": {
+        "cache_write_tokens": 823,
+        "cached_tokens": 18096
+      },
+      "output_tokens": 145,
+      "output_tokens_details": {
+        "reasoning_tokens": 11
+      },
+      "total_tokens": 19067
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4516.0
+  },
+  {
+    "seq": 1350,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.25156,
+    "measuredUsd": 0.0089432,
+    "usage": {
+      "input_tokens": 24043,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 23912
+      },
+      "output_tokens": 629,
+      "output_tokens_details": {
+        "reasoning_tokens": 205
+      },
+      "total_tokens": 24672
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 15125.0
+  },
+  {
+    "seq": 1351,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.212815,
+    "measuredUsd": 0.0027959,
+    "usage": {
+      "input_tokens": 22502,
+      "input_tokens_details": {
+        "cache_write_tokens": 50,
+        "cached_tokens": 22449
+      },
+      "output_tokens": 42,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 22544
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2265.0
+  },
+  {
+    "seq": 1352,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.13654,
+    "measuredUsd": 0.0033599000000000003,
+    "usage": {
+      "input_tokens": 19063,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 18919
+      },
+      "output_tokens": 118,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 19181
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4297.0
+  },
+  {
+    "seq": 1353,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.2882,
+    "measuredUsd": 0.0087197,
+    "usage": {
+      "input_tokens": 24696,
+      "input_tokens_details": {
+        "cache_write_tokens": 781,
+        "cached_tokens": 23912
+      },
+      "output_tokens": 437,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 25133
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 7235.0
+  },
+  {
+    "seq": 1354,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.28064,
+    "measuredUsd": 0.036240800000000004,
+    "usage": {
+      "input_tokens": 24277,
+      "input_tokens_details": {
+        "cache_write_tokens": 12758,
+        "cached_tokens": 10238
+      },
+      "output_tokens": 76,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 24353
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2469.0
+  },
+  {
+    "seq": 1355,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.21917,
+    "measuredUsd": 0.0033709,
+    "usage": {
+      "input_tokens": 22756,
+      "input_tokens_details": {
+        "cache_write_tokens": 254,
+        "cached_tokens": 22499
+      },
+      "output_tokens": 48,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 22804
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2062.0
+  },
+  {
+    "seq": 1356,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.142125,
+    "measuredUsd": 0.0034699,
+    "usage": {
+      "input_tokens": 19193,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 18919
+      },
+      "output_tokens": 103,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 19296
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3125.0
+  },
+  {
+    "seq": 1357,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.29571,
+    "measuredUsd": 0.0371273,
+    "usage": {
+      "input_tokens": 24750,
+      "input_tokens_details": {
+        "cache_write_tokens": 13219,
+        "cached_tokens": 10238
+      },
+      "output_tokens": 47,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 24797
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 1844.0
+  },
+  {
+    "seq": 1358,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.30842,
+    "measuredUsd": 0.0048958000000000005,
+    "usage": {
+      "input_tokens": 25286,
+      "input_tokens_details": {
+        "cache_write_tokens": 461,
+        "cached_tokens": 24693
+      },
+      "output_tokens": 101,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 25387
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3563.0
+  },
+  {
+    "seq": 1359,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.394395,
+    "measuredUsd": 0.017958099999999998,
+    "usage": {
+      "input_tokens": 29156,
+      "input_tokens_details": {
+        "cache_write_tokens": 6157,
+        "cached_tokens": 22996
+      },
+      "output_tokens": 26,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 29182
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2172.0
+  },
+  {
+    "seq": 1360,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.221975,
+    "measuredUsd": 0.0473613,
+    "usage": {
+      "input_tokens": 22828,
+      "input_tokens_details": {
+        "cache_write_tokens": 72,
+        "cached_tokens": 22753
+      },
+      "output_tokens": 4490,
+      "output_tokens_details": {
+        "reasoning_tokens": 449
+      },
+      "total_tokens": 27318
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 48563.0
+  },
+  {
+    "seq": 1361,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.14717,
+    "measuredUsd": 0.0033099,
+    "usage": {
+      "input_tokens": 19308,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 18919
+      },
+      "output_tokens": 64,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 19372
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2250.0
+  },
+  {
+    "seq": 1362,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.4056,
+    "measuredUsd": 0.017699200000000002,
+    "usage": {
+      "input_tokens": 29495,
+      "input_tokens_details": {
+        "cache_write_tokens": 6035,
+        "cached_tokens": 23457
+      },
+      "output_tokens": 26,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 29521
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2203.0
+  },
+  {
+    "seq": 1363,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.31387,
+    "measuredUsd": 0.0036254,
+    "usage": {
+      "input_tokens": 25399,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 25154
+      },
+      "output_tokens": 62,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 25461
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2266.0
+  },
+  {
+    "seq": 1364,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.40221,
+    "measuredUsd": 0.0038723000000000004,
+    "usage": {
+      "input_tokens": 29329,
+      "input_tokens_details": {
+        "cache_write_tokens": 50,
+        "cached_tokens": 29153
+      },
+      "output_tokens": 58,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 29387
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3000.0
+  },
+  {
+    "seq": 1365,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.23905,
+    "measuredUsd": 0.0228825,
+    "usage": {
+      "input_tokens": 23010,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 22825
+      },
+      "output_tokens": 2023,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 25033
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 27656.0
+  },
+  {
+    "seq": 1366,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.1567,
+    "measuredUsd": 0.0140179,
+    "usage": {
+      "input_tokens": 19678,
+      "input_tokens_details": {
+        "cache_write_tokens": 756,
+        "cached_tokens": 18919
+      },
+      "output_tokens": 1023,
+      "output_tokens_details": {
+        "reasoning_tokens": 53
+      },
+      "total_tokens": 20701
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 10906.0
+  },
+  {
+    "seq": 1367,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.40804,
+    "measuredUsd": 0.0037902,
+    "usage": {
+      "input_tokens": 29545,
+      "input_tokens_details": {
+        "cache_write_tokens": 50,
+        "cached_tokens": 29492
+      },
+      "output_tokens": 71,
+      "output_tokens_details": {
+        "reasoning_tokens": 24
+      },
+      "total_tokens": 29616
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2532.0
+  },
+  {
+    "seq": 1368,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.32228,
+    "measuredUsd": 0.0052764,
+    "usage": {
+      "input_tokens": 25767,
+      "input_tokens_details": {
+        "cache_write_tokens": 610,
+        "cached_tokens": 25154
+      },
+      "output_tokens": 123,
+      "output_tokens_details": {
+        "reasoning_tokens": 39
+      },
+      "total_tokens": 25890
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3469.0
+  },
+  {
+    "seq": 1369,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.406525,
+    "measuredUsd": 0.0043763000000000005,
+    "usage": {
+      "input_tokens": 29470,
+      "input_tokens_details": {
+        "cache_write_tokens": 264,
+        "cached_tokens": 29203
+      },
+      "output_tokens": 79,
+      "output_tokens_details": {
+        "reasoning_tokens": 45
+      },
+      "total_tokens": 29549
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3734.0
+  },
+  {
+    "seq": 1370,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.315765,
+    "measuredUsd": 0.048311,
+    "usage": {
+      "input_tokens": 25057,
+      "input_tokens_details": {
+        "cache_write_tokens": 2229,
+        "cached_tokens": 22825
+      },
+      "output_tokens": 4045,
+      "output_tokens_details": {
+        "reasoning_tokens": 331
+      },
+      "total_tokens": 29102
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 39765.0
+  },
+  {
+    "seq": 1371,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.19204,
+    "measuredUsd": 0.005771,
+    "usage": {
+      "input_tokens": 20725,
+      "input_tokens_details": {
+        "cache_write_tokens": 1047,
+        "cached_tokens": 19675
+      },
+      "output_tokens": 118,
+      "output_tokens_details": {
+        "reasoning_tokens": 19
+      },
+      "total_tokens": 20843
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3828.0
+  },
+  {
+    "seq": 1372,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.42009,
+    "measuredUsd": 0.0927277,
+    "usage": {
+      "input_tokens": 29640,
+      "input_tokens_details": {
+        "cache_write_tokens": 95,
+        "cached_tokens": 29542
+      },
+      "output_tokens": 8953,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 38593
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 73219.0
+  },
+  {
+    "seq": 1373,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.339715,
+    "measuredUsd": 0.005032399999999999,
+    "usage": {
+      "input_tokens": 25902,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 25764
+      },
+      "output_tokens": 218,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 26120
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3735.0
+  },
+  {
+    "seq": 1374,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.419935,
+    "measuredUsd": 0.0500402,
+    "usage": {
+      "input_tokens": 29573,
+      "input_tokens_details": {
+        "cache_write_tokens": 103,
+        "cached_tokens": 29467
+      },
+      "output_tokens": 4683,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 34256
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 43266.0
+  },
+  {
+    "seq": 1375,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.40931,
+    "measuredUsd": 0.0360739,
+    "usage": {
+      "input_tokens": 29126,
+      "input_tokens_details": {
+        "cache_write_tokens": 4069,
+        "cached_tokens": 25054
+      },
+      "output_tokens": 2339,
+      "output_tokens_details": {
+        "reasoning_tokens": 161
+      },
+      "total_tokens": 31465
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 24375.0
+  },
+  {
+    "seq": 1376,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.205315,
+    "measuredUsd": 0.004218200000000001,
+    "usage": {
+      "input_tokens": 20840,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 20722
+      },
+      "output_tokens": 191,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 21031
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3453.0
+  },
+  {
+    "seq": 1377,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.62884,
+    "measuredUsd": 0.026452200000000002,
+    "usage": {
+      "input_tokens": 38617,
+      "input_tokens_details": {
+        "cache_write_tokens": 8977,
+        "cached_tokens": 29637
+      },
+      "output_tokens": 104,
+      "output_tokens_details": {
+        "reasoning_tokens": 50
+      },
+      "total_tokens": 38721
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3797.0
+  },
+  {
+    "seq": 1378,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.346885,
+    "measuredUsd": 0.0060674,
+    "usage": {
+      "input_tokens": 26177,
+      "input_tokens_details": {
+        "cache_write_tokens": 410,
+        "cached_tokens": 25764
+      },
+      "output_tokens": 246,
+      "output_tokens_details": {
+        "reasoning_tokens": 109
+      },
+      "total_tokens": 26423
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 7954.0
+  },
+  {
+    "seq": 1379,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.544775,
+    "measuredUsd": 0.0154205,
+    "usage": {
+      "input_tokens": 34280,
+      "input_tokens_details": {
+        "cache_write_tokens": 4707,
+        "cached_tokens": 29570
+      },
+      "output_tokens": 69,
+      "output_tokens_details": {
+        "reasoning_tokens": 37
+      },
+      "total_tokens": 34349
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4297.0
+  },
+  {
+    "seq": 1380,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.471085,
+    "measuredUsd": 0.049035800000000004,
+    "usage": {
+      "input_tokens": 31489,
+      "input_tokens_details": {
+        "cache_write_tokens": 2363,
+        "cached_tokens": 29123
+      },
+      "output_tokens": 4021,
+      "output_tokens_details": {
+        "reasoning_tokens": 392
+      },
+      "total_tokens": 35510
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 39828.0
+  },
+  {
+    "seq": 1381,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.213805,
+    "measuredUsd": 0.0314582,
+    "usage": {
+      "input_tokens": 21205,
+      "input_tokens_details": {
+        "cache_write_tokens": 480,
+        "cached_tokens": 20722
+      },
+      "output_tokens": 2818,
+      "output_tokens_details": {
+        "reasoning_tokens": 183
+      },
+      "total_tokens": 24023
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 24547.0
+  },
+  {
+    "seq": 1382,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.64457,
+    "measuredUsd": 0.005352399999999999,
+    "usage": {
+      "input_tokens": 38823,
+      "input_tokens_details": {
+        "cache_write_tokens": 206,
+        "cached_tokens": 38614
+      },
+      "output_tokens": 97,
+      "output_tokens_details": {
+        "reasoning_tokens": 13
+      },
+      "total_tokens": 38920
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 3594.0
+  },
+  {
+    "seq": 1383,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.369305,
+    "measuredUsd": 0.0045194,
+    "usage": {
+      "input_tokens": 26435,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 26174
+      },
+      "output_tokens": 138,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 26573
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4703.0
+  },
+  {
+    "seq": 1384,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.56434,
+    "measuredUsd": 0.007705700000000001,
+    "usage": {
+      "input_tokens": 34476,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 34277
+      },
+      "output_tokens": 388,
+      "output_tokens_details": {
+        "reasoning_tokens": 356
+      },
+      "total_tokens": 34864
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 10687.0
+  },
+  {
+    "seq": 1385,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.581075,
+    "measuredUsd": 0.09854710000000001,
+    "usage": {
+      "input_tokens": 35534,
+      "input_tokens_details": {
+        "cache_write_tokens": 4045,
+        "cached_tokens": 31486
+      },
+      "output_tokens": 8528,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 44062
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 87437.0
+  },
+  {
+    "seq": 1386,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.28938,
+    "measuredUsd": 0.0099862,
+    "usage": {
+      "input_tokens": 24081,
+      "input_tokens_details": {
+        "cache_write_tokens": 2876,
+        "cached_tokens": 21202
+      },
+      "output_tokens": 67,
+      "output_tokens_details": {
+        "reasoning_tokens": 50
+      },
+      "total_tokens": 24148
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4015.0
+  },
+  {
+    "seq": 1387,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.74358,
+    "measuredUsd": 0.043253,
+    "usage": {
+      "input_tokens": 43365,
+      "input_tokens_details": {
+        "cache_write_tokens": 4542,
+        "cached_tokens": 38820
+      },
+      "output_tokens": 2801,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 46166
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 33594.0
+  },
+  {
+    "seq": 1388,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.37581,
+    "measuredUsd": 0.0048594,
+    "usage": {
+      "input_tokens": 26585,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 26174
+      },
+      "output_tokens": 142,
+      "output_tokens_details": {
+        "reasoning_tokens": 37
+      },
+      "total_tokens": 26727
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4547.0
+  },
+  {
+    "seq": 1389,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.59984,
+    "measuredUsd": 0.015471200000000001,
+    "usage": {
+      "input_tokens": 34955,
+      "input_tokens_details": {
+        "cache_write_tokens": 675,
+        "cached_tokens": 34277
+      },
+      "output_tokens": 1035,
+      "output_tokens_details": {
+        "reasoning_tokens": 136
+      },
+      "total_tokens": 35990
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 14343.0
+  },
+  {
+    "seq": 1390,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.7877,
+    "measuredUsd": 0.07682910000000001,
+    "usage": {
+      "input_tokens": 44086,
+      "input_tokens_details": {
+        "cache_write_tokens": 8552,
+        "cached_tokens": 35531
+      },
+      "output_tokens": 5189,
+      "output_tokens_details": {
+        "reasoning_tokens": 673
+      },
+      "total_tokens": 49275
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 54672.0
+  },
+  {
+    "seq": 1391,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.306625,
+    "measuredUsd": 0.0042688000000000005,
+    "usage": {
+      "input_tokens": 24235,
+      "input_tokens_details": {
+        "cache_write_tokens": 154,
+        "cached_tokens": 24078
+      },
+      "output_tokens": 147,
+      "output_tokens_details": {
+        "reasoning_tokens": 37
+      },
+      "total_tokens": 24382
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4375.0
+  },
+  {
+    "seq": 1392,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.794295,
+    "measuredUsd": 0.0264982,
+    "usage": {
+      "input_tokens": 44043,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 43362
+      },
+      "output_tokens": 2080,
+      "output_tokens_details": {
+        "reasoning_tokens": 26
+      },
+      "total_tokens": 46123
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 18485.0
+  },
+  {
+    "seq": 1393,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.39406,
+    "measuredUsd": 0.0046974,
+    "usage": {
+      "input_tokens": 26739,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 26174
+      },
+      "output_tokens": 95,
+      "output_tokens_details": {
+        "reasoning_tokens": 78
+      },
+      "total_tokens": 26834
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4906.0
+  },
+  {
+    "seq": 1394,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.63523,
+    "measuredUsd": 0.0132662,
+    "usage": {
+      "input_tokens": 36065,
+      "input_tokens_details": {
+        "cache_write_tokens": 1110,
+        "cached_tokens": 34952
+      },
+      "output_tokens": 699,
+      "output_tokens_details": {
+        "reasoning_tokens": 102
+      },
+      "total_tokens": 36764
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 9484.0
+  },
+  {
+    "seq": 1395,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.94106,
+    "measuredUsd": 0.17874679999999998,
+    "usage": {
+      "input_tokens": 49299,
+      "input_tokens_details": {
+        "cache_write_tokens": 5213,
+        "cached_tokens": 44083
+      },
+      "output_tokens": 16130,
+      "output_tokens_details": {
+        "reasoning_tokens": 200
+      },
+      "total_tokens": 65429
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 154344.0
+  },
+  {
+    "seq": 1396,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.32214,
+    "measuredUsd": 0.0036472,
+    "usage": {
+      "input_tokens": 24389,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 24232
+      },
+      "output_tokens": 91,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 24480
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4937.0
+  },
+  {
+    "seq": 1397,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.84396,
+    "measuredUsd": 0.0188922,
+    "usage": {
+      "input_tokens": 46189,
+      "input_tokens_details": {
+        "cache_write_tokens": 2824,
+        "cached_tokens": 43362
+      },
+      "output_tokens": 749,
+      "output_tokens_details": {
+        "reasoning_tokens": 580
+      },
+      "total_tokens": 46938
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 18578.0
+  },
+  {
+    "seq": 1398,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.414165,
+    "measuredUsd": 0.0078134,
+    "usage": {
+      "input_tokens": 26921,
+      "input_tokens_details": {
+        "cache_write_tokens": 744,
+        "cached_tokens": 26174
+      },
+      "output_tokens": 333,
+      "output_tokens_details": {
+        "reasoning_tokens": 258
+      },
+      "total_tokens": 27254
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 10797.0
+  },
+  {
+    "seq": 1399,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.664755,
+    "measuredUsd": 0.009232200000000001,
+    "usage": {
+      "input_tokens": 36885,
+      "input_tokens_details": {
+        "cache_write_tokens": 820,
+        "cached_tokens": 36062
+      },
+      "output_tokens": 357,
+      "output_tokens_details": {
+        "reasoning_tokens": 223
+      },
+      "total_tokens": 37242
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 9937.0
+  },
+  {
+    "seq": 1400,
+    "actor": "foundry-codex",
+    "reservedUsd": 2.217175,
+    "measuredUsd": 0.0508006,
+    "usage": {
+      "input_tokens": 65453,
+      "input_tokens_details": {
+        "cache_write_tokens": 16154,
+        "cached_tokens": 49296
+      },
+      "output_tokens": 548,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 66001
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 16687.0
+  },
+  {
+    "seq": 1401,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.327085,
+    "measuredUsd": 0.0082632,
+    "usage": {
+      "input_tokens": 24492,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 24232
+      },
+      "output_tokens": 532,
+      "output_tokens_details": {
+        "reasoning_tokens": 37
+      },
+      "total_tokens": 25024
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 10469.0
+  },
+  {
+    "seq": 1402,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.45286,
+    "measuredUsd": 0.0044618,
+    "usage": {
+      "input_tokens": 27443,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 26918
+      },
+      "output_tokens": 72,
+      "output_tokens_details": {
+        "reasoning_tokens": 15
+      },
+      "total_tokens": 27515
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2469.0
+  },
+  {
+    "seq": 1403,
+    "actor": "foundry-codex",
+    "reservedUsd": 2.266875,
+    "measuredUsd": 0.009876,
+    "usage": {
+      "input_tokens": 66063,
+      "input_tokens_details": {
+        "cache_write_tokens": 610,
+        "cached_tokens": 65450
+      },
+      "output_tokens": 180,
+      "output_tokens_details": {
+        "reasoning_tokens": 69
+      },
+      "total_tokens": 66243
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 5047.0
+  },
+  {
+    "seq": 1404,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.363285,
+    "measuredUsd": 0.007261700000000001,
+    "usage": {
+      "input_tokens": 25624,
+      "input_tokens_details": {
+        "cache_write_tokens": 1389,
+        "cached_tokens": 24232
+      },
+      "output_tokens": 136,
+      "output_tokens_details": {
+        "reasoning_tokens": 87
+      },
+      "total_tokens": 25760
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4719.0
+  },
+  {
+    "seq": 1405,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.46647,
+    "measuredUsd": 0.0046758,
+    "usage": {
+      "input_tokens": 27635,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 26918
+      },
+      "output_tokens": 55,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 27690
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2453.0
+  },
+  {
+    "seq": 1406,
+    "actor": "foundry-codex",
+    "reservedUsd": 2.292755,
+    "measuredUsd": 0.0089595,
+    "usage": {
+      "input_tokens": 66658,
+      "input_tokens_details": {
+        "cache_write_tokens": 595,
+        "cached_tokens": 66060
+      },
+      "output_tokens": 86,
+      "output_tokens_details": {
+        "reasoning_tokens": 15
+      },
+      "total_tokens": 66744
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4360.0
+  },
+  {
+    "seq": 1407,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.39898,
+    "measuredUsd": 0.0061456,
+    "usage": {
+      "input_tokens": 26639,
+      "input_tokens_details": {
+        "cache_write_tokens": 1015,
+        "cached_tokens": 25621
+      },
+      "output_tokens": 104,
+      "output_tokens_details": {
+        "reasoning_tokens": 72
+      },
+      "total_tokens": 26743
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4766.0
+  },
+  {
+    "seq": 1408,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.6792,
+    "measuredUsd": 0.032070299999999996,
+    "usage": {
+      "input_tokens": 38366,
+      "input_tokens_details": {
+        "cache_write_tokens": 11445,
+        "cached_tokens": 26918
+      },
+      "output_tokens": 76,
+      "output_tokens_details": {
+        "reasoning_tokens": 24
+      },
+      "total_tokens": 38442
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4078.0
+  },
+  {
+    "seq": 1409,
+    "actor": "foundry-codex",
+    "reservedUsd": 2.30738,
+    "measuredUsd": 0.018204,
+    "usage": {
+      "input_tokens": 66931,
+      "input_tokens_details": {
+        "cache_write_tokens": 273,
+        "cached_tokens": 66655
+      },
+      "output_tokens": 1085,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 68016
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 27844.0
+  },
+  {
+    "seq": 1410,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.417615,
+    "measuredUsd": 0.0038571000000000005,
+    "usage": {
+      "input_tokens": 26806,
+      "input_tokens_details": {
+        "cache_write_tokens": 167,
+        "cached_tokens": 26636
+      },
+      "output_tokens": 77,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 26883
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 5047.0
+  },
+  {
+    "seq": 1411,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.74015,
+    "measuredUsd": 0.0319298,
+    "usage": {
+      "input_tokens": 40821,
+      "input_tokens_details": {
+        "cache_write_tokens": 2455,
+        "cached_tokens": 38363
+      },
+      "output_tokens": 2195,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 43016
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 29203.0
+  },
+  {
+    "seq": 1412,
+    "actor": "foundry-codex",
+    "reservedUsd": 2.454505,
+    "measuredUsd": 0.0253013,
+    "usage": {
+      "input_tokens": 70532,
+      "input_tokens_details": {
+        "cache_write_tokens": 3601,
+        "cached_tokens": 66928
+      },
+      "output_tokens": 960,
+      "output_tokens_details": {
+        "reasoning_tokens": 57
+      },
+      "total_tokens": 71492
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 11187.0
+  },
+  {
+    "seq": 1413,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.42234,
+    "measuredUsd": 0.0031543,
+    "usage": {
+      "input_tokens": 26895,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 26803
+      },
+      "output_tokens": 29,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 26924
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 2828.0
+  },
+  {
+    "seq": 1414,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.829545,
+    "measuredUsd": 0.0134503,
+    "usage": {
+      "input_tokens": 43726,
+      "input_tokens_details": {
+        "cache_write_tokens": 2905,
+        "cached_tokens": 40818
+      },
+      "output_tokens": 210,
+      "output_tokens_details": {
+        "reasoning_tokens": 51
+      },
+      "total_tokens": 43936
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 8875.0
+  },
+  {
+    "seq": 1415,
+    "actor": "foundry-codex",
+    "reservedUsd": 2.47308,
+    "measuredUsd": 0.0168209,
+    "usage": {
+      "input_tokens": 70678,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 70529
+      },
+      "output_tokens": 947,
+      "output_tokens_details": {
+        "reasoning_tokens": 24
+      },
+      "total_tokens": 71625
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 12485.0
+  },
+  {
+    "seq": 1416,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.4273,
+    "measuredUsd": 0.0050788000000000005,
+    "usage": {
+      "input_tokens": 27103,
+      "input_tokens_details": {
+        "cache_write_tokens": 297,
+        "cached_tokens": 26803
+      },
+      "output_tokens": 165,
+      "output_tokens_details": {
+        "reasoning_tokens": 90
+      },
+      "total_tokens": 27268
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 6359.0
+  },
+  {
+    "seq": 1417,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.85081,
+    "measuredUsd": 0.0056283,
+    "usage": {
+      "input_tokens": 44078,
+      "input_tokens_details": {
+        "cache_write_tokens": 352,
+        "cached_tokens": 43723
+      },
+      "output_tokens": 37,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 44115
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 4296.0
+  },
+  {
+    "seq": 1418,
+    "actor": "foundry-codex",
+    "reservedUsd": 2.50318,
+    "measuredUsd": 0.0231364,
+    "usage": {
+      "input_tokens": 71683,
+      "input_tokens_details": {
+        "cache_write_tokens": 1151,
+        "cached_tokens": 70529
+      },
+      "output_tokens": 1320,
+      "output_tokens_details": {
+        "reasoning_tokens": 175
+      },
+      "total_tokens": 73003
+    },
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "httpStatus": 200,
+    "responseStatus": "completed",
+    "serviceTier": "default",
+    "elapsedMs": 13656.0
+  },
+  {
+    "seq": 1419,
+    "actor": "foundry-codex",
+    "reservedUsd": 1.447765,
+    "measuredUsd": null,
+    "model": "gpt-6.1-sol",
+    "rates": {
+      "input": 2.0,
+      "read": 0.1,
+      "write30m": 2.5,
+      "write12h": 5.0,
+      "output": 10.0
+    },
+    "elapsedMs": 40063.0,
+    "failureKind": "RemoteDisconnected"
+  }
+]

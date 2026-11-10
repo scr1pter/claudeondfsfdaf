@@ -21,7 +21,7 @@ export type Limits = {
   readonly researchers: number
 }
 
-/** Default caps for one run, used only when the user has no cap of their own (section 11.2). */
+/** Default caps when the user has none. Dollar caps exclude Codium; step limits still apply. */
 export const LIMITS: Readonly<Record<Research.Depth, Limits>> = {
   focused: { usd: 1, steps: 80, pages: 15, searches: 8, researchers: 2 },
   deep: { usd: 3, steps: 240, pages: 40, searches: 24, researchers: 4 },

@@ -8,14 +8,18 @@ import { BrainErase } from "@vectordevai/core/brain/erase"
 import { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
+import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { ResearchStore } from "@vectordevai/core/research/store"
+import { ResearchExport } from "@vectordevai/core/research/export"
 import { Git } from "@/git"
 import { Instruction } from "@/session/instruction"
 import { SessionDistill } from "@/session/distill"
 import { SessionPosting } from "@/session/posting"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
+import { LearnedSkill } from "@/skill/learned"
 import { InstanceHttpApi } from "../api"
 import {
   IMPORT_CHARS,
@@ -51,6 +55,8 @@ function overLimit(error: Multipart.MultipartError) {
   )
 }
 
+const SKILL_ENTRY = "That is a learned skill. Change learned skills in Settings > Memory > Skills."
+
 /** A file over 1 MB, or a PDF over 20 pages, costs less remembered than sent with a message. */
 const REMEMBER_INSTEAD = { bytes: 1024 * 1024, pages: 20 }
 
@@ -64,6 +70,9 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     const research = yield* ResearchStore.Service
     const sessions = yield* Session.Service
     const git = yield* Git.Service
+    const skills = yield* BrainSkill.Service
+    const workflow = yield* BrainWorkflow.Service
+    const learned = yield* LearnedSkill.Service
 
     const list = Effect.fn("MemoryHttpApi.list")(function* (ctx: {
       query: { scope?: "repository" | "personal"; filter?: Brain.Filter; query?: string }
@@ -108,14 +117,19 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     }) {
       const result = yield* brain.update(yield* instruction.place(), ctx.params.memoryID, ctx.payload, "user")
       if (!result) return yield* missing(ctx.params.memoryID)
-      if (result.type === "refused") return yield* refused(result.message)
+      if (result.type === "refused") return yield* refused(result.message, result.reason)
       return result.entry
     })
 
     const remove = Effect.fn("MemoryHttpApi.remove")(function* (ctx: { params: { memoryID: string } }) {
-      const result = yield* brain.forget(yield* instruction.place(), ctx.params.memoryID)
+      const place = yield* instruction.place()
+      const result = yield* brain.forget(place, ctx.params.memoryID)
+      // A learned skill lives outside memory, so memory does not find it; say where it is changed instead.
+      if (result === "not-found" && (yield* skills.get(place, ctx.params.memoryID)))
+        return yield* refused(SKILL_ENTRY, "skill-entry")
       if (result === "not-found") return yield* missing(ctx.params.memoryID)
-      if (result === "file-entry") return yield* refused("This entry comes from a file you wrote; change it in that file.")
+      if (result === "file-entry")
+        return yield* refused("This entry comes from a file you wrote; change it in that file.")
       return true
     })
 
@@ -139,7 +153,14 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     }) {
       const place = yield* instruction.place()
       const format = ctx.query.format ?? "markdown"
-      const body = yield* BrainExport.render({ brain, knowledge, place, scope: ctx.query.scope ?? "all", format })
+      const body = yield* BrainExport.render({
+        brain,
+        knowledge,
+        skills,
+        place,
+        scope: ctx.query.scope ?? "all",
+        format,
+      })
       return HttpServerResponse.text(body, {
         contentType: `${format === "json" ? "application/json" : "text/markdown"}; charset=utf-8`,
         headers: {
@@ -152,8 +173,9 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     })
 
     const importMemory = Effect.fn("MemoryHttpApi.import")(function* (ctx: { payload: { text: string } }) {
-      if (ctx.payload.text.length > IMPORT_CHARS) return yield* refused("Vector imports at most 2 MB at a time.", "limit")
-      return yield* BrainExport.importText({ brain, place: yield* instruction.place(), text: ctx.payload.text })
+      if (ctx.payload.text.length > IMPORT_CHARS)
+        return yield* refused("Vector imports at most 2 MB at a time.", "limit")
+      return yield* BrainExport.importText({ brain, skills, place: yield* instruction.place(), text: ctx.payload.text })
     })
 
     const tidy = Effect.fn("MemoryHttpApi.tidy")(function* () {
@@ -183,21 +205,126 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
         keepOriginals?: boolean
         facets?: Partial<Record<BrainSchema.Facet, boolean>>
         modelLearner?: Brain.ModelLearner
+        skills?: BrainSchema.SkillLearning
+        skillDrafter?: BrainSchema.SkillDrafter
+        workflow?: BrainSchema.WorkflowLearning
+        workflowExplore?: boolean
       }
     }) {
       const place = yield* instruction.place()
-      if (ctx.payload.learning !== undefined || ctx.payload.facets || ctx.payload.modelLearner)
-        yield* brain.setLearnSettings({
-          ...(ctx.payload.learning === undefined ? {} : { learning: ctx.payload.learning }),
-          ...(ctx.payload.facets ? { facets: ctx.payload.facets } : {}),
-          ...(ctx.payload.modelLearner ? { modelLearner: ctx.payload.modelLearner } : {}),
-        })
+      const learn = {
+        ...(ctx.payload.learning === undefined ? {} : { learning: ctx.payload.learning }),
+        ...(ctx.payload.facets ? { facets: ctx.payload.facets } : {}),
+        ...(ctx.payload.modelLearner ? { modelLearner: ctx.payload.modelLearner } : {}),
+        ...(ctx.payload.skills ? { skills: ctx.payload.skills } : {}),
+        ...(ctx.payload.skillDrafter ? { skillDrafter: ctx.payload.skillDrafter } : {}),
+        ...(ctx.payload.workflow ? { workflow: ctx.payload.workflow } : {}),
+        ...(ctx.payload.workflowExplore === undefined ? {} : { workflowExplore: ctx.payload.workflowExplore }),
+      }
+      if (Object.keys(learn).length > 0) yield* brain.setLearnSettings(learn)
       if (ctx.payload.repositoryDocs !== undefined || ctx.payload.keepOriginals !== undefined)
         yield* knowledge.configure(place, {
           ...(ctx.payload.repositoryDocs === undefined ? {} : { repositoryDocs: ctx.payload.repositoryDocs }),
           ...(ctx.payload.keepOriginals === undefined ? {} : { keepOriginals: ctx.payload.keepOriginals }),
         })
       return yield* settingsOf(place)
+    })
+
+    // --- Learned skills and workflow insights ----------------------------------------------------------------------
+
+    const listSkills = Effect.fn("MemoryHttpApi.skills")(function* (ctx: {
+      query: { filter?: "active" | "review" | "archived" | "all" }
+    }) {
+      const place = yield* instruction.place()
+      const learn = yield* brain.learnSettings()
+      return {
+        skills: yield* skills.list(place, ctx.query.filter ?? "active"),
+        settings: { skills: learn.skills, skillDrafter: learn.skillDrafter },
+      }
+    })
+
+    const skillDetail = Effect.fnUntraced(function* (place: Brain.Place, id: string) {
+      const detail = yield* skills.get(place, id)
+      if (!detail?.entry.skill) return undefined
+      return {
+        entry: detail.entry,
+        evidence: detail.evidence,
+        versions: detail.versions,
+        uses: detail.entry.skill.uses,
+      }
+    })
+
+    const noSkill = (id: string) => missing(id, `No learned skill ${id} here.`)
+
+    const getSkill = Effect.fn("MemoryHttpApi.skill")(function* (ctx: { params: { memoryID: string } }) {
+      const detail = yield* skillDetail(yield* instruction.place(), ctx.params.memoryID)
+      if (!detail) return yield* noSkill(ctx.params.memoryID)
+      return detail
+    })
+
+    const updateSkill = Effect.fn("MemoryHttpApi.updateSkill")(function* (ctx: {
+      params: { memoryID: string }
+      payload: BrainSkill.SkillChange
+    }) {
+      const place = yield* instruction.place()
+      const result = yield* skills.update(place, ctx.params.memoryID, ctx.payload)
+      if (!result) return yield* noSkill(ctx.params.memoryID)
+      if (result.type === "refused")
+        return yield* result.reason === "not-found"
+          ? missing(ctx.params.memoryID, result.message)
+          : refused(result.message, result.reason)
+      // A rejected draft is gone with its versions: what it was is all there is to show.
+      return (
+        (yield* skillDetail(place, ctx.params.memoryID)) ?? {
+          entry: result.entry,
+          evidence: [],
+          versions: [],
+          uses: result.entry.skill?.uses ?? { loads: 0, passes: 0, fails: 0, ignored: 0, reverts: 0 },
+        }
+      )
+    })
+
+    const forgetSkill = Effect.fn("MemoryHttpApi.forgetSkill")(function* (ctx: { params: { memoryID: string } }) {
+      if ((yield* skills.forget(yield* instruction.place(), ctx.params.memoryID)) === "not-found")
+        return yield* noSkill(ctx.params.memoryID)
+      return { forgotten: true as const }
+    })
+
+    // The route never reloads the directory: a busy session would lose its instance. The app does it once none is.
+    const shareSkill = Effect.fn("MemoryHttpApi.shareSkill")(function* (ctx: {
+      params: { memoryID: string }
+      payload: { force?: boolean }
+    }) {
+      const result = yield* learned.share(yield* instruction.place(), ctx.params.memoryID, {
+        force: ctx.payload.force === true,
+      })
+      if (result.type === "refused")
+        return yield* result.reason === "not-found"
+          ? missing(ctx.params.memoryID, result.message)
+          : refused(result.message, result.reason)
+      return { path: result.path, trust: result.trust, reload: result.reload }
+    })
+
+    const previewSkillShare = Effect.fn("MemoryHttpApi.previewSkillShare")(function* (ctx: {
+      params: { memoryID: string }
+    }) {
+      const result = yield* learned.preview(yield* instruction.place(), ctx.params.memoryID)
+      if (result.type === "refused")
+        return yield* result.reason === "not-found"
+          ? missing(ctx.params.memoryID, result.message)
+          : refused(result.message, result.reason)
+      return { path: result.path, text: result.text, exists: result.exists }
+    })
+
+    const insights = Effect.fn("MemoryHttpApi.workflow")(function* () {
+      return yield* workflow.insights(yield* instruction.place())
+    })
+
+    const resetWorkflow = Effect.fn("MemoryHttpApi.resetWorkflow")(function* (ctx: {
+      query: { tier?: "light" | "standard" | "thorough" }
+    }) {
+      const removed = yield* workflow.reset(yield* instruction.place(), ctx.query.tier ? { tier: ctx.query.tier } : {})
+      return { removed }
     })
 
     // --- Documents ------------------------------------------------------------------------------------------------
@@ -255,7 +382,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
           .pipe(Effect.catch((error) => Effect.fail(refused(error.message, error.reason))))
       }
       if (ctx.payload.action === "remove") yield* knowledge.removeModel()
-      if (ctx.payload.action === "pause" || ctx.payload.action === "resume") yield* embed.pause(ctx.payload.action === "pause")
+      if (ctx.payload.action === "pause" || ctx.payload.action === "resume")
+        yield* embed.pause(ctx.payload.action === "pause")
       return yield* knowledge.model(place)
     })
 
@@ -368,10 +496,13 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       if (file.type === "refused") return yield* refused(file.message, file.reason)
       const probed = yield* knowledge
         .probe({ name: file.name, bytes: file.bytes })
-        .pipe(Effect.catch((error) => Effect.fail(refused(`Vector could not read this file: ${error.message}`, "invalid"))))
+        .pipe(
+          Effect.catch((error) => Effect.fail(refused(`Vector could not read this file: ${error.message}`, "invalid"))),
+        )
       if ("type" in probed) return yield* refused(probed.message, probed.reason)
       const large =
-        file.bytes.length > REMEMBER_INSTEAD.bytes || (probed.format === "pdf" && (probed.pages ?? 0) > REMEMBER_INSTEAD.pages)
+        file.bytes.length > REMEMBER_INSTEAD.bytes ||
+        (probed.format === "pdf" && (probed.pages ?? 0) > REMEMBER_INSTEAD.pages)
       return {
         format: probed.format,
         ...(probed.pages === undefined ? {} : { pages: probed.pages }),
@@ -426,9 +557,12 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       return (yield* knowledge.document(place, id, { personal: true }))?.document ?? before.document
     })
 
-    const removeDocument = Effect.fn("MemoryHttpApi.removeDocument")(function* (ctx: { params: { documentID: string } }) {
+    const removeDocument = Effect.fn("MemoryHttpApi.removeDocument")(function* (ctx: {
+      params: { documentID: string }
+    }) {
       const result = yield* knowledge.remove(yield* instruction.place(), ctx.params.documentID)
-      if (result === "not-found") return yield* missing(ctx.params.documentID, `No document ${ctx.params.documentID} here.`)
+      if (result === "not-found")
+        return yield* missing(ctx.params.documentID, `No document ${ctx.params.documentID} here.`)
       return true
     })
 
@@ -439,7 +573,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       const page = Number.isNaN(number)
         ? undefined
         : yield* knowledge.page(yield* instruction.place(), ctx.params.documentID, number, { personal: true })
-      if (!page) return yield* missing(ctx.params.documentID, `No page ${ctx.params.page} in document ${ctx.params.documentID}.`)
+      if (!page)
+        return yield* missing(ctx.params.documentID, `No page ${ctx.params.page} in document ${ctx.params.documentID}.`)
       return page
     })
 
@@ -448,7 +583,10 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     const documentFile = Effect.fn("MemoryHttpApi.documentFile")(function* (ctx: { params: { documentID: string } }) {
       const original = yield* knowledge.original(yield* instruction.place(), ctx.params.documentID)
       if (!original)
-        return yield* missing(ctx.params.documentID, `Vector keeps no copy of document ${ctx.params.documentID}'s file.`)
+        return yield* missing(
+          ctx.params.documentID,
+          `Vector keeps no copy of document ${ctx.params.documentID}'s file.`,
+        )
       const ascii = original.name.replace(/[^A-Za-z0-9._ -]/g, "_")
       return HttpServerResponse.uint8Array(original.bytes, {
         contentType: "application/octet-stream",
@@ -554,14 +692,18 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       payload: BrainKnowledge.Resolution
     }) {
       const result = yield* knowledge.resolve(yield* instruction.place(), ctx.params.itemID, ctx.payload)
-      if (!result) return yield* missing(ctx.params.itemID, `Nothing here needs a look as ${ctx.params.itemID}, or not that way.`)
+      if (!result)
+        return yield* missing(ctx.params.itemID, `Nothing here needs a look as ${ctx.params.itemID}, or not that way.`)
       if (result.type === "refused") return yield* refused(result.message)
       if (result.type === "settled") return {}
       return { item: result.item, ...(result.entry ? { entry: result.entry } : {}) }
     })
 
     const cited = Effect.fn("MemoryHttpApi.knowledge")(function* (ctx: { query: { ids: string } }) {
-      const ids = ctx.query.ids.split(",").map((id) => id.trim()).filter(Boolean)
+      const ids = ctx.query.ids
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
       if (ids.length > BrainKnowledge.LIMIT.cards) return yield* refused("Ask for at most 50 ids at a time.", "limit")
       return yield* knowledge.cards(yield* instruction.place(), ids, { personal: true })
     })
@@ -606,10 +748,30 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     // An attachment, never something a browser renders.
     const exportResearch = Effect.fn("MemoryHttpApi.exportResearch")(function* (ctx: {
       params: { runID: string }
-      query: { format?: "markdown" | "json" }
+      query: { format?: "markdown" | "json" | "docx" | "pdf" }
     }) {
-      const exported = yield* research.export(yield* instruction.place(), ctx.params.runID, ctx.query.format ?? "markdown")
+      const format = ctx.query.format ?? "markdown"
+      const exported = yield* research.export(
+        yield* instruction.place(),
+        ctx.params.runID,
+        format === "json" ? "json" : "markdown",
+      )
       if (!exported) return yield* noRun(ctx.params.runID)
+      if (format === "docx" || format === "pdf") {
+        const converted = yield* Effect.tryPromise({
+          try: () => ResearchExport.render(exported.body, format),
+          catch: (cause) => refused(cause instanceof Error ? cause.message : "Vector could not export this report."),
+        })
+        return HttpServerResponse.uint8Array(converted.bytes, {
+          contentType: converted.type,
+          headers: {
+            "content-disposition": `attachment; filename="${exported.name.replace(/\.md$/, `.${format}`).replace(/[^A-Za-z0-9._-]/g, "_")}"`,
+            "x-content-type-options": "nosniff",
+            "content-security-policy": "sandbox",
+            "cache-control": "no-store",
+          },
+        })
+      }
       return HttpServerResponse.text(exported.body, {
         contentType: `${exported.type}; charset=utf-8`,
         headers: {
@@ -625,7 +787,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       params: { runID: string; sourceID: string }
     }) {
       const saved = yield* research.source(yield* instruction.place(), ctx.params.runID, ctx.params.sourceID)
-      if (!saved) return yield* missing(ctx.params.sourceID, `No source ${ctx.params.sourceID} in run ${ctx.params.runID}.`)
+      if (!saved)
+        return yield* missing(ctx.params.sourceID, `No source ${ctx.params.sourceID} in run ${ctx.params.runID}.`)
       return {
         source: { ...saved.source, ...(saved.forgotten ? { forgotten: true } : {}) },
         chunks: saved.chunks,
@@ -671,6 +834,14 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       .handle("tidy", tidy)
       .handle("settings", settings)
       .handle("configure", configure)
+      .handle("skills", listSkills)
+      .handle("skill", getSkill)
+      .handle("updateSkill", updateSkill)
+      .handle("forgetSkill", forgetSkill)
+      .handle("previewSkillShare", previewSkillShare)
+      .handle("shareSkill", shareSkill)
+      .handle("workflow", insights)
+      .handle("resetWorkflow", resetWorkflow)
       .handle("model", model)
       .handle("changeModel", changeModel)
       .handle("documents", documents)

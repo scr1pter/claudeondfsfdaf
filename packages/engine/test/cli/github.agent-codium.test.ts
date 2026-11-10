@@ -536,13 +536,13 @@ describe("the session's retries", () => {
       const usual = { busy: 1, renewing: 1, "an unknown code": 1, "500 with no body": 1 } as Record<string, number>
       const before: Record<string, number> = {}
       for (const [name, status, code] of rows) before[name] = yield* retries(gatewayError(status, code, plans), plans)
-      // Unpinned, today's rules: the capacity and model-unavailable answers are retried as busy providers are.
+      // Unpinned, main's final Codium answers stop immediately; temporary and unknown answers keep normal retries.
       expect(before).toEqual({
-        "run limit": 10,
-        "daily limit": 10,
+        "run limit": 0,
+        "daily limit": 0,
         capacity: 10,
         "upgrade required": 0,
-        "model unavailable": 10,
+        "model unavailable": 0,
         busy: 10,
         renewing: 10,
         "an unknown code": 10,
