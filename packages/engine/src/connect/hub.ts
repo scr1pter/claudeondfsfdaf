@@ -31,7 +31,7 @@ import type { SessionPrompt } from "@/session/prompt"
 import type { TaskPromptOps } from "@/tool/task"
 import type { Tool } from "@/tool/tool"
 import type { ConnectAdapter } from "./adapter"
-import { ADAPTERS } from "./adapters"
+import { ADAPTERS, DEPS as ADAPTER_DEPS } from "./adapters"
 import { ConnectMembers } from "./members"
 
 // Connected tools' hub: one place where every hand-off starts, is checked, asks, runs, is recorded and ends.
@@ -781,7 +781,10 @@ export const layer = layerWith(ADAPTERS)
 // Agent, Skill, MCP, WorkflowLibrary and DesktopTasks are already in the tool registry's graph (through ResearchRun,
 // WorkflowRuns and TaskManager), so the registry depending on the hub adds no service it did not build before. The hub
 // never depends on SessionPrompt or the registry: the helper handle is built from the prompt calls a caller lends it.
-const deps = [
+// The adapters' own services (connect/adapters `DEPS`: the review's provider, model, git and Brain services) join
+// these in `node`; none of them reaches the prompt loop either.
+/** The hub's own dependencies, without its adapters'. */
+export const DEPS = [
   RuntimeFlags.node,
   Permission.node,
   Session.node,
@@ -795,11 +798,15 @@ const deps = [
   DesktopTasks.node,
 ] as const
 
-export const node = LayerNode.make({ service: Service, layer, deps })
+export const node = LayerNode.make({ service: Service, layer, deps: [...DEPS, ...ADAPTER_DEPS] })
 
-/** The hub over other adapters, with the same dependencies; for tests. */
+/** The hub over other adapters, with its own dependencies; for tests. */
 export const nodeWith = (adapters: readonly ConnectAdapter.Adapter[]) =>
-  LayerNode.make({ service: Service, layer: layerWith(adapters.map((adapter) => Effect.succeed(adapter))), deps })
+  LayerNode.make({
+    service: Service,
+    layer: layerWith(adapters.map((adapter) => Effect.succeed(adapter))),
+    deps: DEPS,
+  })
 
 // ---------------------------------------------------------------------------------------------------------------
 
