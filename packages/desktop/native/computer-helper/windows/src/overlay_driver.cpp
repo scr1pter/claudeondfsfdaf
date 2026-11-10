@@ -349,7 +349,9 @@ int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<L
       require(held && GetFileInformationByHandleEx(held.get(), FileBasicInfo, &info, sizeof(info)) && (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && equal_path(final_path(held.get()), directory.wstring()), L"source_mismatch"); profile_directories.push_back(std::move(held));
     }
   }
-  std::wstring command = L"\"" + files.electron.path + L"\" \"" + files.main.path + L"\" \"--user-data-dir=" + profile.wstring() + L"\" --computer-smoke-nonce=" + options.nonce;
+  // Enable Chromium accessibility before the fixture renders any window. Its later app setting
+  // follows earlier rendered windows and does not wait for a native accessibility tree.
+  std::wstring command = L"\"" + files.electron.path + L"\" --force-renderer-accessibility \"" + files.main.path + L"\" \"--user-data-dir=" + profile.wstring() + L"\" --computer-smoke-nonce=" + options.nonce;
   const auto preserved = command; auto environment = child_environment(profile); PROCESS_INFORMATION process{}; constexpr DWORD flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
   BOOL launched = token ? CreateProcessAsUserW(token.get(), files.electron.path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment.data(), files.root.c_str(), &startup.StartupInfo, &process) : CreateProcessW(files.electron.path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment.data(), files.root.c_str(), &startup.StartupInfo, &process);
   if (!launched && token && GetLastError() == ERROR_PRIVILEGE_NOT_HELD) { QuotaPrivilege quota; if (quota.ready()) { command = preserved; launched = CreateProcessAsUserW(token.get(), files.electron.path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment.data(), files.root.c_str(), &startup.StartupInfo, &process); } }

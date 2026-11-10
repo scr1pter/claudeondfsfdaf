@@ -96,6 +96,36 @@ describe("independent overlay source admission", () => {
       expect(() => computerOverlayModuleReferences("/fixture/entry.ts", source)).toThrow("unbounded runtime import")
   })
 
+  test("only the native Windows bootstrap enables renderer accessibility before Electron starts", async () => {
+    const desktop = fileURLToPath(new URL("../", import.meta.url))
+    const driver = await readFile(path.join(desktop, "native/computer-helper/windows/src/overlay_driver.cpp"), "utf8")
+    const launch = driver.match(/^int launch_electron\([^]*?^\}/m)?.[0]
+    expect(launch).toBeString()
+    const command = launch!.match(/std::wstring command = ([^\n]+);/)?.[1]
+    expect(command).toBeString()
+    expect(command!.match(/--force-renderer-accessibility/g)).toHaveLength(1)
+    expect(command!.indexOf("--force-renderer-accessibility")).toBeLessThan(command!.indexOf("files.main.path"))
+    expect(launch!.indexOf("std::wstring command")).toBeLessThan(launch!.indexOf("CreateProcessAsUserW("))
+    expect(launch!.indexOf("std::wstring command")).toBeLessThan(launch!.indexOf("CreateProcessW("))
+    expect(launch).toContain("const auto preserved = command")
+    expect(launch).toContain("command = preserved; launched = CreateProcessAsUserW(")
+    expect(driver.replace(launch!, "")).not.toContain("--force-renderer-accessibility")
+    expect(driver).toContain("if (options.mode == OverlayDriverMode::launch_electron)")
+    const smoke = await readFile(path.join(desktop, "scripts/computer-overlay-smoke.ts"), "utf8")
+    expect(smoke).toContain('const bootstrapStage = process.platform === "win32" ? stage : undefined')
+    expect(smoke).toContain('? ["--launch-electron", "--nonce", nonce]')
+    for (const file of [
+      "scripts/computer-overlay-smoke.ts",
+      "scripts/computer-overlay-smoke-electron.ts",
+      "native/computer-helper/macos/TestOverlayDriver/main.swift",
+      "src/main/index.ts",
+      "test/computer/fake-helper.ts",
+    ])
+      expect(await readFile(path.join(desktop, file), "utf8"), file).not.toContain("--force-renderer-accessibility")
+    expect(await readFile(path.join(desktop, "scripts/computer-overlay-smoke-electron.ts"), "utf8")).toContain(
+      "app.setAccessibilitySupportEnabled(true)",
+    )
+  })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))
     expect(graph.entries.map((entry) => entry.path)).toContain("packages/desktop/src/main/computer-overlay.ts")
