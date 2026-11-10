@@ -153,7 +153,15 @@ describe("the agent phase's task", () => {
         const event = yield* Effect.promise(() =>
           eventFile(issueComment({ number: 12, id: 901, body: `/vector check [output](${url})` })),
         )
-        const values = [CHANNEL.githubToken, CHANNEL.cliToken, ...Object.values(CHANNEL.keys)]
+        // Own-key channels forbid runToken. The CLI regression deliberately includes this foreign run-token literal
+        // in model tool text too, so it needs the structured-token output defense in addition to held-value matching.
+        const values = [
+          CHANNEL.githubToken,
+          CHANNEL.cliToken,
+          CHANNEL.runToken,
+          "vct_foreign-payload.signature",
+          ...Object.values(CHANNEL.keys),
+        ]
         const command = `printf '%s' '${values.join(" ")}' >/dev/null; printf 'checked\\n'`
         yield* test.llm.tool("bash", { command, description: "Check output handling" })
         const commands = "::warning::fixture\rinline ##[add-mask]fixture\r\n::error::fixture"

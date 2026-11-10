@@ -17,6 +17,9 @@ const cliToken = z
   .string()
   .max(4096)
   .regex(/^vct_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$(?![\s\S])/)
+// Public prose may contain another run's token, which this holder never received. Match a complete pair of
+// base64url segments, then apply the canonical schemas (including total length) before withholding that value.
+const vectorTokenOutput = /(?<![A-Za-z0-9_-])v(?:ct|rt)_[A-Za-z0-9_-]{1,4096}\.[A-Za-z0-9_-]{1,4096}(?![A-Za-z0-9_-])/g
 const secretName = /^[A-Z_][A-Z0-9_]{0,99}$(?![\s\S])/
 const reserved = /^(?:VECTOR_|GITHUB_|ACTIONS_|RUNNER_|REVIEW_|NODE_|NPM_|BUN_|BASH_|GIT_|LD_|DYLD_)/
 const control = new Set([
@@ -269,7 +272,37 @@ export function createGithubSecrets() {
     githubToken: () => held?.githubToken,
     cliToken: () => held?.cliToken,
     providerKeys: () => ({ ...held?.keys }),
-    redact: (text: string) => (outputPattern ? text.replace(outputPattern, "[redacted]") : text),
+    redact: (text: string) => {
+      // Both detectors see the original text. Replacing one first could break the other's match when a full
+      // held credential contains a structured token, or a short held credential overlaps a foreign token.
+      const ranges = [
+        ...[...text.matchAll(vectorTokenOutput)].flatMap((match) =>
+          validRunToken(match[0]) || cliToken.safeParse(match[0]).success
+            ? [{ start: match.index, end: match.index + match[0].length }]
+            : [],
+        ),
+        ...(outputPattern
+          ? [...text.matchAll(outputPattern)].map((match) => ({
+              start: match.index,
+              end: match.index + match[0].length,
+            }))
+          : []),
+      ].sort((a, b) => a.start - b.start || b.end - a.end)
+      const merged: { start: number; end: number }[] = []
+      for (const range of ranges) {
+        const last = merged.at(-1)
+        if (last && range.start <= last.end) last.end = Math.max(last.end, range.end)
+        else merged.push({ ...range })
+      }
+      const parts: string[] = []
+      let at = 0
+      for (const range of merged) {
+        parts.push(text.slice(at, range.start), "[redacted]")
+        at = range.end
+      }
+      parts.push(text.slice(at))
+      return parts.join("")
+    },
     async authorize(check: (value: string) => Promise<boolean>) {
       const value = held?.runToken
       if (!value) return false

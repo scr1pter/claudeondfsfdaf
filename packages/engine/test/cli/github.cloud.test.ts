@@ -294,6 +294,21 @@ describe("cloud command HTTP boundary", () => {
 })
 
 describe("private GitHub credentials", () => {
+  test("the holder redacts foreign Vector token literals using the canonical grammar", () => {
+    const holder = createGithubSecrets()
+    const values = ["vrt_fixture-agent.signature", "vct_foreign-payload.signature", "vrt_a-.b_"]
+    const text = JSON.stringify({ command: values.join(" ") }) + "\n" + values.join("\n")
+    expect(holder.redact(text)).toBe(
+      '{"command":"[redacted] [redacted] [redacted]"}\n[redacted]\n[redacted]\n[redacted]',
+    )
+    const prose = "vrt_ documentation; vct_payload without a signature; vct_.missing; prefix_vrt_a.b"
+    expect(holder.redact(prose)).toBe(prose)
+    const tooLong = `vrt_${"a".repeat(1020)}.signature`
+    expect(holder.redact(tooLong)).toBe(tooLong)
+    expect(holder.loaded()).toBe(false)
+    expect(holder.pendingRunToken()).toBeUndefined()
+  })
+
   test("the holder redacts literal and JSON-escaped channel values without changing credentials", async () => {
     const holder = createGithubSecrets()
     const secret = 'fixture.key[private]\\path"first\nfixture-second-private-line'
@@ -314,6 +329,25 @@ describe("private GitHub credentials", () => {
     expect(holder.redact("ordinary output stays readable")).toBe("ordinary output stays readable")
     expect(holder.providerKeys()).toEqual(value.keys)
     expect(holder.githubToken() === value.githubToken && holder.cliToken() === value.cliToken).toBe(true)
+  })
+
+  test("overlapping held values and foreign token matches are masked against the original text", async () => {
+    const holder = createGithubSecrets()
+    const value = {
+      v: 1 as const,
+      githubToken: "fixture-github-overlap-token",
+      cliToken: "vct_overlap.signature",
+      keys: { WHOLE_CREDENTIAL: "prefix vrt_a.b private-suffix", SHORT_CREDENTIAL: "fixture" },
+    }
+    await holder.load(
+      { GITHUB_ACTIONS: "true", VECTOR_MODE: "own-key", VECTOR_SECRET_CHANNEL: "stdin" },
+      channel(value),
+    )
+    expect(holder.redact(`${value.keys.WHOLE_CREDENTIAL}\nvrt_fixture-agent.signature`)).toBe("[redacted]\n[redacted]")
+    expect(
+      holder.redact(JSON.stringify({ full: value.keys.WHOLE_CREDENTIAL, foreign: "vct_fixture-other.signature" })),
+    ).toBe('{"full":"[redacted]","foreign":"[redacted]"}')
+    expect(holder.providerKeys()).toEqual(value.keys)
   })
 
   test("the channel leaves no OS credentials and loading alone authorizes no model", async () => {
