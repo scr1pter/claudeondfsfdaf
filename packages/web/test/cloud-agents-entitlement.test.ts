@@ -13,7 +13,11 @@ import {
   type CodiumPlanId,
   type RunSource,
 } from "../../../api/_lib/cloud-agents-entitlement"
+import { codiumKey } from "../../../api/_lib/codium-keys"
+import { buildSnapshot, snapshotKey, type EntitlementSnapshot } from "../../../api/_lib/codium-snapshot"
+import { MODEL_SPEND_SCRIPTS } from "../../../api/_lib/codium-spend-ledger"
 import { CodiumPlan } from "../../schema/src/codium-plan"
+import { FakeClock, FakeStore } from "./fixture/codium-fakes"
 
 // The @vector entitlement seam (vector-at-mention-spec 2.3, V04). Codium's A59 deletes the module's local backing and
 // this test together, and its contract test takes these assertions over (INV-K3). Limits are read through the seam's
@@ -50,7 +54,6 @@ const START = 1_791_970_200_000
 const END = 1_794_648_600_000
 const NOW = START + 86_400_000
 const KV = "https://kv.fixture.invalid"
-const STRIPE_SUBSCRIPTIONS = "https://api.stripe.com/v1/subscriptions"
 const OPENROUTER = "https://openrouter.ai"
 
 // CI runs this file in one Bun process after the GitHub API tests, so it assumes nothing about the environment it
@@ -63,6 +66,8 @@ const ENVIRONMENT = [
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
   "STRIPE_SECRET_KEY",
+  "CODIUM_STRIPE_MODE",
+  "OPENROUTER_MANAGEMENT_KEY",
   "MODEL_CREDIT_MARKUP_PERCENT",
   ...CodiumPlan.PLANS.flatMap((plan) => [
     `MODEL_PLAN_${plan.price}_CREDITS_USD`,
@@ -271,20 +276,16 @@ describe("the entitlement seam's local backing", () => {
   })
 
   // The only production path before A59, so the units V06's ledger and V07's tokens build on are pinned here: Stripe
-  // gives the period in seconds, and the seam's epoch and period end are in milliseconds. This account has no monthly
+  // gives the period in seconds; the snapshot and the seam keep it in milliseconds. This account has no monthly
   // key yet (neither the payment webhook nor a model request has provisioned one), the one state in which the default
   // reads no OpenRouter key.
   test("an active Max plan through the default, before its monthly key exists: the epoch and the period end in ms, and no OpenRouter read", async () => {
     const paid = maxPlan()
-    const store = backend({ [paid.account]: { customer: "cus_fixture" } }, [paid.subscription])
+    const store = backend({ [paid.account]: { customer: "cus_fixture" } }, [paid.snapshot])
     expect(await cloudAgentEntitlement(paid.account, { source: "github-comment" }, store.fetcher)).toStrictEqual(
       paid.allowance,
     )
-    expect(
-      store.requests.filter(
-        (request) => request.origin !== KV && request.origin + request.path !== STRIPE_SUBSCRIPTIONS,
-      ),
-    ).toEqual([])
+    expect(store.requests.filter((request) => request.origin !== KV)).toEqual([])
     expect(store.requests.filter((request) => request.origin === KV && request.command[0] !== "GET")).toEqual([])
   })
 
@@ -294,16 +295,19 @@ describe("the entitlement seam's local backing", () => {
   // and the caller fails closed; the failure is not cached.
   test("an active Max plan whose monthly key exists: an OpenRouter failure rejects, then one read grants the same allowance", async () => {
     const paid = maxPlan()
-    const key = { hash: "hash_fixture_max", encrypted: "fixture-encrypted", credits: 50 }
-    const store = backend(
-      {
-        [paid.account]: {
-          customer: "cus_fixture",
-          key: { ...key, subscription: "sub_fixture_max", start: paid.start, end: paid.end },
+    const key = { hash: "hash_fixture_max", encrypted: "fixture-encrypted", credits: 50, creditsMicro: 50_000_000 }
+    const store = backend({}, [paid.snapshot], { [key.hash]: { hash: key.hash, disabled: false, usage: 12.5 } })
+    const period = { subscription: "sub_fixture_max", start: paid.start, end: paid.end }
+    store.store.set(
+      codiumKey("account", paid.account),
+      JSON.stringify({
+        customer: "cus_fixture",
+        key: {
+          ...key,
+          ...period,
+          spendGenesis: store.store.seedSpendGenesis({ account: paid.account, pool: key.hash, ...period }),
         },
-      },
-      [paid.subscription],
-      { [key.hash]: { hash: key.hash, disabled: false, usage: 12.5 } },
+      }),
     )
     const openRouterRequests = () => store.requests.filter((request) => request.origin === OPENROUTER)
     store.openRouter.status = 503
@@ -324,15 +328,15 @@ describe("the entitlement seam's local backing", () => {
         command: [],
       })),
     )
+    expect(store.requests.filter((request) => request.origin !== KV && request.origin !== OPENROUTER)).toEqual([])
     expect(
-      store.requests.filter(
-        (request) =>
-          request.origin !== KV &&
-          request.origin !== OPENROUTER &&
-          request.origin + request.path !== STRIPE_SUBSCRIPTIONS,
-      ),
-    ).toEqual([])
-    expect(store.requests.filter((request) => request.origin === KV && request.command[0] !== "GET")).toEqual([])
+      store.requests
+        .filter((request) => request.origin === KV && request.command[0] !== "GET")
+        .map((request) => request.command.slice(0, 2)),
+    ).toEqual([
+      ["EVAL", MODEL_SPEND_SCRIPTS.READ],
+      ["EVAL", MODEL_SPEND_SCRIPTS.DAY],
+    ])
   })
 })
 
@@ -608,12 +612,19 @@ function setSwitch(name: string, value: string | undefined) {
 }
 
 /**
- * A loopback stand-in for the store, Stripe and OpenRouter's management API. The store answers a GET of any key that
- * contains a known account's id with that account, and null otherwise, so the test does not pin Codium's key layout;
- * it refuses every other command. Stripe answers only the subscription list. OpenRouter answers a GET of a known key
- * with its data while `openRouter.status` is 200, and that status otherwise. Every request is recorded.
+ * Exact account/snapshot keys and the shared ledger fake, behind an injected fetcher. Only GET and the two ledger
+ * read scripts are accepted; account reconciliation, provider writes and every other external request fail closed.
  */
-function backend(accounts: Record<string, unknown>, subscriptions: unknown[] = [], keys: Record<string, unknown> = {}) {
+function backend(
+  accounts: Record<string, unknown>,
+  snapshots: EntitlementSnapshot[] = [],
+  keys: Record<string, unknown> = {},
+) {
+  const store = new FakeStore(new FakeClock())
+  Object.entries(accounts).forEach(([account, value]) =>
+    store.set(codiumKey("account", account), JSON.stringify(value)),
+  )
+  snapshots.forEach((snapshot) => store.set(snapshotKey(snapshot.account), JSON.stringify(snapshot)))
   const requests: { origin: string; path: string; method: string; command: unknown[] }[] = []
   const openRouter = { status: 200 }
   const fetcher: typeof fetch = Object.assign(
@@ -629,34 +640,32 @@ function backend(accounts: Record<string, unknown>, subscriptions: unknown[] = [
       }
       if (url.origin !== KV) {
         requests.push({ origin: url.origin, path: url.pathname, method, command: [] })
-        if (url.origin + url.pathname === STRIPE_SUBSCRIPTIONS)
-          return Response.json({ data: subscriptions, has_more: false })
         return new Response(null, { status: 404 })
       }
       const command: unknown = JSON.parse(String(init?.body))
       const parts = Array.isArray(command) ? command.map(String) : []
       requests.push({ origin: url.origin, path: url.pathname, method, command: parts })
-      if (parts[0] !== "GET" || parts.length !== 2) return new Response(null, { status: 500 })
-      const id = Object.keys(accounts).find((account) => parts[1]!.includes(account))
-      return Response.json({ result: id === undefined ? null : JSON.stringify(accounts[id]) })
+      const read = parts[0] === "GET" && parts.length === 2
+      const ledger = parts[0] === "EVAL" && [MODEL_SPEND_SCRIPTS.READ, MODEL_SPEND_SCRIPTS.DAY].includes(parts[1]!)
+      if (!read && !ledger) return new Response(null, { status: 500 })
+      return Response.json({ result: store.command(parts) })
     },
     { preconnect: fetch.preconnect },
   )
-  return { fetcher, requests, openRouter }
+  return { fetcher, requests, openRouter, store }
 }
 
 /**
- * Turns both switches on and configures the store, Stripe and a Max price, then gives a fresh account, its paid Max
- * subscription for the current period (Stripe's seconds) and the allowance the seam must answer for it (milliseconds).
+ * A paid Max period with a fresh reconciled snapshot. Stripe's period seconds are converted once at the snapshot
+ * boundary; the seam must preserve its millisecond dates without reconciling or provisioning a key on this read.
  */
 function maxPlan() {
   process.env.MODEL_PLANS_ENABLED = "true"
   process.env.VECTOR_CLOUD_AGENTS_ENABLED = "true"
   process.env.KV_REST_API_URL = KV
   process.env.KV_REST_API_TOKEN = "fixture-kv-token"
-  process.env.STRIPE_SECRET_KEY = "sk_fixture"
-  process.env.STRIPE_MODEL_PLAN_100_PRICE_ID = "price_fixture100"
-  process.env.MODEL_PLAN_100_CREDITS_USD = "50"
+  process.env.CODIUM_STRIPE_MODE = "test"
+  process.env.OPENROUTER_MANAGEMENT_KEY = "fixture-management-key"
   const account = randomUUID()
   const start = Math.floor(Date.now() / 1000) - 3600
   const end = start + 30 * 86_400
@@ -664,7 +673,20 @@ function maxPlan() {
     account,
     start,
     end,
-    subscription: maxSubscription(account, start, end),
+    snapshot: buildSnapshot(
+      {
+        account,
+        state: "active",
+        plan: "vector-100",
+        subscription: "sub_fixture_max",
+        periodStart: start * 1000,
+        periodEnd: end * 1000,
+        cancelAtPeriodEnd: false,
+        source: "webhook",
+      },
+      undefined,
+      Date.now(),
+    ),
     allowance: {
       active: true,
       plan: "vector-100",
@@ -674,40 +696,6 @@ function maxPlan() {
       periodEnd: end * 1000,
       premiumModels: true,
     } satisfies CloudAgentAllowance,
-  }
-}
-
-/** A paid Max subscription for the current period, as Stripe lists it (the shape `model-plans-api.test.ts` uses). */
-function maxSubscription(account: string, start: number, end: number) {
-  return {
-    id: "sub_fixture_max",
-    status: "active",
-    cancel_at_period_end: false,
-    metadata: { vector_account_id: account },
-    items: {
-      data: [
-        {
-          quantity: 1,
-          current_period_start: start,
-          current_period_end: end,
-          price: {
-            id: "price_fixture100",
-            active: true,
-            currency: "usd",
-            unit_amount: 10_000,
-            recurring: { interval: "month", interval_count: 1 },
-          },
-        },
-      ],
-    },
-    latest_invoice: {
-      id: "in_fixture_max",
-      paid: true,
-      status: "paid",
-      amount_paid: 10_000,
-      charge: { paid: true, refunded: false, disputed: false, amount_refunded: 0 },
-      lines: { data: [{ price: { id: "price_fixture100" }, period: { start, end }, proration: false }] },
-    },
   }
 }
 
