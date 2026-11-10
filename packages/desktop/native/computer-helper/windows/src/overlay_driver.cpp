@@ -201,7 +201,19 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
     } catch (...) {}
     throw;
   }
-  stage = OverlayDriverStage::stop_hit; auto element = uia.hit(root, point(request));
+  stage = OverlayDriverStage::stop_hit; UiaElement element;
+  try { element = uia.hit(root, point(request)); }
+  catch (...) {
+    // As for root, sample before cleanup and never label late retired work with its mutable phase.
+    try {
+      if (uia.available) {
+        const auto available = uia.available();
+        stage = available ? OverlayDriverStage::stop_hit_refused : OverlayDriverStage::stop_hit_retired;
+        if (available && diagnostic) if (const auto observed = overlay_driver_uia_stage(diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+      }
+    } catch (...) {}
+    throw;
+  }
   for (size_t depth = 0; element && depth < 8; ++depth) {
     stage = OverlayDriverStage::stop_security; const auto security = uia.security(element);
     if (security.control_type == 50000) {

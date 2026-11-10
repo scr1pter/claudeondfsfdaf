@@ -368,7 +368,8 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
   }
   UiaElement parent(const UiaElement& element) {
     winrt::com_ptr<IUIAutomationElement> parent;
-    current_call(); if (FAILED(walker_->GetParentElementBuildCache(native(element), structural_.get(), parent.put()))) unavailable(); return wrap(std::move(parent));
+    note(WindowsUiaPhase::parent_read); current_call(); if (FAILED(walker_->GetParentElementBuildCache(native(element), structural_.get(), parent.put()))) unavailable();
+    note(WindowsUiaPhase::parent_wrap); return wrap(std::move(parent));
   }
   bool equal(const UiaElement& left, const UiaElement& right) {
     if (!left || !right) return false; BOOL same = FALSE; current_call();
@@ -383,18 +384,21 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     return false;
   }
   UiaChildren children(const UiaElement& value, size_t limit) {
-    if (limit > 400) unavailable(); UiaChildren result;
+    note(WindowsUiaPhase::children_limit); if (limit > 400) unavailable(); UiaChildren result;
     winrt::com_ptr<IUIAutomationElement> next;
-    current_call(); if (FAILED(walker_->GetFirstChildElementBuildCache(native(value), structural_.get(), next.put()))) unavailable();
+    note(WindowsUiaPhase::children_first); current_call(); if (FAILED(walker_->GetFirstChildElementBuildCache(native(value), structural_.get(), next.put()))) unavailable();
     while (next) {
-      if (result.elements.size() >= limit) { result.truncated = true; break; }
-      const auto element = wrap(next); result.elements.push_back(element);
-      winrt::com_ptr<IUIAutomationElement> sibling; current_call();
-      if (FAILED(walker_->GetNextSiblingElementBuildCache(next.get(), structural_.get(), sibling.put()))) { result.truncated = true; break; }
-      if (sibling && std::any_of(result.elements.begin(), result.elements.end(), [&](const auto& candidate) { return equal(candidate, wrap(sibling)); })) { result.truncated = true; break; }
+      note(WindowsUiaPhase::children_loop);
+      if (result.elements.size() >= limit) { note(WindowsUiaPhase::children_capacity); result.truncated = true; break; }
+      note(WindowsUiaPhase::children_wrap); const auto element = wrap(next); note(WindowsUiaPhase::children_append); result.elements.push_back(element);
+      winrt::com_ptr<IUIAutomationElement> sibling; note(WindowsUiaPhase::children_next); current_call();
+      if (FAILED(walker_->GetNextSiblingElementBuildCache(next.get(), structural_.get(), sibling.put()))) { note(WindowsUiaPhase::children_sibling_failed); result.truncated = true; break; }
+      note(WindowsUiaPhase::children_compare);
+      if (sibling && std::any_of(result.elements.begin(), result.elements.end(), [&](const auto& candidate) { return equal(candidate, wrap(sibling)); })) { note(WindowsUiaPhase::children_cycle); result.truncated = true; break; }
       next = std::move(sibling);
     }
-    return result;
+    // A proven truncation leaves its terminal fact for hit's unchanged rejection below.
+    if (!result.truncated) note(WindowsUiaPhase::children_end); return result;
   }
   UiaElement focused(const UiaElement& root) {
     VARIANT flag{}; flag.vt = VT_BOOL; flag.boolVal = VARIANT_TRUE;
@@ -460,22 +464,26 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     return {};
   }
   UiaElement hit(const UiaElement& root, POINT point) {
-    struct Node { UiaElement element; size_t depth; };
+    note(WindowsUiaPhase::hit_setup); struct Node { UiaElement element; size_t depth; };
     std::deque<Node> queue{{root, 0}}; std::vector<uint64_t> visited; UiaElement result; size_t selected_depth = 0; bool ambiguous = false;
     const auto pid = security(root).pid;
     while (!queue.empty() && visited.size() < 400) {
-      current_call(); const auto node = queue.front(); queue.pop_front();
-      if (std::find(visited.begin(), visited.end(), node.element->identity) != visited.end()) unavailable(); visited.push_back(node.element->identity);
-      const auto state = security(node.element); if (state.pid != pid) unavailable();
+      note(WindowsUiaPhase::hit_loop); current_call(); const auto node = queue.front(); queue.pop_front();
+      note(WindowsUiaPhase::hit_cycle); if (std::find(visited.begin(), visited.end(), node.element->identity) != visited.end()) unavailable(); visited.push_back(node.element->identity);
+      const auto state = security(node.element); note(WindowsUiaPhase::hit_pid); if (state.pid != pid) unavailable();
       if (!state.bounds || !state.bounds->contains(point)) continue;
       if (!result || node.depth > selected_depth) { result = node.element; selected_depth = node.depth; ambiguous = false; }
-      else if (node.depth == selected_depth && !equal(result, node.element)) ambiguous = true;
-      if (node.depth >= 30) unavailable();
-      const auto descendants = children(node.element, 400 - visited.size() - std::min<size_t>(queue.size(), 400 - visited.size()));
+      else if (node.depth == selected_depth) { note(WindowsUiaPhase::hit_equal); if (!equal(result, node.element)) ambiguous = true; }
+      note(WindowsUiaPhase::hit_depth); if (node.depth >= 30) unavailable();
+      note(WindowsUiaPhase::hit_children); const auto descendants = children(node.element, 400 - visited.size() - std::min<size_t>(queue.size(), 400 - visited.size()));
       if (descendants.truncated) unavailable();
-      for (const auto& child : descendants.elements) queue.push_back(Node{child, node.depth + 1});
+      note(WindowsUiaPhase::hit_enqueue); for (const auto& child : descendants.elements) queue.push_back(Node{child, node.depth + 1});
     }
-    if (!queue.empty() || ambiguous || !result) unavailable(); return result;
+    // Preserve the original terminal guard's short-circuit order, naming only the failing fact.
+    note(WindowsUiaPhase::hit_queue_limit); if (!queue.empty()) unavailable();
+    note(WindowsUiaPhase::hit_ambiguous); if (ambiguous) unavailable();
+    note(WindowsUiaPhase::hit_empty); if (!result) unavailable();
+    note(WindowsUiaPhase::hit_end); return result;
   }
   std::optional<std::wstring> value(const UiaElement& element) {
     const auto state = security(element); if (state.password) throw Failure{L"secure_field", L"The native field is secure."};

@@ -20,10 +20,11 @@ enum class WindowsUiaPhase : uint8_t {
   runtime_value, wrap_equal, wrap_limit, security_cache, security_pid, security_type,
   security_password, security_enabled, security_focus, security_keyboard, security_keyboard_query_failed, security_keyboard_variant_invalid, security_value_pattern, security_value_pattern_query_failed, security_value_pattern_variant_invalid, security_value_pattern_marker, security_value_pattern_probe, security_value_pattern_probe_invalid, security_value_pattern_probe_empty, security_value_pattern_probe_no_interface, security_text_pattern, security_text_pattern_query_failed, security_text_pattern_variant_invalid, security_text_pattern_marker, security_text_pattern_probe, security_text_pattern_probe_invalid, security_text_pattern_probe_empty, security_text_pattern_probe_no_interface,
   security_classify, security_value_readonly, security_text_readonly, security_bounds, security_current, root_pid,
+  hit_setup, hit_loop, hit_cycle, hit_pid, hit_equal, hit_depth, hit_children, hit_enqueue, hit_queue_limit, hit_ambiguous, hit_empty, hit_end, children_limit, children_first, children_loop, children_capacity, children_wrap, children_append, children_next, children_sibling_failed, children_compare, children_cycle, children_end, parent_read, parent_wrap,
   actor_current, actor_current_budget, actor_complete, actor_expired, actor_cancelled, actor_revoked,
   actor_com_uninitialized, actor_com_cancellation_unavailable, actor_com_timer_unavailable, actor_com_expired
 };
-inline constexpr std::array<std::wstring_view, 68> windows_uia_phases{
+inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
   L"none", L"root-current", L"actor-admission", L"actor-queued", L"actor-budget", L"prepare-desktop",
   L"prepare-create", L"prepare-interface", L"prepare-connection", L"prepare-transaction", L"prepare-walker", L"prepare-cache",
   L"prepare-scope", L"prepare-control", L"prepare-filter", L"prepare-property", L"root-availability", L"root-target",
@@ -31,6 +32,7 @@ inline constexpr std::array<std::wstring_view, 68> windows_uia_phases{
   L"runtime-value", L"wrap-equal", L"wrap-limit", L"security-cache", L"security-pid", L"security-type",
   L"security-password", L"security-enabled", L"security-focus", L"security-keyboard", L"security-keyboard-query-failed", L"security-keyboard-variant-invalid", L"security-value-pattern", L"security-value-pattern-query-failed", L"security-value-pattern-variant-invalid", L"security-value-pattern-marker", L"security-value-pattern-probe", L"security-value-pattern-probe-invalid", L"security-value-pattern-probe-empty", L"security-value-pattern-probe-no-interface", L"security-text-pattern", L"security-text-pattern-query-failed", L"security-text-pattern-variant-invalid", L"security-text-pattern-marker", L"security-text-pattern-probe", L"security-text-pattern-probe-invalid", L"security-text-pattern-probe-empty", L"security-text-pattern-probe-no-interface",
   L"security-classify", L"security-value-readonly", L"security-text-readonly", L"security-bounds", L"security-current", L"root-pid",
+  L"hit-setup", L"hit-loop", L"hit-cycle", L"hit-pid", L"hit-equal", L"hit-depth", L"hit-children", L"hit-enqueue", L"hit-queue-limit", L"hit-ambiguous", L"hit-empty", L"hit-end", L"children-limit", L"children-first", L"children-loop", L"children-capacity", L"children-wrap", L"children-append", L"children-next", L"children-sibling-failed", L"children-compare", L"children-cycle", L"children-end", L"parent-read", L"parent-wrap",
   L"actor-current", L"actor-current-budget", L"actor-complete", L"actor-expired", L"actor-cancelled", L"actor-revoked",
   L"actor-com-uninitialized", L"actor-com-cancellation-unavailable", L"actor-com-timer-unavailable", L"actor-com-expired"
 };
