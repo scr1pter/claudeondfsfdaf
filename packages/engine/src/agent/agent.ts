@@ -447,12 +447,11 @@ const layer = Layer.effect(
         }
 
         // The connected-tools fix child (CW-07): the defaults, the user's rules, then its fixed part, which comes last.
-        const connectFix = (rules: PermissionV1.Rule[]) =>
-          Permission.merge(
-            defaults,
-            rules,
-            ConnectPolicy.fixAgentRules({ user: rules, reads: Permission.fromConfig({ read: readDefaults }) }),
-          )
+        // `requester` is the build agent's rules (final once the config below is applied): the child reads no more.
+        const connectFix = (rules: PermissionV1.Rule[], requester: PermissionV1.Rule[]) =>
+          Permission.merge(defaults, rules, ConnectPolicy.fixAgentRules({ user: rules, requester }))
+        const connectFixDescription =
+          "Fixes chosen VectorScope findings in its own isolated worktree, for connected tools."
 
         const agents: Record<string, Info> = {
           build: {
@@ -548,8 +547,8 @@ const layer = Layer.effect(
           // connect launches it (the task tool refuses a model); it is rebuilt after the config below.
           [ConnectPolicy.FIX_AGENT]: {
             name: ConnectPolicy.FIX_AGENT,
-            description: "Fixes chosen VectorScope findings in its own isolated worktree, for connected tools.",
-            permission: connectFix(user),
+            description: connectFixDescription,
+            permission: connectFix(user, Permission.merge(defaults, user)),
             prompt: PROMPT_CONNECT_FIX,
             options: {},
             mode: "subagent",
@@ -837,19 +836,38 @@ const layer = Layer.effect(
           ])
         }
         // No config unhides the fix child or puts a rule after its fixed part; its own rules and the ceiling only narrow.
-        const fixer = agents[ConnectPolicy.FIX_AGENT]
-        if (fixer)
-          Object.assign(fixer, {
+        // Nor does any config pick its model, prompt, steps or options (a trusted project's included): it runs on its
+        // parent's model, as the task tool picks it, under the prompt that frames the findings as data. It reads as
+        // the build agent does, now that the build agent's own config and ceiling are applied.
+        if (agents[ConnectPolicy.FIX_AGENT])
+          agents[ConnectPolicy.FIX_AGENT] = {
             name: ConnectPolicy.FIX_AGENT,
+            description: connectFixDescription,
+            permission: connectFix(
+              [
+                ...user,
+                ...Permission.fromConfig(cfg.agent?.[ConnectPolicy.FIX_AGENT]?.permission ?? {}),
+                ...userCeiling(ConnectPolicy.FIX_AGENT),
+              ],
+              agents.build?.permission ?? Permission.merge(defaults, user),
+            ),
+            prompt: PROMPT_CONNECT_FIX,
+            options: {},
+            mode: "subagent",
             native: true,
             hidden: true,
-            mode: "subagent",
-            permission: connectFix([
-              ...user,
-              ...Permission.fromConfig(cfg.agent?.[ConnectPolicy.FIX_AGENT]?.permission ?? {}),
-              ...userCeiling(ConnectPolicy.FIX_AGENT),
-            ]),
-          })
+          }
+        // Only connect launches the fix child, naming it in `invokedAgents`, which passes this deny: no agent's own task
+        // call starts it, and the task tool never lists it as one to pick. Only where task may launch it, as for the
+        // research judge below, so a deny for this one agent is never the last word on task for an agent with none.
+        for (const [name, item] of Object.entries(agents)) {
+          if (name === ConnectPolicy.FIX_AGENT) continue
+          if (Permission.evaluate("task", ConnectPolicy.FIX_AGENT, item.permission).action === "deny") continue
+          item.permission = Permission.merge(
+            item.permission,
+            Permission.fromConfig({ task: { [ConnectPolicy.FIX_AGENT]: "deny" } }),
+          )
+        }
 
         // The research tools are the research agents' alone, and so are the researcher and the judge: no other agent,
         // whatever its rules, may call one or launch one outside a research run. The build agent alone may hand a

@@ -319,6 +319,30 @@ describe("the dollar cap", () => {
     }
   })
 
+  test("what background reviews still going hold counts as spent, inside the run and after it", () => {
+    // Run limit $5 with $4 spent: one background review holds the $1 left, so a second gets nothing.
+    expect(cap({ run: { running: false, limitUsd: 5, spentUsd: 4, heldUsd: 0.25 } })).toBeCloseTo(0.75)
+    expect(cap({ run: { running: true, limitUsd: 5, spentUsd: 4, heldUsd: 0.25 } })).toBeCloseTo(0.75)
+    expect(cap({ run: { running: false, limitUsd: 10, spentUsd: 1, heldUsd: 2 } })).toBe(2)
+    // With no dollar limit, reviews outside the run share one $0.50.
+    expect(cap({ run: { running: false, heldUsd: 0.3 } })).toBeCloseTo(0.2)
+    // Inside a run with no dollar limit nothing is shared out, so nothing is held.
+    expect(cap({ run: { running: true, heldUsd: 9 } })).toBe(2)
+    expect(cap({ costKind: "local", run: { running: false, heldUsd: 0.5 } })).toBeUndefined()
+    for (const run of [
+      { running: false, limitUsd: 5, spentUsd: 4, heldUsd: 1 },
+      { running: true, limitUsd: 5, spentUsd: 4, heldUsd: 1.5 },
+      { running: false, heldUsd: 0.5 },
+    ]) {
+      const result = ConnectPolicy.effectiveCap({ costKind: "priced", run })
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.refusal.code).toBe("budget")
+        expect(result.refusal.message).toContain("Background reviews of this conversation")
+      }
+    }
+  })
+
   test("a local model has no dollar cap", () => {
     expect(cap({ costKind: "local", repository: 1 })).toBeUndefined()
     expect(cap({ costKind: "local", run: { running: false } })).toBeUndefined()
@@ -411,7 +435,6 @@ describe("check commands for fix children", () => {
 describe("fixes (CW-07)", () => {
   const evaluate = (ruleset: Rule[], permission: string, pattern: string) =>
     ConnectPolicy.evaluate(permission, pattern, ruleset).action
-  const reads = buildRules.filter((rule) => rule.permission === "read")
   const finding = (id: string, extra: Partial<Connect.Finding> = {}): Connect.Finding => ({
     id,
     severity: "concern",
@@ -427,16 +450,16 @@ describe("fixes (CW-07)", () => {
     ...extra,
   })
 
-  test("the fix child's fixed part denies everything but its tools, the checks, and its requester's reads", () => {
-    const fixed = ConnectPolicy.fixAgentRules({ user: [], reads })
+  test("the fix child's fixed part denies everything but its tools and its requester's reads, and every command", () => {
+    const fixed = ConnectPolicy.fixAgentRules({ user: [], requester: buildRules })
     const all = [...buildRules, ...fixed]
     expect(fixed[0]).toEqual({ permission: "*", pattern: "*", action: "deny" })
     for (const tool of ConnectPolicy.FIX_TOOLS) expect(evaluate(all, tool, "src/a.ts")).toBe("allow")
     expect(evaluate(all, "read", ".env")).toBe("ask")
     expect(evaluate(all, "read", "mcp:server:x")).toBe("deny")
-    expect(evaluate(all, "bash", "npm test")).toBe("ask")
-    expect(evaluate(all, "bash", "npm test -- --watch")).toBe("deny")
-    expect(evaluate(all, "bash", "curl https://example.invalid")).toBe("deny")
+    // A test or typecheck would run code the child may have just written, with the network: no command runs.
+    for (const command of ["npm test", "bun test src/a.test.ts", "tsc --noEmit", "curl https://example.invalid"])
+      expect(evaluate(all, "bash", command)).toBe("deny")
     for (const permission of ["webfetch", "websearch", "network_command", "task", "external_directory", "skill"])
       expect(evaluate(all, permission, "*")).toBe("deny")
   })
@@ -449,14 +472,39 @@ describe("fixes (CW-07)", () => {
       { permission: "edit", pattern: "secret/*", action: "deny" },
       { permission: "read", pattern: "notes/*", action: "ask" },
     ]
-    const all = [...buildRules, ...user, ...ConnectPolicy.fixAgentRules({ user, reads })]
+    const requester = [...buildRules, ...user]
+    const all = [...requester, ...ConnectPolicy.fixAgentRules({ user, requester })]
     expect(evaluate(all, "bash", "curl https://example.invalid")).toBe("deny")
+    expect(evaluate(all, "bash", "npm test")).toBe("deny")
     expect(evaluate(all, "webfetch", "*")).toBe("deny")
     expect(evaluate(all, "edit", "secret/key.ts")).toBe("deny")
     expect(evaluate(all, "read", "notes/plan.md")).toBe("ask")
     // The user's blanket allow opens what it opens for the requester itself, and nothing else.
     expect(evaluate(all, "read", ".env")).toBe("allow")
     expect(evaluate(all, "question", "*")).toBe("deny")
+  })
+
+  test("the requester's own read rules hold in the child, and no rule of the child's reopens one", () => {
+    // The user allows every read; the build agent's own config denies secrets/ and asks about notes/.
+    const user: Rule[] = [{ permission: "read", pattern: "*", action: "allow" }]
+    const requester: Rule[] = [
+      ...buildRules,
+      ...user,
+      { permission: "read", pattern: "secrets/*", action: "deny" },
+      { permission: "*", pattern: "notes/*", action: "ask" },
+      { permission: "grep", pattern: "vault/*", action: "deny" },
+    ]
+    const own: Rule[] = [...user, { permission: "read", pattern: "secrets/*", action: "ask" }]
+    const all = [...requester, ...own, ...ConnectPolicy.fixAgentRules({ user: own, requester })]
+    expect(evaluate(all, "read", "secrets/key.txt")).toBe("deny")
+    expect(evaluate(all, "read", "notes/plan.md")).toBe("ask")
+    expect(evaluate(all, "grep", "vault/a")).toBe("deny")
+    expect(evaluate(all, "read", "src/a.ts")).toBe("allow")
+    // The child's own ask narrows what the requester allows.
+    const asked = [{ permission: "edit", pattern: "src/*", action: "ask" }] satisfies Rule[]
+    expect(evaluate(ConnectPolicy.fixAgentRules({ user: asked, requester }), "edit", "src/a.ts")).toBe("ask")
+    // A requester with no rule for a fix tool gives the child none.
+    expect(evaluate(ConnectPolicy.fixAgentRules({ user: [], requester: [] }), "read", "src/a.ts")).toBe("deny")
   })
 
   test("fixable applies the owned-path rule finding by finding and says why each one is left out", () => {

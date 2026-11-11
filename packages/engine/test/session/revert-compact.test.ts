@@ -477,6 +477,48 @@ describe("revert + compact workflow", () => {
   )
 
   it.live(
+    "cleanup stops a background connect review that a removed call started, and leaves an earlier one running",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+          const jobs = yield* BackgroundJob.Service
+
+          const info = yield* session.create({})
+          const sid = info.id
+          const u1 = yield* user(sid)
+          const a1 = yield* assistant(sid, u1.id, dir)
+          const u2 = yield* user(sid)
+          const a2 = yield* assistant(sid, u2.id, dir)
+          // A background VectorScope review (connect) names the message and call that started it, as commands do.
+          const review = (id: string, messageID: MessageID, callID: string) =>
+            jobs.start({
+              id,
+              type: "connect",
+              title: id,
+              metadata: { parentSessionId: sid, background: true, runID: id, parentMessageId: messageID, callID },
+              run: Effect.never,
+            })
+          yield* review("cr_keptReview01", a1.id, "call-1")
+          yield* review("cr_undoneReview1", a2.id, "call-2")
+
+          yield* session.setRevert({
+            sessionID: sid,
+            revert: { messageID: u2.id },
+            summary: { additions: 0, deletions: 0, files: 0 },
+          })
+          yield* revert.cleanup(yield* session.get(sid))
+
+          expect((yield* jobs.get("cr_undoneReview1"))?.status).toBe("cancelled")
+          expect((yield* jobs.get("cr_keptReview01"))?.status).toBe("running")
+          yield* jobs.cancel("cr_keptReview01")
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live(
     "cleanup is a no-op when session has no revert state",
     provideTmpdirInstance(
       () =>

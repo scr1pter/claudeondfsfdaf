@@ -432,7 +432,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
         const trusted = statePath !== undefined && stateBefore !== undefined && states.get(statePath) === stateBefore
         // Every question is behind it: a background run's caller stops waiting here.
-        if (context.working) yield* context.working()
+        if (context.working) yield* context.working(cap.value !== undefined ? { maxCostUsd: cap.value } : {})
         yield* say("review", "Reviewing")
         const result = yield* loaded
           .executeLocalReview(reviewOptions({ request, maxCost: cap.value, full: !trusted, env }), local)

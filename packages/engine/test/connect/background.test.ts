@@ -5,6 +5,7 @@ import path from "node:path"
 import { Deferred, type Duration, Effect, Fiber, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { ConnectFrame } from "@vectordevai/core/connect/frame"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -309,6 +310,23 @@ const noteOf = (input: SessionPrompt.PromptInput) => {
   return part?.type === "text" ? part : undefined
 }
 
+// Every connect note the recorded prompts carry: the window may deliver several in one message.
+const connectNotes = (notes: readonly SessionPrompt.PromptInput[]) =>
+  notes.flatMap((input) =>
+    input.parts.flatMap((part) =>
+      part.type === "text" && part.metadata?.connectNotification !== undefined
+        ? [part.metadata.connectNotification]
+        : [],
+    ),
+  )
+
+const notesArrived = (notes: readonly SessionPrompt.PromptInput[], count: number) =>
+  pollWithTimeout(
+    Effect.sync(() => (connectNotes(notes).length >= count ? true : undefined)),
+    `expected ${count} connect notes, saw ${connectNotes(notes).length}`,
+    "5 seconds",
+  )
+
 const setup = Effect.gen(function* () {
   delete script.handle
   seen.length = 0
@@ -352,6 +370,8 @@ describe("a background review", () => {
         const job = (yield* jobs.list()).find((item) => item.id === run.id)
         expect(job).toMatchObject({ type: ConnectHub.JOB_TYPE, status: "running" })
         expect(job?.metadata).toMatchObject({ parentSessionId: requester.id, background: true, runID: run.id })
+        // It names the call that started it, so reverting that call's message cancels it (session/revert.ts).
+        expect(job?.metadata).toMatchObject({ parentMessageId: call.id, callID })
         // The processor keeps the call's metadata, the run as it was when the call returned.
         yield* settlePart(requester.id, call.id, callID, ConnectHub.metadata(run))
 
@@ -561,6 +581,123 @@ describe("a background review", () => {
       yield* Effect.sleep(`${QUIET * 5} millis`)
       // Only the background review that went on after its caller left reported.
       expect(notes).toHaveLength(1)
+    }),
+  )
+})
+
+describe("background reviews side by side", () => {
+  it.instance("share what the run has left: each holds its cap from the others until it ends", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup
+      const guard = yield* SpendGuard.Service
+      const { notes, ops } = recorder()
+      // Run limit $5, $4 spent: $1 left for every review that may outlive the turn.
+      yield* guard.arm(requester.id, { usd: 5 })
+      yield* guard.begin(requester.id)
+      yield* guard.record(requester.id, {
+        costUsd: 4,
+        costKind: "priced",
+        contextTokens: 1_000,
+        cachedTokens: 0,
+        continues: false,
+        tools: [],
+        patched: false,
+      })
+      const priced = (context: ConnectAdapter.HandoffContext) =>
+        ConnectPolicy.effectiveCap({ costKind: "priced", run: context.spend })
+      const gates: Deferred.Deferred<void>[] = []
+      // A member that, like VectorScope, reports no cap of its own: it holds what it was admitted with.
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<void>()
+          gates.push(gate)
+          yield* context.working!()
+          yield* Deferred.await(gate)
+          return clean()
+        })
+      const first = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      expect(first.status).toBe("running")
+      expect(seen.at(-1)?.context.spend.heldUsd).toBeUndefined()
+      expect(priced(seen.at(-1)!.context)).toEqual({ ok: true, value: 1 })
+
+      // The second sees the first's $1 as spent: a priced review would be refused, and a foreground one too.
+      const second = yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      expect(second.status).toBe("running")
+      expect(seen.at(-1)?.context.spend).toMatchObject({ running: false, limitUsd: 5, spentUsd: 4, heldUsd: 1 })
+      const refused = priced(seen.at(-1)!.context)
+      expect(refused.ok).toBe(false)
+      if (!refused.ok) expect(refused.refusal.code).toBe("budget")
+      script.handle = () => Effect.succeed(clean())
+      yield* hub.run({ request: review(requester.id, directory, { background: false }), call: asker() })
+      expect(seen.at(-1)?.context.spend).toMatchObject({ running: true, heldUsd: 1 })
+      expect(priced(seen.at(-1)!.context).ok).toBe(false)
+
+      // Once the first ends, what it held is free again (the second, admitted when nothing was left, holds nothing).
+      yield* Deferred.succeed(gates[0], undefined)
+      yield* arrived(notes, 1)
+      yield* hub.run({ request: review(requester.id, directory, { background: false }), call: asker() })
+      expect(seen.at(-1)?.context.spend.heldUsd).toBeUndefined()
+      expect(priced(seen.at(-1)!.context)).toEqual({ ok: true, value: 1 })
+      yield* Deferred.succeed(gates[1], undefined)
+      yield* arrived(notes, 2)
+      yield* guard.end(requester.id)
+    }),
+  )
+
+  it.instance("a review that reports its own cap holds only that; one with no dollar cap holds none", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup
+      const guard = yield* SpendGuard.Service
+      const { notes, ops } = recorder()
+      yield* guard.arm(requester.id, { usd: 10 })
+      yield* guard.begin(requester.id)
+      const gates: Deferred.Deferred<void>[] = []
+      const caps: ({ maxCostUsd?: number } | undefined)[] = [{ maxCostUsd: 0.75 }, {}]
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<void>()
+          gates.push(gate)
+          yield* context.working!(caps.shift())
+          yield* Deferred.await(gate)
+          return clean()
+        })
+      // Admitted at connect's $2 cap, then lowered to the $0.75 it reported.
+      yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      expect(seen.at(-1)?.context.spend.heldUsd).toBe(0.75)
+      // The second ran with no dollar cap (a local model): it holds nothing.
+      yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
+      expect(seen.at(-1)?.context.spend.heldUsd).toBe(0.75)
+      for (const gate of gates) yield* Deferred.succeed(gate, undefined)
+      yield* notesArrived(notes, 3)
+      yield* guard.end(requester.id)
+    }),
+  )
+
+  it.instance("a run that ends as its work begins is reported exactly once, by the caller or by a note", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, call } = yield* setup
+      const { notes, ops } = recorder()
+      script.handle = (_request, context) => context.working!().pipe(Effect.as(clean()))
+      const shown: Connect.Run[] = []
+      for (let index = 0; index < 8; index++)
+        shown.push(
+          yield* hub.run({
+            request: review(requester.id, directory),
+            call: { ...asker(), promptOps: ops, part: { messageID: call.id, callID: `call_race_${index}` } },
+          }),
+        )
+      const owed = shown.filter((run) => run.result === undefined)
+      // A caller that got the run without its result owes nothing; every other run's end is a note.
+      for (const run of shown) expect(run.status === "done").toBe(run.result !== undefined)
+      if (owed.length > 0) yield* notesArrived(notes, owed.length)
+      yield* Effect.sleep(`${QUIET * 5} millis`)
+      const runOf = (note: unknown) =>
+        typeof note === "object" && note !== null && "runID" in note ? String(note.runID) : ""
+      const byRun = (a: unknown, b: unknown) => runOf(a).localeCompare(runOf(b))
+      expect(connectNotes(notes).toSorted(byRun)).toEqual(
+        owed.map((run) => ({ runID: run.id, state: "completed", quiet: true })).toSorted(byRun),
+      )
     }),
   )
 })

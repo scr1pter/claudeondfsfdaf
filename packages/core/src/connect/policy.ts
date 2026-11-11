@@ -336,6 +336,12 @@ export interface RunSpend {
   readonly spentUsd?: number
   /** The run stopped (`guard.stopped`). */
   readonly stopped?: boolean
+  /**
+   * The most the requester's background reviews that are still going may yet spend. The guard stops counting one once
+   * the run that started it ends, so this counts as spent: reviews side by side never share out more than the run has
+   * left, nor more than one $0.50 outside a run with no dollar limit.
+   */
+  readonly heldUsd?: number
 }
 
 /** Whether a tool's `max_cost` is usable: a finite number of dollars greater than 0, or absent. */
@@ -350,8 +356,9 @@ export function maxCostInput(value: unknown): Decision<number | undefined> {
  * The dollar cap for one review: the smallest positive value of review.json's or the environment's `maxCostUsd`,
  * connect's own cap ($2, or `connect.review.max_cost_usd`), the tool's `max_cost`, and what the run has left. A 0 or a
  * missing value is skipped, never read as "no cap". After the run ended, what it had left caps the review, or $0.50
- * when it had no limit. A run that stopped refuses another review. A local model has no dollar cap (undefined); its
- * step and time limits and the per-request cap still apply.
+ * when it had no limit. What the requester's background reviews still hold (`run.heldUsd`) is taken off both. A run
+ * that stopped refuses another review, and so does one with nothing left. A local model has no dollar cap (undefined);
+ * its step and time limits and the per-request cap still apply.
  */
 export function effectiveCap(input: {
   readonly costKind: Connect.CostKind
@@ -366,10 +373,17 @@ export function effectiveCap(input: {
     return refuse("budget", "This run stopped on its budget, so connect did not start another review.")
   if (input.costKind === "local") return { ok: true, value: undefined }
   const limit = positive(input.run.limitUsd)
+  const held = Math.max(0, finite(input.run.heldUsd) ?? 0)
   const left = limit === undefined ? undefined : limit - Math.max(0, finite(input.run.spentUsd) ?? 0)
+  const room = input.run.running ? left : (left ?? OUTSIDE_RUN_MAX_COST_USD)
+  const budget = room === undefined ? undefined : room - held
   if (left !== undefined && left <= 0)
     return refuse("budget", "This run has no budget left for a review, so connect did not start one.")
-  const budget = input.run.running ? left : (left ?? OUTSIDE_RUN_MAX_COST_USD)
+  if (budget !== undefined && budget <= 0)
+    return refuse(
+      "budget",
+      "Background reviews of this conversation that are still going hold what the budget has left, so connect did not start another review. Their results arrive as notes when they end.",
+    )
   const connect = positive(input.connect) ?? DEFAULT_MAX_COST_USD
   const caps = [positive(input.repository), connect, tool.value, positive(budget)].filter(
     (value): value is number => value !== undefined,
@@ -435,8 +449,9 @@ export function normalizePath(path: string): string | undefined {
 // Check commands for fix children
 
 /**
- * The commands a fix child may ask to run: VectorScope's own check list (test and typecheck commands, bare or with
- * paths and test names, never with a flag), read from its review rules so both stay one list.
+ * VectorScope's own check list (test and typecheck commands, bare or with paths and test names, never with a flag),
+ * read from its review rules so both stay one list. No fix child runs them: a check runs code the child may have just
+ * written, with the shell's network, so `fixAgentRules` denies every command (deviations, 2026-11-11).
  */
 export function checkCommands(): string[] {
   return reviewPermissionRules({ checks: true })
@@ -445,9 +460,9 @@ export function checkCommands(): string[] {
 }
 
 /**
- * The `bash` rules of a fix child, in order: every command denied, the check commands asked one by one, then every
+ * The check commands as `bash` rules, in order: every command denied, the check commands asked one by one, then every
  * flag denied again (as VectorScope's rules do), with `tsc --noEmit` asked after it. The last matching rule wins, so no
- * other command runs.
+ * other command runs. A fix child gets none of them (`fixAgentRules`).
  */
 export function checkCommandRules(): Rule[] {
   return [
@@ -481,25 +496,29 @@ const FIX_DENIED = ["webfetch", "websearch", "network_command", "task"]
 
 /**
  * The fixed part of the `connect_fix` agent's rules, which the agent puts after the defaults and the user's rules, so
- * it comes last and wins: every permission denied, then the fix tools allowed, the requester's own read defaults (so a
- * secret file still asks), the check commands asked one by one with every other command denied, the user's own rules
- * only where they narrow (a deny anywhere; an ask or allow only for a fix tool, never for the shell or the network),
- * and last the network tools, MCP resources and the task tool denied. `reads` are the agent defaults' `read` rules.
+ * it comes last and wins:
+ *
+ * 1. every permission denied;
+ * 2. the fix tools exactly as the requester has them: each of the requester's rules (`requester`, the build agent's
+ *    final rules) that covers a fix tool, in its order, so a read the requester is denied or asked about is denied or
+ *    asked about in the child too, and nothing else is opened;
+ * 3. every command denied: a test or typecheck runs code the child may have just written, with the shell's network,
+ *    so no command runs in a fix child; the requester runs the checks after `here` or after the merge;
+ * 4. the child's own rules (`user`: the user's, its agent config's and the ceiling's) only where they narrow: an ask
+ *    for a fix tool, after which the requester's denies come again so no ask reopens one, then a deny anywhere;
+ * 5. last the network tools, MCP resources and the task tool denied.
  */
-export function fixAgentRules(input: { readonly user: Ruleset; readonly reads: Ruleset }): Rule[] {
-  const narrowed = input.user.flatMap((rule): Rule[] => {
-    if (rule.action === "deny") return [rule]
-    return FIX_TOOLS.filter((tool) => Wildcard.match(tool, rule.permission)).map((tool) => ({
-      ...rule,
-      permission: tool,
-    }))
-  })
+export function fixAgentRules(input: { readonly user: Ruleset; readonly requester: Ruleset }): Rule[] {
+  const onto = (rule: Rule): Rule[] =>
+    FIX_TOOLS.filter((tool) => Wildcard.match(tool, rule.permission)).map((tool) => ({ ...rule, permission: tool }))
+  const requester = input.requester.flatMap(onto)
   return [
     { permission: "*", pattern: "*", action: "deny" },
-    ...FIX_TOOLS.map((tool): Rule => ({ permission: tool, pattern: "*", action: "allow" })),
-    ...input.reads.filter((rule) => rule.permission === "read"),
-    ...checkCommandRules(),
-    ...narrowed,
+    ...requester,
+    { permission: "bash", pattern: "*", action: "deny" },
+    ...input.user.filter((rule) => rule.action === "ask").flatMap(onto),
+    ...requester.filter((rule) => rule.action === "deny"),
+    ...input.user.filter((rule) => rule.action === "deny"),
     { permission: "read", pattern: "mcp:*", action: "deny" },
     ...FIX_DENIED.map((permission): Rule => ({ permission, pattern: "*", action: "deny" })),
   ]

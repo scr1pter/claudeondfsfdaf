@@ -188,7 +188,7 @@ const layer = Layer.effect(
       yield* Effect.forEach(
         jobs.filter(
           (job) =>
-            (job.type === "task" || job.type === "shell") &&
+            (job.type === "task" || job.type === "shell" || job.type === "connect") &&
             job.status === "running" &&
             job.metadata?.parentSessionId === sessionID &&
             launched(job),

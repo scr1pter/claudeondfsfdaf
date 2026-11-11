@@ -969,7 +969,7 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
     part.tool === "connect" &&
     part.state.status !== "pending" &&
     (part.state.metadata?.connect !== undefined ||
-      ["review", "findings", "status", "cancel"].includes(part.state.metadata?.action))
+      ["review", "fix", "findings", "status", "cancel"].includes(part.state.metadata?.action))
   if (
     commands.includes("mcp") ||
     calls.some((part) => !LOCAL_TOOLS.has(part.tool) && !DELEGATION_TOOLS.has(part.tool) && !connected(part))

@@ -331,7 +331,10 @@ live.instance(
         .filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "task")
       expect(tasks).toHaveLength(1)
       expect(tasks[0]!.state.status).toBe("error")
-      expect(tasks[0]!.state.status === "error" ? tasks[0]!.state.error : "").toContain("cannot be launched with task")
+      // Every agent's own rules deny launching it, so the task tool refuses before it asks anything.
+      expect(tasks[0]!.state.status === "error" ? tasks[0]!.state.error : "").toContain(
+        `The build agent may not launch the ${ConnectPolicy.FIX_AGENT} subagent.`,
+      )
       expect((yield* sessions.children(requester.id)).some((child) => child.agent === ConnectPolicy.FIX_AGENT)).toBe(
         false,
       )
@@ -489,7 +492,10 @@ isolated.instance(
         return part?.state.status === "error" ? part.state.error : `not an error: ${part?.state.status}`
       }
       expect(error("write", 0)).toContain("owned_paths")
-      expect(error("bash", 0)).toContain("A permission rule denies bash")
+      // The shell is not even offered to it: the call is refused as a tool it does not have, before anything runs.
+      const shell = error("bash", 0)
+      expect(shell).toContain("unavailable tool")
+      expect(shell.split("Available tools:")[1]).not.toContain("bash")
       expect(parts.filter((item) => item.tool === "write")[1]?.state.status).toBe("completed")
       expect(
         yield* Effect.promise(() =>

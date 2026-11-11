@@ -136,7 +136,7 @@ export function brief(input: {
     `Fix findings that VectorScope reported in its review ${input.source} of ${ConnectFindings.targetWords(input.target)}. The user approved fixing them in this isolated worktree.`,
     `Change only these files: ${input.owned.join(", ")}. Every other file is outside your assignment.`,
     "Confirm each finding in the code before you change anything, and skip any you cannot confirm or that needs another file.",
-    "You may run only the project's own test and typecheck commands, without flags; each one asks the user first. Every other command and every network tool is denied.",
+    "You cannot run commands, tests included, and every network tool is denied: check your fixes by reading the code. The main agent runs the project's checks after the merge.",
     "Answer with the ids of the findings you fixed, and each id you skipped with a short reason.",
     "",
     ConnectFrame.briefBlock(input.findings),

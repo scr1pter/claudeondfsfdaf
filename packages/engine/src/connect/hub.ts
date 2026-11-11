@@ -238,6 +238,12 @@ interface Entry {
   readonly owed: Deferred.Deferred<boolean>
   /** The caller stopped waiting: asks go to the requester's session, updates stop, and the end arrives as a note. */
   detached?: boolean
+  /**
+   * For a background review: the most it may still spend, held from the requester's other reviews until it ends,
+   * because the guard stops counting it once the turn that started it ends. Set when it is admitted, at the most any
+   * review admitted then could be capped at, and lowered to its own cap when its adapter reports one (`working`).
+   */
+  reservedUsd?: number
   fiber?: Fiber.Fiber<Connect.Result, Connect.Refusal>
   stop?: Stop
 }
@@ -644,16 +650,25 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               : `Fix findings from ${request.run} with ${member.title}.`,
           ...(member.sendsTo ? { sendsTo: member.sendsTo } : {}),
         })
+        const ledgerState = yield* InstanceState.get(ledger)
         const read = yield* spendOf(requester.sessionID)
         // A background run may outlive the turn that started it, so it is capped as a review outside the run: at what
-        // the run has left (guard.snapshot), or $0.50 when it has no dollar limit.
-        const spend: ConnectPolicy.RunSpend = request.background ? { ...read, running: false } : read
+        // the run has left (guard.snapshot), or $0.50 when it has no dollar limit. What the requester's background
+        // reviews still going hold counts as spent for every review, and a background review holds its own share from
+        // here, in the same step, so reviews admitted side by side never share out more than there is.
+        const heldUsd = request.action === "review" ? held(ledgerState, requester.sessionID, entry) : 0
+        const spend: ConnectPolicy.RunSpend = {
+          ...read,
+          ...(request.background ? { running: false } : {}),
+          ...(heldUsd > 0 ? { heldUsd } : {}),
+        }
+        if (request.action === "review" && request.background) entry.reservedUsd = reserve(request, spend)
         // What the requester already had, so the helper handle reaches only the sessions this run makes.
         entry.earlier = new Set(
           requester.sessionID ? (yield* sessions.children(requester.sessionID)).map((child) => child.id) : [],
         )
         const remainingUsd =
-          spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0)) : undefined
+          spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0) - heldUsd) : undefined
         const ops = entry.call.promptOps
         const context: ConnectAdapter.HandoffContext = {
           runID: entry.run.id,
@@ -663,7 +678,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           abort: entry.controller.signal,
           ask,
           progress: (update) => progress(entry, update),
-          working: () => Deferred.succeed(entry.working, undefined).pipe(Effect.asVoid),
+          working: (cap) =>
+            Effect.suspend(() => {
+              // The adapter's own cap is never above what was held for it; a review with no dollar cap holds none.
+              if (cap && entry.reservedUsd !== undefined)
+                entry.reservedUsd = Math.min(entry.reservedUsd, cap.maxCostUsd ?? 0)
+              return Deferred.succeed(entry.working, undefined).pipe(Effect.asVoid)
+            }),
           ...(ops && HELPER_MEMBERS.has(adapter.id) ? { helper: helperFor(entry, ops, adapter.id) } : {}),
           ...(remainingUsd !== undefined ? { remainingUsd } : {}),
           spend,
@@ -841,6 +862,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 runID: entry.run.id,
                 member: request.to,
                 action: request.action,
+                // The call that started it: reverting that call's message cancels the run (session/revert.ts).
+                ...(entry.call.part
+                  ? { parentMessageId: entry.call.part.messageID, callID: entry.call.part.callID }
+                  : {}),
               },
               promotable: false,
               onComplete: (info) => ended(entry, info),
@@ -854,10 +879,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             ...(signal ? [aborted(signal).pipe(Effect.as<"ended" | "working" | "caller">("caller"))] : []),
           ]).pipe(Effect.onInterrupt(() => stopRun(entry, "caller")))
           if (waited === "caller") yield* stopRun(entry, "caller")
-          const owed = waited !== "caller" && entry.run.status !== "done"
+          // The run the caller returns is read in the same step as the decision: the run may end at the next yield,
+          // and a caller that returned it ended would report it as well as the note.
+          const shown = entry.run
+          const owed = waited !== "caller" && shown.status !== "done"
           if (owed) entry.detached = true
           yield* Deferred.succeed(entry.owed, owed)
-          return owed ? entry.run : yield* Deferred.await(entry.done)
+          return owed ? shown : yield* Deferred.await(entry.done)
         }).pipe(Effect.ensuring(Deferred.succeed(entry.owed, false)))
 
       // A background job stopped before or while its run went: the run is cancelled, and ends here even when its work
@@ -1020,6 +1048,28 @@ function reviews(
       if (entry.run.request.requestID === requestID && entry.run.request.requester.sessionID === sessionID)
         count(entry.run)
   return counted.size
+}
+
+/** What the requester's background reviews that are still going hold, besides `entry`'s own run. */
+function held(state: State, sessionID: SessionID | undefined, entry: Entry): number {
+  if (!sessionID) return 0
+  let total = 0
+  for (const other of state.runs.values())
+    if (other !== entry && other.run.status !== "done" && other.run.request.requester.sessionID === sessionID)
+      total += other.reservedUsd ?? 0
+  return total
+}
+
+/**
+ * What a background review holds when it is admitted: the most any review admitted with this spend could be capped at
+ * (a priced model under connect's own cap and the tool's `max_cost`; review.json can only lower it), or nothing when
+ * such a review would be refused, since only one with no dollar cap can run then. When CW-09 adds
+ * `connect.review.max_cost_usd`, it joins here as it joins the adapter's cap.
+ */
+function reserve(request: Connect.Request, spend: ConnectPolicy.RunSpend): number {
+  if (request.action !== "review") return 0
+  const cap = ConnectPolicy.effectiveCap({ costKind: "priced", tool: request.budget?.maxCostUsd, run: spend })
+  return cap.ok ? (cap.value ?? 0) : 0
 }
 
 function withActivity(member: Connect.Member, state: State): Connect.Member {

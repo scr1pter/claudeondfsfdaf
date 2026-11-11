@@ -896,6 +896,10 @@ describe("memory", () => {
     expect(SessionMemory.taint(history([review]))).toBe("subagent")
     expect(SessionMemory.taint(history(["read", review]))).toBe("subagent")
     expect(SessionMemory.taint(history([status]))).toBe("subagent")
+    // A fix the tool refused before the hub saves only its action and refusal: still the built-in tool, not MCP.
+    expect(SessionMemory.taint(history([{ tool: "connect", metadata: { action: "fix", refused: "escalate" } }]))).toBe(
+      "subagent",
+    )
     expect(SessionMemory.taint(history(["read"]))).toBeUndefined()
     // An MCP tool beside it keeps the stronger hold.
     expect(SessionMemory.taint(history([review, "github_create_issue"]))).toBe("mcp")
