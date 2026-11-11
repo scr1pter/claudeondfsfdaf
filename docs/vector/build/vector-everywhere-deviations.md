@@ -8,3 +8,17 @@
 - **The lane also runs workflow-compliance.test.ts.** The test workflow checks it only on pull requests and pushes to main, so the lane runs it on pushes to the branch too (one step, no edit to that file).
 - **Redis is the Valkey image the other lanes use.** The test job's service is `valkey/valkey:7.2.14-alpine`, pinned by the same digest as vector-sharing.yml, exposed on 6379 with `VECTOR_TEST_REDIS_URL=redis://127.0.0.1:6379`.
 - **Steps that only some packages need run only when those packages have everywhere tests.** ripgrep (engine and core network guards), the turbo build of the engine, core and app dependencies, and the Electron runtime for desktop tests are gated with `hashFiles` on their packages' everywhere test paths.
+
+## 2026-11-11, VE-01 (shared types and limits)
+
+Nothing in the contract was wrong about the code. These are the choices packages/schema/src/everywhere.ts makes where the contract leaves a detail open, so later packages read it the same way.
+
+- **Ids.** A jid is `vej_` plus 22 lowercase Crockford base32 characters: 10 of creation time in milliseconds, then 12 random ones. Ids sort by time, and every character is allowed in `vector/ve-[0-9a-z]{12}`. Which 12 (or 8) characters a branch takes is VE-02's `branchFor`. Lease ids and offer `jti`s are 26 random characters of the same alphabet. Devices use Codium Remote's device id pattern, copied, since that file is Codium's. Account ids are the UUIDs `requireAccountUser` accepts.
+- **Offer times are milliseconds**, like Vector's other signed tokens (`vct_`, `vdg_`). "exp − iat ≤ 30 s" is `exp - iat <= 30_000`.
+- **Codes.** 4.1 item 1 says the laptop declines a GitHub handoff whose trigger comment changed but names no code: it is `trigger-changed`, which, like `busy`, is not lasting (the server answers `handled: false`). The refusal codes add the cases 3.8 and 4.4 refuse without naming a code: `not-linked` (answered with the link prompt), `external`, `guest`, `bot`, `automation`, `not-connected`, `shared-place`, `link-invalid` and `unsupported`.
+- **Strict and lenient decoders.** Everything a computer sends (report, settle, claim, decline) and the parsed `InboundTrigger` refuse unknown fields; offer claims do too. `decodeJob` drops unknown fields instead, so a server that adds an optional field in a later version does not stop older desktops; the runner only reads what the decoder returns. A job of kind `stop` or `command` is refused, though the type keeps the contract's union.
+- **GitHub carries no thread text.** A GitHub trigger or job must have an empty task and context and a `github` reference (4.1); other platforms may not carry a `github` reference, and only Linear and Jira may carry an `issue`.
+- **Settle summaries** are also refused when they hold a fenced code block, beside the diff forms E4 names; `sanitizeReply` on the computer already refuses fences, so a real summary never has one.
+- **Thread links** must be https on the platform's own host: github.com, slack.com and its subdomains, linear.app, and subdomains of atlassian.net. VE-13 widens Jira's if its re-read finds other site hosts.
+- **Slack installation keys** take three forms: `slack:E…:T…` (a workspace in a Grid organisation), `slack:T…` (a workspace on its own) and `slack:E…` (an organisation-wide install). VE-11 picks which it writes.
+- **A job's reply format** must be its platform's: Slack mrkdwn for Slack, Markdown for GitHub and Linear, plain text for Jira.
