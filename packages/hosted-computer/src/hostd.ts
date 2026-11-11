@@ -9,7 +9,7 @@ import { parseToolInput, PROTOCOL, type HandoffReason } from "./actions"
 import { Computer, type ImageFormat } from "./computer"
 import { Daemon, type AgentControl, type BrowserControl, type Job } from "./daemon"
 import { checkRepository, GitError, HostGit, type Access, type Repository, type TokenSource } from "./git"
-import { BrowserGuard, CdpPipe } from "./guard"
+import { BrowserGuard, CdpPipe, guardView } from "./guard"
 import {
   AGENT_HOME,
   AGENT_UID,
@@ -213,8 +213,9 @@ class Browser implements BrowserControl {
 
   constructor(private readonly guardSource: string) {}
 
+  /** What the computer asks before an action: see guardView (no browser, its guard, or a guard that is down). */
   current() {
-    return this.guard
+    return guardView(this.child !== undefined, this.guard)
   }
 
   async start() {
@@ -242,8 +243,15 @@ class Browser implements BrowserControl {
     }
     child.on("error", gone)
     child.on("exit", gone)
-    await guard.start()
-    this.guard = guard
+    try {
+      await guard.start()
+    } catch (error) {
+      // The guard could not take hold of the browser, so the browser is not left running without it (until it has
+      // exited, guardView refuses typing). The daemon starts it again on a later heartbeat.
+      child.kill("SIGKILL")
+      throw error
+    }
+    if (this.child === child) this.guard = guard
   }
 
   async stop() {

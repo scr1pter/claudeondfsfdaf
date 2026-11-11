@@ -36,7 +36,7 @@ export type StepResult =
 
 export type ActionResult = StepResult | { ok: boolean; action: ToolAction; steps: StepResult[] }
 
-/** What the guard answers (BrowserGuard, or nothing while no browser runs). */
+/** What the guard answers (BrowserGuard, GUARD_DOWN while the browser runs without its guard, or nothing while no browser runs). */
 export type GuardView = {
   focusedSecret(): Promise<HandoffReason | undefined>
   captchas(): Promise<Rect[]>
