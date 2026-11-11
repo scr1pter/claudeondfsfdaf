@@ -1,5 +1,6 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Config } from "@/config/config"
 import { ConfigAgent } from "@/config/agent"
 import { serviceUse } from "@vectordevai/core/effect/service-use"
@@ -15,6 +16,7 @@ import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
+import PROMPT_CONNECT_FIX from "./prompt/connect-fix.txt"
 import PROMPT_DEBUG from "./prompt/debug.txt"
 import PROMPT_DISTILL from "./prompt/distill.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
@@ -444,6 +446,14 @@ const layer = Layer.effect(
           )
         }
 
+        // The connected-tools fix child (CW-07): the defaults, the user's rules, then its fixed part, which comes last.
+        const connectFix = (rules: PermissionV1.Rule[]) =>
+          Permission.merge(
+            defaults,
+            rules,
+            ConnectPolicy.fixAgentRules({ user: rules, reads: Permission.fromConfig({ read: readDefaults }) }),
+          )
+
         const agents: Record<string, Info> = {
           build: {
             name: "build",
@@ -533,6 +543,18 @@ const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+          },
+          // Fixes chosen VectorScope findings in its own worktree, for connected tools. Hidden and native, so only
+          // connect launches it (the task tool refuses a model); it is rebuilt after the config below.
+          [ConnectPolicy.FIX_AGENT]: {
+            name: ConnectPolicy.FIX_AGENT,
+            description: "Fixes chosen VectorScope findings in its own isolated worktree, for connected tools.",
+            permission: connectFix(user),
+            prompt: PROMPT_CONNECT_FIX,
+            options: {},
+            mode: "subagent",
+            native: true,
+            hidden: true,
           },
           explore: {
             name: "explore",
@@ -814,6 +836,20 @@ const layer = Layer.effect(
             ...userCeiling(name),
           ])
         }
+        // No config unhides the fix child or puts a rule after its fixed part; its own rules and the ceiling only narrow.
+        const fixer = agents[ConnectPolicy.FIX_AGENT]
+        if (fixer)
+          Object.assign(fixer, {
+            name: ConnectPolicy.FIX_AGENT,
+            native: true,
+            hidden: true,
+            mode: "subagent",
+            permission: connectFix([
+              ...user,
+              ...Permission.fromConfig(cfg.agent?.[ConnectPolicy.FIX_AGENT]?.permission ?? {}),
+              ...userCeiling(ConnectPolicy.FIX_AGENT),
+            ]),
+          })
 
         // The research tools are the research agents' alone, and so are the researcher and the judge: no other agent,
         // whatever its rules, may call one or launch one outside a research run. The build agent alone may hand a

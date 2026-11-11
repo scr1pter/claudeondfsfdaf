@@ -408,6 +408,110 @@ describe("check commands for fix children", () => {
   })
 })
 
+describe("fixes (CW-07)", () => {
+  const evaluate = (ruleset: Rule[], permission: string, pattern: string) =>
+    ConnectPolicy.evaluate(permission, pattern, ruleset).action
+  const reads = buildRules.filter((rule) => rule.permission === "read")
+  const finding = (id: string, extra: Partial<Connect.Finding> = {}): Connect.Finding => ({
+    id,
+    severity: "concern",
+    category: "bug",
+    path: "src/a.ts",
+    line: 1,
+    side: "RIGHT",
+    title: id,
+    body: "",
+    source: "review",
+    bucket: "inline",
+    status: "open",
+    ...extra,
+  })
+
+  test("the fix child's fixed part denies everything but its tools, the checks, and its requester's reads", () => {
+    const fixed = ConnectPolicy.fixAgentRules({ user: [], reads })
+    const all = [...buildRules, ...fixed]
+    expect(fixed[0]).toEqual({ permission: "*", pattern: "*", action: "deny" })
+    for (const tool of ConnectPolicy.FIX_TOOLS) expect(evaluate(all, tool, "src/a.ts")).toBe("allow")
+    expect(evaluate(all, "read", ".env")).toBe("ask")
+    expect(evaluate(all, "read", "mcp:server:x")).toBe("deny")
+    expect(evaluate(all, "bash", "npm test")).toBe("ask")
+    expect(evaluate(all, "bash", "npm test -- --watch")).toBe("deny")
+    expect(evaluate(all, "bash", "curl https://example.invalid")).toBe("deny")
+    for (const permission of ["webfetch", "websearch", "network_command", "task", "external_directory", "skill"])
+      expect(evaluate(all, permission, "*")).toBe("deny")
+  })
+
+  test("the user's rules only narrow it: a deny anywhere, an ask or allow only for a fix tool", () => {
+    const user: Rule[] = [
+      { permission: "*", pattern: "*", action: "allow" },
+      { permission: "bash", pattern: "*", action: "allow" },
+      { permission: "webfetch", pattern: "*", action: "allow" },
+      { permission: "edit", pattern: "secret/*", action: "deny" },
+      { permission: "read", pattern: "notes/*", action: "ask" },
+    ]
+    const all = [...buildRules, ...user, ...ConnectPolicy.fixAgentRules({ user, reads })]
+    expect(evaluate(all, "bash", "curl https://example.invalid")).toBe("deny")
+    expect(evaluate(all, "webfetch", "*")).toBe("deny")
+    expect(evaluate(all, "edit", "secret/key.ts")).toBe("deny")
+    expect(evaluate(all, "read", "notes/plan.md")).toBe("ask")
+    // The user's blanket allow opens what it opens for the requester itself, and nothing else.
+    expect(evaluate(all, "read", ".env")).toBe("allow")
+    expect(evaluate(all, "question", "*")).toBe("deny")
+  })
+
+  test("fixable applies the owned-path rule finding by finding and says why each one is left out", () => {
+    const plan = ConnectPolicy.fixable({
+      findings: [
+        finding("a"),
+        finding("b", { path: "./src/b.ts" }),
+        finding("c", { bucket: "outside-diff" }),
+        finding("d", { bucket: "still-open", status: "still-open" }),
+        finding("e", { path: ".vector/review.md" }),
+        finding("f", { path: "src/gone.ts" }),
+        finding("g", { status: "fixed" }),
+        finding("h", { status: "dismissed" }),
+        finding("i", { path: "../outside.ts" }),
+      ],
+      changed: ["src/a.ts", "src/b.ts", ".vector/review.md"],
+    })
+    expect(plan.findings.map((item) => item.id)).toEqual(["a", "b"])
+    expect(plan.paths).toEqual(["src/a.ts", "src/b.ts"])
+    expect(plan.skipped).toEqual([
+      { id: "c", reason: "its place is outside the reviewed diff" },
+      { id: "d", reason: "it comes from VectorScope's saved state, not from the reviewed diff" },
+      { id: "e", reason: "connect never fixes files under .github or .vector" },
+      { id: "f", reason: "its file is no longer among the reviewed changes" },
+      { id: "g", reason: "it is already fixed" },
+      { id: "h", reason: "it was dismissed" },
+      { id: "i", reason: "its path is not a file in this repository" },
+    ])
+    expect(ConnectPolicy.fixTouches([finding("a"), finding("c", { bucket: "outside-diff", path: "x.ts" })])).toEqual([
+      "src/a.ts",
+    ])
+  })
+
+  test("a merge asks connect_write with the diff, every time, never saved", () => {
+    const ask = ConnectPolicy.mergeAsk({
+      title: "Fix 1 finding from cr_1",
+      patterns: ["src/a.ts", "src/a.ts"],
+      diff: "+x",
+    })
+    expect(ask).toEqual({
+      permission: "connect_write",
+      patterns: ["src/a.ts"],
+      always: [],
+      metadata: {
+        diff: "+x",
+        description: 'Merge the fix worktree "Fix 1 finding from cr_1" into your checkout. It changes 1 file.',
+        runID: "cr_1",
+      },
+    })
+    const bare = ConnectPolicy.mergeAsk({ title: "t", patterns: [], diff: "" })
+    expect(bare.patterns).toEqual(["*"])
+    expect(bare.metadata.runID).toBeUndefined()
+  })
+})
+
 describe("read rules a review must not get around", () => {
   test("under the build agent's defaults only the docker and kube patterns are looked for", () => {
     expect(ConnectPolicy.readPatterns(buildRules)).toEqual([

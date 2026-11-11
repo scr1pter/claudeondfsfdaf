@@ -90,6 +90,8 @@ export interface Call {
   readonly update?: (run: Connect.Run) => Effect.Effect<void>
   /** What a write effect touches, such as a fix's owned paths, for the narrowing check. */
   readonly touches?: readonly string[]
+  /** For a fix in an isolated worktree: starts the hidden connect_fix child through the task tool (CW-07). */
+  readonly launch?: ConnectAdapter.Launcher
 }
 
 export interface StartInput {
@@ -492,6 +494,14 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         }
       }
 
+      // The caller's fix launcher, held to the run: it starts a child only while the run is going.
+      const launcherFor =
+        (entry: Entry, launch: ConnectAdapter.Launcher): ConnectAdapter.Launcher =>
+        (input) =>
+          entry.run.status === "running"
+            ? launch(input)
+            : Effect.die(new Error("Connect's fix launcher refused a start: the run is not going."))
+
       const spendOf = Effect.fnUntraced(function* (sessionID: SessionID | undefined) {
         if (!sessionID) return { running: false } satisfies ConnectPolicy.RunSpend
         const running = yield* guard.running(sessionID)
@@ -565,6 +575,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         }
         const previous = request.action === "review" && request.since ? yield* earlier(request, requester) : undefined
         const source = request.action === "fix" ? yield* fixSource(request, requester) : undefined
+        // A fix writes the files of the findings it fixes, so the requester's rules are checked over those too.
+        if (source?.result && request.action === "fix") {
+          const chosen = new Set(request.findings)
+          const touched = ConnectPolicy.fixTouches(source.result.findings.filter((item) => chosen.has(item.id)))
+          const checked = ConnectPolicy.narrowing({ effects: action.effects, ruleset: rules, patterns: touched })
+          if (!checked.ok) return yield* checked.refusal
+        }
         const ask = asker(entry, requester.sessionID, rules)
         yield* ask({
           permission: "connect",
@@ -597,6 +614,9 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           spend,
           ...(previous ? { previous } : {}),
           ...(source ? { source } : {}),
+          ...(request.action === "fix" && entry.call.launch && HELPER_MEMBERS.has(adapter.id)
+            ? { launch: launcherFor(entry, entry.call.launch) }
+            : {}),
         }
         return { context, handle: adapter.handle } satisfies Admission
       })

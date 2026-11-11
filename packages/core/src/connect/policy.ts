@@ -459,6 +459,175 @@ export function checkCommandRules(): Rule[] {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Fixes (CW-07)
+
+/** The hidden agent a fix in an isolated worktree runs as. Only connect launches it; the task tool refuses a model. */
+export const FIX_AGENT = "connect_fix"
+
+/** The tools a fix child may use. Every other tool and permission is denied. */
+export const FIX_TOOLS: readonly string[] = [
+  "read",
+  "glob",
+  "grep",
+  "list",
+  "edit",
+  "write",
+  "apply_patch",
+  "StructuredOutput",
+]
+
+// What a fix child never gets, whatever a rule says: the network, MCP resources and subagents. Denied last.
+const FIX_DENIED = ["webfetch", "websearch", "network_command", "task"]
+
+/**
+ * The fixed part of the `connect_fix` agent's rules, which the agent puts after the defaults and the user's rules, so
+ * it comes last and wins: every permission denied, then the fix tools allowed, the requester's own read defaults (so a
+ * secret file still asks), the check commands asked one by one with every other command denied, the user's own rules
+ * only where they narrow (a deny anywhere; an ask or allow only for a fix tool, never for the shell or the network),
+ * and last the network tools, MCP resources and the task tool denied. `reads` are the agent defaults' `read` rules.
+ */
+export function fixAgentRules(input: { readonly user: Ruleset; readonly reads: Ruleset }): Rule[] {
+  const narrowed = input.user.flatMap((rule): Rule[] => {
+    if (rule.action === "deny") return [rule]
+    return FIX_TOOLS.filter((tool) => Wildcard.match(tool, rule.permission)).map((tool) => ({
+      ...rule,
+      permission: tool,
+    }))
+  })
+  return [
+    { permission: "*", pattern: "*", action: "deny" },
+    ...FIX_TOOLS.map((tool): Rule => ({ permission: tool, pattern: "*", action: "allow" })),
+    ...input.reads.filter((rule) => rule.permission === "read"),
+    ...checkCommandRules(),
+    ...narrowed,
+    { permission: "read", pattern: "mcp:*", action: "deny" },
+    ...FIX_DENIED.map((permission): Rule => ({ permission, pattern: "*", action: "deny" })),
+  ]
+}
+
+/** Why a chosen finding is not fixed through connect. */
+export type FixSkip = { readonly id: string; readonly reason: string }
+
+/**
+ * Which of the chosen findings a fix may take on, and the files it may write: the owned-path rule applied finding by
+ * finding, so each one left out says why. A finding already fixed or dismissed is left out too.
+ */
+export function fixable(input: {
+  readonly findings: readonly Connect.Finding[]
+  readonly changed: readonly string[]
+}): { readonly findings: Connect.Finding[]; readonly skipped: FixSkip[]; readonly paths: string[] } {
+  const findings: Connect.Finding[] = []
+  const skipped: FixSkip[] = []
+  const changed = new Set(input.changed.flatMap((path) => normalizePath(path) ?? []))
+  for (const finding of input.findings) {
+    const reason = skipReason(finding, changed)
+    if (reason) skipped.push({ id: finding.id, reason })
+    else findings.push(finding)
+  }
+  return { findings, skipped, paths: ownedPaths({ findings, changed: input.changed }) }
+}
+
+function skipReason(finding: Connect.Finding, changed: ReadonlySet<string>): string | undefined {
+  if (finding.status === "fixed") return "it is already fixed"
+  if (finding.status === "dismissed") return "it was dismissed"
+  if (!RESOLVED.has(finding.bucket))
+    return finding.bucket === "still-open"
+      ? "it comes from VectorScope's saved state, not from the reviewed diff"
+      : "its place is outside the reviewed diff"
+  const path = normalizePath(finding.path)
+  if (!path) return "its path is not a file in this repository"
+  const lower = path.toLowerCase()
+  if (NEVER_OWNED.some((dir) => lower === dir || lower.startsWith(`${dir}/`)))
+    return "connect never fixes files under .github or .vector"
+  if (!changed.has(path)) return "its file is no longer among the reviewed changes"
+  return undefined
+}
+
+/** The files a fix of these findings could write, before the reviewed diff is read again; for the narrowing check. */
+export function fixTouches(findings: readonly Pick<Connect.Finding, "path" | "bucket">[]): string[] {
+  return ownedPaths({ findings, changed: findings.map((finding) => finding.path) })
+}
+
+/** The checked answer a fix child gives: the ids it fixed, and each id it skipped with a reason. */
+export const FIX_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    fixed: { type: "array", items: { type: "string" } },
+    skipped: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { id: { type: "string" }, reason: { type: "string" } },
+        required: ["id", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["fixed", "skipped"],
+  additionalProperties: false,
+}
+
+/**
+ * A fix child's answer, read as data: only ids of the findings it was given count, each once, fixed before skipped.
+ * A model wrote it, so nothing in it chooses what happens next; reasons are cut to 500 characters.
+ */
+export function fixAnswer(
+  value: unknown,
+  ids: ReadonlySet<string>,
+): { readonly fixed: string[]; readonly skipped: FixSkip[] } {
+  const record = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {}
+  const fixed = [
+    ...new Set(
+      (Array.isArray(record.fixed) ? record.fixed : []).filter(
+        (id): id is string => typeof id === "string" && ids.has(id),
+      ),
+    ),
+  ]
+  const done = new Set(fixed)
+  const skipped: FixSkip[] = []
+  for (const item of Array.isArray(record.skipped) ? record.skipped : []) {
+    if (typeof item !== "object" || item === null) continue
+    const { id, reason } = item as Record<string, unknown>
+    if (typeof id !== "string" || !ids.has(id) || done.has(id)) continue
+    done.add(id)
+    skipped.push({ id, reason: clip(typeof reason === "string" ? reason.trim() : "", 500) || "no reason given" })
+  }
+  return { fixed, skipped }
+}
+
+/**
+ * The `connect_write` question asked before a fix child's worktree is merged into the checkout by an agent: every
+ * time, never saved, with the diff. The task's title is connect's own words ("Fix 2 findings from cr_…"); the review
+ * run it names goes in `runID`, as the hub's own asks carry theirs, so a client shows the sentence.
+ */
+export function mergeAsk(input: {
+  readonly title: string
+  readonly patterns: readonly string[]
+  readonly diff: string
+}): {
+  permission: "connect_write"
+  patterns: string[]
+  always: string[]
+  metadata: { diff: string; description: string; runID?: string }
+} {
+  const patterns = [...new Set(input.patterns.filter((pattern) => pattern.trim() !== ""))]
+  const run = /\bcr_[0-9A-Za-z]{1,61}\b/.exec(input.title)?.[0]
+  return {
+    permission: "connect_write",
+    patterns: patterns.length > 0 ? patterns : ["*"],
+    always: [],
+    metadata: {
+      diff: input.diff,
+      description: clip(
+        `Merge the fix worktree "${input.title}" into your checkout. It changes ${plural(patterns.length, "file")}.`,
+        Connect.MAX_SUMMARY,
+      ),
+      ...(run ? { runID: run } : {}),
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Read rules a review must not get around
 
 const ASK_ALL: Rule = { permission: "read", pattern: "*", action: "ask" }

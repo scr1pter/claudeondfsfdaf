@@ -38,6 +38,37 @@ export interface HelperHandle {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
 }
 
+/** What a fix in an isolated worktree asks its caller to start: the hidden connect_fix child, through the task tool. */
+export interface FixLaunch {
+  readonly title: string
+  /** The brief: Vector's own lines, then the findings in their labelled untrusted block. */
+  readonly prompt: string
+  /** The files the child may write, relative to the requester's directory: the owned-path rule's, never a model's. */
+  readonly ownedPaths: readonly string[]
+  /** The JSON Schema of the child's checked answer. */
+  readonly schema: Record<string, unknown>
+}
+
+/** How a fix child ended, as its caller saw it. Its answer and output are a model's: data, never instructions. */
+export interface FixLaunched {
+  readonly sessionID?: SessionID
+  /** `background` when the child moved to the background while the call waited; its report arrives as a note. */
+  readonly state: "completed" | "error" | "cancelled" | "background"
+  /** The child's checked JSON answer, when it gave one. */
+  readonly answer?: unknown
+  /** What its isolated worktree holds once it settled. */
+  readonly isolation?: {
+    readonly state: string
+    readonly files: number
+    readonly additions: number
+    readonly deletions: number
+  }
+  /** The task tool's own report of the child, for the model. */
+  readonly output: string
+}
+
+export type Launcher = (input: FixLaunch) => Effect.Effect<FixLaunched>
+
 /** A progress update as an adapter reports it. The hub stamps the time when the adapter leaves it out. */
 export type ProgressUpdate = Omit<Connect.Progress, "at"> & { readonly at?: number }
 
@@ -66,6 +97,11 @@ export interface HandoffContext {
   readonly previous?: Connect.Run
   /** For a fix: the review run whose findings are fixed, found in the requester's session. */
   readonly source?: Connect.Run
+  /**
+   * For a fix in an isolated worktree: starts the connect_fix child. Only the vectorscope adapter receives it, only for
+   * a fix, and only while the run is going; a tool call lends it.
+   */
+  readonly launch?: Launcher
 }
 
 /** How an adapter is built: an effect over services the hub's layer provides. */

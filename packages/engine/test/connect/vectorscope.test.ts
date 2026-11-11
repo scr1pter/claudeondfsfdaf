@@ -537,7 +537,11 @@ describe("a review through connect", () => {
           reach: "connect",
           owner: "vectorscope",
         })
-        expect(listed?.actions?.map((action) => action.id)).toEqual(["review"])
+        // A review reads; a fix (CW-07) reads and writes, so the requester's edit rules are checked before it starts.
+        expect(listed?.actions?.map((action) => [action.id, action.effects])).toEqual([
+          ["review", ["read"]],
+          ["fix", ["read", "write"]],
+        ])
       }),
     instance,
   )

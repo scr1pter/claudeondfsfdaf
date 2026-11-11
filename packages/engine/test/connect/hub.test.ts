@@ -21,6 +21,7 @@ import { ConnectMembers } from "@/connect/members"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Permission } from "@/permission"
 import type { SessionPrompt } from "@/session/prompt"
 import { MessageID, PartID, type SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
@@ -120,6 +121,7 @@ const graph = (flags: Partial<RuntimeFlags.Info>) =>
   AppNodeBuilder.build(
     LayerNode.group([
       ConnectHub.nodeWith([fake("vectorscope"), fake("other"), listed]),
+      Permission.node,
       Session.node,
       SpendGuard.node,
       EventV2Bridge.node,
@@ -920,14 +922,28 @@ describe("consent", () => {
             return clean()
           })
         const viaCall = yield* hub.run({ request: review(requester.id, directory), call: { ask } })
-        const viaPermission = yield* hub.run({ request: review(requester.id, directory) })
         const writes = asks.filter((item) => item.permission === "connect_write")
         if (PermissionPolicy.requiresApproval("connect_write", [], fixBatch.patterns)) {
           // Once requiresApproval covers it (CW-07), no rule or auto-accept answers it: it is asked each time.
           expect(viaCall.result?.state).toBe("completed")
           expect(writes.length).toBe(2)
           expect(writes.every((item) => item.always.length === 0)).toBe(true)
+          // Through Permission the requester's allow-everything rule does not answer it, and an "always" reply is
+          // kept for that one question only: the second is asked again.
+          const permissions = yield* Permission.Service
+          const running = yield* hub.run({ request: review(requester.id, directory) }).pipe(Effect.forkChild)
+          for (const reply of ["always", "once"] as const) {
+            const pending = yield* pollWithTimeout(
+              permissions.list().pipe(Effect.map((list) => list.find((item) => item.permission === "connect_write"))),
+              "connect_write was not asked through Permission",
+            )
+            expect(pending.always).toEqual([])
+            yield* permissions.reply({ requestID: pending.id, reply })
+          }
+          const viaPermission = yield* Fiber.join(running)
+          expect(viaPermission.result?.state).toBe("completed")
         } else {
+          const viaPermission = yield* hub.run({ request: review(requester.id, directory) })
           // Until then nothing keeps an allow rule, a saved approval or an auto-accept from answering it, so it is
           // refused before it is asked, by either way of asking.
           expect(writes).toEqual([])

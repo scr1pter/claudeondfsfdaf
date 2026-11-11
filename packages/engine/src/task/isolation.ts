@@ -25,6 +25,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { KeyedMutex } from "@vectordevai/core/effect/keyed-mutex"
 import { Global } from "@vectordevai/core/global"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { IsolationCopy } from "@vectordevai/core/isolation/copy"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { SessionAudience } from "@vectordevai/core/session/audience"
@@ -146,10 +147,10 @@ export type By =
       kind: "agent"
       sessionID: string
       ask: (input: {
-        permission: "edit"
+        permission: "edit" | "connect_write"
         patterns: string[]
         always: string[]
-        metadata: { diff: string }
+        metadata: { diff: string; description?: string; runID?: string }
       }) => Effect.Effect<void, unknown>
       assertWritable: (input: { files: string[] }) => Effect.Effect<void, unknown>
       assertExternalDirectory: (file: string) => Effect.Effect<unknown, unknown>
@@ -2294,6 +2295,10 @@ export const make = Effect.gen(function* () {
             // them there for the prompt_source and memory_source asks. A project that is not a Git repository has the
             // file system root as its worktree, while its merge targets sit in the project folder.
             const ctx = yield* home
+            const patterns = plan.targets.map((target) => path.relative(ctx.worktree, target))
+            // A connected-tools fix child's changes reach the checkout only after the user says yes, every time (CW-07).
+            if (plan.record.agent.name === ConnectPolicy.FIX_AGENT)
+              yield* by.ask(ConnectPolicy.mergeAsk({ title: plan.record.title, patterns, diff: plan.diff }))
             yield* by.ask({
               permission: "edit",
               patterns: plan.targets.map((target) => path.relative(ctx.worktree, target)),

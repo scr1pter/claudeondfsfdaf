@@ -35,6 +35,7 @@ import type { ResolvedModel, ReviewModel } from "@/review/model"
 import type { Review } from "@/review/run"
 import type { SessionPrompt } from "@/session/prompt"
 import type { ConnectAdapter } from "../adapter"
+import { ConnectFix } from "../fix"
 import { ConnectReviewPrompt } from "../review-prompt"
 
 // VectorScope as a member of connected tools: the Vector agent asks it for a review in this engine process, on the
@@ -45,6 +46,8 @@ import { ConnectReviewPrompt } from "../review-prompt"
 // and the dollar cap. Then it runs the review with the reviewer's sessions as hidden children of the requester, through
 // the hub's helper handle, and turns the outcome into a typed result. It never posts, never pushes and never picks a
 // model: the order is VectorScope's own (review.json, then `agent.review.model`, then the configured default).
+// A fix (CW-07) is the Vector agent's work until VectorScope has a fix mode: the adapter reads what the review's target
+// changes now and hands the rest to connect/fix.ts.
 
 /** The member id. */
 export const ID = "vectorscope"
@@ -110,6 +113,8 @@ export interface Deps {
 
 const ACTIONS: Connect.Action[] = [
   { id: "review", title: "Review your changes", effects: ["read"], background: false, result: "review" },
+  // The Vector agent makes the fix (here, or in a connect_fix child's worktree) until VectorScope has a fix mode.
+  { id: "fix", title: "Fix chosen findings", effects: ["read", "write"], background: false, result: "fix" },
 ]
 
 const SUMMARY =
@@ -311,8 +316,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
 
     const handle: NonNullable<ConnectAdapter.Adapter["handle"]> = (request, context) =>
       Effect.gen(function* () {
-        if (request.action !== "review")
-          return yield* refusal("unknown", "VectorScope takes reviews through connect; fixes arrive in a later build.")
+        if (request.action === "fix") return yield* fix(request, context)
         if (!context.sessionID)
           return yield* refusal("unavailable", "A VectorScope review through connect needs a session to run in.")
         if (!context.helper)
@@ -457,6 +461,18 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
           ...(context.previous ? { previous: context.previous } : {}),
         })
       })
+
+    // A fix works from the review it names, over what that review's target changes now (the owned-path rule's diff).
+    const fix = Effect.fnUntraced(function* (request: Connect.FixRequest, context: ConnectAdapter.HandoffContext) {
+      if (!context.sessionID)
+        return yield* refusal("unavailable", "A fix through connect needs a session to ask in and to report to.")
+      const source = context.source
+      if (!source?.result || source.request.action !== "review")
+        return yield* refusal("input", `There is no review ${request.run} in this session to fix.`)
+      yield* context.progress({ pass: "fix", message: "Checking what the changes edit" })
+      const scope = yield* changes(git, request.directory, ConnectFix.targetOf(source))
+      return yield* ConnectFix.run({ request, context, source, root: scope.root, changed: scope.changed })
+    })
 
     return { id: ID, owner: "vectorscope", describe, handle } satisfies ConnectAdapter.Adapter
   })

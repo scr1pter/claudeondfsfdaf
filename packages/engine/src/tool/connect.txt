@@ -2,6 +2,7 @@ Hands work to VectorScope, Vector's code reviewer, and returns its result as dat
 
 Actions:
 - review: review the changes. target is uncommitted (the default: the working tree against HEAD, untracked files included), staged, or branch (against its merge base; base names another ref). security true always runs the security pass, false never does. since takes an earlier review's run id of the same target kind, to mark findings fixed, still open or new. max_cost is dollars, greater than 0, and can only lower the cap.
+- fix: fix chosen findings of a review (run, and findings: their ids), only when the user asks for it. It asks the user first, every time. mode here (the default) hands you a brief and you make the fixes yourself; mode worktree has a fix agent make them in an isolated worktree, which reaches the user's files only when merged, and merging asks the user again. Afterwards, review again with since set to the review's run id.
 - findings: a review's findings in full (run; findings narrows them to those ids).
 - status: one run's state (run), or this conversation's recent runs.
 - cancel: stop a run that is going (run).
