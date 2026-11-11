@@ -713,8 +713,11 @@ function keepLink(url: string, label: string | undefined, context: ReplyContext)
 const CODE_SPAN = /`[^`\n]+`/g
 
 /** The [start, end) ranges of the inline code spans in `text`, in order. */
-function codeRanges(text: string) {
-  return Array.from(text.matchAll(CODE_SPAN), (match) => [match.index ?? 0, (match.index ?? 0) + match[0].length])
+function codeRanges(text: string): [start: number, end: number][] {
+  return Array.from(text.matchAll(CODE_SPAN), (match): [number, number] => [
+    match.index ?? 0,
+    (match.index ?? 0) + match[0].length,
+  ])
 }
 
 /**
