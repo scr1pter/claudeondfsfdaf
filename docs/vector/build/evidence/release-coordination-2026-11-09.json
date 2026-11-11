@@ -239,13 +239,32 @@
   "freshCoordinatorCiTriage": {
     "revision": "9aece4c4b7802bf81e2d17deeaf730ee91739260",
     "run": 42759785901,
-    "job": "engine (windows, shard4/12)",
     "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42759785901/job/129642515363",
     "failedCase": "revert handles large mixed batches across chunk boundaries",
     "observed": "30022.83ms under unchanged30000ms timeout, one dangling process killed, then the same fixture initial snapshot.track() yielded empty text and its assertion continued aftertimeout.",
     "qualification": "Failure happened before patch/revert, so it does not demonstrate a batch-revert defect. No write/track race found; initial101filewrites awaited. Exact Git/setup phase that stalled is unknown; no transient-flake claim.",
     "sourceReview": "Snapshot Git failure may return empty text; existing Effect.runPromise test harness has no Bun-timeout abort signal. These observations explain the late empty assertion, not the initiating stall.",
     "nextCheck": "One exact-source focused Windows diagnostic with existing30s timeout and101files/allassertions, bounded setup/Git phase/child-exit tracing. No blind retry, deadline increase or weakened assertion applied.",
-    "status": "unresolved; current coordinator and main release gates remain unpassed"
+    "status": "unresolved; current coordinator and main release gates remain unpassed",
+    "jobId": 129642515363,
+    "jobName": "engine (windows, shard4/12)"
+  },
+  "coordinatorPushVerification20261111": {
+    "revision": "f9773571",
+    "branch": "release-coordination",
+    "normalPush": "succeeded; no hooks disabled or bypassed",
+    "requiredPrePushTypecheck": {
+      "passedPackages": 23,
+      "totalPackages": 23,
+      "cacheHits": 22,
+      "seconds": 185.387
+    },
+    "freshWebsiteTypecheck": {
+      "files": 202,
+      "errors": 0,
+      "warnings": 0,
+      "hints": 184
+    },
+    "scope": "Standard coordinator-worktree push hook; not a Hands checkout Turbo/native build or a full release qualification."
   }
 }
