@@ -87,6 +87,8 @@ bool overlay_driver_hex(std::wstring_view, size_t = 64) noexcept;
 std::optional<OverlayDriverOptions> parse_overlay_driver_options(std::span<const std::wstring>);
 std::optional<OverlayStopRequest> parse_overlay_stop_request(const JsonObject&);
 bool valid_overlay_stop_request(const OverlayStopRequest&) noexcept;
+// Pure style check for the clickable Stop banner; compositor layering does not grant input authority.
+bool valid_overlay_stop_styles(LONG_PTR extended, LONG_PTR style) noexcept;
 // DOM coordinates are only a rounding hint. Posting always uses the independently observed native
 // Stop button rectangle; both of its edges must be within one physical pixel of the hint.
 bool overlay_stop_bounds_match(const WindowsRect& hint, const WindowsRect& observed) noexcept;

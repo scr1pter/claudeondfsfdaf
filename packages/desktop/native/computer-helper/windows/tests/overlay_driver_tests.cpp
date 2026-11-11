@@ -32,6 +32,23 @@ JsonObject wire_request() {
 size_t run_overlay_driver_tests() {
   size_t count = 0; const auto test = [&](const auto& body) { body(); ++count; };
   test([] {
+    for (int flags = 0; flags < 16; ++flags) {
+      const LONG_PTR extended = ((flags & 1) ? static_cast<LONG_PTR>(WS_EX_NOACTIVATE) : LONG_PTR{0}) |
+        ((flags & 2) ? static_cast<LONG_PTR>(WS_EX_TRANSPARENT) : LONG_PTR{0}) |
+        ((flags & 4) ? static_cast<LONG_PTR>(WS_EX_LAYERED) : LONG_PTR{0});
+      const LONG_PTR style = (flags & 8) ? static_cast<LONG_PTR>(WS_CAPTION) : LONG_PTR{0};
+      require(valid_overlay_stop_styles(extended, style) == ((flags & 1) != 0 && (flags & 2) == 0 && (flags & 8) == 0),
+        "overlay-driver.clickable-stop-style-authority-is-independent-of-layering");
+    }
+    for (const LONG_PTR layered : {LONG_PTR{0}, static_cast<LONG_PTR>(WS_EX_LAYERED)}) {
+      const auto extended = static_cast<LONG_PTR>(WS_EX_NOACTIVATE) | layered;
+      require(valid_overlay_stop_styles(extended | WS_EX_TOOLWINDOW, static_cast<LONG_PTR>(WS_POPUP) | WS_VISIBLE),
+        "overlay-driver.clickable-frameless-banner-allows-either-compositor-style");
+      for (const LONG_PTR caption : {static_cast<LONG_PTR>(WS_CAPTION), static_cast<LONG_PTR>(WS_BORDER), static_cast<LONG_PTR>(WS_DLGFRAME)})
+        require(!valid_overlay_stop_styles(extended, caption), "overlay-driver.any-caption-bit-still-refuses-stop");
+    }
+  });
+  test([] {
     const auto parsed = parse_overlay_driver_options(stop_options());
     require(parsed && parsed->mode == OverlayDriverMode::stop && parsed->parent == 42 && parsed->nonce == std::wstring(64, L'a'), "overlay-driver.finite-stop-cli");
     const auto bootstrap = parse_overlay_driver_options(std::vector<std::wstring>{L"--launch-electron", L"--nonce", std::wstring(64, L'b')});

@@ -112,5 +112,42 @@
     }
   ],
   "localLimits": "Serial individual provider-free tests and package typecheck only. No native compile/test, owner input/capture/clipboard, Electron, Playwright or OS permission changes.",
-  "pending": "New candidate hosted native outcomes; cold capture; Windows ARM64 runtime/final packaged verification; actual granted Mac/device checks; signing/notarization; gateway and owner publication gates. Hands remains unversioned/unreleased."
+  "pending": "New candidate hosted native outcomes; cold capture; Windows ARM64 runtime/final packaged verification; actual granted Mac/device checks; signing/notarization; gateway and owner publication gates. Hands remains unversioned/unreleased.",
+  "styleFollowUp": {
+    "parentRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "sourceEvidence": {
+      "electron": "42.11.4",
+      "implementation": "https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.cc#L1229-L1253",
+      "layeredDefault": "https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.h#L309",
+      "fact": "SetIgnoreMouseEvents(false) clears TRANSPARENT and LAYERED, restoring LAYERED only after explicit SetOpacity/SetLayered. The paused production banner becomes clickable and does not call setOpacity.",
+      "correction": "Smoke Stop style proof accepts either LAYERED state; retains NOACTIVATE, rejects TRANSPARENT and all CAPTION bits. No real rendering or opacity change; production click-through overlay guard unchanged.",
+      "qualification": "Source-confirmed mismatch; attribution of the observed runtime rejection requires the new native result."
+    },
+    "tests": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 ./scripts/computer-overlay-smoke-report.test.ts",
+        "passed": 40,
+        "failed": 0,
+        "assertions": 24740,
+        "seconds": 0.46,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174,
+        "seconds": 1.86,
+        "exitCode": 0
+      },
+      {
+        "native": "Actual pure style helper regression covers16 flag combinations, both legitimate layering states with unrelated bits, and partial caption flags; execution pending hosted CI."
+      }
+    ],
+    "unchangedOrdinaryNativeBodies": {
+      "comparison": "601c17d0 to9ad84b3e/current source, normalized LF; identical extracted ordinary functions",
+      "hitSha256": "7a69ee1a61007704814aef58eaa16429054aff1eff610bb84dde730ce3e70c04",
+      "belongsSha256": "9cd50497df5ef8c2f8a16d3a4a7c0b4fe2ba82f5cbfb281afe8d90ae1996f063"
+    }
+  }
 }

@@ -940,3 +940,19 @@ No native operation, input, screenshot, Electron or OS permission change was
 performed on the owner's machine. Local source/report checks and typechecking
 passed; Windows native validation remains hosted-CI-only. No release, signing,
 version, permission or publication gate is waived.
+
+The pinned Electron 42.11.4 implementation revealed a separate Stop-driver
+assumption: [`SetIgnoreMouseEvents(false)`](https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.cc#L1229-L1253)
+clears both `WS_EX_TRANSPARENT` and `WS_EX_LAYERED`, retaining layering only
+after explicit opacity setup. The paused banner uses this normal clickable
+path and has no opacity setter. The native Stop proof now accepts either
+layering state through an actual pure style helper, while still requiring
+`NOACTIVATE`, rejecting `TRANSPARENT` and all caption bits, and retaining
+every identity/currentness/geometry/UIA/input deadline guard. The production
+click-through passthrough/capture-exclusion guard is unchanged and still
+requires its legitimate layering/transparent flags. No rendering or opacity
+is changed to satisfy the test. Native regression covers all 16 style
+combinations and partial caption bits. Local report/source tests passed
+40/19 with 24,740/174 assertions. This is a source-confirmed mismatch; new
+native evidence is required before claiming it caused or fixed a runtime
+rejection.

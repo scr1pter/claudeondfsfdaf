@@ -533,7 +533,7 @@ test("initial Windows window diagnostics preserve predicate order and leave fina
     "WindowFromPoint(point(request))", "!hit", "GetAncestor(hit, GA_ROOT) != request.banner",
     "!GetWindowThreadProcessId(hit, &hit_pid) || hit_pid != request.parent", "GetClassNameW(request.banner, type, 257)",
     "GetWindowLongPtrW(request.banner, GWL_EXSTYLE)", "GetWindowLongPtrW(request.banner, GWL_STYLE)",
-    "(extended & WS_EX_NOACTIVATE) && (extended & WS_EX_LAYERED) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION)",
+    "valid_overlay_stop_styles(extended, style)",
     "windows_desktop_available(observe_windows_desktop())",
   ].map((predicate) => current.indexOf(predicate))
   expect(predicates.every((index) => index >= 0)).toBe(true)
@@ -549,6 +549,10 @@ test("initial Windows window diagnostics preserve predicate order and leave fina
   expect(current.match(/GetWindowLongPtrW\(/g)).toHaveLength(2)
   expect(current.match(/observe_windows_desktop\(/g)).toHaveLength(1)
   expect(current).not.toMatch(/GetTickCount|now_ms|sleep|wait_for|new |make_shared|std::function/)
+  const styles = driver.slice(driver.indexOf("bool valid_overlay_stop_styles("), driver.indexOf("bool valid_overlay_stop_request("))
+  expect(styles).toContain("return (extended & WS_EX_NOACTIVATE) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION);")
+  expect(styles).not.toMatch(/GetWindowLong|SetWindowLong|SetOpacity\s*\(|GetTickCount|now_ms|sleep|wait_for/)
+  expect(current.match(/valid_overlay_stop_styles\(extended, style\)/g)).toHaveLength(1)
   expect(driver).toContain("if (!valid_overlay_stop_request(observed_request)) { stage = Stage::window_current_request; invalid(); }")
   expect(driver.match(/window_current\(observed_request, parent, window, life, &stage\)/g)).toHaveLength(1)
   expect(driver.match(/window_current\(observed_request, parent, window, life\)/g)).toHaveLength(2)

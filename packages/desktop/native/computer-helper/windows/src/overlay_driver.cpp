@@ -197,7 +197,7 @@ bool window_current(const OverlayStopRequest& request, const WindowsOwner& paren
   wchar_t type[257]{}; const auto length = GetClassNameW(request.banner, type, 257);
   if (length <= 0 || length > 256 || std::wstring_view(type, static_cast<size_t>(length)) != L"Chrome_WidgetWin_1") { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_class; return false; }
   const auto extended = GetWindowLongPtrW(request.banner, GWL_EXSTYLE), style = GetWindowLongPtrW(request.banner, GWL_STYLE);
-  if (!((extended & WS_EX_NOACTIVATE) && (extended & WS_EX_LAYERED) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION))) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_styles; return false; }
+  if (!valid_overlay_stop_styles(extended, style)) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_styles; return false; }
   if (!windows_desktop_available(observe_windows_desktop())) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_desktop; return false; }
   return true;
 }
@@ -410,6 +410,12 @@ std::optional<OverlayDriverOptions> parse_overlay_driver_options(std::span<const
   if (arguments.size() == 3 && arguments[0] == L"--launch-electron" && arguments[1] == L"--nonce" && overlay_driver_hex(arguments[2])) return OverlayDriverOptions{OverlayDriverMode::launch_electron, 0, arguments[2]};
   if (arguments.size() != 5 || arguments[0] != L"--overlay-stop" || arguments[1] != L"--parent-pid" || arguments[3] != L"--nonce" || !overlay_driver_hex(arguments[4])) return {};
   const auto parent = decimal(arguments[2], MAXDWORD); if (!parent) return {}; return OverlayDriverOptions{OverlayDriverMode::stop, static_cast<DWORD>(*parent), arguments[4]};
+}
+bool valid_overlay_stop_styles(LONG_PTR extended, LONG_PTR style) noexcept {
+  // Electron 42.11.4 SetIgnoreMouseEvents(false) clears WS_EX_LAYERED unless SetOpacity retained it.
+  // Layering is not click authority: keep the actual nonactivating, clickable and frameless floors.
+  // https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.cc#L1244-L1253
+  return (extended & WS_EX_NOACTIVATE) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION);
 }
 bool valid_overlay_stop_request(const OverlayStopRequest& value) noexcept {
   constexpr std::wstring_view prefix = L"Vector computer smoke ";
