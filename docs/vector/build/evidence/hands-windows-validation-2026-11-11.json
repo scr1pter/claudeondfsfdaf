@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "kind": "hands-windows-validation-continuation",
+  "observedAtUtc": "2026-11-11T18:57:26.516339+00:00",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands",
+  "parentRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
+  "hosted": {
+    "full": {
+      "run": 42764300309,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42764300309",
+      "conclusion": "failure",
+      "checkoutRevision": "546257bc928d6babb275b04be63388e6f154d75c",
+      "headRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
+      "matchingSourceTree": "cf830294f27819c3851ac039e0d59e034ff80c92",
+      "ordinaryRegression": "All16 engine shards, Linux/Windows unit and E2E jobs, and desktop Node engine bundle passed.",
+      "windows": {
+        "job": 129657344650,
+        "x64AndArm64Compilation": "passed",
+        "x64NativeUnitVersionProbes": "passed",
+        "core": {
+          "passed": 30,
+          "skipped": 1,
+          "failed": 0
+        },
+        "isolated": {
+          "passed": 34,
+          "skipped": 10,
+          "failed": 2
+        },
+        "stop": {
+          "ok": false,
+          "reason": "proof_changed",
+          "stage": "window-current",
+          "cause": "driver_failure",
+          "exitCode": 1
+        }
+      },
+      "windowsArm64Runtime": {
+        "job": 129664171875,
+        "conclusion": "skipped"
+      },
+      "macMatrix": {
+        "job": 129662052557,
+        "conclusion": "skipped"
+      },
+      "macBuild": {
+        "job": 129657344630,
+        "conclusion": "success",
+        "qualification": "Build/required grant-free checks passed; native Stop/capture prerequisite exit77 may be an explicit skip, optional failures permit continuation. Interactive native success not certified from metadata."
+      }
+    },
+    "diagnostic": {
+      "run": 42764373615,
+      "job": 129657368869,
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42764373615",
+      "conclusion": "failure",
+      "headRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
+      "x64NativeUnitVersionProbes": "passed",
+      "core": {
+        "passed": 30,
+        "skipped": 1,
+        "failed": 0
+      },
+      "isolated": {
+        "passed": 34,
+        "skipped": 10,
+        "failed": 2
+      },
+      "stop": {
+        "ok": false,
+        "reason": "native_failure",
+        "stage": "stop-belongs",
+        "cause": "core_failure:no_ui_tree",
+        "exitCode": 1
+      }
+    },
+    "capture": {
+      "scenario": "capture-color-patch",
+      "result": "failed",
+      "stage": "capture-window-item-full-cancelled-setup-lt25-rpc-ge50",
+      "nativeCode": "capture_unavailable",
+      "qualification": "Full50ms CreateForWindow ticket expired/cancelled; setup<25ms, RPC>=50ms. No safe fix or root cause proven. No warmup/retry/deadline relaxation applied."
+    },
+    "qualification": "Official job logs and API metadata inspected. Artifact archives not yet locally verified. Optional failed/skipped scenarios are not passes. Smoke-driver proof failure does not establish failure of ordinary app Stop."
+  },
+  "candidate": {
+    "membership": "Smoke-only fresh root and bounded metadata ancestry inside one original50ms actor call; full root and selected security retained. Ordinary hit/belongs unchanged.",
+    "diagnostics": "19 closed first-failure buckets only on initial pre-arm window proof; unchanged final authority/deadline checks.",
+    "nativeTests": "8 additional membership test groups; execution pending hosted CI."
+  },
+  "localChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 ./scripts/computer-overlay-smoke-source.test.ts",
+      "exitCode": 0,
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 4.74
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 ./scripts/computer-overlay-smoke-report.test.ts",
+      "exitCode": 0,
+      "passed": 40,
+      "failed": 0,
+      "assertions": 24737,
+      "seconds": 1.438
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
+      "exitCode": 0
+    }
+  ],
+  "localLimits": "Serial individual provider-free tests and package typecheck only. No native compile/test, owner input/capture/clipboard, Electron, Playwright or OS permission changes.",
+  "pending": "New candidate hosted native outcomes; cold capture; Windows ARM64 runtime/final packaged verification; actual granted Mac/device checks; signing/notarization; gateway and owner publication gates. Hands remains unversioned/unreleased."
+}

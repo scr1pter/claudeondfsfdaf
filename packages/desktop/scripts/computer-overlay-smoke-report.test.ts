@@ -519,6 +519,43 @@ test("Windows driver diagnostic enums match the native allowlists exactly", asyn
   expect(COMPUTER_SMOKE_DRIVER_CAUSES).not.toContain("driver_skip")
 })
 
+test("initial Windows window diagnostics preserve predicate order and leave final posting guards uninstrumented", async () => {
+  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+  const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
+  const current = driver.slice(driver.indexOf("bool window_current("), driver.indexOf("struct StopElement"))
+  expect(current).toContain("OverlayDriverStage* diagnostic = nullptr")
+  const predicates = [
+    "!life->current()", "!windows_owner_current(parent)", "!windows_window_current(expected)",
+    "request.parent_created != parent.process.creation_time", "bounds(request.banner, diagnostic) != request.banner_bounds",
+    "caption(request.banner, diagnostic) != request.title", "GetWindowThreadProcessId(request.banner, &owner) != expected.thread_id",
+    "owner != request.parent", "GetAncestor(request.banner, GA_ROOT) != request.banner", "!IsWindowVisible(request.banner)",
+    "IsIconic(request.banner)", "!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != request.parent",
+    "WindowFromPoint(point(request))", "!hit", "GetAncestor(hit, GA_ROOT) != request.banner",
+    "!GetWindowThreadProcessId(hit, &hit_pid) || hit_pid != request.parent", "GetClassNameW(request.banner, type, 257)",
+    "GetWindowLongPtrW(request.banner, GWL_EXSTYLE)", "GetWindowLongPtrW(request.banner, GWL_STYLE)",
+    "(extended & WS_EX_NOACTIVATE) && (extended & WS_EX_LAYERED) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION)",
+    "windows_desktop_available(observe_windows_desktop())",
+  ].map((predicate) => current.indexOf(predicate))
+  expect(predicates.every((index) => index >= 0)).toBe(true)
+  expect(predicates).toEqual([...predicates].sort((left, right) => left - right))
+  const stages = ["request", "lifetime", "owner", "window", "created", "bounds", "caption", "thread", "pid", "root",
+    "visible", "minimized", "foreground", "point", "point-root", "point-owner", "class", "styles", "desktop"]
+  expect(COMPUTER_SMOKE_DRIVER_STAGES.filter((stage) => stage.startsWith("window-current-"))).toEqual(
+    stages.map((stage) => `window-current-${stage}`),
+  )
+  expect(current.match(/if \(diagnostic\) \*diagnostic = OverlayDriverStage::window_current_[a-z_]+; return false;/g)).toHaveLength(18)
+  expect(current.match(/GetWindowThreadProcessId\(/g)).toHaveLength(3)
+  expect(current.match(/GetAncestor\(/g)).toHaveLength(2)
+  expect(current.match(/GetWindowLongPtrW\(/g)).toHaveLength(2)
+  expect(current.match(/observe_windows_desktop\(/g)).toHaveLength(1)
+  expect(current).not.toMatch(/GetTickCount|now_ms|sleep|wait_for|new |make_shared|std::function/)
+  expect(driver).toContain("if (!valid_overlay_stop_request(observed_request)) { stage = Stage::window_current_request; invalid(); }")
+  expect(driver.match(/window_current\(observed_request, parent, window, life, &stage\)/g)).toHaveLength(1)
+  expect(driver.match(/window_current\(observed_request, parent, window, life\)/g)).toHaveLength(2)
+  expect(driver).toContain("window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50")
+  expect(driver).toContain("!window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50")
+})
+
 describe("fixed real Electron computer smoke reports", () => {
   test("checks fixed banner title separately from delivered Working state and enabled Stop", () => {
     const view = ComputerOverlayPage.bannerView({

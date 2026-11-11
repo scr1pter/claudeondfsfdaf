@@ -6,6 +6,24 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
+**Windows validation, 11 November 2026 (Pacific).** At `601c17d0`, all
+16 engine shards, ordinary Windows/Linux unit and E2E jobs, and the Node
+engine bundle passed [PR CI](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42764300309).
+The native Windows builds and x64 unit/protocol checks passed, but the staged
+Stop proof failed at `window-current` (`proof_changed`). A separate
+[diagnostic run](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42764373615)
+failed later than the old hit search, at `stop-belongs` (`no_ui_tree`). Cold
+capture still failed its original 50 ms ticket. ARM64 runtime and the separate
+macOS matrix were skipped; neither is a runtime pass.
+
+The next candidate replaces only the smoke driver's full per-ancestor
+security queries with fresh, bounded metadata ancestry, reacquiring the actual
+root and retaining full selected/root security. Ordinary `hit` and `belongs`
+remain unchanged. Initial window-proof failures now have closed predicate
+stages; final input guards and deadlines remain unchanged. Local checks passed:
+19 source tests, 40 report tests and desktop typechecking. Actual native results
+remain pending; see the [dated evidence](./evidence/hands-windows-validation-2026-11-11.json).
+
 **Takeover, 9 November 2026 (Pacific).** The owner asked Codex to finish the
 computer-use work after its previous agent ran out of usage. Continue on the
 main-integrated `hands` branch. The four later native diagnostics patches are

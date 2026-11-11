@@ -57,6 +57,7 @@ struct PointFixture {
     backend.security = [this](const UiaElement& value) { ++security_reads; require(value == normalized, "uia-native.overlay-selected-security-only"); operation("security"); return security; };
   }
   UiaElement resolve() { return resolve_uia_overlay_point(root, POINT{15, 15}, backend); }
+  bool member() { return resolve_uia_overlay_membership(root, selected, POINT{15, 15}, backend); }
 };
 template<class Body> void refusal(Body body) {
   try { body(); } catch (const Failure& failure) { require(failure.code == L"no_ui_tree", "uia-native.fixed-refusal"); return; }
@@ -65,6 +66,61 @@ template<class Body> void refusal(Body body) {
 }
 size_t run_uia_native_tests() {
   size_t groups = 0; const auto test = [&](const std::function<void()>& body) { body(); ++groups; };
+  test([] {
+    PointFixture fixture; fixture.backend.point = {}; fixture.backend.normalize = {};
+    for (uint64_t id = 10; id < 5010; ++id) fixture.facts[id] = {101, {static_cast<int>(id)}, WindowsRect{0, 0, 100, 100}};
+    require(fixture.member() && fixture.metadata_reads == 3 && fixture.parent_reads == 1 && fixture.security_reads == 1 &&
+        fixture.points == 0 && fixture.normalizations == 0, "uia-native.overlay-membership-rechecks-ancestry-without-point-or-subtree-search");
+    fixture.facts[2].pid = 202; refusal([&] { fixture.member(); });
+    require(fixture.security_reads == 1, "uia-native.overlay-membership-never-reuses-an-earlier-positive-proof");
+  });
+  test([] {
+    PointFixture fixture; fixture.parents[2] = std::make_shared<WindowsUiaElement>(3); fixture.facts[3] = {101, {3}, WindowsRect{0, 0, 100, 100}};
+    refusal([&] { fixture.member(); }); require(fixture.security_reads == 0, "uia-native.overlay-membership-same-process-other-root-refused");
+    fixture.parents[3] = fixture.root; fixture.facts[3].pid = 202; refusal([&] { fixture.member(); });
+    fixture.facts[3].pid = 101; fixture.facts[3].runtime_id = {1}; refusal([&] { fixture.member(); });
+  });
+  test([] {
+    PointFixture fixture; fixture.parents[2] = fixture.selected; refusal([&] { fixture.member(); });
+    require(fixture.parent_reads == 1 && fixture.security_reads == 0, "uia-native.overlay-membership-cycle-is-bounded");
+    fixture.parents[2] = fixture.root; fixture.equality = false; refusal([&] { fixture.member(); });
+  });
+  test([] {
+    PointFixture fixture; auto cursor = fixture.selected;
+    for (uint64_t id = 3; id < 38; ++id) {
+      const auto parent = std::make_shared<WindowsUiaElement>(id); fixture.parents[cursor->identity] = parent;
+      fixture.facts[id] = {101, {static_cast<int>(id)}, WindowsRect{0, 0, 100, 100}}; cursor = parent;
+    }
+    fixture.parents[cursor->identity] = fixture.root; refusal([&] { fixture.member(); });
+    require(fixture.parent_reads == 32 && fixture.security_reads == 0, "uia-native.overlay-membership-depth-cannot-expand-the-ticket");
+  });
+  test([] {
+    PointFixture fixture; fixture.facts[2].bounds.reset(); refusal([&] { fixture.member(); });
+    fixture.facts[2].bounds = WindowsRect{20, 20, 20, 20}; refusal([&] { fixture.member(); });
+    fixture.facts[2].bounds = fixture.security.bounds; fixture.facts[1].runtime_id.clear(); refusal([&] { fixture.member(); });
+    fixture.facts[1].runtime_id = {1}; fixture.security.password = true; refusal([&] { fixture.member(); });
+    fixture.security = UiaSecurity{}; refusal([&] { fixture.member(); });
+  });
+  test([] {
+    PointFixture fixture; fixture.security.bounds = WindowsRect{10, 10, 21, 20}; refusal([&] { fixture.member(); });
+    fixture.security.bounds = fixture.facts[2].bounds; fixture.security.pid = 202; refusal([&] { fixture.member(); });
+    fixture.security.pid = 101; fixture.security.enabled = false; refusal([&] { fixture.member(); });
+  });
+  test([] {
+    for (const auto late : {"metadata", "parent", "equal", "security"}) {
+      PointFixture fixture; fixture.on = [&](std::string_view operation) { if (operation == late) fixture.elapsed = 50; };
+      refusal([&] { fixture.member(); }); require(fixture.points == 0 && fixture.normalizations == 0, "uia-native.overlay-membership-late-result-has-no-fallback");
+    }
+    PointFixture fixture; fixture.on = [&](std::string_view operation) { if (operation == "parent") fixture.alive = false; };
+    refusal([&] { fixture.member(); }); require(fixture.security_reads == 0, "uia-native.overlay-membership-cancelled-proof-cannot-publish");
+  });
+  test([] {
+    for (const auto failed : {"metadata", "parent", "equal", "security"}) {
+      PointFixture fixture; fixture.on = [&](std::string_view operation) { if (operation == failed) throw Failure{L"no_ui_tree", L"fixture membership unknown"}; };
+      refusal([&] { fixture.member(); });
+    }
+    PointFixture fixture; fixture.backend.metadata = {}; refusal([&] { fixture.member(); });
+  });
   test([] {
     PointFixture fixture;
     // Thousands of unrelated nodes cannot turn a native point lookup into a subtree scan.

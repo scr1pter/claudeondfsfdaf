@@ -85,6 +85,7 @@ struct UiaPointBackend {
   std::function<UiaSecurity(const UiaElement&)> security;
 };
 UiaElement resolve_uia_overlay_point(const UiaElement& root, POINT point, const UiaPointBackend&);
+bool resolve_uia_overlay_membership(const UiaElement& root, const UiaElement& element, POINT point, const UiaPointBackend&);
 struct UiaMenuShortcut { std::vector<std::wstring> path; std::wstring accelerator; std::wstring access; };
 struct UiaObservation {
   WindowsWindow window;
@@ -108,6 +109,7 @@ struct WindowsUiaBackend {
   std::function<UiaElement(const UiaElement&, POINT)> hit;
   // Smoke-driver only; ordinary ui.hittest and pointer guards retain the app-scoped BFS above.
   std::function<UiaElement(const UiaElement&, POINT)> overlay_hit;
+  std::function<bool(const UiaElement&, const WindowsWindow&, POINT)> overlay_belongs;
   std::function<bool(const UiaElement&, const UiaElement&)> equal;
   std::function<bool(const UiaElement&, const WindowsWindow&)> belongs;
   std::function<bool(const UiaElement&, std::wstring_view)> perform;

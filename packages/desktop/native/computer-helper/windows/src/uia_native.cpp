@@ -463,7 +463,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     }
     return {};
   }
-  UiaElement overlay_hit(const UiaElement& root, POINT point) {
+  UiaPointBackend overlay_backend() {
     // Unlike the ordinary app-scoped BFS, this smoke-only path asks UIA for its actual point
     // target. It never searches underneath a foreign result or substitutes a guessed root.
     // https://learn.microsoft.com/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation-elementfrompointbuildcache
@@ -493,7 +493,16 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     backend.parent = [this](const auto& value) { return parent(value); };
     backend.equal = [this](const auto& left, const auto& right) { return equal(left, right); };
     backend.security = [this](const auto& value) { return security(value); };
-    return resolve_uia_overlay_point(root, point, backend);
+    return backend;
+  }
+  UiaElement overlay_hit(const UiaElement& root, POINT point) {
+    return resolve_uia_overlay_point(root, point, overlay_backend());
+  }
+  bool overlay_belongs(const UiaElement& element, const WindowsWindow& window, POINT point) {
+    // Re-observe the actual native window root, including its existing token, handle, owner and
+    // full security checks. This is a new proof inside the caller's one original 50 ms ticket.
+    const auto expected = root(window);
+    return resolve_uia_overlay_membership(expected, element, point, overlay_backend());
   }
   UiaElement hit(const UiaElement& root, POINT point) {
     note(WindowsUiaPhase::hit_setup); struct Node { UiaElement element; size_t depth; };
@@ -621,6 +630,7 @@ WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic
   backend.focused = [native](const auto& root) { return native->call([native, root] { return native->focused(root); }); };
   backend.hit = [native](const auto& root, POINT point) { return native->call([native, root, point] { return native->hit(root, point); }); };
   backend.overlay_hit = [native](const auto& root, POINT point) { return native->call([native, root, point] { return native->overlay_hit(root, point); }); };
+  backend.overlay_belongs = [native](const auto& element, const auto& window, POINT point) { return native->call([native, element, window, point] { return native->overlay_belongs(element, window, point); }); };
   backend.equal = [native](const auto& left, const auto& right) { return native->call([native, left, right] { return native->equal(left, right); }); };
   backend.belongs = [native](const auto& element, const auto& window) { return native->call([native, element, window] { return native->belongs(element, window); }); };
   backend.perform = [native](const auto& element, auto action) { return native->call([native, element, action = std::wstring(action)] { return native->perform(element, action); }); };
@@ -639,34 +649,29 @@ WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic
   return backend;
 }
 
-UiaElement resolve_uia_overlay_point(const UiaElement& root, POINT point, const UiaPointBackend& backend) {
-  if (!root || !backend.current || !backend.point || !backend.normalize || !backend.metadata || !backend.parent || !backend.equal || !backend.security) unavailable();
-  const auto read = [&](const UiaElement& value) {
-    backend.current(); if (!value) unavailable(); const auto state = backend.metadata(value); backend.current();
-    if (!state.pid || state.runtime_id.empty() || state.runtime_id.size() > 64 || !state.bounds || !state.bounds->valid() || !state.bounds->contains(point)) unavailable();
-    return state;
-  };
-  const auto same = [&](const UiaElement& left, const UiaElement& right) {
-    backend.current(); if (!left || !right) unavailable(); const auto result = backend.equal(left, right); backend.current(); return result;
-  };
-  const auto parent = [&](const UiaElement& value) {
-    backend.current(); const auto result = backend.parent(value); backend.current(); return result;
-  };
-  const auto scope = read(root);
-  backend.current(); const auto raw = backend.point(point); backend.current(); const auto raw_state = read(raw);
-  if (raw_state.pid != scope.pid) unavailable();
-  backend.current(); const auto selected = backend.normalize(raw); backend.current(); const auto selected_state = read(selected);
-  if (selected_state.pid != scope.pid) unavailable();
-  // Normalization must preserve the actual point target or its immediate Control View parent.
-  // A same-process result in another window is never sufficient proof of membership.
-  if (same(raw, selected)) { if (raw_state.runtime_id != selected_state.runtime_id) unavailable(); }
-  else if (!same(parent(raw), selected)) unavailable();
+namespace {
+void require_overlay_backend(const UiaElement& root, const UiaPointBackend& backend) {
+  if (!root || !backend.current || !backend.metadata || !backend.parent || !backend.equal || !backend.security) unavailable();
+}
+UiaPointMetadata overlay_metadata(const UiaElement& value, POINT point, const UiaPointBackend& backend) {
+  backend.current(); if (!value) unavailable(); const auto state = backend.metadata(value); backend.current();
+  if (!state.pid || state.runtime_id.empty() || state.runtime_id.size() > 64 || !state.bounds || !state.bounds->valid() || !state.bounds->contains(point)) unavailable();
+  return state;
+}
+bool overlay_equal(const UiaElement& left, const UiaElement& right, const UiaPointBackend& backend) {
+  backend.current(); if (!left || !right) unavailable(); const auto result = backend.equal(left, right); backend.current(); return result;
+}
+UiaElement overlay_parent(const UiaElement& value, const UiaPointBackend& backend) {
+  backend.current(); const auto result = backend.parent(value); backend.current(); return result;
+}
+UiaElement require_overlay_ancestry(const UiaElement& root, const UiaPointMetadata& scope, const UiaElement& selected,
+                                  const UiaPointMetadata& selected_state, POINT point, const UiaPointBackend& backend) {
   auto cursor = selected; auto state = selected_state; std::vector<std::vector<int>> visited; bool reached = false;
   for (size_t depth = 0; cursor && depth < 32; ++depth) {
     backend.current(); if (state.pid != scope.pid || std::find(visited.begin(), visited.end(), state.runtime_id) != visited.end()) unavailable();
     visited.push_back(state.runtime_id);
-    if (state.runtime_id == scope.runtime_id) { if (!same(cursor, root)) unavailable(); reached = true; break; }
-    cursor = parent(cursor); if (!cursor) unavailable(); state = read(cursor);
+    if (state.runtime_id == scope.runtime_id) { if (!overlay_equal(cursor, root, backend)) unavailable(); reached = true; break; }
+    cursor = overlay_parent(cursor, backend); if (!cursor) unavailable(); state = overlay_metadata(cursor, point, backend);
   }
   if (!reached) unavailable();
   // No name, value or document content is requested while membership is still unknown. The full
@@ -675,6 +680,27 @@ UiaElement resolve_uia_overlay_point(const UiaElement& root, POINT point, const 
   if (security.pid != scope.pid || security.password || !security.enabled || !security.bounds || !security.bounds->valid() ||
       security.bounds != selected_state.bounds || !security.bounds->contains(point)) unavailable();
   return selected;
+}
+}
+
+UiaElement resolve_uia_overlay_point(const UiaElement& root, POINT point, const UiaPointBackend& backend) {
+  require_overlay_backend(root, backend); if (!backend.point || !backend.normalize) unavailable();
+  const auto scope = overlay_metadata(root, point, backend);
+  backend.current(); const auto raw = backend.point(point); backend.current(); const auto raw_state = overlay_metadata(raw, point, backend);
+  if (raw_state.pid != scope.pid) unavailable();
+  backend.current(); const auto selected = backend.normalize(raw); backend.current(); const auto selected_state = overlay_metadata(selected, point, backend);
+  if (selected_state.pid != scope.pid) unavailable();
+  // Normalization must preserve the actual point target or its immediate Control View parent.
+  // A same-process result in another window is never sufficient proof of membership.
+  if (overlay_equal(raw, selected, backend)) { if (raw_state.runtime_id != selected_state.runtime_id) unavailable(); }
+  else if (!overlay_equal(overlay_parent(raw, backend), selected, backend)) unavailable();
+  return require_overlay_ancestry(root, scope, selected, selected_state, point, backend);
+}
+
+bool resolve_uia_overlay_membership(const UiaElement& root, const UiaElement& element, POINT point, const UiaPointBackend& backend) {
+  require_overlay_backend(root, backend);
+  const auto scope = overlay_metadata(root, point, backend), selected = overlay_metadata(element, point, backend);
+  static_cast<void>(require_overlay_ancestry(root, scope, element, selected, point, backend)); return true;
 }
 
 std::wstring sanitize_uia(std::wstring_view text, size_t maximum) {

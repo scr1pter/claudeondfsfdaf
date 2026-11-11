@@ -906,3 +906,37 @@ Each item keeps the contract's intent (sections 1.5 K, 2.9, 4.2 D23; INV-C8; E13
    retry, reorder, accept late pixels or extend its 50/750 ms limits to turn the
    test green. Native Stop, cold capture, packaging and owner-device/signing
    gates require their own actual evidence.
+
+## Windows validation continuation — 11 November 2026 (Pacific)
+
+At source `601c17d0da22ca810fad2cd798c994b906e10905`, the full ordinary
+regression passed all 16 engine shards and Windows/Linux unit/E2E jobs. The
+full PR run used synthetic merge `546257bc928d6babb275b04be63388e6f154d75c`;
+its source tree is exactly the head's `cf830294f27819c3851ac039e0d59e034ff80c92`.
+This identifies the tested source, not reproducible build bytes. Native Windows
+x64/ARM64 compilation and x64 unit/version/protocol tests passed. The actual
+staged Stop proof failed at `window-current` in the full run and `stop-belongs`
+in the manual diagnostic. Cold capture also failed. ARM64 runtime and the
+separate macOS matrix were skipped. A successful macOS build job alone does
+not establish interactive Stop/capture: its workflow permits explicit missing-
+grant skips. Full receipts and qualifications are in
+[the dated record](./evidence/hands-windows-validation-2026-11-11.json).
+
+The continuation candidate adds smoke-only `overlay_belongs`: one original
+50 ms actor call reacquires the actual native root using its unchanged token,
+handle, owner and full security validation, then checks fresh metadata ancestry
+to that exact root. Ancestors retain PID/runtime-ID/bounds/cycle/depth checks;
+the selected element retains full security and password checks. Ordinary
+`hit()` and `belongs()` remain unchanged. This removes redundant full pattern
+queries on ancestors in this one smoke path; a runtime improvement is not yet
+proven. Eight new native test groups cover the actual factored guard, but are
+not local native execution evidence.
+
+Initial pre-arm window validation now reports one of 19 additional closed
+failure stages. It preserves query order, short-circuiting and authority
+predicates, stores only on failure and records no observed caption/identifier.
+Final refresh/post checks stay uninstrumented with their original deadlines.
+No native operation, input, screenshot, Electron or OS permission change was
+performed on the owner's machine. Local source/report checks and typechecking
+passed; Windows native validation remains hosted-CI-only. No release, signing,
+version, permission or publication gate is waived.

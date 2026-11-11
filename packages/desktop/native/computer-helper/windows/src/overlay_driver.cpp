@@ -171,17 +171,35 @@ class PrivateReader {
     }
   }
 };
-std::wstring caption(HWND window) { wchar_t text[257]{}; const auto count = GetWindowTextW(window, text, 257); require(count > 0 && count <= 256); return {text, static_cast<size_t>(count)}; }
-WindowsRect bounds(HWND window) { RECT rect{}; require(GetWindowRect(window, &rect) != FALSE); return {rect.left, rect.top, int64_t(rect.right) - rect.left, int64_t(rect.bottom) - rect.top}; }
+std::wstring caption(HWND window, OverlayDriverStage* diagnostic = nullptr) { wchar_t text[257]{}; const auto count = GetWindowTextW(window, text, 257); if (!(count > 0 && count <= 256) && diagnostic) *diagnostic = OverlayDriverStage::window_current_caption; require(count > 0 && count <= 256); return {text, static_cast<size_t>(count)}; }
+WindowsRect bounds(HWND window, OverlayDriverStage* diagnostic = nullptr) { RECT rect{}; const auto observed = GetWindowRect(window, &rect); if (observed == FALSE && diagnostic) *diagnostic = OverlayDriverStage::window_current_bounds; require(observed != FALSE); return {rect.left, rect.top, int64_t(rect.right) - rect.left, int64_t(rect.bottom) - rect.top}; }
 POINT point(const OverlayStopRequest& request) { return {static_cast<LONG>(request.stop_bounds.x + request.stop_bounds.width / 2), static_cast<LONG>(request.stop_bounds.y + request.stop_bounds.height / 2)}; }
-bool window_current(const OverlayStopRequest& request, const WindowsOwner& parent, const WindowsWindow& expected, const std::shared_ptr<Lifetime>& life) {
-  if (!life->current() || !windows_owner_current(parent) || !windows_window_current(expected) || request.parent_created != parent.process.creation_time || bounds(request.banner) != request.banner_bounds || caption(request.banner) != request.title) return false;
-  DWORD owner = 0, foreground = 0; if (GetWindowThreadProcessId(request.banner, &owner) != expected.thread_id || owner != request.parent || GetAncestor(request.banner, GA_ROOT) != request.banner || !IsWindowVisible(request.banner) || IsIconic(request.banner)) return false;
-  if (!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != request.parent) return false;
-  const auto hit = WindowFromPoint(point(request)); DWORD hit_pid = 0; if (!hit || GetAncestor(hit, GA_ROOT) != request.banner || !GetWindowThreadProcessId(hit, &hit_pid) || hit_pid != request.parent) return false;
-  wchar_t type[257]{}; const auto length = GetClassNameW(request.banner, type, 257); if (length <= 0 || length > 256 || std::wstring_view(type, static_cast<size_t>(length)) != L"Chrome_WidgetWin_1") return false;
+bool window_current(const OverlayStopRequest& request, const WindowsOwner& parent, const WindowsWindow& expected, const std::shared_ptr<Lifetime>& life, OverlayDriverStage* diagnostic = nullptr) {
+  // Only the initial pre-arm check supplies diagnostic. Store one closed bucket on its first failed
+  // predicate; final refresh/post checks retain the same queries, short-circuit order and deadline.
+  if (!life->current()) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_lifetime; return false; }
+  if (!windows_owner_current(parent)) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_owner; return false; }
+  if (!windows_window_current(expected)) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_window; return false; }
+  if (request.parent_created != parent.process.creation_time) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_created; return false; }
+  if (bounds(request.banner, diagnostic) != request.banner_bounds) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_bounds; return false; }
+  if (caption(request.banner, diagnostic) != request.title) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_caption; return false; }
+  DWORD owner = 0, foreground = 0;
+  if (GetWindowThreadProcessId(request.banner, &owner) != expected.thread_id) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_thread; return false; }
+  if (owner != request.parent) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_pid; return false; }
+  if (GetAncestor(request.banner, GA_ROOT) != request.banner) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_root; return false; }
+  if (!IsWindowVisible(request.banner)) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_visible; return false; }
+  if (IsIconic(request.banner)) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_minimized; return false; }
+  if (!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != request.parent) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_foreground; return false; }
+  const auto hit = WindowFromPoint(point(request)); DWORD hit_pid = 0;
+  if (!hit) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_point; return false; }
+  if (GetAncestor(hit, GA_ROOT) != request.banner) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_point_root; return false; }
+  if (!GetWindowThreadProcessId(hit, &hit_pid) || hit_pid != request.parent) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_point_owner; return false; }
+  wchar_t type[257]{}; const auto length = GetClassNameW(request.banner, type, 257);
+  if (length <= 0 || length > 256 || std::wstring_view(type, static_cast<size_t>(length)) != L"Chrome_WidgetWin_1") { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_class; return false; }
   const auto extended = GetWindowLongPtrW(request.banner, GWL_EXSTYLE), style = GetWindowLongPtrW(request.banner, GWL_STYLE);
-  return (extended & WS_EX_NOACTIVATE) && (extended & WS_EX_LAYERED) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION) && windows_desktop_available(observe_windows_desktop());
+  if (!((extended & WS_EX_NOACTIVATE) && (extended & WS_EX_LAYERED) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION))) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_styles; return false; }
+  if (!windows_desktop_available(observe_windows_desktop())) { if (diagnostic) *diagnostic = OverlayDriverStage::window_current_desktop; return false; }
+  return true;
 }
 struct StopElement { UiaElement root, element; UiaSecurity security; UiaName name; };
 StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic) {
@@ -219,7 +237,7 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
     if (security.control_type == 50000) {
       stage = OverlayDriverStage::stop_name; const auto name = uia.name(element);
       // The belongs step retains all preceding local button facts in their original short-circuit order.
-      stage = OverlayDriverStage::stop_belongs; require(security.pid == request.parent && security.enabled && !security.password && (!security.value_pattern || security.read_only == true) && (!security.text_pattern || security.text_read_only == true) && security.bounds && security.bounds->width >= 3 && security.bounds->height >= 3 && request.banner_bounds.contains(*security.bounds) && overlay_stop_bounds_match(request.stop_bounds, *security.bounds) && name.complete && name.text == L"Stop" && uia.belongs(element, window));
+      stage = OverlayDriverStage::stop_belongs; require(security.pid == request.parent && security.enabled && !security.password && (!security.value_pattern || security.read_only == true) && (!security.text_pattern || security.text_read_only == true) && security.bounds && security.bounds->width >= 3 && security.bounds->height >= 3 && request.banner_bounds.contains(*security.bounds) && overlay_stop_bounds_match(request.stop_bounds, *security.bounds) && name.complete && name.text == L"Stop" && uia.overlay_belongs && uia.overlay_belongs(element, window, point(request)));
       return {root, element, security, name};
     }
     require(security.pid == request.parent && !security.password); stage = OverlayDriverStage::stop_equal; if (uia.equal(element, root)) break;
@@ -255,7 +273,9 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
   stage = Stage::window_observe; const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
   require(window.hwnd == request->banner && window.surface == request->banner && window.owner.process.pid == options.parent && window.physical_owner.process.pid == options.parent && same_windows_process(window.owner.process, parent.process) && same_windows_process(window.physical_owner.process, parent.process));
-  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage, uia_diagnostic); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current; require(valid_overlay_stop_request(observed_request) && window_current(observed_request, parent, window, life));
+  stage = Stage::stop_element; const auto element = observe_stop(uia, window, *request, stage, uia_diagnostic); auto observed_request = *request; observed_request.stop_bounds = *element.security.bounds; stage = Stage::window_current;
+  if (!valid_overlay_stop_request(observed_request)) { stage = Stage::window_current_request; invalid(); }
+  require(window_current(observed_request, parent, window, life, &stage));
   stage = Stage::quiet; if (!backend.quiet()) throw DriverSkip{L"physical_input"};
   stage = Stage::guardian_ready; require(guardian->ready(), L"guardian_unavailable");
   stage = Stage::reserve; const InputRelease release{InputReleaseKind::mouse_button, 0, 0, false, 0}; const auto ticket = guardian->reserve(release); require(ticket.has_value(), L"guardian_unavailable");

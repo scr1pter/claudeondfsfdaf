@@ -300,28 +300,33 @@ describe("independent overlay source admission", () => {
     const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
     const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
     const resolver = implementation.slice(
-      implementation.indexOf("UiaElement overlay_hit("),
+      implementation.indexOf("UiaPointBackend overlay_backend()"),
       implementation.indexOf("UiaElement hit("),
     )
     expect(resolver.match(/ElementFromPointBuildCache/g)).toHaveLength(1)
     expect(resolver.match(/NormalizeElementBuildCache/g)).toHaveLength(1)
     expect(resolver).toContain("backend.current = current_call")
-    expect(resolver).toContain("resolve_uia_overlay_point(root, point, backend)")
+    expect(resolver).toContain("resolve_uia_overlay_point(root, point, overlay_backend())")
+    expect(resolver).toContain("const auto expected = root(window)")
+    expect(resolver).toContain("resolve_uia_overlay_membership(expected, element, point, overlay_backend())")
     expect(resolver).not.toMatch(
       /native->call|\.wait|sleep|now_ms|GetTickCount|get_CurrentName|get_CurrentValue|GetText/,
     )
     expect(implementation).toContain(
       "backend.overlay_hit = [native](const auto& root, POINT point) { return native->call([native, root, point] { return native->overlay_hit(root, point); }); };",
     )
+    expect(implementation).toContain(
+      "backend.overlay_belongs = [native](const auto& element, const auto& window, POINT point) { return native->call([native, element, window, point] { return native->overlay_belongs(element, window, point); }); };",
+    )
     expect(implementation).toContain("ticket->deadline = now_ms() + 50")
     expect(implementation).toContain("actor_->quarantined = true")
     const guard = implementation.slice(
-      implementation.indexOf("UiaElement resolve_uia_overlay_point("),
+      implementation.indexOf("void require_overlay_backend("),
       implementation.indexOf("std::wstring sanitize_uia("),
     )
     expect(guard).toContain("depth < 32")
     expect(guard).toContain("state.runtime_id == scope.runtime_id")
-    expect(guard).toContain("if (!same(cursor, root)) unavailable()")
+    expect(guard).toContain("if (!overlay_equal(cursor, root, backend)) unavailable()")
     expect(guard).toContain("raw_state.pid != scope.pid")
     expect(guard).toContain("selected_state.pid != scope.pid")
     expect(guard).toContain("security.password")
@@ -332,7 +337,8 @@ describe("independent overlay source admission", () => {
     expect(driver).toContain("element = uia.overlay_hit(root, point(request));")
     expect(driver).not.toContain("element = uia.hit(root, point(request));")
     expect(driver).toContain("GetTickCount64() - started < 50")
-    expect(driver).toContain("uia.belongs(element, window)")
+    expect(driver).toContain("uia.overlay_belongs && uia.overlay_belongs(element, window, point(request))")
+    expect(driver).not.toContain("uia.belongs(element, window)")
   })
   test("admits the actual production overlay, native smoke and fake helper workspace graph", async () => {
     const graph = await computerOverlaySourceGraph(fileURLToPath(new URL("../", import.meta.url)))

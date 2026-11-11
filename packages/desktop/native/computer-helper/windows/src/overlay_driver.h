@@ -30,7 +30,12 @@ enum class OverlayDriverStage : uint8_t {
   token, desktop, ready_write, envelope_read, envelope_shape, request,
   foreground, guardian_create, backend_create, uia_create, uia_available, window_observe,
   stop_element, stop_root, stop_root_retired, stop_root_refused, stop_hit, stop_hit_retired, stop_hit_refused, stop_security,
-  stop_name, stop_belongs, stop_equal, stop_parent, window_current, quiet,
+  stop_name, stop_belongs, stop_equal, stop_parent, window_current,
+  window_current_request, window_current_lifetime, window_current_owner, window_current_window,
+  window_current_created, window_current_bounds, window_current_caption, window_current_thread,
+  window_current_pid, window_current_root, window_current_visible, window_current_minimized,
+  window_current_foreground, window_current_point, window_current_point_root, window_current_point_owner,
+  window_current_class, window_current_styles, window_current_desktop, quiet,
   guardian_ready, reserve, refresh, post, observe_down, retire,
   observe_up, cleanup, uia_root_current, uia_actor_admission, uia_actor_queued, uia_actor_budget,
   uia_prepare_desktop, uia_prepare_create, uia_prepare_interface, uia_prepare_connection, uia_prepare_transaction, uia_prepare_walker,
@@ -43,12 +48,17 @@ enum class OverlayDriverStage : uint8_t {
   uia_actor_current, uia_actor_current_budget, uia_actor_complete, uia_actor_expired, uia_actor_cancelled,
   uia_actor_revoked, uia_actor_com_uninitialized, uia_actor_com_cancellation_unavailable, uia_actor_com_timer_unavailable, uia_actor_com_expired
 };
-inline constexpr std::array<std::wstring_view, 132> overlay_driver_stages{
+inline constexpr std::array<std::wstring_view, 151> overlay_driver_stages{
   L"dpi", L"parent", L"files", L"observe-parent", L"observe-bootstrap", L"isolation",
   L"token", L"desktop", L"ready-write", L"envelope-read", L"envelope-shape", L"request",
   L"foreground", L"guardian-create", L"backend-create", L"uia-create", L"uia-available", L"window-observe",
   L"stop-element", L"stop-root", L"stop-root-retired", L"stop-root-refused", L"stop-hit", L"stop-hit-retired", L"stop-hit-refused", L"stop-security",
-  L"stop-name", L"stop-belongs", L"stop-equal", L"stop-parent", L"window-current", L"quiet",
+  L"stop-name", L"stop-belongs", L"stop-equal", L"stop-parent", L"window-current",
+  L"window-current-request", L"window-current-lifetime", L"window-current-owner", L"window-current-window",
+  L"window-current-created", L"window-current-bounds", L"window-current-caption", L"window-current-thread",
+  L"window-current-pid", L"window-current-root", L"window-current-visible", L"window-current-minimized",
+  L"window-current-foreground", L"window-current-point", L"window-current-point-root", L"window-current-point-owner",
+  L"window-current-class", L"window-current-styles", L"window-current-desktop", L"quiet",
   L"guardian-ready", L"reserve", L"refresh", L"post", L"observe-down", L"retire",
   L"observe-up", L"cleanup", L"uia-root-current", L"uia-actor-admission", L"uia-actor-queued", L"uia-actor-budget",
   L"uia-prepare-desktop", L"uia-prepare-create", L"uia-prepare-interface", L"uia-prepare-connection", L"uia-prepare-transaction", L"uia-prepare-walker",
