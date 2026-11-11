@@ -98,8 +98,11 @@ export const HELPERS = {
 } as const satisfies Record<string, Pick<MemberInput, "id" | "kind" | "title" | "summary" | "reach"> | undefined>
 // `vectorscope` is listed by its adapter, `browser-agent` as the browser tool below.
 
-/** Tools listed under their own member, so the plain tool list does not repeat them. */
-const NAMED_TOOLS = new Set(["research", "browser", "computer", "vector_cloud", "task", "workflow", "skill"])
+/**
+ * Tools listed under their own member, so the plain tool list does not repeat them, and connect's own tool, which is
+ * how members are reached rather than a member.
+ */
+const NAMED_TOOLS = new Set(["research", "browser", "computer", "vector_cloud", "task", "workflow", "skill", "connect"])
 
 const decode = Schema.decodeUnknownOption(Connect.Member)
 

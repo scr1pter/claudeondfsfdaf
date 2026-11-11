@@ -964,12 +964,15 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
   )
     return "mcp"
   // Direct MCP content keeps its stronger hold when the same history also contains delegation.
-  if (commands.includes("mcp") || tools.some((tool) => !LOCAL_TOOLS.has(tool) && !DELEGATION_TOOLS.has(tool)))
+  if (
+    commands.includes("mcp") ||
+    tools.some((tool) => !LOCAL_TOOLS.has(tool) && !DELEGATION_TOOLS.has(tool) && tool !== "connect")
+  )
     return "mcp"
   // A background subagent's report, note up, waiting or interruption arrives as a synthetic note in a user message. A
   // background command's exit note adds nothing, like a foreground command's result.
   if (
-    tools.some((tool) => DELEGATION_TOOLS.has(tool)) ||
+    tools.some((tool) => DELEGATION_TOOLS.has(tool) || tool === "connect") ||
     messages.some((message) =>
       message.parts.some(
         (part) => part.type === "text" && SUBAGENT_NOTES.some((key) => part.metadata?.[key] !== undefined),
