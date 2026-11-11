@@ -1,0 +1,298 @@
+name: Vector everywhere
+
+# The CI lane for the Vector everywhere build (docs/vector/build/vector-everywhere-spec.md, VE-00). Work packages run
+# single test files on the owner's Mac, so every everywhere test file, the typechecks of the packages the build
+# touches and the store tests against a real Redis run here. The lane holds no secrets and reaches no platform: every
+# test uses local fakes on 127.0.0.1.
+#
+# It runs on every push to the vector-everywhere branch, and on pull requests and pushes to main that touch the paths
+# below. One push trigger cannot filter one of its branches by path, so the scope job applies the pull_request paths
+# to pushes to main, and every other job waits for its answer. packages/web/test/everywhere-lane.test.ts holds the
+# lane's shape and runs its two scripts.
+on:
+  push:
+    branches:
+      - vector-everywhere
+      - main
+  pull_request:
+    paths:
+      # The Vector everywhere paths (spec 6.6).
+      - api/_lib/everywhere/**
+      - api/everywhere/**
+      - api/slack/**
+      - api/linear/**
+      - api/jira/**
+      - packages/schema/src/everywhere.ts
+      - packages/schema/src/everywhere-policy.ts
+      - packages/core/src/everywhere/**
+      - packages/core/src/v1/config/everywhere.ts
+      - packages/desktop/src/main/everywhere-*
+      - packages/app/src/components/settings-v2/everywhere*
+      - packages/web/src/pages/everywhere*
+      - packages/web/src/pages/everywhere/**
+      - packages/web/src/pages/docs/everywhere.astro
+      - packages/web/src/components/everywhere/**
+      - packages/web/src/components/marketing/everywhere/**
+      - integrations/slack/**
+      - integrations/jira-forge/**
+      - packages/web/test/**/everywhere*
+      - packages/schema/test/**/everywhere*
+      - packages/core/test/everywhere/**
+      - packages/engine/test/everywhere/**
+      - docs/vector/build/vector-everywhere-*
+      - docs/vector/owner-actions/vector-everywhere-*
+      - .github/workflows/vector-everywhere.yml
+      # The helpers on main that the everywhere code imports.
+      - api/_lib/http.ts
+      - api/_lib/persistent-store.ts
+      - api/_lib/account.ts
+      - api/_lib/cli-token.ts
+      - api/_lib/revocation.ts
+      - api/_lib/codium-switches.ts
+      - packages/desktop/src/main/github-auth.ts
+      - packages/desktop/src/main/github-api.ts
+  workflow_dispatch:
+
+concurrency:
+  # Every run on main keeps its own group, so a cancelled check never marks main's history; the branch and pull
+  # requests cancel their stale runs. Both format() results are non-empty, so the && / || idiom is safe here.
+  group: ${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  scope:
+    name: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      # Commits and trees only: the scope compares two commits by file name.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      # Bun alone, for its YAML parser and globs; nothing is installed.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      # The branch, pull requests (already filtered by GitHub) and manual runs always run. A push to main runs only
+      # when a changed file matches this file's pull_request paths, and runs when the change cannot be listed.
+      - name: Decide whether this run concerns Vector everywhere
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          run=true
+          if [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
+            if changed=$(git diff --name-only --no-renames "$BEFORE" "$AFTER" 2>/dev/null); then
+              run=$(printf '%s\n' "$changed" | bun -e '
+                const lane = Bun.YAML.parse(await Bun.file(".github/workflows/vector-everywhere.yml").text())
+                const globs = lane.on.pull_request.paths.map((pattern) => new Bun.Glob(pattern))
+                const changed = (await Bun.stdin.text()).split("\n").filter(Boolean)
+                console.log(changed.some((file) => globs.some((glob) => glob.match(file))))
+              ')
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Vector everywhere lane runs: $run"
+
+  typecheck:
+    name: typecheck (${{ matrix.name }})
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The hosted API in api/ is checked against the root tsconfig.json, which includes only api/**.
+          - name: api
+            directory: packages/engine
+            command: bun typecheck --project ../../tsconfig.json
+          - name: schema
+            directory: packages/schema
+            command: bun typecheck
+          - name: core
+            directory: packages/core
+            command: bun typecheck
+          - name: engine
+            directory: packages/engine
+            command: bun typecheck
+          - name: desktop
+            directory: packages/desktop
+            command: bun typecheck
+          - name: web
+            directory: packages/web
+            command: bun typecheck
+          - name: app
+            directory: packages/app
+            command: bun typecheck
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Typecheck ${{ matrix.name }}
+        working-directory: ${{ matrix.directory }}
+        run: ${{ matrix.command }}
+
+  tests:
+    name: Vector everywhere tests
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      # The store tests run their atomic paths against a real Redis; locally they skip without VECTOR_TEST_REDIS_URL.
+      valkey:
+        image: valkey/valkey:7.2.14-alpine@sha256:c6c2f0020be34bbf684a53a0ef716ab16ff70295186d4d9f2518435beb7afbff
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@vectordev.ai"
+          git config --global user.name "Vector"
+
+      # The engine and core suites run under their strict network guards, so Vector may not download ripgrep for the
+      # tests that search files: it has to be installed (engine/test/preload.ts).
+      - name: Install ripgrep
+        if: hashFiles('packages/engine/test/everywhere/**', 'packages/core/test/everywhere/**') != ''
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ripgrep
+          fi
+          rg --version
+
+      # The engine, core and app tests import their dependencies' builds, as turbo's ^build does for their suites.
+      - name: Build test dependencies
+        if: hashFiles('packages/engine/test/everywhere/**', 'packages/core/test/everywhere/**', 'packages/app/src/**/everywhere*.test.ts', 'packages/app/src/**/everywhere*.test.tsx') != ''
+        timeout-minutes: 20
+        run: >-
+          GITHUB_ACTIONS=false bun turbo run build --log-order=stream
+          --filter='@vectordevai/engine^...' --filter='@vectordevai/core^...' --filter='@vectordevai/app^...'
+
+      # Desktop tests run as packages/desktop/scripts/test.ts runs them, after the locked Electron runtime is installed.
+      - name: Install the Electron runtime
+        if: hashFiles('packages/desktop/src/main/everywhere-*.test.ts') != ''
+        working-directory: packages/desktop
+        run: bun --no-env-file "$(node -p 'require.resolve("electron/install.js")')"
+
+      # Every tracked test file whose name, or a folder above it, starts with "everywhere", under test/ or packages/,
+      # except end-to-end checks, fixtures and build output. Each file runs in its own Bun process from the package
+      # that owns it (the nearest folder with a package.json or bunfig.toml), with that package's own test flags, so a
+      # crash names its file and one file's module mocks cannot reach the next.
+      - name: Run every Vector everywhere test file
+        timeout-minutes: 40
+        env:
+          VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
+          VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
+        run: |
+          # The tests run as on a developer's computer: engine code reads GITHUB_ACTIONS to act as Vector's GitHub agent.
+          export GITHUB_ACTIONS=false
+          files=$(git ls-files -- 'test/*' 'packages/*' \
+            | grep -E '(^|/)everywhere[^/]*(/.*)?\.test\.tsx?$' \
+            | grep -vE '(^|/)(node_modules|e2e|fixtures?|dist)/' \
+            | LC_ALL=C sort) || true
+          if [ -z "$files" ]; then
+            echo "::error title=Vector everywhere::No everywhere test files found; the picker is broken."
+            exit 1
+          fi
+
+          owner() {
+            local directory
+            directory=$(dirname "$1")
+            while [ "$directory" != "." ]; do
+              if [ -f "$directory/package.json" ] || [ -f "$directory/bunfig.toml" ]; then
+                printf '%s\n' "$directory"
+                return 0
+              fi
+              directory=$(dirname "$directory")
+            done
+            return 1
+          }
+
+          total=0
+          failures=0
+          failed=""
+          while IFS= read -r file; do
+            total=$((total + 1))
+            if ! directory=$(owner "$file"); then
+              echo "::error title=Vector everywhere::No package owns $file"
+              failures=$((failures + 1))
+              failed="$failed$file"$'\n'
+              continue
+            fi
+            target="./${file#"$directory"/}"
+            args=(test --timeout 30000)
+            case "$directory" in
+              # Desktop tests never read a developer's .env files (packages/desktop/scripts/test.ts).
+              packages/desktop) args=(--no-env-file "${args[@]}") ;;
+              # The app's unit and browser-condition suites each run isolated (packages/app/package.json).
+              packages/app)
+                args+=(--isolate)
+                case "$target" in ./test-browser/*) args+=(--conditions=browser) ;; esac
+                ;;
+            esac
+            echo "::group::$file"
+            # The test reads nothing from this loop's list.
+            if (cd "$directory" && bun "${args[@]}" "$target" </dev/null); then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error title=Vector everywhere test failed::$file"
+              failures=$((failures + 1))
+              failed="$failed$file"$'\n'
+            fi
+          done <<EOF
+          $files
+          EOF
+
+          echo "Vector everywhere: $((total - failures))/$total test files passed"
+          if [ "$failures" -gt 0 ]; then
+            printf 'Failed test files:\n%s' "$failed" >&2
+            exit 1
+          fi
+
+      # The repository's own rules for every workflow (a named Ubuntu, among others). The test workflow checks them on
+      # pull requests; this lane also checks them on pushes to the branch.
+      - name: Check the repository's workflow rules
+        if: ${{ !cancelled() }}
+        working-directory: packages/cloud
+        run: bun test --timeout 30000 src/workflow-compliance.test.ts
