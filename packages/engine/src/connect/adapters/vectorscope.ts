@@ -1,8 +1,9 @@
 export * as VectorScopeAdapter from "./vectorscope"
 
+import { createHash } from "node:crypto"
 import { lstat, readFile, realpath } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Context, Effect, Exit, Option, Schema } from "effect"
+import { Cause, Context, Effect, Exit, Option, Schema, Stream } from "effect"
 import { Billing } from "@vectordevai/schema/billing"
 import { Connect } from "@vectordevai/schema/connect"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
@@ -119,12 +120,16 @@ const LINKED = [".vector", ...ConnectPolicy.SETTINGS_PATHS]
 
 const MAX_LIST_BYTES = 64 * 1024 * 1024
 
+// The most the settings files may hold together, as git prints them from the base; past it check 1 fires.
+const MAX_SETTINGS_BYTES = 16 * 1024 * 1024
+
+// The branch state files connect trusts at most at once (one per branch reviewed in this engine process).
+const MAX_TRUSTED_STATES = 200
+
 const isSessionID = Schema.is(SessionID)
 
 /** A model the review would use, as connect checked it without a model call. */
-export interface Checked extends ConnectPolicy.ReviewModel {
-  readonly resolved: ResolvedModel
-}
+export type Checked = ConnectPolicy.ReviewModel
 
 /** Why VectorScope cannot review right now, as a member state. */
 export interface NotReady {
@@ -153,11 +158,13 @@ export interface Scope {
 /**
  * The options connect passes to `executeLocalReview`. It never sets `pr`, `post`, `yes` or `checks`, so nothing is
  * posted, nothing asks `confirm`, and no code under review runs. It asks for VectorScope's largest comment limit, so
- * selection keeps every finding it can, and passes the effective dollar cap as `maxCost`.
+ * selection keeps every finding it can, and passes the effective dollar cap as `maxCost`. `full` (branch reviews only)
+ * makes VectorScope ignore its branch state file, which connect does when it did not see VectorScope write that file.
  */
 export function reviewOptions(input: {
   readonly request: Connect.ReviewRequest
   readonly maxCost?: number
+  readonly full?: boolean
   readonly env: Record<string, string | undefined>
 }): LocalReviewOptions {
   const target = input.request.target
@@ -166,6 +173,7 @@ export function reviewOptions(input: {
     ...(target.kind === "uncommitted" ? { uncommitted: true } : {}),
     ...(target.kind === "staged" ? { staged: true } : {}),
     ...(target.kind === "branch" && target.base !== undefined ? { base: target.base } : {}),
+    ...(target.kind === "branch" && input.full ? { full: true } : {}),
     post: false,
     json: true,
     checks: false,
@@ -196,6 +204,11 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
       Context.add(ModelCatalog.Service, yield* ModelCatalog.Service),
       Context.add(Git.Service, git),
     )
+    // The branch state files connect saw VectorScope write, by path, with a hash of what it wrote. Any other state file
+    // (one written by a model's shell, by `vector review`, or before this engine started) is not trusted: the review
+    // then runs with `full`, so no stored outcome or earlier head that a model could have written picks its result or
+    // its range (I2).
+    const states = new Map<string, string>()
 
     const resolver = Effect.fnUntraced(function* () {
       if (deps.resolveModel) return deps.resolveModel
@@ -234,7 +247,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         local: costKind === "local",
         url: line?.origin || model.api.url || undefined,
       })
-      return { resolved, model: name, role, costKind, sendsTo, fromRepository } satisfies Checked
+      return { model: name, role, costKind, sendsTo, fromRepository } satisfies Checked
     })
 
     // The models a review of `root` would use, in VectorScope's own order, read from the settings in its working tree.
@@ -310,10 +323,15 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         const helper = context.helper
         const say = (pass: string, message: string) => context.progress({ pass, message })
 
-        // Check 1: the settings the reviewed changes may have edited. No model runs when they did.
+        // Check 1: the settings the reviewed changes may have edited. No model runs when they did. It runs again right
+        // before the review and once more after it, since an edit can land while connect waits on a question or while
+        // the review runs (a parallel tool call, a background helper).
         yield* say("settings", "Checking what the changes edit")
-        const scope = yield* changes(git, request.directory, request.target)
-        const edited = ConnectPolicy.editedSettings(scope.settings, scope.links)
+        const settings = Effect.fnUntraced(function* () {
+          const scope = yield* changes(git, request.directory, request.target)
+          return { scope, edited: ConnectPolicy.editedSettings(scope.settings, scope.links) }
+        })
+        const { scope, edited } = yield* settings()
         if (edited.length > 0) return settingsResult(request.target, edited)
 
         // Check 2: the models, the dollar cap, and `connect_model` when a model is priced, has no readable price, or is
@@ -401,14 +419,39 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
           posting: async () => [],
           requirements: (input) => requirements({ files: input.files, personal: personal && !input.shared }),
         }
+        // Check 1 again: nothing may have edited the settings while connect asked or loaded.
+        const before = yield* settings()
+        if (before.edited.length > 0) return settingsResult(request.target, before.edited)
+        // A branch review reads VectorScope's state file only when connect saw VectorScope write it as it is now.
+        const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
+        const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
+        const trusted = statePath !== undefined && stateBefore !== undefined && states.get(statePath) === stateBefore
         yield* say("review", "Reviewing")
         const result = yield* loaded
-          .executeLocalReview(reviewOptions({ request, maxCost: cap.value, env }), local)
+          .executeLocalReview(reviewOptions({ request, maxCost: cap.value, full: !trusted, env }), local)
           .pipe(Effect.provideService(Git.Service, git))
+        if (statePath) {
+          const stateAfter = yield* Effect.promise(() => fingerprint(statePath))
+          states.delete(statePath)
+          // Trusted from here: what VectorScope wrote in this run, or the trusted file it left as it was.
+          if (stateAfter !== undefined && (stateAfter !== stateBefore || trusted)) {
+            states.set(statePath, stateAfter)
+            for (const key of states.keys()) if (states.size > MAX_TRUSTED_STATES) states.delete(key)
+          }
+        }
+        const shown = printed(out)
+        // Check 1 once more: a review whose settings changed while it ran is never shown as VectorScope's result. Its
+        // sessions and cost stay on the result, since they were made and spent.
+        const after = yield* settings().pipe(
+          Effect.map((again) => again.edited),
+          Effect.catch(() => Effect.succeed([...ConnectPolicy.SETTINGS_PATHS])),
+        )
+        if (after.length > 0)
+          return settingsResult(request.target, after, spentOf({ local: result, printed: shown, plan: planned }))
         return resultOf({
           request,
           local: result,
-          printed: printed(out),
+          printed: shown,
           plan: planned,
           scope,
           ...(context.previous ? { previous: context.previous } : {}),
@@ -489,24 +532,65 @@ export function printed(chunks: readonly string[]): { readonly cached: boolean }
   }
 }
 
-function settingsResult(target: Connect.Target, edited: readonly string[]): Connect.Result {
+/** The note a review gets when its settings changed while it ran; its findings are left out. */
+export const SETTINGS_CHANGED_NOTE =
+  "They changed after connect checked them, while the review ran, so what it found is not shown."
+
+/**
+ * The result when check 1 fires: verdict `incomplete`, no findings. `spent` is set when it fired after the review ran,
+ * and keeps what that review made and spent, and where it sent the diff.
+ */
+function settingsResult(target: Connect.Target, edited: readonly string[], spent?: Spent): Connect.Result {
   const shown = edited.slice(0, 5).map((file) => clip(file, 200))
   return {
     state: "completed",
     verdict: "incomplete",
     summary: ConnectFrame.summarize({ verdict: "incomplete", target, findings: [], settingsEdited: true }),
     findings: [],
-    sessions: [],
+    ...(spent?.sendsTo ? { sendsTo: spent.sendsTo } : {}),
+    ...(spent?.cost ? { cost: spent.cost } : {}),
+    sessions: spent ? [...spent.sessions] : [],
     notes: [
       ConnectPolicy.SETTINGS_NOTE,
       clip(
         `Settings the changes edit: ${shown.join(", ")}${edited.length > shown.length ? ` and ${edited.length - shown.length} more` : ""}.`,
         1_000,
       ),
+      ...(spent ? [SETTINGS_CHANGED_NOTE] : []),
     ],
     target,
   }
 }
+
+/** What a review made and spent, and where it sent the diff. */
+export interface Spent {
+  readonly sendsTo?: Connect.SendsTo
+  readonly cost?: Connect.Cost
+  readonly sessions: readonly SessionID[]
+}
+
+/**
+ * What this run made and spent, and where it sent the diff. A stored outcome (cached) or no outcome at all means no
+ * model ran now: no sessions, no cost, and no `sendsTo`, since the diff went nowhere this time (section 3.2).
+ */
+export function spentOf(input: {
+  readonly local: LocalReviewResult
+  readonly printed: { readonly cached: boolean }
+  readonly plan: Pick<Plan, "review" | "triage">
+}): Spent {
+  const outcome = input.local.outcome
+  if (!outcome || input.printed.cached) return { sessions: [] }
+  const sendsTo = widest(input.plan)
+  const cost = costOf(outcome, sendsTo)
+  return {
+    sendsTo,
+    ...(cost ? { cost } : {}),
+    sessions: outcome.sessions.filter(isSessionID).slice(0, Connect.MAX_SESSIONS),
+  }
+}
+
+/** The note a stored outcome gets: this run sent no code anywhere. */
+export const CACHED_NOTE = "Connect sent no code this time: these findings are from that earlier review."
 
 /** The result of a review VectorScope ran (or chose not to run), from what `executeLocalReview` returned. */
 export function resultOf(input: {
@@ -552,18 +636,17 @@ export function resultOf(input: {
     }
   }
 
-  const sendsTo = widest(input.plan)
   const cached = input.printed.cached
+  // A stored outcome: no model ran and no diff went anywhere in this run, so there is no `sendsTo`, cost or session.
+  const { sendsTo, cost, sessions } = spentOf(input)
   const notes: string[] = []
-  if (cached) notes.push(ConnectFindings.cachedNote(outcome.head))
+  if (cached) notes.push(ConnectFindings.cachedNote(outcome.head), CACHED_NOTE)
   const triage = input.plan.triage
-  if (triage && triage.sendsTo !== input.plan.review.sendsTo)
+  if (!cached && triage && triage.sendsTo !== input.plan.review.sendsTo)
     notes.push(
       `The review pass ran on ${input.plan.review.model}, which sent the diff to ${ConnectFrame.describeSendsTo(input.plan.review.sendsTo)}; the triage pass ran on ${triage.model}, which sent it to ${ConnectFrame.describeSendsTo(triage.sendsTo)}.`,
     )
   notes.push(...ConnectFindings.outcomeNotes(outcome))
-  const sessions = cached ? [] : outcome.sessions.filter(isSessionID).slice(0, Connect.MAX_SESSIONS)
-  const cost = cached ? undefined : costOf(outcome, sendsTo)
 
   if (local.exitCode === 2)
     return {
@@ -574,9 +657,9 @@ export function resultOf(input: {
         Connect.MAX_SUMMARY,
       ),
       findings: [],
-      sendsTo,
+      ...(sendsTo ? { sendsTo } : {}),
       ...(cost ? { cost } : {}),
-      sessions,
+      sessions: [...sessions],
       notes: bounded(notes),
       target,
       ...where,
@@ -621,10 +704,10 @@ export function resultOf(input: {
       cached,
     }),
     findings: finished.findings,
-    sendsTo,
+    ...(sendsTo ? { sendsTo } : {}),
     cached,
     ...(cost ? { cost } : {}),
-    sessions,
+    sessions: [...sessions],
     notes: bounded(notes),
     target,
     ...where,
@@ -668,7 +751,8 @@ function bounded(notes: readonly string[]): string[] {
  * from the working tree whatever the target: every path that differs between the target's base and the working tree
  * or the index, every untracked file (ignored ones too, under `.vector` and `.gitattributes`), and the branch's own
  * changes. Renames count on both sides. Settings paths that are links, or lie beneath one, are resolved with realpath
- * (`links`). Any git error refuses, so check 1 never passes on what it could not read.
+ * (`links`). Any git error refuses, so check 1 never passes on what it could not read. Every settings file whose bytes
+ * differ from the base's (`drifted`) counts too, since git's own view of the working tree can be told to look away.
  */
 export const changes = Effect.fnUntraced(function* (git: Git.Interface, directory: string, target: Connect.Target) {
   const fail = (message: string) => refusal("input", message)
@@ -698,13 +782,134 @@ export const changes = Effect.fnUntraced(function* (git: Git.Interface, director
   const changed =
     target.kind === "uncommitted" ? [...worktree, ...untracked] : target.kind === "staged" ? index : committed
   const links = yield* Effect.promise(() => settingsLinks(root))
+  const drift = yield* drifted(git, root, from)
   return {
     root,
     changed: [...new Set(changed)],
-    settings: [...new Set([...worktree, ...index, ...untracked, ...ignored, ...committed])],
+    settings: [...new Set([...worktree, ...index, ...untracked, ...ignored, ...committed, ...drift])],
     links,
   } satisfies Scope
 })
+
+/** A settings file at the base, as a checkout of it would read the file. */
+type BaseFile = { readonly kind: "blob"; readonly bytes: Buffer } | { readonly kind: "missing" | "outside" }
+
+/**
+ * The settings files whose bytes in the working tree, read as the review reads them (through links), are not what the
+ * same file holds at `from`. Raw bytes, so nothing that makes git's own view of the working tree look away hides an
+ * edit: an assume-unchanged or skip-worktree entry, `core.ignoreStat`, a stat setting, or a clean filter (and git
+ * already runs with the fsmonitor off). A file that is there is looked up at `from` under its real path, so a link or
+ * a case-insensitive disk reads the same file on both sides; one that is not there is looked up under its own name,
+ * with git following links inside its tree as a checkout of `from` would. Carriage returns before a line feed are
+ * ignored, so a checkout's line-ending conversion is not an edit. A file present on one side only counts. A file that
+ * leads out of the repository counts only when it did not lead out at `from` too, since the changes cannot edit what
+ * lies there. Anything git cannot answer counts as edited, so check 1 fails closed.
+ */
+export const drifted = Effect.fnUntraced(function* (git: Git.Interface, root: string, from: string) {
+  const files = ConnectPolicy.SETTINGS_PATHS
+  const home = yield* Effect.promise(() => realpath(root).catch(() => undefined))
+  if (!home) return [...files]
+  const outside = (real: string | undefined) => {
+    if (real === undefined) return undefined
+    const relative = path.relative(home, real)
+    return relative.startsWith("..") || path.isAbsolute(relative) ? true : relative === "" ? undefined : relative
+  }
+  const seen = yield* Effect.forEach(files, (file) =>
+    Effect.promise(async () => {
+      const full = path.join(root, file)
+      // As `executeLocalReview` reads it: any error reads as no file.
+      const now = await readFile(full).catch(() => undefined)
+      const where = now === undefined ? undefined : outside(await realpath(full).catch(() => undefined))
+      return { file, full, now, where }
+    }),
+  )
+  // A file that is there and inside the repository is looked up under its real path, without links.
+  const lookup = seen.map((item) => (typeof item.where === "string" ? item.where.replaceAll("\\", "/") : item.file))
+  const result = yield* git.run(["cat-file", "--batch", "--follow-symlinks"], {
+    cwd: root,
+    stdin: Stream.make(new TextEncoder().encode(lookup.map((file) => `${from}:${file}\n`).join(""))),
+    maxOutputBytes: MAX_SETTINGS_BYTES,
+  })
+  const base = result.exitCode === 0 && !result.truncated ? parseBatch(result.stdout, files.length) : undefined
+  if (!base) return [...files]
+  const edited: string[] = []
+  for (const [index, item] of seen.entries()) {
+    const then = base[index]!
+    if (item.now !== undefined && item.where === undefined) edited.push(item.file)
+    else if (then.kind === "blob") {
+      if (item.now === undefined || !sameText(item.now, then.bytes)) edited.push(item.file)
+    } else if (then.kind === "outside") {
+      // Out of the repository at `from`: fine while it still leads out.
+      const now = item.now === undefined ? outside(yield* Effect.promise(() => resolved(item.full))) : item.where
+      if (now !== true) edited.push(item.file)
+    } else if (item.now !== undefined) edited.push(item.file)
+  }
+  return edited
+})
+
+// `git cat-file --batch --follow-symlinks` output, one record per requested object, or undefined when it does not
+// read as that.
+function parseBatch(out: Buffer, count: number): BaseFile[] | undefined {
+  const files: BaseFile[] = []
+  let at = 0
+  for (let item = 0; item < count; item++) {
+    const end = out.indexOf(10, at)
+    if (end < 0) return undefined
+    const header = out.subarray(at, end).toString("utf8")
+    at = end + 1
+    if (header.endsWith(" missing")) {
+      files.push({ kind: "missing" })
+      continue
+    }
+    const fields = header.split(" ")
+    const linked = ["symlink", "dangling", "loop", "notdir"].includes(fields[0]!)
+    if (fields.length !== (linked ? 2 : 3)) return undefined
+    const kind = linked ? fields[0]! : fields[1]!
+    const size = Number(fields.at(-1))
+    if (!Number.isSafeInteger(size) || size < 0 || at + size >= out.length || out[at + size] !== 10) return undefined
+    const body = out.subarray(at, at + size)
+    at += size + 1
+    // A link out of the repository; a dangling or looping link, or a path through a file, reads as no file; so does a
+    // directory or a submodule, which the review cannot read as text either.
+    files.push(kind === "blob" ? { kind: "blob", bytes: body } : { kind: kind === "symlink" ? "outside" : "missing" })
+  }
+  return files
+}
+
+// Where a path leads: its real path, or for a file that is not there, its nearest existing folder's real path joined
+// with the rest.
+async function resolved(full: string): Promise<string | undefined> {
+  const real = await realpath(full).catch(() => undefined)
+  if (real) return real
+  const parent = path.dirname(full)
+  if (parent === full) return undefined
+  const up = await resolved(parent)
+  return up ? path.join(up, path.basename(full)) : undefined
+}
+
+function sameText(a: Buffer, b: Buffer) {
+  if (a.equals(b)) return true
+  const lines = (bytes: Buffer) => bytes.toString("latin1").replaceAll("\r\n", "\n")
+  return lines(a) === lines(b)
+}
+
+/**
+ * VectorScope's state file for the branch checked out at `root`, where `executeLocalReview` keeps it: the git
+ * directory's vector/review/<branch>.json. Undefined on a detached head or when git cannot say.
+ */
+export const stateFile = Effect.fnUntraced(function* (git: Git.Interface, root: string) {
+  const branch = yield* git.branch(root)
+  if (!branch) return undefined
+  const result = yield* git.run(["rev-parse", "--absolute-git-dir"], { cwd: root })
+  const dir = result.exitCode === 0 ? result.text().trim() : ""
+  return dir ? path.join(dir, "vector", "review", `${encodeURIComponent(branch)}.json`) : undefined
+})
+
+/** A hash of a file's bytes; undefined when it cannot be read. */
+export async function fingerprint(file: string): Promise<string | undefined> {
+  const bytes = await readFile(file).catch(() => undefined)
+  return bytes ? createHash("sha256").update(bytes).digest("hex") : undefined
+}
 
 const commitOf = Effect.fnUntraced(function* (git: Git.Interface, root: string, ref: string) {
   if (!ref || ref.startsWith("-")) return undefined

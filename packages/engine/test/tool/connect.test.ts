@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import fs from "node:fs/promises"
 import path from "node:path"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
@@ -353,6 +354,52 @@ describe("offered", () => {
           agent: build,
         })
         expect(list.map((item) => item.id)).not.toContain("connect")
+      }),
+    60_000,
+  )
+
+  // A user's own tool that happens to be named connect (.vector/tool/connect.ts, default export).
+  const customConnect = Effect.gen(function* () {
+    const test = yield* TestInstance
+    const dir = path.join(test.directory, ".vector", "tool")
+    yield* Effect.promise(async () => {
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(
+        path.join(dir, "connect.ts"),
+        "export default { description: 'my own connect tool', args: {}, execute: async () => 'connected' }\n",
+      )
+    })
+  })
+  const offeredTo = Effect.fnUntraced(function* (name: string) {
+    const tools = yield* ToolRegistry.Service
+    const agents = yield* Agent.Service
+    const agent = yield* agents.get(name)
+    if (!agent) throw new Error(`no agent ${name}`)
+    const list = yield* tools.tools({ providerID: ProviderV2.ID.openai, modelID: ModelV2.ID.make("test"), agent })
+    return list.filter((item) => item.id === "connect").map((item) => item.description)
+  })
+
+  registryOff.instance(
+    "with connected tools off, a custom tool named connect is offered to every agent, as before",
+    () =>
+      Effect.gen(function* () {
+        yield* customConnect
+        for (const name of ["build", "plan", "general", "explore"])
+          expect({ name, offered: yield* offeredTo(name) }).toEqual({ name, offered: ["my own connect tool"] })
+      }),
+    60_000,
+  )
+
+  registryOn.instance(
+    "with connected tools on, the built-in connect shadows a custom one, which no agent is offered",
+    () =>
+      Effect.gen(function* () {
+        yield* customConnect
+        const build = yield* offeredTo("build")
+        expect(build).toHaveLength(1)
+        expect(build[0]).toContain("VectorScope")
+        for (const name of ["plan", "general", "explore"])
+          expect({ name, offered: yield* offeredTo(name) }).toEqual({ name, offered: [] })
       }),
     60_000,
   )
@@ -713,7 +760,8 @@ describe("findings, status and cancel", () => {
 describe("memory", () => {
   let counter = 0
   const id = (prefix: string) => `${prefix}_connect_taint_${++counter}`
-  const history = (tools: readonly string[]): SessionV1.WithParts[] => {
+  type Call = string | { readonly tool: string; readonly metadata: Record<string, unknown> }
+  const history = (tools: readonly Call[]): SessionV1.WithParts[] => {
     const sessionID = SessionID.make("ses_connect_taint")
     const user = MessageID.make(id("msg"))
     const assistant = MessageID.make(id("msg"))
@@ -737,31 +785,48 @@ describe("memory", () => {
           providerID: model.providerID,
           time: { created: 2 },
         },
-        parts: tools.map((tool) => ({
-          id: PartID.make(id("prt")),
-          messageID: assistant,
-          sessionID,
-          type: "tool" as const,
-          callID: id("call"),
-          tool,
-          state: {
-            status: "completed" as const,
-            input: {},
-            output: "",
-            title: tool,
-            metadata: {},
-            time: { start: 0, end: 1 },
-          },
-        })),
+        parts: tools.map((call) => {
+          const { tool, metadata } = typeof call === "string" ? { tool: call, metadata: {} } : call
+          return {
+            id: PartID.make(id("prt")),
+            messageID: assistant,
+            sessionID,
+            type: "tool" as const,
+            callID: id("call"),
+            tool,
+            state: {
+              status: "completed" as const,
+              input: {},
+              output: "",
+              title: tool,
+              metadata,
+              time: { start: 0, end: 1 },
+            },
+          }
+        }),
       },
     ]
   }
 
+  // What the built-in tool saves: a review's run under ConnectHub's key, or the action for the other three.
+  const review = { tool: "connect", metadata: { [ConnectHub.METADATA_KEY]: { id: "cr_1" } } }
+  const status = { tool: "connect", metadata: { action: "status" } }
+
   test("a connect call holds memory as a subagent's report, not as MCP", () => {
-    expect(SessionMemory.taint(history(["connect"]))).toBe("subagent")
-    expect(SessionMemory.taint(history(["read", "connect"]))).toBe("subagent")
+    expect(SessionMemory.taint(history([review]))).toBe("subagent")
+    expect(SessionMemory.taint(history(["read", review]))).toBe("subagent")
+    expect(SessionMemory.taint(history([status]))).toBe("subagent")
     expect(SessionMemory.taint(history(["read"]))).toBeUndefined()
     // An MCP tool beside it keeps the stronger hold.
-    expect(SessionMemory.taint(history(["connect", "github_create_issue"]))).toBe("mcp")
+    expect(SessionMemory.taint(history([review, "github_create_issue"]))).toBe("mcp")
+  })
+
+  test("a custom or plugin tool named connect, without the built-in's metadata, is held as an outside tool", () => {
+    expect(SessionMemory.taint(history(["connect"]))).toBe("mcp")
+    expect(SessionMemory.taint(history([{ tool: "connect", metadata: { action: "fetch" } }]))).toBe("mcp")
+    // So a subagent that ran it passes that hold up with its report.
+    expect(SessionMemory.carried(SessionMemory.taint(history(["read", "connect"])))).toEqual(
+      SessionMemory.carried("mcp"),
+    )
   })
 })

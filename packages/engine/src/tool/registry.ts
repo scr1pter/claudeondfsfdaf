@@ -412,7 +412,9 @@ const layer = Layer.effect(
         // The build agent researches as a tool on its own requests unless the user turned that off; the session
         // runtime's size decides the rest when the tool runs.
         if (tool.id === ResearchTool.id) return input.agent.name === "build" && researchSetting !== "off"
-        if (tool.id === ConnectTool.id) return input.agent.name === "build"
+        // Connected tools on: the built-in to build alone, and a custom or plugin tool named connect to nobody.
+        if (tool.id === ConnectTool.id && flags.experimentalConnect)
+          return input.agent.name === "build" && !builtin.custom.includes(tool)
 
         const usePatch =
           input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
