@@ -9,6 +9,7 @@
     "devtools://*",
     "chrome://inspect",
     "chrome://settings/passwords",
+    "chrome://settings/content",
     "chrome://password-manager"
   ],
   "PasswordManagerEnabled": false,
@@ -22,6 +23,8 @@
   "BrowserGuestModeEnabled": false,
   "IncognitoModeAvailability": 1,
   "ExtensionInstallBlocklist": ["*"],
+  "DefaultJavaScriptSetting": 1,
+  "AuthSchemes": "negotiate",
   "DefaultGeolocationSetting": 2,
   "DefaultNotificationsSetting": 2,
   "DefaultSerialGuardSetting": 2,

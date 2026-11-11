@@ -15,7 +15,7 @@ function world(options: { guard?: Partial<GuardView>; paused?: boolean; screen?:
   const activity: number[] = []
   let paused = options.paused ?? false
   const guard: GuardView | undefined = options.guard
-    ? { focusedSecret: async () => undefined, captchas: async () => [], ...options.guard }
+    ? { focusedSecret: async () => undefined, pointedSecret: async () => undefined, captchas: async () => [], ...options.guard }
     : undefined
   const computer = new Computer({
     run: async (file, args, runOptions) => {
@@ -120,6 +120,48 @@ describe("the credential guard", () => {
     expect(
       await w.computer.execute({ action: "drag", path: [{ x: 10, y: 10 }, { x: 200, y: 140 }] }),
     ).toMatchObject({ ok: false, code: "blocked" })
+  })
+
+  test("a paste or a drop into a secret field is refused too: middle click, right click, drag, mouse up", async () => {
+    const asked: string[] = []
+    const w = world({
+      guard: {
+        pointedSecret: async (point) => {
+          asked.push(`${point.x},${point.y}`)
+          return point.x === 300 ? "credential" : undefined
+        },
+      },
+    })
+    await w.computer.execute({ action: "screenshot" })
+    expect(await w.computer.execute({ action: "middle_click", x: 300, y: 120 })).toMatchObject({ ok: false, code: "secure_field", handoff: "credential" })
+    expect(await w.computer.execute({ action: "right_click", x: 300, y: 120 })).toMatchObject({ ok: false, code: "secure_field" })
+    // A drag drops where it ends.
+    expect(await w.computer.execute({ action: "drag", path: [{ x: 10, y: 10 }, { x: 300, y: 140 }] })).toMatchObject({ ok: false, code: "secure_field" })
+    // A mouse up drops at the pointer (xdotool says where it is).
+    expect(await w.computer.execute({ action: "mouse_up" })).toMatchObject({ ok: true })
+    expect(asked.at(-1)).toBe("640,400")
+    expect(w.handoffs).toEqual(["credential", "credential", "credential"])
+    // Nothing was pressed for the refused steps; a plain click is not asked about.
+    expect(w.calls.some((call) => call.args.includes("2"))).toBe(false)
+    const before = asked.length
+    expect(await w.computer.execute({ action: "click", x: 300, y: 120 })).toMatchObject({ ok: true })
+    expect(await w.computer.execute({ action: "middle_click", x: 20, y: 20 })).toMatchObject({ ok: true })
+    expect(asked.length).toBe(before + 1)
+  })
+
+  test("a paste is also refused while the focused field is a secret one, or the guard cannot answer", async () => {
+    const focused = world({ guard: { focusedSecret: async () => "payment_details" } })
+    await focused.computer.execute({ action: "screenshot" })
+    expect(await focused.computer.execute({ action: "middle_click", x: 20, y: 20 })).toMatchObject({ code: "secure_field", handoff: "payment_details" })
+    const failing = world({
+      guard: {
+        pointedSecret: async () => {
+          throw new Error("frame did not answer")
+        },
+      },
+    })
+    await failing.computer.execute({ action: "screenshot" })
+    expect(await failing.computer.execute({ action: "right_click", x: 20, y: 20 })).toMatchObject({ code: "secure_field", handoff: "credential" })
   })
 
   test("with no browser running there is no field to guard", async () => {

@@ -507,6 +507,18 @@ export function typesText(step: Step): boolean {
   return !combo.every((key) => NAVIGATION.has(key) || key === "shift")
 }
 
+/**
+ * Where a pointer step could put text into a field without any typing (what the credential guard checks for pointer
+ * steps): a middle click pastes the selection where it lands, a right click opens a menu with Paste for the field under
+ * it, and a drag, or a mouse up after a mouse down, drops what it carries. "pointer" is the pointer's current position.
+ */
+export function insertsAt(step: Step): Point | "pointer" | undefined {
+  if (step.kind === "click" && step.button !== "left") return step.at
+  if (step.kind === "drag") return step.path[step.path.length - 1]
+  if (step.kind === "up") return "pointer"
+  return undefined
+}
+
 /** The screen points a step presses at (what the CAPTCHA check looks at). */
 export function pressPoints(step: Step): Point[] {
   if (step.kind === "click") return [step.at]

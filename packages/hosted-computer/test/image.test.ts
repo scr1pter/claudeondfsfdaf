@@ -262,6 +262,17 @@ describe("the browser policy", () => {
     expect(policy.DeveloperToolsAvailability).toBeUndefined()
   })
 
+  test("keeps the credential guard's view: scripts always run, and no sign-in prompt the guard cannot see", () => {
+    // The guard's script runs only where scripts do: JavaScript stays on and its settings pages are barred (a path
+    // prefix covers every page under it).
+    expect(policy.DefaultJavaScriptSetting).toBe(1)
+    expect(policy.URLBlocklist).toContain("chrome://settings/content")
+    // The browser's own HTTP sign-in prompt (Basic, Digest, NTLM) has a password field outside every page; Negotiate
+    // never asks for one.
+    const schemes = String(policy.AuthSchemes).split(",").map((scheme) => scheme.trim())
+    expect(schemes).toEqual(["negotiate"])
+  })
+
   test("boot.sh adds the run host it was booted with (a preview's own host) to the blocklist", () => {
     expect(lib).toContain("if (!policy.URLBlocklist.includes(host)) policy.URLBlocklist.push(host)")
   })

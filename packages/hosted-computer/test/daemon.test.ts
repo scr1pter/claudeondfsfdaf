@@ -15,8 +15,10 @@ function answer(patch: Partial<Hosted.HeartbeatAnswer> = {}): Hosted.HeartbeatAn
   return { state: "running", control: "agent", deadline: 10_000_000, browser: true, viewerKey: KEY, ...patch }
 }
 
-function world(answers: (Hosted.HeartbeatAnswer | Error)[]) {
+function world(answers: (Hosted.HeartbeatAnswer | Error)[], options: { browserStart?: () => Promise<void> } = {}) {
   const log: string[] = []
+  /** hostd's own log lines. */
+  const lines: string[] = []
   const reports: Report[] = []
   const viewer: { control: string; key: string }[] = []
   const timers: { ms: number; run: () => void; cancelled: boolean }[] = []
@@ -65,6 +67,7 @@ function world(answers: (Hosted.HeartbeatAnswer | Error)[]) {
       start: async () => {
         browserRunning = true
         log.push("browser start")
+        await options.browserStart?.()
       },
       stop: async () => {
         if (browserRunning) log.push("browser stop")
@@ -99,6 +102,7 @@ function world(answers: (Hosted.HeartbeatAnswer | Error)[]) {
     },
     metrics: { cpu: () => 12, egressBytes: async () => 5000 },
     clock: () => 1_000_000,
+    log: (line) => lines.push(line),
     schedule: (ms, run) => {
       const timer = { ms, run, cancelled: false }
       timers.push(timer)
@@ -106,7 +110,7 @@ function world(answers: (Hosted.HeartbeatAnswer | Error)[]) {
     },
   }
   const daemon = new Daemon(deps)
-  return { daemon, log, reports, viewer, timers, agentExit: () => exit?.() }
+  return { daemon, log, lines, reports, viewer, timers, agentExit: () => exit?.(), browserGone: () => (browserRunning = false) }
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 5))
@@ -133,6 +137,30 @@ describe("the session loop", () => {
     expect(w.log).toContain("browser start")
     await w.daemon.tick()
     expect(w.log).toContain("browser stop")
+  })
+
+  test("a browser that went away is started again without holding up the heartbeat, and a failed start is logged", async () => {
+    let starts = 0
+    let fail: (() => void) | undefined
+    const w = world([answer({ job: { prompt: "p" } }), answer()], {
+      browserStart: () => {
+        starts++
+        if (starts === 1) return Promise.resolve()
+        return new Promise((_resolve, reject) => (fail = () => reject(new Error("Target.setDiscoverTargets timed out"))))
+      },
+    })
+    await w.daemon.tick()
+    expect(starts).toBe(1)
+    // Its guard went down and hostd ended it: the next heartbeat starts it again, and returns while it starts.
+    w.browserGone()
+    await w.daemon.tick()
+    expect(starts).toBe(2)
+    // It counts as running while it starts, so no second one is started.
+    await w.daemon.tick()
+    expect(starts).toBe(2)
+    fail!()
+    await settle()
+    expect(w.lines).toContain("browser did not start")
   })
 
   test("a take-over pauses the agent and stops recording; handing back resumes both", async () => {

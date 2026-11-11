@@ -4,6 +4,7 @@ import {
   BATCH_FAILURE,
   checkRegion,
   imageSize,
+  insertsAt,
   plan,
   pressPoints,
   toStep,
@@ -24,8 +25,9 @@ import { runChecked, type Runner } from "./run"
 /*
  * hostd's action executor (contract WP A54): carries out the agent's computer actions on the virtual display with
  * xdotool and takes screenshots (JPEG, or WebP when asked, at most 1280 wide). Before an action it asks the credential
- * guard: nothing is typed into a password, one-time-code or card field, and nothing is pressed inside a CAPTCHA. Both
- * hand the computer to the person instead. While the person has control (a take-over) every action is refused.
+ * guard: nothing is typed, pasted or dropped into a password, one-time-code or card field, and nothing is pressed inside
+ * a CAPTCHA. Both hand the computer to the person instead. While the person has control (a take-over) every action is
+ * refused.
  */
 
 export type ImageFormat = "jpeg" | "webp"
@@ -39,6 +41,8 @@ export type ActionResult = StepResult | { ok: boolean; action: ToolAction; steps
 /** What the guard answers (BrowserGuard, GUARD_DOWN while the browser runs without its guard, or nothing while no browser runs). */
 export type GuardView = {
   focusedSecret(): Promise<HandoffReason | undefined>
+  /** The kind of secret the field at a display point takes (where a paste or a drop would go), or undefined. */
+  pointedSecret(point: Point): Promise<HandoffReason | undefined>
   captchas(): Promise<Rect[]>
 }
 
@@ -114,14 +118,7 @@ export class Computer {
           return { ok: true, action: input.action, image: dataUrl(image.bytes, format) }
         }
         case "cursor_position": {
-          const result = await runChecked(this.deps.run, BINARIES.xdotool, ["getmouselocation", "--shell"], {
-            env: X_ENV,
-            timeoutMs: STEP_MS,
-          })
-          const text = result.stdout.toString("utf8")
-          const x = Number(/^X=(\d+)$/m.exec(text)?.[1])
-          const y = Number(/^Y=(\d+)$/m.exec(text)?.[1])
-          if (!Number.isFinite(x) || !Number.isFinite(y)) throw new ActionError("failed", "The pointer position could not be read.")
+          const { x, y } = await this.pointer()
           const scale = this.frame?.scale ?? 1
           return { ok: true, action: input.action, point: { x: Math.round(x * scale), y: Math.round(y * scale) } }
         }
@@ -140,6 +137,22 @@ export class Computer {
           if (points.some((point) => inside(point, rects))) {
             this.deps.handoff?.("captcha")
             throw new ActionError("blocked", "That is a CAPTCHA. The person solves CAPTCHAs: hand the computer to them.", "captcha")
+          }
+        }
+        // A paste or a drop puts text into the field under the pointer (and, failing closed, the focused field is asked too).
+        const at = insertsAt(step)
+        if (at) {
+          const point = at === "pointer" ? await this.pointer() : at
+          const secret =
+            (await guard.pointedSecret(point).catch(() => "credential" as const)) ??
+            (await guard.focusedSecret().catch(() => "credential" as const))
+          if (secret) {
+            this.deps.handoff?.(secret)
+            throw new ActionError(
+              "secure_field",
+              "That field takes a password, a one-time code or card details. The person enters these: hand the computer to them.",
+              secret,
+            )
           }
         }
         if (typesText(step)) {
@@ -170,6 +183,19 @@ export class Computer {
         return { ok: false, action: input.action, code: error.code, message: error.message, ...(error.handoff ? { handoff: error.handoff } : {}) }
       return { ok: false, action: input.action, code: "failed", message: "The action could not be carried out." }
     }
+  }
+
+  /** The pointer's position on the display. */
+  private async pointer(): Promise<Point> {
+    const result = await runChecked(this.deps.run, BINARIES.xdotool, ["getmouselocation", "--shell"], {
+      env: X_ENV,
+      timeoutMs: STEP_MS,
+    })
+    const text = result.stdout.toString("utf8")
+    const x = Number(/^X=(\d+)$/m.exec(text)?.[1])
+    const y = Number(/^Y=(\d+)$/m.exec(text)?.[1])
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new ActionError("failed", "The pointer position could not be read.")
+    return { x, y }
   }
 
   private async capture(format: ImageFormat) {

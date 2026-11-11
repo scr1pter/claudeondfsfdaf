@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { request } from "node:http"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { agentCommand, agentEnv, browserCommand, cpuReader, createAgentApi, parseArgs, parseEgressCounter, type ApiDeps } from "../src/hostd"
+import { PassThrough } from "node:stream"
+import { agentCommand, agentEnv, browserCommand, cpuReader, createAgentApi, parseArgs, parseEgressCounter, tiePipe, type ApiDeps } from "../src/hostd"
+import { CdpPipe } from "../src/guard"
 import { GitError } from "../src/git"
 import { HeartbeatError, RunApi, type Transport } from "../src/run-api"
 import { Hosted } from "@vectordevai/schema/hosted"
@@ -70,6 +72,34 @@ describe("the agent and the browser", () => {
     expect(command.some((arg) => arg.startsWith("--remote-debugging-port"))).toBe(false)
     expect(command).not.toContain("--no-sandbox")
     expect(command).not.toContain("--disable-web-security")
+  })
+})
+
+describe("the browser's debugging pipe", () => {
+  test("feeds the guard, and ends the browser once it closes: fd 4 ended or failed, fd 3 failed, or a message too large", () => {
+    const cases: [string, (from: PassThrough, to: PassThrough) => void][] = [
+      ["fd 4 ended", (from) => from.emit("end")],
+      ["fd 4 failed", (from) => from.emit("error", new Error("EIO"))],
+      ["fd 3 failed", (_from, to) => to.emit("error", new Error("EPIPE"))],
+      ["a message too large", (from) => from.emit("data", Buffer.from("x".repeat(65)))],
+    ]
+    for (const [what, close] of cases) {
+      const from = new PassThrough()
+      const to = new PassThrough()
+      const pipe = new CdpPipe(() => {}, { maxMessage: 64 })
+      const events: string[] = []
+      pipe.on((message) => events.push(message.method!))
+      let ended = 0
+      tiePipe(pipe, from, to, () => ended++)
+      from.emit("data", Buffer.from('{"method":"Target.targetCreated","params":{}}\0'))
+      expect(events).toEqual(["Target.targetCreated"])
+      expect({ what, ended }).toEqual({ what, ended: 0 })
+      close(from, to)
+      expect({ what, closed: pipe.closed, ended }).toEqual({ what, closed: true, ended: 1 })
+      // Closing again (the browser's exit closes the pipe too) does not end it twice.
+      pipe.close()
+      expect(ended).toBe(1)
+    }
   })
 })
 

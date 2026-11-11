@@ -291,7 +291,10 @@ export class Daemon {
 
     if (!this.browserAllowed && this.deps.browser.running()) await this.deps.browser.stop()
     else if (this.browserAllowed && this.booted && !this.done && !this.deps.browser.running())
-      await this.deps.browser.start().catch(() => {})
+      // Started again (it exited, or was ended because its guard did not start or went down) without holding up the
+      // heartbeat: a slow start-up can take the guard's whole start-up budget. It counts as running from the moment it is
+      // spawned, so later heartbeats do not start a second one.
+      void this.deps.browser.start().catch(() => this.deps.log?.("browser did not start"))
 
     if (answer.state === "wrapping" && answer.wrapBy !== undefined && !this.wrapping && !this.done) {
       this.wrapping = true

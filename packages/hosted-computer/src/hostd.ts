@@ -206,6 +206,21 @@ class Agent implements AgentControl {
   }
 }
 
+/**
+ * Ties the guard's pipe to the browser's fds: what the browser writes on fd 4 feeds the pipe, and the pipe closes when
+ * either fd ends or fails. Once the pipe has closed (that, or a message too large) the guard is down for good, so `down`
+ * is called: hostd ends a browser that still runs then.
+ */
+export function tiePipe(pipe: CdpPipe, fromBrowser: NodeJS.ReadableStream, toBrowser: NodeJS.WritableStream, down: () => void) {
+  const close = () => pipe.close()
+  fromBrowser.on("data", (chunk: Buffer) => pipe.feed(chunk))
+  fromBrowser.on("end", close)
+  fromBrowser.on("close", close)
+  fromBrowser.on("error", close)
+  toBrowser.on("error", close)
+  pipe.onClose(down)
+}
+
 class Browser implements BrowserControl {
   private child: ChildProcess | undefined
   private guard: BrowserGuard | undefined
@@ -230,9 +245,7 @@ class Browser implements BrowserControl {
     const toBrowser = child.stdio[3] as NodeJS.WritableStream
     const fromBrowser = child.stdio[4] as NodeJS.ReadableStream
     const pipe = new CdpPipe((chunk) => toBrowser.write(chunk))
-    fromBrowser.on("data", (chunk: Buffer) => pipe.feed(chunk))
-    toBrowser.on("error", () => {})
-    fromBrowser.on("error", () => {})
+    // The first commands go out as the browser starts, so they get the guard's start-up budget, not a page's.
     const guard = new BrowserGuard(pipe, this.guardSource)
     const gone = () => {
       if (this.child !== child) return
@@ -243,6 +256,11 @@ class Browser implements BrowserControl {
     }
     child.on("error", gone)
     child.on("exit", gone)
+    // A browser whose guard went down while it runs is not left running without it: it is ended, and the daemon starts
+    // it again, with a fresh guard, on a later heartbeat.
+    tiePipe(pipe, fromBrowser, toBrowser, () => {
+      if (this.child === child) child.kill("SIGKILL")
+    })
     try {
       await guard.start()
     } catch (error) {

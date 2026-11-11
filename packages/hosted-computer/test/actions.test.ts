@@ -5,6 +5,7 @@ import {
   LIMITS,
   TOOL_ACTIONS,
   UNSUPPORTED,
+  insertsAt,
   keysym,
   parseToolInput,
   plan,
@@ -178,5 +179,15 @@ describe("xdotool commands", () => {
     expect(typesText({ kind: "click", button: "left", count: 1, at: { x: 1, y: 1 }, modifiers: [] })).toBe(false)
     expect(pressPoints({ kind: "drag", path: [{ x: 1, y: 2 }, { x: 3, y: 4 }], modifiers: [] })).toEqual([{ x: 1, y: 2 }, { x: 3, y: 4 }])
     expect(pressPoints({ kind: "move", at: { x: 1, y: 1 } })).toEqual([])
+    // Where a pointer step could paste or drop text: a middle or right click where it lands, a drag where it ends, a
+    // mouse up at the pointer.
+    const at = { x: 5, y: 6 }
+    expect(insertsAt({ kind: "click", button: "middle", count: 1, at, modifiers: [] })).toEqual(at)
+    expect(insertsAt({ kind: "click", button: "right", count: 1, at, modifiers: [] })).toEqual(at)
+    expect(insertsAt({ kind: "click", button: "left", count: 2, at, modifiers: [] })).toBeUndefined()
+    expect(insertsAt({ kind: "drag", path: [{ x: 1, y: 2 }, { x: 3, y: 4 }], modifiers: [] })).toEqual({ x: 3, y: 4 })
+    expect(insertsAt({ kind: "up", button: "left" })).toBe("pointer")
+    expect(insertsAt({ kind: "down", button: "left" })).toBeUndefined()
+    expect(insertsAt({ kind: "move", at })).toBeUndefined()
   })
 })
