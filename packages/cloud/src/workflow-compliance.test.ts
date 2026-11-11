@@ -6,7 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { browserCommand, owningDirectory, selectBrowserSpecs, selectUnitTests, unitCommand } from "./codium-ci-tests"
 
-const root = new URL("../../..", import.meta.url).pathname
+const root = fileURLToPath(new URL("../../..", import.meta.url))
 const read = (path: string) => Bun.file(`${root}/${path}`).text()
 
 describe("release workflow supply-chain policy", () => {
@@ -469,7 +469,12 @@ describe("Codium CI lane", () => {
     ])
     // The flags above mirror the packages' own scripts; a change there must reach the picker too.
     const app = (await Bun.file(`${root}/packages/app/package.json`).json()) as { scripts: Record<string, string> }
-    expect(app.scripts["test:unit"]).toContain("--isolate")
+    expect(app.scripts["test:unit"]).toBe("node --test ./scripts/test-unit.test.mjs && node ./scripts/test-unit.mjs")
+    const appUnit = await read("packages/app/scripts/test-unit.mjs")
+    expect(appUnit).toContain(
+      'const argumentsBeforePath = ["test", "--isolate", "--only-failures", "--preload", "./happydom.ts"]',
+    )
+    expect(appUnit).toMatch(/run\("bun",\s*\[\.\.\.argumentsBeforePath,\s*file\],\s*\{\s*cwd:\s*root,/)
     expect(app.scripts["test:browser"]).toContain("--conditions=browser")
     expect(app.scripts["test:e2e"]).toBe("playwright test")
     expect(await read("packages/desktop/scripts/test.ts")).toContain('"--no-env-file", "test"')

@@ -956,3 +956,15 @@ combinations and partial caption bits. Local report/source tests passed
 40/19 with 24,740/174 assertions. This is a source-confirmed mismatch; new
 native evidence is required before claiming it caused or fixed a runtime
 rejection.
+
+The artifacts-only preview at `9ad84b3e` exposed a separate compatibility
+assertion in the cloud package (147 passed, one failed): it expected the app
+manifest's unit-test string itself to contain `--isolate`. Main now delegates
+to the checked Node launcher, whose actual per-file Bun command still carries
+that flag. The compliance test now binds the manifest to the actual launcher
+and its isolate/preload argv and invocation. Existing picked-file commands
+and other assertions stay unchanged. Its existing root URL now uses
+`fileURLToPath` for Windows. The focused compliance case passed (one test,
+15 assertions); all 11 actual launcher behavioral tests and cloud typechecking
+also passed. No production runner or active Codium branch changed. The old
+preview remains failed; this repair requires new hosted packaging evidence.

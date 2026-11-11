@@ -149,5 +149,46 @@
       "hitSha256": "7a69ee1a61007704814aef58eaa16429054aff1eff610bb84dde730ce3e70c04",
       "belongsSha256": "9cd50497df5ef8c2f8a16d3a4a7c0b4fe2ba82f5cbfb281afe8d90ae1996f063"
     }
+  },
+  "packagingPreconditionFollowUp": {
+    "failedRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "run": 43083263709,
+    "job": 130742381047,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43083263709/job/130742381047",
+    "scope": "Explicit unsigned artifacts-only dry_run on hands. No signing/publication/tag creation.",
+    "failedCheck": {
+      "package": "cloud",
+      "passed": 147,
+      "failed": 1,
+      "assertions": 821,
+      "seconds": 3.52,
+      "exitCode": 1
+    },
+    "cause": "Codium workflow-compliance test expected --isolate directly in app manifest test:unit string. Main-integrated app now delegates to Node launcher, whose real Bun argv still uses --isolate.",
+    "repair": "Bind exact manifest wrapper to actual launcher isolate/preload argv and actual Bun per-file invocation; preserve every picker/browser/e2e/desktop assertion. Convert existing test file URL via fileURLToPath for Windows. No production runner or active Codium branch changed.",
+    "localChecks": [
+      {
+        "command": "packages/cloud: bun --no-env-file test --timeout 30000 ./src/workflow-compliance.test.ts --test-name-pattern \"each picked file runs from the package\"",
+        "passed": 1,
+        "filtered": 21,
+        "failed": 0,
+        "assertions": 15,
+        "seconds": 0.111,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/app: node --test ./scripts/test-unit.test.mjs",
+        "passed": 11,
+        "failed": 0,
+        "seconds": 0.1752191,
+        "exitCode": 0,
+        "scope": "Actual launcher behavior through its injected synthetic process seam; no real Bun child, desktop operation or provider call."
+      },
+      {
+        "command": "packages/cloud: bun --no-env-file run typecheck",
+        "exitCode": 0
+      }
+    ],
+    "qualification": "Does not turn the failed old packaging run green; a new exact-source packaging run is needed. Other old-run outcomes remain pending until collected."
   }
 }
