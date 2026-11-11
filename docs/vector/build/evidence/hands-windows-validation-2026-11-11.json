@@ -190,5 +190,69 @@
       }
     ],
     "qualification": "Does not turn the failed old packaging run green; a new exact-source packaging run is needed. Other old-run outcomes remain pending until collected."
+  },
+  "desktopRoutingFixtureFollowUp": {
+    "failedRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "run": 43083263709,
+    "job": 130742381175,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43083263709/job/130742381175",
+    "failedCase": "egress-filter.test.ts: Chromium billing routing expected cancelled for removed model_topup flag; actual canonical behavior was closed.",
+    "contractEvidence": [
+      "billing-navigation.ts handles current model_plan outcomes, defaults unknown account returns to closed.",
+      "billing-navigation.test.ts explicitly covers model_plan=cancelled -> cancelled and model_topup=cancelled -> closed.",
+      "api/_lib/model-plan-account.ts constructs current checkout and upgrade cancellation redirects with model_plan=cancelled.",
+      "api/model-plans/topup.ts returns410 MODEL_TOPUP_REMOVED."
+    ],
+    "repair": "One synthetic input URL now uses the current model_plan=cancelled flag. Existing completed/cancelled/browser expectations, cancellation replies, subframe behavior and no-log assertions unchanged. No production billing/egress code changed.",
+    "localChecks": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./src/main/egress-filter.test.ts",
+        "passed": 64,
+        "failed": 0,
+        "assertions": 118,
+        "seconds": 0.646,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./src/main/billing-navigation.test.ts",
+        "passed": 6,
+        "failed": 0,
+        "assertions": 47,
+        "seconds": 0.05,
+        "exitCode": 0
+      }
+    ],
+    "qualification": "The failed old packaging run remains failed; current-source preview is still required."
+  },
+  "membershipCandidateHostedOutcome": {
+    "headRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "run": 43082767608,
+    "job": 130741686369,
+    "conclusion": "failure",
+    "nativeBuildUnitVersionProbes": "passed",
+    "requiredProtocolLifecycle": {
+      "passed": 30,
+      "skipped": 1,
+      "failed": 0
+    },
+    "stagedBuild": "passed",
+    "isolated": {
+      "passed": 34,
+      "skipped": 10,
+      "failed": 2
+    },
+    "stop": {
+      "ok": false,
+      "reason": "proof_changed",
+      "stage": "window-current-styles",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "capture": {
+      "result": "failed",
+      "stage": "capture-window-item-full-expired-setup-lt25-rpc-ge50",
+      "nativeCode": "capture_unavailable"
+    },
+    "qualification": "Native run progressed beyond membership and other initial window predicates to the source-confirmed style mismatch. Style-corrected source is not covered by this run; repeated successful/ cancelled late CreateForWindow outcomes both remain failed50ms acceptance."
   }
 }

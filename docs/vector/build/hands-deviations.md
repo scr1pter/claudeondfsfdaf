@@ -968,3 +968,21 @@ and other assertions stay unchanged. Its existing root URL now uses
 15 assertions); all 11 actual launcher behavioral tests and cloud typechecking
 also passed. No production runner or active Codium branch changed. The old
 preview remains failed; this repair requires new hosted packaging evidence.
+
+The same old preview also found an egress-filter fixture sending a removed
+`model_topup=cancelled` flag while expecting the current cancellation result.
+The backend now emits `model_plan=cancelled`; canonical billing-navigation
+tests already require the removed top-up flag to close normally. The fixture
+now uses the actual current cancellation URL, retaining every routing,
+cancellation, subframe and logging assertion. No production billing or egress
+code changed. The full named egress and canonical-navigation files passed
+64/6 tests (118/47 assertions) on Windows.
+
+Native diagnostic `43082767608`, job `130741686369`, at `9ad84b3e` passed
+x64 compilation, native unit/version/probes, required protocol/lifecycle and
+the source-bound stage build. Its Stop proof reached `window-current-styles`,
+after the membership and preceding window predicates. This supports the
+rendering-check investigation; the style-corrected source still needs its own
+result. Cold capture again failed (`full-expired-setup-lt25-rpc-ge50`);
+34 isolated checks passed, ten skipped and two failed. The complete run is a
+failure, not a native release pass.
