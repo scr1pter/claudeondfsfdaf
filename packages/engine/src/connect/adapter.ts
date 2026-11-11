@@ -87,11 +87,20 @@ export interface HandoffContext {
    */
   readonly ask: (consent: Connect.Consent) => Effect.Effect<void, Connect.Refusal>
   readonly progress: (update: ProgressUpdate) => Effect.Effect<void>
+  /**
+   * An adapter calls it once every question it asks is behind it and its long work begins (CW-08). A background run's
+   * caller stops waiting here: the run goes on as a background job, a later ask reaches the requester's session rather
+   * than the call, and the end arrives as a note. In the foreground it changes nothing.
+   */
+  readonly working?: () => Effect.Effect<void>
   /** Only the vectorscope adapter receives it, and only when the caller gave the hub prompt calls to build it from. */
   readonly helper?: HelperHandle
   /** What the requester's run has left in dollars; undefined when it has no dollar limit or there is no session. */
   readonly remainingUsd?: number
-  /** Where the requester's run stands, read from the spend guard, for `ConnectPolicy.effectiveCap`. */
+  /**
+   * Where the requester's run stands, read from the spend guard, for `ConnectPolicy.effectiveCap`. A background run may
+   * outlive the turn that started it, so its spend reads as outside the run (`running: false`).
+   */
   readonly spend: ConnectPolicy.RunSpend
   /** For a review with `since`: the earlier run, found in the requester's session and of the same target kind. */
   readonly previous?: Connect.Run

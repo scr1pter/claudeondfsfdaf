@@ -112,7 +112,8 @@ export interface Deps {
 }
 
 const ACTIONS: Connect.Action[] = [
-  { id: "review", title: "Review your changes", effects: ["read"], background: false, result: "review" },
+  // A review can run in the background (CW-08): its questions come first, then the caller stops waiting.
+  { id: "review", title: "Review your changes", effects: ["read"], background: true, result: "review" },
   // The Vector agent makes the fix (here, or in a connect_fix child's worktree) until VectorScope has a fix mode.
   { id: "fix", title: "Fix chosen findings", effects: ["read", "write"], background: false, result: "fix" },
 ]
@@ -430,6 +431,8 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
         const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
         const trusted = statePath !== undefined && stateBefore !== undefined && states.get(statePath) === stateBefore
+        // Every question is behind it: a background run's caller stops waiting here.
+        if (context.working) yield* context.working()
         yield* say("review", "Reviewing")
         const result = yield* loaded
           .executeLocalReview(reviewOptions({ request, maxCost: cap.value, full: !trusted, env }), local)

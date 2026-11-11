@@ -2,10 +2,11 @@ export * as ConnectHub from "./hub"
 
 import { readdir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ConnectFindings } from "@vectordevai/core/connect/findings"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
+import { Database } from "@vectordevai/core/database/database"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
@@ -15,6 +16,7 @@ import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Connect } from "@vectordevai/schema/connect"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Agent } from "@/agent/agent"
+import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -22,10 +24,12 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { MCP } from "@/mcp"
 import { WorkflowLibrary } from "@/orchestration/library"
 import { Permission } from "@/permission"
-import type { SessionID } from "@/session/schema"
+import type { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Skill } from "@/skill"
 import { DesktopTasks } from "@/task/desktop"
+import { TaskNotify } from "@/task/notify"
+import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 // Types only, as everywhere in connect: the hub must stay out of the prompt loop's module graph.
 import type { SessionPrompt } from "@/session/prompt"
 import type { TaskPromptOps } from "@/tool/task"
@@ -33,6 +37,7 @@ import type { Tool } from "@/tool/tool"
 import type { ConnectAdapter } from "./adapter"
 import { ADAPTERS, DEPS as ADAPTER_DEPS } from "./adapters"
 import { ConnectMembers } from "./members"
+import { ConnectNote } from "./note"
 
 // Connected tools' hub: one place where every hand-off starts, is checked, asks, runs, is recorded and ends.
 //
@@ -47,10 +52,16 @@ import { ConnectMembers } from "./members"
 //
 // Results persist with the session: the caller saves `metadata(run)` in the `connect` tool part, and `get`, `runs`,
 // `since` and `fix` find a run there after a restart. Only a `connect` tool part in an assistant message counts: a
-// client can write a synthetic text part with any metadata, so a note carries no run until CW-08 gives notes a form a
-// client cannot write. The in-memory ledger keeps the last 50 runs of each instance as a cache and holds what is
-// running, so a run can be cancelled from anywhere. The hub itself makes no network call and no model call: only
-// adapters do work, through the handle.
+// client can write a synthetic text part with any metadata, so a note never carries a run. The in-memory ledger keeps
+// the last 50 runs of each instance as a cache and holds what is running, so a run can be cancelled from anywhere. The
+// hub itself makes no network call and no model call: only adapters do work, through the handle.
+//
+// A background run (CW-08) is a BackgroundJob of type `connect`, started only through `BackgroundJob.start`, so it
+// lives in the instance's job registry and outlives the tool call: a settings reload waits for it, and deleting the
+// session stops it. Its caller waits until the adapter's questions are behind it (`working`) or the run ends. A run
+// that ended by then is the caller's to report; any other is written into its tool part when it ends, and reported
+// once through TaskNotify as a `connect` note that names the run (ConnectNote). Its cap is worked out as outside the
+// requester's run, since it may outlive the turn, and a run stopped on its budget starts none.
 
 /** The most runs the in-memory ledger keeps per instance. Runs still going are never dropped. */
 export const LEDGER_SIZE = 50
@@ -69,6 +80,8 @@ export const HELPER_AGENTS: Readonly<Record<string, ReadonlySet<string>>> = {
 export const MAX_SCAN = 2_000_000
 /** What a run saved in a session reads as when it never ended there: Vector stopped while it was going. */
 export const STOPPED_SUMMARY = "Vector stopped before this hand-off ended."
+/** The BackgroundJob type of a background run. Its job id is the run id. */
+export const JOB_TYPE = "connect"
 
 /** What the caller of a hand-off supplies; the hub adds the run id and the request id. */
 export type StartRequest =
@@ -92,6 +105,11 @@ export interface Call {
   readonly touches?: readonly string[]
   /** For a fix in an isolated worktree: starts the hidden connect_fix child through the task tool (CW-07). */
   readonly launch?: ConnectAdapter.Launcher
+  /**
+   * The tool call's message and call ids. A background run that outlives the call is written into that part when it
+   * ends, and its note is dropped once that message is gone.
+   */
+  readonly part?: { readonly messageID: MessageID; readonly callID: string }
 }
 
 export interface StartInput {
@@ -102,7 +120,8 @@ export interface StartInput {
 export interface Interface {
   /**
    * Starts a hand-off and waits for it. It never fails: a refusal, a failure, a timeout or a cancel ends the run with
-   * that result. Background runs arrive with CW-08 and are refused until then.
+   * that result. A background run returns still running once its adapter's questions are behind it; it then reports
+   * once, as a note to the requester's session, when it ends.
    */
   readonly run: (input: StartInput) => Effect.Effect<Connect.Run>
   /** Cancels a run that is going. With `sessionID`, only that session's own runs. False when there was none. */
@@ -132,7 +151,8 @@ export function metadata(run: Connect.Run): Record<string, unknown> {
 
 /**
  * The run a stored part carries: only a `connect` tool part. A text part, synthetic or not, carries none, because a
- * client can write one with any metadata. A run the schema does not accept is no run.
+ * client can write one with any metadata; a connect note only names its run. A run the schema does not accept is no
+ * run.
  */
 export function fromPart(part: SessionV1.Part): Connect.Run | undefined {
   if (part.type !== "tool" || part.tool !== "connect" || !("metadata" in part.state)) return undefined
@@ -212,6 +232,12 @@ interface Entry {
   readonly asked: Set<string>
   readonly controller: AbortController
   readonly done: Deferred.Deferred<Connect.Run>
+  /** The adapter's questions are behind it and its long work begins (`working`). */
+  readonly working: Deferred.Deferred<void>
+  /** For a background run: whether its caller stopped waiting before it ended, so its end is owed as a note. */
+  readonly owed: Deferred.Deferred<boolean>
+  /** The caller stopped waiting: asks go to the requester's session, updates stop, and the end arrives as a note. */
+  detached?: boolean
   fiber?: Fiber.Fiber<Connect.Result, Connect.Refusal>
   stop?: Stop
 }
@@ -248,6 +274,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const mcp = yield* MCP.Service
       const library = yield* WorkflowLibrary.Service
       const desktop = yield* DesktopTasks.Service
+      const background = yield* BackgroundJob.Service
+      const notify = yield* TaskNotify.Service
+      const database = yield* Database.Service
+      // Where a background run's tool-part write runs: the hub's own scope, so nothing waits on it.
+      const scope = yield* Scope.Scope
       const adapters = yield* Effect.all(factories)
       const byID = new Map(adapters.map((adapter) => [adapter.id, adapter]))
 
@@ -261,7 +292,9 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         yield* events
           .publish(Connect.Event.RunUpdated, { ...(sessionID ? { sessionID } : {}), run: entry.run })
           .pipe(Effect.catchCause((cause) => Effect.logWarning("connect.run.updated was not published", { cause })))
-        if (entry.call.update) yield* entry.call.update(entry.run).pipe(Effect.catchCause(() => Effect.void))
+        // A caller that stopped waiting has nothing left to stream into.
+        if (entry.call.update && !entry.detached)
+          yield* entry.call.update(entry.run).pipe(Effect.catchCause(() => Effect.void))
       })
 
       // Runs recorded in a session since the user last wrote, newest first, read without loading the whole history.
@@ -421,7 +454,8 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               ...(checked.diff !== undefined ? { diff: checked.diff } : {}),
             },
           }
-          const call = entry.call.ask
+          // Once a background run's caller stopped waiting, its call is over: the requester's session is asked instead.
+          const call = entry.detached ? undefined : entry.call.ask
           const exit = yield* (
             call
               ? call(ask)
@@ -519,8 +553,6 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const request = entry.run.request
         const requester = request.requester
         if (!flags.experimentalConnect) return yield* refusal("not-allowed", OFF)
-        if (request.background)
-          return yield* refusal("input", "Background hand-offs are not available yet. Run it in the foreground.")
         const session = requester.sessionID
           ? yield* sessions.get(requester.sessionID).pipe(Effect.orElseSucceed(() => undefined))
           : undefined
@@ -554,6 +586,25 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         if (!narrowed.ok) return yield* narrowed.refusal
         if (Option.isNone(decodeMember(member)))
           return yield* refusal("unavailable", `${request.to} described itself in a shape connect does not accept.`)
+        // Only an action the member declares able to run in the background goes there, and it reports to a session
+        // through the prompt calls its caller lent. A run stopped on its budget starts none, before any question.
+        if (request.background) {
+          if (!action.background)
+            return yield* refusal(
+              "input",
+              `${member.title} cannot run ${request.action} in the background. Run it in the foreground.`,
+            )
+          if (!requester.sessionID || !entry.call.promptOps)
+            return yield* refusal(
+              "unavailable",
+              "A background hand-off reports to its session as a note, and this one has no session to report to.",
+            )
+          if ((yield* spendOf(requester.sessionID)).stopped)
+            return yield* refusal(
+              "budget",
+              "This run stopped on its budget, so connect did not start a background hand-off.",
+            )
+        }
         // Vector Local governs every member here as in the registry: one that runs in a cloud, or sends code past this
         // computer and the listed model servers, is off whatever it says of itself.
         const ready = ConnectMembers.gate(member, (yield* config.localPolicy()).enabled)
@@ -593,7 +644,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               : `Fix findings from ${request.run} with ${member.title}.`,
           ...(member.sendsTo ? { sendsTo: member.sendsTo } : {}),
         })
-        const spend = yield* spendOf(requester.sessionID)
+        const read = yield* spendOf(requester.sessionID)
+        // A background run may outlive the turn that started it, so it is capped as a review outside the run: at what
+        // the run has left (guard.snapshot), or $0.50 when it has no dollar limit.
+        const spend: ConnectPolicy.RunSpend = request.background ? { ...read, running: false } : read
         // What the requester already had, so the helper handle reaches only the sessions this run makes.
         entry.earlier = new Set(
           requester.sessionID ? (yield* sessions.children(requester.sessionID)).map((child) => child.id) : [],
@@ -609,6 +663,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           abort: entry.controller.signal,
           ask,
           progress: (update) => progress(entry, update),
+          working: () => Deferred.succeed(entry.working, undefined).pipe(Effect.asVoid),
           ...(ops && HELPER_MEMBERS.has(adapter.id) ? { helper: helperFor(entry, ops, adapter.id) } : {}),
           ...(remainingUsd !== undefined ? { remainingUsd } : {}),
           spend,
@@ -726,6 +781,8 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           asked: new Set(),
           controller: new AbortController(),
           done: yield* Deferred.make<Connect.Run>(),
+          working: yield* Deferred.make<void>(),
+          owed: yield* Deferred.make<boolean>(),
         }
         remember(state, entry)
         yield* publish(entry)
@@ -739,6 +796,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           return yield* admission.handle(request, admission.context)
         }).pipe(Effect.onExit((exit) => finish(entry, exit)))
 
+        if (request.background) return yield* detach(entry, work)
         const fiber = yield* Effect.forkChild(work)
         entry.fiber = fiber
         const minutes = request.budget?.timeoutMinutes
@@ -750,6 +808,92 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         ])
         if (outcome) yield* stopRun(entry, outcome)
         return yield* Deferred.await(entry.done)
+      })
+
+      // A background run: its work runs as a `connect` BackgroundJob, so it outlives the tool call. The caller waits
+      // until the adapter's questions are behind it, the run ends, or the caller stops (which cancels the run). Which
+      // of the caller and the note reports the end is decided in one step, so it is reported exactly once.
+      const detach = (entry: Entry, work: Effect.Effect<Connect.Result, Connect.Refusal>) =>
+        Effect.gen(function* () {
+          const request = entry.run.request
+          const minutes = request.budget?.timeoutMinutes
+          // Stopping the job (deleting its session, say) cancels the run, and the job ends only once the run did.
+          const job = Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(work)
+            entry.fiber = fiber
+            const outcome = yield* Effect.raceAll([
+              Fiber.await(fiber).pipe(Effect.as<Stop | undefined>(undefined)),
+              ...(minutes
+                ? [Effect.sleep(Duration.minutes(minutes)).pipe(Effect.as<Stop | undefined>("timeout"))]
+                : []),
+            ])
+            if (outcome) yield* stopRun(entry, outcome)
+            return (yield* Deferred.await(entry.done)).result?.summary ?? ""
+          }).pipe(Effect.onInterrupt(() => unstarted(entry)))
+          yield* background
+            .start({
+              id: entry.run.id,
+              type: JOB_TYPE,
+              title: `VectorScope ${request.action}`,
+              metadata: {
+                parentSessionId: request.requester.sessionID,
+                background: true,
+                runID: entry.run.id,
+                member: request.to,
+                action: request.action,
+              },
+              promotable: false,
+              onComplete: (info) => ended(entry, info),
+              run: job,
+            })
+            .pipe(Effect.onInterrupt(() => unstarted(entry)))
+          const signal = entry.call.abort
+          const waited = yield* Effect.raceAll([
+            Deferred.await(entry.done).pipe(Effect.as<"ended" | "working" | "caller">("ended")),
+            Deferred.await(entry.working).pipe(Effect.as<"ended" | "working" | "caller">("working")),
+            ...(signal ? [aborted(signal).pipe(Effect.as<"ended" | "working" | "caller">("caller"))] : []),
+          ]).pipe(Effect.onInterrupt(() => stopRun(entry, "caller")))
+          if (waited === "caller") yield* stopRun(entry, "caller")
+          const owed = waited !== "caller" && entry.run.status !== "done"
+          if (owed) entry.detached = true
+          yield* Deferred.succeed(entry.owed, owed)
+          return owed ? entry.run : yield* Deferred.await(entry.done)
+        }).pipe(Effect.ensuring(Deferred.succeed(entry.owed, false)))
+
+      // A background job stopped before or while its run went: the run is cancelled, and ends here even when its work
+      // never started (the job registry was closing).
+      const unstarted = (entry: Entry) =>
+        entry.fiber
+          ? stopRun(entry, "cancelled")
+          : Effect.suspend(() => {
+              entry.stop ??= "cancelled"
+              entry.controller.abort()
+              return entry.run.status === "done" ? Effect.void : finish(entry, Exit.interrupt())
+            })
+
+      // A background run ended. One its caller already reported owes nothing; one Vector stopped while going away is
+      // lost, as a restart loses it, and its part reads as cut off. Any other is written into its tool part, the only
+      // place a run is read back from, and reported once through TaskNotify.
+      const ended = Effect.fnUntraced(function* (entry: Entry, info: BackgroundJob.Info) {
+        if (!(yield* Deferred.await(entry.owed)) || info.status === "interrupted") return
+        const run = entry.run
+        const sessionID = run.request.requester.sessionID
+        const part = entry.call.part
+        if (part)
+          yield* SubagentLifecycle.patchPart({
+            sessions,
+            messageID: part.messageID,
+            callID: part.callID,
+            patch: metadata(run),
+          }).pipe(Effect.provideService(Database.Service, database), Effect.forkIn(scope, { startImmediately: true }))
+        const ops = entry.call.promptOps
+        if (!sessionID || !ops) return
+        yield* notify.enqueue({
+          parentID: sessionID,
+          note: ConnectNote.note(run, part?.messageID),
+          ops,
+          agent: run.request.requester.agent ?? (yield* agents.defaultAgent()),
+        })
       })
 
       const members: Interface["members"] = Effect.fn("ConnectHub.members")(function* (input) {
@@ -802,7 +946,8 @@ export const layer = layerWith(ADAPTERS)
 // WorkflowRuns and TaskManager), so the registry depending on the hub adds no service it did not build before. The hub
 // never depends on SessionPrompt or the registry: the helper handle is built from the prompt calls a caller lends it.
 // The adapters' own services (connect/adapters `DEPS`: the review's provider, model, git and Brain services) join
-// these in `node`; none of them reaches the prompt loop either.
+// these in `node`; none of them reaches the prompt loop either. BackgroundJob and TaskNotify (background runs, CW-08)
+// are in the registry's graph too, through the task tool; Database is the tool-part write's.
 /** The hub's own dependencies, without its adapters'. */
 export const DEPS = [
   RuntimeFlags.node,
@@ -816,6 +961,9 @@ export const DEPS = [
   MCP.node,
   WorkflowLibrary.node,
   DesktopTasks.node,
+  BackgroundJob.node,
+  TaskNotify.node,
+  Database.node,
 ] as const
 
 export const node = LayerNode.make({ service: Service, layer, deps: [...DEPS, ...ADAPTER_DEPS] })

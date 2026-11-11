@@ -26,7 +26,8 @@ import DESCRIPTION from "./connect.txt"
 // this call's `ctx.ask`), the run record and the events. A review's run is saved in this call's metadata
 // (`ConnectHub.metadata`), so `since`, `findings` and `status` find it again after a restart. The other actions save
 // no run, so a later request's cap never counts an earlier review again. What a reviewer wrote reaches the model only
-// inside the untrusted block `ConnectFrame` builds. Foreground only until CW-08.
+// inside the untrusted block `ConnectFrame` builds. A review with `background` (CW-08) returns once VectorScope starts
+// reviewing: the hub writes the ended run into this call's part and reports it once as a note to this conversation.
 //
 // `fix` (CW-07) works from a review saved in this session. The hub checks the requester's edit rules over the files it
 // may write and asks `connect`; the adapter holds the findings to the owned-path rule and asks `connect_write` once for
@@ -77,6 +78,10 @@ export const Parameters = Schema.Struct({
   max_cost: Schema.optional(Schema.Finite.check(Schema.isGreaterThan(0))).annotate({
     description: "For review: a dollar cap greater than 0; it can only lower connect's cap",
   }),
+  background: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "For review: true runs it in the background. The call returns once VectorScope starts reviewing, and the result arrives later as a note in this conversation",
+  }),
 })
 export type Params = Schema.Schema.Type<typeof Parameters>
 
@@ -99,6 +104,8 @@ export const NOT_BUILD = "Only the build agent hands work to VectorScope."
 
 /** The most runs `status` lists without a run id. */
 export const STATUS_RUNS = 10
+/** The title of a review call that went on in the background. */
+export const BACKGROUND_TITLE = "VectorScope review: in the background"
 
 export const ConnectTool = Tool.define(
   CONNECT_TOOL,
@@ -176,7 +183,7 @@ export const ConnectTool = Tool.define(
           params.action,
           "input",
           "Not reviewed",
-          "run, findings and mode are for the fix, findings, status and cancel actions. A review takes target, base, security, since and max_cost.",
+          "run, findings and mode are for the fix, findings, status and cancel actions. A review takes target, base, security, since, max_cost and background.",
         )
       const kind = params.target ?? "uncommitted"
       if (params.base !== undefined && kind !== "branch")
@@ -188,6 +195,7 @@ export const ConnectTool = Tool.define(
         kind === "branch" ? { kind, ...(params.base !== undefined ? { base: params.base } : {}) } : { kind }
       const directory = (yield* InstanceState.context).directory
       const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
+      const background = params.background === true
       // The hub holds the whole request to the schema (a `since` that is not a run id is refused there with `input`)
       // and derives the request id itself, from the message the user last wrote.
       const run = yield* hub.run({
@@ -197,7 +205,7 @@ export const ConnectTool = Tool.define(
           target,
           requester: { kind: "agent", sessionID: ctx.sessionID, agent: ctx.agent },
           directory,
-          background: false,
+          background,
           ...(params.security !== undefined ? { security: params.security } : {}),
           ...(params.since !== undefined ? { since: params.since as Connect.RunID } : {}),
           ...(cost.value !== undefined ? { budget: { maxCostUsd: cost.value } } : {}),
@@ -208,9 +216,13 @@ export const ConnectTool = Tool.define(
           abort: ctx.abort,
           // Progress streams into this call's part; a part cut off mid-run reads back as cancelled (`settled`).
           update: (next) => ctx.metadata({ title: titleOf(next), metadata: ConnectHub.metadata(next) }),
+          // A background run that outlives this call is written into its part when it ends.
+          ...(ctx.callID ? { part: { messageID: ctx.messageID, callID: ctx.callID } } : {}),
         },
       })
       const result = run.result
+      if (!result && background)
+        return { title: BACKGROUND_TITLE, output: backgroundOutput(run), metadata: ConnectHub.metadata(run) }
       if (!result) return { title: titleOf(run), output: "The review did not end.", metadata: ConnectHub.metadata(run) }
       const comparable = result.state === "completed" || result.state === "partial"
       return {
@@ -230,7 +242,8 @@ export const ConnectTool = Tool.define(
         params.base !== undefined ||
         params.security !== undefined ||
         params.since !== undefined ||
-        params.max_cost !== undefined
+        params.max_cost !== undefined ||
+        params.background !== undefined
       )
         return refused(params.action, "input", "Not fixed", "A fix takes run, findings and mode.")
       if (params.run === undefined)
@@ -381,6 +394,16 @@ export function titleOf(run: Connect.Run): string {
   if (state === "failed") return "VectorScope review failed"
   if (state === "cancelled") return "VectorScope review cancelled"
   return `VectorScope review: ${ConnectFrame.shownVerdict(run.result)}`
+}
+
+/** What the model reads when a review goes on in the background: only Vector's words, and the run id. */
+export function backgroundOutput(run: Connect.Run): string {
+  const target = run.request.action === "review" ? ConnectFindings.targetWords(run.request.target) : "the changes"
+  return [
+    `VectorScope is reviewing ${target} in the background as run ${run.id}.`,
+    "Its result arrives as a note in this conversation when it ends. Carry on with your work meanwhile; do not wait or poll for it.",
+    `To see where it stands or stop it, call connect with action status or cancel and run ${run.id}.`,
+  ].join("\n")
 }
 
 /** One run in a line, for `status` without a run id. */

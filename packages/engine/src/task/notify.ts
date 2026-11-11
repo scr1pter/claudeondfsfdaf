@@ -33,10 +33,12 @@ import { TaskLimits } from "./limits"
 // starts one. A note that should not start a turn is recorded with noReply and marked taskQuiet.
 
 export type Note = {
-  kind: "result" | "message" | "attention" | "interrupted" | "shell"
+  kind: "result" | "message" | "attention" | "interrupted" | "shell" | "connect"
   taskID?: SessionID
   taskIDs?: SessionID[]
   shellID?: string
+  /** The connected-tools run a `connect` note is about (CW-08). */
+  runID?: string
   /** How a background command exited, when it exited on its own. */
   exitCode?: number
   /** The parent's message whose call launched the work: the note is dropped once that message is gone. */
@@ -222,6 +224,7 @@ function wakes(note: Note) {
 }
 
 function metadata(note: Note, quiet: boolean): Record<string, unknown> {
+  if (note.kind === "connect") return connectNotification(note, quiet)
   const own =
     note.kind === "result"
       ? {
@@ -248,6 +251,14 @@ function metadata(note: Note, quiet: boolean): Record<string, unknown> {
               }
   const held = { ...own, ...SessionMemory.carried(note.hold) }
   return quiet ? { ...held, [SessionTaskSize.QUIET]: true } : held
+}
+
+// A connect note names its run and never carries it: a run is read back only from the connect tool part that started it.
+function connectNotification(note: Note, quiet: boolean): Record<string, unknown> {
+  const own = {
+    connectNotification: { runID: note.runID, state: note.state, ...(note.quiet || quiet ? { quiet: true } : {}) },
+  }
+  return quiet ? { ...own, [SessionTaskSize.QUIET]: true } : own
 }
 
 type Pending = { note: Note; ops: TaskPromptOps; agent: string; variant?: string }
