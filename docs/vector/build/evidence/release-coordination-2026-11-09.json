@@ -165,7 +165,12 @@
     "totalFailed": 0,
     "scenarioCount": 3,
     "repeatsPerScenarioPerRevision": 10,
-    "order": ["baseline", "candidate", "candidate", "baseline"],
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
     "powerSamples": 46,
     "allPowerSamplesAC": true,
     "realProviderCalls": 0,
@@ -205,5 +210,42 @@
       "qualification": "These additional local failures were not repaired or included in the targeted two-test pass. No full website-suite pass is claimed."
     },
     "linuxVerification": "Await fresh exact-head CI after this correction; no local Linux run or old-head success reused."
+  },
+  "windowsReleaseCopyFollowUp": {
+    "observedAtUtc": "2026-11-11T19:24:32.334677+00:00",
+    "parentRevision": "9aece4c4b7802bf81e2d17deeaf730ee91739260",
+    "cause": "URL.pathname yields a URL path instead of a native Windows filesystem path. After conversion, Windows Bun.Glob backslash labels failed existing src/data/ comparisons, treating historical release notes as current copy and omitting them from placeholder checks.",
+    "repair": "Use fileURLToPath for the same root URL; normalize source labels only to forward slashes while retaining original raw paths for reads. Existing assertions and active/historical scope unchanged; no product copy or feature code changed.",
+    "firstNamedRunAfterUrlOnly": {
+      "passed": 10,
+      "skipped": 1,
+      "failed": 1,
+      "assertions": 33,
+      "seconds": 1.398,
+      "exitCode": 1,
+      "failure": "Existing Check for Updates Mac-only assertion saw historical src\\data\\ labels as active; no content exception was added."
+    },
+    "finalNamedCheck": {
+      "command": "packages/web: bun --no-env-file test --timeout 30000 ./test/release-copy.test.ts",
+      "passed": 11,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 33,
+      "seconds": 0.572,
+      "exitCode": 0
+    },
+    "qualification": "Single Windows fixture check only. Existing light-theme skip remains skipped. No full website or release-approval claim; multiagent MAX_RUNNING source-alignment issue remains with its owner."
+  },
+  "freshCoordinatorCiTriage": {
+    "revision": "9aece4c4b7802bf81e2d17deeaf730ee91739260",
+    "run": 42759785901,
+    "job": "engine (windows, shard4/12)",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42759785901/job/129642515363",
+    "failedCase": "revert handles large mixed batches across chunk boundaries",
+    "observed": "30022.83ms under unchanged30000ms timeout, one dangling process killed, then the same fixture initial snapshot.track() yielded empty text and its assertion continued aftertimeout.",
+    "qualification": "Failure happened before patch/revert, so it does not demonstrate a batch-revert defect. No write/track race found; initial101filewrites awaited. Exact Git/setup phase that stalled is unknown; no transient-flake claim.",
+    "sourceReview": "Snapshot Git failure may return empty text; existing Effect.runPromise test harness has no Bun-timeout abort signal. These observations explain the late empty assertion, not the initiating stall.",
+    "nextCheck": "One exact-source focused Windows diagnostic with existing30s timeout and101files/allassertions, bounded setup/Git phase/child-exit tracing. No blind retry, deadline increase or weakened assertion applied.",
+    "status": "unresolved; current coordinator and main release gates remain unpassed"
   }
 }
