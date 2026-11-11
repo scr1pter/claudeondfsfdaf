@@ -228,6 +228,7 @@ export type RouteInput = {
   readonly allow?: Allowlists
   /** The sponsor has the `everywhere` perk, or, before it exists, is listed in VECTOR_EVERYWHERE_ALLOW_ACCOUNTS. */
   readonly inPlan: boolean
+  /** The cap counters from before this job was created: the job being routed is never counted in them. */
   readonly counts: CapCounts
   /** The repository the job is for; absent while it is unclear. */
   readonly repository?: { readonly id: number; readonly fullName: string }
@@ -243,7 +244,10 @@ export type RouteInput = {
     /** "Wait for my computer" (default on), from the computer's last readiness booleans. */
     readonly waitForComputer: boolean
   }
-  /** Absent until the job was offered; then what came back in the window. */
+  /**
+   * Absent until the job was offered; then what came back in the window. A claim is final: the jobs route has already
+   * moved the job to `claimed`, so only the global switch at `stop` still changes the answer.
+   */
   readonly offer?: OfferOutcome
   readonly actions?: ActionsFacts
   readonly receivedAt: number
@@ -252,7 +256,8 @@ export type RouteInput = {
 
 /** Why no place could take a job (3.4 step 7), so the refusal names the real reason. */
 export type NoPlace = {
-  readonly computer: "not-seen" | "wait-off" | "not-allowed" | "no-remote"
+  /** `no-remote`: no `remote` perk or Remote not configured; `remote-off`: Codium's `remote` switch is not on. */
+  readonly computer: "not-seen" | "wait-off" | "not-allowed" | "no-remote" | "remote-off"
   /** `bind`: the Actions route exists but this repository is not bound for it; `public`: it is not private. */
   readonly actions: "none" | "bind" | "public"
 }
@@ -313,6 +318,8 @@ function queueBlock(input: RouteInput, allowed: boolean): NoPlace["computer"] | 
   // A queued job ends up running on the computer, so it needs what the laptop route needs, except being online now.
   if (!allowed) return "not-allowed"
   if (!input.laptop.perk || !input.laptop.configured) return "no-remote"
+  // Nothing can be offered through a relay that is switched off, so the job is refused now rather than left to expire.
+  if (input.switches.remote !== "on") return "remote-off"
   const seen = input.laptop.lastSeen
   if (seen === undefined || !Number.isFinite(seen) || input.now - seen > COMPUTER_SEEN_MS) return "not-seen"
   if (!input.laptop.waitForComputer) return "wait-off"
@@ -337,6 +344,11 @@ function validRepository(repository: RouteInput["repository"]) {
  *
  * For a GitHub handoff (4.1) the repository's own Actions run is the fallback, so every outcome but a claim is
  * `hand-back` (`handled: false`).
+ *
+ * A claim is final. By the second call the jobs route has already moved the job to `claimed`, so facts the intake
+ * re-reads after the window (a cap counter that now counts this job, a lapsed heartbeat, the global switch at `no-new`,
+ * which lets running work finish) cannot turn it into a refusal or a queue reply. Only the global switch at `stop`
+ * still refuses, as the claim route does.
  */
 export function decideRoute(input: RouteInput, decisions: OwnerDecisions = OWNER_DECISIONS): RouteDecision {
   const github = input.platform === "github"
@@ -345,7 +357,9 @@ export function decideRoute(input: RouteInput, decisions: OwnerDecisions = OWNER
     return why ? { action: "refuse", code: code as RefusalCode, why } : { action: "refuse", code: code as RefusalCode }
   }
 
-  // 1. Switches: "no-new" takes no new job, and "stop" stops everything.
+  // 1. Switches: "no-new" takes no new job, and "stop" stops everything, a claimed job included.
+  if (input.switches.everywhere === "stop") return stop("switched-off")
+  if (input.offer?.claimed === true) return { action: "laptop" }
   if (input.switches.everywhere !== "on" || !input.switches.platform) return stop("switched-off")
 
   // 2. Identity. GitHub has no links: the trigger comment's author must be the binder, by id.
@@ -386,7 +400,6 @@ export function decideRoute(input: RouteInput, decisions: OwnerDecisions = OWNER
     input.laptop.online
   if (laptop) {
     if (!input.offer) return { action: "offer" }
-    if (input.offer.claimed) return { action: "laptop" }
     const lasting = everyDeclineLasting(input.offer)
     if (lasting) return stop(lasting)
   }
@@ -505,23 +518,40 @@ function decodeEntity(match: string, body: string) {
   return NAMED_ENTITIES[body] ?? NAMED_ENTITIES[body.toLowerCase()] ?? match
 }
 
+const ENTITY = /&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,7});/g
+
+/** Line ends unified, odd spaces made plain, and control, zero-width, soft-hyphen and direction characters removed. */
+function cleanCharacters(text: string) {
+  return text
+    .replace(/\r\n?|[\u2028\u2029\u0085]/g, "\n")
+    .replace(/[\t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/g, " ")
+    .replace(
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u0084\u0086-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g,
+      "",
+    )
+}
+
+/** Real text nests entities two or three deep; deeper nesting is an attempt to outlast the decoder. */
+const ENTITY_ROUNDS = 32
+
 /**
- * The text as a reader sees it: entities decoded (until none is left, so `&amp;lt;` cannot come back later), line
- * ends unified, and control, zero-width, soft-hyphen and direction characters removed, so nothing can hide a mention,
- * a link or a token from the checks below.
+ * The text as a reader sees it: entities decoded until none is left (so `&amp;lt;` cannot come back later), line ends
+ * unified, and control, zero-width, soft-hyphen and direction characters removed, each round, so a removed character
+ * cannot join an entity back together either. Nothing can hide a mention, a link or a token from the checks below.
+ * Text still decoding after `ENTITY_ROUNDS` loses every `&`, so no entity is left for a renderer to decode.
  */
 function normalizeText(text: string) {
   let out = text
-  for (let round = 0; round < 8; round++) {
-    const next = out.replace(/&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,7});/g, decodeEntity)
+  for (let round = 0; ; round++) {
+    const next = cleanCharacters(out.replace(ENTITY, decodeEntity))
     if (next === out) break
+    if (round === ENTITY_ROUNDS - 1) {
+      out = cleanCharacters(next.replace(/&/g, ""))
+      break
+    }
     out = next
   }
-  return out
-    .replace(/\r\n?|[\u2028\u2029\u0085]/g, "\n")
-    .replace(/[\t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/g, " ")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u0084\u0086-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g, "")
-    .normalize("NFC")
+  return out.normalize("NFC")
 }
 
 const PROFILE_PATH = /^\/[^/]+\/profiles?\//i
@@ -578,16 +608,36 @@ const FILE_EXTENSIONS = new Set(
   ).split(" "),
 )
 
-const SCHEME_URL = String.raw`\b[a-z][a-z0-9+.-]{1,15}:\/\/[^\s<>"'\x60]+`
-const WWW_URL = String.raw`(?<![\w.-])www\.[^\s<>"'\x60]+`
-const EMAIL = String.raw`(?<![\w.+-])[\w.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+`
-const DOMAIN =
-  String.raw`(?<![\w@./:-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?` +
-  String.raw`(?:\/[^\s<>"'\x60]*)?(?![\w-])`
-const MENTION = String.raw`(?<![\w\x60@./+-])@[a-z0-9][a-z0-9-]{0,38}(?:\/(?:[a-z0-9_.-]{0,99}[a-z0-9_-]))?(?![\w-])`
+const EXTENSIONS = [...FILE_EXTENSIONS].sort((a, b) => b.length - a.length).join("|")
 
-/** Links, addresses, domains and mentions in plain text: one pass, so nothing is matched twice. */
-const PLAIN = new RegExp(`(${SCHEME_URL})|(${WWW_URL})|(${EMAIL})|(${DOMAIN})|(${MENTION})`, "gi")
+/*
+ * The shapes below follow how a browser and a Markdown renderer read a link, not how a person writes one: a scheme
+ * with any number of slashes (`https:/host` and `http:host` reach the host as well as `https://host`), a
+ * scheme-relative `//host` (or `\\host`), and a bare host after any character but a letter, digit, `_` or `@`
+ * (`at:host`, `dir/host`, `.host`, `-host`). The domain shape takes at most 126 labels, as DNS does, so a long run of
+ * dots costs linear time.
+ */
+const SCHEME_URL = String.raw`\b[a-z][a-z0-9+.-]{1,15}:\/+[^\s<>"'\x60]+`
+/** In plain text a backslash also counts as a slash, as browsers read it in an address. */
+const SCHEME_URL_LOOSE = String.raw`\b[a-z][a-z0-9+.-]{1,15}:[\/\\]+[^\s<>"'\x60]+`
+const SCHEME_RELATIVE = String.raw`(?<![\w:\/\\])[\/\\]{2}[^\s<>"'\x60]+`
+const WWW_URL = String.raw`(?<![\w@])www\.[^\s<>"'\x60]+`
+const EMAIL = String.raw`(?<![\w.+-])[\w.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+`
+/** A relative path to a source file (`src/utils.ts`, `../a.md`, `.github/ci.yml`); no dot inside its first folder. */
+const PATH_FILE =
+  String.raw`(?<![\w@.\/\\:-])\/?(?:\.{1,2}|\.?[\w-]+)\/(?:[\w.-]+\/)*[\w.-]*\.(?:${EXTENSIONS})` +
+  String.raw`(?![\w\/-]|\.\w)`
+const DOMAIN =
+  String.raw`(?<![\w@])\.?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,126}[a-z]{2,63}(?::[0-9]{1,5})?` +
+  String.raw`(?:\/[^\s<>"'\x60]*)?(?![\w-])`
+/** `@name` and `@org/team` after anything but a letter, digit, `_`, `@` or a backtick, as GitHub reads them. */
+const MENTION = String.raw`(?<![\w\x60@])@[a-z0-9][a-z0-9-]{0,38}(?:\/(?:[a-z0-9_.-]{0,99}[a-z0-9_-]))?(?![\w-])`
+
+/** Links, addresses, paths, domains and mentions in plain text: one pass, so nothing is matched twice. */
+const PLAIN = new RegExp(
+  `(${SCHEME_URL_LOOSE})|(${SCHEME_RELATIVE})|(${WWW_URL})|(${EMAIL})|(${PATH_FILE})|(${DOMAIN})|(${MENTION})`,
+  "gi",
+)
 const URLS = new RegExp(`(${SCHEME_URL})|(${WWW_URL})`, "gi")
 const TRAILING = /[.,;:!?'")\]}*_~]+$/
 
@@ -597,29 +647,41 @@ function splitTrailing(value: string): [string, string] {
   return [value.slice(0, value.length - trailing.length), trailing]
 }
 
-function cleanUrl(match: string, www: boolean, context: ReplyContext) {
+/** A link kept is written as its checked absolute form, so a second pass reads exactly what the first one kept. */
+function cleanUrl(match: string, kind: "scheme" | "relative" | "www", context: ReplyContext) {
   const [link, trailing] = splitTrailing(match)
-  const kept = allowedLink(www ? `https://${link}` : link, context)
+  const kept = allowedLink(
+    kind === "scheme" ? link : kind === "relative" ? `https:${link}` : `https://${link}`,
+    context,
+  )
   if (!kept) return trailing
-  return (www ? link : kept) + trailing
+  return (kind === "www" ? link : kept) + trailing
 }
 
-function cleanDomain(match: string, context: ReplyContext, call: boolean) {
+function cleanDomain(match: string, value: string, offset: number, context: ReplyContext) {
   const [token, trailing] = splitTrailing(match)
-  if (allowedLink(`https://${token}`, context)) return token + trailing
-  const label = token.slice(token.lastIndexOf(".") + 1).toLowerCase()
+  const lead = token.startsWith(".") ? "." : ""
+  const host = token.slice(lead.length)
+  if (allowedLink(`https://${host}`, context)) return lead + host + trailing
+  const plain = !/[/:]/.test(host)
+  // A dot-led name after a space or the start (".env.local") is a file name: code, so it never links.
+  if (lead !== "" && plain && !/[\w.]/.test(value.charAt(offset - 1))) return `\`${token}\`${trailing}`
+  const label = host.slice(host.lastIndexOf(".") + 1).toLowerCase()
+  const call = trailing === "" && value.charAt(offset + match.length) === "("
   // A file name ("README.md") or a method call ("config.load()") is code, not a site.
-  if (!/[/:]/.test(token) && (FILE_EXTENSIONS.has(label) || (call && trailing === ""))) return `\`${token}\`${trailing}`
-  return trailing
+  if (plain && (FILE_EXTENSIONS.has(label) || call)) return `${lead}\`${host}\`${trailing}`
+  return lead + trailing
 }
 
 /** Plain text, outside code and links: foreign links, addresses and domains go, files become code, mentions code. */
 function cleanPlain(value: string, context: ReplyContext) {
-  return value.replace(PLAIN, (match, scheme, www, email, domain, mention, offset: number) => {
-    if (scheme) return cleanUrl(match, false, context)
-    if (www) return cleanUrl(match, true, context)
+  return value.replace(PLAIN, (match, scheme, relative, www, email, path, domain, mention, offset: number) => {
+    if (scheme) return cleanUrl(match, "scheme", context)
+    if (relative) return cleanUrl(match, "relative", context)
+    if (www) return cleanUrl(match, "www", context)
     if (email) return ""
-    if (domain) return cleanDomain(match, context, value.charAt(offset + match.length) === "(")
+    if (path) return `\`${match}\``
+    if (domain) return cleanDomain(match, value, offset, context)
     if (mention) return `\`${match}\``
     return match
   })
@@ -628,7 +690,7 @@ function cleanPlain(value: string, context: ReplyContext) {
 /** Inline code is never a link, but a foreign address inside it still goes. */
 function cleanCode(value: string, context: ReplyContext) {
   const kept = value
-    .replace(URLS, (match, scheme) => cleanUrl(match, !scheme, context))
+    .replace(URLS, (match, scheme) => cleanUrl(match, scheme ? "scheme" : "www", context))
     .replace(/`/g, "")
     .trim()
   return kept === "" ? "" : `\`${kept}\``
@@ -647,29 +709,82 @@ function keepLink(url: string, label: string | undefined, context: ReplyContext)
   return `[${text === "" ? kept : text}](${kept})`
 }
 
+/** An inline code span as this module writes them: one backtick each side, on one line. */
+const CODE_SPAN = /`[^`\n]+`/g
+
+/** The [start, end) ranges of the inline code spans in `text`, in order. */
+function codeRanges(text: string) {
+  return Array.from(text.matchAll(CODE_SPAN), (match) => [match.index ?? 0, (match.index ?? 0) + match[0].length])
+}
+
+/**
+ * A tag a Markdown renderer would read as raw HTML: `<name` followed by a space, a line end, `/`, `>` or the end, then
+ * the rest of that line up to `>`. `<len` before a backtick, `Map<string, User>` or `a < b` are no tag.
+ */
+const HTML_TAG = /<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)[^>\n]*>?/g
+/** A tag with no attributes, closed on its line (`<void>`, `</T>`): it can fetch or link nothing. */
+const BARE_TAG = /^<\/?[A-Za-z][A-Za-z0-9-]*[ \t]*\/?>$/
+
+/**
+ * Every HTML tag goes, its text kept, except a bare tag inside inline code (`Promise<void>`), which code shows as
+ * written. A tag that is not closed on its line loses its name, so it can no longer open anything.
+ */
+function stripTags(text: string) {
+  const code = codeRanges(text)
+  let index = 0
+  return text.replace(HTML_TAG, (match: string, offset: number) => {
+    while (index < code.length && code[index]![1] <= offset) index++
+    const span = code[index]
+    const inside = span !== undefined && span[0] < offset && offset + match.length < span[1]
+    return inside && BARE_TAG.test(match) ? match : ""
+  })
+}
+
+/** Link reference definitions, also in a blockquote or a list item, where they still apply to the whole document. */
+const DEFINITION = /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d{1,9}[.)][ \t]+)*\[[^\]\n]+\]:.*$/gm
+
 /** Markup that can reach a reader's screen or another host: mentions, images, foreign links and HTML. */
 function stripMarkup(text: string, context: ReplyContext) {
-  return (
-    text
-      // HTML comments, a forged `<!-- vector:job … -->` marker among them.
-      .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-      // Slack user and group mentions, channel links and broadcasts: <@U…>, <!here>, <!channel>, <!subteam^…>, <#C…>.
-      .replace(/<[@#!][^>\n]*>/g, "")
-      // Jira mentions: [~accountid:…] and [~name].
-      .replace(/\[~[^\]\n]*\]/g, "")
-      // Images: Markdown, reference-style and Jira.
-      .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
-      .replace(/!\[[^\]\n]*\]\[[^\]\n]*\]/g, "")
-      .replace(JIRA_IMAGE, "")
-      // Reference link definitions.
-      .replace(/^ {0,3}\[[^\]\n]+\]:[^\n]*$/gm, "")
-      // Autolinks and Slack links: <https://…> and <https://…|label>.
-      .replace(SLACK_LINK, (_match, url: string, label: string | undefined) => keepLink(url, label, context))
-      // Every other HTML tag, its text kept; an unclosed tag runs to the end.
-      .replace(/<\/?[A-Za-z][^>]*(?:>|$)/g, "")
-      .replace(MARKDOWN_LINK, (_match, label: string, url: string) => keepLink(url, label, context))
-      .replace(JIRA_LINK, (_match, label: string, url: string) => keepLink(url, label, context))
-  )
+  const once = text
+    // HTML comments, a forged `<!-- vector:job … -->` marker among them.
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    // Slack user and group mentions, channel links and broadcasts: <@U…>, <!here>, <!channel>, <!subteam^…>, <#C…>.
+    .replace(/<[@#!][^>\n]*>/g, "")
+    // Jira mentions: [~accountid:…] and [~name].
+    .replace(/\[~[^\]\n]*\]/g, "")
+    // Images: Markdown inline, full and collapsed reference, shortcut reference (`![a]`), and Jira.
+    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
+    .replace(/!\[[^\]\n]*\]\[[^\]\n]*\]/g, "")
+    .replace(/!\[[^\]\n]*\]/g, "")
+    .replace(JIRA_IMAGE, "")
+    .replace(DEFINITION, "")
+    // Autolinks and Slack links: <https://…> and <https://…|label>.
+    .replace(SLACK_LINK, (_match, url: string, label: string | undefined) => keepLink(url, label, context))
+  return stripTags(once)
+    .replace(MARKDOWN_LINK, (_match, label: string, url: string) => keepLink(url, label, context))
+    .replace(JIRA_LINK, (_match, label: string, url: string) => keepLink(url, label, context))
+}
+
+/**
+ * Backticks and backslash escapes made plain, so this module and a Markdown renderer agree on what is code. A renderer
+ * pairs backtick runs of equal length and skips an escaped backtick, while the rest of this module reads one backtick
+ * each side: so backslashes before a backtick go, spans pair up one backtick each side on one line, every other
+ * backtick goes, and spans that touch are kept apart by a space. Outside code, a backslash before ASCII punctuation
+ * goes too, so `\@name`, `https\://host` or `\<img …>` cannot hide from the checks and come back when rendered.
+ */
+function canonicalMarkdown(text: string) {
+  const unescaped = text.replace(/\\+(?=`)/g, "")
+  const plainPart = (value: string) => value.replace(/`/g, "").replace(/\\([!-\/:-@\[-`{-~])/g, "$1")
+  let out = ""
+  let last = 0
+  for (const match of unescaped.matchAll(CODE_SPAN)) {
+    const index = match.index ?? 0
+    const between = plainPart(unescaped.slice(last, index))
+    out += between === "" && out !== "" ? " " : between
+    out += match[0]
+    last = index + match[0].length
+  }
+  return out + plainPart(unescaped.slice(last))
 }
 
 /** Inline code and kept links; everything between them is plain text. */
@@ -693,11 +808,11 @@ function mapSegments(text: string, map: SegmentMap) {
   return out + map.text(text.slice(last))
 }
 
-/** Applies `change` to the text outside inline code spans only. */
+/** Applies `change` to the text outside inline code spans only (code spans as `sanitizeReply` writes them). */
 export function outsideCode(text: string, change: (plain: string) => string) {
   let out = ""
   let last = 0
-  for (const match of text.matchAll(/`[^`\n]+`/g)) {
+  for (const match of text.matchAll(CODE_SPAN)) {
     const index = match.index ?? 0
     out += change(text.slice(last, index)) + match[0]
     last = index + match[0].length
@@ -705,9 +820,16 @@ export function outsideCode(text: string, change: (plain: string) => string) {
   return out + change(text.slice(last))
 }
 
-/** GitHub `@name` and `@org/team` mentions (and Slack's `@here` words) wrapped in code, so they notify nobody. */
+const MENTION_OR_EMAIL = new RegExp(`(${EMAIL})|${MENTION}`, "gi")
+
+/**
+ * GitHub `@name` and `@org/team` mentions (and Slack's `@here` words) wrapped in code, so they notify nobody. E-mail
+ * addresses (`x-@example.com` too) are left as they are.
+ */
 export function wrapMentions(text: string) {
-  return outsideCode(text, (plain) => plain.replace(new RegExp(MENTION, "gi"), (match) => `\`${match}\``))
+  return outsideCode(text, (plain) =>
+    plain.replace(MENTION_OR_EMAIL, (match, email: string | undefined) => (email ? match : `\`${match}\``)),
+  )
 }
 
 /** Punctuation a removed link or address left behind, in plain text only (code and links keep theirs). */
@@ -755,15 +877,39 @@ function cut(text: string, max: number) {
  * hosts, so no image proxy or unfurl reaches another host. A name like `README.md` stays, as code. The result is cut
  * to `maxChars` on a word, link or code boundary.
  *
- * The answer is plain Markdown for `formatText`. Sanitizing it again changes nothing, so the computer and the server
- * can both run it.
+ * Removing markup can join what it separated (`gh<b></b>p_…` becomes a token, `<[](a)img …>` a tag,
+ * `evil.example@bob` a mention), so the cleaning runs again until the text stops changing, and the secret and code
+ * checks run on what comes out as well as on what went in. The answer is plain Markdown for `formatText`. Sanitizing it again changes
+ * nothing, so the computer and the server can both run it.
  */
 export function sanitizeReply(text: string, context: ReplyContext): SanitizedReply {
   const max = Math.max(1, Math.min(Math.floor(context.maxChars ?? LIMITS.summaryChars), LIMITS.replyChars))
   const clean = normalizeText(text)
-  if (secretLike(clean)) return { text: WITHHELD.secret, withheld: "secret" }
-  if (looksLikeCode(clean)) return { text: WITHHELD.code, withheld: "code" }
-  const stripped = stripMarkup(clean, context)
+  const before = withheldFor(clean)
+  if (before) return before
+  let current = clean
+  for (let round = 0; ; round++) {
+    const next = cleanOnce(current, context)
+    if (next === current) break
+    // Text that is still changing after this many passes is built to defeat the cleaning: it is not posted.
+    if (round === CLEANING_PASSES - 1) return { text: WITHHELD.code, withheld: "code" }
+    current = next
+  }
+  return withheldFor(current) ?? { text: cut(current, max) }
+}
+
+/** Real text settles in two or three passes. */
+const CLEANING_PASSES = 8
+
+function withheldFor(text: string): SanitizedReply | undefined {
+  if (secretLike(text)) return { text: WITHHELD.secret, withheld: "secret" }
+  if (looksLikeCode(text)) return { text: WITHHELD.code, withheld: "code" }
+  return undefined
+}
+
+/** One cleaning pass: normalize, make code spans plain, strip markup, clean plain text, code and links, tidy. */
+function cleanOnce(text: string, context: ReplyContext) {
+  const stripped = stripMarkup(canonicalMarkdown(normalizeText(text)), context)
   const out = mapSegments(stripped, {
     text: (value) => cleanPlain(value, context),
     code: (value) => cleanCode(value, context),
@@ -774,14 +920,15 @@ export function sanitizeReply(text: string, context: ReplyContext): SanitizedRep
       return `[${words === "" ? "link" : words}](${kept})`
     },
   })
-  return { text: cut(tidy(out), max) }
+  return tidy(out)
 }
 
 /** The words of a title: no link, address, mention, reference or markup survives, only letters, digits and `._'’,-`. */
 export function titleWords(text: string, max = 60) {
   const words = normalizeText(text)
-    .replace(PLAIN, (match, scheme, www, email, domain) => {
-      if (scheme || www || email) return " "
+    .replace(PLAIN, (match, scheme, relative, www, email, path, domain) => {
+      if (scheme || relative || www || email) return " "
+      if (path) return match
       if (domain) {
         const token = splitTrailing(match)[0]
         const label = token.slice(token.lastIndexOf(".") + 1).toLowerCase()
@@ -908,6 +1055,7 @@ const NO_PLACE_COMPUTER: Readonly<Record<NoPlace["computer"], string>> = {
   "wait-off": 'Your computer is offline, and "Wait for my computer" is off.',
   "not-allowed": "Requests from teammates never run on someone else's computer.",
   "no-remote": "Vector Remote is not set up for this account, so no computer can take jobs.",
+  "remote-off": "Vector Remote is paused, so no computer can take jobs right now.",
 }
 
 const NO_PLACE_ACTIONS: Readonly<Record<NoPlace["actions"], string>> = {
@@ -1028,7 +1176,10 @@ export type RenderedResult = {
   readonly privateText?: string
 }
 
-const CHECKS_LINE = "Checks have not run on this pull request yet: push a commit to the branch to start them."
+const CHECKS_LINE = {
+  pr: "Checks have not run on this pull request yet: push a commit to the branch to start them.",
+  branch: "Checks have not run on this branch yet: push a commit to it to start them.",
+} as const
 
 const OUTCOME_LINE: Readonly<Record<Outcome, (where: string) => string>> = {
   changes: (where) => `Done ${where}.`,
@@ -1056,7 +1207,8 @@ function prLink(input: ResultInput) {
 /**
  * The result message (3.7): the outcome in plain words, where it ran, and the draft PR link. A private reply adds the
  * computer's name, the summary (sanitized again), the branch when there is no PR, the held-back count, that checks
- * have not run, and the permissions a `needs-approval` run needed. No costs or token counts. In a shared place `text`
+ * have not run on the pull request or the pushed branch (never for a `held` result), and the permissions a
+ * `needs-approval` run needed. No costs or token counts. In a shared place `text`
  * carries only the outcome and the link, says "on your computer", and the rest is `privateText`.
  */
 export function renderResult(input: ResultInput): RenderedResult {
@@ -1087,8 +1239,13 @@ export function renderResult(input: ResultInput): RenderedResult {
     details.push(
       `${held} ${held === 1 ? "file" : "files"} under .github/, .husky/, .githooks/, .gitattributes or .gitmodules ${held === 1 ? "was" : "were"} held back and not committed.`,
     )
-  const reviewable = link !== undefined || (input.branch !== undefined && BRANCH_PATTERN.test(input.branch))
-  if (reviewable && (input.route === "actions" || input.checks === "skipped")) details.push(CHECKS_LINE)
+  // The checks line names what exists: the pull request, or a pushed branch without one. A `held` result kept its
+  // changes on the computer (or never pushed them, Q8), so there is nothing for checks to run on yet.
+  const branchOnly = link === undefined && input.branch !== undefined && BRANCH_PATTERN.test(input.branch)
+  if (input.outcome !== "held" && (input.route === "actions" || input.checks === "skipped")) {
+    if (link) details.push(CHECKS_LINE.pr)
+    else if (branchOnly) details.push(CHECKS_LINE.branch)
+  }
   if (input.outcome === "needs-approval") {
     const needs = (input.needs ?? []).filter((id) => PERMISSION_ID_PATTERN.test(id)).slice(0, LIMITS.needs)
     if (needs.length > 0) details.push(`It needed: ${needs.map((id) => `\`${id}\``).join(", ")}.`)

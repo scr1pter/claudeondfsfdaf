@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { DECLINE_CODES, REFUSAL_CODES, TIMING, createJobId, type Outcome, OUTCOMES, MILESTONES } from "../src/everywhere"
+import {
+  DECLINE_CODES,
+  REFUSAL_CODES,
+  TIMING,
+  createJobId,
+  decodeSettle,
+  randomId,
+  type Outcome,
+  OUTCOMES,
+  MILESTONES,
+} from "../src/everywhere"
 import {
   COMPUTER_SEEN_MS,
   ENDINGS,
@@ -78,6 +88,18 @@ const offline = { configured: true, perk: true, online: false, lastSeen: now - m
 /** The text outside inline code spans. */
 function plain(text: string) {
   return text.replace(/`[^`\n]+`/g, "")
+}
+
+/** The text outside code spans and links to the job's own repository or vectordev.ai. */
+function outsideAllowedLinks(text: string) {
+  return plain(text)
+    .replace(/\[[^\]\n]*\]\((?:https:\/\/github\.com\/acme\/widgets|https:\/\/vectordev\.ai)[^\s)]*\)/gi, "")
+    .replace(/https:\/\/(?:github\.com\/acme\/widgets|vectordev\.ai)[^\s)]*/gi, "")
+}
+
+/** Whether the computer's settle call would be accepted with this summary. */
+function settles(summary: string) {
+  return decodeSettle({ jid: createJobId(now), lease: randomId(), outcome: "changes", summary }).ok
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -188,9 +210,26 @@ describe("decideRoute, step 5: the laptop", () => {
 
   test("the remote switch off makes the laptop ineligible even when presence says online (E10)", () => {
     for (const remote of ["stop", "no-new"] as const) {
-      const decision = decideRoute(input({ switches: { everywhere: "on", platform: true, remote } }))
-      expect(decision).toEqual({ action: "queue", until: now + TIMING.queueMs })
+      const switches = { everywhere: "on", platform: true, remote } as const
+      expect(decideRoute(input({ switches })).action).not.toBe("offer")
+      // Actions still takes the job when it is eligible.
+      expect(decideRoute(input({ switches, actions: eligibleActions }))).toEqual({ action: "actions" })
     }
+  })
+
+  test("the remote switch off never queues: nothing could be offered through it, so the refusal names it (E10)", () => {
+    for (const remote of ["stop", "no-new"] as const)
+      for (const laptop of [input().laptop, offline]) {
+        const decision = decideRoute(input({ switches: { everywhere: "on", platform: true, remote }, laptop }))
+        expect(decision).toEqual({
+          action: "refuse",
+          code: "no-place",
+          why: { computer: "remote-off", actions: "none" },
+        })
+      }
+    expect(renderRefusal("no-place", { platform: "slack", why: { computer: "remote-off", actions: "none" } })).toBe(
+      "Vector Remote is paused, so no computer can take jobs right now.",
+    )
   })
 
   test("Remote not configured, no remote perk, or the computer offline: no offer", () => {
@@ -208,6 +247,36 @@ describe("decideRoute, step 5a: the offer window and the decline split", () => {
   test("a claim means the laptop", () => {
     expect(decideRoute(input({ offer: { claimed: true, declines: [], unanswered: 0 } }))).toEqual({
       action: "laptop",
+    })
+  })
+
+  test("a claim is final: facts re-read after the window cannot turn a claimed job into a refusal or a queue", () => {
+    const offer = { claimed: true, declines: [], unanswered: 0 }
+    const zero = { sponsorToday: 0, sponsorLive: 0, requesterHour: 0, installationToday: 0 }
+    for (const overrides of [
+      // The live counter now counts the job just created.
+      { counts: { ...zero, sponsorLive: 3 } },
+      { counts: { ...zero, sponsorToday: 30, requesterHour: 6, installationToday: 200 } },
+      // The relay heartbeat lapsed during the window.
+      { laptop: offline },
+      { laptop: { ...offline, lastSeen: undefined, waitForComputer: false } },
+      // "no-new" lets running work finish.
+      { switches: { everywhere: "no-new", platform: true, remote: "on" } },
+      { switches: { everywhere: "on", platform: true, remote: "stop" } },
+      { switches: { everywhere: "on", platform: false, remote: "on" } },
+      { actions: eligibleActions },
+    ] satisfies Partial<RouteInput>[])
+      expect(decideRoute(input({ ...overrides, offer }))).toEqual({ action: "laptop" })
+    expect(
+      decideRoute(input({ platform: "github", github: { actorId: 7, binderId: 7 }, laptop: offline, offer })),
+    ).toEqual({ action: "laptop" })
+  })
+
+  test("only the global switch at stop still refuses a claimed job, as the claim route does", () => {
+    const offer = { claimed: true, declines: [], unanswered: 0 }
+    expect(decideRoute(input({ switches: { everywhere: "stop", platform: true, remote: "on" }, offer }))).toEqual({
+      action: "refuse",
+      code: "switched-off",
     })
   })
 
@@ -562,6 +631,10 @@ describe("sanitizeReply", () => {
       "Linear https://linear.app/acme/profiles/bob",
       "GitHub @bob, @acme/reviewers and @here, @channel, @everyone.",
       "Hidden &#64;carol and @\u200bdave and &lt;!channel&gt;",
+      // GitHub reads a mention after any character that is not a letter, digit or underscore.
+      "After punctuation .@erin /@acme/ops -@frank +@grace and (@heidi)",
+      // An escaped mention, a backtick run that renders as plain text, and an entity nested past eight levels.
+      `Escaped \\@ivan and x\`\`@judy\` and ${"&" + "amp;".repeat(12)}#64;mallory`,
     ].join("\n")
     for (const context of [slack, github, linear, jira]) {
       const out = sanitizeReply(text, context).text
@@ -569,8 +642,36 @@ describe("sanitizeReply", () => {
       expect(out).not.toContain("[~")
       expect(out).not.toContain("profiles/bob")
       expect(plain(out)).not.toContain("@")
-      for (const name of ["@bob", "@acme/reviewers", "@here", "@channel", "@everyone", "@carol", "@dave"])
+      expect(out).not.toContain("\\`")
+      expect(out).not.toMatch(/``/)
+      for (const name of [
+        "@bob",
+        "@acme/reviewers",
+        "@here",
+        "@channel",
+        "@everyone",
+        "@carol",
+        "@dave",
+        "@erin",
+        "@acme/ops",
+        "@frank",
+        "@grace",
+        "@heidi",
+        "@ivan",
+        "@judy",
+        "@mallory",
+      ])
         expect(out).toContain(`\`${name}\``)
+    }
+  })
+
+  test("entities nested deeper than any real text leave no entity for a renderer to decode", () => {
+    for (const depth of [9, 16, 31, 33, 200]) {
+      const text = `Hi ${"&" + "amp;".repeat(depth)}#64;bob and ${"&" + "amp;".repeat(depth)}#103;hp_`
+      const out = sanitizeReply(text, github).text
+      expect(out).not.toMatch(/&#?[a-z0-9]+;/i)
+      expect(plain(out)).not.toContain("@")
+      expect(sanitizeReply(out, github).text).toBe(out)
     }
   })
 
@@ -589,6 +690,130 @@ describe("sanitizeReply", () => {
     expect(out).not.toContain("raw/main/shot.png")
     expect(out).not.toMatch(/!\S+!/)
     expect(out).toContain("Before after.")
+  })
+
+  test("no image, definition or link reaches an outside host through forms a renderer still reads", () => {
+    const inputs = [
+      // A shortcut reference image and a definition inside a blockquote apply to the whole document.
+      "Done.\n\n![a]\n\n> [a]: //evil.example/p.png?d=x",
+      "Done.\n\n![b][]\n\n- [b]: https://evil.example/p.png\n\n1. [c]: //evil.example/q.png\n\n![c]",
+      "Done.\n\n![d]\n\n> - > [d]: http:evil.example/r.png",
+      // Removing an empty link builds a tag, which a second pass removes.
+      "Done. <[](a)img src=//evil.example/a.png>",
+      "Done. <im<b></b>g src=//evil.example/b.png>",
+      // Scheme-relative and one-slash or slash-less addresses reach the host too.
+      "See //evil.example/x, https:/evil.example/y, http:evil.example/z and \\\\evil.example\\w.",
+      // An escaped colon or bracket hides an address until it is rendered.
+      "See https\\://203.0.113.9/p.png and \\[e]: https\\://203.0.113.9/q.png and \\<img src=//evil.example/c.png>",
+      "Read [docs](//evil.example/docs) and [x][e] and <https:evil.example/y>.",
+    ]
+    for (const text of inputs)
+      for (const context of [slack, github, linear, jira]) {
+        const out = sanitizeReply(text, context).text
+        expect(out).not.toContain("evil.example")
+        expect(out).not.toContain("203.0.113.9")
+        expect(out).not.toContain("<img")
+        expect(out).not.toContain("![")
+        expect(out).not.toMatch(/^\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+)*\[[^\]\n]+\]:/m)
+        expect(outsideAllowedLinks(out)).not.toContain("//")
+        expect(sanitizeReply(out, context).text).toBe(out)
+      }
+  })
+
+  test("a bare domain after a colon, slash, dot or dash is removed, and file paths stay as code", () => {
+    for (const text of [
+      "Reset at:evil.example/login now.",
+      "See //evil.example/x now.",
+      "Moved in src/evil.example now.",
+      "Visit -evil.example now.",
+      "Visit x.www.evil.example and -www.evil.example now.",
+      "Done...evil.example and foo_bar.evil.example now.",
+    ]) {
+      const out = sanitizeReply(text, github).text
+      expect(out).not.toContain("evil.example")
+      expect(out.endsWith("now.")).toBe(true)
+    }
+    // A dot-led name is a file name, kept as code, so it never links.
+    expect(sanitizeReply("Visit .evil.example and .env.local now.", github).text).toBe(
+      "Visit `.evil.example` and `.env.local` now.",
+    )
+    expect(
+      sanitizeReply("Updated src/utils.ts, ../a.md, .github/workflows/ci.yml and packages/x/src/y-z.test.ts.", github)
+        .text,
+    ).toBe("Updated `src/utils.ts`, `../a.md`, `.github/workflows/ci.yml` and `packages/x/src/y-z.test.ts`.")
+    // The job's own repository stays a link however the address is written.
+    expect(
+      sanitizeReply("PR https:/github.com/acme/widgets/pull/3 and //github.com/acme/widgets/pull/4.", github).text,
+    ).toBe("PR https://github.com/acme/widgets/pull/3 and https://github.com/acme/widgets/pull/4.")
+  })
+
+  test("HTML is removed outside code without cutting code or later paragraphs", () => {
+    expect(sanitizeReply("Fixed the off-by-one in `i<len` and added a test.\n\nAlso updated docs.", github).text).toBe(
+      "Fixed the off-by-one in `i<len` and added a test.\n\nAlso updated docs.",
+    )
+    expect(sanitizeReply("Typed `Map<string, User>`, `Promise<void>` and `Array<T>`.", github).text).toBe(
+      "Typed `Map<string, User>`, `Promise<void>` and `Array<T>`.",
+    )
+    expect(sanitizeReply("Since a <b\n\nsecond paragraph stays.", github).text).toBe(
+      "Since a\n\nsecond paragraph stays.",
+    )
+    expect(sanitizeReply("Bold <b>text</b> and a<b>c.", github).text).toBe("Bold text and ac.")
+    // A tag with attributes goes even inside code, and code a renderer would not see as code is not trusted.
+    for (const text of [
+      "Shown `<img src=//evil.example/a.png>` here.",
+      "Shown \\`<img src=//evil.example/a.png>` here.",
+      "Shown x``<img src=//evil.example/a.png>` here.",
+      "Shown `a\n<img src=//evil.example/a.png>\nb` here.",
+    ]) {
+      const out = sanitizeReply(text, github).text
+      expect(out).not.toContain("<img")
+      expect(out).not.toContain("evil.example")
+    }
+  })
+
+  test("markup that splits a token or a diff line is removed first, so the checks still see it", () => {
+    const token = "gh" + "p_" + randomAlnum(36)
+    const [head, tail] = [token.slice(0, 2), token.slice(2)]
+    for (const split of [
+      "<b></b>",
+      "<!---->",
+      "<@U012AB3CD>",
+      "[~bob]",
+      "[](https://x)",
+      "<!here>",
+      "\u200b",
+      "&#8203;",
+    ]) {
+      for (const context of [slack, github, linear, jira])
+        expect(sanitizeReply(`Set it to ${head}${split}${tail} today.`, context)).toEqual({
+          text: WITHHELD.secret,
+          withheld: "secret",
+        })
+      expect(sanitizeReply(`Done.\n${split}@@ -1 +1 @@\n-old\n+new`, github)).toEqual({
+        text: WITHHELD.code,
+        withheld: "code",
+      })
+    }
+  })
+
+  test("what sanitizeReply returns is always accepted by the settle decoder", () => {
+    const token = "gh" + "p_" + randomAlnum(36)
+    for (const text of [
+      "https://evil.example ```bash",
+      "a@b.com @@ x",
+      "evil.example @@ -1 +1 @@",
+      "Done.\n<b></b>@@ -1 +1 @@",
+      "<i></i>--- a/x.ts\n<i></i>+++ b/x.ts",
+      `gh<b></b>${token.slice(2)}`,
+      "Done.\r@@ -1 +1 @@",
+      "Plain words and README.md.",
+    ])
+      for (const context of [slack, github, linear, jira]) {
+        const out = sanitizeReply(text, context).text
+        expect(settles(out)).toBe(true)
+        expect(secretLike(out)).toBe(false)
+        expect(sanitizeReply(out, context).text).toBe(out)
+      }
   })
 
   test("autolinks, bare URLs, e-mail addresses and bare domains outside the allowed hosts are removed", () => {
@@ -702,6 +927,15 @@ describe("sanitizeReply", () => {
       "Changed `src/a.ts` and [the PR](https://github.com/acme/widgets/pull/3); evil.example gone.",
       "R&amp;D &amp;lt;b&amp;gt; and **bold** text\n\n\n\nwith   gaps",
       `${"long ".repeat(400)}`,
+      // Markup whose removal joins what it separated.
+      `Set gh<b></b>p_${randomAlnum(36)} and gh[~x]p_${randomAlnum(36)}`,
+      "Done.\n<b></b>@@ -1 +1 @@",
+      "Done. <[](a)img src=//evil.example/a.png> and evil.example@bob",
+      "Done.\n\n![a]\n\n> [a]: //evil.example/p.png?d=x",
+      "https://evil.example ```bash and a@b.com @@ x",
+      "Thanks -@octocat, /@acme/team, .@someone, +@bob, \\@carol and x``@dave`",
+      "Typed `Map<string, User>` and `i<len`, a <b\n\nnext, and src/utils.ts with .env.local",
+      `${"&" + "amp;".repeat(40)}#64;eve`,
     ]
     for (const sample of samples)
       for (const context of [slack, github, linear, jira]) {
@@ -716,6 +950,10 @@ describe("wrapMentions and outsideCode", () => {
     expect(wrapMentions("ping @bob and `@carol` and me@example.com")).toBe(
       "ping `@bob` and `@carol` and me@example.com",
     )
+    // After any character that is not a letter, digit or underscore, as GitHub reads them; e-mail addresses stay.
+    expect(wrapMentions("Thanks -@octocat /@acme/team .@bob +@carol, x-@example.com")).toBe(
+      "Thanks -`@octocat` /`@acme/team` .`@bob` +`@carol`, x-@example.com",
+    )
     expect(outsideCode("a `b` c", (part) => part.toUpperCase())).toBe("A `b` C")
   })
 })
@@ -728,6 +966,9 @@ describe("titleWords", () => {
     expect(words).not.toContain("evil.example")
     expect(words).not.toContain("<")
     expect(words).toContain("session.ts")
+    const hosts = titleWords("Check //evil.example/x, at:evil.example and https:/evil.example in src/app.ts")
+    expect(hosts).not.toContain("evil")
+    expect(hosts).toContain("app.ts")
     const long = titleWords("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron")
     expect(long.length).toBeLessThanOrEqual(60)
     expect(long.endsWith(" ")).toBe(false)
@@ -824,6 +1065,26 @@ describe("renderResult", () => {
     })
     expect(result.text).not.toContain("other/repo")
     expect(result.text).toContain("vector/ve-0123456789ab")
+    // There is no pull request, so the checks line speaks of the branch.
+    expect(result.text).not.toContain("pull request")
+    expect(result.text).toContain("Checks have not run on this branch yet: push a commit to it to start them.")
+  })
+
+  test("the checks line names what exists: the pull request, a pushed branch, or nothing for a held result", () => {
+    const branch = "vector/ve-0123456789ab"
+    const pr = renderResult({ ...base, shared: false })
+    expect(pr.text).toContain("Checks have not run on this pull request yet")
+    const branchOnly = renderResult({ ...base, prUrl: undefined, branch, shared: false })
+    expect(branchOnly.text).toContain("Checks have not run on this branch yet")
+    expect(branchOnly.text).not.toContain("pull request")
+    for (const platform of ["github", "slack", "linear", "jira"] as const) {
+      const held = renderResult({ ...base, platform, outcome: "held", prUrl: undefined, branch, shared: false })
+      expect(held.text).toContain("kept on the computer")
+      expect(held.text).not.toContain("Checks have not run")
+      expect(held.text).not.toContain("pull request")
+    }
+    const nothing = renderResult({ ...base, prUrl: undefined, branch: undefined, shared: false })
+    expect(nothing.text).not.toContain("Checks have not run")
   })
 
   test("needs-approval lists permission ids only", () => {

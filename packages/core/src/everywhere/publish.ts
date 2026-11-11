@@ -96,8 +96,10 @@ const CLOSING_REFERENCE = new RegExp(String.raw`\b(${CLOSING})(\s*:)?(\s+)${REFE
 /**
  * Removes closing references that would close something other than the job's own work when the PR merges: a GitHub
  * issue in another repository (`Fixes other/repo#1` or its URL) and any issue key but the job's own (`Fixes ENG-9`
- * when the job is ENG-123). The keyword goes and the reference stays as code, so it neither closes nor links. The
- * template's own "Fixes ENG-123" or "PROJ-123" line, and same-repository `#12` references, are kept.
+ * when the job is ENG-123). The words stay and the reference becomes code (`Fixes \`ENG-9\``), so it neither closes
+ * nor links and the sentence keeps every word; a term that only looks like a key (`Fixed utf-8 decoding`) is just
+ * shown as code. Keys match in any case, so a lowercase key cannot slip through. The template's own "Fixes ENG-123"
+ * or "PROJ-123" line, and same-repository `#12` references, are kept.
  */
 export function stripClosingKeywords(
   text: string,
@@ -108,14 +110,28 @@ export function stripClosingKeywords(
   return outsideCode(text, (plain) =>
     plain.replace(
       CLOSING_REFERENCE,
-      (match, _word, _colon, _space, urlOwner, urlName, urlNumber, refOwner, refName, refNumber, local, key) => {
+      (
+        match: string,
+        word: string,
+        colon: string | undefined,
+        space: string,
+        urlOwner?: string,
+        urlName?: string,
+        urlNumber?: string,
+        refOwner?: string,
+        refName?: string,
+        refNumber?: string,
+        local?: string,
+        key?: string,
+      ) => {
+        const neutral = (reference: string) => `${word}${colon ?? ""}${space}\`${reference}\``
         if (local) return match
-        if (key) return key.toUpperCase() === ownKey ? match : `\`${key}\``
+        if (key) return key.toUpperCase() === ownKey ? match : neutral(key)
         const owner = urlOwner ?? refOwner
         const name = urlName ?? refName
         const number = urlNumber ?? refNumber
         if (own !== undefined && `${owner}/${name}`.toLowerCase() === own) return match
-        return `\`${owner}/${name}#${number}\``
+        return neutral(`${owner}/${name}#${number}`)
       },
     ),
   )

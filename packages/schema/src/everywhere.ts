@@ -509,13 +509,20 @@ export function sanitizeLabel(value: string) {
   return out === "" ? "Requester" : out
 }
 
-/** Text that holds a fenced code block or looks like a diff: a hunk header, a file header pair, or `diff --git`. */
+/**
+ * Text that holds a fenced code block or looks like a diff: a hunk header, a file header pair, or `diff --git`. Every
+ * line end a renderer honours counts (CR, CRLF, U+0085, U+2028, U+2029), invisible format and control characters are
+ * ignored, and a line may start with spaces, so none of them can hide a diff from the settle decoder (E4).
+ */
 export function looksLikeCode(value: string) {
+  const text = value
+    .replace(/\r\n?|[\u0085\u2028\u2029\u000b\u000c]/g, "\n")
+    .replace(/[\p{Cf}\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f]/gu, "")
   return (
-    /(?:^|\n)[ \t]*(?:```|~~~)/.test(value) ||
-    /(?:^|\n)@@ /.test(value) ||
-    /(?:^|\n)--- [^\n]*\r?\n\+\+\+ /.test(value) ||
-    /(?:^|\n)diff --git /.test(value)
+    /(?:^|\n)[^\S\n]*(?:```|~~~)/.test(text) ||
+    /(?:^|\n)[^\S\n]*@@[ \t]/.test(text) ||
+    /(?:^|\n)[^\S\n]*--- [^\n]*\n[^\S\n]*\+\+\+ /.test(text) ||
+    /(?:^|\n)[^\S\n]*diff --git /.test(text)
   )
 }
 

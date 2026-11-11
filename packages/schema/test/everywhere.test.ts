@@ -386,6 +386,15 @@ describe("decodeSettle", () => {
       "diff --git a/src/login.ts b/src/login.ts",
       "Here is the fix:\n```ts\nconst token = read()\n```",
       "  ~~~\ncode\n~~~",
+      // Every line end a renderer honours, and characters that hide a line start, count too.
+      "Changed it.\r--- a/x.ts\r+++ b/x.ts\r@@ -1 +1 @@\r-old\r+new",
+      "Changed it.\u2028@@ -1 +1 @@",
+      "Changed it.\u2029@@ -1 +1 @@",
+      "Changed it.\u0085@@ -1 +1 @@",
+      "Changed it.\n  @@ -1 +1 @@",
+      "Changed it.\n\u200b@@ -1 +1 @@",
+      "Changed it.\n\u00a0diff --git a/x b/x",
+      "Changed it.\r\n--- a/x.ts\r\n\u200b+++ b/x.ts",
     ])
       expect(refused(decodeSettle(settle({ summary })))).toBe("summary: looks like code")
     // Prose with dashes or plus signs is not a diff.
@@ -704,6 +713,9 @@ describe("text helpers", () => {
   test("code and diffs are recognised", () => {
     expect(looksLikeCode("@@ -1 +1 @@")).toBe(true)
     expect(looksLikeCode("intro\r\n--- a/x\r\n+++ b/x")).toBe(true)
+    expect(looksLikeCode("intro\r--- a/x\r+++ b/x")).toBe(true)
+    expect(looksLikeCode("intro\u2028@@ -1 +1 @@")).toBe(true)
+    expect(looksLikeCode("intro\n\u200b```ts")).toBe(true)
     expect(looksLikeCode("All tests pass. Email me @@ home")).toBe(false)
     expect(looksLikeCode("Fixed the login race.")).toBe(false)
   })

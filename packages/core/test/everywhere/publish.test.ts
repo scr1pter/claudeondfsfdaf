@@ -89,20 +89,21 @@ describe("heldBack", () => {
 describe("stripClosingKeywords", () => {
   const options = { repository: "acme/widgets", issueKey: "ENG-123" }
 
-  test("closing references to other repositories' issues lose their keyword", () => {
-    expect(stripClosingKeywords("Fixes other/repo#12", options)).toBe("`other/repo#12`")
+  test("closing references to other repositories' issues become code, so they neither close nor link", () => {
+    expect(stripClosingKeywords("Fixes other/repo#12", options)).toBe("Fixes `other/repo#12`")
     expect(stripClosingKeywords("This closes https://github.com/other/repo/issues/3.", options)).toBe(
-      "This `other/repo#3`.",
+      "This closes `other/repo#3`.",
     )
-    expect(stripClosingKeywords("RESOLVED: Other/Repo#4 today", options)).toBe("`Other/Repo#4` today")
+    expect(stripClosingKeywords("RESOLVED: Other/Repo#4 today", options)).toBe("RESOLVED: `Other/Repo#4` today")
     expect(stripClosingKeywords("fixed other/repo#5, closes other/repo#6", options)).toBe(
-      "`other/repo#5`, `other/repo#6`",
+      "fixed `other/repo#5`, closes `other/repo#6`",
     )
   })
 
-  test("other issue keys lose their keyword, and the job's own line stays", () => {
-    expect(stripClosingKeywords("Fixes ENG-9", options)).toBe("`ENG-9`")
-    expect(stripClosingKeywords("Completes PROJ-77", options)).toBe("`PROJ-77`")
+  test("other issue keys become code, and the job's own line stays", () => {
+    expect(stripClosingKeywords("Fixes ENG-9", options)).toBe("Fixes `ENG-9`")
+    expect(stripClosingKeywords("Completes PROJ-77", options)).toBe("Completes `PROJ-77`")
+    expect(stripClosingKeywords("closes eng-9", options)).toBe("closes `eng-9`")
     expect(stripClosingKeywords("Fixes ENG-123", options)).toBe("Fixes ENG-123")
     expect(stripClosingKeywords("fixes eng-123", options)).toBe("fixes eng-123")
     expect(stripClosingKeywords("PROJ-123", { repository: "acme/widgets", issueKey: "PROJ-123" })).toBe("PROJ-123")
@@ -115,12 +116,33 @@ describe("stripClosingKeywords", () => {
     expect(stripClosingKeywords("fix: a typo in the fixed header", options)).toBe("fix: a typo in the fixed header")
     expect(stripClosingKeywords("Run `fixes other/repo#1` to see", options)).toBe("Run `fixes other/repo#1` to see")
   })
+
+  test("ordinary hyphenated terms after a closing word keep every word of the sentence", () => {
+    for (const [text, out] of [
+      ["Fixed utf-8 decoding in the parser.", "Fixed `utf-8` decoding in the parser."],
+      ["Resolved sha-256 mismatch on upload.", "Resolved `sha-256` mismatch on upload."],
+      ["Completed step-2 of the migration.", "Completed `step-2` of the migration."],
+    ] as const) {
+      const stripped = stripClosingKeywords(text, options)
+      expect(stripped).toBe(out)
+      expect(stripped.replace(/`/g, "")).toBe(text)
+    }
+  })
 })
 
 describe("wrapMentions", () => {
   test("wraps GitHub mentions and team mentions in code", () => {
     expect(wrapMentions("Thanks @octocat and @acme/maintainers.")).toBe("Thanks `@octocat` and `@acme/maintainers`.")
     expect(wrapMentions("Mail ops@example.com")).toBe("Mail ops@example.com")
+  })
+
+  test("wraps mentions after any punctuation GitHub reads as a boundary", () => {
+    expect(wrapMentions("Thanks -@octocat and /@acme/team and .@someone and +@bob")).toBe(
+      "Thanks -`@octocat` and /`@acme/team` and .`@someone` and +`@bob`",
+    )
+    expect(wrapMentions("Mail x-@example.com or first.last+tag@example.com")).toBe(
+      "Mail x-@example.com or first.last+tag@example.com",
+    )
   })
 })
 
@@ -194,6 +216,39 @@ describe("prTemplate", () => {
     const slack = prTemplate({ ...base, platform: "slack", issueKey: "ENG-123" })
     expect(slack.title).toStartWith("Vector: ")
     expect(slack.body).not.toContain("Fixes ENG-123")
+  })
+
+  test("mentions after punctuation are wrapped in the body, which the user's own login opens", () => {
+    const { body } = prTemplate({
+      ...base,
+      summary: "Thanks -@octocat, /@acme/team, .@someone and +@bob. Also \\@carol and x``@dave`.",
+    })
+    for (const name of ["@octocat", "@acme/team", "@someone", "@bob", "@carol", "@dave"])
+      expect(body).toContain(`\`${name}\``)
+    expect(body.replace(/`[^`\n]+`/g, "").replace(jobMarker(jid), "")).not.toContain("@")
+  })
+
+  test("no image, definition or outside address reaches the body", () => {
+    for (const summary of [
+      "Done.\n\n![a]\n\n> [a]: //evil.example/p.png?d=x",
+      "Done. <[](a)img src=//evil.example/a.png>",
+      "Done. See //evil.example/x, https:/evil.example/y and http:evil.example/z.",
+      "Done.\n\n![b][]\n\n- [b]: https://evil.example/p.png",
+    ]) {
+      const { body } = prTemplate({ ...base, summary })
+      expect(body).not.toContain("evil.example")
+      expect(body).not.toContain("<img")
+      expect(body).not.toContain("![")
+      expect(body.replace(jobMarker(jid), "")).not.toContain("//")
+      expect(body).toStartWith("Done.")
+    }
+  })
+
+  test("a summary with a token split by markup is withheld", () => {
+    const token = "gh" + "p_" + Array.from(crypto.getRandomValues(new Uint8Array(36)), (b) => "abc123"[b % 6]).join("")
+    const { body } = prTemplate({ ...base, summary: `Token ${token.slice(0, 2)}<b></b>${token.slice(2)}` })
+    expect(body).toStartWith(WITHHELD.secret)
+    expect(body).not.toContain(token.slice(2))
   })
 
   test("a summary with code or a secret is withheld with the fixed text", () => {
