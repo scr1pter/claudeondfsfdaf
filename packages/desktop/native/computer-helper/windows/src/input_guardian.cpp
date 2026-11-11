@@ -14,6 +14,18 @@
 #include <winrt/base.h>
 
 namespace vector::computer {
+std::optional<InputIoDeadlineSnapshot> InputIoDeadlineFence::arm(uint64_t deadline) noexcept {
+  std::lock_guard lock(mutex_);
+  if (generation_ == std::numeric_limits<uint64_t>::max()) { active_.reset(); return {}; }
+  active_ = InputIoDeadlineSnapshot{++generation_, deadline}; return active_;
+}
+std::optional<InputIoDeadlineSnapshot> InputIoDeadlineFence::snapshot() const noexcept {
+  std::lock_guard lock(mutex_); return active_;
+}
+bool InputIoDeadlineFence::retire(const InputIoDeadlineSnapshot& observed) noexcept {
+  std::lock_guard lock(mutex_); if (!active_ || *active_ != observed) return false; active_.reset(); return true;
+}
+
 InputGuardianLedger::InputGuardianLedger(uint64_t tag) : tag_(tag) {}
 std::optional<InputGuardianTicket> InputGuardianLedger::reserve(const InputRelease& release) {
   if (!valid_input_release(release)) return {};
@@ -152,26 +164,35 @@ class IoWatch final {
     if (cancellation_) cancellation_->attach(thread_.get());
     try {
       timer_=std::thread([this] { while (!closed_.load()) {
-        const auto due=deadline_.load();
-        if ((cancelled_ && cancelled_->load()) || (due && GetTickCount64()>=due)) (void)CancelSynchronousIo(thread_.get());
+        if (const auto observed=deadlines_.snapshot()) {
+          const auto cancelled=cancelled_ && cancelled_->load();
+          if (cancelled || observed->deadline)
+            (void)deadlines_.cancel_if_due(*observed,cancelled ? 0 : GetTickCount64(),cancelled,[this] { (void)CancelSynchronousIo(thread_.get()); });
+        }
         Sleep(1);
       } });
     } catch (...) { if (cancellation_) cancellation_->detach(); throw; }
   }
-  ~IoWatch() { closed_.store(true); if (timer_.joinable()) timer_.join(); if (cancellation_) cancellation_->detach(); }
+  ~IoWatch() {
+    closed_.store(true); if (const auto observed=deadlines_.snapshot()) (void)deadlines_.retire(*observed);
+    if (timer_.joinable()) timer_.join(); if (cancellation_) cancellation_->detach();
+  }
   bool transfer(HANDLE pipe, Bytes& bytes, bool write, uint64_t deadline) {
-    deadline_.store(deadline); size_t offset=0;
+    auto ticket=deadlines_.arm(deadline); if (!ticket) return false;
+    struct Retire { InputIoDeadlineFence& fence; std::optional<InputIoDeadlineSnapshot>& ticket; ~Retire() { if (ticket) (void)fence.retire(*ticket); } } retire{deadlines_,ticket};
+    size_t offset=0;
     while (offset<bytes.size()) {
-      if ((cancelled_ && cancelled_->load()) || (deadline && GetTickCount64()>=deadline)) { deadline_.store(0); return false; }
+      if ((cancelled_ && cancelled_->load()) || (deadline && GetTickCount64()>=deadline)) return false;
       DWORD count=0; const bool ok=write ? WriteFile(pipe,bytes.data()+offset,static_cast<DWORD>(bytes.size()-offset),&count,nullptr)!=FALSE : ReadFile(pipe,bytes.data()+offset,static_cast<DWORD>(bytes.size()-offset),&count,nullptr)!=FALSE;
-      if (!ok || count==0 || count>bytes.size()-offset) { deadline_.store(0); return false; }
+      if (!ok || count==0 || count>bytes.size()-offset) return false;
       offset+=count;
-      if (!write && !deadline && offset<bytes.size()) { deadline=GetTickCount64()+100; deadline_.store(deadline); }
+      if (!write && !deadline && offset<bytes.size()) { deadline=GetTickCount64()+100; ticket=deadlines_.arm(deadline); if (!ticket) return false; }
     }
-    deadline_.store(0); return (!cancelled_ || !cancelled_->load()) && (!deadline || GetTickCount64()<deadline);
+    (void)deadlines_.retire(*ticket); ticket.reset();
+    return (!cancelled_ || !cancelled_->load()) && (!deadline || GetTickCount64()<deadline);
   }
  private:
-  winrt::handle thread_; std::thread timer_; std::atomic<uint64_t> deadline_{0}; std::atomic<bool> closed_{false};
+  winrt::handle thread_; std::thread timer_; InputIoDeadlineFence deadlines_; std::atomic<bool> closed_{false};
   const std::atomic<bool>* cancelled_;
   IoCancellation* cancellation_;
 };
@@ -332,7 +353,7 @@ void authenticate(const std::shared_ptr<ChildState>& state) {
 
 class NativeGuardian final : public InputGuardian, public std::enable_shared_from_this<NativeGuardian> {
  public:
-  NativeGuardian() : nonce_(random_hex(32)),tag_(hex_number(random_hex(8))) {
+  explicit NativeGuardian(std::shared_ptr<InputGuardianDiagnostic> diagnostic) : diagnostic_(std::move(diagnostic)),nonce_(random_hex(32)),tag_(hex_number(random_hex(8))) {
     if (!tag_) throw std::runtime_error("Guardian tag unavailable.");
     shutdown_event_.attach(CreateEventW(nullptr,TRUE,FALSE,nullptr));
     if (!shutdown_event_) throw std::runtime_error("Guardian shutdown unavailable.");
@@ -363,10 +384,19 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
     return InputGuardianTicket{reply->ticket,release};
   }
   bool observed(const InputGuardianTicket& ticket,bool down,uint32_t timeout) override {
-    if (ticket.id==0 || !valid_input_release(ticket.release)) return false;
+    if (ticket.id==0 || !valid_input_release(ticket.release)) {
+      if (diagnostic_) diagnostic_->phase.store(InputGuardianPhase::request_invalid,std::memory_order_relaxed);
+      return false;
+    }
     Packet packet; packet.op=Op::observed; packet.ticket=ticket.id; packet.release=ticket.release; packet.down=down;
     const auto budget=std::min<uint32_t>(timeout,50); packet.budget=budget>10 ? budget-10 : 0;
-    const auto reply=exchange(packet,budget); return reply && reply->ok;
+    auto phase=InputGuardianPhase::setup_failed;
+    const auto reply=exchange(packet,budget,diagnostic_ ? &phase : nullptr);
+    if (reply) phase=reply->ok ? InputGuardianPhase::confirmed : InputGuardianPhase::reply_negative;
+    // Smoke observations are sequential. Only this returning caller publishes; cancellation,
+    // hook, control and retirement workers never retain or write this caller-local phase.
+    if (diagnostic_) diagnostic_->phase.store(phase,std::memory_order_relaxed);
+    return reply && reply->ok;
   }
   void retire(const InputGuardianTicket& ticket,bool definitely_not_posted) noexcept override {
     if (!ticket.id || !valid_input_release(ticket.release) || closed_signal_.load()) return;
@@ -422,6 +452,7 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
     }).detach();
   }
  private:
+  const std::shared_ptr<InputGuardianDiagnostic> diagnostic_;
   std::wstring nonce_; uint64_t tag_=0,sequence_=0;
   std::timed_mutex mutex_; bool closed_=false;
   std::atomic<bool> failed_{false},armed_{false};
@@ -434,15 +465,16 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
   std::array<Retirement,136> retired_{};
   size_t retire_count_=0;
   winrt::handle child_,input_,output_,shutdown_event_;
-  std::optional<Packet> exchange(Packet packet,uint32_t milliseconds) {
+  std::optional<Packet> exchange(Packet packet,uint32_t milliseconds,InputGuardianPhase* phase=nullptr) {
     const auto deadline=GetTickCount64()+milliseconds;
-    std::unique_lock lock(mutex_,std::defer_lock); if (!lock.try_lock_for(std::chrono::milliseconds(milliseconds))) return {};
+    std::unique_lock lock(mutex_,std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::milliseconds(milliseconds))) { if (phase) *phase=InputGuardianPhase::lock_expired; return {}; }
     // Normal UP confirmation follows queued retirement. Publish those retirements before waiting
     // for their observed UPs; the worker cannot acquire this same control lock while we wait.
     flush_retired_locked(deadline);
-    const auto now=GetTickCount64(); if (now>=deadline) return {};
+    const auto now=GetTickCount64(); if (now>=deadline) { if (phase) *phase=InputGuardianPhase::budget_expired; return {}; }
     if (packet.op==Op::observed) packet.budget=static_cast<uint32_t>(std::min<uint64_t>(packet.budget,deadline-now>10?deadline-now-10:0));
-    return exchange_locked(packet,deadline);
+    return exchange_locked(packet,deadline,phase);
   }
   void flush_retired_locked(uint64_t deadline) {
     // The entire batch shares one deadline, including serialization and both pipe transfers.
@@ -457,12 +489,19 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
       if (!exchange_locked(packet,deadline)) return;
     }
   }
-  std::optional<Packet> exchange_locked(Packet packet,uint64_t deadline) {
-    if (closed_ || closed_signal_.load() || failed_ || !child_ || GetTickCount64()>=deadline || sequence_==std::numeric_limits<uint64_t>::max() || WaitForSingleObject(child_.get(),0)!=WAIT_TIMEOUT) return {};
+  std::optional<Packet> exchange_locked(Packet packet,uint64_t deadline,InputGuardianPhase* phase=nullptr) {
+    if (closed_ || closed_signal_.load() || failed_ || !child_) { if (phase) *phase=InputGuardianPhase::inactive; return {}; }
+    if (GetTickCount64()>=deadline) { if (phase) *phase=InputGuardianPhase::budget_expired; return {}; }
+    if (sequence_==std::numeric_limits<uint64_t>::max() || WaitForSingleObject(child_.get(),0)!=WAIT_TIMEOUT) { if (phase) *phase=InputGuardianPhase::inactive; return {}; }
     packet.sequence=++sequence_; packet.tag=tag_; packet.nonce=nonce_bytes(nonce_);
     try {
+      if (phase) *phase=InputGuardianPhase::setup_failed;
       IoWatch io(&closed_signal_,&io_cancellation_); auto bytes=encode(packet);
-      if (!io.transfer(input_.get(),bytes,true,deadline) || !io.transfer(output_.get(),bytes,false,deadline)) { failed_=true; input_.close(); return {}; }
+      if (phase) *phase=InputGuardianPhase::write_refused;
+      if (!io.transfer(input_.get(),bytes,true,deadline)) { failed_=true; input_.close(); return {}; }
+      if (phase) *phase=InputGuardianPhase::read_refused;
+      if (!io.transfer(output_.get(),bytes,false,deadline)) { failed_=true; input_.close(); return {}; }
+      if (phase) *phase=InputGuardianPhase::reply_invalid;
       const auto reply=decode(bytes);
       if (!reply || !reply->response || reply->op!=packet.op || reply->sequence!=packet.sequence || reply->tag!=tag_ || reply->nonce!=packet.nonce ||
           reply->release!=packet.release || (packet.op!=Op::reserve && reply->ticket!=packet.ticket) || reply->down!=packet.down || reply->budget!=packet.budget || reply->count>136 ||
@@ -556,7 +595,7 @@ bool input_guardian_protocol_self_test() {
   packet.budget=301; if (valid_request(packet,command,0)) return false;
   return true;
 }
-std::shared_ptr<InputGuardian> InputGuardian::native() { const auto guardian=std::make_shared<NativeGuardian>(); guardian->start_retirement_worker(); return guardian; }
+std::shared_ptr<InputGuardian> InputGuardian::native(std::shared_ptr<InputGuardianDiagnostic> diagnostic) { const auto guardian=std::make_shared<NativeGuardian>(std::move(diagnostic)); guardian->start_retirement_worker(); return guardian; }
 int run_input_guardian(std::span<const std::wstring> args,HANDLE input,HANDLE output) noexcept {
   try { const auto command=parse_input_guardian(args); return command ? run_input_guardian(*command,input,output) : 2; } catch (...) { return 2; }
 }

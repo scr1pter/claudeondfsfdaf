@@ -1,6 +1,7 @@
 #pragma once
 #include "input_events.h"
 #include <array>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -10,6 +11,10 @@
 
 namespace vector::computer {
 inline constexpr uint64_t input_guardian_held_limit_ms=10'000;
+// Smoke-only observation of existing receipt refusal paths. No ticket, event, tag or native value.
+enum class InputGuardianPhase : uint8_t { none, request_invalid, lock_expired, budget_expired, inactive, write_refused, read_refused, reply_invalid, setup_failed, reply_negative, confirmed };
+struct InputGuardianDiagnostic { std::atomic<InputGuardianPhase> phase{InputGuardianPhase::none}; };
+static_assert(std::atomic<InputGuardianPhase>::is_always_lock_free);
 struct InputGuardianTicket {
   uint64_t id = 0;
   InputRelease release;
@@ -21,6 +26,29 @@ struct InputGuardianEvent {
   bool injected = false;
   bool down = false;
   uint64_t observed_at_ms = 0;
+};
+
+struct InputIoDeadlineSnapshot {
+  uint64_t generation = 0, deadline = 0;
+  bool operator==(const InputIoDeadlineSnapshot&) const = default;
+};
+// Each armed synchronous I/O phase owns a generation, including an unbounded read with deadline zero.
+// Eligibility and the actual cancellation are serialized with arm/retire. The callback must not
+// re-enter this fence; it cancels only the watcher's already-held native thread handle.
+class InputIoDeadlineFence final {
+ public:
+  std::optional<InputIoDeadlineSnapshot> arm(uint64_t deadline) noexcept;
+  std::optional<InputIoDeadlineSnapshot> snapshot() const noexcept;
+  bool retire(const InputIoDeadlineSnapshot&) noexcept;
+  template<class Cancel> bool cancel_if_due(const InputIoDeadlineSnapshot& observed, uint64_t now, bool cancelled, Cancel cancel) {
+    std::lock_guard lock(mutex_);
+    if (!active_ || *active_ != observed || (!cancelled && (!observed.deadline || now < observed.deadline))) return false;
+    cancel(); return true;
+  }
+ private:
+  mutable std::mutex mutex_;
+  uint64_t generation_ = 0;
+  std::optional<InputIoDeadlineSnapshot> active_;
 };
 
 // Pure bounded metadata. A reservation never authorizes an up; only a matching injected tagged
@@ -68,7 +96,7 @@ class InputGuardian {
   virtual void retire(const InputGuardianTicket&, bool definitely_not_posted = false) noexcept = 0;
   virtual uint32_t drain(uint32_t budget_ms = 300) noexcept = 0;
   virtual void close() noexcept = 0;
-  static std::shared_ptr<InputGuardian> native();
+  static std::shared_ptr<InputGuardian> native(std::shared_ptr<InputGuardianDiagnostic> diagnostic = {});
 };
 
 struct InputGuardianCommand {

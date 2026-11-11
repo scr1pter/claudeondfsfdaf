@@ -6,6 +6,21 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
+**Latest native observation, 11 November 2026.** The style-corrected
+`68fcb2fe` passed Windows native build/unit/version/probe/protocol checks and
+advanced through final window/freshness validation to accepted insertion. It
+still failed guardian DOWN confirmation (`observe-down`), so Stop is not
+verified. The next candidate fixes a demonstrated stale I/O-cancellation
+generation race and adds closed transport-versus-ledger diagnostics without
+relaxing any 50 ms bound. Local report/source checks passed 41/19 tests and
+desktop types passed; native confirmation is pending. Cold capture still
+fails and its separate design decision is awaiting the owner.
+
+Older-source native ARM64 core checks passed in the unsigned preview; final
+packaging did not run because integration assertions failed. Those fixture
+repairs are now pushed. The [dated record](./evidence/hands-windows-validation-2026-11-11.json)
+retains failures, cancellations, exact source/run scope and remaining gates.
+
 **Windows validation, 11 November 2026 (Pacific).** At `601c17d0`, all
 16 engine shards, ordinary Windows/Linux unit and E2E jobs, and the Node
 engine bundle passed [PR CI](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42764300309).

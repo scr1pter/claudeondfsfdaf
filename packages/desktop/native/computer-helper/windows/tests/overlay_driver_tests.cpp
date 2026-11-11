@@ -1,5 +1,6 @@
 #include "overlay_driver.h"
 #include "uia_native.h"
+#include "input_guardian.h"
 #include "privileged_self_test.h"
 #include <propidl.h>
 #include <uiautomation.h>
@@ -31,6 +32,18 @@ JsonObject wire_request() {
 // Pure wire/decision fixtures. They start no process, query no HWND/token/file, and post no input.
 size_t run_overlay_driver_tests() {
   size_t count = 0; const auto test = [&](const auto& body) { body(); ++count; };
+  test([] {
+    for (const auto phase : {InputGuardianPhase::none, InputGuardianPhase::confirmed, static_cast<InputGuardianPhase>(255)})
+      require(!overlay_driver_guardian_stage(phase), "overlay-driver.guardian-success-or-unknown-cannot-diagnose-failed-down");
+    std::set<OverlayDriverStage> stages;
+    for (const auto phase : {InputGuardianPhase::request_invalid, InputGuardianPhase::lock_expired, InputGuardianPhase::budget_expired,
+        InputGuardianPhase::inactive, InputGuardianPhase::write_refused, InputGuardianPhase::read_refused,
+        InputGuardianPhase::reply_invalid, InputGuardianPhase::setup_failed, InputGuardianPhase::reply_negative}) {
+      const auto stage = overlay_driver_guardian_stage(phase);
+      require(stage && stages.insert(*stage).second && overlay_driver_stage(overlay_driver_stage_name(*stage)),
+        "overlay-driver.guardian-failure-buckets-are-unique-closed-stages");
+    }
+  });
   test([] {
     for (int flags = 0; flags < 16; ++flags) {
       const LONG_PTR extended = ((flags & 1) ? static_cast<LONG_PTR>(WS_EX_NOACTIVATE) : LONG_PTR{0}) |

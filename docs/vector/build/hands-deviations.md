@@ -986,3 +986,44 @@ rendering-check investigation; the style-corrected source still needs its own
 result. Cold capture again failed (`full-expired-setup-lt25-rpc-ge50`);
 34 isolated checks passed, ten skipped and two failed. The complete run is a
 failure, not a native release pass.
+
+## Native input receipt continuation — 11 November 2026 (Pacific)
+
+At `68fcb2fe`, manual run `43086114357` / job `130751803266` passed native
+x64 compilation, units/version/probes, required protocol/lifecycle and staging.
+The Stop driver passed its style, ownership and final freshness checks, then
+failed `input_post_failed` / `observe-down`: insertion was accepted, but actual
+guardian DOWN confirmation was not. This cannot establish target delivery or
+a passing Stop, and the coarse failure cannot distinguish guardian transport
+failure from a valid negative ledger reply. Cold capture again failed its
+original ticket; the isolated report remains 34 passed, ten skipped, two failed.
+
+A separate source race was found in guardian I/O cancellation. Its reusable
+watcher could sample a previous reply deadline, pause, and later cancel a
+successor blocking read whose deadline was cleared/replaced. The real watcher
+now uses a generation-plus-deadline fence. Eligibility and the actual native
+cancellation serialize with arm/retire; stale snapshots cannot touch successor
+I/O. Current expiry and close still cancel repeatedly. Failure paths retire
+through RAII; success retires before its unchanged final acceptance deadline
+check. One watcher remains one thread, with no replay, retry or budget renewal.
+Seven native regression groups cover actual fence behavior, including stale
+reply-to-read handoff and concurrency. Native execution remains pending CI.
+This source defect is not yet proven to have caused the observed DOWN failure.
+
+Only the finite smoke driver supplies an optional guardian diagnostic. Reasons
+remain caller-local through synchronous exchange and publish one closed atomic
+phase before observed() returns. Timers, hooks and retirement workers retain
+no reason pointer and write no diagnostics. Nine closed failure stages split
+request, lock, budget, admission, transport and parsed reply refusal; no new
+IPC, native query, content, event tag or observed identifier is recorded.
+Insertion still requires the same actual matching receipt within 50 ms.
+Local report/source checks passed 41/19 tests (26,203/174 assertions) and
+desktop typechecking passed. Capture's 50 ms rule remains unchanged; its
+separate owner design question is pending, not assumed approved.
+
+The earlier unsigned preview was cancelled only after its two explained
+precondition failures and completed native core checks. Its actual ARM64
+unit/version/probe and protocol/lifecycle job `130752315043` passed, with
+30 core checks passed and privileged execution explicitly skipped. macOS
+15 Intel/26 required matrices also passed. This is older-source core evidence,
+not final packaging, granted input/capture, or a Hands release.

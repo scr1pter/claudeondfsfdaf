@@ -254,5 +254,97 @@
       "nativeCode": "capture_unavailable"
     },
     "qualification": "Native run progressed beyond membership and other initial window predicates to the source-confirmed style mismatch. Style-corrected source is not covered by this run; repeated successful/ cancelled late CreateForWindow outcomes both remain failed50ms acceptance."
+  },
+  "styleCandidateHostedOutcome": {
+    "headRevision": "68fcb2fe4eb5206314d65ac9967cb50369b6e359",
+    "run": 43086114357,
+    "job": 130751803266,
+    "conclusion": "failure",
+    "buildUnitVersionProbes": "passed",
+    "requiredProtocolLifecycle": {
+      "passed": 30,
+      "skipped": 1,
+      "failed": 0
+    },
+    "stagedBuild": "passed",
+    "isolated": {
+      "passed": 34,
+      "failed": 2,
+      "skipped": 10
+    },
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "observe-down",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "Passed the corrected style and unchanged final freshness checks and reached accepted insertion, but matching guardian DOWN confirmation failed. Insertion is not proof of target delivery or a passing Stop. Coarse receipt could mean transport failure or a negative ledger reply.",
+    "capture": {
+      "result": "failed",
+      "stage": "capture-window-item-full-expired-setup-lt25-rpc-ge50",
+      "nativeCode": "capture_unavailable"
+    }
+  },
+  "earlierPackagingDisposition": {
+    "run": 43083263709,
+    "revision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
+    "action": "Cancelled old unsigned artifacts-only run after two explained failing preconditions and completed native core coverage; no installers/publication credit.",
+    "windowsArm64": {
+      "job": 130752315043,
+      "conclusion": "success",
+      "actualUnitVersionProbes": "passed",
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "skipped": "privileged:disabled",
+      "qualification": "Official job log inspected; correct9ad checkout, restored artifact verification and native ARM64 checks. Not current-source packaging or isolated/input/capture evidence; local archive verification not claimed."
+    },
+    "macMatrices": [
+      {
+        "job": 130750747128,
+        "host": "macos-15-intel",
+        "conclusion": "success"
+      },
+      {
+        "job": 130750747211,
+        "host": "macos-26",
+        "conclusion": "success"
+      }
+    ],
+    "qualification": "Required grant-free native/build evidence only; privileged/granted behavior not established."
+  },
+  "guardianCandidate": {
+    "parentRevision": "ed70d6e99f4e8a00f24be295d0a3f54308fbb177",
+    "sourceDefect": "IoWatch reused a bare deadline across transfers. A timer could snapshot a reply deadline, pause, then cancel successor I/O after that deadline had been cleared/replaced.",
+    "repair": "Actual InputIoDeadlineFence binds generation+deadline. Arm/retire and eligibility plus actual CancelSynchronousIo share one private metadata lock. Stale snapshots cannot cancel successor reads; repeated current expiry/close cancellation remains. RAII retires failure paths, and success retires before unchanged final acceptance check.",
+    "unchanged": "Original absolute50ms control/confirmation bounds, first-partial100ms framing bound, tag/descriptor matching, actual-DOWN release authority and cleanup. Same watcher-thread count; no retry or deadline renewal.",
+    "diagnostics": "Smoke-only optional shared atomic; synchronous caller-local request/lock/budget/admission/write/read/reply reason published on observed return. Nine closed failed-confirmation stages; no event/key/tag/ID content, new IPC/native queries or timer/hook/retirement writes. None/confirmed never reclassify failure as success.",
+    "nativeTests": "Seven actual-fence regression groups plus closed stage mapping test; hosted execution pending.",
+    "localChecks": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+        "passed": 41,
+        "failed": 0,
+        "assertions": 26203,
+        "seconds": 0.948,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174,
+        "seconds": 4.1,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file run typecheck",
+        "exitCode": 0
+      }
+    ],
+    "qualification": "Source race corrected; not yet established as cause of observed native DOWN failure. New hosted native result required. Capture50ms policy remains unchanged; owner design decision pending."
   }
 }

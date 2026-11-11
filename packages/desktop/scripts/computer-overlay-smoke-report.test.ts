@@ -560,6 +560,48 @@ test("initial Windows window diagnostics preserve predicate order and leave fina
   expect(driver).toContain("!window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50")
 })
 
+test("Windows DOWN diagnostics retain the original receipt and transport boundaries", async () => {
+  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+  const guardian = await readFile(path.join(native, "input_guardian.cpp"), "utf8")
+  const header = await readFile(path.join(native, "input_guardian.h"), "utf8")
+  const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
+  expect(header).toContain("native(std::shared_ptr<InputGuardianDiagnostic> diagnostic = {})")
+  expect(header).toContain("std::atomic<InputGuardianPhase>::is_always_lock_free")
+  const observed = guardian.slice(
+    guardian.indexOf("bool observed(const InputGuardianTicket& ticket,bool down,uint32_t timeout) override"),
+    guardian.indexOf("void retire(const InputGuardianTicket& ticket,bool definitely_not_posted) noexcept override"),
+  )
+  expect(observed).toContain("std::min<uint32_t>(timeout,50)")
+  expect(observed).toContain("packet.budget=budget>10 ? budget-10 : 0")
+  expect(observed).toContain("exchange(packet,budget,diagnostic_ ? &phase : nullptr)")
+  expect(observed).toContain("reply->ok ? InputGuardianPhase::confirmed : InputGuardianPhase::reply_negative")
+  expect(observed).toContain("return reply && reply->ok")
+  expect(guardian.match(/diagnostic_->phase.store/g)).toHaveLength(2)
+  expect(observed).not.toMatch(/GetTickCount|WaitForSingleObject|sleep|SendInput|CancelSynchronousIo/)
+  const exchange = guardian.slice(guardian.indexOf("std::optional<Packet> exchange("), guardian.indexOf("void flush_retired_locked("))
+  expect(exchange.match(/GetTickCount64\(/g)).toHaveLength(2)
+  const locked = guardian.slice(guardian.indexOf("std::optional<Packet> exchange_locked("), guardian.indexOf("  void start()"))
+  expect(locked.match(/GetTickCount64\(/g)).toHaveLength(1)
+  expect(locked.match(/WaitForSingleObject\(/g)).toHaveLength(1)
+  expect(locked.match(/io.transfer\(/g)).toHaveLength(2)
+  expect(locked.indexOf("io.transfer(input_.get(),bytes,true,deadline)")).toBeLessThan(
+    locked.indexOf("io.transfer(output_.get(),bytes,false,deadline)"),
+  )
+  const down = driver.slice(driver.indexOf("// Insertion alone never proves DOWN"), driver.indexOf("if (backend.confirm_down)"))
+  expect(down).toContain("if (outcome == InputPostResult::accepted)")
+  expect(down.match(/guardian->observed\(\*ticket, true, 50\)/g)).toHaveLength(1)
+  expect(down).toContain("guardian_diagnostic->phase.load(std::memory_order_relaxed)")
+  expect(down).toContain('invalid(L"input_post_failed")')
+  expect(down).not.toMatch(/retire\(|drain\(|GetTickCount|SendInput/)
+  const watcher = guardian.slice(guardian.indexOf("class IoWatch final"), guardian.indexOf("DWORD actual_parent()"))
+  expect(watcher).toContain("deadlines_.cancel_if_due")
+  expect(watcher).toContain("InputIoDeadlineFence deadlines_")
+  expect(watcher).not.toContain("std::atomic<uint64_t> deadline_")
+  expect(watcher.indexOf("(void)deadlines_.retire(*ticket); ticket.reset();")).toBeLessThan(
+    watcher.lastIndexOf("GetTickCount64()<deadline"),
+  )
+})
+
 describe("fixed real Electron computer smoke reports", () => {
   test("checks fixed banner title separately from delivered Working state and enabled Stop", () => {
     const view = ComputerOverlayPage.bannerView({

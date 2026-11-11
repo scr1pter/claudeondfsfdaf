@@ -268,7 +268,7 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::envelope_shape; require(keys(envelope, {L"id", L"ok", L"stop"}) && safe_integer(field(envelope, L"id")) == 1 && envelope.GetNamedBoolean(L"ok"), L"control_invalid");
   stage = Stage::request; const auto request = parse_overlay_stop_request(envelope.GetNamedObject(L"stop")); require(request && request->parent == options.parent && request->nonce == options.nonce && request->parent_created == life->birth && request->source_digest == widen(overlay_driver_identity::kSourceDigest), L"control_invalid");
   stage = Stage::foreground; DWORD foreground = 0; if (!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != options.parent) throw DriverSkip{L"foreground_unavailable"};
-  stage = Stage::guardian_create; auto guardian = InputGuardian::native(); stage = Stage::backend_create; auto backend = InputBackend::system({}, guardian); stage = Stage::uia_create; const auto uia_diagnostic = std::make_shared<WindowsUiaDiagnostic>(); const auto uia = WindowsUiaBackend::system(uia_diagnostic);
+  stage = Stage::guardian_create; const auto guardian_diagnostic = std::make_shared<InputGuardianDiagnostic>(); auto guardian = InputGuardian::native(guardian_diagnostic); stage = Stage::backend_create; auto backend = InputBackend::system({}, guardian); stage = Stage::uia_create; const auto uia_diagnostic = std::make_shared<WindowsUiaDiagnostic>(); const auto uia = WindowsUiaBackend::system(uia_diagnostic);
   struct Close { InputBackend& backend; const WindowsUiaBackend& uia; std::shared_ptr<InputGuardian> guardian; ~Close() { guardian->close(); if (backend.close) backend.close(); if (uia.close) uia.close(); } } close{backend, uia, guardian};
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
   stage = Stage::window_observe; const auto window = WindowsBackend::system(windows_child_shell).observe(request->banner);
@@ -288,9 +288,15 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
       attempted = true; return true;
     });
     if (outcome == InputPostResult::not_posted) { attempted = false; invalid(L"input_post_failed"); }
-    // The former single condition is unchanged; the stage names observe-down only once the post was accepted.
-    if (outcome == InputPostResult::accepted) stage = Stage::observe_down;
-    require(outcome == InputPostResult::accepted && guardian->observed(*ticket, true, 50), L"input_post_failed");
+    // Insertion alone never proves DOWN. Only this private guardian's failed confirmation supplies
+    // a closed diagnosis, sampled before retirement/cleanup can perform another control operation.
+    if (outcome == InputPostResult::accepted) {
+      stage = Stage::observe_down;
+      if (!guardian->observed(*ticket, true, 50)) {
+        if (const auto observed = overlay_driver_guardian_stage(guardian_diagnostic->phase.load(std::memory_order_relaxed))) stage = *observed;
+        invalid(L"input_post_failed");
+      }
+    } else invalid(L"input_post_failed");
     if (backend.confirm_down) backend.confirm_down(release);
     stage = Stage::retire; guardian->retire(*ticket); stage = Stage::observe_up; confirmed_up = guardian->observed(*ticket, false, 300); require(confirmed_up, L"cleanup_failed");
     stage = Stage::cleanup; if (backend.forget_release) backend.forget_release(release);
@@ -448,6 +454,20 @@ std::optional<OverlayDriverStage> overlay_driver_uia_stage(WindowsUiaPhase phase
   const auto index = static_cast<size_t>(phase);
   if (index == 0 || index >= windows_uia_phases.size()) return {};
   return static_cast<OverlayDriverStage>(static_cast<size_t>(OverlayDriverStage::uia_root_current) + index - 1);
+}
+std::optional<OverlayDriverStage> overlay_driver_guardian_stage(InputGuardianPhase phase) noexcept {
+  switch (phase) {
+    case InputGuardianPhase::request_invalid: return OverlayDriverStage::guardian_observe_request_invalid;
+    case InputGuardianPhase::lock_expired: return OverlayDriverStage::guardian_observe_lock_expired;
+    case InputGuardianPhase::budget_expired: return OverlayDriverStage::guardian_observe_budget_expired;
+    case InputGuardianPhase::inactive: return OverlayDriverStage::guardian_observe_inactive;
+    case InputGuardianPhase::write_refused: return OverlayDriverStage::guardian_observe_write_refused;
+    case InputGuardianPhase::read_refused: return OverlayDriverStage::guardian_observe_read_refused;
+    case InputGuardianPhase::reply_invalid: return OverlayDriverStage::guardian_observe_reply_invalid;
+    case InputGuardianPhase::setup_failed: return OverlayDriverStage::guardian_observe_setup_failed;
+    case InputGuardianPhase::reply_negative: return OverlayDriverStage::guardian_observe_reply_negative;
+    default: return {};
+  }
 }
 bool overlay_driver_stage(std::wstring_view value) noexcept {
   return std::find(overlay_driver_stages.begin(), overlay_driver_stages.end(), value) != overlay_driver_stages.end();

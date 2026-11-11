@@ -1,5 +1,8 @@
 #include "input_guardian.h"
+#include <atomic>
+#include <future>
 #include <stdexcept>
+#include <thread>
 
 namespace vector::computer {
 namespace {
@@ -12,6 +15,9 @@ InputGuardianEvent event(const InputRelease& release,bool down,uint64_t time=100
 InputGuardianTicket reserve(InputGuardianLedger& ledger,const InputRelease& release) {
   const auto ticket=ledger.reserve(release); check(ticket.has_value(),"guardian.synthetic-reservation"); return *ticket;
 }
+InputIoDeadlineSnapshot arm(InputIoDeadlineFence& fence,uint64_t deadline) {
+  const auto observed=fence.arm(deadline); check(observed.has_value(),"guardian.io-generation-arms"); return *observed;
+}
 std::vector<std::wstring> args() {
   return {L"--computer-input-guardian",L"--parent-pid",L"42",L"--input-nonce",std::wstring(64,L'a'),L"--input-tag",L"0123456789abcdef",L"--shutdown-event",L"128"};
 }
@@ -20,6 +26,80 @@ std::vector<std::wstring> args() {
 // Pure metadata, codec and CLI fixtures only. No process, pipe, hook, key, mouse or desktop operation runs.
 size_t run_input_guardian_tests() {
   size_t groups=0; const auto test=[&](const auto& body) { body(); ++groups; };
+  test([] {
+    InputIoDeadlineFence fence; size_t cancellations=0;
+    check(!fence.snapshot(),"guardian.io-unarmed-has-no-cancellation-target"); const auto observed=arm(fence,100);
+    check(observed.generation!=0 && observed.deadline==100 && fence.snapshot()==observed,"guardian.io-snapshot-binds-generation-and-original-deadline");
+    check(!fence.cancel_if_due(observed,99,false,[&] { ++cancellations; }) && cancellations==0,"guardian.io-current-unexpired-transfer-is-not-cancelled");
+    check(fence.cancel_if_due(observed,100,false,[&] { ++cancellations; }) &&
+          fence.cancel_if_due(observed,101,false,[&] { ++cancellations; }) && cancellations==2 && fence.snapshot()==observed,
+          "guardian.io-current-expired-transfer-keeps-repeated-cancellation-without-renewal");
+    check(fence.retire(observed) && !fence.snapshot() && !fence.retire(observed),"guardian.io-transfer-retirement-is-idempotent");
+    check(!fence.cancel_if_due(observed,200,true,[&] { ++cancellations; }) && cancellations==2,"guardian.io-retired-transfer-cannot-cancel-anything");
+  });
+  test([] {
+    InputIoDeadlineFence fence; size_t cancellations=0;
+    const auto previous=arm(fence,100), delayed=*fence.snapshot();
+    check(fence.retire(previous),"guardian.io-reply-completed-before-next-read"); const auto next=arm(fence,0);
+    // Deterministic version of the timer being descheduled after sampling the previous reply.
+    check(!fence.cancel_if_due(delayed,150,false,[&] { ++cancellations; }) && cancellations==0 && fence.snapshot()==next,
+          "guardian.io-delayed-expired-reply-snapshot-cannot-cancel-successor-blocking-read");
+    check(!fence.cancel_if_due(next,150,false,[&] { ++cancellations; }),"guardian.io-unbounded-read-does-not-inherit-previous-deadline");
+    check(fence.cancel_if_due(next,150,true,[&] { ++cancellations; }) && cancellations==1,"guardian.io-close-still-cancels-the-active-unbounded-read");
+  });
+  test([] {
+    InputIoDeadlineFence fence; size_t cancellations=0;
+    const auto previous=arm(fence,100), next=arm(fence,100);
+    check(previous.generation!=next.generation && previous.deadline==next.deadline,"guardian.io-same-deadline-successor-still-has-distinct-lineage");
+    check(!fence.cancel_if_due(previous,100,true,[&] { ++cancellations; }) && !fence.retire(previous) && fence.snapshot()==next,
+          "guardian.io-old-close-snapshot-or-retirement-cannot-touch-a-new-generation");
+    check(fence.cancel_if_due(next,100,false,[&] { ++cancellations; }) && cancellations==1,"guardian.io-current-lineage-remains-cancellable");
+  });
+  test([] {
+    InputIoDeadlineFence fence; size_t cancellations=0; const auto initial=arm(fence,0);
+    // The existing first-partial-read rule arms its one absolute 100 ms boundary. Later samples
+    // and cancellation attempts cannot move it, and the prior indefinite phase is no longer valid.
+    const auto partial=arm(fence,1100);
+    check(!fence.cancel_if_due(initial,2000,true,[&] { ++cancellations; }) &&
+          !fence.cancel_if_due(partial,1099,false,[&] { ++cancellations; }) && fence.snapshot()==partial,
+          "guardian.io-first-partial-budget-has-an-independent-fixed-generation");
+    check(fence.cancel_if_due(partial,1100,false,[&] { ++cancellations; }) &&
+          fence.cancel_if_due(partial,1200,false,[&] { ++cancellations; }) && cancellations==2 && partial.deadline==1100,
+          "guardian.io-partial-deadline-is-not-renewed-by-repeated-observations");
+  });
+  test([] {
+    InputIoDeadlineFence fence; size_t cancellations=0; const auto current=arm(fence,100);
+    auto changed=current; ++changed.deadline;
+    check(!fence.cancel_if_due(changed,200,true,[&] { ++cancellations; }) && !fence.retire(changed),"guardian.io-deadline-is-part-of-the-snapshot-identity");
+    changed=current; ++changed.generation;
+    check(!fence.cancel_if_due(changed,200,true,[&] { ++cancellations; }) && !fence.retire(changed),"guardian.io-unknown-generation-is-never-a-cancellation-target");
+    check(!fence.cancel_if_due(InputIoDeadlineSnapshot{},200,true,[&] { ++cancellations; }) && cancellations==0 && fence.snapshot()==current,
+          "guardian.io-default-snapshot-cannot-act-as-a-wildcard");
+  });
+  test([] {
+    InputIoDeadlineFence fence; size_t cancellations=0; auto previous=arm(fence,50);
+    for (uint64_t index=0; index<256; ++index) {
+      check(fence.retire(previous),"guardian.io-sequential-transfer-retires-exact-owner"); const auto next=arm(fence,50);
+      check(!fence.cancel_if_due(previous,100,true,[&] { ++cancellations; }) && fence.snapshot()==next,
+            "guardian.io-repeated-successor-transfers-never-reuse-old-cancellation-proof"); previous=next;
+    }
+    check(cancellations==0 && fence.cancel_if_due(previous,100,true,[&] { ++cancellations; }) && cancellations==1,
+          "guardian.io-only-the-final-live-transfer-can-be-cancelled");
+  });
+  test([] {
+    InputIoDeadlineFence fence; const auto previous=arm(fence,100);
+    std::promise<void> started; auto starting=started.get_future(); std::atomic<bool> finished{false};
+    std::optional<InputIoDeadlineSnapshot> next; std::thread armer; bool serialized=false;
+    const auto cancelled=fence.cancel_if_due(previous,100,false,[&] {
+      armer=std::thread([&] { started.set_value(); next=fence.arm(200); finished.store(true); });
+      starting.wait(); serialized=!finished.load();
+    });
+    armer.join();
+    check(cancelled && serialized && finished.load() && next && fence.snapshot()==next,
+          "guardian.io-successor-arm-cannot-pass-the-actual-cancellation-callback");
+    size_t stale=0; check(!fence.cancel_if_due(previous,300,true,[&] { ++stale; }) && stale==0,
+          "guardian.io-joined-concurrent-successor-keeps-its-own-lineage");
+  });
   test([] {
     check(input_guardian_protocol_self_test(),"guardian.finite-authenticated-private-protocol");
     const auto value=parse_input_guardian(args());
