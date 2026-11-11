@@ -120,25 +120,35 @@ export class BrowserGuard {
           return
         }
         this.sessions.set(sessionId, { sessionId, type })
-        try {
-          await this.pipe.send("Page.enable", {}, sessionId)
-          await this.pipe.send("Runtime.enable", {}, sessionId)
-          await this.pipe.send(
+        // The target waits for the debugger until it is told to run. The setup goes out first and the go-ahead right
+        // behind it, without waiting for any answer in between: the browser handles one session's commands in order, so
+        // the guard's script and the auto-attach are in place before the target runs. Waiting for each answer first can
+        // stall the target: while it navigates, the browser holds commands meant for its renderer, and the navigation
+        // can itself be held until the go-ahead, so the guard sat out its call timeout (the image check's Page.navigate
+        // timed out behind it) and then gave up on the page.
+        const setup = [
+          this.pipe.send("Page.enable", {}, sessionId),
+          this.pipe.send("Runtime.enable", {}, sessionId),
+          this.pipe.send(
             "Page.addScriptToEvaluateOnNewDocument",
             { source: this.source, worldName: GUARD_WORLD, runImmediately: true },
             sessionId,
-          )
-          await this.pipe.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId)
-          const tree = await this.pipe.send<{ frameTree?: { frame?: { id?: string } } }>("Page.getFrameTree", {}, sessionId)
-          const session = this.sessions.get(sessionId)
-          if (session && tree.frameTree?.frame?.id) session.mainFrame = tree.frameTree.frame.id
-        } catch {
+          ),
+          this.pipe.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId),
+        ]
+        const tree = this.pipe.send<{ frameTree?: { frame?: { id?: string } } }>("Page.getFrameTree", {}, sessionId)
+        const run = this.pipe.send("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {})
+        const [answers, frameTree] = await Promise.all([Promise.allSettled(setup), tree.catch(() => undefined)])
+        await run
+        if (answers.some((answer) => answer.status === "rejected")) {
           // The target went away while it was being set up ("Session with given id not found"): there is nothing left
           // to guard, and an event handler that threw would take hostd down with an unhandled rejection.
           this.sessions.delete(sessionId)
-        } finally {
-          await this.pipe.send("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {})
+          return
         }
+        const session = this.sessions.get(sessionId)
+        const frame = frameTree?.frameTree?.frame?.id
+        if (session && frame) session.mainFrame = frame
         return
       }
       case "Target.detachedFromTarget": {

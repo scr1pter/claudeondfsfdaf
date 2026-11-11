@@ -133,14 +133,28 @@ report("an expired viewer token is refused", (await viewer(mint({ iat: Math.floo
 report("another session's viewer token is refused", (await viewer(mint({ sid: `hs_${"a".repeat(26)}` }))) === "closed 4003")
 
 // ── The browser: policy and credential guard ───────────────────────────────────────────────────────────────────────
+// Chromium with the flags hostd starts it with (bundle.browserCommand()), its own profile, headless and, only here,
+// without its sandbox. Its own log is kept so a failure here says what the browser reported.
 const bundle = await import("/opt/vector/hostd.mjs")
 const profile = `/tmp/check-profile-${randomBytes(4).toString("hex")}`
 mkdirSync(profile, { recursive: true })
 execFileSync("chown", ["10004:10004", profile])
-const browserArgs = asUser(10004, "", ["/usr/bin/chromium-browser", "--headless=new", "--no-sandbox", `--user-data-dir=${profile}`, "--remote-debugging-pipe", "about:blank"])
-const browser = spawn(browserArgs[0], browserArgs.slice(1), { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"], env: { HOME: profile, PATH: "/usr/bin:/bin" } })
+const hostdBrowser = bundle.browserCommand()
+const hostdFlags = hostdBrowser
+  .slice(hostdBrowser.indexOf("/usr/bin/chromium-browser") + 1)
+  .filter((flag) => flag.startsWith("--") && !flag.startsWith("--user-data-dir=") && flag !== "--remote-debugging-pipe")
+const browserArgs = asUser(10004, "", [
+  "/usr/bin/chromium-browser", "--headless=new", "--no-sandbox", `--user-data-dir=${profile}`, "--remote-debugging-pipe", ...hostdFlags, "about:blank",
+])
+const browser = spawn(browserArgs[0], browserArgs.slice(1), {
+  stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+  env: { HOME: profile, PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+})
+let browserLog = ""
+browser.stdio[2].on("data", (chunk) => (browserLog = (browserLog + chunk).slice(-20_000)))
 const pipe = new bundle.CdpPipe((chunk) => browser.stdio[3].write(chunk))
 browser.stdio[4].on("data", (chunk) => pipe.feed(chunk))
+const browserStarted = Date.now()
 let step = "guard start"
 try {
   const guard = new bundle.BrowserGuard(pipe, readFileSync("/opt/vector/credential-guard.js", "utf8"))
@@ -151,18 +165,23 @@ try {
   const { sessionId } = await pipe.send("Target.attachToTarget", { targetId, flatten: true })
   step = "page enable"
   await pipe.send("Page.enable", {}, sessionId)
-  step = "checks"
+  step = "focus emulation"
   await pipe.send("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId)
+  step = "navigate to the run-API host"
   const blocked = await pipe.send("Page.navigate", { url: "https://hosted-run.vectordev.ai/" }, sessionId)
   report("the browser policy blocks the run-API host", String(blocked.errorText ?? "").includes("BLOCKED_BY_ADMINISTRATOR"), blocked.errorText)
+  step = "navigate to the form"
   await pipe.send("Page.navigate", { url: "data:text/html,<input type=password id=p><input id=q name=search>" }, sessionId)
   await new Promise((resolve) => setTimeout(resolve, 1500))
+  step = "focus the password field"
   await pipe.send("Runtime.evaluate", { expression: "document.getElementById('p').focus()" }, sessionId)
   report("the guard sees a focused password field", (await guard.focusedSecret()) === "credential")
+  step = "focus the ordinary field"
   await pipe.send("Runtime.evaluate", { expression: "document.getElementById('q').focus()" }, sessionId)
   report("the guard lets an ordinary field through", (await guard.focusedSecret()) === undefined)
 } catch (error) {
-  report("the browser checks ran", false, `${step}: ${error.message}`)
+  report("the browser checks ran", false, `${step}, ${Date.now() - browserStarted} ms after the browser started: ${error.message}`)
+  report("browser log", false, browserLog.slice(-400))
 } finally {
   browser.kill("SIGKILL")
 }
