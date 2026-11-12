@@ -78,7 +78,12 @@ function sameBinding(left: ReadOnlyGit.Input, right: ReadOnlyGit.Input) {
   return (
     left.directory === right.directory &&
     left.gitDirectory === right.gitDirectory &&
-    left.commonDirectory === right.commonDirectory
+    left.commonDirectory === right.commonDirectory &&
+    (right.commonIdentity === undefined ||
+      (left.commonIdentity !== undefined &&
+        left.commonIdentity.dev === right.commonIdentity.dev &&
+        left.commonIdentity.ino === right.commonIdentity.ino &&
+        left.commonIdentity.birth === right.commonIdentity.birth))
   )
 }
 

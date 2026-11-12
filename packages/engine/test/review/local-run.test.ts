@@ -528,6 +528,7 @@ describe("durable server-owned local review runs", () => {
         const database = yield* Database.Service
         const brain = yield* BrainDatabase.Service
         const jobs = yield* BackgroundJob.Service
+        const requests = yield* ReviewRequestStore.Service
         const original = yield* fixture
         const snapshot = () =>
           Effect.gen(function* () {
@@ -553,20 +554,24 @@ describe("durable server-owned local review runs", () => {
           const started = yield* runs.start(repo.request, repo.source)
           yield* jobs.wait({ id: started.runID })
           expect((yield* runs.get(repo.parent.id, started.runID)).status).toBe("completed")
+          const retained = yield* requests.sourceSnapshot(repo.parent.id, started.runID)
+          const physical = retained?.sourceBinding?.scope
+          if (!physical) throw new Error("The real review did not retain its physical admission binding")
           const repository = repo.parent.projectID
           const reviewEntry = `source-${started.runID}`
           const ownerEntry = `owner-${started.runID}`
           const ordinaryEntry = `ordinary-${started.runID}`
           yield* brain.db.transaction((tx) =>
             Effect.gen(function* () {
-              yield* ReviewStore.register(tx, repository)
-              yield* ReviewStore.advance(tx, repository, true)
+              yield* ReviewStore.register(tx, repository, physical)
+              yield* ReviewStore.advance(tx, repository, physical, true)
               yield* tx
                 .insert(BrainReviewMemoryTable)
                 .values([
                   {
                     id: reviewEntry,
                     repository_id: repository,
+                    scope_id: physical,
                     kind: "outcome",
                     status: "active",
                     visibility: "repository",
@@ -588,6 +593,7 @@ describe("durable server-owned local review runs", () => {
                   {
                     id: ownerEntry,
                     repository_id: repository,
+                    scope_id: physical,
                     kind: "preference",
                     status: "active",
                     visibility: "repository",

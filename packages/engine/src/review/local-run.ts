@@ -250,7 +250,13 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
         const setup = Effect.gen(function* () {
           const prepared = yield* lifecycle.within(parentID)(
             Effect.gen(function* () {
-              const reservation = yield* requests.reserve({ parentID, request, ownerNonce, owner: lease })
+              const reservation = yield* requests.reserve({
+                parentID,
+                request,
+                ownerNonce,
+                owner: lease,
+                sourceBinding: admission.success.sourceBinding,
+              })
               if (!reservation.claimed) {
                 if (reservation.row.runID) return { existing: yield* get(parentID, reservation.row.runID) }
                 return yield* new Error({
