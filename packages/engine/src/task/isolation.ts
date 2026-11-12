@@ -769,6 +769,51 @@ export const make = Effect.gen(function* () {
       return yield* err("registry", "The task checkout's Git metadata changed identity.")
     return current
   })
+  /** A settled checkout remains the same registered task until the read-only review releases this lock. */
+  const review = <A, E, R>(
+    input: { readonly taskID: string; readonly parentSessionID: string },
+    use: (record: Record) => Effect.Effect<A, E, R>,
+  ) =>
+    lock(
+      input.taskID,
+      Effect.gen(function* () {
+        const record = yield* get(input.taskID)
+        if (record.parentSessionID !== input.parentSessionID || record.deleted)
+          return yield* err("review_target", "That isolated task does not belong to this conversation.")
+        if (record.mode !== "worktree" || !["changed", "diverged"].includes(record.state))
+          return yield* err("review_target", "Only a settled task with saved worktree changes can be reviewed.")
+        if (!record.tip || !(record.reviewBase ?? record.seed))
+          return yield* err("review_target", "The task has no saved review range.")
+        const checked = yield* verify(record)
+        if ((yield* text(checked.directory, ["rev-parse", "HEAD"])) !== checked.tip)
+          return yield* err(
+            "review_target",
+            "The task checkout changed since it settled. Settle it again before reviewing.",
+          )
+        // The branch review covers saved commits only; unsaved edits must never be silently reported as reviewed.
+        if (yield* text(checked.directory, ["status", "--porcelain", "--untracked-files=all"]))
+          return yield* err("review_target", "The task has unsaved changes. Settle it again before reviewing.")
+        const result = yield* use(checked)
+        const current = yield* verify(checked)
+        if (
+          current.deleted ||
+          current.parentSessionID !== checked.parentSessionID ||
+          current.state !== checked.state ||
+          current.attempt !== checked.attempt ||
+          current.settledAttempt !== checked.settledAttempt ||
+          current.tip !== checked.tip ||
+          (current.reviewBase ?? current.seed) !== (checked.reviewBase ?? checked.seed) ||
+          (yield* text(checked.directory, ["rev-parse", "HEAD"])) !== checked.tip ||
+          (yield* text(checked.directory, ["status", "--porcelain", "--untracked-files=all"]))
+        )
+          return yield* err(
+            "review_target",
+            "The task changed while it was being reviewed; the review was not accepted.",
+          )
+        return result
+      }),
+    )
+
   const identity = Effect.fn("TaskIsolation.identity")(function* (cwd: string) {
     const name = yield* run(cwd, ["config", "user.name"])
     const email = yield* run(cwd, ["config", "user.email"])
@@ -2810,6 +2855,7 @@ export const make = Effect.gen(function* () {
     find: optional,
     markSettling,
     records,
+    review,
     enqueue,
     admit,
   }

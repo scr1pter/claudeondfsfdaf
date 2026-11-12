@@ -78,6 +78,12 @@ export interface HandoffContext {
   readonly sessionID?: SessionID
   /** The request this run belongs to: the id of the message the user last wrote, or the run id with no session. */
   readonly requestID: string
+  /** Connect-owned hidden placement parent for a task worktree review; consent still belongs to sessionID. */
+  readonly reviewParentID?: SessionID
+  /** A placed task review always ignores previous branch state. */
+  readonly fullReview?: true
+  /** Original task target for persisted findings comparison; execution still uses its verified branch range. */
+  readonly reviewTarget?: Connect.Target
   readonly directory: string
   /** Fires when the run is cancelled, times out, or its caller stops waiting. */
   readonly abort: AbortSignal

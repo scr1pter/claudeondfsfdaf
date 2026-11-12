@@ -202,13 +202,17 @@ export function finish(findings: readonly Connect.Finding[]): { findings: Connec
 // ---------------------------------------------------------------------------------------------------------------
 // Comparing two reviews
 
-/** Whether an earlier review can be compared with this one: both of the same target kind. */
+/** Same target kind, and the same registered task for full task worktree reviews. */
 export function comparable(previous: Connect.Target | undefined, current: Connect.Target): boolean {
-  return previous !== undefined && previous.kind === current.kind
+  return (
+    previous !== undefined &&
+    previous.kind === current.kind &&
+    (current.kind !== "task" || (previous.kind === "task" && previous.task === current.task))
+  )
 }
 
 /**
- * Labels this review's findings against an earlier review of the working tree or the index. A finding that matches an
+ * Labels this review's findings against an earlier working-tree, index or full task review. A finding that matches an
  * earlier one (core's `matchPrior`: by id, then by place and a similar title) is still open, whatever status the
  * earlier run saved: a saved run is session data, and only a person's click dismisses a finding (CW-17), so an
  * earlier `dismissed` never hides a finding this review raised. One that matches none is new. Each earlier finding is
@@ -288,7 +292,7 @@ export function compareBranch(input: {
 
 /**
  * Compares this review with an earlier one. Only reviews of the same target kind compare; any other pair is refused.
- * Branch reviews read VectorScope's state (`selection`), and the working tree and the index read the earlier run's
+ * Branch reviews read VectorScope's state (`selection`); working-tree, index and full task reviews read the earlier run's
  * saved findings.
  */
 export function compare(input: {
@@ -325,6 +329,7 @@ export function compare(input: {
 export function targetWords(target: Connect.Target): string {
   if (target.kind === "uncommitted") return "uncommitted changes"
   if (target.kind === "staged") return "staged changes"
+  if (target.kind === "task") return `task ${target.task}’s isolated changes`
   return target.base ? `the branch against ${target.base}` : "the branch against its base"
 }
 

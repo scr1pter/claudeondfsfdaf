@@ -8,7 +8,7 @@ import type { ConnectAdapter } from "@/connect/adapter"
 import { ConnectHub } from "@/connect/hub"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import type { SessionID } from "@/session/schema"
+import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import type { TaskSizeContext } from "./escalate"
 // The prompt calls arrive in `ctx.extra.promptOps`, and the hub builds its helper handle from them. The task tool starts
@@ -52,6 +52,9 @@ export const Parameters = Schema.Struct({
   target: Schema.optional(Schema.Literals(["uncommitted", "staged", "branch"])).annotate({
     description:
       "For review: uncommitted (default: the working tree against HEAD, untracked files included), staged, or branch (against its merge base)",
+  }),
+  task: Schema.optional(SessionID).annotate({
+    description: "For review: a settled isolated task in this conversation; exclusive with target and base",
   }),
   base: Schema.optional(Schema.String.check(Schema.isLengthBetween(1, 256))).annotate({
     description: "For target branch only: the ref to compare against",
@@ -186,6 +189,8 @@ export const ConnectTool = Tool.define(
           "Not reviewed",
           "run, findings and mode are for the fix, findings, status and cancel actions. A review takes target, base, security, since, max_cost and background.",
         )
+      if (params.task !== undefined && (params.target !== undefined || params.base !== undefined))
+        return refused(params.action, "input", "Not reviewed", "task cannot be combined with target or base.")
       const kind = params.target ?? "uncommitted"
       if (params.base !== undefined && kind !== "branch")
         return refused(params.action, "input", "Not reviewed", "base is for target branch only.")
@@ -193,7 +198,11 @@ export const ConnectTool = Tool.define(
       const cost = ConnectPolicy.maxCostInput(params.max_cost)
       if (!cost.ok) return refused(params.action, "input", "Not reviewed", cost.refusal.message)
       const target: Connect.Target =
-        kind === "branch" ? { kind, ...(params.base !== undefined ? { base: params.base } : {}) } : { kind }
+        params.task !== undefined
+          ? { kind: "task", task: params.task }
+          : kind === "branch"
+            ? { kind, ...(params.base !== undefined ? { base: params.base } : {}) }
+            : { kind }
       const directory = (yield* InstanceState.context).directory
       const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
       const background = params.background === true
@@ -240,6 +249,7 @@ export const ConnectTool = Tool.define(
         return refused(params.action, "escalate", "Not fixed", LIGHT_FIX)
       if (
         params.target !== undefined ||
+        params.task !== undefined ||
         params.base !== undefined ||
         params.security !== undefined ||
         params.since !== undefined ||

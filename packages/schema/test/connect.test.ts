@@ -164,6 +164,8 @@ describe("connect contracts round-trip", () => {
       reason: "Off in Vector Local",
       reach: "none",
     })
+    roundTrip(Connect.Target, { kind: "task", task: session })
+    roundTrip(Connect.Request, { ...reviewRequest, target: { kind: "task", task: session } })
     roundTrip(Connect.Target, { kind: "staged" })
     roundTrip(Connect.Target, { kind: "branch" })
     const refusal = new Connect.Refusal({
@@ -177,15 +179,14 @@ describe("connect contracts round-trip", () => {
     expect(decoded.code).toBe("read-rule")
   })
 
-  test("the run event is defined, scoped to the requester's session, and not yet in the manifest", () => {
+  test("the run event is defined, scoped to the requester's session, and included in the manifest", () => {
     expect(Connect.Event.RunUpdated.type).toBe("connect.run.updated")
     expect(Connect.Event.Definitions).toEqual([Connect.Event.RunUpdated])
     const payload = { id: "evt_0001", type: "connect.run.updated", data: { sessionID: session, run } }
     roundTrip(Connect.Event.RunUpdated, payload)
     roundTrip(Connect.Event.RunUpdated, { ...payload, data: { run } })
     refuses(Connect.Event.RunUpdated, { ...payload, type: "connect.run.changed" })
-    // CW-09 adds the event to the public manifest and flips this line.
-    expect(EventManifest.Latest.has("connect.run.updated")).toBe(false)
+    expect(EventManifest.Latest.has("connect.run.updated")).toBe(true)
   })
 
   test("run ids are cr_ ids that sort by creation", () => {

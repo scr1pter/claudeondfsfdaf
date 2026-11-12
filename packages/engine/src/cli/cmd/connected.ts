@@ -20,7 +20,7 @@ type Arguments = {
   base?: string
 }
 
-export function reviewTarget(args: Arguments): Connect.Target {
+export function reviewTarget(args: Arguments): Exclude<Connect.Target, { kind: "task" }> {
   const choices = Number(!!args.uncommitted) + Number(!!args.staged) + Number(args.base !== undefined)
   if (choices > 1) throw new Error("Choose one of --uncommitted, --staged or --base.")
   if (args.base !== undefined) {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Connect } from "@vectordevai/schema/connect"
+import { SessionID } from "@vectordevai/schema/session-id"
 import { ConnectFindings } from "../../src/connect/findings"
 import type { Finding, PlacedFinding, PriorFinding, ReviewOutcome, Selection } from "../../src/review/types"
 
@@ -361,6 +362,32 @@ describe("comparing two reviews", () => {
       ["gone2", "fixed", "still-open"],
     ])
     for (const entry of result.findings) decodeFinding(entry)
+  })
+
+  test("task reviews compare only within the same registered task", () => {
+    const task = SessionID.create()
+    const other = SessionID.create()
+    expect(ConnectFindings.comparable({ kind: "task", task }, { kind: "task", task })).toBe(true)
+    expect(ConnectFindings.comparable({ kind: "task", task }, { kind: "task", task: other })).toBe(false)
+    expect(ConnectFindings.comparable({ kind: "branch" }, { kind: "task", task })).toBe(false)
+    expect(ConnectFindings.targetWords({ kind: "task", task })).toContain(task)
+  })
+
+  test("a full task review compares stored findings without branch incremental selection state", () => {
+    const task = SessionID.create()
+    const result = ConnectFindings.compare({
+      target: { kind: "task", task },
+      previous: { target: { kind: "task", task }, findings: [finding("retained"), finding("fixed")] },
+      current: [finding("retained")],
+      changed: ["src/retained.ts", "src/fixed.ts"],
+      selection: { fixed: [], raised: [] },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok)
+      expect(result.findings.map((item) => [item.id, item.status])).toEqual([
+        ["retained", "still-open"],
+        ["fixed", "fixed"],
+      ])
   })
 
   test("target words", () => {

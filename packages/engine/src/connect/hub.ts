@@ -29,6 +29,7 @@ import { Session } from "@/session/session"
 import { Skill } from "@/skill"
 import { DesktopTasks } from "@/task/desktop"
 import { TaskNotify } from "@/task/notify"
+import { TaskIsolation } from "@/task/isolation"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 // Types only, as everywhere in connect: the hub must stay out of the prompt loop's module graph.
 import type { SessionPrompt } from "@/session/prompt"
@@ -38,6 +39,7 @@ import type { ConnectAdapter } from "./adapter"
 import { ADAPTERS, DEPS as ADAPTER_DEPS } from "./adapters"
 import { ConnectMembers } from "./members"
 import { ConnectNote } from "./note"
+import { ConnectPlacement } from "./placement"
 import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
 import type { RunBudget } from "@vectordevai/schema/run-budget"
 
@@ -240,6 +242,11 @@ interface Entry {
   readonly places: Set<SessionID>
   /** The requester's child sessions when the run was admitted: an earlier run's helpers, never this run's. */
   earlier?: ReadonlySet<SessionID>
+  /** Extra denies only, projected from a placed task's requester; no helper receives a new allow. */
+  readDenies?: PermissionV1.Ruleset
+  /** Trusted adapter usage remains visible if the task identity becomes stale after the review finishes. */
+  observedCost?: Connect.Cost
+  observedSendsTo?: Connect.SendsTo
   /** Consents already asked in this run. */
   readonly asked: Set<string>
   readonly controller: AbortController
@@ -295,6 +302,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const background = yield* BackgroundJob.Service
       const notify = yield* TaskNotify.Service
       const database = yield* Database.Service
+      const isolation = yield* TaskIsolation.Service
       // Where a background run's tool-part write runs: the hub's own scope, so nothing waits on it.
       const scope = yield* Scope.Scope
       const adapters = yield* Effect.all(factories)
@@ -539,6 +547,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 return yield* refuse(sessionID, "another run going now holds it")
             if (entry.sessions.size >= Connect.MAX_SESSIONS)
               return yield* refuse(sessionID, `the run already made ${Connect.MAX_SESSIONS} helper sessions`)
+            if (entry.readDenies?.length)
+              yield* sessions.setPermission({
+                sessionID,
+                permission: [...(info.permission ?? []), ...entry.readDenies],
+              })
           }
         })
         const agents = HELPER_AGENTS[member] ?? new Set<string>()
@@ -587,7 +600,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         } satisfies ConnectPolicy.RunSpend
       })
 
-      const admit = Effect.fnUntraced(function* (entry: Entry, saved: readonly Connect.Run[]) {
+      const admit = Effect.fnUntraced(function* (
+        entry: Entry,
+        saved: readonly Connect.Run[],
+        placed?: TaskIsolation.Record,
+      ) {
         const request = entry.run.request
         const requester = request.requester
         if (!flags.experimentalConnect) return yield* refusal("not-allowed", OFF)
@@ -661,6 +678,19 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           )
           if (!capped.ok) return yield* capped.refusal
           yield* checkReads(request.directory, rules)
+          if (placed) {
+            const roots = yield* Effect.tryPromise(() =>
+              Promise.all([placed.parentDirectory, placed.directory].map((root) => realpath(root))),
+            ).pipe(Effect.catch(() => refusal("read-rule", "Connect could not resolve the task's read authorities.")))
+            const denies = ConnectPlacement.readDenies({
+              rules,
+              sources: [placed.parentDirectory, roots[0]!],
+              work: [placed.directory, roots[1]!],
+            })
+            if (!denies.ok) return yield* denies.refusal
+            entry.readDenies = denies.value
+            yield* checkReads(placed.directory, rules, [placed.parentDirectory, roots[0]!])
+          }
         }
         const previous = request.action === "review" && request.since ? yield* earlier(request, requester) : undefined
         const source = request.action === "fix" ? yield* fixSource(request, requester) : undefined
@@ -760,13 +790,21 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
 
       // The reviewer reads the whole worktree with no external-directory question, and the read tool names each file
       // relative to it, so the check walks from where the reviewer's reads start, under the names it asks with.
-      const checkReads = Effect.fnUntraced(function* (directory: string, rules: PermissionV1.Ruleset) {
+      const checkReads = Effect.fnUntraced(function* (
+        directory: string,
+        rules: PermissionV1.Ruleset,
+        aliases: readonly string[] = [],
+      ) {
         const patterns = ConnectPolicy.readPatterns(rules)
         if (patterns.length === 0) return
         const instance = yield* InstanceState.context
         const scanned = yield* Effect.tryPromise(async () => {
           const place = await reviewRoot(directory, instance)
-          return scan(place.root, patterns, rules, { prefixes: place.prefixes })
+          const roots = await Promise.all([place.root, ...aliases].map((root) => realpath(root)))
+          const prefixes = [...new Set([...place.prefixes, ...roots, place.root, ...aliases])].map((root) =>
+            root.replaceAll("\\", "/").replace(/\/$/, ""),
+          )
+          return scan(place.root, patterns, rules, { prefixes })
         }).pipe(Effect.orElseSucceed(() => ({ error: true as const })))
         if ("error" in scanned)
           return yield* refusal(
@@ -868,13 +906,65 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         remember(state, entry)
         yield* publish(entry)
 
+        const execute = (placed?: TaskIsolation.Record) =>
+          Effect.gen(function* () {
+            if (entry.stop) return yield* Effect.interrupt
+            const admission = yield* admit(entry, saved?.runs ?? [], placed)
+            const started = yield* Clock.currentTimeMillis
+            entry.run = { ...entry.run, status: "running", time: { ...entry.run.time, started } }
+            yield* publish(entry)
+            if (!placed || request.action !== "review") return yield* admission.handle(request, admission.context)
+            const target = { kind: "branch", base: placed.reviewBase ?? placed.seed! } as const
+            return yield* ConnectPlacement.use(
+              {
+                record: placed,
+                requester: request.requester.sessionID!,
+                places: entry.places,
+                stopHelpers: Effect.suspend(() =>
+                  Effect.forEach([...entry.sessions], (id) => entry.call.promptOps?.cancel(id) ?? Effect.void, {
+                    discard: true,
+                  }),
+                ),
+              },
+              (parentID) =>
+                admission
+                  .handle(
+                    { ...request, target, directory: placed.directory },
+                    { ...admission.context, reviewParentID: parentID, fullReview: true, reviewTarget: request.target },
+                  )
+                  .pipe(
+                    Effect.tap((result) =>
+                      Effect.sync(() => {
+                        const observed = Option.getOrUndefined(decodeResult(result))
+                        if (!observed) return
+                        entry.observedCost = observed.cost?.kind === "plan" ? { kind: "plan" } : observed.cost
+                        entry.observedSendsTo = observed.sendsTo
+                      }),
+                    ),
+                    Effect.map((result) => ({ ...result, target: request.target })),
+                  ),
+            ).pipe(Effect.provideService(Session.Service, sessions))
+          })
         const work = Effect.gen(function* () {
-          if (entry.stop) return yield* Effect.interrupt
-          const admission = yield* admit(entry, saved?.runs ?? [])
-          const started = yield* Clock.currentTimeMillis
-          entry.run = { ...entry.run, status: "running", time: { ...entry.run.time, started } }
-          yield* publish(entry)
-          return yield* admission.handle(request, admission.context)
+          if (request.action !== "review" || request.target.kind !== "task") return yield* execute()
+          if (request.to !== "vectorscope" || !request.requester.sessionID)
+            return yield* refusal("input", "An isolated task review needs its launching conversation and VectorScope.")
+          return yield* isolation
+            .review({ taskID: request.target.task, parentSessionID: request.requester.sessionID }, (record) =>
+              execute(record),
+            )
+            .pipe(
+              Effect.catch((error) =>
+                error instanceof Connect.Refusal
+                  ? Effect.fail(error)
+                  : refusal(
+                      "input",
+                      error instanceof TaskIsolation.IsolationError
+                        ? error.message
+                        : "Connect could not validate this task's registered worktree.",
+                    ),
+              ),
+            )
         }).pipe(Effect.onExit((exit) => finish(entry, exit)))
 
         if (request.background) return yield* detach(entry, work)
@@ -1069,6 +1159,7 @@ export const DEPS = [
   DesktopTasks.node,
   BackgroundJob.node,
   TaskNotify.node,
+  TaskIsolation.node,
   Database.node,
 ] as const
 
@@ -1226,6 +1317,8 @@ function ended(entry: Entry, state: "refused" | "failed" | "cancelled", summary:
     ...(request.action === "review" ? { verdict: "not-reviewed" as const, target: request.target } : {}),
     summary: clip(summary, Connect.MAX_SUMMARY),
     findings: [],
+    ...(entry.observedCost ? { cost: entry.observedCost } : {}),
+    ...(entry.observedSendsTo ? { sendsTo: entry.observedSendsTo } : {}),
     sessions: [...entry.sessions].slice(0, Connect.MAX_SESSIONS),
     notes: [],
   }
@@ -1357,11 +1450,15 @@ export async function scan(
     relative,
     ...prefixes.map((prefix) => (relative ? `${prefix}/${relative}` : prefix)),
   ]
+  const absolute = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)
+  // Relative read rules decide the tool-relative name. Only an explicit absolute pattern needs another namespace;
+  // applying a relative default ask there would erase a valid relative allow for the very same file.
+  const relevant = (name: string) => (absolute(name) ? patterns.filter(absolute) : patterns)
   const beneath = (relative: string) =>
-    names(relative).some((name) => patterns.some((pattern) => ConnectPolicy.overlaps(pattern, `${name}/*`)))
+    names(relative).some((name) => relevant(name).some((pattern) => ConnectPolicy.overlaps(pattern, `${name}/*`)))
   const blocked = (relative: string) => {
     for (const name of names(relative)) {
-      if (!patterns.some((pattern) => Wildcard.match(name, pattern))) continue
+      if (!relevant(name).some((pattern) => Wildcard.match(name, pattern))) continue
       const block = ConnectPolicy.readBlock(name, rules, review)
       if (block) return block
     }

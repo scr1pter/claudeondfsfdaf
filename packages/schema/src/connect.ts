@@ -202,11 +202,12 @@ export const Ref = Schema.String.check(
 )
 
 // What a review covers: the working tree against HEAD (untracked files included), the index against HEAD, or the
-// branch against its merge base. A task's isolated worktree joins in CW-14.
+// branch against its merge base, or a settled task's registered isolated worktree.
 export const Target = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("uncommitted") }),
   Schema.Struct({ kind: Schema.Literal("staged") }),
   Schema.Struct({ kind: Schema.Literal("branch"), base: optional(Ref) }),
+  Schema.Struct({ kind: Schema.Literal("task"), task: SessionID }),
 ])
   .pipe(Schema.toTaggedUnion("kind"))
   .annotate({ identifier: "Connect.Target" })

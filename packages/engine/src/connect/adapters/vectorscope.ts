@@ -318,6 +318,8 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
     const handle: NonNullable<ConnectAdapter.Adapter["handle"]> = (request, context) =>
       Effect.gen(function* () {
         if (request.action === "fix") return yield* fix(request, context)
+        if (request.target.kind === "task")
+          return yield* refusal("input", "A task review must be placed by the connected-tools hub.")
         if (!context.sessionID)
           return yield* refusal("unavailable", "A VectorScope review through connect needs a session to run in.")
         if (!context.helper)
@@ -326,6 +328,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
             "Connect can run a VectorScope review only from a tool call that lends it this session's prompt calls.",
           )
         const helper = context.helper
+        const target = context.reviewTarget ?? request.target
         const say = (pass: string, message: string) => context.progress({ pass, message })
 
         // Check 1: the settings the reviewed changes may have edited. No model runs when they did. It runs again right
@@ -337,7 +340,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
           return { scope, edited: ConnectPolicy.editedSettings(scope.settings, scope.links) }
         })
         const { scope, edited } = yield* settings()
-        if (edited.length > 0) return settingsResult(request.target, edited)
+        if (edited.length > 0) return settingsResult(target, edited)
 
         // Check 2: the models, the dollar cap, and `connect_model` when a model is priced, has no readable price, or is
         // the repository's choice and not the user's own review model.
@@ -395,7 +398,9 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         const out: string[] = []
         const local: LocalReviewDeps = {
           runReview: (input) =>
-            runReview({ ...input, parentID: context.sessionID }).pipe(Effect.provideContext(reviewContext)),
+            runReview({ ...input, parentID: context.reviewParentID ?? context.sessionID }).pipe(
+              Effect.provideContext(reviewContext),
+            ),
           // VectorScope resolves the model again; it must be the one connect checked and asked about.
           resolveModel: (input) =>
             resolve(input).pipe(
@@ -426,7 +431,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         }
         // Check 1 again: nothing may have edited the settings while connect asked or loaded.
         const before = yield* settings()
-        if (before.edited.length > 0) return settingsResult(request.target, before.edited)
+        if (before.edited.length > 0) return settingsResult(target, before.edited)
         // A branch review reads VectorScope's state file only when connect saw VectorScope write it as it is now.
         const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
         const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
@@ -435,7 +440,10 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         if (context.working) yield* context.working(cap.value !== undefined ? { maxCostUsd: cap.value } : {})
         yield* say("review", "Reviewing")
         const result = yield* loaded
-          .executeLocalReview(reviewOptions({ request, maxCost: cap.value, full: !trusted, env }), local)
+          .executeLocalReview(
+            reviewOptions({ request, maxCost: cap.value, full: context.fullReview || !trusted, env }),
+            local,
+          )
           .pipe(Effect.provideService(Git.Service, git))
         if (statePath) {
           const stateAfter = yield* Effect.promise(() => fingerprint(statePath))
@@ -454,9 +462,10 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
           Effect.catch(() => Effect.succeed([...ConnectPolicy.SETTINGS_PATHS])),
         )
         if (after.length > 0)
-          return settingsResult(request.target, after, spentOf({ local: result, printed: shown, plan: planned }))
+          return settingsResult(target, after, spentOf({ local: result, printed: shown, plan: planned }))
         return resultOf({
           request,
+          target,
           local: result,
           printed: shown,
           plan: planned,
@@ -472,6 +481,11 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
       const source = context.source
       if (!source?.result || source.request.action !== "review")
         return yield* refusal("input", `There is no review ${request.run} in this session to fix.`)
+      if (source.request.target.kind === "task")
+        return yield* refusal(
+          "input",
+          "Fix the isolated task through its own task conversation, then settle and review it again.",
+        )
       yield* context.progress({ pass: "fix", message: "Checking what the changes edit" })
       const scope = yield* changes(git, request.directory, ConnectFix.targetOf(source))
       return yield* ConnectFix.run({ request, context, source, root: scope.root, changed: scope.changed })
@@ -614,6 +628,7 @@ export const CACHED_NOTE = "Connect sent no code this time: these findings are f
 /** The result of a review VectorScope ran (or chose not to run), from what `executeLocalReview` returned. */
 export function resultOf(input: {
   readonly request: Connect.ReviewRequest
+  readonly target?: Connect.Target
   readonly local: LocalReviewResult
   readonly printed: { readonly cached: boolean }
   readonly plan: Pick<Plan, "review" | "triage">
@@ -621,7 +636,7 @@ export function resultOf(input: {
   readonly previous?: Connect.Run
 }): Connect.Result {
   const { request, local } = input
-  const target = request.target
+  const target = input.target ?? request.target
   const where = {
     ...(local.target ? { head: clip(local.target.head, 200), base: clip(local.target.mergeBase, 200) } : {}),
   }
@@ -775,6 +790,7 @@ function bounded(notes: readonly string[]): string[] {
  */
 export const changes = Effect.fnUntraced(function* (git: Git.Interface, directory: string, target: Connect.Target) {
   const fail = (message: string) => refusal("input", message)
+  if (target.kind === "task") return yield* fail("The task target has not been placed in its registered worktree.")
   const top = yield* git.run(["rev-parse", "--show-toplevel"], { cwd: directory })
   const found = top.exitCode === 0 ? top.text().trim() : ""
   if (!found) return yield* fail("VectorScope reviews work inside a git repository, and this directory is not in one.")
