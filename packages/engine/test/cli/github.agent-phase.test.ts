@@ -12,6 +12,7 @@ import { Effect } from "effect"
 import { buildInlineBody } from "@vectordevai/core/review/format"
 import type { Finding } from "@vectordevai/core/review/types"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 import { GithubRunCommand } from "../../src/cli/cmd/github"
 import {
   AGENT_NEEDS_CHANNEL,
@@ -124,6 +125,46 @@ const noBundle = async (dir: string) =>
     () => false,
     () => true,
   )
+
+it.instance(
+  "a configured schedule runs its own trusted prompt and records the stable schedule identity",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      yield* Effect.promise(() => commitSetup(test.dir))
+      const github = yield* Effect.acquireRelease(
+        Effect.sync(() => fakeGithub({ roles: {} })),
+        (value) => Effect.sync(() => value.stop()),
+      )
+      const cron = "17 3 * * 1"
+      const configuration = JSON.stringify({
+        [cron]: { id: "weekly", prompt: "Check this repository's maintenance notes" },
+      })
+      const configured = lookupSchedule({ VECTOR_SCHEDULE_PROMPTS: configuration }, { schedule: cron })
+      if (!configured) throw new Error("Missing configured schedule fixture")
+      yield* test.llm.text("Maintenance notes checked.")
+      yield* test.llm.text("Weekly maintenance")
+      const result = yield* phase({
+        env: {
+          ...stepEnv({
+            event: yield* Effect.promise(() => eventFile({ schedule: cron })),
+            eventName: "schedule",
+            thread: configured.thread,
+            github: github.url,
+          }),
+          VECTOR_SCHEDULE_PROMPTS: configuration,
+        },
+        credentials: yield* Effect.promise(() => holder("own-key")),
+      })
+      expect(result.result).toMatchObject({ exitCode: 0, outcome: "no-changes" })
+      const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+      expect(bundle.summary).toMatchObject({ kind: "schedule", thread: configured.thread, scheduleId: "weekly" })
+      const calls = yield* test.llm.inputs
+      expect(userText(calls.find((call) => !isTitle(call))!)).toContain("Check this repository's maintenance notes")
+    }),
+  { git: true },
+  30_000,
+)
 
 function issueComment(input: { number: number; id: number; body: string; pr?: boolean; user?: object }) {
   return {
@@ -649,7 +690,7 @@ describe("the agent phase's credentials and policy", () => {
 
 describe("refusals", () => {
   it.instance(
-    "a scheduled run is refused until V22, and on Codium it settles refused",
+    "an unconfigured scheduled run is refused, and on Codium it settles refused",
     () =>
       Effect.gen(function* () {
         const test = yield* setup()

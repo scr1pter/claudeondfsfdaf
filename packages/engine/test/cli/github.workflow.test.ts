@@ -848,6 +848,19 @@ describe("workflow v3", () => {
   })
 
   test("options reject executable names, secret/control collisions and unsupported Codium modes", () => {
+    for (const cron of ["60 8 * * *", "0 24 * * *", "*/0 8 * * *", "20-10 8 * * *", "0 8 * 13 *"])
+      expect(() =>
+        buildAgentsWorkflow({ ...CODIUM, schedules: [{ id: "daily", cron, prompt: "Maintain the repository" }] }),
+      ).toThrow("Invalid workflow schedules")
+    expect(() =>
+      buildAgentsWorkflow({
+        ...CODIUM,
+        schedules: [
+          { id: "first", cron: "0 8 * * *", prompt: "a".repeat(70_000) },
+          { id: "second", cron: "1 8 * * *", prompt: "b".repeat(70_000) },
+        ],
+      }),
+    ).toThrow("safe environment size limit")
     for (const key of [
       "BAD-KEY",
       "x",

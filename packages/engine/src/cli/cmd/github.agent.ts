@@ -6,7 +6,7 @@
 // before sending it, and never writes process.env. A Codium run (V18c) also heartbeats from the gate's starting beat to
 // its settle, stops its session at VECTOR_RUN_DEADLINE minus STOP_MARGIN_SECONDS or when the heartbeat says stop, follows
 // 2.9.2 in its retries and its bundle's stop, and logs gateway errors only as their reason lines (P6). An own-key run
-// never heartbeats, settles or waits (INV-K1). A schedule is refused until V22. Node APIs only: the desktop sidecar runs
+// never heartbeats, settles or waits (INV-K1). Schedules run only the exact default-branch configuration. Node APIs only: the desktop sidecar runs
 // the engine under Node.
 
 import fs from "node:fs/promises"
@@ -46,6 +46,7 @@ import { WRITE_PERMISSIONS, createReviewGitHub } from "./github.review-api"
 import { TASK_MENTIONS, mentionsFrom } from "./github.route"
 import { GithubRunHelpers } from "./github.run-helpers"
 import { GithubSecrets } from "./github.secrets"
+import { lookupSchedule, UNKNOWN_SCHEDULE } from "./github.schedule"
 import { sanitizeActionsLog } from "./github.output"
 import { githubFetch } from "./github.shared"
 
@@ -53,7 +54,7 @@ import { githubFetch } from "./github.shared"
 export const AGENT_NEEDS_CHANNEL =
   "The agent phase runs only inside `vector github sandbox run`, which hands it the run's credentials."
 export const DEADLINE_MISSING = "A Codium run needs the deadline its mint step sets in VECTOR_RUN_DEADLINE."
-export const SCHEDULE_NOT_YET = "This Vector version does not run scheduled tasks yet."
+export const SCHEDULE_NOT_YET = UNKNOWN_SCHEDULE
 export const UNKNOWN_MODE = "The agent phase needs VECTOR_MODE own-key or codium."
 export const NO_PROMPT = "A dispatched task needs a prompt."
 export const NOT_A_TASK = "Nothing to do: this event does not ask Vector for a task."
@@ -134,7 +135,8 @@ export type AgentPhaseResult = {
 }
 
 export type AgentRoute = {
-  kind: "issue" | "pr" | "dispatch"
+  kind: "issue" | "pr" | "dispatch" | "schedule"
+  scheduleId?: string
   thread: string
   number?: number
   /** The writer's task: the comment, the issue's text after its mention, or the dispatch's prompt. */
@@ -373,6 +375,13 @@ async function begin(deps: Deps) {
 
 // What the task is: the writer checked again, the thread's labelled text, and the pull request's head branch.
 async function gather(start: Start, deps: Deps) {
+  if (start.route.kind === "schedule")
+    return {
+      message: start.route.trigger,
+      files: [] as GithubRunHelpers.PromptFiles,
+      threadTitle: undefined,
+      headRef: undefined,
+    }
   // Vector's App bot has no collaborator permission: mint step 8 verified the bot and its one-time ticket instead. Its
   // prompt can quote people without write access, so it is labelled untrusted data under a fixed task line (INV-S14).
   if (start.route.ticket)
@@ -573,6 +582,7 @@ function bundleRoute(
   if (route.kind === "issue") return { mode, kind: "issue", thread: route.thread, issue: route.number }
   if (route.kind === "pr")
     return { mode, kind: "pr", thread: route.thread, pr: route.number, ...(headRef ? { headRef } : {}) }
+  if (route.kind === "schedule") return { mode, kind: "schedule", thread: route.thread, scheduleId: route.scheduleId }
   return { mode, kind: "dispatch", thread: route.thread }
 }
 
@@ -817,7 +827,20 @@ export function agentRoute(
       },
     }
   }
-  if (event.name === "schedule") return { refused: SCHEDULE_NOT_YET }
+  if (event.name === "schedule") {
+    const schedule = lookupSchedule(env, event.payload)
+    if (!schedule) return { refused: UNKNOWN_SCHEDULE }
+    return {
+      route: {
+        kind: "schedule",
+        scheduleId: schedule.id,
+        thread: schedule.thread,
+        trigger: schedule.prompt,
+        login: GITHUB_ACTIONS_BOT,
+        review: false,
+      },
+    }
+  }
   return { refused: refusedEvent(event.name || "unknown") }
 }
 
