@@ -60,6 +60,15 @@ export async function probeToolProcesses() {
     ),
   }
   console.log(`Fixed null-device metadata: ${JSON.stringify(nullDevice)}`)
+  if (
+    !("character" in nullDevice.stat) ||
+    !nullDevice.stat.character ||
+    nullDevice.stat.rdev !== 259 ||
+    nullDevice.stat.symbolic ||
+    nullDevice.openRead !== true ||
+    nullDevice.openWrite !== true
+  )
+    throw new Error("The standard private null device is not usable as character device 1:3")
   const controlNode = path.join(process.env.PATH!.split(path.delimiter)[0]!, "node")
   const originalSpawn = spawn
   const describeOptions = (options: SpawnOptions) => ({
@@ -124,11 +133,17 @@ export async function probeToolProcesses() {
     await control("node-piped-stdio", controlNode, "pipe"),
     await control("node-ignored-stdio", controlNode, "ignore"),
   ]
+  if (direct.some((item) => item.error || item.code !== 0))
+    throw new Error("An actual standard stdio execution control failed")
   const beforeGuard = await control("before-strict-guard")
+  if (beforeGuard.error || beforeGuard.code !== 0 || !beforeGuard.acknowledged)
+    throw new Error("The actual pre-guard IPC stdio control failed")
   const { EgressGuard } = await import("@vectordevai/core/local-mode/guard")
   const network = EgressGuard.installStrict()
   try {
     const afterGuard = await control("after-strict-guard")
+    if (afterGuard.error || afterGuard.code !== 0 || !afterGuard.acknowledged)
+      throw new Error("The strict guard broke the actual IPC stdio control")
     const { Effect, Layer, Cause, Exit } = await import("effect")
     const { LayerNode } = await import("@vectordevai/core/effect/layer-node")
     const { CrossSpawnSpawner } = await import("@vectordevai/core/cross-spawn-spawner")

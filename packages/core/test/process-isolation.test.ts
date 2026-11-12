@@ -36,6 +36,11 @@ test("hosted process boundaries hide engine proc and give tools their own PID an
   expect(tool).toContain("--unshare-user")
   expect(tool).toContain("--unshare-pid")
   expect(tool.slice(tool.indexOf("--proc"), tool.indexOf("--proc") + 2)).toEqual(["--proc", "/proc"])
+  for (const boundary of [engine, tool]) {
+    expect(boundary.slice(boundary.indexOf("--dev"), boundary.indexOf("--dev") + 2)).toEqual(["--dev", "/dev"])
+    expect(boundary).not.toContain("--dev-bind")
+    expect(boundary).not.toContain("--dev-bind-try")
+  }
   expect(tool).not.toContain("--unshare-user-try")
   expect(tool).not.toContain("--not-a-security-boundary")
   expect(tool.slice(-4)).toEqual(["--", "/bin/sh", "-c", "echo example"])

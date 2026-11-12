@@ -28,6 +28,9 @@ export function engineArguments(file: string, args: readonly string[], cwd: stri
     "--bind",
     "/",
     "/",
+    // Ordinary binds are nodev; mount only bwrap's standard private devices, never the host /dev tree.
+    "--dev",
+    "/dev",
     "--tmpfs",
     "/proc",
     "--remount-ro",
@@ -57,6 +60,9 @@ export function argumentsForTool(file: string, args: readonly string[], cwd: str
     "--bind",
     "/",
     "/",
+    // Ordinary binds are nodev; mount only bwrap's standard private devices, never the host /dev tree.
+    "--dev",
+    "/dev",
     "--proc",
     "/proc",
     "--chdir",
