@@ -100,7 +100,7 @@ export function createEverywhereGit(input: {
     const worktree = await hash(file) === "absent" ? "" : await run(["config", "--null", "--list", "--file", file, "--no-includes"], cwd)
     if (!safeRepositoryConfig(worktree)) throw new Error("Everywhere refuses executable repository configuration")
     const config = local + worktree
-    if (!mapsRepository(config, input.repository)) throw new Error("The Everywhere project remote does not match")
+    if (!mapsRepository(config, input.repository)) throw new Error("The Everywhere workspace remote does not match")
     return config
   }
   const authority = async (cwd: string) => {

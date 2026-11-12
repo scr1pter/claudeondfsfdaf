@@ -849,7 +849,7 @@ describe("a Vector Local run", () => {
   const small = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("tiny-context") }
   const allow = [{ permission: "*", pattern: "*", action: "allow" as const }]
 
-  const setup = Effect.fn("test.setup")(function* () {
+  const setup = Effect.fn("test.setup")(function* (concurrency?: number) {
     const directory = (yield* TestInstance).directory
     const llm = yield* TestLLMServer
     const fs = yield* FSUtil.Service
@@ -878,7 +878,11 @@ describe("a Vector Local run", () => {
               options: {},
             },
           },
-          options: { apiKey: "test-key", baseURL: llm.url },
+          options: {
+            apiKey: "test-key",
+            baseURL: llm.url,
+            ...(concurrency === undefined ? {} : { concurrency }),
+          },
         },
       },
     }
@@ -1346,7 +1350,8 @@ describe("a Vector Local run", () => {
     "asks before an address a background subagent's report relays",
     () =>
       Effect.gen(function* () {
-        const harness = yield* setup()
+        // The child stream waits for the parent to finish; the fake needs both permits to avoid a fixture deadlock.
+        const harness = yield* setup(2)
         const start = pages.direct("docs", "/start")
         const exfil = `${pages.direct("docs", "/guide")}?q=SECRET-BACKGROUND`
         const launched = Promise.withResolvers<void>()
