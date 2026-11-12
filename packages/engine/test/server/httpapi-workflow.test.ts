@@ -113,7 +113,9 @@ it.live("owner preview validates without writes; guests and forwarded guests can
     expect((yield* call(() => f.sdk.experimental.capabilities.get())).data?.workflows).toBe(true)
     const valid = (yield* call(() => f.sdk.experimental.workflow.validate({ workflowValidateInput: { spec } }))).data!
     expect(valid).toMatchObject({ ok: true, issues: [] })
-    expect(valid.plan?.stages[0].model).toBe("lmstudio/test-model")
+    const stage = valid.plan?.stages[0]
+    if (!stage || stage.kind === "connect") throw new Error("The legacy workflow preview must contain an agent stage")
+    expect(stage.model).toBe("lmstudio/test-model")
     const invalid = (yield* call(() => f.sdk.experimental.workflow.validate({ workflowValidateInput: { spec: "{" } })))
       .data!
     expect(invalid.ok).toBe(false)
