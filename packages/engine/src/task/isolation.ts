@@ -27,6 +27,7 @@ import { Global } from "@vectordevai/core/global"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { IsolationCopy } from "@vectordevai/core/isolation/copy"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Database } from "@vectordevai/core/database/database"
@@ -769,6 +770,23 @@ export const make = Effect.gen(function* () {
       return yield* err("registry", "The task checkout's Git metadata changed identity.")
     return current
   })
+  const inspectReview = (record: Record) =>
+    Effect.tryPromise({
+      try: () => {
+        if (!record.gitDirectory || !record.gitCommonDirectory)
+          return Promise.reject(new ReadOnlyGit.Unavailable("the task has no verified Git binding"))
+        return ReadOnlyGit.inspect({
+          directory: record.directory,
+          gitDirectory: record.gitDirectory,
+          commonDirectory: record.gitCommonDirectory,
+        })
+      },
+      catch: () =>
+        new IsolationError({
+          code: "review_target",
+          message: "This task's Git metadata cannot be inspected safely. The review did not start.",
+        }),
+    })
   /** A settled checkout remains the same registered task until the read-only review releases this lock. */
   const review = <A, E, R>(
     input: { readonly taskID: string; readonly parentSessionID: string },
@@ -785,16 +803,18 @@ export const make = Effect.gen(function* () {
         if (!record.tip || !(record.reviewBase ?? record.seed))
           return yield* err("review_target", "The task has no saved review range.")
         const checked = yield* verify(record)
-        if ((yield* text(checked.directory, ["rev-parse", "HEAD"])) !== checked.tip)
+        const before = yield* inspectReview(checked)
+        if (before.head !== checked.tip)
           return yield* err(
             "review_target",
             "The task checkout changed since it settled. Settle it again before reviewing.",
           )
         // The branch review covers saved commits only; unsaved edits must never be silently reported as reviewed.
-        if (yield* text(checked.directory, ["status", "--porcelain", "--untracked-files=all"]))
+        if (before.dirty)
           return yield* err("review_target", "The task has unsaved changes. Settle it again before reviewing.")
         const result = yield* use(checked)
         const current = yield* verify(checked)
+        const after = yield* inspectReview(current)
         if (
           current.deleted ||
           current.parentSessionID !== checked.parentSessionID ||
@@ -803,8 +823,8 @@ export const make = Effect.gen(function* () {
           current.settledAttempt !== checked.settledAttempt ||
           current.tip !== checked.tip ||
           (current.reviewBase ?? current.seed) !== (checked.reviewBase ?? checked.seed) ||
-          (yield* text(checked.directory, ["rev-parse", "HEAD"])) !== checked.tip ||
-          (yield* text(checked.directory, ["status", "--porcelain", "--untracked-files=all"]))
+          after.head !== checked.tip ||
+          after.dirty
         )
           return yield* err(
             "review_target",
