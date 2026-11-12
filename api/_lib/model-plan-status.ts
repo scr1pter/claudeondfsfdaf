@@ -27,6 +27,7 @@ import { renewalGraceMinutes } from "./codium-limits.js"
 import { listedPerks, type ListedPerksOptions } from "./codium-perks.js"
 import { persistentStore } from "./persistent-store.js"
 import { handleApiError, json, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
+import { readCloudAgentsStatusMeter } from "./cloud-agents-status.js"
 
 const DAY_MS = 86_400_000
 /** §4.11: a status answer is kept 30 s per account, and reconcile clears it (codium-snapshot.ts WRITE). */
@@ -343,6 +344,8 @@ const statusMeters = createStatusMeterRegistry()
 export function registerStatusMeter<N extends StatusMeterName>(perk: PerkId, name: N, read: StatusMeterReader<N>) {
   statusMeters.register(perk, name, read)
 }
+
+registerStatusMeter("github-agents", "cloudAgents", readCloudAgentsStatusMeter)
 
 function meterValue(name: StatusMeterName, value: unknown) {
   if (typeof value !== "object" || value === null) return undefined
