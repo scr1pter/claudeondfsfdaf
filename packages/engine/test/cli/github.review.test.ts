@@ -30,6 +30,8 @@ import { tmpdir } from "../fixture/fixture"
 import { cliIt, type CliFixture } from "../lib/cli-process"
 import { reply } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
+import { GithubBundle } from "../../src/cli/cmd/github.bundle"
+import { redactCodiumReviewText, type CodiumReviewControl } from "../../src/cli/cmd/github.review-codium"
 
 const OWNER = "o"
 const REPO = "r"
@@ -737,6 +739,7 @@ async function job(
     expectedHead?: string
     botLogin?: string
     resolveModel?: () => Promise<ResolvedModel>
+    cloud?: CodiumReviewControl
   } = {},
 ) {
   const runner = options.runner ?? (await w.repo.runner(w.fake.pull.head.sha))
@@ -776,6 +779,7 @@ async function job(
     now: () => NOW,
     nonce: () => `run${++nonce}`,
     ...(options.dryRun ? { dryRun: true } : {}),
+    ...(options.cloud ? { cloud: options.cloud } : {}),
   })
   return { result, log, waits, runner }
 }
@@ -2107,3 +2111,47 @@ test("mixed Codium review progress reports only positive own spend", async () =>
   expect(result.log).toContain("Spent $0.1200 + Codium")
   expect(result.log.join("\n")).not.toContain("Spent $0.0000")
 }, 30_000)
+
+test(
+  "a stopped Codium review posts its completed findings with read-only input and one public reason",
+  async () => {
+    await using w = await world()
+    const controller = new AbortController()
+    const state: { stop?: GithubBundle.Stop } = {}
+    const cloud: CodiumReviewControl = {
+      signal: controller.signal,
+      stopped: () => state.stop,
+      redact: redactCodiumReviewText,
+      outcome: () => {},
+    }
+    const base = reviewer({
+      findings: () => [OFF_BY_ONE],
+      summary: "Fix payment_failed on vector-100 Max plan at 75% and $99.",
+      partial: "timeout",
+      during: async (input) => {
+        expect(input.checks).toBe(false)
+        expect(input.stopSignal).toBe(controller.signal)
+        expect(input.config.maxCostUsd).toBe(0)
+        expect(input.config.maxCostUsdPerPr).toBe(0)
+        expect(input.config.maxCostUsdPerMonth).toBe(0)
+        state.stop = GithubBundle.DEADLINE
+        controller.abort()
+      },
+    })
+    const review = {
+      calls: base.calls,
+      run: async (input: RunInput): Promise<ReviewOutcome> => ({
+        ...(await base.run(input)),
+        cost: { ...COST, kind: "codium", codium: true, model: "vector-plan/vector-flash", costUsd: 0 },
+      }),
+    }
+    const result = await job(w, review, { cloud, env: { MODEL: "vector-plan" } })
+    expect(result.result.exitCode).toBe(0)
+    expect(w.fake.reviews).toHaveLength(1)
+    const body = sticky(w)?.body ?? ""
+    expect(body.match(/Vector stopped early: the run reached its time limit\./g)).toHaveLength(1)
+    expect(body).not.toMatch(/payment_failed|vector-100|Max plan|75%|\$99/)
+    expect(result.log.join("\n")).not.toMatch(/payment|dispute|fraud|past_due|\$/)
+  },
+  TIMEOUT,
+)

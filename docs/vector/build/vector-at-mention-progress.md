@@ -1028,7 +1028,6 @@ For each package, record its commit, the focused tests and typechecks run locall
   - V30: a CLI-level Codium journey, which needs a fake-vectordev.ai seam, because `github.cloud.ts`'s `SITE` and the gate's heartbeat are fixed to `https://vectordev.ai`.
   - Owner (section 4 step 1): whether one missed heartbeat should end a run (deviation V18c item 4).
 
-
 ### Resume integration with main (2026-11-09)
 
 - Base: `vector-at-mention` at `15069641b7940ddabcfd3c49d921984505c089f7` (V18c).
@@ -1078,3 +1077,11 @@ None yet (contract section 4).
 - The Windows lane attempted six success fixtures requiring POSIX private directories. The generated sandbox runs on Ubuntu and its public lifecycle explicitly refuses non-Linux hosts. Those success cases now skip Windows; negative Windows cases require mint/load/bundle refusal, no credential authorization, no file command or destination creation, and source preservation. A non-Linux case checks all three sandbox lifecycle entrypoints refuse before state creation. Production ownership and mode guards are unchanged.
 - The sandbox file passed eight cases with two platform-only skips and 68 assertions on Linux. The cloud file passed 43 cases with one Windows-only skip and 474 assertions. Native Windows refusal cases remain CI-only. Combined with the phase regression and hosted file, the focused batch covers 73 distinct passing cases and 630 assertions. Each file ran separately with four fresh XDG roots and a 30-second timeout.
 - Independent source review cleared the token union, entitlement fixture, current-access guard and platform fixture corrections before validation. The fixture and access guard are separate commits, followed by token output and platform fixtures. Only the final combined tree was validated, not each partially staged intermediate tree. Engine and hosted API typechecks, source formatting and the diff check passed. Mandatory pre-push and exact-head CI remain pending at this checkpoint; no release or live acceptance is claimed.
+
+### V20 Codium review lifecycle (2026-11-12, source checkpoint)
+
+- The CLI review now uses the existing private, account-gate-authorized run credential, a running heartbeat, bounded settlement, the original stop margin and pinned gateway retry policy. Own-key review execution keeps its existing path and starts no cloud lifecycle.
+- Codium review model resolution stays on the actual Codium catalog; repository model overrides cannot move the run to another provider. Repository checks are forced off. Its dollar caps are disabled because Codium activity has no public dollar subtotal, while the run's original time/step limits remain in force.
+- An optional engine `Review.RunInput.stopSignal` cancels only the review's owned specialists, denies new provider and finalizer admissions, and preserves reports completed before the stop. Existing callers that omit the signal retain their original path. The engine captures the instance/services for cancellation and removes the signal listener on cleanup.
+- Public review output withholds credential values and billing-state/plan/price text. A stopped review posts completed findings and one fixed reason from the existing closed stop table; raw session history remains authoritative.
+- ROOT ran the named checks on the working source: `github.review-codium.test.ts` **4 pass, 20 assertions**; the stopped-review fake-GitHub/real-git case **1 pass, 10 assertions**; the actual model-server initial/in-flight stop cases **2 pass, 9 assertions**. All seven passed. The first engine typecheck found only a generic return annotation; it was corrected to include the lifecycle's signal-driven `void` result. The final engine typecheck passed in 34 seconds. Broader unchanged-review regression and exact-head hosted CI remain pending at this entry. No live model call, customer repository action, CLI publication or production activation occurred.
