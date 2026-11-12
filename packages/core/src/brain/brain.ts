@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
 import { Global } from "../global"
 import { Glob } from "../util/glob"
@@ -18,7 +18,7 @@ import { BrainParse } from "./parse"
 import { BrainPaths } from "./paths"
 import { BrainPrivate } from "./private"
 import { BrainScan } from "./scan"
-import type { BrainSchema } from "./schema"
+import { BrainSchema } from "./schema"
 import { SkillStore } from "./skill-store"
 import {
   BrainAnchorTable,
@@ -440,6 +440,11 @@ export interface Interface {
     input: { readonly filter?: Filter; readonly query?: string; readonly scope?: BrainSchema.Scope },
   ) => Effect.Effect<BrainSchema.Entry[]>
   readonly propose: (place: Place, proposal: Proposal) => Effect.Effect<WriteResult>
+  /** Owner-click review context only. Ordinary learned proposals cannot write this kind or choose this origin. */
+  readonly dismissReview: (
+    place: Place,
+    input: { readonly text: string; readonly paths: readonly string[]; readonly sessionID: string },
+  ) => Effect.Effect<WriteResult>
   readonly update: (
     place: Place,
     id: string,
@@ -1544,7 +1549,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .pipe(Effect.orDie)
   })
 
-  const propose = Effect.fn("Brain.propose")(function* (place: Place, proposal: Proposal) {
+  const writeProposal = Effect.fn("Brain.writeProposal")(function* (
+    place: Place,
+    proposal: Proposal | (Omit<Proposal, "kind" | "origin"> & { readonly kind: "review"; readonly origin: "user" }),
+  ) {
     if (proposal.supersedes && (yield* skillEntry(proposal.supersedes))) return refuse("skill-entry", SKILL_ENTRY)
     const agent = proposal.origin === "agent"
     // What a file the user imported says waits for them, however it reads, so a changed file cannot plant memory in use.
@@ -1681,6 +1689,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         and(
           eq(BrainEntryTable.repository_id, repository),
           inArray(BrainEntryTable.origin, [...LEARNED]),
+          // A learned fact cannot become a dismissal, nor may a dismissal be merged into a model's learned fact.
+          proposal.kind === "review" ? eq(BrainEntryTable.kind, "review") : ne(BrainEntryTable.kind, "review"),
           inArray(BrainEntryTable.status, ["active", "proposed", "quarantined", "archived"]),
         ),
       )
@@ -1888,6 +1898,21 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     if (status === "quarantined") return { type: "held" as const, entry, ...extra }
     return { type: "added" as const, entry, ...extra }
   })
+
+  const propose: Interface["propose"] = (place, proposal) =>
+    Schema.is(BrainSchema.LearnedKind)(proposal.kind)
+      ? writeProposal(place, proposal)
+      : Effect.succeed(refuse("user-entry", "Only an owner action can dismiss a review finding."))
+  const dismissReview: Interface["dismissReview"] = (place, input) =>
+    writeProposal(place, {
+      kind: "review",
+      origin: "user",
+      scope: "repository",
+      text: input.text,
+      paths: input.paths,
+      sessionID: input.sessionID,
+      evidence: { type: "user" },
+    })
 
   // The term in use for the same words, in this repository or the user's own, unless it already says these words.
   const sameTerm = Effect.fnUntraced(function* (place: Place, key: string, hash: string) {
@@ -2813,6 +2838,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     lines,
     list,
     propose,
+    dismissReview,
     update,
     forget,
     erase,
@@ -3025,7 +3051,7 @@ function rank(row: Pick<Row, "origin" | "status">) {
   return row.status === "active" ? 1 : 0
 }
 
-function confidence(proposal: Proposal, verified: boolean) {
+function confidence(proposal: Pick<Proposal, "origin" | "evidence">, verified: boolean) {
   if (proposal.origin === "user") return 1
   if (!verified) return 0.5
   return proposal.evidence?.type === "message" ? 0.9 : 0.8
