@@ -422,6 +422,7 @@ export async function createPR(
   branch: string,
   draftTitle: string,
   draftBody: string,
+  draft = false,
 ): Promise<number | null> {
   console.log("Creating pull request...")
   const [title, body] = (await ctx.checked([draftTitle, draftBody])) as [string, string]
@@ -465,6 +466,7 @@ export async function createPR(
         base,
         title,
         body: escapeVectorMarkers(body),
+        ...(draft ? { draft: true } : {}),
       }),
     )
     return pr.data.number

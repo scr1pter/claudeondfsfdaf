@@ -41,6 +41,17 @@ export const GithubBindCommand = effectCmd({
     }),
 })
 
+export const GithubPublishCommand = effectCmd({
+  command: "publish",
+  describe: "publish a validated GitHub agent result",
+  instance: false,
+  handler: () =>
+    Effect.gen(function* () {
+      const { githubPublish } = yield* Effect.promise(() => import("./github.publish"))
+      return yield* githubPublish()
+    }),
+})
+
 export const GithubSandboxCommand = effectCmd({
   command: "sandbox <action>",
   describe: "isolate a GitHub Actions agent and collect its bundle",
@@ -181,6 +192,7 @@ export const GithubCommand = cmd({
       .command(GithubReviewCommand)
       .command(GithubMintCommand)
       .command(GithubBindCommand)
+      .command(GithubPublishCommand)
       .command(GithubSandboxCommand)
       .demandCommand(),
   async handler() {},
