@@ -25,6 +25,7 @@ export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
 export const RETRY_MAX_ATTEMPTS = 10
 export const RETRY_MAX_MS = 15 * 60_000
+const CODIUM_CONCURRENCY = "MODEL_PLAN_CONCURRENCY"
 
 function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
@@ -123,23 +124,34 @@ export function policy(opts: {
   set: (input: { attempt: number; message: string; action?: Retryable["action"]; next: number }) => Effect.Effect<void>
 }) {
   return Schedule.fromStepWithMetadata(
-    Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
-      const error = opts.parse(meta.input)
-      const retry = retryable(error, opts.provider)
-      if (!retry) return Cause.done(meta.attempt)
-      const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
-      // A provider that keeps failing must end the run with its last error instead of retrying unattended forever.
-      if (meta.attempt > RETRY_MAX_ATTEMPTS || meta.elapsed + wait > RETRY_MAX_MS) return Cause.done(meta.attempt)
-      return Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis
-        yield* opts.set({
-          attempt: meta.attempt,
-          message: retry.message,
-          action: retry.action,
-          next: now + wait,
+    Effect.sync(() => {
+      // Waits for the account's other Codium requests to finish, counted for this retry loop only.
+      let waits = 0
+      return (meta: Schedule.InputMetadata<unknown>) => {
+        const error = opts.parse(meta.input)
+        const retry = retryable(error, opts.provider)
+        if (!retry) return Cause.done(meta.attempt)
+        const api = SessionV1.APIError.isInstance(error) ? error : undefined
+        // Codium asks a request to wait while the account's other requests run (§4.10): that wait is bounded by time
+        // alone. It neither counts toward the attempt bound nor lengthens the backoff of a failure after it, which
+        // backs off from the failures counted so far.
+        const waiting = api?.data.metadata?.code === CODIUM_CONCURRENCY
+        if (waiting) waits++
+        const counted = meta.attempt - waits
+        const wait = delay(waiting ? waits : counted, api)
+        // A provider that keeps failing must end the run with its last error instead of retrying unattended forever.
+        if (counted > RETRY_MAX_ATTEMPTS || meta.elapsed + wait > RETRY_MAX_MS) return Cause.done(meta.attempt)
+        return Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          yield* opts.set({
+            attempt: meta.attempt,
+            message: retry.message,
+            action: retry.action,
+            next: now + wait,
+          })
+          return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
         })
-        return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
-      })
+      }
     }),
   )
 }

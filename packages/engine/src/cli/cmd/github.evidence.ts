@@ -7,6 +7,7 @@
 //
 // TODO(screenshots): browser/computer tool parts carry image attachments; once
 // there is an asset store to upload them to, add a "Screenshots" section here.
+import { Billing } from "@vectordevai/schema/billing"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { parseJudgeScores, parseJudgeVerdict } from "@/session/judge-verdict"
 
@@ -25,6 +26,12 @@ export type EvidenceCheck = {
 }
 
 export type MeasuredCost = {
+  codium?: boolean
+  usageMissing?: boolean
+  /** Measured own turns; absent on older own-only records. */
+  ownTurns?: number
+  /** Usage-bearing messages without positive provider identity. */
+  unknownTurns?: number
   costUsd: number
   input: number
   output: number
@@ -103,28 +110,53 @@ const finite = (value: unknown) => (typeof value === "number" && Number.isFinite
 // assistant messages that reported usage, and return undefined rather than a
 // fabricated zero when none did. Provider/model come from the latest such
 // message, since a run can switch models midway.
+/** A stamped Codium step makes legacy message aggregates inseparable, even under an older own-provider identity. */
+export function reviewUsageMessages(messages: readonly SessionV1.WithParts[]) {
+  return messages.map((message) =>
+    message.info.role === "assistant" && message.parts.some((part) => part.type === "step-finish" && Billing.of(part))
+      ? { ...message, info: { ...message.info, billing: "codium" as const } }
+      : message,
+  )
+}
+
 export function measureCost(messages: readonly SessionV1.WithParts[]): MeasuredCost | undefined {
-  const measured: SessionV1.Assistant[] = []
-  for (const { info } of messages) {
-    if (info.role !== "assistant") continue
+  const measured = reviewUsageMessages(messages).flatMap(({ info }) => {
+    if (info.role !== "assistant" || info.forked) return []
     const t = info.tokens
-    if (finite(t?.input) > 0 || finite(t?.output) > 0 || finite(t?.reasoning) > 0 || finite(t?.cache?.read) > 0) {
-      measured.push(info)
-    }
-  }
+    return Billing.of(info) ||
+      (Billing.hasOwnIdentity(info) && finite(info.cost) > 0) ||
+      [t?.input, t?.output, t?.reasoning, t?.cache?.read, t?.cache?.write].some((n) => finite(n) > 0)
+      ? [info]
+      : []
+  })
   if (!measured.length) return undefined
-  const last = measured[measured.length - 1]
+  const own = measured.filter(Billing.hasOwnIdentity)
+  const codium = measured.some((message) => Billing.of(message))
+  const unknown = measured.filter((message) => !Billing.of(message) && !Billing.hasOwnIdentity(message)).length
+  const missing = own.some((message) =>
+    [
+      message.tokens?.input,
+      message.tokens?.output,
+      message.tokens?.reasoning,
+      message.tokens?.cache?.read,
+      message.tokens?.cache?.write,
+    ].every((n) => finite(n) === 0),
+  )
+  const last = own.at(-1) ?? measured.at(-1)!
   return {
-    costUsd: measured.reduce((sum, m) => sum + finite(m.cost), 0),
-    input: measured.reduce((sum, m) => sum + finite(m.tokens?.input), 0),
-    output: measured.reduce((sum, m) => sum + finite(m.tokens?.output), 0),
-    reasoning: measured.reduce((sum, m) => sum + finite(m.tokens?.reasoning), 0),
-    cacheRead: measured.reduce((sum, m) => sum + finite(m.tokens?.cache?.read), 0),
-    cacheWrite: measured.reduce((sum, m) => sum + finite(m.tokens?.cache?.write), 0),
+    ...(codium ? { codium: true, ownTurns: own.length } : {}),
+    ...(unknown ? { unknownTurns: unknown } : {}),
+    ...(missing ? { usageMissing: true } : {}),
+    costUsd: own.reduce((sum, m) => sum + finite(m.cost), 0),
+    input: own.reduce((sum, m) => sum + finite(m.tokens?.input), 0),
+    output: own.reduce((sum, m) => sum + finite(m.tokens?.output), 0),
+    reasoning: own.reduce((sum, m) => sum + finite(m.tokens?.reasoning), 0),
+    cacheRead: own.reduce((sum, m) => sum + finite(m.tokens?.cache?.read), 0),
+    cacheWrite: own.reduce((sum, m) => sum + finite(m.tokens?.cache?.write), 0),
     provider: last.providerID,
     model: last.modelID,
     turns: measured.length,
-    unpriced: measured.filter((message) => message.unpriced).length,
+    unpriced: own.filter((message) => message.unpriced).length + unknown,
   }
 }
 
@@ -257,16 +289,24 @@ function formatChecks(checks: EvidenceCheck[], compact = false): string[] {
 
 function formatCost(cost: MeasuredCost | undefined): string {
   if (!cost) return "**Cost:** not measured"
+  const turns = `${cost.turns} ${cost.turns === 1 ? "turn" : "turns"}`
+  if (cost.codium && cost.ownTurns === 0 && !cost.unknownTurns)
+    return `**Cost:** Codium · Vector Codium${cost.model ? ` · ${cost.model}` : ""} · ${turns}`
   const usd = `$${cost.costUsd.toFixed(cost.costUsd > 0 && cost.costUsd < 0.01 ? 4 : 2)}`
   const parts = [
     // A turn on a model with no listed price adds nothing, so the cost is a lower bound, or unknown if that is all.
-    cost.unpriced === 0 ? usd : cost.costUsd > 0 ? `${usd} + ${cost.unpriced} unpriced` : "unknown (no listed price)",
-    `${fmtTokens(cost.input)} in / ${fmtTokens(cost.output)} out`,
+    `${cost.unpriced === 0 ? usd : cost.costUsd > 0 ? `${usd} + ${cost.unpriced} unpriced` : "unknown (no listed price)"}${cost.codium ? " + Codium" : ""}`,
+    ...(cost.usageMissing
+      ? ["token usage unavailable"]
+      : cost.unknownTurns && !(cost.ownTurns ?? cost.turns - cost.unknownTurns)
+        ? []
+        : [`${fmtTokens(cost.input)} in / ${fmtTokens(cost.output)} out`]),
   ]
   if (cost.reasoning > 0) parts.push(`${fmtTokens(cost.reasoning)} reasoning`)
   if (cost.cacheRead > 0) parts.push(`${fmtTokens(cost.cacheRead)} cache read`)
-  if (cost.provider && cost.model) parts.push(`${cost.provider}/${cost.model}`)
-  parts.push(`${cost.turns} ${cost.turns === 1 ? "turn" : "turns"}`)
+  if (cost.provider && cost.model && Billing.hasOwnIdentity({ providerID: cost.provider }))
+    parts.push(`${cost.provider}/${cost.model}`)
+  parts.push(turns)
   return `**Cost:** ${parts.join(" · ")}`
 }
 

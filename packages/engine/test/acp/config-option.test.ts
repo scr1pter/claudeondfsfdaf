@@ -88,6 +88,52 @@ describe("acp config options", () => {
     })
   })
 
+  test("a Codium model the plan does not include names the plan that does, as the app and the TUI pickers do", () => {
+    const option = buildModelSelectOption({
+      providers: [
+        {
+          id: "vector-plan",
+          name: "Vector Codium",
+          models: {
+            "vendor/included": { id: "vendor/included", name: "Included", codium: { role: "default" } },
+            "vendor/ultra": {
+              id: "vendor/ultra",
+              name: "Ultra only",
+              codium: { locked: { plan: "vector-200", name: "Ultra" } },
+              variants: { high: {} },
+            },
+            "vendor/early": {
+              id: "vendor/early",
+              name: "Early",
+              codium: { locked: { plan: "vector-200", name: "Ultra", previewUntil: 1_800_000_000_000 } },
+            },
+          },
+        },
+      ],
+      currentModel: { providerID: "vector-plan", modelID: "vendor/included" },
+      includeVariants: true,
+    })
+    if (option.type !== "select") throw new Error("expected select option")
+    expect(option.options).toEqual([
+      {
+        value: "vector-plan/vendor/early",
+        name: "Vector Codium/Early (Preview · Ultra)",
+        description: "Only in Ultra during its preview",
+      },
+      { value: "vector-plan/vendor/included", name: "Vector Codium/Included" },
+      {
+        value: "vector-plan/vendor/ultra",
+        name: "Vector Codium/Ultra only (Codium · Ultra)",
+        description: "Included in Ultra and above",
+      },
+      {
+        value: "vector-plan/vendor/ultra/high",
+        name: "Vector Codium/Ultra only (Codium · Ultra) (High)",
+        description: "Included in Ultra and above",
+      },
+    ])
+  })
+
   test("builds effort option from variants and falls back to default when current variant is invalid", () => {
     expect(buildEffortSelectOption({ variants: ["low", "default", "high"], currentVariant: "missing" })).toEqual({
       id: "effort",

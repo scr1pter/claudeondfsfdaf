@@ -27,6 +27,8 @@ const LEGACY_STORAGE = "default.dat"
 const GLOBAL_STORAGE = "vector.global.dat"
 const WINDOW_STORAGE = "vector.window"
 const LOCAL_PREFIX = "vector."
+// The follow-up queue's own storage (features/followup/followup-store.ts): queued messages are never evicted for room.
+const FOLLOWUP_PREFIX = "vector.followup.dat:"
 const fallback = new Map<string, boolean>()
 
 const CACHE_MAX_ENTRIES = 500
@@ -117,6 +119,7 @@ function evict(storage: Storage, keep: string, value: string) {
     const name = storage.key(index)
     if (!name) continue
     if (!name.startsWith(LOCAL_PREFIX)) continue
+    if (name.startsWith(FOLLOWUP_PREFIX)) continue
     if (name === keep) continue
     const stored = storage.getItem(name)
     items.push({ key: name, size: stored?.length ?? 0 })

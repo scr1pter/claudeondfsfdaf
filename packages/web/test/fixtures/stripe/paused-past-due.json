@@ -1,0 +1,306 @@
+{
+  "row": "past-due",
+  "description": "The renewal payment failed and Stripe marked the subscription past_due.",
+  "apiVersion": "2025-02-24.acacia",
+  "accountId": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+  "now": 1790985600,
+  "account": {
+    "customer": "cus_CodiumFixture01"
+  },
+  "key": {
+    "subscription": "sub_failed",
+    "start": 1788220800,
+    "end": 1790812800
+  },
+  "objects": {
+    "customers": [
+      {
+        "id": "cus_CodiumFixture01",
+        "object": "customer",
+        "created": 1788220200,
+        "email": null,
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90"
+        }
+      }
+    ],
+    "subscriptions": [
+      {
+        "id": "sub_failed",
+        "object": "subscription",
+        "billing_cycle_anchor": 1788220800,
+        "cancel_at": null,
+        "cancel_at_period_end": false,
+        "canceled_at": null,
+        "collection_method": "charge_automatically",
+        "created": 1788220800,
+        "currency": "usd",
+        "current_period_end": 1793404800,
+        "current_period_start": 1790812800,
+        "customer": "cus_CodiumFixture01",
+        "ended_at": null,
+        "items": {
+          "object": "list",
+          "data": [
+            {
+              "id": "si_failed",
+              "object": "subscription_item",
+              "created": 1788220800,
+              "metadata": {},
+              "price": {
+                "id": "price_codium50",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-50-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium50",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 5000,
+                "unit_amount_decimal": "5000"
+              },
+              "quantity": 1,
+              "subscription": "sub_failed"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/subscription_items?subscription=sub_failed"
+        },
+        "latest_invoice": "in_failed",
+        "livemode": false,
+        "metadata": {
+          "vector_account_id": "5f0c8a52-0d1e-4c3b-9a7e-2b6d4e8f1a90",
+          "vector_plan": "vector-50",
+          "vector_model_credits_usd": "22"
+        },
+        "pause_collection": null,
+        "schedule": null,
+        "start_date": 1788220800,
+        "status": "past_due"
+      }
+    ],
+    "invoices": [
+      {
+        "id": "in_failedP1",
+        "object": "invoice",
+        "amount_due": 5000,
+        "amount_paid": 5000,
+        "amount_remaining": 0,
+        "attempt_count": 1,
+        "attempted": true,
+        "billing_reason": "subscription_create",
+        "charge": "ch_failedP1",
+        "collection_method": "charge_automatically",
+        "created": 1788220800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_fixture/in_failedP1",
+        "lines": {
+          "object": "list",
+          "data": [
+            {
+              "id": "il_failedP1",
+              "object": "line_item",
+              "amount": 5000,
+              "currency": "usd",
+              "period": {
+                "start": 1788220800,
+                "end": 1790812800
+              },
+              "price": {
+                "id": "price_codium50",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-50-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium50",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 5000,
+                "unit_amount_decimal": "5000"
+              },
+              "proration": false,
+              "quantity": 1,
+              "subscription": "sub_failed",
+              "type": "subscription"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/invoices/in_failedP1/lines"
+        },
+        "livemode": false,
+        "paid": true,
+        "payment_intent": "pi_failedP1",
+        "period_start": 1788220800,
+        "period_end": 1788220800,
+        "status": "paid",
+        "status_transitions": {
+          "finalized_at": 1788224400,
+          "marked_uncollectible_at": null,
+          "paid_at": 1788224400,
+          "voided_at": null
+        },
+        "subscription": "sub_failed"
+      },
+      {
+        "id": "in_failed",
+        "object": "invoice",
+        "amount_due": 5000,
+        "amount_paid": 0,
+        "amount_remaining": 5000,
+        "attempt_count": 1,
+        "attempted": true,
+        "billing_reason": "subscription_cycle",
+        "charge": null,
+        "collection_method": "charge_automatically",
+        "created": 1790812800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_fixture/in_failed",
+        "lines": {
+          "object": "list",
+          "data": [
+            {
+              "id": "il_failed",
+              "object": "line_item",
+              "amount": 5000,
+              "currency": "usd",
+              "period": {
+                "start": 1790812800,
+                "end": 1793404800
+              },
+              "price": {
+                "id": "price_codium50",
+                "object": "price",
+                "active": true,
+                "billing_scheme": "per_unit",
+                "created": 1787356800,
+                "currency": "usd",
+                "livemode": false,
+                "lookup_key": "vector-models-50-monthly-v1",
+                "metadata": {},
+                "product": "prod_codium50",
+                "recurring": {
+                  "aggregate_usage": null,
+                  "interval": "month",
+                  "interval_count": 1,
+                  "meter": null,
+                  "usage_type": "licensed"
+                },
+                "tax_behavior": "exclusive",
+                "type": "recurring",
+                "unit_amount": 5000,
+                "unit_amount_decimal": "5000"
+              },
+              "proration": false,
+              "quantity": 1,
+              "subscription": "sub_failed",
+              "type": "subscription"
+            }
+          ],
+          "has_more": false,
+          "url": "/v1/invoices/in_failed/lines"
+        },
+        "livemode": false,
+        "paid": false,
+        "payment_intent": "pi_failed",
+        "period_start": 1788220800,
+        "period_end": 1790812800,
+        "status": "open",
+        "status_transitions": {
+          "finalized_at": 1790816400,
+          "marked_uncollectible_at": null,
+          "paid_at": null,
+          "voided_at": null
+        },
+        "subscription": "sub_failed"
+      }
+    ],
+    "payment_intents": [
+      {
+        "id": "pi_failedP1",
+        "object": "payment_intent",
+        "amount": 5000,
+        "created": 1788220800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "invoice": "in_failedP1",
+        "latest_charge": "ch_failedP1",
+        "livemode": false,
+        "status": "succeeded"
+      },
+      {
+        "id": "pi_failed",
+        "object": "payment_intent",
+        "amount": 5000,
+        "created": 1790812800,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "invoice": "in_failed",
+        "latest_charge": null,
+        "livemode": false,
+        "status": "requires_payment_method"
+      }
+    ],
+    "charges": [
+      {
+        "id": "ch_failedP1",
+        "object": "charge",
+        "amount": 5000,
+        "amount_captured": 5000,
+        "amount_refunded": 0,
+        "balance_transaction": "txn_failedP1",
+        "captured": true,
+        "created": 1788224400,
+        "currency": "usd",
+        "customer": "cus_CodiumFixture01",
+        "disputed": false,
+        "invoice": "in_failedP1",
+        "livemode": false,
+        "metadata": {},
+        "outcome": {
+          "network_status": "approved_by_network",
+          "risk_level": "normal",
+          "seller_message": "Payment complete.",
+          "type": "authorized"
+        },
+        "paid": true,
+        "payment_intent": "pi_failedP1",
+        "refunded": false,
+        "status": "succeeded"
+      }
+    ]
+  },
+  "expect": {
+    "state": "paused",
+    "reason": "payment_failed",
+    "plan": "vector-50",
+    "subscription": "sub_failed",
+    "periodStart": 1788220800,
+    "periodEnd": 1790812800,
+    "key": "disabled"
+  }
+}

@@ -21,6 +21,8 @@ const keep = new Set([
   "support",
   // The owner's usage dashboard; api/usage/summary decides who sees any numbers.
   "usage",
+  // Private owner shells contain no data; the owner API authorizes every read and mutation.
+  "owner",
   "install",
   "install.ps1",
   "index.html",
@@ -45,6 +47,7 @@ const keep = new Set([
   "sitemap-index.xml",
   "theme.json",
   "config.json",
+  "workflow.json",
   "tui.json",
   "desktop-theme.json",
   // The feed the desktop app polls for "what's new". Pruning it is what made

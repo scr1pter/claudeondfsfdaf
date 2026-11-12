@@ -57,6 +57,9 @@ import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { DialogTasks } from "./dialog-tasks"
+import { DialogWorkflow } from "./dialog-workflow"
+import { interruptedToast, pendingInterruption, stoppedHelpersMessage } from "./task-presentation"
+import { stopBackgroundSubagents, stopIncludingHelpers } from "./task-actions"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
@@ -116,7 +119,11 @@ const sessionBindingCommands = [
   "session.parent",
   "session.child.next",
   "session.child.previous",
+  "session.interrupt.all",
 ] as const
+
+// Main sessions whose interrupted helpers have been announced in this process (5.I.5: one toast per session).
+const announcedInterruptions = new Set<string>()
 
 const sessionGlobalBindingCommands = [
   "session.page.up",
@@ -186,10 +193,15 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
-  // A subagent's own tasks cannot move to the background, so its view offers no way to try.
+  // A subagent's own tasks cannot move to the background, so its view offers no way to try. A batch moves only on an
+  // engine that can promote batch entries (taskPromote).
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents && !session()?.parentID
-      ? messages().flatMap((message) => (sync.data.part[message.id] ?? []).filter(canBackgroundTask))
+      ? messages().flatMap((message) =>
+          (sync.data.part[message.id] ?? []).filter((part) =>
+            canBackgroundTask(part, sync.data.capabilities.taskPromote),
+          ),
+        )
       : [],
   )
   // Stop on the main turn leaves background subagents running, so they have a command of their own to stop them. A
@@ -436,13 +448,88 @@ export function Session() {
     }
   }
 
+  // "Stop including helpers" (5.I.5): the main turn and every helper this conversation started, at any depth, plus
+  // their workflow runs and background commands. Partial work is kept.
+  function stopAll() {
+    const sessionID = route.sessionID
+    dialog.clear()
+    void stopIncludingHelpers({
+      client: sdk.client,
+      sessionID,
+      workspace: project.workspace.current(),
+      capabilities: sync.data.capabilities,
+      helpers: backgroundSessions(),
+    })
+      .then((result) => toast.show({ message: stoppedHelpersMessage(result), variant: "info" }))
+      .catch((error: unknown) => toast.show({ message: errorMessage(error), variant: "error" }))
+  }
+
+  // Interrupted helpers are announced once per main session: nothing resumes on its own (decision 6).
+  createEffect(() => {
+    const sessionID = route.sessionID
+    const current = session()
+    if (!current || current.parentID || !sync.data.capabilities.taskResume) return
+    if (announcedInterruptions.has(sessionID)) return
+    announcedInterruptions.add(sessionID)
+    const workspace = untrack(() => project.workspace.current())
+    void sdk.client.experimental.task
+      .list({ sessionID, workspace }, { throwOnError: true })
+      .then((result) => {
+        const count = (result.data?.tasks ?? []).filter(
+          (task) => task.source === "subagent" && pendingInterruption(task),
+        ).length
+        if (count > 0 && route.sessionID === sessionID)
+          toast.show({ message: interruptedToast(count), variant: "warning", duration: 10_000 })
+      })
+      .catch(() => {})
+  })
+
   const sessionCommandList = createMemo(() => [
     {
       title: "Manage subagent tasks",
       value: "session.tasks",
       category: "Session",
       slash: { name: "tasks" },
-      run: () => dialog.replace(() => <DialogTasks sessionID={route.sessionID} />),
+      run: () =>
+        dialog.replace(() => (
+          <DialogTasks sessionID={route.sessionID} onStopAll={session()?.parentID ? undefined : stopAll} />
+        )),
+    },
+    {
+      title: "Stop including helpers",
+      value: "session.interrupt.all",
+      category: "Session",
+      description: "the main turn and every helper it started",
+      slash: { name: "stop-all" },
+      enabled: !session()?.parentID,
+      run: stopAll,
+    },
+    {
+      title: "Run a saved workflow",
+      value: "workflow.open",
+      category: "Session",
+      slash: { name: "workflow" },
+      // A command of the user's own named "workflow" keeps its name.
+      enabled:
+        sync.data.capabilities.workflows &&
+        !session()?.parentID &&
+        !sync.data.command.some((command) => command.name === "workflow"),
+      run: () =>
+        dialog.replace(() => (
+          <DialogWorkflow
+            sessionID={route.sessionID}
+            busy={() => (sync.data.session_status?.[route.sessionID]?.type ?? "idle") !== "idle"}
+            onBusy={(message) => {
+              const current = prompt?.current
+              const input = current?.input ?? ""
+              prompt?.set({
+                input: `${input}${input.trim() ? "\n\n" : ""}${message}`,
+                parts: current?.parts ?? [],
+              })
+              prompt?.focus()
+            }}
+          />
+        )),
     },
     {
       title: "Rename session",
@@ -961,11 +1048,24 @@ export function Session() {
       hidden: true,
       enabled: foregroundTasks().length > 0,
       run: () => {
-        void sdk.client.experimental.session.background({
-          sessionID: route.sessionID,
-          workspace: project.workspace.current(),
-        })
         dialog.clear()
+        // An engine that promotes batch entries moves every blocking subagent of the turn (route 2); an older one
+        // keeps its single-subagent route.
+        if (!sync.data.capabilities.taskPromote) {
+          void sdk.client.experimental.session.background({
+            sessionID: route.sessionID,
+            workspace: project.workspace.current(),
+          })
+          return
+        }
+        void sdk.client.experimental.task
+          .background({ sessionID: route.sessionID, workspace: project.workspace.current() }, { throwOnError: true })
+          .then((result) => {
+            const moved = result.data?.tasks.length ?? 0
+            if (!moved)
+              toast.show({ message: "No subagent could move to the background.", variant: "warning", duration: 3000 })
+          })
+          .catch((error: unknown) => toast.show({ message: errorMessage(error), variant: "error" }))
       },
     },
     {
@@ -974,24 +1074,21 @@ export function Session() {
       category: "Session",
       enabled: backgroundSessions().length > 0,
       run: () => {
-        void sdk.client.experimental.task
-          .stop(
-            {
-              sessionID: route.sessionID,
-              all: true,
-              reason: "Stopped all subagents from the terminal",
-              workspace: project.workspace.current(),
-            },
-            { throwOnError: true },
-          )
+        dialog.clear()
+        void stopBackgroundSubagents({
+          client: sdk.client,
+          sessionID: route.sessionID,
+          workspace: project.workspace.current(),
+          capabilities: sync.data.capabilities,
+          background: backgroundSessions(),
+        })
           .then((result) =>
             toast.show({
-              message: `Stopped ${result.data?.tasks.length ?? 0} subagent tasks. Partial work is retained.`,
-              variant: "info",
+              message: `Stopped ${result.stopped} background subagent${result.stopped === 1 ? "" : "s"}. Partial work is retained.${result.failed ? ` ${result.failed} stop request${result.failed === 1 ? "" : "s"} failed.` : ""}`,
+              variant: result.failed ? "warning" : "info",
             }),
           )
           .catch((error: unknown) => toast.show({ message: errorMessage(error), variant: "error" }))
-        dialog.clear()
       },
     },
     {
@@ -1278,6 +1375,7 @@ export function Session() {
                         toBottom()
                       }}
                       sessionID={route.sessionID}
+                      onStopAll={session()?.parentID ? undefined : stopAll}
                       right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
                     />
                   </pluginRuntime.Slot>
@@ -1468,7 +1566,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
               when={
                 sync.data.capabilities.experimentalBackgroundSubagents &&
                 !sync.session.get(ctx.sessionID)?.parentID &&
-                props.parts.some(canBackgroundTask)
+                props.parts.some((part) => canBackgroundTask(part, sync.data.capabilities.taskPromote))
               }
             >
               <span style={{ fg: theme.textMuted }}> · </span>
@@ -2197,10 +2295,17 @@ function WebSearch(props: ToolProps) {
   )
 }
 
-export function canBackgroundTask(part: Part): part is ToolPart {
+/**
+ * Whether Ctrl+B can move this task call to the background. A single task can while it runs in the foreground. A batch
+ * can when any entry is running and not in the background, and only on an engine that promotes batch entries
+ * (`taskPromote`); an older engine moves only a one-entry batch.
+ */
+export function canBackgroundTask(part: Part, taskPromote = false): part is ToolPart {
   if (part.type !== "tool" || part.tool !== "task" || part.state.status !== "running") return false
   const entries = taskBatchEntries(part.state.input, part.state.metadata)
   if (!entries) return part.state.metadata?.background !== true
+  if (taskPromote)
+    return entries.some((entry) => entry.metadata.background !== true && entry.metadata.status === "running")
   if (entries.length !== 1 || entries[0].index !== 0) return false
   return entries[0].metadata.background !== true && entries[0].metadata.status === "running"
 }

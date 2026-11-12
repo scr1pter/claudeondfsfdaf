@@ -23,6 +23,7 @@ export function recommendationAvailable(
   recommendation: Pick<ModelRecommendation, "provider" | "model" | "variant">,
   models: readonly AvailableModel[],
 ) {
+  if (Billing.isCodium(recommendation.provider)) return false
   return models.some(
     (model) =>
       model.providerID === recommendation.provider &&
@@ -96,6 +97,7 @@ export function recommendModel(
 ): ModelRecommendation | undefined {
   const groups = new Map<string, Group>()
   for (const outcome of outcomes) {
+    if (Billing.isCodium(outcome.provider)) continue
     if (!outcome.provider || !outcome.model || outcome.mixedModels) continue
     if (outcome.category !== category || outcome.variant?.kind !== "named" || !outcome.variant.name) continue
     const candidate = { provider: outcome.provider, model: outcome.model, variant: outcome.variant.name }
@@ -165,3 +167,4 @@ export function recommendModel(
     evidence: evidenceFor(best.group, category),
   }
 }
+import { Billing } from "@vectordevai/schema/billing"

@@ -2,7 +2,9 @@
 // gets back the text to print. Everything the model wrote is flattened to plain text with control characters removed,
 // so a review of someone else's pull request cannot write escape sequences to the terminal.
 
-import { formatDuration, formatTokens, formatUsd } from "@vectordevai/core/review/format"
+import { Billing } from "@vectordevai/schema/billing"
+import { reviewCostHasCodium, reviewCostIsCodium } from "@vectordevai/core/review/state"
+import { costWording, formatDuration, formatTokens, formatUsd } from "@vectordevai/core/review/format"
 import type {
   Finding,
   PlacedFinding,
@@ -217,7 +219,10 @@ function sinceLine(since: string, outcome: ReviewOutcome): string {
 // "anthropic/claude-sonnet-4 · 48.2k in / 3.1k out · 1m 52s · sessions: ses_1, ses_2"
 function footer(outcome: ReviewOutcome): string {
   const parts: string[] = []
-  if (outcome.cost) parts.push(outcome.cost.model, costText(outcome.cost), usage(outcome.cost))
+  if (outcome.cost) {
+    if (reviewCostHasCodium(outcome.cost)) parts.push(costWording(outcome.cost))
+    else parts.push(outcome.cost.model, costText(outcome.cost), usage(outcome.cost))
+  }
   parts.push(formatDuration(outcome.durationMs))
   if (outcome.sessions.length) parts.push(`sessions: ${outcome.sessions.join(", ")}`)
   return parts.join(" · ")
@@ -226,7 +231,6 @@ function footer(outcome: ReviewOutcome): string {
 // "By pass: review $0.0123 (40.1k in / 2.0k out) · double-check $0.0031 (9.2k in / 0.4k out)". Dollar amounts only
 // when the review as a whole is priced.
 function passesLine(passes: ReviewPass[], cost: ReviewCost | undefined): string {
-  const priced = cost?.kind === "priced"
   const name = {
     review: "review",
     security: "security",
@@ -236,10 +240,22 @@ function passesLine(passes: ReviewPass[], cost: ReviewCost | undefined): string 
     repro: "reproducer",
   } as const
   return `By pass: ${passes
-    .map(
-      (pass) =>
-        `${name[pass.name]} ${priced && pass.costUsd !== undefined ? `${formatUsd(pass.costUsd)} ` : ""}(${formatTokens(pass.input)} in / ${formatTokens(pass.output)} out)`,
-    )
+    .map((pass) => {
+      const explicit = pass.model.includes("/")
+      const codium =
+        pass.costKind === "codium" ||
+        Billing.isCodium(pass.model.split("/")[0]) ||
+        (!explicit && !pass.costKind && cost && reviewCostIsCodium(cost))
+      if (codium) return `${name[pass.name]}: Codium`
+      if (explicit && !Billing.hasOwnIdentity({ providerID: pass.model.split("/")[0] }))
+        return `${name[pass.name]}: usage unavailable`
+      const kind = pass.costKind ?? cost?.kind
+      const dollars =
+        pass.costUsd !== undefined && (kind === "priced" || (kind === "unknown" && pass.costUsd > 0))
+          ? `${formatUsd(pass.costUsd)}${kind === "unknown" ? " + unpriced" : ""} `
+          : ""
+      return `${name[pass.name]} ${dollars}${pass.usageMissing ? "(token usage unavailable)" : `(${formatTokens(pass.input)} in / ${formatTokens(pass.output)} out)`}`
+    })
     .join(" · ")}`
 }
 

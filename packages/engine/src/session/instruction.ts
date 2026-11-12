@@ -5,6 +5,7 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Effect, Layer, Context, Option } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Config } from "@/config/config"
+import { PromptTrust } from "@/config/prompt-trust"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Flag } from "@vectordevai/core/flag/flag"
@@ -88,7 +89,9 @@ function extract(messages: SessionV1.WithParts[]) {
 /** The memory entries already attached to read results in this history. */
 export function attachedMemory(messages: SessionV1.WithParts[]) {
   return new Set(
-    [...extract(messages)].flatMap((item) => (item.startsWith(MEMORY_LOADED) ? [item.slice(MEMORY_LOADED.length)] : [])),
+    [...extract(messages)].flatMap((item) =>
+      item.startsWith(MEMORY_LOADED) ? [item.slice(MEMORY_LOADED.length)] : [],
+    ),
   )
 }
 
@@ -208,7 +211,10 @@ const layer: Layer.Layer<
         })
       )
         return true
-      yield* Effect.logWarning("not loading a project instruction file that links outside the project", { file, target })
+      yield* Effect.logWarning("not loading a project instruction file that links outside the project", {
+        file,
+        target,
+      })
       return false
     })
 
@@ -293,22 +299,22 @@ const layer: Layer.Layer<
         for (const raw of config.instructions) {
           if (raw.startsWith("https://") || raw.startsWith("http://")) continue
           const instruction = raw.startsWith("~/") ? path.join(global.home, raw.slice(2)) : raw
-          const matches = yield* (
-            path.isAbsolute(instruction)
-              ? fs
-                  .glob(path.basename(instruction), {
-                    cwd: path.dirname(instruction),
-                    absolute: true,
-                    include: "file",
-                  })
-                  .pipe(Effect.catch(() => Effect.succeed([] as string[])))
-              : projectFiles(relative(instruction))
-          )
+          const matches = yield* path.isAbsolute(instruction)
+            ? fs
+                .glob(path.basename(instruction), {
+                  cwd: path.dirname(instruction),
+                  absolute: true,
+                  include: "file",
+                })
+                .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+            : projectFiles(relative(instruction))
           matches.forEach((item) => paths.add(path.resolve(item)))
         }
       }
 
-      return paths
+      // An instruction file outside the repository that changed since the owner last approved it waits for them. A held
+      // global AGENTS.md keeps its place, so CLAUDE.md does not stand in for it.
+      return new Set([...paths].filter(PromptTrust.allowed))
     })
 
     const system = Effect.fn("Instruction.system")(function* () {
@@ -460,21 +466,23 @@ const layer: Layer.Layer<
       const s = yield* InstanceState.get(state)
       const claimed = s.claims.get(messageID) ?? new Set<string>()
       const done = linkedSince(messages, "guard")
-      const links = yield* Effect.forEach([...new Set(files.map((file) => BrainPaths.relative(brainPlace.root, file)))], (file) =>
-        Effect.gen(function* () {
-          if (done.has(file) || claimed.has(`guard:${file}`)) return []
-          // A requirement the conversation already has is still named: the guard asks for a check, not a read.
-          const line = yield* knowledge.guard(brainPlace, {
-            file,
-            personal: asking.personal,
-            exclude: new Set(),
-            sessionID: asking.sessionID,
-            ...(requestOf(messages) ? { requestID: requestOf(messages)! } : {}),
-          })
-          if (!line.text) return []
-          claimed.add(`guard:${file}`)
-          return [{ mode: "guard" as const, file, ids: line.ids }]
-        }),
+      const links = yield* Effect.forEach(
+        [...new Set(files.map((file) => BrainPaths.relative(brainPlace.root, file)))],
+        (file) =>
+          Effect.gen(function* () {
+            if (done.has(file) || claimed.has(`guard:${file}`)) return []
+            // A requirement the conversation already has is still named: the guard asks for a check, not a read.
+            const line = yield* knowledge.guard(brainPlace, {
+              file,
+              personal: asking.personal,
+              exclude: new Set(),
+              sessionID: asking.sessionID,
+              ...(requestOf(messages) ? { requestID: requestOf(messages)! } : {}),
+            })
+            if (!line.text) return []
+            claimed.add(`guard:${file}`)
+            return [{ mode: "guard" as const, file, ids: line.ids }]
+          }),
       ).pipe(Effect.map((found) => found.flat()))
       s.claims.set(messageID, claimed)
       if (links.length === 0) return { links }
@@ -497,7 +505,10 @@ export function links(part: SessionV1.Part): Link[] {
   return value.flatMap((item: unknown) => {
     if (!item || typeof item !== "object" || !("file" in item) || typeof item.file !== "string") return []
     const mode = "mode" in item && item.mode === "guard" ? ("guard" as const) : ("pointer" as const)
-    const ids = "ids" in item && Array.isArray(item.ids) ? item.ids.filter((id: unknown): id is string => typeof id === "string") : []
+    const ids =
+      "ids" in item && Array.isArray(item.ids)
+        ? item.ids.filter((id: unknown): id is string => typeof id === "string")
+        : []
     return ids.length > 0 ? [{ mode, file: item.file, ids }] : []
   })
 }

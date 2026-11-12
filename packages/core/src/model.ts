@@ -23,6 +23,9 @@ export type Ref = typeof Ref.Type
 export const Api = Model.Api
 export type Api = Model.Api
 
+export const Codium = Model.Codium
+export type Codium = Model.Codium
+
 export const Info = Model.Info
 export type Info = Model.Info
 

@@ -11,6 +11,8 @@ import {
   findingMarker,
   inlineTitle,
   reviewMarker,
+  reviewCostHasCodium,
+  reviewCostIsCodium,
   setFindingStatus,
   stateMarker,
   type ClassifiedPrior,
@@ -118,18 +120,29 @@ function formatCount(value: number): string {
 // The model and what the review cost (section 5.5). The engine's `input` excludes cached tokens, so "in" adds
 // them back and "of it cached" shows the cache reads.
 export function costWording(cost: ReviewCost): string {
-  if (cost.usageMissing) return `${cost.model} · cost and token usage unavailable`
+  if (reviewCostIsCodium(cost)) return `Vector Codium · ${cost.model.replace(/(^| \+ )vector-plan\//g, "$1")} · Codium`
+  const codium = reviewCostHasCodium(cost)
+  const extra = codium ? " + Codium" : ""
+  if (cost.usageMissing) {
+    if (cost.costUsd > 0)
+      return `${cost.model} · ${formatUsd(cost.costUsd)}${extra} · additional cost and token usage unavailable`
+    return `${cost.model} · cost and token usage unavailable${extra}`
+  }
   const tokensIn = cost.input + cost.cacheRead + cost.cacheWrite
   const usage =
-    cost.cacheRead > 0
-      ? `${formatTokens(tokensIn)} in, ${formatTokens(cost.cacheRead)} of it cached / ${formatTokens(cost.output)} out`
-      : `${formatTokens(tokensIn)} in / ${formatTokens(cost.output)} out`
-  if (cost.kind === "free") return `${cost.model.replace(/:free$/, "")} · free (${usage})`
+    codium && cost.tokensOwnOnly !== true
+      ? ""
+      : cost.cacheRead > 0
+        ? ` (${formatTokens(tokensIn)} in, ${formatTokens(cost.cacheRead)} of it cached / ${formatTokens(cost.output)} out)`
+        : ` (${formatTokens(tokensIn)} in / ${formatTokens(cost.output)} out)`
+  if (cost.kind === "free") return `${cost.model.replace(/:free$/, "")} · free${extra}${usage}`
   if (cost.kind === "priced" && cost.partial)
-    return `${cost.model} · at least ${formatUsd(cost.costUsd)}: a reply that stopped early reported no usage (${usage})`
-  if (cost.kind === "priced") return `${cost.model} · ${formatUsd(cost.costUsd)} (${usage})`
-  if (cost.kind === "plan") return `${cost.model} · subscription sign-in, no per-token price (${usage})`
-  return `${cost.model} · cost unknown: pricing or complete usage is unavailable (${usage})`
+    return `${cost.model} · at least ${formatUsd(cost.costUsd)}${extra}: a reply that stopped early reported no usage${usage}`
+  if (cost.kind === "priced") return `${cost.model} · ${formatUsd(cost.costUsd)}${extra}${usage}`
+  if (cost.kind === "plan") return `${cost.model} · subscription sign-in, no per-token price${extra}${usage}`
+  if (codium && cost.costUsd > 0)
+    return `${cost.model} · ${formatUsd(cost.costUsd)}${extra} · additional cost unknown: pricing or complete usage is unavailable${usage}`
+  return `${cost.model} · cost unknown${extra}: pricing or complete usage is unavailable${usage}`
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -651,7 +664,7 @@ export interface SummaryInput {
   notes?: string[] // paragraphs after the counts, such as noteSuperseded or noteMoved
   cost?: ReviewCost
   durationMs?: number
-  prTotal?: { costUsd: number; reviews: number }
+  prTotal?: { costUsd: number; reviews: number; codiumReviews?: number }
   runUrl?: string
   commentUrls?: Record<string, string> // finding id → its inline comment's URL
   state?: ReviewState
@@ -959,8 +972,13 @@ function footer(input: SummaryInput): string[] {
   if (input.cost) parts.push(costWording(input.cost))
   if (input.durationMs !== undefined) parts.push(formatDuration(input.durationMs))
   if (input.prTotal && input.prTotal.reviews > 0) {
-    const spent = input.prTotal.costUsd > 0 ? `${formatUsd(input.prTotal.costUsd)} over ` : ""
-    parts.push(`this pull request: ${spent}${reviews(input.prTotal.reviews)}`)
+    const spent = [
+      input.prTotal.costUsd > 0 ? formatUsd(input.prTotal.costUsd) : undefined,
+      (input.prTotal.codiumReviews ?? 0) > 0 ? "Codium" : undefined,
+    ]
+      .filter(Boolean)
+      .join(" + ")
+    parts.push(`this pull request: ${spent ? `${spent} over ` : ""}${reviews(input.prTotal.reviews)}`)
   }
   if (input.runUrl) parts.push(`[workflow run](${input.runUrl})`)
   const out = [`<sub>${parts.join(" · ")}</sub>`]

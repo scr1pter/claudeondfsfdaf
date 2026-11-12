@@ -1,9 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import { Option, Schema } from "effect"
 import { readCodiumFunding } from "./codium-funding.js"
+import { codiumKey } from "./codium-keys.js"
 import { ApiError, handleApiError, json, queryValue, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 import { openRouterManagement, readModelPlanAccount, withCodiumLease } from "./model-plan-account.js"
-import { modelPlans, modelTopups, subscriptionPlanCredits } from "./model-plan-config.js"
+import { modelPlans, subscriptionPlanCredits } from "./model-plan-config.js"
 import { modelPlanStripe, stripeRecord } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -15,6 +16,8 @@ import { persistentStore } from "./persistent-store.js"
  */
 const Entry = Schema.Struct({
   charge: Schema.String,
+  // Codium sells monthly plans only (WP A04), so every entry written now is a subscription's. "topup" still decodes so
+  // a line written before top-ups were removed keeps counting in the books as it was recorded; nothing writes one.
   kind: Schema.Literals(["subscription", "topup"]),
   account: Schema.String,
   product: Schema.String,
@@ -29,13 +32,12 @@ const Entry = Schema.Struct({
   credits: Schema.Number,
   openRouterFee: Schema.Number,
   profit: Schema.Number,
-  // A top-up's purchased-credit key usage when this entry was written; see codiumLedger.
-  walletUsage: Schema.optional(Schema.Number),
   updatedAt: Schema.Number,
 })
 type Entry = typeof Entry.Type
 
-const LEDGER_KEY = "vector:codium:ledger"
+// Read at each call: the mode namespace comes from the environment.
+const LEDGER_KEY = () => codiumKey("ledger")
 
 /**
  * Writes the ledger entry for one charge from Stripe's current state, so every notification about it (paid, fee
@@ -72,17 +74,10 @@ export async function recordCodiumCharge(id: string, chargeID: string, fetcher: 
       const disputed =
         charge.disputed === true &&
         !(disputes.length > 0 && disputes.every((value) => ["won", "warning_closed"].includes(String(value.status))))
-      const sale = topupSale(charge, account, id) ?? subscriptionSale(charge, id)
+      const sale = subscriptionSale(charge, id)
       if (!sale) return
       const reversed = refunded > 0 || disputed
-      const credits =
-        sale.kind === "topup"
-          ? disputed
-            ? 0
-            : Math.floor((sale.credits * (price - refunded)) / price)
-          : reversed
-            ? await revokedMonthlyCost(account, sale, fetcher)
-            : sale.credits
+      const credits = reversed ? await revokedMonthlyCost(account, sale, fetcher) : sale.credits
       const transaction = stripeRecord(charge.balance_transaction) ? charge.balance_transaction : undefined
       const disputeTransactions = disputes.flatMap((value) =>
         Array.isArray(value.balance_transactions) ? value.balance_transactions.filter(stripeRecord) : [],
@@ -95,17 +90,6 @@ export async function recordCodiumCharge(id: string, chargeID: string, fetcher: 
       const stripeFee = fee === undefined ? null : fee + sum("fee")
       const stripeNet = (net ?? price) - refunded + sum("net")
       const openRouterFee = Math.ceil((credits * openRouterFeePercent()) / 100)
-      const wallet =
-        sale.kind === "topup" && account.wallet
-          ? (await openRouterManagement(`/${encodeURIComponent(account.wallet.hash)}`, undefined, fetcher)).data
-          : undefined
-      const usage = stripeRecord(wallet) ? wallet.usage : undefined
-      if (wallet !== undefined && (typeof usage !== "number" || !Number.isFinite(usage) || usage < 0))
-        throw new ApiError(
-          503,
-          "CODIUM_LEDGER_USAGE",
-          "The purchased-credit usage for the Codium ledger could not be read.",
-        )
       const entry: Entry = {
         charge: chargeID,
         kind: sale.kind,
@@ -121,53 +105,19 @@ export async function recordCodiumCharge(id: string, chargeID: string, fetcher: 
         credits,
         openRouterFee,
         profit: stripeNet - credits - openRouterFee,
-        // A top-up bought before its account's purchased-credit key exists has spent nothing yet.
-        walletUsage: sale.kind !== "topup" ? undefined : typeof usage === "number" ? Math.ceil(usage * 100 - 1e-6) : 0,
-        // Written under the lease, so the latest entry holds the latest usage.
         updatedAt: Date.now(),
       }
-      await persistentStore(["HSET", LEDGER_KEY, chargeID, JSON.stringify(entry)], fetcher)
+      await persistentStore(["HSET", LEDGER_KEY(), chargeID, JSON.stringify(entry)], fetcher)
       return entry
     },
     fetcher,
   )
 }
 
-/**
- * Every entry, newest first, counting what buyers spent before a refund or dispute took a top-up back. An entry's
- * credits are what its purchase still pays for, but a key's usage stays when its limit drops, and every top-up of an
- * account shares one key. So that spend is the key's latest usage above all the account's top-up credits, and it is
- * the reversed top-ups' cost, oldest first, each up to the credits its reversal took away (`reversedSpend`).
- */
+/** Every entry, newest first. */
 export async function codiumLedger(fetcher: typeof fetch = fetch) {
-  const entries = [...new Map((await ledgerPage(fetcher)).map((entry) => [entry.charge, entry])).values()].sort(
-    (a, b) => a.created - b.created,
-  )
-  const topups = entries.filter((entry) => entry.kind === "topup")
-  const unpaid = new Map(
-    [...new Set(topups.map((entry) => entry.account))].map((account) => {
-      const owned = topups.filter((entry) => entry.account === account)
-      const latest = owned.reduce((last, entry) => (entry.updatedAt >= last.updatedAt ? entry : last))
-      return [account, Math.max(0, (latest.walletUsage ?? 0) - owned.reduce((sum, entry) => sum + entry.credits, 0))]
-    }),
-  )
-  const fee = openRouterFeePercent()
-  return entries
-    .map((entry) => {
-      const left = unpaid.get(entry.account) ?? 0
-      const spent = entry.kind === "topup" ? Math.max(0, Math.min(left, entry.granted - entry.credits)) : 0
-      if (spent === 0) return { ...entry, reversedSpend: 0 }
-      unpaid.set(entry.account, left - spent)
-      const credits = entry.credits + spent
-      const openRouterFee = Math.ceil((credits * fee) / 100)
-      return {
-        ...entry,
-        credits,
-        openRouterFee,
-        profit: entry.stripeNet - credits - openRouterFee,
-        reversedSpend: spent,
-      }
-    })
+  return [...new Map((await ledgerPage(fetcher)).map((entry) => [entry.charge, entry])).values()]
+    .sort((a, b) => a.created - b.created)
     .reverse()
 }
 
@@ -201,23 +151,6 @@ export async function handleCodiumLedger(request: ApiRequest, response: ApiRespo
   } catch (error) {
     handleApiError(response, error)
   }
-}
-
-function topupSale(
-  charge: Record<string, unknown>,
-  account: { purchases?: readonly { payment: string; credits: number }[] },
-  id: string,
-) {
-  const payment = stripeRecord(charge.payment_intent) ? charge.payment_intent : undefined
-  const metadata = payment && stripeRecord(payment.metadata) ? payment.metadata : undefined
-  if (metadata?.vector_product !== "codium-topup" || metadata.vector_account_id !== id) return
-  const pack = modelTopups().find((value) => value.id === metadata.vector_pack)
-  // The purchase records the credits granted; until the checkout notification records it, its metadata says the same.
-  const credits =
-    account.purchases?.find((value) => value.payment === payment?.id)?.credits ?? Number(metadata.vector_credits_usd)
-  if (!pack || charge.amount !== pack.price * 100 || !Number.isFinite(credits) || credits <= 0 || credits > pack.price)
-    return
-  return { kind: "topup" as const, product: pack.id, credits: Math.round(credits * 100) }
 }
 
 function subscriptionSale(charge: Record<string, unknown>, id: string) {
@@ -292,7 +225,7 @@ function openRouterFeePercent() {
 }
 
 async function ledgerPage(fetcher: typeof fetch, cursor = "0"): Promise<Entry[]> {
-  const result = await persistentStore(["HSCAN", LEDGER_KEY, cursor, "COUNT", 500], fetcher)
+  const result = await persistentStore(["HSCAN", LEDGER_KEY(), cursor, "COUNT", 500], fetcher)
   if (!Array.isArray(result) || !Array.isArray(result[1]))
     throw new ApiError(503, "CODIUM_LEDGER_UNAVAILABLE", "The Codium ledger could not be read.")
   const entries = result[1]
@@ -304,7 +237,7 @@ async function ledgerPage(fetcher: typeof fetch, cursor = "0"): Promise<Entry[]>
 
 const month = (entry: { created: number }) => new Date(entry.created).toISOString().slice(0, 7)
 
-function totals(entries: readonly (Entry & { reversedSpend: number })[]) {
+function totals(entries: readonly Entry[]) {
   return entries.reduce(
     (sum, entry) => ({
       payments: sum.payments + 1,
@@ -313,7 +246,6 @@ function totals(entries: readonly (Entry & { reversedSpend: number })[]) {
       stripeFee: sum.stripeFee + (entry.stripeFee ?? 0),
       stripeNet: sum.stripeNet + entry.stripeNet,
       credits: sum.credits + entry.credits,
-      reversedSpend: sum.reversedSpend + entry.reversedSpend,
       openRouterFee: sum.openRouterFee + entry.openRouterFee,
       profit: sum.profit + entry.profit,
       feesPending: sum.feesPending + (entry.stripeFee === null ? 1 : 0),
@@ -325,7 +257,6 @@ function totals(entries: readonly (Entry & { reversedSpend: number })[]) {
       stripeFee: 0,
       stripeNet: 0,
       credits: 0,
-      reversedSpend: 0,
       openRouterFee: 0,
       profit: 0,
       feesPending: 0,

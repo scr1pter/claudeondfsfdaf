@@ -25,6 +25,11 @@ export const GlobTool = Tool.define(
       execute: (params: { pattern: string; path?: string }, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const ins = yield* InstanceState.context
+          let search = params.path ?? ins.directory
+          search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
+          // A guest family may not list a private task folder or a folder holding one, nor learn through a stat or an
+          // ask whether one exists.
+          if (ctx.assertReadable) yield* ctx.assertReadable({ files: [search], recursive: true })
           yield* ctx.ask({
             permission: "glob",
             patterns: [params.pattern],
@@ -35,8 +40,6 @@ export const GlobTool = Tool.define(
             },
           })
 
-          let search = params.path ?? ins.directory
-          search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (info?.type === "File") {
             throw new Error(`glob path must be a directory: ${search}`)

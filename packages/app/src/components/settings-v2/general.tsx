@@ -10,6 +10,8 @@ import "./settings-v2.css"
 
 import { usePlatform } from "@/context/platform"
 import { observeTelemetryPreference, setTelemetryEnabled, telemetryEnabled } from "@/features/privacy/telemetry"
+import { followupDescriptionKeys } from "@/features/followup/followup-model"
+import { navigatorLocks } from "@/features/followup/followup-store"
 
 export type SettingsSection = "general" | "notifications" | "accessibility"
 
@@ -183,6 +185,7 @@ export const SettingsGeneralV2: Component<{
   section?: SettingsSection
 }> = (props) => {
   const settings = useSettings()
+  const language = useLanguage()
   const platform = usePlatform()
   const [status, setStatus] = createSignal("")
   const [crashDiagnostics, setCrashDiagnostics] = createSignal(telemetryEnabled())
@@ -216,9 +219,41 @@ export const SettingsGeneralV2: Component<{
     <Page
       eyebrow="General"
       title="General"
-      description="Manage Vector's local behavior, diagnostics, verification defaults, and terminal shell. Memory has a page of its own."
+      description="Manage what Vector does while it works, diagnostics, verification defaults, and the terminal shell. Memory has a page of its own."
     >
       <div class="settings-v2-section-grid">
+        <Card
+          icon="task"
+          title={language.t("settings.general.section.whileWorking.title")}
+          description={language.t("settings.general.section.whileWorking.description")}
+        >
+          <SelectRow
+            title={language.t("settings.general.row.followup.title")}
+            description={
+              // The queue drains while a Vector window is open (R6); without Web Locks (plain-http `vector web`) only on
+              // the page showing its session (5.I.1).
+              followupDescriptionKeys(navigatorLocks() !== undefined)
+                .map((key) => language.t(key))
+                .join(" ")
+            }
+            options={[
+              { value: "steer", label: language.t("settings.general.row.followup.option.steer") },
+              { value: "queue", label: language.t("settings.general.row.followup.option.queue") },
+            ]}
+            value={settings.general.followup()}
+            onChange={(value) => settings.general.setFollowup(value === "queue" ? "queue" : "steer")}
+          />
+          <SelectRow
+            title={language.t("settings.general.row.stopScope.title")}
+            description={language.t("settings.general.row.stopScope.description")}
+            options={[
+              { value: "turn", label: language.t("settings.general.row.stopScope.option.turn") },
+              { value: "all", label: language.t("settings.general.row.stopScope.option.all") },
+            ]}
+            value={settings.general.stopScope()}
+            onChange={(value) => settings.general.setStopScope(value === "all" ? "all" : "turn")}
+          />
+        </Card>
         <Card
           icon="status"
           title="Crash diagnostics"
@@ -294,7 +329,7 @@ export const SettingsGeneralV2: Component<{
           <Show when={settings.general.llmJudge()}>
             <SelectRow
               title="Tasks the judge checks"
-              description="Large tasks are the ones Vector runs with subagents: when you ask it to be thorough, or when the agent finds the work is large. Every task that changes files also includes small fixes."
+              description='Large tasks are the ones Vector runs as Thorough: when you ask it to be thorough, or when the agent raises an exceptionally hard request to Thorough. Ordinary work, even when Vector hands parts of it to subagents, is checked only with "Every task that changes files", which also covers small fixes.'
               options={[
                 { value: "thorough", label: "Large tasks" },
                 { value: "changes", label: "Every task that changes files" },

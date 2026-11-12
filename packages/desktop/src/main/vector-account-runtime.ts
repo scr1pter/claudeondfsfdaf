@@ -3,7 +3,7 @@ import { BrowserWindow, shell } from "electron"
 import { focusBillingWindow, isBillingWindow, openBillingWindow } from "./billing-window"
 import { getStore, removeStoreFileIfEmpty } from "./store"
 import { vaultSecrets } from "./vault-secrets"
-import { createVectorAccount, syncVectorAccount } from "./vector-account"
+import { createVectorAccount, refreshVectorModels, syncVectorAccount } from "./vector-account"
 import { createManagedAccountLifecycle } from "./vector-account-lifecycle"
 
 const STORE = "vector-account"
@@ -38,6 +38,11 @@ export const vectorAccount = createVectorAccount({
     const ready = engine.ready
     const synchronize = async () => syncVectorAccount(await ready(), token)
     await managed.sync(token, synchronize)
+  },
+  // Only the app's own sidecar: a WSL server gets the account when it starts, and its kept list lapses within a minute.
+  models: async (token) => {
+    if (!engine.ready) return
+    await refreshVectorModels(await engine.ready(), token)
   },
   changed: (status) =>
     BrowserWindow.getAllWindows().forEach((window) => {

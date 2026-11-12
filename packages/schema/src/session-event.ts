@@ -2,6 +2,7 @@ export * as SessionEvent from "./session-event"
 
 import { Schema } from "effect"
 import { optional } from "./schema"
+import { Billing } from "./billing"
 import { Event } from "./event"
 import { ProviderMetadata, ToolContent } from "./llm"
 import { Delivery } from "./session-delivery"
@@ -170,6 +171,8 @@ export namespace Step {
       cost: Schema.Finite,
       // The model lists no price, so cost is 0 because nothing could be charged, not because the step was free.
       unpriced: Schema.Boolean.pipe(optional),
+      // The step ran on Vector Codium: its usage shows as "Codium", never as tokens or dollars.
+      billing: Billing.Kind.pipe(optional),
       tokens: Schema.Struct({
         input: Schema.Finite,
         output: Schema.Finite,
@@ -217,6 +220,7 @@ const ancillaryUsage = {
   model: Model.Ref,
   cost: Step.Ended.data.fields.cost.pipe(optional),
   unpriced: Step.Ended.data.fields.unpriced,
+  billing: Step.Ended.data.fields.billing,
   tokens: Step.Ended.data.fields.tokens.pipe(optional),
   // Only partial provider usage was available; normalized totals are a lower bound, not a fully priced request.
   incomplete: Schema.Boolean.pipe(optional),
@@ -486,6 +490,7 @@ export namespace Compaction {
       // What the summary request cost; the provider bills it like any step.
       cost: Schema.Finite.pipe(optional),
       unpriced: Step.Ended.data.fields.unpriced,
+      billing: Step.Ended.data.fields.billing,
       tokens: Step.Ended.data.fields.tokens.pipe(optional),
     },
   })
@@ -501,6 +506,7 @@ export namespace Compaction {
       reason: Started.data.fields.reason,
       cost: Schema.Finite.pipe(optional),
       unpriced: Step.Ended.data.fields.unpriced,
+      billing: Step.Ended.data.fields.billing,
       tokens: Step.Ended.data.fields.tokens.pipe(optional),
     },
   })

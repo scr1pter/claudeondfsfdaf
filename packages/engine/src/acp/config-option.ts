@@ -1,4 +1,5 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 export const DEFAULT_VARIANT_VALUE = "default"
 
@@ -6,6 +7,7 @@ export type ConfigOptionModel = {
   id: string
   name: string
   variants?: Record<string, Record<string, unknown>>
+  codium?: ModelPlanStatus.Listing
 }
 
 export type ConfigOptionProvider = {
@@ -166,15 +168,17 @@ export function formatVariantName(variant: string) {
 function buildModelSelectOptions(
   providers: readonly ConfigOptionProvider[],
   options: { includeVariants: boolean },
-): Array<{ value: string; name: string }> {
+): Array<{ value: string; name: string; description?: string }> {
   return providers.flatMap((provider) =>
     Object.values(provider.models)
       .sort((a, b) => a.name.localeCompare(b.name))
       .flatMap((model) => {
-        const base = {
-          value: `${provider.id}/${model.id}`,
-          name: `${provider.name}/${model.name}`,
-        }
+        // A Codium model the plan does not include (or a preview) says so, as the app's and the TUI's pickers do:
+        // every prompt to a locked one is refused with the gateway's Change plan answer.
+        const badge = ModelPlanStatus.listingBadge(model.codium)
+        const name = badge ? `${provider.name}/${model.name} (${badge.label})` : `${provider.name}/${model.name}`
+        const about = badge ? { description: badge.title } : {}
+        const base = { value: `${provider.id}/${model.id}`, name, ...about }
         if (!options.includeVariants || !model.variants) return [base]
 
         return [
@@ -183,7 +187,8 @@ function buildModelSelectOptions(
             .filter((variant) => variant !== DEFAULT_VARIANT_VALUE)
             .map((variant) => ({
               value: `${provider.id}/${model.id}/${variant}`,
-              name: `${provider.name}/${model.name} (${formatVariantName(variant)})`,
+              name: `${name} (${formatVariantName(variant)})`,
+              ...about,
             })),
         ]
       }),

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import type { VectorAccountStatus, VectorBillingResult, VectorDeletionResult } from "@vectordevai/app/vector-account"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { Option, Schema } from "effect"
 import type { BillingOutcome } from "./billing-navigation"
 
 type StoredAccount = {
@@ -28,6 +29,8 @@ type Dependencies = {
   openBrowser(url: string): Promise<void>
   fetch(url: string, options: RequestInit): Promise<Response>
   sync(token: string | undefined): Promise<void>
+  /** Writes the signed-in token to the local server again, which reads that account's Codium models now. */
+  models(token: string): Promise<void>
   changed(status: VectorAccountStatus): void
   /** Shows a Stripe page in Vector's billing window and resolves when that window is done. */
   billingWindow(url: string): Promise<BillingOutcome>
@@ -177,15 +180,17 @@ export function createVectorAccount(deps: Dependencies) {
     notify()
   }
 
-  // One billing request: ask vectordev.ai for the Stripe page, then show it in the billing window.
+  // One billing request: ask vectordev.ai for the Stripe page, then show it in the billing window. A smaller plan and
+  // Keep my plan are answered without a page.
   const openBilling = async (input: unknown): Promise<VectorBillingResult> => {
     const request = billingRequest(input)
     if (!request) return { outcome: "failed", message: "Vector could not open billing for that choice." }
     const secret = await token().catch(() => undefined)
     if (!secret) return { outcome: "failed", message: "Sign in to Vector to manage billing." }
     const response = await deps
-      .fetch(`${ModelPlanStatus.API_URL}/${request.kind}`, {
-        method: "POST",
+      .fetch(`${ModelPlanStatus.API_URL}/${request.route}`, {
+        method: request.method,
+        // vectordev.ai takes these routes only as JSON, the DELETE that keeps the plan included.
         headers: {
           accept: "application/json",
           "content-type": "application/json",
@@ -215,13 +220,21 @@ export function createVectorAccount(deps: Dependencies) {
         (!error && (response.status === 404 || response.status === 405)))
     ) {
       await deps
-        .openBrowser(request.kind === "portal" ? ModelPlanStatus.MANAGE_URL : ModelPlanStatus.PURCHASE_URL)
+        .openBrowser(request.kind === "checkout" ? ModelPlanStatus.PURCHASE_URL : ModelPlanStatus.MANAGE_URL)
         .catch(() => undefined)
       return { outcome: "website" }
     }
     if (!response.ok)
       return { outcome: "failed", message: error?.message ?? "Vector could not open billing. Try again shortly." }
-    const url = payload && typeof payload === "object" && "url" in payload ? payload.url : undefined
+    const answer = payload && typeof payload === "object" ? payload : {}
+    // Keep my plan drops the scheduled change; a smaller plan is scheduled for the renewal date.
+    if (request.kind === "keep")
+      return "scheduled" in answer && answer.scheduled === false
+        ? { outcome: "kept" }
+        : { outcome: "failed", message: "Vector could not keep your plan. Try again shortly." }
+    const scheduled = request.kind === "change" ? scheduledChange(answer) : undefined
+    if (scheduled) return { outcome: "scheduled", ...scheduled }
+    const url = "url" in answer ? answer.url : undefined
     if (
       typeof url !== "string" ||
       !url.startsWith(request.kind === "portal" ? "https://billing.stripe.com/" : "https://checkout.stripe.com/")
@@ -288,15 +301,28 @@ export function createVectorAccount(deps: Dependencies) {
       }
       return notify()
     },
-    /** The plans and top-ups vectordev.ai sells, by name and price; read here so the renderer needs no network. */
+    /** The monthly plans vectordev.ai sells, by name and price; read here so the renderer needs no network. */
     offers() {
       return ModelPlanStatus.fetchOffers(deps.fetch)
     },
     /**
-     * Opens Codium checkout, a top-up or Stripe's customer portal in Vector's billing window. The account token goes
-     * only to vectordev.ai, and the window loads only the Stripe address vectordev.ai answers with. One request runs at
-     * a time: another, from a second page or dialog, gets "busy" and the open window comes forward, so no request
-     * reports how a different one ended and no second Stripe session is made.
+     * After a purchase: has the local server read the account's Codium models now instead of keeping its list for up to
+     * a minute. It runs in the account queue with the token stored when it runs, so a sign-out or another sign-in asked
+     * for earlier comes first and is never undone, and it does nothing while signed out. A failed write leaves the list
+     * the server keeps, which lapses within the minute.
+     */
+    async refreshModels() {
+      await queue(async () => {
+        const secret = await token()
+        if (secret) await deps.models(secret)
+      }).catch(() => undefined)
+    },
+    /**
+     * Opens Codium checkout, an upgrade's checkout or Stripe's customer portal in Vector's billing window, or schedules a
+     * smaller plan or keeps the current one. The account token goes only to vectordev.ai, and the window loads only the
+     * Stripe address vectordev.ai answers with. One request runs at a time: another, from a second page or dialog, gets
+     * "busy" and the open window comes forward, so no request reports how a different one ended and no second Stripe
+     * session is made.
      */
     async billing(input: unknown): Promise<VectorBillingResult> {
       if (state.billing) {
@@ -505,7 +531,9 @@ export function createVectorAccount(deps: Dependencies) {
           !payload.user ||
           typeof payload.user !== "object" ||
           !("email" in payload.user) ||
-          typeof payload.user.email !== "string"
+          typeof payload.user.email !== "string" ||
+          // Only a grant minted for this app: a CLI grant, or an unmarked token, is never kept here.
+          tokenClient(payload.token) !== "desktop"
         ) {
           state.pending = undefined
           fail("Vector could not complete sign-in. The link may have expired; start sign-in again.")
@@ -548,22 +576,42 @@ export function createVectorAccount(deps: Dependencies) {
   }
 }
 
-/** Which billing request the renderer asked for, checked here, since it reaches the main process over IPC. */
+/**
+ * Which billing request the renderer asked for, checked here, since it reaches the main process over IPC: a monthly
+ * plan's checkout, a plan change (POST /change), keeping the plan (DELETE /change), or the portal's home, cancel or
+ * card step. Codium sells no top-ups, and the portal no longer changes plans.
+ */
 function billingRequest(input: unknown) {
   if (!input || typeof input !== "object" || !("kind" in input)) return
-  const id = (value: unknown) => (typeof value === "string" && /^[a-z0-9-]{1,40}$/.test(value) ? value : undefined)
-  if (input.kind === "checkout") {
-    const plan = id("plan" in input ? input.plan : undefined)
-    return plan ? { kind: "checkout" as const, body: { plan } } : undefined
-  }
-  if (input.kind === "topup") {
-    const pack = id("pack" in input ? input.pack : undefined)
-    return pack ? { kind: "topup" as const, body: { pack } } : undefined
-  }
+  const plan =
+    "plan" in input && typeof input.plan === "string" && /^[a-z0-9-]{1,40}$/.test(input.plan) ? input.plan : ""
+  if (input.kind === "checkout" && plan)
+    return { kind: "checkout" as const, route: "checkout", method: "POST", body: { plan } }
+  if (input.kind === "change" && plan)
+    return { kind: "change" as const, route: "change", method: "POST", body: { plan } }
+  if (input.kind === "keep") return { kind: "keep" as const, route: "change", method: "DELETE", body: {} }
   if (input.kind !== "portal") return
   const flow = "flow" in input ? input.flow : undefined
-  if (flow !== undefined && flow !== "change" && flow !== "cancel") return
-  return { kind: "portal" as const, body: flow ? { flow } : {} }
+  if (flow !== undefined && flow !== "cancel" && flow !== "payment_method_update") return
+  return { kind: "portal" as const, route: "portal", method: "POST", body: flow ? { flow } : {} }
+}
+
+/** A smaller plan /change scheduled for the renewal date: `{scheduled: {plan, at}}`. */
+function scheduledChange(answer: object) {
+  const scheduled = "scheduled" in answer ? answer.scheduled : undefined
+  if (!scheduled || typeof scheduled !== "object" || !("plan" in scheduled) || !("at" in scheduled)) return
+  if (typeof scheduled.plan !== "string" || typeof scheduled.at !== "number" || !Number.isFinite(scheduled.at)) return
+  return { plan: scheduled.plan, at: scheduled.at }
+}
+
+// The client a vct_ sign-in token was minted for, read without verifying it: only vectordev.ai can verify the
+// signature, and this decides only what the desktop keeps.
+const Claims = Schema.fromJsonString(Schema.Struct({ client: Schema.optional(Schema.String) }))
+function tokenClient(token: string) {
+  const parts = token.startsWith("vct_") ? token.slice(4).split(".") : []
+  if (parts.length !== 2) return
+  return Option.getOrUndefined(Schema.decodeUnknownOption(Claims)(Buffer.from(parts[0]!, "base64url").toString("utf8")))
+    ?.client
 }
 
 /** vectordev.ai's `{ error: { code, message } }`, with the message kept to a line the app can show. */
@@ -602,12 +650,30 @@ function deletionGrant(payload: unknown, ok: boolean, now: number) {
   return { value: payload.grant, email: payload.user.email, expiresAt: Math.min(payload.expiresAt, now + 600_000) }
 }
 
+type LocalServer = { url: string; username: string | null; password: string | null }
+type Fetcher = (url: string, init: RequestInit) => Promise<Response>
+
 /** The account token may only be copied to the app's authenticated local sidecar. */
-export async function syncVectorAccount(
-  connection: { url: string; username: string | null; password: string | null },
-  token: string | undefined,
-  fetcher: (url: string, init: RequestInit) => Promise<Response> = fetch,
-) {
+export async function syncVectorAccount(connection: LocalServer, token: string | undefined, fetcher: Fetcher = fetch) {
+  const server = await writeCredential(connection, token, fetcher)
+  const refreshed = await fetcher(new URL("/global/dispose", server.url).href, {
+    method: "POST",
+    headers: { authorization: server.authorization },
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (!refreshed.ok) throw new Error("Vector could not refresh the local account connection.")
+}
+
+/**
+ * Writes the signed-in token to the local sidecar again, unchanged: the write makes it read that account's Codium
+ * models now (ControlHttpApi.authSet). Nothing reloads, so running sessions carry on.
+ */
+export async function refreshVectorModels(connection: LocalServer, token: string, fetcher: Fetcher = fetch) {
+  await writeCredential(connection, token, fetcher)
+}
+
+async function writeCredential(connection: LocalServer, token: string | undefined, fetcher: Fetcher) {
   const url = new URL(connection.url)
   if (
     url.protocol !== "http:" ||
@@ -618,26 +684,16 @@ export async function syncVectorAccount(
     !connection.password
   )
     throw new Error("Vector account setup requires the authenticated local server.")
+  const authorization = `Basic ${Buffer.from(`${connection.username}:${connection.password}`).toString("base64")}`
   const response = await fetcher(new URL("/auth/vector", url).href, {
     method: token ? "PUT" : "DELETE",
-    headers: {
-      authorization: `Basic ${Buffer.from(`${connection.username}:${connection.password}`).toString("base64")}`,
-      "content-type": "application/json",
-    },
+    headers: { authorization, "content-type": "application/json" },
     ...(token ? { body: JSON.stringify({ type: "api", key: token }) } : {}),
     redirect: "error",
     signal: AbortSignal.timeout(10_000),
   })
   if (!response.ok) throw new Error("Vector could not update the local account credential.")
-  const refreshed = await fetcher(new URL("/global/dispose", url).href, {
-    method: "POST",
-    headers: {
-      authorization: `Basic ${Buffer.from(`${connection.username}:${connection.password}`).toString("base64")}`,
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(10_000),
-  })
-  if (!refreshed.ok) throw new Error("Vector could not refresh the local account connection.")
+  return { url, authorization }
 }
 
 /** Google's avatar hosts over https only, the same list vectordev.ai checks before it hands a photo out. */

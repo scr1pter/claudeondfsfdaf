@@ -1,11 +1,14 @@
 import { ServerAuth } from "@/server/auth"
-import { Effect, Encoding, Layer, Redacted, Schema } from "effect"
+import { Effect, Encoding, Layer, Option, Redacted, Schema } from "effect"
 import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import { ForbiddenError, UnauthorizedError } from "@vectordevai/protocol/errors"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 import { PtyID } from "@vectordevai/core/pty/schema"
 import { isPublicUIPath } from "@/server/shared/public-ui"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
 export {
   Authorization as ServerAuthorization,
   authorizationLayer as serverAuthorizationLayer,
@@ -43,6 +46,7 @@ function validateCredential<A, E, R>(
   effect: Effect.Effect<A, E, R>,
   credential: ServerAuth.DecodedCredentials,
   config: ServerAuth.Info,
+  audience?: SessionAudience.Interface,
 ) {
   return Effect.gen(function* () {
     const identity = ServerAuth.identity(credential, config)
@@ -52,9 +56,18 @@ function validateCredential<A, E, R>(
       )
       return yield* new UnauthorizedError({ message: ServerAuth.unauthorizedMessage(credential, config) })
     }
-    if (identity === "guest" && (yield* ServerAuth.ownerOnlyRequest))
+    if (
+      yield* ServerAuth.refusedRequest(
+        identity === "guest",
+        RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest),
+      )
+    )
       return yield* new ForbiddenError({ message: "This operation requires the server owner" })
-    return yield* effect.pipe(Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)))
+    return yield* SessionAudienceHttp.protectResponse(
+      effect,
+      identity === "owner" && !RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest),
+      audience,
+    ).pipe(Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)))
   })
 }
 
@@ -88,6 +101,7 @@ function validateRawCredential<A, E, R>(
   effect: Effect.Effect<A, E, R>,
   credential: ServerAuth.DecodedCredentials,
   config: ServerAuth.Info,
+  audience?: SessionAudience.Interface,
 ) {
   return Effect.gen(function* () {
     const identity = ServerAuth.identity(credential, config)
@@ -99,18 +113,37 @@ function validateRawCredential<A, E, R>(
           headers: { "www-authenticate": WWW_AUTHENTICATE },
         },
       )
-    if (identity === "guest" && (yield* ServerAuth.ownerOnlyRequest))
+    if (
+      yield* ServerAuth.refusedRequest(
+        identity === "guest",
+        RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest),
+      )
+    )
       return HttpServerResponse.jsonUnsafe(
         { _tag: "ForbiddenError", message: "This operation requires the server owner" },
         { status: FORBIDDEN },
       )
-    return yield* effect.pipe(Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)))
+    return yield* SessionAudienceHttp.protectResponse(
+      effect,
+      identity === "owner" && !RequestOwner.forwarded(yield* HttpServerRequest.HttpServerRequest),
+      audience,
+    ).pipe(
+      Effect.provideService(RequestPrincipal, ServerAuth.principal(identity, config)),
+      Effect.catchIf(
+        (cause) => cause instanceof ForbiddenError,
+        (cause) =>
+          Effect.succeed(
+            HttpServerResponse.jsonUnsafe({ _tag: "ForbiddenError", message: cause.message }, { status: FORBIDDEN }),
+          ),
+      ),
+    )
   })
 }
 
 export const authorizationRouterMiddleware = HttpRouter.middleware()(
   Effect.gen(function* () {
     const config = yield* ServerAuth.Config
+    const audience = Option.getOrUndefined(yield* Effect.serviceOption(SessionAudience.Service))
     return (effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
@@ -119,11 +152,27 @@ export const authorizationRouterMiddleware = HttpRouter.middleware()(
         // Only the UI catch-all serves the asset the URL parser reads. /doc answers whatever spelling the router
         // matched, and the URL parser reads /doc;/../site.webmanifest as an asset.
         if (route.route.path === "/*" && isPublicUIPath(request.method, url.pathname)) return yield* effect
-        if (url.searchParams.has("auth_token")) return yield* validateRawCredential(effect, emptyCredential(), config)
+        if (url.searchParams.has("auth_token"))
+          return yield* validateRawCredential(effect, emptyCredential(), config, audience)
+        if (!ServerAuth.required(config) && (yield* ServerAuth.refusedRequest(false, RequestOwner.forwarded(request))))
+          return HttpServerResponse.jsonUnsafe(
+            { _tag: "ForbiddenError", message: "This operation requires the server owner" },
+            { status: FORBIDDEN },
+          )
         if (!ServerAuth.required(config))
-          return yield* effect.pipe(Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)))
+          return yield* SessionAudienceHttp.protectResponse(effect, !RequestOwner.forwarded(request), audience).pipe(
+            Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)),
+            Effect.catchTag("ForbiddenError", (cause) =>
+              Effect.succeed(
+                HttpServerResponse.jsonUnsafe(
+                  { _tag: "ForbiddenError", message: cause.message },
+                  { status: FORBIDDEN },
+                ),
+              ),
+            ),
+          )
         return yield* credentialFromHeaders(request).pipe(
-          Effect.flatMap((credential) => validateRawCredential(effect, credential, config)),
+          Effect.flatMap((credential) => validateRawCredential(effect, credential, config, audience)),
         )
       })
   }),
@@ -133,15 +182,20 @@ export const authorizationLayer = Layer.effect(
   Authorization,
   Effect.gen(function* () {
     const config = yield* ServerAuth.Config
+    const audience = Option.getOrUndefined(yield* Effect.serviceOption(SessionAudience.Service))
     return Authorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         if (new URL(request.url, "http://localhost").searchParams.has("auth_token"))
-          return yield* validateCredential(effect, emptyCredential(), config)
+          return yield* validateCredential(effect, emptyCredential(), config, audience)
+        if (!ServerAuth.required(config) && (yield* ServerAuth.refusedRequest(false, RequestOwner.forwarded(request))))
+          return yield* new ForbiddenError({ message: "This operation requires the server owner" })
         if (!ServerAuth.required(config))
-          return yield* effect.pipe(Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)))
+          return yield* SessionAudienceHttp.protectResponse(effect, !RequestOwner.forwarded(request), audience).pipe(
+            Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)),
+          )
         return yield* credentialFromRequest(request).pipe(
-          Effect.flatMap((credential) => validateCredential(effect, credential, config)),
+          Effect.flatMap((credential) => validateCredential(effect, credential, config, audience)),
         )
       }),
     )
@@ -152,11 +206,13 @@ export const ptyConnectAuthorizationLayer = Layer.effect(
   PtyConnectAuthorization,
   Effect.gen(function* () {
     const config = yield* ServerAuth.Config
+    const audience = Option.getOrUndefined(yield* Effect.serviceOption(SessionAudience.Service))
     return PtyConnectAuthorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const url = new URL(request.url, "http://localhost")
-        if (url.searchParams.has("auth_token")) return yield* validateCredential(effect, emptyCredential(), config)
+        if (url.searchParams.has("auth_token"))
+          return yield* validateCredential(effect, emptyCredential(), config, audience)
         const route = yield* HttpRouter.RouteContext
         const ticket = url.searchParams.get("ticket")
         const ptyID = Schema.decodeUnknownOption(PtyID)(route.params.ptyID)
@@ -172,10 +228,14 @@ export const ptyConnectAuthorizationLayer = Layer.effect(
               ...connection,
             }),
           )
+        if (!ServerAuth.required(config) && (yield* ServerAuth.refusedRequest(false, RequestOwner.forwarded(request))))
+          return yield* new ForbiddenError({ message: "This operation requires the server owner" })
         if (!ServerAuth.required(config))
-          return yield* effect.pipe(Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)))
+          return yield* SessionAudienceHttp.protectResponse(effect, !RequestOwner.forwarded(request), audience).pipe(
+            Effect.provideService(RequestPrincipal, ServerAuth.ownerPrincipal(config)),
+          )
         return yield* credentialFromHeaders(request).pipe(
-          Effect.flatMap((credential) => validateCredential(effect, credential, config)),
+          Effect.flatMap((credential) => validateCredential(effect, credential, config, audience)),
         )
       }),
     )

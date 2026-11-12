@@ -1,10 +1,11 @@
 import { NodeHttpServer } from "@effect/platform-node"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import fs from "fs/promises"
 import { connect } from "node:net"
 import path from "path"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Effect, Layer, Option, Queue, Redacted, Schema, Stream } from "effect"
-import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
+import { HttpClient, HttpClientRequest, HttpRouter, HttpServer, HttpServerRequest } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import { ServerAuth } from "../../src/server/auth"
 import { Authorization, authorizationLayer } from "../../src/server/routes/instance/httpapi/middleware/authorization"
@@ -19,6 +20,30 @@ import { Server } from "../../src/server/server"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { Global } from "@vectordevai/core/global"
 import { SessionV2 } from "@vectordevai/core/session"
+import { ProjectV2 } from "@vectordevai/core/project"
+import type { SessionV1 } from "@vectordevai/core/v1/session"
+import { Agent } from "@/agent/agent"
+import { MCP } from "@/mcp"
+import { Project } from "@/project/project"
+import { Provider } from "@/provider/provider"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Session } from "@/session/session"
+import { SessionPrompt } from "@/session/prompt"
+import { SessionID } from "@/session/schema"
+import { TaskManager } from "@/task/manager"
+import type { Task } from "@vectordevai/schema/task"
+import { DesktopTasks } from "@/task/desktop"
+import { ToolRegistry } from "@/tool/registry"
+import { Worktree } from "@/worktree"
+import { FREE_MODEL_TRAINING_OWNER_ONLY } from "@vectordevai/core/free-model-choice"
+import { ExperimentalApi } from "../../src/server/routes/instance/httpapi/groups/experimental"
+import { experimentalHandlers } from "../../src/server/routes/instance/httpapi/handlers/experimental"
+import { InstanceContextMiddleware } from "../../src/server/routes/instance/httpapi/middleware/instance-context"
+import { schemaErrorLayer } from "../../src/server/routes/instance/httpapi/middleware/schema-error"
+import {
+  WorkspaceRouteContext,
+  WorkspaceRoutingMiddleware,
+} from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
 
 const credential = (username: string, password: string) => ({ username, password: Redacted.make(password) })
 
@@ -1325,6 +1350,44 @@ test("guests load the app's bootstrap routes, narrowed to their workspace", asyn
     const taskRoute = `/experimental/session/${ownerTasks.id}/tasks`
     // Seeing a shared workspace does not grant permission to steer or stop its owner's workers.
     expect((await call(taskRoute, { headers: guest })).status).toBe(200)
+    // The board's limits line carries the owner's configured limits, which a guest never sees (I19).
+    const limitsOf = async (headers: Record<string, string>) =>
+      ((await (await call(taskRoute, { headers })).json()) as { limits?: { maxRunning: number } }).limits
+    expect(await limitsOf(guest)).toBeUndefined()
+    expect((await limitsOf(owner))?.maxRunning).toBe(8)
+    // Nor does it show a helper's absolute worktree, which goes only to the owner or a principal in control (I19).
+    const registered = await call(`${taskRoute}/bridge/register`, {
+      method: "POST",
+      headers: owner,
+      body: JSON.stringify({
+        tasks: [
+          {
+            id: "workspace:isolated",
+            parentSessionID: ownerTasks.id,
+            source: "team",
+            title: "Isolated helper",
+            status: "completed",
+            startedAt: Date.now(),
+            elapsedMs: 0,
+            ownedPaths: [],
+            dependsOn: [],
+            resultAvailable: false,
+            attempt: 1,
+            controls: { inspect: true, message: false, stop: false },
+            isolation: { mode: "worktree", state: "active", branch: "vector/isolated", directory: other.path },
+          },
+        ],
+      }),
+    })
+    expect(registered.status).toBe(200)
+    const isolation = async (headers: Record<string, string>) =>
+      (
+        (await (await call(taskRoute, { headers })).json()) as {
+          tasks: Array<{ id: string; isolation?: Record<string, unknown> }>
+        }
+      ).tasks.find((task) => task.id === "workspace:isolated")?.isolation
+    expect(await isolation(guest)).toEqual({ mode: "worktree", state: "active", branch: "vector/isolated" })
+    expect((await isolation(owner))?.directory).toBe(other.path)
     expect(
       (
         await call(`${taskRoute}/wait`, {
@@ -1360,6 +1423,148 @@ test("guests load the app's bootstrap routes, narrowed to their workspace", asyn
     expect(seen.every((event) => event.directory === undefined || event.directory === tmp.path)).toBe(true)
   } finally {
     abort.abort()
+    Flag.VECTOR_WORKSPACE_ID = previousWorkspaceID
+    await listener.stop(true)
+    for (const key of keys) {
+      const value = previous[key]
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}, 30_000)
+
+test("a guest stops or backgrounds a session's helpers only when it controls that session", async () => {
+  // Seeing a shared workspace does not grant control of the owner's sessions; a session the guest was given does.
+  await using tmp = await tmpdir({ trusted: true, git: true, config: { formatter: false, lsp: false } })
+  const previousWorkspaceID = Flag.VECTOR_WORKSPACE_ID
+  const keys = [
+    "VECTOR_SERVER_USERNAME",
+    "VECTOR_SERVER_PASSWORD",
+    "VECTOR_SERVER_GUEST_USERNAME",
+    "VECTOR_SERVER_GUEST_PASSWORD",
+    "VECTOR_SERVER_GUEST_WORKSPACES",
+    "VECTOR_SERVER_GUEST_WORKSPACE_DIRECTORIES",
+    "VECTOR_SERVER_GUEST_SESSIONS",
+    "VECTOR_DISABLE_DEFAULT_PLUGINS",
+  ] as const
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  const claimedID = SessionV2.ID.create()
+  Object.assign(process.env, {
+    VECTOR_SERVER_USERNAME: "vector",
+    VECTOR_SERVER_PASSWORD: "owner-secret",
+    VECTOR_SERVER_GUEST_USERNAME: "guest",
+    VECTOR_SERVER_GUEST_PASSWORD: "guest-secret",
+    VECTOR_SERVER_GUEST_WORKSPACES: "wrk_allowed",
+    VECTOR_SERVER_GUEST_WORKSPACE_DIRECTORIES: JSON.stringify({ wrk_allowed: tmp.path }),
+    VECTOR_SERVER_GUEST_SESSIONS: claimedID,
+    VECTOR_DISABLE_DEFAULT_PLUGINS: "1",
+  })
+  const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
+  const owner = { authorization: basic("vector", "owner-secret"), "content-type": "application/json" }
+  const guest = { authorization: basic("guest", "guest-secret"), "content-type": "application/json" }
+  const call = (route: string, init: RequestInit = {}) =>
+    fetch(new URL(route, listener.url), { ...init, keepalive: false })
+  try {
+    Flag.VECTOR_WORKSPACE_ID = "wrk_allowed"
+    const ownerSession = (await (
+      await call(`/session?directory=${encodeURIComponent(tmp.path)}`, { method: "POST", headers: owner, body: "{}" })
+    ).json()) as { id: string }
+    const claimed = await call("/api/session", {
+      method: "POST",
+      headers: owner,
+      body: JSON.stringify({ id: claimedID, location: { directory: tmp.path, workspaceID: "wrk_allowed" } }),
+    })
+    expect(claimed.status).toBe(200)
+    const stop = (id: string, headers: Record<string, string>) =>
+      call(`/experimental/session/${id}/stop`, { method: "POST", headers, body: JSON.stringify({ helpers: true }) })
+    const background = (id: string, headers: Record<string, string>) =>
+      call(`/experimental/session/${id}/background`, { method: "POST", headers })
+
+    expect((await stop(ownerSession.id, guest)).status).toBe(403)
+    expect((await background(ownerSession.id, guest)).status).toBe(403)
+    const mine = await stop(claimedID, guest)
+    expect(mine.status).toBe(200)
+    expect(await mine.json()).toEqual({ aborted: false, tasks: [], shells: 0, excluded: 0, skipped: 0 })
+    expect((await background(claimedID, guest)).status).toBe(200)
+    expect((await stop(ownerSession.id, owner)).status).toBe(200)
+  } finally {
+    Flag.VECTOR_WORKSPACE_ID = previousWorkspaceID
+    await listener.stop(true)
+    for (const key of keys) {
+      const value = previous[key]
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}, 30_000)
+
+// Routes 4–6 (WP28): a guest with view scope may ask for an isolated task's counts, never merge or discard, even in
+// a session it controls; a guest outside the session's scope cannot ask at all.
+test("a guest may review isolated task counts in its own session, and only the owner merges or discards", async () => {
+  await using tmp = await tmpdir({ trusted: true, git: true, config: { formatter: false, lsp: false } })
+  await using elsewhere = await tmpdir({ trusted: true, git: true, config: { formatter: false, lsp: false } })
+  const previousWorkspaceID = Flag.VECTOR_WORKSPACE_ID
+  const keys = [
+    "VECTOR_SERVER_USERNAME",
+    "VECTOR_SERVER_PASSWORD",
+    "VECTOR_SERVER_GUEST_USERNAME",
+    "VECTOR_SERVER_GUEST_PASSWORD",
+    "VECTOR_SERVER_GUEST_WORKSPACES",
+    "VECTOR_SERVER_GUEST_WORKSPACE_DIRECTORIES",
+    "VECTOR_SERVER_GUEST_SESSIONS",
+    "VECTOR_DISABLE_DEFAULT_PLUGINS",
+  ] as const
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  const claimedID = SessionV2.ID.create()
+  Object.assign(process.env, {
+    VECTOR_SERVER_USERNAME: "vector",
+    VECTOR_SERVER_PASSWORD: "owner-secret",
+    VECTOR_SERVER_GUEST_USERNAME: "guest",
+    VECTOR_SERVER_GUEST_PASSWORD: "guest-secret",
+    VECTOR_SERVER_GUEST_WORKSPACES: "wrk_allowed",
+    VECTOR_SERVER_GUEST_WORKSPACE_DIRECTORIES: JSON.stringify({ wrk_allowed: tmp.path }),
+    VECTOR_SERVER_GUEST_SESSIONS: claimedID,
+    VECTOR_DISABLE_DEFAULT_PLUGINS: "1",
+  })
+  const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
+  const owner = { authorization: basic("vector", "owner-secret"), "content-type": "application/json" }
+  const guest = { authorization: basic("guest", "guest-secret"), "content-type": "application/json" }
+  const call = (route: string, init: RequestInit = {}) =>
+    fetch(new URL(route, listener.url), { ...init, keepalive: false })
+  try {
+    Flag.VECTOR_WORKSPACE_ID = "wrk_allowed"
+    // The owner's session in another project, outside the guest's workspace.
+    const ownerSession = (await (
+      await call(`/session?directory=${encodeURIComponent(elsewhere.path)}`, {
+        method: "POST",
+        headers: owner,
+        body: "{}",
+      })
+    ).json()) as { id: string }
+    const claimed = await call("/api/session", {
+      method: "POST",
+      headers: owner,
+      body: JSON.stringify({ id: claimedID, location: { directory: tmp.path, workspaceID: "wrk_allowed" } }),
+    })
+    expect(claimed.status).toBe(200)
+    const task = (id: string, action: string) => `/experimental/session/${id}/tasks/ses_missing/${action}`
+
+    // View scope reaches the task lookup (no such isolated task here); outside it the guest is refused.
+    const counts = await call(`${task(claimedID, "changes")}?diff=true`, { headers: guest })
+    expect(counts.status).toBe(400)
+    expect(await counts.json()).toMatchObject({ code: "not_found" })
+    expect((await call(task(ownerSession.id, "changes"), { headers: guest })).status).toBe(403)
+    for (const action of ["merge", "discard"]) {
+      // Control of the session does not make the guest the owner.
+      expect((await call(task(claimedID, action), { method: "POST", headers: guest, body: "{}" })).status).toBe(403)
+      expect((await call(task(ownerSession.id, action), { method: "POST", headers: guest, body: "{}" })).status).toBe(
+        403,
+      )
+      expect((await call(task(ownerSession.id, action), { method: "POST", headers: owner, body: "{}" })).status).toBe(
+        400,
+      )
+    }
+  } finally {
     Flag.VECTOR_WORKSPACE_ID = previousWorkspaceID
     await listener.stop(true)
     for (const key of keys) {
@@ -1490,6 +1695,231 @@ test("a guest's global config leaves out the owner's Vector Local block", async 
     }
   }
 }, 30_000)
+
+// A guest's resume (D.3, I11): it runs under the guest limits, and never reaches a free model that may train through
+// the owner's acceptance. TaskManager.resume itself is tested in tool/task-manage.test.ts.
+describe("a guest's task resume and background command rows", () => {
+  const rootID = SessionID.make("ses_guest_resume_root")
+  const trains = SessionID.make("ses_guest_resume_trains")
+  const keeps = SessionID.make("ses_guest_resume_keeps")
+  // Another conversation's helper on the training model: the guest controls neither it nor its parent.
+  const foreign = SessionID.make("ses_guest_resume_foreign")
+  const models: Record<string, string> = {
+    [trains]: "acme/trains:free",
+    [keeps]: "acme/keeps:free",
+    [foreign]: "acme/trains:free",
+  }
+  const parentOf = (id: SessionID) => (id === foreign ? SessionID.make("ses_guest_resume_other") : rootID)
+  const resumed: Array<{ guest: boolean; origin: string; refuses: boolean }> = []
+  // A background command of the root session, as the manager returns it: with its absolute output path (5.H).
+  const command: Task.Shell = {
+    id: "shl_0123456789abGuestCommand01",
+    title: "bun test",
+    command: "bun test",
+    status: "running",
+    startedAt: 1,
+    outputPath: "/owner/data/tool-output/shell-shl_0123456789abGuestCommand01.log",
+    outputBytes: 0,
+  }
+  const listedShells: boolean[] = []
+  // A request with an `x-test-guest` header runs as a guest in control of the sessions it lists.
+  const authorization = Authorization.of((effect) =>
+    Effect.gen(function* () {
+      const claims = (yield* HttpServerRequest.HttpServerRequest).headers["x-test-guest"]
+      if (claims === undefined) return yield* effect
+      return yield* effect.pipe(
+        Effect.provideService(RequestPrincipal, {
+          kind: "guest",
+          username: "guest",
+          workspaceIDs: new Set<string>(),
+          workspaceDirectories: new Map<string, string>(),
+          sessionIDs: new Set(claims.split(",").filter(Boolean)),
+        }),
+      )
+    }),
+  )
+  const session = (id: SessionID): Session.Info => ({
+    id,
+    slug: "test",
+    projectID: ProjectV2.ID.make("project_test"),
+    directory: process.cwd(),
+    title: "test",
+    version: "test",
+    time: { created: 1, updated: 1 },
+    ...(models[id]
+      ? {
+          parentID: parentOf(id),
+          metadata: {
+            subagent: {
+              kind: "subagent",
+              custom: false,
+              agent: "general",
+              title: "Survey",
+              parentSessionID: parentOf(id),
+              parentMessageID: "msg_guest_resume_launch",
+              model: { providerID: "openrouter", modelID: models[id] },
+              background: true,
+              status: "cancelled",
+              startedAt: 1,
+              attempt: 1,
+            },
+          },
+        }
+      : {}),
+  })
+  const it = testEffect(
+    HttpRouter.serve(
+      HttpApiBuilder.layer(HttpApi.make("vector-instance").addHttpApi(ExperimentalApi)).pipe(
+        Layer.provide(experimentalHandlers),
+        Layer.provide([
+          schemaErrorLayer,
+          Layer.succeed(Authorization, authorization),
+          Layer.succeed(
+            InstanceContextMiddleware,
+            InstanceContextMiddleware.of((effect) => effect),
+          ),
+          Layer.succeed(
+            WorkspaceRoutingMiddleware,
+            WorkspaceRoutingMiddleware.of((effect) =>
+              effect.pipe(Effect.provideService(WorkspaceRouteContext, { directory: process.cwd() })),
+            ),
+          ),
+          RuntimeFlags.layer({ backgroundSubagents: true }),
+          // These unrelated experimental endpoints are never called by this test.
+          Layer.mock(Agent.Service)({}),
+          Layer.mock(MCP.Service)({}),
+          Layer.mock(Project.Service)({}),
+          Layer.mock(ToolRegistry.Service)({}),
+          Layer.mock(Worktree.Service)({}),
+          Layer.mock(DesktopTasks.Service)({}),
+          Layer.mock(Session.Service)({ get: (id) => Effect.succeed(session(id)) }),
+          // The free model whose provider may train on prompts, and one that keeps them private.
+          Layer.mock(Provider.Service)({
+            getModel: (_, modelID) =>
+              Effect.succeed({
+                freeModel: {
+                  source: "openrouter",
+                  dataPolicy: modelID === models[trains] ? "may-train" : "no-training",
+                },
+              } as unknown as Provider.Model),
+          }),
+          // Records whether the prompts a resume sends would refuse such a model.
+          Layer.mock(SessionPrompt.Service)({
+            prompt: (input, options) =>
+              Effect.succeed({
+                info: { id: "msg_guest_resume_reply", sessionID: input.sessionID, role: "user" },
+                parts: [],
+                refuses: options?.refuseTrainingFreeModels === true,
+              } as unknown as SessionV1.WithParts),
+          }),
+          Layer.mock(TaskManager.Service)({
+            list: (input) =>
+              Effect.sync(() => {
+                listedShells.push(input.shells === true)
+                return { tasks: [], truncated: false, ...(input.shells ? { shells: [command] } : {}) }
+              }),
+            stop: () => Effect.succeed({ tasks: [], shells: [command] }),
+            wait: () => Effect.succeed({ tasks: [], timedOut: false, shells: [command] }),
+            resume: (input, ops) =>
+              input.taskIDs.includes(foreign)
+                ? Effect.fail(
+                    new TaskManager.Error({
+                      code: "forbidden",
+                      message: "The task does not belong to this session's descendants.",
+                    }),
+                  )
+                : ops.prompt({ sessionID: input.sessionID, parts: [] }).pipe(
+                    Effect.map((reply) => {
+                      const refuses = (reply as unknown as { refuses: boolean }).refuses
+                      resumed.push({ guest: input.guest, origin: input.origin, refuses })
+                      return { tasks: [] }
+                    }),
+                  ),
+          }),
+        ]),
+      ),
+      { disableListenLog: true, disableLogger: true },
+    ).pipe(
+      Layer.provideMerge(NodeHttpServer.layerTest),
+      // Handlers read the audience per request. No conversation here is owner-only; the mocked sessions count as known.
+      Layer.provide(
+        Layer.mock(SessionAudience.Service)({
+          knows: () => Effect.succeed(true),
+          isPrivate: () => Effect.succeed(false),
+        }),
+      ),
+    ),
+  )
+  const resume = (taskIDs: string[], headers: Record<string, string>) =>
+    HttpClientRequest.post(`/experimental/session/${rootID}/tasks/resume`).pipe(
+      HttpClientRequest.setHeaders(headers),
+      HttpClientRequest.bodyJsonUnsafe({ taskIDs }),
+      HttpClient.execute,
+    )
+
+  it.live("a guest resume refuses training models and runs under the guest limits", () =>
+    Effect.gen(function* () {
+      resumed.length = 0
+      const guest = { "x-test-guest": rootID }
+      // A helper on a free model that may train is refused at once, before anything resumes.
+      const refused = yield* resume([keeps, trains], guest)
+      expect(refused.status).toBe(400)
+      expect(yield* refused.json).toEqual({ code: "forbidden", message: FREE_MODEL_TRAINING_OWNER_ONLY })
+      expect(resumed).toEqual([])
+      // One on a private free model resumes, as a guest whose prompts refuse such a model.
+      expect((yield* resume([keeps], guest)).status).toBe(200)
+      expect(resumed).toEqual([{ guest: true, origin: "user", refuses: true }])
+      // Another session's helper gets resume's own refusal: its model is never looked up for the guest (I19).
+      const elsewhere = yield* resume([foreign], guest)
+      expect(elsewhere.status).toBe(400)
+      expect(yield* elsewhere.json).toEqual({
+        code: "forbidden",
+        message: "The task does not belong to this session's descendants.",
+      })
+      // A guest without control of the session is refused before the manager is reached.
+      expect((yield* resume([keeps], { "x-test-guest": "" })).status).toBe(403)
+      // The owner accepted the training notice, so the owner may resume it.
+      expect((yield* resume([trains], {})).status).toBe(200)
+      expect(resumed[1]).toEqual({ guest: false, origin: "user", refuses: false })
+      expect(resumed).toHaveLength(2)
+    }),
+  )
+
+  // I19: a background command's output path, an absolute path in the owner's data folder, goes only to the owner. The
+  // list, stop and wait routes all return command rows.
+  it.live("a guest's command rows leave out their output path, and the owner's keep it", () =>
+    Effect.gen(function* () {
+      listedShells.length = 0
+      const guest = { "x-test-guest": rootID }
+      const rows = (response: { json: Effect.Effect<unknown, unknown> }) =>
+        Effect.map(response.json, (body) => (body as { shells?: Array<Record<string, unknown>> }).shells)
+      const routes = [
+        () => HttpClientRequest.get(`/experimental/session/${rootID}/tasks?shells=true`),
+        () =>
+          HttpClientRequest.post(`/experimental/session/${rootID}/tasks/stop`).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ taskIDs: [command.id] }),
+          ),
+        () =>
+          HttpClientRequest.post(`/experimental/session/${rootID}/tasks/wait`).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ taskIDs: [command.id], timeout: 0 }),
+          ),
+      ]
+      for (const route of routes) {
+        const asGuest = yield* route().pipe(HttpClientRequest.setHeaders(guest), HttpClient.execute)
+        expect(asGuest.status).toBe(200)
+        const seen = yield* rows(asGuest)
+        expect(seen).toEqual([
+          { id: command.id, title: "bun test", command: "bun test", status: "running", startedAt: 1, outputBytes: 0 },
+        ])
+        const asOwner = yield* route().pipe(HttpClientRequest.setHeaders({}), HttpClient.execute)
+        expect(asOwner.status).toBe(200)
+        expect((yield* rows(asOwner))?.[0]?.outputPath).toBe(command.outputPath)
+      }
+      // The list route asked the manager for the session's commands both times.
+      expect(listedShells).toEqual([true, true])
+    }),
+  )
+})
 
 // Presence on the directory event stream. This test server has no password,
 // so every connection has the default owner principal regardless of headers.

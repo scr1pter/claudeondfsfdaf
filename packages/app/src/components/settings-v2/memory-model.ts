@@ -1,6 +1,15 @@
 // What the Memory page says about each entry, kept apart from the page so the wording is tested and stays honest.
 
-export type MemoryKind = "rule" | "preference" | "decision" | "lesson" | "fact" | "failure" | "review" | "term"
+export type MemoryKind =
+  | "rule"
+  | "preference"
+  | "decision"
+  | "lesson"
+  | "fact"
+  | "failure"
+  | "review"
+  | "term"
+  | "skill"
 export type MemoryStatus = "active" | "proposed" | "quarantined" | "archived" | "superseded"
 export type MemoryHold =
   | "web"
@@ -47,14 +56,16 @@ export type MemoryFiles = { memory: string; rules: string; repository: readonly 
 export type MemoryFilter = "active" | "review" | "archived" | "all"
 
 /**
- * Settings > Memory's sections: memory, what Vector learned about the user, documents, research, and the local model
- * documents are searched by meaning with.
+ * Settings > Memory's sections: memory, the skills Vector learned, what it learned about the user, what workflows got
+ * checks passing for less, documents, research, and the local model documents are searched by meaning with.
  */
-export type MemoryTab = "memory" | "about" | "documents" | "research" | "model"
+export type MemoryTab = "memory" | "skills" | "about" | "workflow" | "documents" | "research" | "model"
 
 export const MEMORY_TABS: readonly { value: MemoryTab; label: string }[] = [
   { value: "memory", label: "Memory" },
+  { value: "skills", label: "Skills" },
   { value: "about", label: "About you" },
+  { value: "workflow", label: "Workflow insights" },
   { value: "documents", label: "Documents" },
   { value: "research", label: "Research" },
   { value: "model", label: "Search model" },
@@ -84,6 +95,7 @@ export function kindLabel(kind: MemoryKind) {
     failure: "Past failure",
     review: "Review note",
     term: "Term",
+    skill: "Learned skill",
   }[kind]
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Agent } from "../src/agent"
+import { Billing } from "../src/billing"
 import { FileSystem } from "../src/filesystem"
 import { Model } from "../src/model"
 import { Project } from "../src/project"
@@ -36,6 +37,7 @@ describe("contract hygiene", () => {
   test("reusable public identifiers are stable and unique", () => {
     const identifiers = [
       Agent.Color,
+      Billing.Kind,
       FileSystem.Submatch,
       Model.Ref,
       Model.Capabilities,

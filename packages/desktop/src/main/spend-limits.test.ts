@@ -34,7 +34,14 @@ async function persistedState(directory: string) {
 }
 
 function spender(ledger: Awaited<ReturnType<typeof newLedger>>["ledger"], source: SpendSource = "scheduled") {
-  return (input: { runId: string; costUsd?: number; tokens?: number; at: Date; projectPath?: string }) =>
+  return (input: {
+    runId: string
+    costUsd?: number
+    tokens?: number
+    at: Date
+    projectPath?: string
+    billing?: "codium"
+  }) =>
     ledger.recordSpend({
       projectPath: input.projectPath ?? PROJECT,
       runId: input.runId,
@@ -42,6 +49,7 @@ function spender(ledger: Awaited<ReturnType<typeof newLedger>>["ledger"], source
       model: "claude-sonnet",
       source,
       costUsd: input.costUsd,
+      ...(input.billing ? { billing: input.billing } : {}),
       tokens: input.tokens,
       at: input.at,
     })
@@ -511,7 +519,7 @@ describe("retention", () => {
     const april9 = new Date(2026, 3, 9, 12, 0)
     const april10 = new Date(2026, 3, 10, 12, 0)
     const spend = spender(ledger)
-    await spend({ runId: "a-1", costUsd: 1.5, tokens: 12_000, at: april9 })
+    await spend({ runId: "a-1", costUsd: 1.5, tokens: 12_000, at: april9, billing: "codium" })
     await spend({ runId: "a-2", costUsd: 2.25, tokens: 30_000, at: april10 })
     await spend({ runId: "a-3", at: april10 })
     await spend({ runId: "b-1", costUsd: 0.75, tokens: 4_000, at: april10, projectPath: OTHER_PROJECT })
@@ -537,6 +545,10 @@ describe("retention", () => {
     expect(beforeMonth.all.month.tokens).toBe(46_000)
     expect(beforeMonth.all.month.runs).toBe(4)
     expect(beforeMonth.all.month.unmeasuredRuns).toBe(1)
+    expect(beforeMonth.all.month.billing).toBe("codium")
+    expect((await createSpendLedger({ userDataPath: directory }).summary({ at: april9 })).all.month.billing).toBe(
+      "codium",
+    )
   })
 
   // Folding completed days does nothing for a flood inside a single day, which
@@ -554,6 +566,7 @@ describe("retention", () => {
         policy: DEFAULT_SPEND_POLICY,
         events: Array.from({ length: 4_001 }, (_, index) => ({
           id: `seed-${index}`,
+          ...(index === 1 ? { billing: "codium" } : {}),
           projectPath: PROJECT,
           runId: `run-${index % 200}`,
           provider: "anthropic",
@@ -587,6 +600,9 @@ describe("retention", () => {
     expect(summary.all.day.costUsd).toBeCloseTo(3_980 * 0.01 + 1, 6)
     expect(summary.all.day.tokens).toBe(4_001 * 10)
     expect(summary.all.day.runs).toBe(200)
+    expect(summary.all.day.billing).toBe("codium")
+    expect((await ledger.recentEvents(400)).find((event) => event.runId === "run-1")?.billing).toBe("codium")
+    expect((await createSpendLedger({ userDataPath: directory }).summary({ at })).all.day.billing).toBe("codium")
     // run-0 reported real cost at the end, so nothing is left unmeasured.
     expect(summary.all.day.unmeasuredRuns).toBe(0)
 
@@ -748,5 +764,75 @@ describe("durability", () => {
     expect(allowance.state).toBe("ok")
     expect(allowance.unmeasuredRuns).toBe(0)
     expect((await ledger.summary({ at })).all.month.costUsd).toBe(0)
+  })
+})
+
+test("known Codium runs bypass spent dollar windows and reserve no headroom", async () => {
+  const { ledger } = await newLedger()
+  const at = new Date(2026, 7, 19, 10, 0)
+  await ledger.setPolicy({ unattended: { perDay: { usd: 1 } } })
+  await spender(ledger)({ runId: "spent", costUsd: 1, at })
+  expect((await ledger.checkAllowance({ runId: "own", source: "scheduled", at })).allowed).toBe(false)
+  expect(
+    await ledger.checkAllowance({ runId: "codium", source: "scheduled", at, reserve: true, billing: "codium" }),
+  ).toEqual({ allowed: true, state: "ok", unmeasuredRuns: 0 })
+  await ledger.setPolicy({ unattended: { perDay: { usd: 2 } } })
+  expect((await ledger.checkAllowance({ runId: "own", source: "scheduled", at })).remainingUsd).toBe(1)
+})
+
+test("Codium-only leaves no spend event, while own free and unknown mixed work remains in the ledger", async () => {
+  const { ledger } = await newLedger()
+  const at = new Date(2026, 7, 19, 12)
+  const run = {
+    projectPath: PROJECT,
+    provider: "vector-plan",
+    model: "coding",
+    source: "parallel" as const,
+    billing: "codium" as const,
+    at,
+  }
+  expect(await ledger.recordRunCost({ ...run, runId: "codium", totalCostUsd: 0, totalTokens: 0 })).toBeUndefined()
+  expect(await ledger.recentEvents()).toEqual([])
+  expect((await ledger.summary({ at })).all.day).toEqual({ costUsd: 0, tokens: 0, runs: 0, unmeasuredRuns: 0 })
+  await ledger.recordRunCost({ ...run, runId: "free-mixed", totalCostUsd: 0, totalTokens: 30 })
+  await ledger.recordRunCost({ ...run, runId: "unknown-mixed", totalTokens: 20 })
+  expect((await ledger.summary({ at })).all.day).toEqual({
+    costUsd: 0,
+    tokens: 50,
+    runs: 2,
+    unmeasuredRuns: 1,
+    billing: "codium",
+  })
+  expect((await ledger.recentEvents()).find((event) => event.runId === "unknown-mixed")).toMatchObject({
+    costUsd: undefined,
+    tokens: 20,
+    billing: "codium",
+  })
+})
+
+test("a later Codium drain annotates an existing mixed run without appending a zero event", async () => {
+  const { directory, ledger } = await newLedger()
+  const at = new Date(2026, 7, 19, 12)
+  const run = {
+    projectPath: PROJECT,
+    provider: "own",
+    model: "coding",
+    source: "parallel" as const,
+    runId: "mixed",
+    at,
+    totalCostUsd: 0.12,
+    totalTokens: 50,
+  }
+  await ledger.recordRunCost(run)
+  expect(await ledger.recordRunCost({ ...run, billing: "codium" })).toBeUndefined()
+  const saved = createSpendLedger({ userDataPath: directory })
+  expect(await saved.recentEvents()).toHaveLength(1)
+  expect((await saved.recentEvents())[0]).toMatchObject({ costUsd: 0.12, tokens: 50, billing: "codium" })
+  expect((await saved.summary({ at })).all.day).toEqual({
+    costUsd: 0.12,
+    tokens: 50,
+    runs: 1,
+    unmeasuredRuns: 0,
+    billing: "codium",
   })
 })

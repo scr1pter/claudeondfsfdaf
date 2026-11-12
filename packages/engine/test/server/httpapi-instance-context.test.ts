@@ -11,6 +11,7 @@ import { WorkspaceV2 } from "@vectordevai/core/workspace"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PtyTicket } from "@vectordevai/core/pty/ticket"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import type { WorkspaceAdapter } from "../../src/control-plane/types"
 import { Workspace } from "../../src/control-plane/workspace"
 import { InstanceRef, WorkspaceRef } from "../../src/effect/instance-ref"
@@ -55,6 +56,7 @@ const it = testEffect(
     workspaceLayer,
     LayerNode.compile(PtyTicket.node),
     LayerNode.compile(FreeModelGuests.node),
+    LayerNode.compile(SessionAudience.node),
   ),
 )
 

@@ -28,6 +28,10 @@ import type {
   Config as Config3,
   ConfigGetErrors,
   ConfigGetResponses,
+  ConfigPromptTrustApproveErrors,
+  ConfigPromptTrustApproveResponses,
+  ConfigPromptTrustGetErrors,
+  ConfigPromptTrustGetResponses,
   ConfigProvidersErrors,
   ConfigProvidersResponses,
   ConfigTrustApproveErrors,
@@ -61,24 +65,48 @@ import type {
   ExperimentalSessionBackgroundResponses,
   ExperimentalSessionListErrors,
   ExperimentalSessionListResponses,
+  ExperimentalSessionStopErrors,
+  ExperimentalSessionStopResponses,
   ExperimentalSessionUsageErrors,
   ExperimentalSessionUsageResponses,
+  ExperimentalTaskBackgroundErrors,
+  ExperimentalTaskBackgroundResponses,
   ExperimentalTaskBridgePollErrors,
   ExperimentalTaskBridgePollResponses,
   ExperimentalTaskBridgeReceiptErrors,
   ExperimentalTaskBridgeReceiptResponses,
   ExperimentalTaskBridgeRegisterErrors,
   ExperimentalTaskBridgeRegisterResponses,
+  ExperimentalTaskChangesErrors,
+  ExperimentalTaskChangesResponses,
+  ExperimentalTaskDiscardErrors,
+  ExperimentalTaskDiscardResponses,
   ExperimentalTaskInspectErrors,
   ExperimentalTaskInspectResponses,
   ExperimentalTaskListErrors,
   ExperimentalTaskListResponses,
+  ExperimentalTaskMergeErrors,
+  ExperimentalTaskMergeResponses,
   ExperimentalTaskMessageErrors,
   ExperimentalTaskMessageResponses,
+  ExperimentalTaskResumeErrors,
+  ExperimentalTaskResumeResponses,
   ExperimentalTaskStopErrors,
   ExperimentalTaskStopResponses,
   ExperimentalTaskWaitErrors,
   ExperimentalTaskWaitResponses,
+  ExperimentalWorkflowGetErrors,
+  ExperimentalWorkflowGetResponses,
+  ExperimentalWorkflowListErrors,
+  ExperimentalWorkflowListResponses,
+  ExperimentalWorkflowResumeErrors,
+  ExperimentalWorkflowResumeResponses,
+  ExperimentalWorkflowSavedErrors,
+  ExperimentalWorkflowSavedResponses,
+  ExperimentalWorkflowStartErrors,
+  ExperimentalWorkflowStartResponses,
+  ExperimentalWorkflowValidateErrors,
+  ExperimentalWorkflowValidateResponses,
   ExperimentalWorkspaceAdapterListErrors,
   ExperimentalWorkspaceAdapterListResponses,
   ExperimentalWorkspaceCreateErrors,
@@ -278,10 +306,29 @@ import type {
   MemorySettingsGetResponses,
   MemorySettingsUpdateErrors,
   MemorySettingsUpdateResponses,
+  MemorySkillDrafter,
+  MemorySkillLearning,
+  MemorySkillsForgetErrors,
+  MemorySkillsForgetResponses,
+  MemorySkillsGetErrors,
+  MemorySkillsGetResponses,
+  MemorySkillsListErrors,
+  MemorySkillsListResponses,
+  MemorySkillsShareErrors,
+  MemorySkillsSharePreviewErrors,
+  MemorySkillsSharePreviewResponses,
+  MemorySkillsShareResponses,
+  MemorySkillsUpdateErrors,
+  MemorySkillsUpdateResponses,
   MemoryTidyErrors,
   MemoryTidyResponses,
   MemoryUpdateErrors,
   MemoryUpdateResponses,
+  MemoryWorkflowGetErrors,
+  MemoryWorkflowGetResponses,
+  MemoryWorkflowLearning,
+  MemoryWorkflowResetErrors,
+  MemoryWorkflowResetResponses,
   ModelRef,
   MoveSessionDestination,
   OutputFormat,
@@ -314,6 +361,7 @@ import type {
   ProjectUpdateErrors,
   ProjectUpdateResponses,
   PromptInput,
+  PromptTrustApproval,
   ProviderAuthErrors,
   ProviderAuthResponses,
   ProviderFreeModelsConsentErrors,
@@ -605,6 +653,9 @@ import type {
   VcsStatusResponses,
   VcsSwitchErrors,
   VcsSwitchResponses,
+  WorkflowResumeInput,
+  WorkflowStartInput,
+  WorkflowValidateInput,
   WorktreeCreateErrors,
   WorktreeCreateInput,
   WorktreeCreateResponses,
@@ -1155,6 +1206,51 @@ export class Session extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * Stop a session
+   *
+   * Stop the session's main turn and, with helpers, every subagent working under it. No new turn starts until the next user message; partial work is kept.
+   */
+  public stop<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      helpers?: boolean
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "helpers" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalSessionStopResponses,
+      ExperimentalSessionStopErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/stop",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Bridge extends HeyApiClient {
@@ -1301,6 +1397,8 @@ export class Task extends HeyApiClient {
       workspace?: string
       descendants?: "true" | "false"
       limit?: string
+      active?: "true" | "false"
+      shells?: "true" | "false"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1314,6 +1412,8 @@ export class Task extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "query", key: "descendants" },
             { in: "query", key: "limit" },
+            { in: "query", key: "active" },
+            { in: "query", key: "shells" },
           ],
         },
       ],
@@ -1508,9 +1608,458 @@ export class Task extends HeyApiClient {
     })
   }
 
+  /**
+   * Move session tasks to the background
+   *
+   * Move the session's running foreground subagents, or the selected ones, to the background, batch entries included. Each keeps running and reports later on its own.
+   */
+  public background<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      taskIDs?: Array<string>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "taskIDs" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalTaskBackgroundResponses,
+      ExperimentalTaskBackgroundErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/background",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Resume session tasks
+   *
+   * Continue the session's stopped, failed or interrupted subagents in the background, each in a new attempt. A completed subagent continues only with text. Nothing resumes on its own.
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      taskIDs?: Array<string>
+      text?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "taskIDs" },
+            { in: "body", key: "text" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalTaskResumeResponses,
+      ExperimentalTaskResumeErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/resume",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Review an isolated task's changes
+   *
+   * Read an isolated child's changed files and, with diff=true, its bounded patch. Only the authenticated owner receives paths and the patch; other viewers receive counts.
+   */
+  public changes<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      taskID: string
+      directory?: string
+      workspace?: string
+      diff?: boolean | "true" | "false"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "taskID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "diff" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalTaskChangesResponses,
+      ExperimentalTaskChangesErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/{taskID}/changes",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Merge an isolated task
+   *
+   * Owner only. Bring an isolated child's saved changes, or the selected files, into the parent checkout after a checkpoint.
+   */
+  public merge<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      taskID: string
+      directory?: string
+      workspace?: string
+      files?: Array<string>
+      includeStacked?: boolean
+      force?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "taskID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "files" },
+            { in: "body", key: "includeStacked" },
+            { in: "body", key: "force" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalTaskMergeResponses,
+      ExperimentalTaskMergeErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/{taskID}/merge",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Discard an isolated task
+   *
+   * Owner only. Keep a recovery artifact, then remove an isolated child's checkout and branch.
+   */
+  public discard<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      taskID: string
+      directory?: string
+      workspace?: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "taskID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalTaskDiscardResponses,
+      ExperimentalTaskDiscardErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/tasks/{taskID}/discard",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   private _bridge?: Bridge
   get bridge(): Bridge {
     return (this._bridge ??= new Bridge({ client: this.client }))
+  }
+}
+
+export class Workflow extends HeyApiClient {
+  /**
+   * List trusted saved workflows
+   */
+  public saved<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkflowSavedResponses,
+      ExperimentalWorkflowSavedErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/saved",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Validate a workflow without starting it
+   */
+  public validate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      workflowValidateInput?: WorkflowValidateInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "workflowValidateInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkflowValidateResponses,
+      ExperimentalWorkflowValidateErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/validate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List workflow runs
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkflowListResponses,
+      ExperimentalWorkflowListErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start an owner-approved workflow
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      workflowStartInput?: WorkflowStartInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "workflowStartInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkflowStartResponses,
+      ExperimentalWorkflowStartErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get workflow progress and results
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      runID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkflowGetResponses,
+      ExperimentalWorkflowGetErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow/{runID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resume an owner-approved workflow
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      runID: string
+      directory?: string
+      workspace?: string
+      workflowResumeInput?: WorkflowResumeInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "workflowResumeInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkflowResumeResponses,
+      ExperimentalWorkflowResumeErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow/{runID}/resume",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -1894,6 +2443,11 @@ export class Experimental extends HeyApiClient {
     return (this._task ??= new Task({ client: this.client }))
   }
 
+  private _workflow?: Workflow
+  get workflow(): Workflow {
+    return (this._workflow ??= new Workflow({ client: this.client }))
+  }
+
   private _resource?: Resource
   get resource(): Resource {
     return (this._resource ??= new Resource({ client: this.client }))
@@ -2109,6 +2663,83 @@ export class Trust extends HeyApiClient {
   }
 }
 
+export class PromptTrust extends HeyApiClient {
+  /**
+   * Get held prompt files
+   *
+   * The prompt files outside this repository (global agents, commands, skills and instruction files, and the prompt settings of global config) that changed since the owner last approved them. Vector does not load them until the owner approves. Owner only.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ConfigPromptTrustGetResponses,
+      ConfigPromptTrustGetErrors,
+      ThrowOnError
+    >({
+      url: "/config/prompt-trust",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Approve held prompt files
+   *
+   * Approve the held prompt files the owner was shown, as GET returned them, and reload the instance so Vector loads them. When the files held now are not exactly those, unchanged, nothing is approved and the request fails with 409: read the list again. Owner only.
+   */
+  public approve<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      promptTrustApproval?: PromptTrustApproval
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "promptTrustApproval", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ConfigPromptTrustApproveResponses,
+      ConfigPromptTrustApproveErrors,
+      ThrowOnError
+    >({
+      url: "/config/prompt-trust/approve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Config2 extends HeyApiClient {
   /**
    * Get configuration
@@ -2210,6 +2841,11 @@ export class Config2 extends HeyApiClient {
   private _trust?: Trust
   get trust(): Trust {
     return (this._trust ??= new Trust({ client: this.client }))
+  }
+
+  private _promptTrust?: PromptTrust
+  get promptTrust(): PromptTrust {
+    return (this._promptTrust ??= new PromptTrust({ client: this.client }))
   }
 }
 
@@ -4227,7 +4863,7 @@ export class Settings extends HeyApiClient {
   /**
    * Change memory settings
    *
-   * Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.
+   * Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, learned skills and their drafter, workflow insights and their exploration, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.
    */
   public update<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -4245,6 +4881,10 @@ export class Settings extends HeyApiClient {
         style?: boolean
       }
       modelLearner?: MemoryModelLearner
+      skills?: MemorySkillLearning
+      skillDrafter?: MemorySkillDrafter
+      workflow?: MemoryWorkflowLearning
+      workflowExplore?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4260,6 +4900,10 @@ export class Settings extends HeyApiClient {
             { in: "body", key: "keepOriginals" },
             { in: "body", key: "facets" },
             { in: "body", key: "modelLearner" },
+            { in: "body", key: "skills" },
+            { in: "body", key: "skillDrafter" },
+            { in: "body", key: "workflow" },
+            { in: "body", key: "workflowExplore" },
           ],
         },
       ],
@@ -4277,6 +4921,298 @@ export class Settings extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+}
+
+export class Skills extends HeyApiClient {
+  /**
+   * List learned skills
+   *
+   * Skills Vector drafted for the repository at `directory` after a run turned a failing check green: in use, waiting for your review (`filter=review`), put away (`filter=archived`) or all of them. Each carries its procedure, checks, commands, version and counts.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      filter?: "active" | "review" | "archived" | "all"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "filter" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<MemorySkillsListResponses, MemorySkillsListErrors, ThrowOnError>({
+      url: "/memory/skills",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Forget a learned skill
+   *
+   * Delete every version of the skill, its uses and the sessions' listings of it, and keep only a hash of its key so Vector does not draft it again.
+   */
+  public forget<ThrowOnError extends boolean = false>(
+    parameters: {
+      memoryID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "memoryID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<MemorySkillsForgetResponses, MemorySkillsForgetErrors, ThrowOnError>(
+      {
+        url: "/memory/skills/{memoryID}",
+        ...options,
+        ...params,
+      },
+    )
+  }
+
+  /**
+   * Get a learned skill
+   *
+   * One learned skill: the runs that vouch for it, every version of its text, and how its loads fared.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      memoryID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "memoryID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<MemorySkillsGetResponses, MemorySkillsGetErrors, ThrowOnError>({
+      url: "/memory/skills/{memoryID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Change a learned skill
+   *
+   * Edit its description, steps, checks or commands (a new version, checked like a draft), approve or reject a draft, archive it, restore it, undo the version in use, or roll back to `version`. Checks and commands must be on the allow lists.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      memoryID: string
+      directory?: string
+      workspace?: string
+      description?: string
+      procedure?: string
+      checks?: Array<string>
+      commands?: Array<string>
+      action?: "approve" | "reject" | "archive" | "restore" | "undo" | "rollback"
+      version?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "memoryID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "description" },
+            { in: "body", key: "procedure" },
+            { in: "body", key: "checks" },
+            { in: "body", key: "commands" },
+            { in: "body", key: "action" },
+            { in: "body", key: "version" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<MemorySkillsUpdateResponses, MemorySkillsUpdateErrors, ThrowOnError>({
+      url: "/memory/skills/{memoryID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Preview sharing a learned skill
+   *
+   * The file sharing the skill would write and where, after the same checks sharing makes, or the refusal it would give. Writes nothing.
+   */
+  public sharePreview<ThrowOnError extends boolean = false>(
+    parameters: {
+      memoryID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "memoryID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      MemorySkillsSharePreviewResponses,
+      MemorySkillsSharePreviewErrors,
+      ThrowOnError
+    >({
+      url: "/memory/skills/{memoryID}/share",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Share a learned skill to the repository
+   *
+   * Write a skill you approved to `.vector/skills/<name>/SKILL.md` for your team to commit, with no error excerpt, session ids or counts, after checking it against your personal memory (refused with reason `personal` and the sentences to edit). It changes the repository's settings, so the app reloads the directory once no session in it is busy and you trust them again. Refused with reason `exists` unless `force`.
+   */
+  public share<ThrowOnError extends boolean = false>(
+    parameters: {
+      memoryID: string
+      directory?: string
+      workspace?: string
+      force?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "memoryID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "force" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<MemorySkillsShareResponses, MemorySkillsShareErrors, ThrowOnError>({
+      url: "/memory/skills/{memoryID}/share",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Workflow2 extends HeyApiClient {
+  /**
+   * Reset workflow insights
+   *
+   * Forget the runs workflow insights learned from in this repository, for one size (`tier`) or every size. Learned defaults start again from nothing.
+   */
+  public reset<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      tier?: "light" | "standard" | "thorough"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "tier" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      MemoryWorkflowResetResponses,
+      MemoryWorkflowResetErrors,
+      ThrowOnError
+    >({
+      url: "/memory/workflow",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get workflow insights
+   *
+   * For each size, the effort, subagent split and subagent model the build agent ran with in this repository, how often their checks passed and what they cost, and the cheaper default the runs support. Runs where you, the agent or config chose the effort are left out, and unknown cost stays unknown.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<MemoryWorkflowGetResponses, MemoryWorkflowGetErrors, ThrowOnError>({
+      url: "/memory/workflow",
+      ...options,
+      ...params,
     })
   }
 }
@@ -5460,7 +6396,7 @@ export class Memory extends HeyApiClient {
   /**
    * Forget a memory entry
    *
-   * Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file.
+   * Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file. A learned skill is refused with reason `skill-entry`: forget it under /memory/skills.
    */
   public remove<ThrowOnError extends boolean = false>(
     parameters: {
@@ -5524,7 +6460,7 @@ export class Memory extends HeyApiClient {
   /**
    * Change a memory entry
    *
-   * Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again.
+   * Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again. A learned skill is refused with reason `skill-entry`: change it under /memory/skills.
    */
   public update<ThrowOnError extends boolean = false>(
     parameters: {
@@ -5569,7 +6505,7 @@ export class Memory extends HeyApiClient {
   /**
    * Erase learned memory
    *
-   * Erase what Vector learned for this repository, for the user, or everywhere. The repository's Deep research runs go with its memory, and every run with everything; erasing what Vector learned about the user keeps them. Files people wrote are left alone.
+   * Erase what Vector learned for this repository, for the user, or everywhere. Erasing a repository or everything also erases its learned skills and workflow insights. The repository's Deep research runs go with its memory, and every run with everything; erasing what Vector learned about the user keeps them. Files people wrote are left alone.
    */
   public erase<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -5606,7 +6542,7 @@ export class Memory extends HeyApiClient {
   /**
    * Erase what Vector learned in a session
    *
-   * Forget every entry Vector learned whose only evidence is this session, so it is not learned again. The Deep research runs the session started are forgotten too. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.
+   * Forget every entry Vector learned whose only evidence is this session, so it is not learned again, with its workflow records; a learned skill that session taught goes back to the text other sessions taught, or goes. The Deep research runs the session started are forgotten too. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.
    */
   public eraseSession<ThrowOnError extends boolean = false>(
     parameters: {
@@ -5805,6 +6741,16 @@ export class Memory extends HeyApiClient {
   private _settings?: Settings
   get settings(): Settings {
     return (this._settings ??= new Settings({ client: this.client }))
+  }
+
+  private _skills?: Skills
+  get skills(): Skills {
+    return (this._skills ??= new Skills({ client: this.client }))
+  }
+
+  private _workflow?: Workflow2
+  get workflow(): Workflow2 {
+    return (this._workflow ??= new Workflow2({ client: this.client }))
   }
 
   private _model?: Model

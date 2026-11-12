@@ -216,8 +216,12 @@ export type Session = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -306,6 +310,10 @@ export type UserMessage = {
     modelID: string
     variant?: string
   }
+  selected?: {
+    providerID: string
+    modelID: string
+  }
   system?: string
   tools?: {
     [key: string]: boolean
@@ -378,6 +386,7 @@ export type BudgetStopError = {
     spentUsd?: number
     capUsd?: number
     unpricedSteps?: number
+    codiumSteps?: number
     estimate?: {
       lowUsd: number
       highUsd: number
@@ -444,6 +453,7 @@ export type AssistantMessage = {
   summary?: boolean
   cost: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens: {
     total?: number
     input: number
@@ -457,6 +467,13 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   size?: TaskSizeTier
+  workflow?: {
+    effort?: "default"
+    split?: "solo"
+    subagentModel?: "small"
+    source: "learned" | "explore"
+    reason: string
+  }
   finish?: string
   forked?: boolean
 }
@@ -649,6 +666,7 @@ export type StepFinishPart = {
   snapshot?: string
   cost: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens: {
     total?: number
     input: number
@@ -796,7 +814,7 @@ export type SessionStatus =
       type: "busy"
     }
 
-export type CostKind = "free" | "priced" | "plan" | "local" | "unknown"
+export type CostKind = "free" | "priced" | "plan" | "local" | "unknown" | "codium"
 
 export type QuestionOption = {
   /**
@@ -946,6 +964,7 @@ export type GlobalEvent = {
           model: ModelRef
           cost?: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens?: {
             input: number
             output: number
@@ -1091,6 +1110,7 @@ export type GlobalEvent = {
           finish: string
           cost: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens: {
             input: number
             output: number
@@ -1332,6 +1352,7 @@ export type GlobalEvent = {
           recent: string
           cost?: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens?: {
             input: number
             output: number
@@ -1353,6 +1374,7 @@ export type GlobalEvent = {
           reason: "auto" | "manual"
           cost?: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens?: {
             input: number
             output: number
@@ -1729,6 +1751,7 @@ export type GlobalEvent = {
           capUsd?: number
           steps: number
           unpricedSteps: number
+          codiumSteps?: number
           costKind: CostKind
           estimate?: {
             lowUsd: number
@@ -2391,10 +2414,40 @@ export type ConfigWithLocks = {
     loop?: {
       enabled?: boolean
     }
+    subagents?: {
+      usd?: number
+      steps?: number
+      warnAt?: number
+      unpricedSteps?: number
+      running?: number
+      per_request?: number
+    }
+    workflow?: {
+      max_agents?: number
+      concurrency?: number
+      usd?: number
+      tokens?: number
+      steps?: number
+      per_agent_steps?: number
+      minutes?: number
+      runs?: number
+    }
   }
   sizing?: {
     auto?: boolean
     judge?: TaskJudgeMode
+    learn?: boolean
+    subagents?: {
+      fork?: boolean
+      models?: Array<string>
+      ask_timeout?: number
+      isolation?: {
+        lsp?: boolean
+        mcp?: boolean
+        link?: Array<string>
+        max_kept?: number
+      }
+    }
   }
   local?: LocalConfig
   research?: ResearchConfig
@@ -2557,10 +2610,40 @@ export type Config = {
     loop?: {
       enabled?: boolean
     }
+    subagents?: {
+      usd?: number
+      steps?: number
+      warnAt?: number
+      unpricedSteps?: number
+      running?: number
+      per_request?: number
+    }
+    workflow?: {
+      max_agents?: number
+      concurrency?: number
+      usd?: number
+      tokens?: number
+      steps?: number
+      per_agent_steps?: number
+      minutes?: number
+      runs?: number
+    }
   }
   sizing?: {
     auto?: boolean
     judge?: TaskJudgeMode
+    learn?: boolean
+    subagents?: {
+      fork?: boolean
+      models?: Array<string>
+      ask_timeout?: number
+      isolation?: {
+        lsp?: boolean
+        mcp?: boolean
+        link?: Array<string>
+        max_kept?: number
+      }
+    }
   }
   local?: LocalConfig
   research?: ResearchConfig
@@ -2603,6 +2686,32 @@ export type ProjectTrustStatus = {
   ignored: boolean
   settings: boolean
   approvable: boolean
+}
+
+export type PromptTrustFile = {
+  path: string
+  fingerprint?: string
+}
+
+export type PromptTrustStatus = {
+  held: Array<string>
+  files: Array<PromptTrustFile>
+}
+
+export type EffectHttpApiErrorForbidden = {
+  _tag: "Forbidden"
+}
+
+export type PromptTrustApproval = {
+  files: Array<PromptTrustFile>
+}
+
+export type PromptTrustApproved = {
+  approved: number
+}
+
+export type EffectHttpApiErrorConflict = {
+  _tag: "Conflict"
 }
 
 export type Model = {
@@ -2693,6 +2802,7 @@ export type Model = {
       [key: string]: unknown
     }
   }
+  codium?: ModelCodium
 }
 
 export type Provider = {
@@ -2711,6 +2821,15 @@ export type Provider = {
 
 export type ExperimentalCapabilities = {
   backgroundSubagents: boolean
+  workDelegation?: boolean
+  subagentLimits?: boolean
+  sessionStop?: boolean
+  taskPromote?: boolean
+  taskResume?: boolean
+  taskAttention?: boolean
+  taskIsolation?: boolean
+  workflows?: boolean
+  backgroundShells?: boolean
 }
 
 export type ToolListItem = {
@@ -2782,8 +2901,12 @@ export type GlobalSession = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -2853,6 +2976,7 @@ export type SessionUsageDay = {
   tokens: number
   cost: number
   tasks: number
+  codium?: number
 }
 
 export type SessionUsageHelper = {
@@ -2861,12 +2985,14 @@ export type SessionUsageHelper = {
   responses: number
   tokens: number
   cost: number
+  codiumSteps?: number
 }
 
 export type SessionUsageSummary = {
   lifetimeTokens: number
   lifetimeCost: number
   unpricedResponses?: number
+  codiumResponses?: number
   inputTokens: number
   outputTokens: number
   reasoningTokens: number
@@ -2889,8 +3015,14 @@ export type SessionUsageSummary = {
 }
 
 export type TaskApiError = {
-  code: "not_found" | "forbidden" | "invalid" | "finished" | "rate_limited"
+  code: "not_found" | "forbidden" | "invalid" | "finished" | "rate_limited" | "limit" | "conflict" | "running"
   message: string
+}
+
+export type WorkflowApiError = {
+  code: "invalid" | "busy" | "not_found" | "running" | "disabled" | "forbidden" | "limit"
+  message: string
+  issues?: Array<WorkflowIssue>
 }
 
 export type McpResource = {
@@ -3519,10 +3651,38 @@ export type McpServerNotFoundError = {
   message: string
 }
 
+export type MemorySkill = {
+  key: string
+  name: string
+  description: string
+  procedure: string
+  checks: Array<string>
+  commands: Array<string>
+  failure?: string
+  version: number
+  drafter: "rules" | "model" | "user" | "import"
+  approvedBy?: "user" | "vector"
+  approvedAt?: number
+  sharedPath?: string
+  sharedAt?: number
+  helpful: number
+  harmful: number
+  proven: number
+  uses: {
+    loads: number
+    passes: number
+    fails: number
+    ignored: number
+    reverts: number
+  }
+  instructionLikeFailure: boolean
+  fading: boolean
+}
+
 export type MemoryEntry = {
   id: string
   scope: "repository" | "personal"
-  kind: "rule" | "preference" | "decision" | "lesson" | "fact" | "failure" | "review" | "term"
+  kind: "rule" | "preference" | "decision" | "lesson" | "fact" | "failure" | "review" | "term" | "skill"
   origin: "file" | "user" | "agent" | "failure-memory" | "import"
   status: "active" | "proposed" | "quarantined" | "archived" | "superseded"
   pinned: boolean
@@ -3556,6 +3716,7 @@ export type MemoryEntry = {
     key: string
     meaning: string
   }
+  skill?: MemorySkill
 }
 
 export type MemoryStats = {
@@ -3566,6 +3727,10 @@ export type MemoryStats = {
   learned: number
   digestTokens: number
   learning: boolean
+  skills: {
+    active: number
+    review: number
+  }
 }
 
 export type MemoryList = {
@@ -3580,7 +3745,7 @@ export type MemoryList = {
 }
 
 export type MemoryEvidence = {
-  type: "message" | "file" | "check" | "user" | "file-item" | "document"
+  type: "message" | "file" | "check" | "user" | "file-item" | "document" | "run"
   path?: string
   quote?: string
   command?: string
@@ -3708,12 +3873,116 @@ export type MemoryFacets = {
 
 export type MemoryModelLearner = "local-only" | "always" | "off"
 
+export type MemorySkillLearning = "review" | "auto" | "off"
+
+export type MemorySkillDrafter = "off" | "local-only" | "always"
+
+export type MemoryWorkflowLearning = "apply" | "observe" | "off"
+
 export type MemorySettings = {
   learning: boolean
   repositoryDocs: boolean
   keepOriginals: boolean
   facets: MemoryFacets
   modelLearner: MemoryModelLearner
+  skills: MemorySkillLearning
+  skillDrafter: MemorySkillDrafter
+  workflow: MemoryWorkflowLearning
+  workflowExplore: boolean
+}
+
+export type MemorySkillList = {
+  skills: Array<MemoryEntry>
+  settings: {
+    skills: MemorySkillLearning
+    skillDrafter: MemorySkillDrafter
+  }
+}
+
+export type MemorySkillVersion = {
+  version: number
+  entryID: string
+  name: string
+  description: string
+  procedure: string
+  checks: Array<string>
+  commands: Array<string>
+  actor: "agent" | "user" | "vector" | "import"
+  reason: "learned" | "edited" | "imported" | "rollback"
+  createdAt: number
+}
+
+export type MemorySkillUses = {
+  loads: number
+  passes: number
+  fails: number
+  ignored: number
+  reverts: number
+}
+
+export type MemorySkillDetail = {
+  entry: MemoryEntry
+  evidence: Array<MemoryEvidence>
+  versions: Array<MemorySkillVersion>
+  uses: MemorySkillUses
+}
+
+export type MemorySkillSharePreview = {
+  path: string
+  text: string
+  exists: boolean
+}
+
+export type MemorySkillShared = {
+  path: string
+  trust: "changed"
+  reload: "when-idle"
+}
+
+export type MemoryWorkflowArm = {
+  arm: {
+    effortTier: TaskSizeTier
+    effort: string
+    split: "solo" | "subagents"
+    providerID: string
+    modelID: string
+    subagentModel?: "parent" | "small"
+  }
+  rows: number
+  weight: number
+  signal: number
+  passRate?: number
+  lower?: number
+  checkedShare: number
+  costUsd?: number
+  pricedWeight: number
+  tokens?: number
+  lastAt: number
+}
+
+export type MemoryWorkflowAdvice = {
+  effortTier: TaskSizeTier
+  effort?: "default"
+  split?: "solo"
+  subagentModel?: "small"
+  source: "learned" | "explore"
+  reason: string
+  basis: {
+    chosen: MemoryWorkflowArm
+    instead: MemoryWorkflowArm
+  }
+}
+
+export type MemoryWorkflowInsights = {
+  mode: MemoryWorkflowLearning
+  explore: boolean
+  tiers: Array<{
+    tier: TaskSizeTier
+    arms: Array<MemoryWorkflowArm>
+    advice?: MemoryWorkflowAdvice
+    wouldAdvise?: MemoryWorkflowAdvice
+    excluded: number
+  }>
 }
 
 export type MemoryModelOption = {
@@ -4017,8 +4286,8 @@ export type MemoryDistillEstimate = {
     message: string
   }
   sections: number
-  input: number
-  output: number
+  input?: number
+  output?: number
   costKind?: CostKind
   lowUsd?: number
   highUsd?: number
@@ -4034,14 +4303,14 @@ export type MemoryDistillResult = {
     quote: number
     scan: number
   }
-  tokens: {
+  tokens?: {
     input: number
     output: number
     reasoning: number
     cacheRead: number
     cacheWrite: number
   }
-  cost: number
+  cost?: number
   costKind: CostKind
   error?: string
 }
@@ -4424,8 +4693,12 @@ export type Session1 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4490,8 +4763,12 @@ export type Session2 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4569,8 +4846,12 @@ export type Session3 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4647,8 +4928,12 @@ export type Session4 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4713,8 +4998,12 @@ export type Session5 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4783,8 +5072,12 @@ export type Session6 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4897,8 +5190,12 @@ export type Session7 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4963,8 +5260,12 @@ export type Session8 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -5132,6 +5433,7 @@ export type SpendSnapshot = {
   spentUsd: number
   steps: number
   unpricedSteps: number
+  codiumSteps?: number
   costKind?: CostKind
 }
 
@@ -5381,10 +5683,6 @@ export type ProjectCopyError = {
   }
 }
 
-export type EffectHttpApiErrorForbidden = {
-  _tag: "Forbidden"
-}
-
 export type EventTuiPromptAppend2 = {
   id: string
   type: "tui.prompt.append"
@@ -5468,6 +5766,8 @@ export type PublicSessionInfo = {
   revision: number
   updates: boolean
 }
+
+export type BillingKind = "codium"
 
 export type ModelRef = {
   id: string
@@ -5684,6 +5984,7 @@ export type SessionErrorCodium = {
   type: "codium"
   action: "credits" | "sign-in" | "unavailable"
   message: string
+  code?: string
 }
 
 export type SessionErrorAssistant = SessionErrorUnknown | FreeModelLimit | SessionErrorCodium
@@ -5709,6 +6010,7 @@ export type SessionMessageAssistant = {
   finish?: string
   cost?: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens?: {
     input: number
     output: number
@@ -5728,6 +6030,7 @@ export type SessionMessageCompaction = {
   recent: string
   cost?: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens?: {
     input: number
     output: number
@@ -5985,6 +6288,7 @@ export type SyncEventSessionNextAncillaryUsage = {
       model: ModelRef
       cost?: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens?: {
         input: number
         output: number
@@ -6221,6 +6525,7 @@ export type SyncEventSessionNextStepEnded = {
       finish: string
       cost: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens: {
         input: number
         output: number
@@ -6524,6 +6829,7 @@ export type SyncEventSessionNextCompactionEnded = {
       recent: string
       cost?: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens?: {
         input: number
         output: number
@@ -6552,6 +6858,7 @@ export type SyncEventSessionNextCompactionFailed = {
       reason: "auto" | "manual"
       cost?: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens?: {
         input: number
         output: number
@@ -6635,6 +6942,25 @@ export type ConfigV2ExperimentalPolicy = {
 
 export type TeamsId = string
 
+export type ModelCodium = {
+  lab?: string
+  role?: "floor" | "default" | "ceiling"
+  manualOnly?: boolean
+  locked?: {
+    plan: string
+    name: string
+    previewUntil?: number
+  }
+  preview?: {
+    until: number
+  }
+  auto?: {
+    floor: string
+    default: string
+    ceiling: string
+  }
+}
+
 export type TaskStatus = "queued" | "running" | "waiting_on_user" | "completed" | "failed" | "stopped"
 
 export type TaskUsage = {
@@ -6652,6 +6978,8 @@ export type TaskUsage = {
   toolUses: number
   steps: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
 }
 
 export type TaskBudgetScope = {
@@ -6661,9 +6989,89 @@ export type TaskBudgetScope = {
   spentUsd: number
   steps: number
   unpricedSteps: number
+  codiumSteps?: number
   costKind?: CostKind
   stopped?: {
     reason: RunBudgetStopReason
+    message: string
+  }
+}
+
+export type TaskModel = {
+  providerID: string
+  modelID: string
+  variant?: string
+}
+
+export type TaskInterrupted = {
+  at: number
+  cause: string
+  reported?: boolean
+  resumedAt?: number
+  dismissedAt?: number
+}
+
+export type TaskWaiting = {
+  kind: string
+  since: number
+  requestID?: string
+  expiresAt?: number
+  summary?: string
+}
+
+export type TaskResult = {
+  format: string
+  valid?: boolean
+  attempts?: number
+}
+
+export type TaskIsolation = {
+  mode: string
+  state: string
+  branch?: string
+  directory?: string
+  files?: number
+  additions?: number
+  deletions?: number
+  merged?: Array<string>
+  skipped?: Array<string>
+  conflicts?: Array<string>
+  error?: string
+}
+
+export type TaskWorkflowStage = {
+  id: string
+  title: string
+  phase: string
+  total?: number
+  done: number
+  failed: number
+  skipped: number
+  running: number
+  waiting: number
+}
+
+export type TaskWorkflow = {
+  role: string
+  runID: string
+  title?: string
+  stage?: string
+  phase?: string
+  item?: string
+  round?: number
+  verified?: boolean
+  stages?: Array<TaskWorkflowStage>
+  agents?: {
+    launched: number
+    max: number
+    running: number
+  }
+  tokens?: {
+    used: number
+    max?: number
+  }
+  stop?: {
+    reason: string
     message: string
   }
 }
@@ -6687,6 +7095,7 @@ export type TaskInfo = {
   usage?: TaskUsage
   measuredCost?: number
   costKind?: CostKind
+  billing?: BillingKind
   ownedPaths: Array<string>
   dependsOn: Array<string>
   resultAvailable: boolean
@@ -6699,12 +7108,75 @@ export type TaskInfo = {
     inspect: boolean
     message: boolean
     stop: boolean
+    resume?: boolean
+    background?: boolean
+    merge?: boolean
+    discard?: boolean
   }
+  model?: TaskModel
+  effort?: string
+  background?: boolean
+  fork?: boolean
+  queuedReason?: string
+  interrupted?: TaskInterrupted
+  waiting?: TaskWaiting
+  result?: TaskResult
+  isolation?: TaskIsolation
+  workflow?: TaskWorkflow
+  inbox?: {
+    unread: number
+  }
+}
+
+export type TaskSessionStopResult = {
+  aborted: boolean
+  tasks: Array<TaskInfo>
+  shells: number
+  excluded: number
+  skipped: number
+}
+
+export type TaskLimits = {
+  running: number
+  queued: number
+  maxRunning: number
+  launched: number
+  maxPerRequest: number
+  spend?: {
+    spentUsd: number
+    limitUsd?: number
+    unknownSteps: number
+    warned: boolean
+    stopped: boolean
+  }
+}
+
+export type TaskShell = {
+  id: string
+  title: string
+  command: string
+  status: string
+  startedAt: number
+  completedAt?: number
+  exitCode?: number
+  outputPath?: string
+  outputBytes: number
 }
 
 export type TaskListResult = {
   tasks: Array<TaskInfo>
   truncated: boolean
+  limits?: TaskLimits
+  shells?: Array<TaskShell>
+}
+
+export type TaskMessage = {
+  id: string
+  direction: string
+  sender: string
+  text: string
+  createdAt: number
+  deliveredAt?: number
 }
 
 export type TaskInspectResult = {
@@ -6716,6 +7188,12 @@ export type TaskInspectResult = {
   }>
   output: string
   truncated: boolean
+  messages?: Array<TaskMessage>
+  structured?: {
+    json: string
+    valid: boolean
+    truncated: boolean
+  }
 }
 
 export type TaskMessageResult = {
@@ -6727,11 +7205,52 @@ export type TaskMessageResult = {
 
 export type TaskStopResult = {
   tasks: Array<TaskInfo>
+  shells?: Array<TaskShell>
 }
 
 export type TaskWaitResult = {
   tasks: Array<TaskInfo>
   timedOut: boolean
+  attention?: Array<string>
+  shells?: Array<TaskShell>
+}
+
+export type TaskPromoteResult = {
+  tasks: Array<TaskInfo>
+}
+
+export type TaskResumeResult = {
+  tasks: Array<TaskInfo>
+}
+
+export type TaskChangedFile = {
+  path: string
+  status: string
+  additions: number
+  deletions: number
+  binary: boolean
+}
+
+export type TaskChangesResult = {
+  task: TaskInfo
+  files: Array<TaskChangedFile>
+  patch?: string
+  truncated: boolean
+  mergeable: string
+  detail?: string
+}
+
+export type TaskMergeResult = {
+  task: TaskInfo
+  merged: Array<string>
+  remaining: Array<string>
+  conflicts: Array<string>
+  checkpoint?: string
+}
+
+export type TaskDiscardResult = {
+  task: TaskInfo
+  saved?: string
 }
 
 export type TaskBridgeRegisterInput = {
@@ -6776,6 +7295,128 @@ export type TaskBridgeReceiptInput = {
 
 export type TaskBridgeReceiptResult = {
   accepted: boolean
+}
+
+export type WorkflowIssue = {
+  path: string
+  message: string
+}
+
+export type WorkflowSaved = {
+  name: string
+  title: string
+  description?: string
+  source: "repository" | "user"
+  inputs: Array<{
+    name: string
+    description?: string
+    required: boolean
+    default?: unknown
+  }>
+  issues?: Array<WorkflowIssue>
+}
+
+export type WorkflowSavedList = {
+  workflows: Array<WorkflowSaved>
+}
+
+export type WorkflowValidateInput = {
+  spec?: string
+  name?: string
+  inputs?: {
+    [key: string]: unknown
+  }
+}
+
+export type WorkflowPlanStage = {
+  id: string
+  title: string
+  phase: string
+  agent: string
+  model?: string
+  effort?: string
+  isolation?: string
+  items: number | "dynamic"
+  serial: boolean
+  writes: string
+  asks: Array<string>
+  verify?: {
+    agent: string
+    maxRounds: number
+  }
+}
+
+export type WorkflowPlan = {
+  title: string
+  stages: Array<WorkflowPlanStage>
+  maxAgents: number
+  concurrency: number
+  usd?: number
+  tokens?: number
+  steps: number
+  perAgentSteps: number
+  minutes: number
+  saved?: {
+    name: string
+    source: "repository" | "user"
+  }
+}
+
+export type WorkflowValidation = {
+  ok: boolean
+  issues: Array<WorkflowIssue>
+  warnings: Array<WorkflowIssue>
+  plan?: WorkflowPlan
+}
+
+export type WorkflowStartInput = {
+  spec?: string
+  name?: string
+  inputs?: {
+    [key: string]: unknown
+  }
+  title?: string
+  quiet?: boolean
+}
+
+export type WorkflowStarted = {
+  runID: string
+  title: string
+  plan: WorkflowPlan
+}
+
+export type WorkflowRunList = {
+  runs: Array<TaskInfo>
+}
+
+export type WorkflowNode = {
+  key: string
+  stage: string
+  phase: string
+  item: string
+  status: string
+  sessionID?: string
+  round?: number
+  verified?: boolean
+  error?: string
+  preview?: string
+}
+
+export type WorkflowRunDetail = {
+  task: TaskInfo
+  spec?: string
+  nodes: Array<WorkflowNode>
+  truncated: boolean
+  report?: string
+  results?: unknown
+}
+
+export type WorkflowResumeInput = {
+  spec?: string
+  inputs?: {
+    [key: string]: unknown
+  }
+  retryFailed?: boolean
 }
 
 export type ResearchMeasurement = {
@@ -6908,8 +7549,12 @@ export type SessionV2Info = {
   model?: ModelRef
   cost: number
   unpricedSteps?: number
+  codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -6977,6 +7622,7 @@ export type SessionNextAncillaryUsage = {
     model: ModelRef
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -7252,6 +7898,7 @@ export type SessionNextStepEnded = {
     finish: string
     cost: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens: {
       input: number
       output: number
@@ -7600,6 +8247,7 @@ export type SessionNextCompactionEnded = {
     recent: string
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -7631,6 +8279,7 @@ export type SessionNextCompactionFailed = {
     reason: "auto" | "manual"
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -7777,6 +8426,7 @@ export type ModelV2Info = {
     input?: number
     output: number
   }
+  codium?: ModelCodium
 }
 
 export type ProviderAisdk = {
@@ -8921,6 +9571,7 @@ export type SessionSpend = {
     capUsd?: number
     steps: number
     unpricedSteps: number
+    codiumSteps?: number
     costKind: CostKind
     estimate?: {
       lowUsd: number
@@ -9348,6 +9999,7 @@ export type EventSessionNextAncillaryUsage = {
     model: ModelRef
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -9506,6 +10158,7 @@ export type EventSessionNextStepEnded = {
     finish: string
     cost: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens: {
       input: number
       output: number
@@ -9766,6 +10419,7 @@ export type EventSessionNextCompactionEnded = {
     recent: string
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -9788,6 +10442,7 @@ export type EventSessionNextCompactionFailed = {
     reason: "auto" | "manual"
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -10148,6 +10803,7 @@ export type EventSessionSpend = {
     capUsd?: number
     steps: number
     unpricedSteps: number
+    codiumSteps?: number
     costKind: CostKind
     estimate?: {
       lowUsd: number
@@ -10984,6 +11640,75 @@ export type ConfigTrustApproveResponses = {
 
 export type ConfigTrustApproveResponse = ConfigTrustApproveResponses[keyof ConfigTrustApproveResponses]
 
+export type ConfigPromptTrustGetData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/config/prompt-trust"
+}
+
+export type ConfigPromptTrustGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Forbidden | ForbiddenError
+   */
+  403: EffectHttpApiErrorForbidden | ForbiddenError
+}
+
+export type ConfigPromptTrustGetError = ConfigPromptTrustGetErrors[keyof ConfigPromptTrustGetErrors]
+
+export type ConfigPromptTrustGetResponses = {
+  /**
+   * Held prompt files
+   */
+  200: PromptTrustStatus
+}
+
+export type ConfigPromptTrustGetResponse = ConfigPromptTrustGetResponses[keyof ConfigPromptTrustGetResponses]
+
+export type ConfigPromptTrustApproveData = {
+  body?: PromptTrustApproval
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/config/prompt-trust/approve"
+}
+
+export type ConfigPromptTrustApproveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Forbidden | ForbiddenError
+   */
+  403: EffectHttpApiErrorForbidden | ForbiddenError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+}
+
+export type ConfigPromptTrustApproveError = ConfigPromptTrustApproveErrors[keyof ConfigPromptTrustApproveErrors]
+
+export type ConfigPromptTrustApproveResponses = {
+  /**
+   * Prompt files approved
+   */
+  200: PromptTrustApproved
+}
+
+export type ConfigPromptTrustApproveResponse =
+  ConfigPromptTrustApproveResponses[keyof ConfigPromptTrustApproveResponses]
+
 export type ConfigProvidersData = {
   body?: never
   path?: never
@@ -11362,6 +12087,43 @@ export type ExperimentalSessionBackgroundResponses = {
 export type ExperimentalSessionBackgroundResponse =
   ExperimentalSessionBackgroundResponses[keyof ExperimentalSessionBackgroundResponses]
 
+export type ExperimentalSessionStopData = {
+  body?: {
+    helpers: boolean
+    reason?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/stop"
+}
+
+export type ExperimentalSessionStopErrors = {
+  /**
+   * TaskApiError | InvalidRequestError
+   */
+  400: TaskApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalSessionStopError = ExperimentalSessionStopErrors[keyof ExperimentalSessionStopErrors]
+
+export type ExperimentalSessionStopResponses = {
+  /**
+   * What the stop reached
+   */
+  200: TaskSessionStopResult
+}
+
+export type ExperimentalSessionStopResponse = ExperimentalSessionStopResponses[keyof ExperimentalSessionStopResponses]
+
 export type ExperimentalTaskListData = {
   body?: never
   path: {
@@ -11372,6 +12134,8 @@ export type ExperimentalTaskListData = {
     workspace?: string
     descendants?: "true" | "false"
     limit?: string
+    active?: "true" | "false"
+    shells?: "true" | "false"
   }
   url: "/experimental/session/{sessionID}/tasks"
 }
@@ -11547,6 +12311,192 @@ export type ExperimentalTaskWaitResponses = {
 
 export type ExperimentalTaskWaitResponse = ExperimentalTaskWaitResponses[keyof ExperimentalTaskWaitResponses]
 
+export type ExperimentalTaskBackgroundData = {
+  body?: {
+    taskIDs?: Array<string>
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/tasks/background"
+}
+
+export type ExperimentalTaskBackgroundErrors = {
+  /**
+   * TaskApiError | InvalidRequestError
+   */
+  400: TaskApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalTaskBackgroundError = ExperimentalTaskBackgroundErrors[keyof ExperimentalTaskBackgroundErrors]
+
+export type ExperimentalTaskBackgroundResponses = {
+  /**
+   * Tasks moved to the background
+   */
+  200: TaskPromoteResult
+}
+
+export type ExperimentalTaskBackgroundResponse =
+  ExperimentalTaskBackgroundResponses[keyof ExperimentalTaskBackgroundResponses]
+
+export type ExperimentalTaskResumeData = {
+  body?: {
+    taskIDs: Array<string>
+    text?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/tasks/resume"
+}
+
+export type ExperimentalTaskResumeErrors = {
+  /**
+   * TaskApiError | InvalidRequestError
+   */
+  400: TaskApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalTaskResumeError = ExperimentalTaskResumeErrors[keyof ExperimentalTaskResumeErrors]
+
+export type ExperimentalTaskResumeResponses = {
+  /**
+   * Tasks resumed in the background
+   */
+  200: TaskResumeResult
+}
+
+export type ExperimentalTaskResumeResponse = ExperimentalTaskResumeResponses[keyof ExperimentalTaskResumeResponses]
+
+export type ExperimentalTaskChangesData = {
+  body?: never
+  path: {
+    sessionID: string
+    taskID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    diff?: boolean | "true" | "false"
+  }
+  url: "/experimental/session/{sessionID}/tasks/{taskID}/changes"
+}
+
+export type ExperimentalTaskChangesErrors = {
+  /**
+   * TaskApiError | InvalidRequestError
+   */
+  400: TaskApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalTaskChangesError = ExperimentalTaskChangesErrors[keyof ExperimentalTaskChangesErrors]
+
+export type ExperimentalTaskChangesResponses = {
+  /**
+   * Isolated task changes
+   */
+  200: TaskChangesResult
+}
+
+export type ExperimentalTaskChangesResponse = ExperimentalTaskChangesResponses[keyof ExperimentalTaskChangesResponses]
+
+export type ExperimentalTaskMergeData = {
+  body?: {
+    files?: Array<string>
+    includeStacked?: boolean
+    force?: boolean
+  }
+  path: {
+    sessionID: string
+    taskID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/tasks/{taskID}/merge"
+}
+
+export type ExperimentalTaskMergeErrors = {
+  /**
+   * TaskApiError | InvalidRequestError
+   */
+  400: TaskApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalTaskMergeError = ExperimentalTaskMergeErrors[keyof ExperimentalTaskMergeErrors]
+
+export type ExperimentalTaskMergeResponses = {
+  /**
+   * Merged isolated changes
+   */
+  200: TaskMergeResult
+}
+
+export type ExperimentalTaskMergeResponse = ExperimentalTaskMergeResponses[keyof ExperimentalTaskMergeResponses]
+
+export type ExperimentalTaskDiscardData = {
+  body?: {
+    reason?: string
+  }
+  path: {
+    sessionID: string
+    taskID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/tasks/{taskID}/discard"
+}
+
+export type ExperimentalTaskDiscardErrors = {
+  /**
+   * TaskApiError | InvalidRequestError
+   */
+  400: TaskApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalTaskDiscardError = ExperimentalTaskDiscardErrors[keyof ExperimentalTaskDiscardErrors]
+
+export type ExperimentalTaskDiscardResponses = {
+  /**
+   * Discarded isolated changes
+   */
+  200: TaskDiscardResult
+}
+
+export type ExperimentalTaskDiscardResponse = ExperimentalTaskDiscardResponses[keyof ExperimentalTaskDiscardResponses]
+
 export type ExperimentalTaskBridgeRegisterData = {
   body?: TaskBridgeRegisterInput
   path: {
@@ -11653,6 +12603,214 @@ export type ExperimentalTaskBridgeReceiptResponses = {
 
 export type ExperimentalTaskBridgeReceiptResponse =
   ExperimentalTaskBridgeReceiptResponses[keyof ExperimentalTaskBridgeReceiptResponses]
+
+export type ExperimentalWorkflowSavedData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workflow/saved"
+}
+
+export type ExperimentalWorkflowSavedErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowSavedError = ExperimentalWorkflowSavedErrors[keyof ExperimentalWorkflowSavedErrors]
+
+export type ExperimentalWorkflowSavedResponses = {
+  /**
+   * Workflow.SavedList
+   */
+  200: WorkflowSavedList
+}
+
+export type ExperimentalWorkflowSavedResponse =
+  ExperimentalWorkflowSavedResponses[keyof ExperimentalWorkflowSavedResponses]
+
+export type ExperimentalWorkflowValidateData = {
+  body?: WorkflowValidateInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workflow/validate"
+}
+
+export type ExperimentalWorkflowValidateErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowValidateError =
+  ExperimentalWorkflowValidateErrors[keyof ExperimentalWorkflowValidateErrors]
+
+export type ExperimentalWorkflowValidateResponses = {
+  /**
+   * Workflow.Validation
+   */
+  200: WorkflowValidation
+}
+
+export type ExperimentalWorkflowValidateResponse =
+  ExperimentalWorkflowValidateResponses[keyof ExperimentalWorkflowValidateResponses]
+
+export type ExperimentalWorkflowListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow"
+}
+
+export type ExperimentalWorkflowListErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowListError = ExperimentalWorkflowListErrors[keyof ExperimentalWorkflowListErrors]
+
+export type ExperimentalWorkflowListResponses = {
+  /**
+   * Workflow.RunList
+   */
+  200: WorkflowRunList
+}
+
+export type ExperimentalWorkflowListResponse =
+  ExperimentalWorkflowListResponses[keyof ExperimentalWorkflowListResponses]
+
+export type ExperimentalWorkflowStartData = {
+  body?: WorkflowStartInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow"
+}
+
+export type ExperimentalWorkflowStartErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowStartError = ExperimentalWorkflowStartErrors[keyof ExperimentalWorkflowStartErrors]
+
+export type ExperimentalWorkflowStartResponses = {
+  /**
+   * Workflow.Started
+   */
+  200: WorkflowStarted
+}
+
+export type ExperimentalWorkflowStartResponse =
+  ExperimentalWorkflowStartResponses[keyof ExperimentalWorkflowStartResponses]
+
+export type ExperimentalWorkflowGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow/{runID}"
+}
+
+export type ExperimentalWorkflowGetErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowGetError = ExperimentalWorkflowGetErrors[keyof ExperimentalWorkflowGetErrors]
+
+export type ExperimentalWorkflowGetResponses = {
+  /**
+   * Workflow.RunDetail
+   */
+  200: WorkflowRunDetail
+}
+
+export type ExperimentalWorkflowGetResponse = ExperimentalWorkflowGetResponses[keyof ExperimentalWorkflowGetResponses]
+
+export type ExperimentalWorkflowResumeData = {
+  body?: WorkflowResumeInput
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow/{runID}/resume"
+}
+
+export type ExperimentalWorkflowResumeErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowResumeError = ExperimentalWorkflowResumeErrors[keyof ExperimentalWorkflowResumeErrors]
+
+export type ExperimentalWorkflowResumeResponses = {
+  /**
+   * Workflow.Started
+   */
+  200: WorkflowStarted
+}
+
+export type ExperimentalWorkflowResumeResponse =
+  ExperimentalWorkflowResumeResponses[keyof ExperimentalWorkflowResumeResponses]
 
 export type ExperimentalResourceListData = {
   body?: never
@@ -13903,6 +15061,10 @@ export type MemorySettingsUpdateData = {
       style?: boolean
     }
     modelLearner?: MemoryModelLearner
+    skills?: MemorySkillLearning
+    skillDrafter?: MemorySkillDrafter
+    workflow?: MemoryWorkflowLearning
+    workflowExplore?: boolean
   }
   path?: never
   query?: {
@@ -13933,6 +15095,303 @@ export type MemorySettingsUpdateResponses = {
 }
 
 export type MemorySettingsUpdateResponse = MemorySettingsUpdateResponses[keyof MemorySettingsUpdateResponses]
+
+export type MemorySkillsListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    filter?: "active" | "review" | "archived" | "all"
+  }
+  url: "/memory/skills"
+}
+
+export type MemorySkillsListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemorySkillsListError = MemorySkillsListErrors[keyof MemorySkillsListErrors]
+
+export type MemorySkillsListResponses = {
+  /**
+   * The repository's learned skills, with the skill settings
+   */
+  200: MemorySkillList
+}
+
+export type MemorySkillsListResponse = MemorySkillsListResponses[keyof MemorySkillsListResponses]
+
+export type MemorySkillsForgetData = {
+  body?: never
+  path: {
+    /**
+     * A learned skill's id, such as s4k2q7m
+     */
+    memoryID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/skills/{memoryID}"
+}
+
+export type MemorySkillsForgetErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemorySkillsForgetError = MemorySkillsForgetErrors[keyof MemorySkillsForgetErrors]
+
+export type MemorySkillsForgetResponses = {
+  /**
+   * The skill was forgotten
+   */
+  200: {
+    forgotten: true
+  }
+}
+
+export type MemorySkillsForgetResponse = MemorySkillsForgetResponses[keyof MemorySkillsForgetResponses]
+
+export type MemorySkillsGetData = {
+  body?: never
+  path: {
+    /**
+     * A learned skill's id, such as s4k2q7m
+     */
+    memoryID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/skills/{memoryID}"
+}
+
+export type MemorySkillsGetErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemorySkillsGetError = MemorySkillsGetErrors[keyof MemorySkillsGetErrors]
+
+export type MemorySkillsGetResponses = {
+  /**
+   * One learned skill with its evidence, versions and uses
+   */
+  200: MemorySkillDetail
+}
+
+export type MemorySkillsGetResponse = MemorySkillsGetResponses[keyof MemorySkillsGetResponses]
+
+export type MemorySkillsUpdateData = {
+  body?: {
+    description?: string
+    procedure?: string
+    checks?: Array<string>
+    commands?: Array<string>
+    action?: "approve" | "reject" | "archive" | "restore" | "undo" | "rollback"
+    version?: number
+  }
+  path: {
+    /**
+     * A learned skill's id, such as s4k2q7m
+     */
+    memoryID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/skills/{memoryID}"
+}
+
+export type MemorySkillsUpdateErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemorySkillsUpdateError = MemorySkillsUpdateErrors[keyof MemorySkillsUpdateErrors]
+
+export type MemorySkillsUpdateResponses = {
+  /**
+   * The skill after the change
+   */
+  200: MemorySkillDetail
+}
+
+export type MemorySkillsUpdateResponse = MemorySkillsUpdateResponses[keyof MemorySkillsUpdateResponses]
+
+export type MemorySkillsSharePreviewData = {
+  body?: never
+  path: {
+    /**
+     * A learned skill's id, such as s4k2q7m
+     */
+    memoryID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/skills/{memoryID}/share"
+}
+
+export type MemorySkillsSharePreviewErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemorySkillsSharePreviewError = MemorySkillsSharePreviewErrors[keyof MemorySkillsSharePreviewErrors]
+
+export type MemorySkillsSharePreviewResponses = {
+  /**
+   * The file sharing would write
+   */
+  200: MemorySkillSharePreview
+}
+
+export type MemorySkillsSharePreviewResponse =
+  MemorySkillsSharePreviewResponses[keyof MemorySkillsSharePreviewResponses]
+
+export type MemorySkillsShareData = {
+  body?: {
+    force?: boolean
+  }
+  path: {
+    /**
+     * A learned skill's id, such as s4k2q7m
+     */
+    memoryID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/skills/{memoryID}/share"
+}
+
+export type MemorySkillsShareErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemorySkillsShareError = MemorySkillsShareErrors[keyof MemorySkillsShareErrors]
+
+export type MemorySkillsShareResponses = {
+  /**
+   * The file written for the team
+   */
+  200: MemorySkillShared
+}
+
+export type MemorySkillsShareResponse = MemorySkillsShareResponses[keyof MemorySkillsShareResponses]
+
+export type MemoryWorkflowResetData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    tier?: "light" | "standard" | "thorough"
+  }
+  url: "/memory/workflow"
+}
+
+export type MemoryWorkflowResetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryWorkflowResetError = MemoryWorkflowResetErrors[keyof MemoryWorkflowResetErrors]
+
+export type MemoryWorkflowResetResponses = {
+  /**
+   * How many runs were forgotten
+   */
+  200: {
+    removed: number
+  }
+}
+
+export type MemoryWorkflowResetResponse = MemoryWorkflowResetResponses[keyof MemoryWorkflowResetResponses]
+
+export type MemoryWorkflowGetData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/workflow"
+}
+
+export type MemoryWorkflowGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryWorkflowGetError = MemoryWorkflowGetErrors[keyof MemoryWorkflowGetErrors]
+
+export type MemoryWorkflowGetResponses = {
+  /**
+   * What the build agent's runs here passed with and cost, by size
+   */
+  200: MemoryWorkflowInsights
+}
+
+export type MemoryWorkflowGetResponse = MemoryWorkflowGetResponses[keyof MemoryWorkflowGetResponses]
 
 export type MemoryModelGetData = {
   body?: never

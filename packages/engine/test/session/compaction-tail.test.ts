@@ -189,3 +189,52 @@ describe("compaction tail selection", () => {
     }),
   )
 })
+
+// A fork's history starts with its parent's, inherited up to the fork point. Its own messages cannot point back into
+// the parent's, so the tail a summary keeps starts at its first own message (the floor) or after it (5.E.3).
+describe("compaction tail floor", () => {
+  const prompt = (index: number): SessionV1.WithParts => {
+    const id = MessageID.make(`msg_floor_${String(index).padStart(2, "0")}`)
+    return {
+      info: {
+        id,
+        sessionID,
+        role: "user",
+        time: { created: index },
+        agent: "build",
+        model: { providerID: model.providerID, modelID: model.id },
+      },
+      parts: [{ id: PartID.make(`prt_floor_${index}`), messageID: id, sessionID, type: "text", text: "y".repeat(400) }],
+    }
+  }
+  const reply = (index: number): SessionV1.WithParts => {
+    const item = message(index)
+    const id = MessageID.make(`msg_floor_${String(index).padStart(2, "0")}`)
+    return { info: { ...item.info, id }, parts: item.parts.map((part) => ({ ...part, messageID: id })) }
+  }
+  // Two inherited turns of the parent, then the fork's own two: its assignment (the floor) and a follow-up.
+  const messages = [prompt(0), reply(1), prompt(2), reply(3), prompt(4), reply(5), reply(6), prompt(7), reply(8)]
+  const floor = messages[4]!.info.id
+  const cfg = (preserve: number) => ({ compaction: { tail_turns: 3, preserve_recent_tokens: preserve } })
+
+  it.effect("keeps the parent's turns out of the tail", () =>
+    Effect.gen(function* () {
+      const open = yield* SessionCompaction.select({ messages, cfg: cfg(100_000), model })
+      expect(open.tail_start_id).toBe(messages[2]!.info.id)
+      const floored = yield* SessionCompaction.select({ messages, cfg: cfg(100_000), model, floor })
+      expect(floored.tail_start_id).toBe(floor)
+      // Everything before the floor, the parent's history included, is summarized.
+      expect(floored.head).toEqual(messages.slice(0, 4))
+    }),
+  )
+
+  it.effect("splits within the fork's own turns, and keeps no tail when none of them fits", () =>
+    Effect.gen(function* () {
+      const last = yield* estimate({ messages: messages.slice(8), model })
+      const split = yield* SessionCompaction.select({ messages, cfg: cfg(last), model, floor })
+      expect(split.tail_start_id).toBe(messages[8]!.info.id)
+      const none = yield* SessionCompaction.select({ messages, cfg: cfg(1), model, floor })
+      expect(none).toEqual({ head: messages, tail_start_id: undefined })
+    }),
+  )
+})

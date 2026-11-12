@@ -505,3 +505,12 @@ describe("exact effort evidence", () => {
     ).toBe("xhigh")
   })
 })
+
+test("historical Codium outcomes cannot win a cheapest-model recommendation", () => {
+  const codium = Array.from({ length: 4 }, () =>
+    outcome({ provider: "vector-plan", model: "vector-flash", costUsd: 0, costPriced: true }),
+  )
+  expect(recommendModel(codium, "frontend")).toBeUndefined()
+  const own = Array.from({ length: 4 }, () => outcome({ provider: "anthropic", model: "sonnet", costUsd: 0.12 }))
+  expect(recommendModel([...codium, ...own], "frontend")?.provider).toBe("anthropic")
+})

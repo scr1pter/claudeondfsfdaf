@@ -23,7 +23,7 @@
  */
 
 /* tokens */
-:is(.vector-bg-tasks, .vector-task-chip, .vector-bg-tasks-legend) {
+:is(.vector-bg-tasks, .vector-task-chip, .vector-task-chip-actions, .vector-bg-tasks-legend) {
   /* Surfaces: the reference's three steps (pane, card, phase block) on
      Vector's own ramp, the same surfaces as the main area, cards and raised
      controls around it. Purple is kept for running work only: its squares,
@@ -74,7 +74,8 @@
 }
 
 /* Light: Vector's own light ramp; purple only for running work. */
-:root[data-vector-theme="light"] :is(.vector-bg-tasks, .vector-task-chip, .vector-bg-tasks-legend) {
+:root[data-vector-theme="light"]
+  :is(.vector-bg-tasks, .vector-task-chip, .vector-task-chip-actions, .vector-bg-tasks-legend) {
   --bgt-pane: var(--vx-canvas);
   --bgt-card: var(--vx-surface);
   --bgt-card-hover: color-mix(in srgb, var(--vx-text) 3%, var(--vx-surface));
@@ -93,7 +94,8 @@
 /* Nothing else in Vector changes type size with density (the session title,
    header tools and transcript keep theirs), so compact only tightens spacing
    and the text stays on the chat's scale. */
-html[data-vector-density="compact"] :is(.vector-bg-tasks, .vector-task-chip, .vector-bg-tasks-legend) {
+html[data-vector-density="compact"]
+  :is(.vector-bg-tasks, .vector-task-chip, .vector-task-chip-actions, .vector-bg-tasks-legend) {
   --bgt-card-pad: 12px;
   --bgt-gap: 6px;
   --bgt-phase-pad: 8px 10px 10px;
@@ -1208,6 +1210,7 @@ html[data-vector-larger-targets="true"] .vector-bg-tasks-card-toggle {
 }
 
 .vector-bg-tasks-total,
+.vector-bg-tasks-limits,
 .vector-bg-tasks > .vector-bg-tasks-notice {
   margin: 0;
   padding: 0 16px 12px;
@@ -1242,7 +1245,14 @@ html[data-vector-larger-targets="true"] .vector-bg-tasks-card-toggle {
   gap: 2px 8px;
 }
 
-:is(.vector-bg-tasks-actions, .vector-bg-tasks-message, .vector-bg-tasks-dependencies) button {
+:is(
+    .vector-bg-tasks-actions,
+    .vector-bg-tasks-message,
+    .vector-bg-tasks-dependencies,
+    .vector-bg-tasks-waiting,
+    .vector-bg-tasks-conflicts
+  )
+  button {
   min-height: 30px;
   padding: 4px 2px;
   color: var(--bgt-text-1);
@@ -1253,11 +1263,25 @@ html[data-vector-larger-targets="true"] .vector-bg-tasks-card-toggle {
   border-radius: 4px;
 }
 
-:is(.vector-bg-tasks-actions, .vector-bg-tasks-message, .vector-bg-tasks-dependencies) button:hover:not(:disabled) {
+:is(
+    .vector-bg-tasks-actions,
+    .vector-bg-tasks-message,
+    .vector-bg-tasks-dependencies,
+    .vector-bg-tasks-waiting,
+    .vector-bg-tasks-conflicts
+  )
+  button:hover:not(:disabled) {
   background: var(--bgt-well-hover);
 }
 
-:is(.vector-bg-tasks-actions, .vector-bg-tasks-message, .vector-bg-tasks-dependencies) button:disabled {
+:is(
+    .vector-bg-tasks-actions,
+    .vector-bg-tasks-message,
+    .vector-bg-tasks-dependencies,
+    .vector-bg-tasks-waiting,
+    .vector-bg-tasks-conflicts
+  )
+  button:disabled {
   color: var(--bgt-text-3);
   cursor: default;
   text-decoration: none;
@@ -1316,14 +1340,267 @@ html[data-vector-larger-targets="true"] .vector-bg-tasks-card-toggle {
   color: var(--bgt-fail-text);
 }
 
-:is(.vector-bg-tasks-actions, .vector-bg-tasks-message, .vector-bg-tasks-dependencies)
+/* 1.99.113 rows: badges, the queued and waiting lines, the worktree, structured results and messages. */
+.vector-bg-tasks-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 2px 0 4px;
+}
+
+.vector-bg-tasks-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--bgt-well);
+  color: var(--bgt-text-2);
+  font-size: 11px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vector-bg-tasks-badge[data-kind="fork"] {
+  background: var(--bgt-well-run);
+  color: var(--bgt-run-text);
+}
+
+.vector-bg-tasks-badge[data-kind="json"][data-state="valid"] {
+  background: color-mix(in srgb, var(--vx-green) 16%, transparent);
+  color: var(--vx-green);
+}
+
+.vector-bg-tasks-badge[data-kind="json"][data-state="invalid"] {
+  background: color-mix(in srgb, var(--bgt-fail) 16%, transparent);
+  color: var(--bgt-fail-text);
+}
+
+.vector-bg-tasks-queued,
+.vector-bg-tasks-waiting,
+.vector-bg-tasks-conflicts,
+.vector-bg-tasks-promote-note,
+.vector-bg-tasks-worktree-label {
+  margin: 2px 0;
+}
+
+.vector-bg-tasks-waiting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  color: var(--bgt-wait-text);
+}
+
+.vector-bg-tasks-waiting-summary {
+  color: var(--bgt-text-2);
+}
+
+.vector-bg-tasks-promote-note {
+  color: var(--bgt-text-3);
+  font-size: var(--bgt-fs-table);
+}
+
+.vector-bg-tasks-card-actions {
+  margin-top: 6px;
+}
+
+.vector-bg-tasks-worktree {
+  margin: 4px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bgt-well);
+}
+
+.vector-bg-tasks-worktree-label {
+  color: var(--bgt-text-1);
+}
+
+.vector-bg-tasks-worktree [data-armed] {
+  color: var(--bgt-fail-text);
+}
+
+.vector-bg-tasks-conflicts {
+  color: var(--bgt-fail-text);
+}
+
+.vector-bg-tasks-files {
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vector-bg-tasks-file-stat {
+  color: var(--bgt-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.vector-bg-tasks-inspect pre[data-component="task-patch"],
+.vector-bg-tasks-inspect pre[data-component="task-structured"] {
+  font-family: var(--vx-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.vector-bg-tasks-structured > p,
+.vector-bg-tasks-messages > p {
+  color: var(--bgt-text-1);
+}
+
+.vector-bg-tasks-messages ol {
+  list-style: none;
+  padding-left: 0;
+}
+
+.vector-bg-tasks-messages li {
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+
+.vector-bg-tasks-sender {
+  color: var(--bgt-text-1);
+  font-weight: 600;
+}
+
+/* Interrupted helpers and background commands: compact rows under their section labels. */
+.vector-bg-tasks-interrupted-list,
+.vector-bg-tasks-shell-list {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vector-bg-tasks-interrupted-list > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--bgt-card);
+}
+
+.vector-bg-tasks-interrupted-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bgt-text-1);
+  font-size: var(--bgt-fs-meta);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vector-bg-tasks-interrupted-name:disabled {
+  cursor: default;
+}
+
+.vector-bg-tasks-shell {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--bgt-card);
+}
+
+.vector-bg-tasks-shell-command {
+  margin: 0;
+  overflow: hidden;
+  color: var(--bgt-text-1);
+  font-family: var(--vx-mono, ui-monospace, monospace);
+  font-size: var(--bgt-fs-table);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A workflow stage: done, failed, skipped, running and waiting shares of its items. */
+.vector-bg-tasks-stage-bar {
+  display: flex;
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 6px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bgt-well);
+}
+
+.vector-bg-tasks-stage-bar > [data-part="done"] {
+  background: var(--bgt-done);
+}
+
+.vector-bg-tasks-stage-bar > [data-part="failed"] {
+  background: var(--bgt-fail);
+}
+
+.vector-bg-tasks-stage-bar > [data-part="skipped"] {
+  background: var(--bgt-stop);
+}
+
+.vector-bg-tasks-stage-bar > [data-part="running"] {
+  background: var(--bgt-run);
+}
+
+.vector-bg-tasks-stage-bar > [data-part="waiting"] {
+  background: var(--bgt-wait);
+}
+
+.vector-bg-tasks-stage-agents {
+  color: var(--bgt-text-3);
+  font-weight: 400;
+}
+
+/* Move to background beside the chat chip: its own control, never inside the chip's button. */
+.vector-task-chip-actions {
+  max-width: 630px;
+  margin: 0 0 2px;
+  padding: 0 var(--bgt-card-pad);
+  color: var(--bgt-text-3);
+  font-family: var(--font-family-sans);
+  font-size: var(--bgt-fs-table);
+  line-height: var(--bgt-lh);
+}
+
+.vector-task-chip-promote {
+  min-height: 28px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--bgt-text-1);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.vector-task-chip-promote:hover:not(:disabled) {
+  background: var(--bgt-well-hover);
+}
+
+.vector-task-chip-promote:focus-visible,
+.vector-bg-tasks-interrupted-name:focus-visible {
+  outline: 2px solid var(--bgt-ring);
+  outline-offset: 2px;
+}
+
+:is(
+    .vector-bg-tasks-actions,
+    .vector-bg-tasks-message,
+    .vector-bg-tasks-dependencies,
+    .vector-bg-tasks-waiting,
+    .vector-bg-tasks-conflicts
+  )
   :is(button, textarea):focus-visible {
   outline: 2px solid var(--bgt-ring);
   outline-offset: 2px;
 }
 
 @media (pointer: coarse) {
-  :is(.vector-bg-tasks-actions, .vector-bg-tasks-message, .vector-bg-tasks-dependencies) button {
+  :is(
+      .vector-bg-tasks-actions,
+      .vector-bg-tasks-message,
+      .vector-bg-tasks-dependencies,
+      .vector-bg-tasks-waiting,
+      .vector-bg-tasks-conflicts
+    )
+    button {
     min-height: 44px;
   }
 }

@@ -683,6 +683,81 @@ describe("session.llm-native.request", () => {
     }),
   )
 
+  // 5.E.3 Cache markers: the native request reads no message-level markers, so a fork's boundary becomes a cache hint on
+  // its last inherited message, and a request whose prefix is never sent again asks for no breakpoints.
+  it.effect("a fork's boundary takes a breakpoint on the native path, and cache: false turns them off", () =>
+    Effect.gen(function* () {
+      const anthropic: Provider.Model = {
+        ...baseModel,
+        id: ModelV2.ID.make("claude-sonnet"),
+        providerID: ProviderV2.ID.make("anthropic"),
+        api: { id: "claude-sonnet", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+      }
+      const provider: Provider.Info = {
+        ...providerInfo,
+        id: ProviderV2.ID.make("anthropic"),
+        name: "Anthropic",
+        env: ["ANTHROPIC_API_KEY"],
+        options: { apiKey: "test-anthropic-key" },
+      }
+      const requests: Parameters<LLMClientShape["stream"]>[0][] = []
+      const llmClient = {
+        prepare: () => Effect.die("unused"),
+        stream: (request: Parameters<LLMClientShape["stream"]>[0]) => {
+          requests.push(request)
+          return Stream.fromIterable([LLMEvent.finish({ reason: "stop" })])
+        },
+        generate: () => Effect.die("unused"),
+      } as unknown as LLMClientShape
+      const messages: ModelMessage[] = [
+        { role: "system", content: "You are Vector." },
+        { role: "user", content: "Fix the parser." },
+        // An empty message the transform drops: the boundary still lands on the inherited tool result.
+        { role: "assistant", content: [] },
+        {
+          role: "assistant",
+          content: [{ type: "tool-call", toolCallId: "call-1", toolName: "task", input: { fork: true } }],
+        },
+        {
+          role: "tool",
+          content: [
+            { type: "tool-result", toolCallId: "call-1", toolName: "task", output: { type: "text", value: "Forked." } },
+          ],
+        },
+        { role: "user", content: "<fork_assignment>Fix the printer.</fork_assignment>" },
+      ]
+      const send = (extra: { boundary?: number; cache?: boolean }) =>
+        Effect.gen(function* () {
+          const native = LLMNativeRuntime.stream({
+            model: anthropic,
+            provider,
+            auth: undefined,
+            llmClient,
+            messages,
+            tools: {},
+            headers: {},
+            abort: new AbortController().signal,
+            ...extra,
+          })
+          if (native.type === "unsupported") throw new Error(native.reason)
+          yield* Stream.runDrain(native.stream)
+          return requests.at(-1)!
+        })
+      const cached = (request: Parameters<LLMClientShape["stream"]>[0]) =>
+        request.messages.flatMap((message, index) =>
+          message.content.flatMap((part) => ("cache" in part && part.cache ? [[index, part.type] as const] : [])),
+        )
+
+      const fork = yield* send({ boundary: 4 })
+      expect(fork.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "user"])
+      expect(cached(fork)).toEqual([[2, "tool-result"]])
+      expect(fork.cache).toBeUndefined()
+      // Without a boundary nothing is marked by hand; the request's own policy places the rest.
+      expect(cached(yield* send({}))).toEqual([])
+      expect((yield* send({ cache: false })).cache).toBe("none")
+    }),
+  )
+
   it.effect("compiles through the native OpenAI Responses route", () =>
     expectOpenAIResponsesRequest({
       history: [storedSession.user("hello")],

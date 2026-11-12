@@ -18,7 +18,8 @@ export type Side = "RIGHT" | "LEFT"
 export type Risk = "low" | "medium" | "high"
 export type Trust = "trusted" | "untrusted"
 export type Trigger = "auto" | "command" | "local" | "desktop"
-export type CostKind = "free" | "priced" | "plan" | "local" | "unknown"
+// "codium" is billed to the account's Vector Codium plan and never priced locally.
+export type CostKind = "free" | "priced" | "plan" | "local" | "unknown" | "codium"
 
 export interface ModelFinding {
   path: string
@@ -287,6 +288,7 @@ export interface ReviewState {
   head?: string
   base?: string
   reviews: number
+  codiumReviews?: number
   costUsd: number
   tokens: [input: number, output: number]
   month?: { key: string; costUsd: number } // key is "2026-09"
@@ -306,6 +308,11 @@ export interface SkippedFile {
 
 export interface ReviewCost {
   costUsd: number
+  // Codium activity can accompany any own-provider cost kind.
+  codium?: boolean
+  // Set only by fresh per-message reducers that positively attribute all reported tokens to own usage.
+  // Cached or serialized aggregate figures cannot grant this proof.
+  tokensOwnOnly?: boolean
   usageMissing?: boolean
   // A reply stopped or failed before it reported usage, so costUsd is only what the rest of the review cost.
   partial?: boolean
@@ -350,6 +357,8 @@ export interface ReviewOutcome {
 }
 
 export interface ReviewPass {
+  usageMissing?: boolean
+  costKind?: CostKind
   name: "review" | "security" | "verify" | "judge" | "lens" | "repro" // as ReviewOutcome.specialists[].name
   lens?: ReviewLens // as ReviewOutcome.specialists[].lens
   model: string // "provider/model"

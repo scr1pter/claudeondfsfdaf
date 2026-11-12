@@ -15,6 +15,7 @@ import { createStore } from "solid-js/store"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { DebugBar } from "@/components/debug-bar"
 import { Titlebar } from "@/components/titlebar"
+import { PromptTrustBanner } from "@/components/prompt-trust-banner"
 import { useCommand } from "@/context/command"
 import { useLayout } from "@/context/layout"
 import { usePlanMode } from "@/context/plan-mode"
@@ -32,6 +33,8 @@ import { samePolledRecords, sameWorkspaceRevisions } from "@/utils/workspace-rev
 import { Persist, persisted } from "@/utils/persist"
 import { modelDisplayName } from "@/utils/provider-brand"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { onCodiumChange, codiumTurnEnded } from "@/vector-account"
+import { observeCodiumTurns } from "@/utils/codium-turn"
 import { decodeRouteSegment, projectPathFromWorkspaceRoute, sessionIDFromRouteValue } from "@/utils/project-route"
 import { taskScopeId, taskScopeSearch, type TaskScope } from "@/utils/task-scope"
 import { WORKSPACE_FILE_SAVED_EVENT, workspaceFileSavedDetail } from "@/utils/workspace-file-saved"
@@ -459,7 +462,12 @@ type SwarmOrchestratorApi = {
     objective: string
     primaryProvider: string
     primaryModel: string
-    modelPool?: { provider: string; model: string; label?: string }[]
+    modelPool?: {
+      provider: string
+      model: string
+      label?: string
+      codium?: { locked?: boolean; manualOnly?: boolean; auto?: boolean }
+    }[]
     strategy?: "economy" | "balanced" | "quality"
     maxAgents?: number
     maxConcurrency?: number
@@ -746,16 +754,26 @@ export default function NewLayout(props: ParentProps) {
         providerName: provider.name || provider.id,
         modelID: model.id,
         modelName: modelDisplayName({ ...model, provider }) || model.id,
+        // What a swarm needs to keep Codium Auto, locked and manual-only entries out of the models it adds itself.
+        codium: model.codium && {
+          locked: ModelPlanStatus.isLocked(model),
+          manualOnly: model.codium.manualOnly === true,
+          auto: ModelPlanStatus.isAuto(model),
+        },
       })),
     ),
   )
   createEffect(() => {
     const options = parallelModelOptions()
     if (options.length === 0) return
+    // A recent model the plan no longer includes is not picked again by itself: every request to it would be refused.
     const recent = byokModels.recent
       .list()
       .find((item) =>
-        options.some((option) => option.providerID === item.providerID && option.modelID === item.modelID),
+        options.some(
+          (option) =>
+            option.providerID === item.providerID && option.modelID === item.modelID && !option.codium?.locked,
+        ),
       )
     // Without a recent or current choice, the first connected model that is not Codium: Codium spends the account's
     // credits, so a swarm only runs on it when the person picks it.
@@ -859,6 +877,15 @@ export default function NewLayout(props: ParentProps) {
   }
 
   onCleanup(() => stopNavigationResize?.())
+  // A purchase, an upgrade or a plan change can change which Codium models the plan includes.
+  onCleanup(
+    onCodiumChange(
+      () =>
+        void serverSync()
+          .refreshProviders()
+          .catch(() => undefined),
+    ),
+  )
 
   // The Browser Agent's live page is a native Electron WebContentsView that
   // composites on top of all DOM, so it paints over any modal dialog. Hide it
@@ -2268,6 +2295,7 @@ export default function NewLayout(props: ParentProps) {
           provider: option.providerID,
           model: option.modelID,
           label: `${option.providerName} ${option.modelName}`,
+          ...(option.codium ? { codium: option.codium } : {}),
         })),
         strategy: swarmStrategy(),
         maxAgents: swarmMaxAgents(),
@@ -3156,7 +3184,11 @@ export default function NewLayout(props: ParentProps) {
         .filter((info): info is NonNullable<typeof info> => Boolean(info)),
     )
   })
-  const stopSessionOutcomes = serverSDK().event.listen((event) => sessionEconomics.handle(event))
+  const observeCodium = observeCodiumTurns(codiumTurnEnded)
+  const stopSessionOutcomes = serverSDK().event.listen((event) => {
+    sessionEconomics.handle(event)
+    observeCodium(event.details)
+  })
   onCleanup(() => {
     stopSessionOutcomes()
     sessionEconomics.dispose()
@@ -3997,6 +4029,10 @@ export default function NewLayout(props: ParentProps) {
     >
       <div data-vector-pointer-glow aria-hidden="true" />
       <Titlebar />
+      <PromptTrustBanner
+        client={() => (activeProjectPath() ? serverSDK().createClient({ directory: activeProjectPath() }) : undefined)}
+        listen={(fn) => serverSDK().event.listen(fn)}
+      />
       <main
         data-vector-main-stage
         class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict"

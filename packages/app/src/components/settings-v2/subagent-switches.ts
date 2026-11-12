@@ -92,16 +92,56 @@ export const runningWork = (
   return { sessions: busy.length - helpers.length, helpers: [...new Set(helpers)] }
 }
 
-export const stopWorkDescription = (work: { sessions: number; helpers: readonly string[] }) => {
+/**
+ * What a save would stop. `commands` counts running background commands: they run in conversations that are idle, so
+ * the session statuses miss them, and the reload stops them as it stops a turn (5.H).
+ */
+export type RunningWork = { sessions: number; helpers: readonly string[]; commands?: number }
+
+/** How many conversations a save asks for their background commands, the most recently updated first. */
+export const COMMAND_ROOTS = 20
+
+/**
+ * The conversations whose background commands a save asks about: the root sessions this app has seen a status for,
+ * since only the main agent of a conversation starts one, and it does so in a turn. Subagents and Vector's helpers
+ * start none.
+ */
+export const commandRoots = <S extends { id: string; directory: string; parentID?: string; time: { updated: number } }>(
+  status: Record<string, unknown>,
+  get: (sessionID: string) => S | undefined,
+  internal: (session: S) => boolean,
+) =>
+  Object.keys(status)
+    .flatMap((sessionID) => {
+      const session = get(sessionID)
+      return session && !session.parentID && !internal(session) ? [session] : []
+    })
+    .sort((left, right) => right.time.updated - left.time.updated)
+    .slice(0, COMMAND_ROOTS)
+
+export const nothingRunning = (work: RunningWork) =>
+  work.sessions === 0 && work.helpers.length === 0 && (work.commands ?? 0) === 0
+
+export const stopWorkDescription = (work: RunningWork) => {
+  const commands = work.commands ?? 0
   const sessions =
     work.sessions === 1
       ? "1 session is working right now."
       : `${work.sessions} sessions are working right now, subagents included.`
   const helpers = `${work.helpers.length === 1 ? "One of Vector's helpers is" : "Vector's helpers are"} working ${work.sessions > 0 ? "too" : "right now"} (${work.helpers.join(", ")}).`
-  const stops = work.sessions + work.helpers.length === 1 ? "it" : "all of them"
+  const running = commands === 1 ? "1 background command is running." : `${commands} background commands are running.`
+  // A save reloads each folder once its turns and subagents end, and that reload stops its background commands
+  // (global-lifecycle.ts): work in progress keeps the current setting, and nothing stops it.
+  const working = work.sessions + work.helpers.length > 0
+  const outcome = !working
+    ? `Changing this setting stops ${commands === 1 ? "it" : "them"}, and the new setting applies from your next message.`
+    : commands > 0
+      ? "Changing this setting stops the background commands. Other work keeps the current setting until it ends; the new setting applies after that."
+      : "That work keeps the current setting until it ends; the new setting applies after that."
   return [
     ...(work.sessions > 0 ? [sessions] : []),
     ...(work.helpers.length > 0 ? [helpers] : []),
-    `Changing this setting stops ${stops}, and the new setting applies from your next message.`,
+    ...(commands > 0 ? [running] : []),
+    outcome,
   ].join(" ")
 }

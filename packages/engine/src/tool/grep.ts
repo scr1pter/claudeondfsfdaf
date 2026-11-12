@@ -38,6 +38,14 @@ export const GrepTool = Tool.define(
             throw new Error("pattern is required")
           }
 
+          const ins = yield* InstanceState.context
+          const requested = path.isAbsolute(params.path ?? ins.directory)
+            ? (params.path ?? ins.directory)
+            : path.join(ins.directory, params.path ?? ".")
+          // A guest family may not search a private task folder or a folder holding one, nor learn through a stat or an
+          // ask whether one exists.
+          if (ctx.assertReadable) yield* ctx.assertReadable({ files: [requested], recursive: true })
+
           yield* ctx.ask({
             permission: "grep",
             patterns: [params.pattern],
@@ -49,10 +57,6 @@ export const GrepTool = Tool.define(
             },
           })
 
-          const ins = yield* InstanceState.context
-          const requested = path.isAbsolute(params.path ?? ins.directory)
-            ? (params.path ?? ins.directory)
-            : path.join(ins.directory, params.path ?? ".")
           const requestedInfo = yield* fs.stat(requested).pipe(Effect.catch(() => Effect.succeed(undefined)))
           yield* assertExternalDirectoryEffect(ctx, requested, {
             bypass: false,

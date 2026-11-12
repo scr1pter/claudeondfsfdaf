@@ -12,6 +12,7 @@ import {
   freeModelChoices,
   type FreeModelChoice,
 } from "@vectordevai/core/free-model-choice"
+import open from "open"
 import { useSDK } from "../context/sdk"
 import { useToast } from "../ui/toast"
 import { DialogConfirm } from "../ui/dialog-confirm"
@@ -62,7 +63,7 @@ export function DialogModel(props: { providerID?: string }) {
             key: item,
             value: { providerID: provider.id, modelID: model.id },
             title,
-            description: provider.name,
+            description: modelDescription(provider.id, model.codium, provider.name),
             category,
             onSelect: () => {
               void onSelect(provider.id, model.id)
@@ -92,6 +93,7 @@ export function DialogModel(props: { providerID?: string }) {
           filter(([_, info]) => (props.providerID ? info.providerID === props.providerID : true)),
           map(([model, info]) => {
             const title = freeModelName({ id: model, name: info.name ?? model })
+            const codium = provider.id === ModelPlanStatus.PROVIDER_ID
             return {
               id: model,
               name: title,
@@ -99,13 +101,18 @@ export function DialogModel(props: { providerID?: string }) {
               value: { providerID: provider.id, modelID: model },
               title,
               releaseDate: info.release_date,
+              auto: codium && ModelPlanStatus.isAuto({ id: model, codium: info.codium }),
               description: info.freeModel
                 ? [freeModelSource(info), freeModelTrainingLabel(info), freeModelRegionLabel(info)]
                     .filter(Boolean)
                     .join(" · ")
-                : favorites.some((item) => item.providerID === provider.id && item.modelID === model)
-                  ? "(Favorite)"
-                  : undefined,
+                : modelDescription(
+                    provider.id,
+                    info.codium,
+                    favorites.some((item) => item.providerID === provider.id && item.modelID === model)
+                      ? "(Favorite)"
+                      : undefined,
+                  ),
               category: info.freeModel ? FREE_MODELS_TITLE : connected() ? provider.name : undefined,
               // What search reads (searchModelOptions): the catalogue name and, once a provider
               // is connected, its name. Never the heading.
@@ -175,6 +182,17 @@ export function DialogModel(props: { providerID?: string }) {
     const info = sync.data.provider.find((item) => item.id === providerID)?.models[modelID]
     if (
       info &&
+      !(await confirmCodiumChoice({
+        providerID,
+        model: { id: modelID, codium: info.codium },
+        ask: (title, message) =>
+          DialogConfirm.show(dialog, title, message, "Change plan").then((value) => value === true),
+        open: (url) => void open(url).catch(() => undefined),
+      }))
+    )
+      return
+    if (
+      info &&
       !(await confirmFreeModelChoice({
         model: info,
         freeModels: sdk.client.provider.freeModels,
@@ -242,15 +260,41 @@ export function searchModelOptions<
   )
 }
 
-export function sortModelOptions<T extends { footer?: string; releaseDate: string | number; title: string }>(
-  options: T[],
-  _newestFirst: boolean,
-  providerID?: string,
-) {
-  // Vector Codium keeps its catalog's order, led by the model it recommends: its models list no release date, so
-  // sorting by date and title would put Claude Haiku 5.5, the model that uses credits fastest, first.
-  if (providerID === ModelPlanStatus.PROVIDER_ID) return options
+export function sortModelOptions<
+  T extends { footer?: string; releaseDate: string | number; title: string; auto?: boolean },
+>(options: T[], _newestFirst: boolean, providerID?: string) {
+  // Vector Codium keeps its catalog's order with Codium Auto pinned first: its models list no release date, so sorting
+  // by date and title would put Claude Haiku 5.5, the model that uses the plan fastest, first.
+  if (providerID === ModelPlanStatus.PROVIDER_ID)
+    return [...options.filter((option) => option.auto), ...options.filter((option) => !option.auto)]
   return sortBy(options, [(option) => option.releaseDate, "desc"], (option) => option.title)
+}
+
+/**
+ * The line under a model's name in the list. A locked or preview Codium entry shows its badge ("Codium · Max",
+ * "Preview · Ultra") in every section, Favorites and Recent included, so a model the plan no longer includes never
+ * reads as one it does; any other row keeps `fallback` (its provider's name, or "(Favorite)").
+ */
+export function modelDescription(providerID: string, codium: ModelPlanStatus.Listing | undefined, fallback?: string) {
+  if (providerID !== ModelPlanStatus.PROVIDER_ID) return fallback
+  return ModelPlanStatus.listingBadge(codium)?.label ?? fallback
+}
+
+/**
+ * Whether a Codium model may be chosen. One the account's plan does not include is never chosen, since every request to
+ * it would be refused: the person is asked whether to change plan, which opens their account page (label plan §10).
+ */
+export async function confirmCodiumChoice(input: {
+  providerID: string
+  model: { id: string; codium?: ModelPlanStatus.Listing }
+  ask: (title: string, message: string) => Promise<boolean>
+  open: (url: string) => void
+}) {
+  if (input.providerID !== ModelPlanStatus.PROVIDER_ID || !ModelPlanStatus.isLocked(input.model)) return true
+  const badge = ModelPlanStatus.listingBadge(input.model.codium)
+  if (await input.ask(badge?.label ?? "Vector Codium", `${badge?.title ?? "Not included in your plan"}. Change plan?`))
+    input.open(ModelPlanStatus.MANAGE_URL)
+  return false
 }
 
 /**

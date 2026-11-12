@@ -6,6 +6,7 @@ import {
   aggregateStatus,
   buildTaskCards,
   childRecord,
+  childFacts,
   countAgents,
   elapsedMs,
   formatAgentCount,
@@ -14,13 +15,20 @@ import {
   freshestSession,
   idleLiveSessions,
   isDismissed,
+  isInterrupted,
+  isolationLabel,
   kindLabel,
   liveAgentCount,
   liveBackgroundSessions,
   locateTaskPart,
+  modelEffortLabel,
   modelShortName,
   phaseName,
+  queuedLabel,
   readLifecycle,
+  patchTruncatedText,
+  resultChip,
+  stageNotes,
   resolveAgent,
   runningAgentCount,
   statusSummary,
@@ -30,6 +38,7 @@ import {
   subagentTitle,
   taskPartLocations,
   waitingAgentCount,
+  waitingLabel,
   type TaskSource,
 } from "./subagent-model"
 
@@ -153,6 +162,10 @@ function child(id: string, extra: Partial<Session> = {}): Session {
     time: { created: 50, updated: 60 },
     ...extra,
   }
+}
+
+function ownUsage(input: number) {
+  return { tokensOwnOnly: true, tokens: { input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
 }
 
 function usage(total: number, toolUses = 3) {
@@ -450,6 +463,8 @@ describe("buildTaskCards", () => {
         }),
       }),
     ])
+    data.sessions.ses_c1 = child("ses_c1", ownUsage(12_000))
+    data.sessions.ses_c2 = child("ses_c2", ownUsage(216_600))
     const cards = buildTaskCards(source(data))
     expect(cards).toHaveLength(1)
     const card = cards[0]!
@@ -650,6 +665,7 @@ describe("buildTaskCards", () => {
   test("children with no part in the loaded history still appear, grouped by their launching message", () => {
     const data = fixture()
     data.sessions.ses_c1 = child("ses_c1", {
+      ...ownUsage(900),
       metadata: {
         subagent: {
           kind: "subagent",
@@ -721,7 +737,7 @@ describe("buildTaskCards", () => {
     expect(newer.agents[0]!.startedAt).toBe(5_000)
   })
 
-  test("lifecycle usage beats live sums; assistant tokens stand in when no step parts are loaded", () => {
+  test("editable lifecycle totals are ignored; identified assistant tokens stand in when no step parts are loaded", () => {
     const data = fixture()
     addUser(data, "msg_u1", "go")
     addAssistant(data, "msg_a1", "msg_u1", [
@@ -734,6 +750,7 @@ describe("buildTaskCards", () => {
     data.messages.ses_c2 = [
       {
         id: "m2",
+        providerID: "own",
         sessionID: "ses_c2",
         role: "assistant",
         parentID: "u",
@@ -742,7 +759,7 @@ describe("buildTaskCards", () => {
       } as unknown as Message,
     ]
     const agents = buildTaskCards(source(data))[0]!.agents
-    expect(agents[0]!.tokens).toBe(5)
+    expect(agents[0]!.tokens).toBeUndefined()
     expect(agents[1]!.tokens).toBe(42)
     expect(agents[2]!.tokens).toBeUndefined()
   })
@@ -900,6 +917,7 @@ describe("buildTaskCards", () => {
       ])
       // An extend leaves the child's record on the launching call.
       data.sessions.ses_c1 = child("ses_c1", {
+        ...(settled ? ownUsage(40_000) : {}),
         metadata: { subagent: { agent: "explore", callID: "call_1", startedAt: 1_000, background: true, ...outcome } },
       })
       if (!settled) data.status.ses_c1 = { type: "busy" }
@@ -949,6 +967,7 @@ describe("buildTaskCards", () => {
     ])
     // The resume rewrote the child's record; its usage includes the first run's 12k.
     data.sessions.ses_c1 = child("ses_c1", {
+      ...ownUsage(25_000),
       metadata: {
         subagent: { agent: "explore", callID: "call_2", status: "completed", startedAt: 20_000, usage: usage(25_000) },
       },
@@ -956,7 +975,7 @@ describe("buildTaskCards", () => {
     const card = buildTaskCards(source(data))[0]!
     expect(card.agents.map((agent) => agent.partID)).toEqual(["prt_first", "prt_resume"])
     expect(card.phases).toHaveLength(2)
-    expect(card.agents.map((agent) => agent.tokens)).toEqual([12_000, 25_000])
+    expect(card.agents.map((agent) => agent.tokens)).toEqual([25_000, 25_000])
     expect(card.tokens).toBe(25_000)
     expect(countAgents(card.agents)).toBe(1)
     expect(card.kindLabel).toBe("Specialist · Explore")
@@ -986,6 +1005,8 @@ describe("indexed task batches", () => {
         },
       }),
     ])
+    data.sessions.csv = child("csv", ownUsage(100))
+    data.sessions.json = child("json", ownUsage(200))
     const cards = buildTaskCards(source(data))
     expect(cards).toHaveLength(1)
     expect(cards[0]!.phases).toHaveLength(1)
@@ -1077,6 +1098,7 @@ describe("indexed task batches", () => {
       }),
     ])
     data.sessions.csv = child("csv", {
+      ...ownUsage(100),
       metadata: {
         subagent: lifecycle({
           parentMessageID: "a",
@@ -1088,6 +1110,7 @@ describe("indexed task batches", () => {
       },
     })
     data.sessions.json = child("json", {
+      ...ownUsage(200),
       metadata: {
         subagent: lifecycle({
           parentMessageID: "a",
@@ -1222,6 +1245,7 @@ describe("indexed task batches", () => {
       }),
     ])
     data.sessions.csv = child("csv", {
+      ...ownUsage(100),
       metadata: {
         subagent: lifecycle({
           callID: "call_first",
@@ -1267,6 +1291,7 @@ describe("indexed task batches", () => {
         usage: usage(250),
       }),
     }
+    Object.assign(data.sessions.csv, ownUsage(250))
     const resumed = buildTaskCards(source(data))[0]!
     expect(resumed.agents.map((agent) => agent.partID)).toEqual(["first", "resume"])
     expect(resumed.tokens).toBe(250)
@@ -1355,6 +1380,7 @@ describe("cards the event stream left behind", () => {
       taskPart({ id: "prt_1", callID: "call_1", metadata: running("ses_c1", "call_1") }),
     ])
     data.sessions.ses_c1 = child("ses_c1", {
+      ...ownUsage(12_000),
       metadata: {
         subagent: {
           agent: "explore",
@@ -1443,5 +1469,321 @@ describe("cards the event stream left behind", () => {
     const status: Record<string, SessionStatus["type"]> = { ses_busy: "busy", ses_retry: "retry", ses_cached: "idle" }
     expect(idleLiveSessions(agents, (id) => status[id])).toEqual(["ses_cached", "ses_idle"])
     expect(idleLiveSessions([], () => undefined)).toEqual([])
+  })
+})
+
+test("child usage retains own-key step tokens and suppresses Codium raw usage", () => {
+  const data = fixture()
+  const tokens = { input: 90000, output: 10000, reasoning: 0, cache: { read: 0, write: 0 } }
+  addAssistant(
+    data,
+    "codium",
+    "user",
+    [{ id: "codium-step", type: "step-finish", reason: "stop", cost: 9, tokens } as Part],
+    { providerID: "vector-plan", tokens },
+    "ses_child",
+  )
+  addAssistant(
+    data,
+    "own",
+    "user",
+    [
+      {
+        id: "own-step",
+        type: "step-finish",
+        reason: "stop",
+        cost: 0.12,
+        tokens: { ...tokens, input: 50, output: 10 },
+      } as Part,
+    ],
+    {},
+    "ses_child",
+  )
+  expect(childFacts(source(data), "ses_child")).toMatchObject({ tokens: 60, codiumSteps: 1 })
+  delete data.parts.codium
+  delete data.parts.own
+  expect(childFacts(source(data), "ses_child")).toMatchObject({ tokens: 0, codiumSteps: 1 })
+})
+
+test("unknown child aggregate and identity cannot be relabeled as proven own usage", () => {
+  const data = fixture()
+  data.sessions.ses_old = child("ses_old", {
+    tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+  expect(childFacts(source(data), "ses_old").tokens).toBeUndefined()
+  expect(childFacts(source(data), "ses_old").tokensOwnOnly).toBeFalse()
+  addAssistant(
+    data,
+    "missing",
+    "user",
+    [],
+    { providerID: "  ", tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+    "ses_old",
+  )
+  expect(childFacts(source(data), "ses_old").tokens).toBeUndefined()
+  addAssistant(
+    data,
+    "own",
+    "user",
+    [],
+    { tokens: { input: 123, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+    "ses_old",
+  )
+  expect(childFacts(source(data), "ses_old")).toMatchObject({ tokens: 123, tokensOwnOnly: true })
+})
+
+test("a forged lifecycle proof cannot certify raw metadata totals", () => {
+  const data = fixture()
+  addUser(data, "user", "go")
+  addAssistant(data, "assistant", "user", [
+    taskPart({
+      id: "task",
+      metadata: lifecycle({ sessionId: "ses_forged", usage: { ...usage(987654), tokensOwnOnly: true } }),
+    }),
+  ])
+  data.sessions.ses_forged = child("ses_forged", {
+    metadata: { subagent: { usage: { ...usage(987654), tokensOwnOnly: true } } },
+  })
+  expect(buildTaskCards(source(data))[0]?.agents[0]?.tokens).toBeUndefined()
+  data.sessions.ses_forged = {
+    ...data.sessions.ses_forged!,
+    tokensOwnOnly: true,
+    tokens: { input: 123, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  }
+  expect(buildTaskCards(source(data))[0]?.agents[0]?.tokens).toBe(123)
+})
+
+describe("1.99.113 lifecycle fields", () => {
+  test("the part's mirror and the child's record read the same", () => {
+    const part = readLifecycle({
+      effort: "high",
+      fork: true,
+      modelSource: "fork",
+      inheritedTokens: 12_000,
+      queuedReason: "Waiting for a free subagent slot",
+      structured: { valid: true, attempts: 2 },
+      isolation: { mode: "worktree", state: "changed", branch: "vector/task-c1", files: 2, additions: 9, deletions: 1 },
+      groupID: "workflow:ses_run",
+      workflow: {
+        role: "agent",
+        runID: "ses_run",
+        stage: "scan",
+        phase: "find",
+        item: "a.ts",
+        key: "scan:0",
+        round: 1,
+      },
+    })
+    expect(part).toMatchObject({
+      effort: "high",
+      fork: true,
+      queuedReason: "Waiting for a free subagent slot",
+      result: { format: "json", valid: true, attempts: 2 },
+      isolation: { mode: "worktree", state: "changed", branch: "vector/task-c1", files: 2, additions: 9, deletions: 1 },
+      groupID: "workflow:ses_run",
+      workflow: { role: "agent", runID: "ses_run", stage: "scan", phase: "find", item: "a.ts", round: 1 },
+    })
+    const stored = readLifecycle({
+      effort: "low",
+      fork: { point: "msg_1", callID: "call_1", warm: true },
+      slotReason: "Waiting for the launching response",
+      structured: { schema: { type: "object" }, schemaHash: "abc", attempts: 1 },
+      interruption: { at: 5, cause: "crash", reportedAt: 6 },
+      waiting: { kind: "question", requestID: "que_1", since: 40, notedAt: 41, summary: "Which file?" },
+      workflow: {
+        role: "run",
+        title: "Audit",
+        revision: 1,
+        progress: {
+          stages: [{ id: "scan", title: "Scan", total: 3, done: 1, failed: 1, skipped: 0, running: 1, waiting: 0 }],
+          agents: { launched: 3, max: 100, running: 1 },
+        },
+      },
+    })
+    expect(stored).toMatchObject({
+      effort: "low",
+      fork: true,
+      queuedReason: "Waiting for the launching response",
+      result: { format: "json", attempts: 1 },
+      interrupted: { at: 5, cause: "crash" },
+      waiting: { kind: "question", since: 40, summary: "Which file?" },
+      workflow: {
+        role: "run",
+        title: "Audit",
+        stages: [
+          { id: "scan", title: "Scan", phase: "", total: 3, done: 1, failed: 1, skipped: 0, running: 1, waiting: 0 },
+        ],
+        agents: { launched: 3, max: 100, running: 1 },
+      },
+    })
+    expect(stored.result?.valid).toBeUndefined()
+  })
+
+  test("malformed new fields are dropped, never trusted or thrown on", () => {
+    const value = readLifecycle({
+      effort: "<script>",
+      fork: "yes",
+      structured: "valid",
+      result: { format: 7 },
+      queuedReason: 3,
+      isolation: { mode: "worktree", directory: "/secret" },
+      interruption: { cause: "crash" },
+      waiting: { kind: "permission", since: "now" },
+      workflow: { runID: "ses_run" },
+      groupID: ["workflow:x"],
+    })
+    expect(value.effort).toBeUndefined()
+    expect(value.fork).toBeUndefined()
+    expect(value.result).toBeUndefined()
+    expect(value.queuedReason).toBeUndefined()
+    expect(value.isolation).toBeUndefined()
+    expect(value.interrupted).toBeUndefined()
+    expect(value.waiting).toBeUndefined()
+    expect(value.workflow).toBeUndefined()
+    expect(value.groupID).toBeUndefined()
+    // A directory is never read into the display copy, and the conflict list is bounded.
+    const isolation = readLifecycle({
+      isolation: {
+        mode: "worktree",
+        state: "changed",
+        directory: "/secret",
+        files: -1,
+        conflicts: [...Array.from({ length: 60 }, (_, index) => `f${index}`), 5],
+      },
+    }).isolation!
+    expect("directory" in isolation).toBe(false)
+    expect(isolation.files).toBeUndefined()
+    expect(isolation.conflicts).toHaveLength(50)
+    // A cause a newer engine adds is still an interruption.
+    expect(readLifecycle({ interruption: { at: 1, cause: 42 } }).interrupted).toEqual({ at: 1, cause: "unknown" })
+  })
+
+  test("part metadata and the record reach the agent; a queued reason only while it waits", () => {
+    const data = fixture()
+    addUser(data, "msg_u1", "go")
+    addAssistant(data, "msg_a1", "msg_u1", [
+      taskPart({
+        id: "prt_1",
+        status: "running",
+        metadata: lifecycle({
+          sessionId: "ses_q",
+          callID: "call_prt_1",
+          status: "queued",
+          effort: "medium",
+          fork: true,
+          queuedReason: "Waiting for a free subagent slot",
+          structured: { attempts: 0 },
+        }),
+      }),
+      taskPart({
+        id: "prt_2",
+        metadata: lifecycle({
+          sessionId: "ses_i",
+          status: "cancelled",
+          queuedReason: "Waiting for a free subagent slot",
+          isolation: { mode: "worktree", state: "changed", files: 1 },
+        }),
+      }),
+    ])
+    data.sessions.ses_i = child("ses_i", {
+      metadata: { subagent: lifecycle({ status: "cancelled", interruption: { at: 9, cause: "shutdown" } }) },
+    })
+    const agents = buildTaskCards(source(data))[0]!.agents
+    const queued = agents.find((agent) => agent.sessionID === "ses_q")!
+    expect(queued).toMatchObject({
+      status: "pending",
+      effort: "medium",
+      fork: true,
+      queuedReason: "Waiting for a free subagent slot",
+      result: { format: "json", attempts: 0 },
+    })
+    const stopped = agents.find((agent) => agent.sessionID === "ses_i")!
+    expect(stopped.status).toBe("stopped")
+    expect(stopped.queuedReason).toBeUndefined()
+    expect(stopped.isolation).toMatchObject({ mode: "worktree", state: "changed", files: 1 })
+    expect(stopped.interrupted).toEqual({ at: 9, cause: "shutdown" })
+    expect(isInterrupted(stopped)).toBe(true)
+    expect(isInterrupted({ ...stopped, interrupted: { at: 9, cause: "shutdown", resumedAt: 10 } })).toBe(false)
+    expect(isInterrupted({ ...stopped, interrupted: { at: 9, cause: "shutdown", dismissedAt: 10 } })).toBe(false)
+    expect(isInterrupted({ ...stopped, status: "running" })).toBe(false)
+  })
+})
+
+describe("1.99.113 labels", () => {
+  const model = { providerID: "anthropic", modelID: "claude-opus-5", name: "Claude Opus 5", short: "Opus 5" }
+
+  test("model as short · effort, with default effort left out", () => {
+    expect(modelEffortLabel({ model, effort: "high" })).toBe("Opus 5 · high")
+    expect(modelEffortLabel({ model, effort: "default" })).toBe("Opus 5")
+    expect(modelEffortLabel({ model })).toBe("Opus 5")
+    expect(modelEffortLabel({ effort: "low" })).toBe("low")
+    expect(modelEffortLabel({})).toBeUndefined()
+  })
+
+  test("queued, waiting and worktree lines", () => {
+    expect(queuedLabel("Waiting for a free subagent slot")).toBe("Queued: waiting for a free subagent slot")
+    expect(queuedLabel("OAuth refresh pending")).toBe("Queued: OAuth refresh pending")
+    expect(waitingLabel({ kind: "permission", since: 0 }, 3 * 60_000 + 5_000)).toBe("Needs your permission · 3m")
+    expect(waitingLabel({ kind: "question", since: 1_000 }, 20_000)).toBe("Needs your answer · <1m")
+    expect(waitingLabel({ kind: "permission", since: 50_000 }, 0)).toBe("Needs your permission · <1m")
+    expect(isolationLabel({ mode: "worktree", state: "changed", branch: "vector/task-c1", files: 3 })).toBe(
+      "Worktree: vector/task-c1 · changed · 3 files changed",
+    )
+    expect(isolationLabel({ mode: "copy", state: "unchanged", files: 1 })).toBe("Copy: unchanged · 1 file changed")
+    expect(isolationLabel({ mode: "worktree", state: "preparing" })).toBe("Worktree: preparing")
+  })
+
+  // The colour is not the only sign: the chip's text names its state too.
+  test("the JSON chip is green when valid, red when it failed, says which in words, and is absent for text results", () => {
+    expect(resultChip({ format: "json", valid: true })).toMatchObject({ state: "valid", label: "JSON valid" })
+    expect(resultChip({ format: "json", valid: false, attempts: 3 })).toEqual({
+      state: "invalid",
+      label: "JSON invalid",
+      title: "Its JSON answer did not match the schema after 3 attempts",
+    })
+    expect(resultChip({ format: "json" })).toMatchObject({ state: "pending", label: "JSON unchecked" })
+    expect(resultChip({ format: "text" })).toBeUndefined()
+    expect(resultChip(undefined)).toBeUndefined()
+  })
+
+  // The pane names no folder and opens none, so a cut patch points at what the user can run or press.
+  test("a cut review patch says how to see the rest: git diff on the worktree's branch, or Merge for a copy", () => {
+    expect(patchTruncatedText({ branch: "vector/subagent/ses_1" })).toBe(
+      "The patch is cut short; the files above are all it changes. To see all of it, run git diff ...vector/subagent/ses_1 in this repository.",
+    )
+    expect(patchTruncatedText({})).toBe(
+      "The patch is cut short; the files above are all it changes, and Merge applies every change.",
+    )
+    for (const text of [patchTruncatedText({ branch: "b" }), patchTruncatedText({})])
+      expect(text).not.toContain("Open the worktree")
+  })
+
+  test("a stage's count says its failed and skipped agents in words, beside waiting on you", () => {
+    expect(stageNotes({ failed: 0, skipped: 0, waiting: 0 })).toEqual([])
+    expect(stageNotes({ failed: 2, skipped: 1, waiting: 1 })).toEqual(["2 failed", "1 skipped", "waiting on you"])
+  })
+
+  test("a workflow run's loaded agents leave the counts as they were with the run row alone", () => {
+    const task = (id: string, workflow: Record<string, unknown>) =>
+      ({ id, workflow }) as unknown as NonNullable<
+        Parameters<typeof liveAgentCount>[0][number]["agents"][number]["task"]
+      >
+    const run = {
+      key: "r",
+      sessionID: "ses_run",
+      status: "running" as const,
+      task: task("ses_run", { role: "run", runID: "ses_run" }),
+    }
+    const agents = ["w1", "w2"].map((id) => ({
+      key: id,
+      sessionID: id,
+      status: "waiting" as const,
+      task: task(id, { role: "agent", runID: "ses_run", stage: "scan" }),
+    }))
+    expect(liveAgentCount([{ agents: [run, ...agents] }])).toBe(1)
+    expect(runningAgentCount([{ agents: [run, ...agents] }])).toBe(1)
+    expect(waitingAgentCount([{ agents: [run, ...agents] }])).toBe(0)
+    // Without their run row they count as themselves.
+    expect(liveAgentCount([{ agents }])).toBe(2)
   })
 })

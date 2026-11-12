@@ -24,15 +24,24 @@ import { InstallationVersion } from "../installation/version"
 import { ModelV2 } from "../model"
 import { encodedBody } from "./transport"
 import { BrainSchema } from "../brain/schema"
+import { BrainSkill } from "../brain/skill"
+import { SessionAudience } from "../session/audience"
 
 const AncillaryUsage = Schema.Array(SessionEvent.AncillaryUsage.data).pipe(optional)
+// A portable local archive can only tighten its audience, including after importing into another database.
+const Privacy = Schema.optional(Schema.Literal("owner-only"))
+const GuestInput = Schema.optional(Schema.Literal(true))
 export const Legacy = Schema.Struct({
+  privacy: Privacy,
+  guestInput: GuestInput,
   info: SessionV1.SessionInfo,
   messages: Schema.Array(SessionV1.WithParts),
   ancillaryUsage: AncillaryUsage,
 })
 export type Legacy = typeof Legacy.Type
 export const Native = Schema.Struct({
+  privacy: Privacy,
+  guestInput: GuestInput,
   format: Schema.Literal("vector-session"),
   version: Schema.Literal(1),
   engine: Schema.Literal("v2"),
@@ -68,6 +77,15 @@ const partText = (part: PublicSession.Part) =>
     : part.type === "attachment"
       ? `[Attachment: ${part.name} (${part.mediaType}); content is not included]`
       : part.text
+// A learned skill's steps never leave this computer in a public archive: its transcript keeps only the placeholder, and
+// whatever a part's output says, the archive carries that placeholder too.
+const learnedSkill = (tool: string, metadata: Record<string, unknown>) =>
+  tool === "skill" && typeof metadata.learned === "string"
+    ? BrainSkill.placeholder(
+        typeof metadata.name === "string" ? metadata.name : "learned skill",
+        typeof metadata.version === "number" ? metadata.version : 0,
+      )
+    : undefined
 const importedModel = Schema.decodeUnknownSync(ModelV2.Ref)({
   providerID: "vector",
   id: "imported",
@@ -154,7 +172,7 @@ export function publicArchive(local: Local): PublicSession.Archive {
                   input: json(part.state.input),
                   output:
                     part.state.status === "completed"
-                      ? part.state.output
+                      ? (learnedSkill(part.tool, part.state.metadata) ?? part.state.output)
                       : part.state.status === "error"
                         ? part.state.error
                         : "",
@@ -178,65 +196,86 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const audience = SessionAudience.make({ db })
     const events = yield* EventV2.Service
     const projects = yield* ProjectV2.Service
     const exportArchive = Effect.fn("SessionArchive.export")(function* (input: Selection) {
-      const row = yield* db
-        .select()
-        .from(SessionTable)
-        .where(eq(SessionTable.id, input.sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      if (!row) return yield* new PublicSession.Error({ code: "NOT_FOUND", message: "Session not found." })
-      const usage = yield* db
-        .select({ data: EventTable.data })
-        .from(EventTable)
-        .where(
-          and(
-            eq(EventTable.aggregate_id, input.sessionID),
-            inArray(EventTable.type, SessionEvent.AncillaryUsageStored),
-          ),
+      // One read transaction gives the audience flags and the rows one snapshot. A fence only adds rows, so content
+      // written after it is not in this snapshot either. Encoding and decoding the history, the slow part, run after the
+      // snapshot is released, and a read takes no write lock, so an export never holds back another engine's writes.
+      const read = yield* db
+        .transaction(() =>
+          Effect.gen(function* () {
+            const row = yield* db
+              .select()
+              .from(SessionTable)
+              .where(eq(SessionTable.id, input.sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            if (!row) return undefined
+            const privacy = (yield* audience.isPrivate(input.sessionID)) ? ("owner-only" as const) : undefined
+            const guestInput = (yield* audience.hasGuestInput(input.sessionID)) ? (true as const) : undefined
+            const usage = yield* db
+              .select({ data: EventTable.data })
+              .from(EventTable)
+              .where(
+                and(
+                  eq(EventTable.aggregate_id, input.sessionID),
+                  inArray(EventTable.type, SessionEvent.AncillaryUsageStored),
+                ),
+              )
+              .orderBy(asc(EventTable.seq))
+              .all()
+              .pipe(Effect.orDie)
+            const native = yield* db
+              .select()
+              .from(SessionMessageTable)
+              .where(eq(SessionMessageTable.session_id, input.sessionID))
+              .orderBy(asc(SessionMessageTable.seq))
+              .all()
+              .pipe(Effect.orDie)
+            if (input.engine === "v2" || native.length)
+              return { row, privacy, guestInput, usage, native, messages: [], parts: [] }
+            const messages = yield* db
+              .select()
+              .from(MessageTable)
+              .where(eq(MessageTable.session_id, input.sessionID))
+              .orderBy(asc(MessageTable.id))
+              .all()
+              .pipe(Effect.orDie)
+            const parts = yield* db
+              .select()
+              .from(PartTable)
+              .where(eq(PartTable.session_id, input.sessionID))
+              .orderBy(asc(PartTable.id))
+              .all()
+              .pipe(Effect.orDie)
+            return { row, privacy, guestInput, usage, native, messages, parts }
+          }),
         )
-        .orderBy(asc(EventTable.seq))
-        .all()
-        .pipe(Effect.orDie)
-      const ancillaryUsage = usage.length
-        ? usage.map((event) => Schema.decodeUnknownSync(SessionEvent.AncillaryUsage.data)(event.data))
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
+      if (!read) return yield* new PublicSession.Error({ code: "NOT_FOUND", message: "Session not found." })
+      const ancillaryUsage = read.usage.length
+        ? read.usage.map((event) => Schema.decodeUnknownSync(SessionEvent.AncillaryUsage.data)(event.data))
         : undefined
-      const native = yield* db
-        .select()
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, input.sessionID))
-        .orderBy(asc(SessionMessageTable.seq))
-        .all()
-        .pipe(Effect.orDie)
-      if (input.engine === "v2" || native.length)
+      if (input.engine === "v2" || read.native.length)
         return Native.make({
+          privacy: read.privacy,
+          guestInput: read.guestInput,
           format: "vector-session",
           version: 1,
           engine: "v2",
-          info: fromRow(row),
-          messages: native.map((message) =>
+          info: fromRow(read.row),
+          messages: read.native.map((message) =>
             Schema.decodeUnknownSync(SessionMessage.Message)({ ...message.data, id: message.id, type: message.type }),
           ),
           ancillaryUsage,
         })
-      const messages = yield* db
-        .select()
-        .from(MessageTable)
-        .where(eq(MessageTable.session_id, input.sessionID))
-        .orderBy(asc(MessageTable.id))
-        .all()
-        .pipe(Effect.orDie)
-      const parts = yield* db
-        .select()
-        .from(PartTable)
-        .where(eq(PartTable.session_id, input.sessionID))
-        .orderBy(asc(PartTable.id))
-        .all()
-        .pipe(Effect.orDie)
+      const row = read.row
       return Schema.decodeUnknownSync(Schema.fromJsonString(Legacy))(
         JSON.stringify({
+          privacy: read.privacy,
+          guestInput: read.guestInput,
           ancillaryUsage: ancillaryUsage?.map((usage) => Schema.encodeSync(SessionEvent.AncillaryUsage.data)(usage)),
           info: {
             id: row.id,
@@ -253,8 +292,12 @@ const layer = Layer.effect(
             version: row.version,
             cost: row.cost,
             unpricedSteps: row.unpriced_steps || undefined,
+            codiumSteps: row.codium_steps || undefined,
+            tokensOwnOnly: row.tokens_own_only,
+            subagentTokensOwnOnly: row.subagent_tokens_own_only,
             subagentCost: row.subagent_cost || undefined,
             subagentUnpricedSteps: row.subagent_unpriced_steps || undefined,
+            subagentCodiumSteps: row.subagent_codium_steps || undefined,
             subagentTokens: subagentTokens(row),
             tokens: {
               input: row.tokens_input,
@@ -282,9 +325,9 @@ const layer = Layer.effect(
               compacting: row.time_compacting ?? undefined,
             },
           },
-          messages: messages.map((message) => ({
+          messages: read.messages.map((message) => ({
             info: { ...message.data, id: message.id, sessionID: input.sessionID },
-            parts: parts
+            parts: read.parts
               .filter((part) => part.message_id === message.id)
               .map((part) => ({ ...part.data, id: part.id, messageID: message.id, sessionID: input.sessionID })),
           })),
@@ -352,6 +395,9 @@ const layer = Layer.effect(
         directory: input.location.directory,
         ...(input.location.workspaceID ? { workspaceID: input.location.workspaceID } : {}),
         title: source.title,
+        // Local read provenance never crosses an archive boundary, including an empty or tampered archive.
+        tokensOwnOnly: false,
+        subagentTokensOwnOnly: false,
         version: InstallationVersion,
         time: { created: Date.now(), updated: Date.now() },
       })
@@ -549,6 +595,23 @@ const layer = Layer.effect(
       }
       // Local archives preserve historical spend; public transcripts and forks carry no ancillary billing records.
       for (const usage of local?.ancillaryUsage ?? []) append(SessionEvent.AncillaryUsage, { ...usage, sessionID })
+      // Local source identity is restriction-only provenance; never an imported filesystem location.
+      const forkOf = local && (yield* audience.knows(local.info.id)) ? local.info.id : undefined
+      const provenance = Effect.gen(function* () {
+        // Public transcripts have no authenticated local provenance. Importing them must never erase guest history.
+        yield* audience.register({ sessionID, forkOf, actor: archive || local?.guestInput ? "guest" : "owner" })
+        if (local?.privacy === "owner-only") yield* audience.fenceIsolation({ sessionID, actor: "owner" })
+      }).pipe(
+        Effect.catchTag("SessionAudience.Denied", () =>
+          Effect.fail(
+            new PublicSession.Error({
+              code: "INVALID",
+              message: "This archive cannot enter the current conversation audience.",
+            }),
+          ),
+        ),
+      )
+      yield* provenance
       yield* events.importAll(sequence)
       return { sessionID, engine: source.engine }
     })

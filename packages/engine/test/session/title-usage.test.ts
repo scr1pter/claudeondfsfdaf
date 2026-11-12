@@ -14,7 +14,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SessionTable, SessionMessageTable } from "@vectordevai/core/session/sql"
 import { SessionV1 } from "@vectordevai/core/v1/session"
-import { LLMEvent, Usage } from "@vectordevai/llm"
+import { LLMEvent, Usage, type ProviderMetadata } from "@vectordevai/llm"
 import type { Provider } from "@/provider/provider"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TitleUsage } from "@/session/title-usage"
@@ -517,14 +517,16 @@ it.effect("retains an unpriced OpenRouter metadata-only charge when title genera
   }),
 )
 
-it.effect("a Codium title's spend persists once as tokens and stays out of the dollar cost", () =>
+// As Provider.fromModelPlans lists Codium models: no dollar price.
+const codium: Provider.Model = {
+  ...model,
+  providerID: ProviderV2.ID.make("vector-plan"),
+  cost: { input: 0, output: 0, cache: { read: 0, write: 0 }, unpriced: true },
+}
+
+it.effect("a Codium title is recorded once as a Codium step: its record keeps the tokens, the totals do not", () =>
   Effect.gen(function* () {
-    // As Provider.fromModelPlans lists Codium models: credits, not a dollar price.
-    const test = yield* setup({
-      ...model,
-      providerID: ProviderV2.ID.make("vector-plan"),
-      cost: { input: 0, output: 0, cache: { read: 0, write: 0 }, unpriced: true },
-    })
+    const test = yield* setup(codium)
     yield* test.usage.record(
       LLMEvent.stepFinish({
         index: 0,
@@ -536,8 +538,73 @@ it.effect("a Codium title's spend persists once as tokens and stays out of the d
     )
     yield* test.usage.finish()
     expect(yield* test.records).toHaveLength(1)
-    expect((yield* test.records)[0]?.data).toMatchObject({ purpose: "title", cost: 0, unpriced: true })
-    expect(yield* test.session).toMatchObject({ cost: 0, unpriced_steps: 1, tokens_input: 200, tokens_output: 6 })
+    expect((yield* test.records)[0]?.data).toMatchObject({
+      purpose: "title",
+      cost: 0,
+      unpriced: true,
+      billing: "codium",
+      tokens: { input: 200, output: 6 },
+    })
+    expect(yield* test.session).toMatchObject({
+      cost: 0,
+      unpriced_steps: 1,
+      codium_steps: 1,
+      tokens_input: 0,
+      tokens_output: 0,
+    })
     expect(yield* test.messages).toHaveLength(0)
+  }),
+)
+
+it.effect("a Codium title is never priced from a charge its provider metadata reports", () =>
+  Effect.gen(function* () {
+    const test = yield* setup(codium)
+    // OpenRouter's reported cost and Copilot's AI units price any other model's title.
+    const reported: ProviderMetadata[] = [
+      { openrouter: { usage: { cost: 0.05 } } },
+      { copilot: { totalNanoAiu: 4_000_000_000 } },
+    ]
+    for (const providerMetadata of reported)
+      yield* test.usage.record(
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          usage: { inputTokens: 200, outputTokens: 6 },
+          providerMetadata,
+        }),
+      )
+    yield* test.usage.finish()
+    expect((yield* test.records).map((record) => record.data)).toMatchObject([
+      { cost: 0, unpriced: true, billing: "codium" },
+      { cost: 0, unpriced: true, billing: "codium" },
+    ])
+    expect(yield* test.session).toMatchObject({ cost: 0, unpriced_steps: 2, codium_steps: 2, tokens_input: 0 })
+  }),
+)
+
+it.effect("a Codium title charges its captured run as a Codium step, never as an unpriced one", () =>
+  Effect.gen(function* () {
+    const test = yield* setup(codium)
+    yield* test.guard.begin(sessionID, { usd: 1, unpricedSteps: 1 })
+    const spend = yield* test.guard.capture(sessionID)
+    const usage = TitleUsage.create({ sessionID, model: codium, publish: test.events.publish, spend })
+    yield* usage.record(
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: "stop",
+        usage: { inputTokens: 200, outputTokens: 6 },
+        providerMetadata: { openrouter: { usage: { cost: 0.05 } } },
+      }),
+    )
+    yield* usage.finish()
+    expect(yield* test.records).toHaveLength(1)
+    expect(yield* test.guard.snapshot(sessionID)).toMatchObject({
+      costKind: "codium",
+      codiumSteps: 1,
+      unpricedSteps: 0,
+      spentUsd: 0,
+    })
+    expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+    yield* spend.release
   }),
 )

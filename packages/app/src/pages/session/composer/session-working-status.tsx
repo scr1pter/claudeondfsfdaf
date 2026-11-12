@@ -13,6 +13,7 @@ export function SessionWorkingStatus(props: {
   working: () => boolean
   startedAt: () => number | undefined
   tokens: () => number
+  codium?: () => boolean
   runningTasks: () => number
   phrase?: () => string | undefined
 }) {
@@ -45,7 +46,8 @@ export function SessionWorkingStatus(props: {
   const parts = createMemo(() => {
     const out: string[] = [formatDuration(elapsed())]
     const tokens = props.tokens()
-    if (tokens > 0) out.push(`${tokenFormatter.format(tokens)} tokens`)
+    if (props.codium?.()) out.push("Codium")
+    if (!props.codium?.() && tokens > 0) out.push(`${tokenFormatter.format(tokens)} tokens`)
     const tasks = props.runningTasks()
     if (tasks > 0) out.push(`${tasks} running task${tasks === 1 ? "" : "s"}`)
     const phrase = props.phrase?.()
@@ -55,11 +57,7 @@ export function SessionWorkingStatus(props: {
 
   return (
     <Show when={props.working()}>
-      <div
-        role="status"
-        aria-live="polite"
-        class="px-1 pb-1.5 text-13-regular text-text-weak truncate"
-      >
+      <div role="status" aria-live="polite" class="px-1 pb-1.5 text-13-regular text-text-weak truncate">
         {parts().join(" · ")}
       </div>
     </Show>

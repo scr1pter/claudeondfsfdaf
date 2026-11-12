@@ -1047,3 +1047,403 @@ it.effect("descendant spend advances ancestor freshness for equal and older time
     expect(yield* database.db.select().from(SessionMessageTable).all()).toHaveLength(0)
   }),
 )
+
+describe("Codium accounting", () => {
+  const rootID = SessionV2.ID.make("ses_codium_root")
+  const childID = SessionV2.ID.make("ses_codium_child")
+  const leafID = SessionV2.ID.make("ses_codium_leaf")
+  const codiumModel = { id: ModelV2.ID.make("deepseek"), providerID: ProviderV2.ID.make("vector-plan") }
+  const tokens = { input: 10, output: 20, reasoning: 3, cache: { read: 4, write: 5 } }
+  const noTokens = {
+    tokens_input: 0,
+    tokens_output: 0,
+    tokens_reasoning: 0,
+    tokens_cache_read: 0,
+    tokens_cache_write: 0,
+  }
+  const noSubagentTokens = {
+    subagent_tokens_input: 0,
+    subagent_tokens_output: 0,
+    subagent_tokens_reasoning: 0,
+    subagent_tokens_cache_read: 0,
+    subagent_tokens_cache_write: 0,
+  }
+
+  // A root with a child and a grandchild, so a step on the leaf rolls up through two ancestors.
+  const setup = Effect.fn("test.codiumSessions")(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTable)
+      .values(
+        [
+          { id: rootID, parent_id: undefined },
+          { id: childID, parent_id: rootID },
+          { id: leafID, parent_id: childID },
+        ].map((row) => ({
+          ...row,
+          project_id: Project.ID.global,
+          slug: row.id,
+          directory: "/project",
+          title: row.id,
+          version: "test",
+        })),
+      )
+      .run()
+      .pipe(Effect.orDie)
+    const row = (id: SessionV2.ID) =>
+      db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+    const message = (id: SessionMessage.ID) =>
+      db.select().from(SessionMessageTable).where(eq(SessionMessageTable.id, id)).get().pipe(Effect.orDie)
+    return { db, events: yield* EventV2.Service, row, message }
+  })
+
+  it.effect("counts a Codium settlement as one unpriced Codium step with no tokens, up every ancestor", () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* SessionV2.Service
+      const boundary = SessionMessage.ID.make("msg_codium_boundary")
+      const step = SessionMessage.ID.make("msg_codium_step")
+      yield* test.events.publish(SessionEvent.Step.Started, {
+        sessionID: leafID,
+        timestamp: created,
+        assistantMessageID: boundary,
+        agent: "build",
+        model: codiumModel,
+      })
+      yield* test.events.publish(SessionEvent.Step.Started, {
+        sessionID: leafID,
+        timestamp: DateTime.makeUnsafe(1),
+        assistantMessageID: step,
+        agent: "build",
+        model: codiumModel,
+      })
+      const ended = yield* test.events.publish(SessionEvent.Step.Ended, {
+        sessionID: leafID,
+        timestamp: DateTime.makeUnsafe(2),
+        assistantMessageID: step,
+        finish: "stop",
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens,
+      })
+      expect((yield* test.message(step))?.data).toMatchObject({ billing: "codium", unpriced: true, tokens })
+      expect(yield* test.row(leafID)).toMatchObject({ cost: 0, unpriced_steps: 1, codium_steps: 1, ...noTokens })
+      for (const id of [childID, rootID])
+        expect(yield* test.row(id)).toMatchObject({
+          subagent_cost: 0,
+          subagent_unpriced_steps: 1,
+          subagent_codium_steps: 1,
+          ...noSubagentTokens,
+          codium_steps: 0,
+        })
+      expect(yield* sessions.get(leafID)).toMatchObject({ unpricedSteps: 1, codiumSteps: 1 })
+      expect(yield* sessions.get(rootID)).toMatchObject({ subagentUnpricedSteps: 1, subagentCodiumSteps: 1 })
+      expect((yield* sessions.get(rootID)).codiumSteps).toBeUndefined()
+      expect((yield* sessions.get(rootID)).subagentTokens).toBeUndefined()
+
+      // A replayed settlement is projected once.
+      const recorded = yield* test.db.select().from(EventTable).where(eq(EventTable.id, ended.id)).get()
+      if (!recorded) return yield* Effect.die("Codium settlement was not recorded")
+      yield* test.events.replay({
+        id: recorded.id,
+        aggregateID: recorded.aggregate_id,
+        seq: recorded.seq,
+        type: recorded.type,
+        data: recorded.data,
+      })
+      expect(yield* test.row(leafID)).toMatchObject({ unpriced_steps: 1, codium_steps: 1, ...noTokens })
+
+      // An own settlement replacing the Codium one moves every total by the difference, and back again.
+      yield* test.events.publish(SessionEvent.Step.Ended, {
+        sessionID: leafID,
+        timestamp: DateTime.makeUnsafe(3),
+        assistantMessageID: step,
+        finish: "stop",
+        cost: 0.5,
+        tokens,
+      })
+      expect((yield* test.message(step))?.data).not.toHaveProperty("billing")
+      expect(yield* test.row(leafID)).toMatchObject({
+        cost: 0.5,
+        unpriced_steps: 0,
+        codium_steps: 0,
+        tokens_input: 10,
+        tokens_cache_write: 5,
+      })
+      expect(yield* test.row(rootID)).toMatchObject({
+        subagent_cost: 0.5,
+        subagent_unpriced_steps: 0,
+        subagent_codium_steps: 0,
+        subagent_tokens_input: 10,
+        subagent_tokens_cache_write: 5,
+      })
+      yield* test.events.publish(SessionEvent.Step.Ended, {
+        sessionID: leafID,
+        timestamp: DateTime.makeUnsafe(4),
+        assistantMessageID: step,
+        finish: "stop",
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens,
+      })
+      expect(yield* test.row(leafID)).toMatchObject({ cost: 0, unpriced_steps: 1, codium_steps: 1, ...noTokens })
+      expect(yield* test.row(childID)).toMatchObject({
+        subagent_cost: 0,
+        subagent_unpriced_steps: 1,
+        subagent_codium_steps: 1,
+        ...noSubagentTokens,
+      })
+
+      // A revert past the step takes it back out of the session and every ancestor.
+      yield* test.events.publish(SessionEvent.RevertEvent.Committed, {
+        sessionID: leafID,
+        messageID: boundary,
+        timestamp: DateTime.makeUnsafe(5),
+      })
+      expect(yield* test.row(leafID)).toMatchObject({ cost: 0, unpriced_steps: 0, codium_steps: 0, ...noTokens })
+      for (const id of [childID, rootID])
+        expect(yield* test.row(id)).toMatchObject({
+          subagent_unpriced_steps: 0,
+          subagent_codium_steps: 0,
+          ...noSubagentTokens,
+        })
+    }).pipe(Effect.provide(sessionsLayer)),
+  )
+
+  it.effect("keeps the Codium counts when a session update carrying stale totals lands after a step", () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const step = SessionMessage.ID.make("msg_codium_before_update")
+      yield* test.events.publish(SessionEvent.Step.Started, {
+        sessionID: childID,
+        timestamp: created,
+        assistantMessageID: step,
+        agent: "build",
+        model: codiumModel,
+      })
+      yield* test.events.publish(SessionEvent.Step.Ended, {
+        sessionID: childID,
+        timestamp: DateTime.makeUnsafe(1),
+        assistantMessageID: step,
+        finish: "stop",
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens,
+      })
+      // What a title change or a metadata update read before the step settled, or a client's wrong copy of it.
+      const stale = (id: SessionV2.ID, counts: { codiumSteps?: number; subagentCodiumSteps?: number }) => ({
+        id,
+        projectID: Project.ID.global,
+        slug: id,
+        directory: "/project",
+        title: "renamed",
+        version: "test",
+        time: { created: 0, updated: 0 },
+        ...counts,
+      })
+      yield* test.events.publish(SessionV1.Event.Updated, { sessionID: childID, info: stale(childID, {}) })
+      yield* test.events.publish(SessionV1.Event.Updated, {
+        sessionID: rootID,
+        info: stale(rootID, { codiumSteps: 7, subagentCodiumSteps: 7 }),
+      })
+      expect(yield* test.row(childID)).toMatchObject({ title: "renamed", unpriced_steps: 1, codium_steps: 1 })
+      expect(yield* test.row(rootID)).toMatchObject({
+        title: "renamed",
+        codium_steps: 0,
+        subagent_unpriced_steps: 1,
+        subagent_codium_steps: 1,
+      })
+    }),
+  )
+
+  it.effect("routes Codium titles, compaction summaries and failed summaries like Codium steps", () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const boundary = SessionMessage.ID.make("msg_codium_compaction_boundary")
+      yield* test.events.publish(SessionEvent.Step.Started, {
+        sessionID: childID,
+        timestamp: created,
+        assistantMessageID: boundary,
+        agent: "build",
+        model: codiumModel,
+      })
+      // The engine's title helper marks its record; an older record is still read as Codium from its model, because
+      // nothing ever subtracts ancillary usage.
+      yield* test.events.publish(SessionEvent.AncillaryUsage, {
+        sessionID: childID,
+        timestamp: DateTime.makeUnsafe(1),
+        usageID: EventV2.ID.create(),
+        purpose: "title",
+        model: codiumModel,
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens,
+      })
+      yield* test.events.publish(SessionEvent.AncillaryUsage, {
+        sessionID: childID,
+        timestamp: DateTime.makeUnsafe(2),
+        usageID: EventV2.ID.create(),
+        purpose: "memory",
+        model: codiumModel,
+        cost: 0,
+        tokens,
+      })
+      expect(yield* test.row(childID)).toMatchObject({ unpriced_steps: 2, codium_steps: 2, ...noTokens })
+      const summary = SessionMessage.ID.make("msg_codium_summary")
+      yield* test.events.publish(SessionEvent.Compaction.Ended, {
+        sessionID: childID,
+        messageID: summary,
+        timestamp: DateTime.makeUnsafe(3),
+        reason: "auto",
+        text: "summary",
+        recent: "",
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens,
+      })
+      expect((yield* test.message(summary))?.data).toMatchObject({ billing: "codium", unpriced: true, tokens })
+      yield* test.events.publish(SessionEvent.Compaction.Failed, {
+        sessionID: childID,
+        messageID: SessionMessage.ID.make("msg_codium_failed_summary"),
+        timestamp: DateTime.makeUnsafe(4),
+        reason: "auto",
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens,
+      })
+      expect(yield* test.row(childID)).toMatchObject({ cost: 0, unpriced_steps: 4, codium_steps: 4, ...noTokens })
+      expect(yield* test.row(rootID)).toMatchObject({
+        subagent_unpriced_steps: 4,
+        subagent_codium_steps: 4,
+        ...noSubagentTokens,
+      })
+
+      // A revert past the summary takes back only the summary row; titles and the failed request stay billed.
+      yield* test.events.publish(SessionEvent.RevertEvent.Committed, {
+        sessionID: childID,
+        messageID: boundary,
+        timestamp: DateTime.makeUnsafe(5),
+      })
+      expect(yield* test.row(childID)).toMatchObject({ unpriced_steps: 3, codium_steps: 3, ...noTokens })
+      expect(yield* test.row(rootID)).toMatchObject({ subagent_unpriced_steps: 3, subagent_codium_steps: 3 })
+    }),
+  )
+
+  it.effect("counts an imported Codium row once and takes it back on revert", () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const boundary = SessionMessage.ID.make("msg_import_boundary")
+      const imported = SessionMessage.ID.make("msg_import_codium")
+      yield* test.events.publish(SessionEvent.Step.Started, {
+        sessionID: childID,
+        timestamp: created,
+        assistantMessageID: boundary,
+        agent: "build",
+        model: codiumModel,
+      })
+      yield* test.events.publish(SessionEvent.MessageImported, {
+        sessionID: childID,
+        timestamp: DateTime.makeUnsafe(1),
+        message: SessionMessage.Assistant.make({
+          id: imported,
+          type: "assistant",
+          agent: "build",
+          model: codiumModel,
+          content: [],
+          cost: 0,
+          unpriced: true,
+          billing: "codium",
+          tokens,
+          time: { created: DateTime.makeUnsafe(1), completed: DateTime.makeUnsafe(2) },
+        }),
+      })
+      expect(yield* test.row(childID)).toMatchObject({ unpriced_steps: 1, codium_steps: 1, ...noTokens })
+      expect(yield* test.row(rootID)).toMatchObject({ subagent_codium_steps: 1, ...noSubagentTokens })
+      yield* test.events.publish(SessionEvent.RevertEvent.Committed, {
+        sessionID: childID,
+        messageID: boundary,
+        timestamp: DateTime.makeUnsafe(3),
+      })
+      expect(yield* test.row(childID)).toMatchObject({ unpriced_steps: 0, codium_steps: 0, ...noTokens })
+      expect(yield* test.row(rootID)).toMatchObject({ subagent_unpriced_steps: 0, subagent_codium_steps: 0 })
+    }),
+  )
+
+  it.effect("subtracts a Codium step recorded before the flag as the ordinary step it was counted as", () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* SessionV2.Service
+      const boundary = SessionMessage.ID.make("msg_flagless_boundary")
+      const settled = SessionMessage.ID.make("msg_flagless_settled")
+      yield* test.events.publish(SessionEvent.Step.Started, {
+        sessionID: childID,
+        timestamp: created,
+        assistantMessageID: boundary,
+        agent: "build",
+        model: codiumModel,
+      })
+      // Settled on a Codium model before the flag existed: counted as an ordinary unpriced step with its tokens.
+      yield* test.events.publish(SessionEvent.Step.Started, {
+        sessionID: childID,
+        timestamp: DateTime.makeUnsafe(1),
+        assistantMessageID: settled,
+        agent: "build",
+        model: codiumModel,
+      })
+      yield* test.events.publish(SessionEvent.Step.Ended, {
+        sessionID: childID,
+        timestamp: DateTime.makeUnsafe(2),
+        assistantMessageID: settled,
+        finish: "stop",
+        cost: 0,
+        unpriced: true,
+        tokens,
+      })
+      yield* test.events.publish(SessionEvent.MessageImported, {
+        sessionID: childID,
+        timestamp: DateTime.makeUnsafe(3),
+        message: SessionMessage.Assistant.make({
+          id: SessionMessage.ID.make("msg_flagless_imported"),
+          type: "assistant",
+          agent: "build",
+          model: codiumModel,
+          content: [],
+          cost: 0,
+          unpriced: true,
+          tokens,
+          time: { created: DateTime.makeUnsafe(3), completed: DateTime.makeUnsafe(4) },
+        }),
+      })
+      expect(yield* test.row(childID)).toMatchObject({
+        unpriced_steps: 2,
+        codium_steps: 0,
+        tokens_input: 20,
+        tokens_output: 40,
+      })
+      expect(yield* test.row(rootID)).toMatchObject({ subagent_codium_steps: 0, subagent_tokens_input: 20 })
+
+      yield* test.events.publish(SessionEvent.RevertEvent.Committed, {
+        sessionID: childID,
+        messageID: boundary,
+        timestamp: DateTime.makeUnsafe(5),
+      })
+      expect(yield* test.row(childID)).toMatchObject({ unpriced_steps: 0, codium_steps: 0, ...noTokens })
+      for (const id of [childID, rootID])
+        expect(yield* test.row(id)).toMatchObject({ subagent_codium_steps: 0, ...noSubagentTokens })
+      // The counts never go below 0, so the session still encodes.
+      expect((yield* sessions.get(childID)).codiumSteps).toBeUndefined()
+      expect((yield* sessions.get(rootID)).subagentCodiumSteps).toBeUndefined()
+    }).pipe(Effect.provide(sessionsLayer)),
+  )
+})

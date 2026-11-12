@@ -65,8 +65,8 @@ export function columnWarnAt(set: SpendLimitSet) {
 export function summaryLine(summary: Pick<SpendSummary, "all">) {
   const unmeasured = summary.all.month.unmeasuredRuns
   return [
-    `Today: ${formatUsd(summary.all.day.costUsd)}`,
-    `This month: ${formatUsd(summary.all.month.costUsd)}`,
+    `Today: ${CodiumUsage.withCodium(formatUsd(summary.all.day.costUsd), Number(summary.all.day.billing === "codium"))}`,
+    `This month: ${CodiumUsage.withCodium(formatUsd(summary.all.month.costUsd), Number(summary.all.month.billing === "codium"))}`,
     ...(unmeasured > 0 ? [`${unmeasured} ${unmeasured === 1 ? "run" : "runs"} unmeasured`] : []),
   ].join(" · ")
 }
@@ -79,7 +79,14 @@ const SOURCE_LABEL: Record<SpendEvent["source"], string> = {
 
 export function recentRunMeta(event: SpendEvent) {
   return [
-    event.costUsd === undefined ? "unmeasured" : formatUsd(event.costUsd),
+    CodiumUsage.withCodium(
+      event.billing === "codium" && !event.costUsd
+        ? undefined
+        : event.costUsd === undefined
+          ? "unmeasured"
+          : formatUsd(event.costUsd),
+      Number(event.billing === "codium"),
+    ),
     SOURCE_LABEL[event.source],
     new Date(event.at).toLocaleString(undefined, {
       month: "short",
@@ -89,3 +96,4 @@ export function recentRunMeta(event: SpendEvent) {
     }),
   ].join(" · ")
 }
+import { CodiumUsage } from "@vectordevai/core/codium-usage"

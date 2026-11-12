@@ -182,7 +182,8 @@ type RuntimeReport = {
   tasks: TaskReport[]
 }
 
-async function runTask(input: {
+// `env` replaces the inherited environment for the agent and for every check run on what it wrote.
+export async function runTask(input: {
   runtime: RuntimeId
   launcher: Launcher | undefined
   task: EvalTask
@@ -191,6 +192,7 @@ async function runTask(input: {
   timeout?: number
   attempt: number
   repetitions: number
+  env?: Record<string, string>
 }): Promise<TaskReport> {
   const spec = scoringSpec(input.task)
   const repetition = input.repetitions > 1 ? `#${input.attempt}/${input.repetitions}` : ""
@@ -223,6 +225,7 @@ async function runTask(input: {
     args: [...input.launcher.prefix, ...agentArguments(input.runtime, dir, input.task.prompt, input.model)],
     cwd: dir,
     timeoutMs,
+    env: input.env,
   })
   const wallMs = Date.now() - started
 
@@ -264,12 +267,13 @@ async function runTask(input: {
     args: input.task.check.args,
     cwd: dir,
     timeoutMs: CHECK_TIMEOUT_MS,
+    env: input.env,
   })
   const protectedViolations = await findProtectedViolations(input.task, dir)
   const assertionFailures = await findAssertionFailures(input.task, dir)
   const mutationsCaught =
     check.exitCode === 0 && protectedViolations.length === 0 && assertionFailures.length === 0
-      ? await countMutationsCaught(input.task, dir)
+      ? await countMutationsCaught(input.task, dir, input.env)
       : 0
 
   const run: TaskRun = {
@@ -447,7 +451,7 @@ async function findAssertionFailures(task: EvalTask, dir: string) {
 // Seeded-defect coverage: break the implementation one way at a time and
 // require the suite the agent wrote to notice. Runs strictly sequentially
 // because every mutation edits and restores the same file.
-function countMutationsCaught(task: EvalTask, dir: string) {
+function countMutationsCaught(task: EvalTask, dir: string, env?: Record<string, string>) {
   return task.mutations.reduce(async (previous, mutation) => {
     const caught = await previous
     const path = join(dir, mutation.path)
@@ -459,6 +463,7 @@ function countMutationsCaught(task: EvalTask, dir: string) {
       args: task.check.args,
       cwd: dir,
       timeoutMs: CHECK_TIMEOUT_MS,
+      env,
     })
     await writeFile(path, original)
     return caught + (result.exitCode === 0 ? 0 : 1)
@@ -467,12 +472,19 @@ function countMutationsCaught(task: EvalTask, dir: string) {
 
 type CaptureResult = { exitCode: number; output: string; meter: Meter; timedOut: boolean }
 
-function capture(input: { command: string; args: string[]; cwd: string; timeoutMs: number }) {
+// `env`, when given, replaces the inherited environment: prompt evolution's live arm builds one from scratch.
+export function capture(input: {
+  command: string
+  args: string[]
+  cwd: string
+  timeoutMs: number
+  env?: Record<string, string>
+}) {
   return new Promise<CaptureResult>((resolve) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       detached: process.platform !== "win32",
-      env: { ...process.env, CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" },
+      env: { ...(input.env ?? process.env), CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" },
       // "ignore" rather than a pipe: several of these CLIs read a non-TTY stdin
       // as their prompt and would block forever on an open, empty pipe.
       stdio: ["ignore", "pipe", "pipe"],
@@ -710,4 +722,5 @@ function formatTable(rows: string[][]) {
     .join("\n")
 }
 
-process.exit(await main())
+// Run as a script; prompt evolution's live arm imports runTask and capture.
+if (import.meta.main) process.exit(await main())

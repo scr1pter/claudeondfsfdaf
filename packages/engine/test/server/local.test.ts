@@ -610,8 +610,17 @@ describe("the Local API", () => {
 
       await turnOn()
       const asked = await send("POST", "/local/servers", { url: studio.origin })
-      expect(asked.status).toBe(409)
-      expect((await json<Refusal>(asked)).data.changes).toEqual([`adds the model server ${studio.origin}`])
+      const refusal = await json<Refusal>(asked)
+      const policy = Config.local()
+      expect(
+        asked.status,
+        JSON.stringify({
+          body: refusal,
+          studioPaths: studio.hits().slice(-12).map((hit) => hit.path.split("?")[0]!.slice(0, 128)),
+          local: { enabled: policy.enabled, endpoints: policy.endpoints.slice(0, 8).map((item) => item.origin) },
+        }),
+      ).toBe(409)
+      expect(refusal.data.changes).toEqual([`adds the model server ${studio.origin}`])
       expect(Config.local().endpoints.map((item) => item.origin)).toEqual([ollama.origin])
       const confirmed = await json<Added>(await send("POST", "/local/servers", { url: studio.origin, confirm: true }))
       // lmstudio is the catalog's own provider, so a server added by hand gets the app's name for it.

@@ -26,26 +26,17 @@ async function trackedText() {
   const command = Bun.spawn(["git", "ls-files", "-z"], { cwd: root, stdout: "pipe", stderr: "pipe" })
   const output = await new Response(command.stdout).text()
   expect(await command.exited).toBe(0)
+  const read = async (name: string) => {
+    if (notices.has(name) || name.startsWith("licenses/")) return { name, text: "" }
+    const file = Bun.file(path.join(root, name))
+    const text = (await file.exists()) ? Buffer.from(await file.arrayBuffer()).toString("latin1") : ""
+    return { name, text }
+  }
+  // Every tracked file is read, a batch at a time: opening them all at once runs out of file handles on Windows.
   const names = output.split("\0").filter(Boolean)
-  // Opening every tracked file at once runs past Windows' open-file limit (EMFILE) once the
-  // repository holds several thousand files, so read them in bounded batches.
-  const batches = Array.from({ length: Math.ceil(names.length / 256) }, (_, index) =>
-    names.slice(index * 256, (index + 1) * 256),
-  )
-  return batches.reduce(
-    async (read, batch) => [
-      ...(await read),
-      ...(await Promise.all(
-        batch.map(async (name) => {
-          if (notices.has(name) || name.startsWith("licenses/")) return { name, text: "" }
-          const file = Bun.file(path.join(root, name))
-          const text = (await file.exists()) ? Buffer.from(await file.arrayBuffer()).toString("latin1") : ""
-          return { name, text }
-        }),
-      )),
-    ],
-    Promise.resolve<{ name: string; text: string }[]>([]),
-  )
+  const texts: { name: string; text: string }[] = []
+  for (let at = 0; at < names.length; at += 256) texts.push(...(await Promise.all(names.slice(at, at + 256).map(read))))
+  return texts
 }
 
 const tracked = trackedText()

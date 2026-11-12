@@ -1,8 +1,16 @@
 import { enforceRateLimit, requireTrustedJsonRequest } from "../_lib/abuse.js"
-import { verifyCliToken } from "../_lib/cli-token.js"
-import { accountTokensRevoked } from "../_lib/revocation.js"
+import { verifyCliTokenClaims } from "../_lib/cli-token.js"
+import { accountTokensRevoked, requireUnrevokedCliToken } from "../_lib/revocation.js"
 import { afterResponse, recordCliUsage } from "../_lib/usage.js"
-import { ApiError, handleApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "../_lib/http.js"
+import {
+  ApiError,
+  handleApiError,
+  json,
+  readJson,
+  requireMethod,
+  type ApiRequest,
+  type ApiResponse,
+} from "../_lib/http.js"
 
 export default async function handler(request: ApiRequest, response: ApiResponse) {
   try {
@@ -18,10 +26,13 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       },
     )
     const body = await readJson<{ token?: unknown }>(request, 4_000)
-    const user = verifyCliToken(typeof body.token === "string" ? body.token : "")
+    const token = typeof body.token === "string" ? body.token : ""
+    const claims = verifyCliTokenClaims(token)
+    if (claims.jti) await requireUnrevokedCliToken(token)
+    const user = { id: claims.id, email: claims.email }
     // A token outlives the account that minted it, so a deleted account's
     // terminal would keep verifying for up to ninety days without this.
-    if (await accountTokensRevoked(user.id)) {
+    if (!claims.jti && (await accountTokensRevoked(user.id))) {
       throw new ApiError(401, "CLI_TOKEN_INVALID", "That CLI token is not valid. Generate a new one.")
     }
     json(response, 200, { ok: true, user })

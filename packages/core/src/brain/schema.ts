@@ -19,8 +19,20 @@ export type Scope = typeof Scope.Type
  * - review: what Vectorscope was told not to flag; read by reviews, never sent with coding requests.
  * - term: what the user means by a word or phrase ("when I say ship it I mean open a PR, wait for CI, then merge"),
  *   delivered only to a request whose words name it.
+ * - skill: a procedure Vector drafted after a run turned a failing check green (BrainSkill). It lives under its own
+ *   repository id, which no memory query reads, and reaches the agent only as `skill` tool output, never as a rule.
  */
-export const Kind = Schema.Literals(["rule", "preference", "decision", "lesson", "fact", "failure", "review", "term"])
+export const Kind = Schema.Literals([
+  "rule",
+  "preference",
+  "decision",
+  "lesson",
+  "fact",
+  "failure",
+  "review",
+  "term",
+  "skill",
+])
 export type Kind = typeof Kind.Type
 
 /**
@@ -101,6 +113,72 @@ export const Source = Schema.Struct({
   line: Schema.optional(Schema.Finite),
 })
 
+/** Whether Vector drafts skills: for the owner's review (the default), on its own after a second sighting, or never. */
+export const SkillLearning = Schema.Literals(["review", "auto", "off"]).annotate({ identifier: "MemorySkillLearning" })
+export type SkillLearning = typeof SkillLearning.Type
+
+/** When a model may help draft a skill: never, only with Vector Local on (the default), or with any model. */
+export const SkillDrafter = Schema.Literals(["off", "local-only", "always"]).annotate({
+  identifier: "MemorySkillDrafter",
+})
+export type SkillDrafter = typeof SkillDrafter.Type
+
+/** What Vector does with workflow insights: apply learned defaults, only record runs, or nothing. */
+export const WorkflowLearning = Schema.Literals(["apply", "observe", "off"]).annotate({
+  identifier: "MemoryWorkflowLearning",
+})
+export type WorkflowLearning = typeof WorkflowLearning.Type
+
+/**
+ * A learned skill as Settings shows it. The procedure and the failure excerpt live here, never in the entry's text,
+ * which is only the card. `uses` are lifetime counters, which outlive the 30 days memory keeps its uses for.
+ */
+export const Skill = Schema.Struct({
+  key: Schema.String,
+  name: Schema.String,
+  description: Schema.String,
+  procedure: Schema.String,
+  checks: Schema.Array(Schema.String),
+  commands: Schema.Array(Schema.String),
+  failure: Schema.optional(Schema.String),
+  version: Schema.Finite,
+  drafter: Schema.Literals(["rules", "model", "user", "import"]),
+  approvedBy: Schema.optional(Schema.Literals(["user", "vector"])),
+  approvedAt: Schema.optional(Schema.Finite),
+  sharedPath: Schema.optional(Schema.String),
+  sharedAt: Schema.optional(Schema.Finite),
+  helpful: Schema.Finite,
+  harmful: Schema.Finite,
+  proven: Schema.Finite,
+  uses: Schema.Struct({
+    loads: Schema.Finite,
+    passes: Schema.Finite,
+    fails: Schema.Finite,
+    ignored: Schema.Finite,
+    reverts: Schema.Finite,
+  }),
+  /** The failure excerpt reads like instructions to the agent, which keeps the skill from going live on its own. */
+  instructionLikeFailure: Schema.Boolean,
+  /** Loaded again and again without its check ever passing after it, so it leaves the listing. */
+  fading: Schema.Boolean,
+}).annotate({ identifier: "MemorySkill" })
+export type Skill = typeof Skill.Type
+
+/** A skill's text as one version left it. Versions never change, so a session that loaded one keeps its bytes. */
+export const SkillVersion = Schema.Struct({
+  version: Schema.Finite,
+  entryID: Schema.String,
+  name: Schema.String,
+  description: Schema.String,
+  procedure: Schema.String,
+  checks: Schema.Array(Schema.String),
+  commands: Schema.Array(Schema.String),
+  actor: Schema.Literals(["agent", "user", "vector", "import"]),
+  reason: Schema.Literals(["learned", "edited", "imported", "rollback"]),
+  createdAt: Schema.Finite,
+}).annotate({ identifier: "MemorySkillVersion" })
+export type SkillVersion = typeof SkillVersion.Type
+
 export const Entry = Schema.Struct({
   id: Schema.String,
   scope: Scope,
@@ -130,12 +208,17 @@ export const Entry = Schema.Struct({
   facet: Schema.optional(Facet),
   /** A term's word or phrase, as recall matches it, and what the user means by it. */
   term: Schema.optional(Schema.Struct({ key: Schema.String, meaning: Schema.String })),
+  /** Present exactly when the kind is "skill". */
+  skill: Schema.optional(Skill),
 }).annotate({ identifier: "MemoryEntry" })
 export type Entry = typeof Entry.Type
 
 export const Evidence = Schema.Struct({
-  /** "document": a quote from a document's record or passage, whose id is the path. */
-  type: Schema.Literals(["message", "file", "check", "user", "file-item", "document"]),
+  /**
+   * "document": a quote from a document's record or passage, whose id is the path. "run": a run that turned a check
+   * green, with the check as its command and the request's id as its quote.
+   */
+  type: Schema.Literals(["message", "file", "check", "user", "file-item", "document", "run"]),
   path: Schema.optional(Schema.String),
   quote: Schema.optional(Schema.String),
   command: Schema.optional(Schema.String),

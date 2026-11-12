@@ -20,6 +20,10 @@ exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Run without waiting. Vector notifies you when the command exits; read its output file with read and stop it with task_manage stop. Main agent only.",
+      "type": "boolean",
+    },
     "command": {
       "description": "The command to execute",
       "type": "string",
@@ -401,6 +405,35 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
             "description": "A short (3-5 words) title for this subagent, shown to the user on its card, e.g. "Map auth middleware". Make it specific and distinct from sibling subagents",
             "type": "string",
           },
+          "effort": {
+            "description": "Never above your own effort",
+            "enum": [
+              "default",
+              "low",
+              "medium",
+              "high",
+            ],
+            "type": "string",
+          },
+          "fork": {
+            "description": "true: start from your whole conversation instead of a brief, sharing your prompt cache. Background only; no subagent_type, model, effort or context_pack",
+            "type": "boolean",
+          },
+          "isolation": {
+            "description": "Give this child its own git worktree made from your current files. Removed if it changes nothing; otherwise its changes come back for task_manage merge. For parallel editing; not for read-only agents.",
+            "enum": [
+              "worktree",
+            ],
+            "type": "string",
+          },
+          "model": {
+            "description": ""provider/model", a model ID on your provider, or "small". Never pricier than yours unless the user allowed it",
+            "type": "string",
+          },
+          "output_schema": {
+            "description": "A JSON Schema the final answer must match; you receive checked JSON",
+            "type": "object",
+          },
           "owned_paths": {
             "description": "Repository-relative files or directory prefixes this subagent owns. Vector rejects overlapping ownership among active sibling subagents",
             "items": {
@@ -409,7 +442,7 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
             "type": "array",
           },
           "prompt": {
-            "description": "A standalone brief; the subagent sees none of your conversation",
+            "description": "A standalone brief; the subagent sees none of your conversation unless fork is true",
             "type": "string",
           },
           "subagent_type": {

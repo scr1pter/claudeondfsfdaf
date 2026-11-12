@@ -1,3 +1,4 @@
+import { SessionAccounting } from "@vectordevai/core/session/accounting"
 import { ShareNext } from "@/share/share-next"
 import { PublicShareRemovalError, publicShareWarning } from "@vectordevai/schema/public-share"
 import { PublicSession } from "@vectordevai/schema/public-session"
@@ -12,6 +13,7 @@ import { Decimal } from "decimal.js"
 import type { ProviderMetadata, Usage } from "@vectordevai/llm"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
 import { Database } from "@vectordevai/core/database/database"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@vectordevai/core/event"
 import { EventTable } from "@vectordevai/core/event/sql"
@@ -52,6 +54,11 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { SessionMessage } from "@vectordevai/schema/session-message"
 import { SessionEvent } from "@vectordevai/schema/session-event"
+import { TaskPlace } from "@/task/place"
+import { TaskJobs } from "@/task/jobs"
+import { InstanceRef } from "@/effect/instance-ref"
+import { SessionCleanup } from "./cleanup"
+import { Billing } from "@vectordevai/schema/billing"
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
@@ -105,8 +112,12 @@ export function fromRow(row: SessionRow): Info {
     summary,
     cost: row.cost,
     unpricedSteps: row.unpriced_steps || undefined,
+    codiumSteps: row.codium_steps || undefined,
+    tokensOwnOnly: row.tokens_own_only,
+    subagentTokensOwnOnly: row.subagent_tokens_own_only,
     subagentCost: row.subagent_cost || undefined,
     subagentUnpricedSteps: row.subagent_unpriced_steps || undefined,
+    subagentCodiumSteps: row.subagent_codium_steps || undefined,
     subagentTokens: subagentTokens(row),
     tokens: {
       input: row.tokens_input,
@@ -153,8 +164,10 @@ export function toRow(info: Info) {
     metadata: info.metadata,
     cost: info.cost ?? 0,
     unpriced_steps: info.unpricedSteps ?? 0,
+    codium_steps: info.codiumSteps ?? 0,
     subagent_cost: info.subagentCost ?? 0,
     subagent_unpriced_steps: info.subagentUnpricedSteps ?? 0,
+    subagent_codium_steps: info.subagentCodiumSteps ?? 0,
     subagent_tokens_input: info.subagentTokens?.input ?? 0,
     subagent_tokens_output: info.subagentTokens?.output ?? 0,
     subagent_tokens_reasoning: info.subagentTokens?.reasoning ?? 0,
@@ -259,9 +272,16 @@ export const Info = Schema.Struct({
   cost: optional(Schema.Finite),
   // Steps that ran on a model with no listed price; cost leaves them out, so a session with any is not fully priced.
   unpricedSteps: optional(NonNegativeInt),
+  // How many of those unpriced steps ran on Vector Codium; own unpriced steps are unpricedSteps − codiumSteps.
+  codiumSteps: optional(NonNegativeInt),
+  // True only when the accounting boundary proves the aggregate contains own-model tokens only.
+  tokensOwnOnly: optional(Schema.Boolean),
+  subagentTokensOwnOnly: optional(Schema.Boolean),
   // What the subagent sessions below this one spent, which cost leaves out, and how many of their steps were unpriced.
   subagentCost: optional(Schema.Finite),
   subagentUnpricedSteps: optional(NonNegativeInt),
+  // How many of the subagent unpriced steps ran on Vector Codium.
+  subagentCodiumSteps: optional(NonNegativeInt),
   // The tokens those sessions used, which tokens leaves out.
   subagentTokens: optional(Tokens),
   tokens: optional(Tokens),
@@ -296,6 +316,8 @@ export const UsageDay = Schema.Struct({
   // Known recorded spend, including ancillary model work; task activity remains transcript-only.
   cost: Schema.Finite,
   tasks: NonNegativeInt,
+  // Vector Codium responses that day: an activity count, never tokens. A day that counts them leaves their tokens out.
+  codium: optional(NonNegativeInt),
 }).annotate({ identifier: "SessionUsageDay" })
 export type UsageDay = Types.DeepMutable<Schema.Schema.Type<typeof UsageDay>>
 
@@ -325,6 +347,9 @@ export const UsageHelper = Schema.Struct({
   responses: NonNegativeInt,
   tokens: NonNegativeInt,
   cost: Schema.Finite,
+  // The helper's steps on Vector Codium: an activity count, never tokens. A helper that counts them leaves their tokens
+  // out.
+  codiumSteps: optional(NonNegativeInt),
 }).annotate({ identifier: "SessionUsageHelper" })
 export type UsageHelper = Types.DeepMutable<Schema.Schema.Type<typeof UsageHelper>>
 
@@ -334,6 +359,9 @@ export const UsageSummary = Schema.Struct({
   // Model work with unknown price or incomplete usage, including ancillary attempts.
   // lifetimeCost is the known subtotal; this count is independent of transcript modelResponses.
   unpricedResponses: optional(NonNegativeInt),
+  // How many of those unpriced responses ran on Vector Codium: an activity count, never tokens. A summary that counts
+  // them leaves their tokens out of every token total.
+  codiumResponses: optional(NonNegativeInt),
   inputTokens: NonNegativeInt,
   outputTokens: NonNegativeInt,
   reasoningTokens: NonNegativeInt,
@@ -504,6 +532,12 @@ export const getUsage = (input: {
     },
   }
 
+  // A Vector Codium step is billed to the account's plan on vectordev.ai, so it is never priced from what the provider
+  // metadata reports, and every step is unpriced and marked Codium: totals leave its tokens out and show "Codium".
+  // No provider-measured bill comes with it either.
+  if (Billing.isCodium(input.model.providerID))
+    return { billed: false, unpriced: true, billing: "codium" as const, cost: 0, tokens }
+
   const costInfo = costAt(input.model.cost, inputTokens)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
   // A valid provider-reported OpenRouter cost takes precedence over a catalog estimate, including a zero charge.
@@ -554,16 +588,19 @@ export interface Interface {
   readonly listGlobal: (input?: GlobalListInput) => Effect.Effect<GlobalInfo[]>
   /** Usage across every project, or only sessions in `directory`. */
   readonly usage: (input?: { directory?: string }) => Effect.Effect<UsageSummary>
-  readonly create: (input?: {
-    parentID?: SessionID
-    internal?: string
-    title?: string
-    agent?: string
-    model?: Schema.Schema.Type<typeof Model>
-    metadata?: typeof Metadata.Type
-    permission?: PermissionV1.Ruleset
-    workspaceID?: WorkspaceV2.ID
-  }) => Effect.Effect<Info>
+  readonly create: (
+    input?: {
+      parentID?: SessionID
+      internal?: string
+      title?: string
+      agent?: string
+      model?: Schema.Schema.Type<typeof Model>
+      metadata?: typeof Metadata.Type
+      permission?: PermissionV1.Ruleset
+      workspaceID?: WorkspaceV2.ID
+    },
+    actor?: SessionAudience.Actor,
+  ) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
@@ -638,6 +675,7 @@ const layer: Layer.Layer<
     const sharing = yield* ShareNext.Service
     const { db } = yield* Database.Service
     const database = yield* Database.Service
+    const audience = SessionAudience.make(database)
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
@@ -648,6 +686,8 @@ const layer: Layer.Layer<
       agent?: string
       model?: Schema.Schema.Type<typeof Model>
       parentID?: SessionID
+      forkOf?: SessionID
+      actor?: SessionAudience.Actor
       internal?: string
       workspaceID?: WorkspaceV2.ID
       directory: string
@@ -655,14 +695,20 @@ const layer: Layer.Layer<
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
     }) {
-      const ctx = yield* InstanceState.context
+      const current = yield* InstanceState.context
+      const id = SessionID.descending(input.id)
+      yield* audience
+        .register({ sessionID: id, parentID: input.parentID, forkOf: input.forkOf, actor: input.actor })
+        .pipe(Effect.orDie)
+      const inherited = input.parentID ? TaskPlace.inherit(id, input.parentID) : undefined
+      const ctx = inherited?.home ?? current
       const result: Info = {
-        id: SessionID.descending(input.id),
+        id,
         slug: Slug.create(),
         version: InstallationVersion,
         projectID: ctx.project.id,
-        directory: input.directory,
-        path: input.path,
+        directory: inherited?.home.directory ?? input.directory,
+        path: inherited ? sessionPath(ctx.worktree, ctx.directory) : input.path,
         workspaceID: input.workspaceID,
         parentID: input.parentID,
         internal: input.internal,
@@ -680,15 +726,47 @@ const layer: Layer.Layer<
       }
       yield* Effect.logInfo("created", result)
 
-      yield* events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
+      yield* events
+        .publish(
+          SessionV1.Event.Created,
+          { sessionID: result.id, info: result },
+          {
+            commit: (seq) => SessionAccounting.initializeEmpty(db, result.id, seq),
+          },
+        )
+        .pipe(Effect.onError(() => Effect.sync(() => TaskPlace.drop(result.id))))
 
-      return result
+      return yield* get(result.id).pipe(Effect.orDie)
     })
 
     const get = Effect.fn("Session.get")(function* (id: SessionID) {
       const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
       if (!row) return yield* Effect.fail(new NotFoundError({ message: `Session not found: ${id}` }))
-      return fromRow(row)
+      const info = fromRow(row)
+      // Reused sessions may predate the runtime map. Recover trusted lineage from rows, never display metadata.
+      if (info.parentID && !TaskPlace.get(info.id)) {
+        const family = [info]
+        const seen = new Set<string>([info.id])
+        for (
+          let parentID: SessionID | undefined = info.parentID;
+          parentID && !seen.has(parentID) && !TaskPlace.get(parentID);
+
+        ) {
+          seen.add(parentID)
+          const parent: SessionRow | undefined = yield* db
+            .select()
+            .from(SessionTable)
+            .where(eq(SessionTable.id, parentID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!parent) break
+          family.push(fromRow(parent))
+          parentID = parent.parent_id ? SessionID.make(parent.parent_id) : undefined
+        }
+        for (const child of family.reverse())
+          if (child.parentID && !TaskPlace.get(child.id)) TaskPlace.inherit(child.id, child.parentID)
+      }
+      return info
     })
 
     const list = Effect.fn("Session.list")(function* (input?: ListInput) {
@@ -781,6 +859,7 @@ const layer: Layer.Layer<
           model: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.model')`,
           cost: sql<number | null>`json_extract(${SessionMessageTable.data}, '$.cost')`,
           unpriced: sql<number | null>`json_extract(${SessionMessageTable.data}, '$.unpriced')`,
+          billing: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.billing')`,
           tokens: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.tokens')`,
           finish: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.finish')`,
           error: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.error')`,
@@ -844,8 +923,10 @@ const layer: Layer.Layer<
           yield* remove(child.id, options)
         }
 
+        yield* SessionCleanup.run(session)
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
         yield* events.remove(sessionID)
+        TaskPlace.drop(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })
       }
@@ -853,8 +934,12 @@ const layer: Layer.Layer<
 
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
       Effect.gen(function* () {
-        yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg })
-        return msg
+        // Every V1 assistant message, compaction included, is published here, so this is where a Vector Codium
+        // message gets its flag. The published copy carries it; the caller's object is left as it was.
+        const info =
+          msg.role === "assistant" && Billing.isCodium(msg.providerID) ? { ...msg, billing: "codium" as const } : msg
+        yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: info.sessionID, info })
+        return info
       }).pipe(Effect.withSpan("Session.updateMessage"))
 
     const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
@@ -889,19 +974,23 @@ const layer: Layer.Layer<
       } as SessionV1.Part
     })
 
-    const create = Effect.fn("Session.create")(function* (input?: {
-      parentID?: SessionID
-      internal?: string
-      title?: string
-      agent?: string
-      model?: Schema.Schema.Type<typeof Model>
-      metadata?: typeof Metadata.Type
-      permission?: PermissionV1.Ruleset
-      workspaceID?: WorkspaceV2.ID
-    }) {
+    const create = Effect.fn("Session.create")(function* (
+      input?: {
+        parentID?: SessionID
+        internal?: string
+        title?: string
+        agent?: string
+        model?: Schema.Schema.Type<typeof Model>
+        metadata?: typeof Metadata.Type
+        permission?: PermissionV1.Ruleset
+        workspaceID?: WorkspaceV2.ID
+      },
+      actor: SessionAudience.Actor = "owner",
+    ) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
       return yield* createNext({
+        actor,
         parentID: input?.parentID,
         internal: input?.internal,
         directory: ctx.directory,
@@ -919,13 +1008,20 @@ const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
+      const metadata = structuredClone(original.metadata)
+      // A copy of a subagent fork is no fork: it does not inherit its parent's conversation (5.E.3).
+      const subagent = metadata?.subagent
+      if (subagent && typeof subagent === "object" && !Array.isArray(subagent) && "fork" in subagent)
+        delete (subagent as Record<string, unknown>).fork
       const session = yield* createNext({
+        forkOf: original.id,
         directory: ctx.directory,
         path: sessionPath(ctx.worktree, ctx.directory),
         workspaceID: original.workspaceID,
         title,
-        metadata: structuredClone(original.metadata),
+        metadata,
       })
+      yield* SessionAccounting.invalidate(db, session.id)
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()
 
@@ -952,6 +1048,7 @@ const layer: Layer.Layer<
                   ...part,
                   cost: 0,
                   unpriced: undefined,
+                  billing: undefined,
                   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
                 }
               : part),
@@ -965,7 +1062,7 @@ const layer: Layer.Layer<
           yield* updatePart(p)
         }
       }
-      return session
+      return yield* get(session.id)
     })
 
     const patch = (sessionID: SessionID, info: Patch) =>
@@ -1177,15 +1274,16 @@ const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function*
   background: BackgroundJob.Interface,
   sessionID: SessionID,
 ) {
-  const jobs = yield* background.list()
+  const jobs = yield* TaskJobs.all(background)
   yield* Effect.forEach(
-    jobs.filter((job) => {
+    jobs.filter(({ info: job }) => {
       if (job.status !== "running") return false
       if (job.id === sessionID) return true
       if (job.metadata?.sessionId === sessionID) return true
       return job.metadata?.parentSessionId === sessionID
     }),
-    (job) => background.cancel(job.id),
+    ({ info, place }) =>
+      place ? background.cancel(info.id).pipe(Effect.provideService(InstanceRef, place)) : background.cancel(info.id),
     { concurrency: "unbounded", discard: true },
   )
 })
@@ -1207,6 +1305,7 @@ export function stepUsage(
     model: string | null
     cost: number | null
     unpriced: number | null
+    billing?: string | null
     tokens: string | null
     finish: string | null
     error: string | null
@@ -1239,6 +1338,7 @@ export function stepUsage(
         cost: row.cost,
         tokens,
         ...(row.unpriced ? { unpriced: true } : {}),
+        ...(row.billing === "codium" ? { billing: "codium" as const } : {}),
         ...(row.type === "compaction" ? { summary: true } : {}),
         ...(row.finish ? { finish: row.finish } : {}),
         // Only whether the step failed matters to usage; the error itself stays in the session.
@@ -1257,19 +1357,21 @@ export function summarizeUsage(
 ): UsageSummary {
   const assistant = messages.filter((message) => message.role === "assistant").filter((message) => !message.forked)
   const own = assistant.filter((message) => !helpers.has(message.sessionID))
+  const metered = assistant.filter((message) => !Billing.of(message))
   const days = assistant.reduce((result, message) => {
     const tokens = usageTokens(message)
     const date = localDateKey(message.time.created)
-    const current = result.get(date) ?? { date, tokens: 0, cost: 0, tasks: new Set<string>() }
+    const current = result.get(date) ?? { date, tokens: 0, cost: 0, codium: 0, tasks: new Set<string>() }
     if (!helpers.has(message.sessionID)) current.tasks.add(`${message.sessionID}:${message.parentID}`)
     result.set(date, {
       date,
       tokens: current.tokens + tokens,
-      cost: current.cost + Math.max(0, message.cost),
+      cost: current.cost + (Billing.of(message) ? 0 : Math.max(0, message.cost)),
+      codium: current.codium + (Billing.of(message) ? 1 : 0),
       tasks: current.tasks,
     })
     return result
-  }, new Map<string, { date: string; tokens: number; cost: number; tasks: Set<string> }>())
+  }, new Map<string, { date: string; tokens: number; cost: number; codium: number; tasks: Set<string> }>())
   // Archive imports remap sessions and event IDs, but preserve the identity of the paid attempt.
   const attempts = new Map<string, typeof SessionEvent.AncillaryUsage.data.Type | undefined>()
   const same = Schema.toEquivalence(SessionEvent.AncillaryUsage.data)
@@ -1285,15 +1387,24 @@ export function summarizeUsage(
     // Conflicting copies have no trustworthy amount or date; count one unknown attempt below.
     if (!usage) return
     const date = localDateKey(DateTime.toEpochMillis(usage.timestamp))
-    const current = days.get(date) ?? { date, tokens: 0, cost: 0, tasks: new Set<string>() }
+    const current = days.get(date) ?? { date, tokens: 0, cost: 0, codium: 0, tasks: new Set<string>() }
     days.set(date, {
       ...current,
-      cost: current.cost + Math.max(0, usage.cost ?? 0),
-      tokens: current.tokens + usageTokens({ tokens: usage.tokens ?? EmptyTokens }),
+      cost: current.cost + (Billing.of(usage) ? 0 : Math.max(0, usage.cost ?? 0)),
+      tokens: current.tokens + usageTokens({ ...usage, tokens: usage.tokens ?? EmptyTokens }),
+      codium: current.codium + (Billing.of(usage) ? 1 : 0),
     })
   })
   const activity = [...days.values()]
-    .map((day): UsageDay => ({ date: day.date, tokens: day.tokens, cost: day.cost, tasks: day.tasks.size }))
+    .map(
+      (day): UsageDay => ({
+        date: day.date,
+        tokens: day.tokens,
+        cost: day.cost,
+        tasks: day.tasks.size,
+        ...(day.codium ? { codium: day.codium } : {}),
+      }),
+    )
     .sort((a, b) => a.date.localeCompare(b.date))
   const active = new Set(activity.filter((day) => day.tasks > 0).map((day) => day.date))
   const currentStreak = streakEndingAt(
@@ -1318,7 +1429,13 @@ export function summarizeUsage(
       )
       .map((message) => `${message.sessionID}:${message.parentID}`),
   )
-  const modelGroups = assistant.reduce((result, message) => {
+  const ownChats = new Set(
+    own
+      .filter((message) => usageTokens(message) > 0)
+      .map((message) => `${message.sessionID}:${message.parentID}`)
+      .filter((id) => completed.has(id)),
+  )
+  const modelGroups = metered.reduce((result, message) => {
     const modelID = message.modelID.endsWith("-fast") ? message.modelID.slice(0, -5) : message.modelID
     const key = `${message.providerID}\n${modelID}`
     const current = result.get(key) ?? { providerID: message.providerID, modelID, tokens: 0, responses: 0 }
@@ -1329,7 +1446,7 @@ export function summarizeUsage(
     })
     return result
   }, new Map<string, Omit<UsageModel, "percentage">>())
-  const effortGroups = assistant.reduce((result, message) => {
+  const effortGroups = metered.reduce((result, message) => {
     const effort = usageEffort(message.variant)
     const current = result.get(effort.id) ?? { ...effort, tokens: 0, responses: 0 }
     result.set(effort.id, {
@@ -1339,9 +1456,9 @@ export function summarizeUsage(
     })
     return result
   }, new Map<string, Omit<UsageEffort, "percentage">>())
-  const transcriptTokens = assistant.reduce((total, message) => total + usageTokens(message), 0)
+  const transcriptTokens = metered.reduce((total, message) => total + usageTokens(message), 0)
   const percentage = (tokens: number, responses: number) => {
-    const totalResponses = assistant.length
+    const totalResponses = metered.length
     const share = transcriptTokens > 0 ? tokens / transcriptTokens : totalResponses > 0 ? responses / totalResponses : 0
     return Math.round(share * 1_000) / 10
   }
@@ -1354,16 +1471,25 @@ export function summarizeUsage(
     }))
   const longest = durations.reduce((a, b) => (b.ms > a.ms ? b : a), { ms: 0, tokens: 0 })
   const unpricedResponses =
-    assistant.filter((message) => message.unpriced).length +
+    assistant.filter((message) => message.unpriced || Billing.of(message)).length +
     [...attempts.values()].filter(
-      (usage) => !usage || usage.unpriced || usage.incomplete || usage.cost === undefined || usage.tokens === undefined,
+      (usage) =>
+        !usage ||
+        Billing.of(usage) ||
+        usage.unpriced ||
+        usage.incomplete ||
+        usage.cost === undefined ||
+        usage.tokens === undefined,
     ).length
+  const codiumResponses =
+    assistant.length - metered.length + [...attempts.values()].filter((usage) => usage && Billing.of(usage)).length
   const helperGroups = [
     ...assistant.map((message) => ({
       sessionID: message.sessionID,
       responses: 1,
       tokens: usageTokens(message),
-      cost: Math.max(0, message.cost),
+      cost: Billing.of(message) ? 0 : Math.max(0, message.cost),
+      codiumSteps: Billing.of(message) ? 1 : 0,
     })),
     ...[...attempts.values()].flatMap((usage) =>
       usage
@@ -1371,8 +1497,9 @@ export function summarizeUsage(
             {
               sessionID: usage.sessionID,
               responses: 0,
-              tokens: usageTokens({ tokens: usage.tokens ?? EmptyTokens }),
-              cost: Math.max(0, usage.cost ?? 0),
+              tokens: usageTokens({ ...usage, tokens: usage.tokens ?? EmptyTokens }),
+              cost: Billing.of(usage) ? 0 : Math.max(0, usage.cost ?? 0),
+              codiumSteps: Billing.of(usage) ? 1 : 0,
             },
           ]
         : [],
@@ -1387,6 +1514,9 @@ export function summarizeUsage(
       responses: current.responses + item.responses,
       tokens: current.tokens + item.tokens,
       cost: current.cost + item.cost,
+      ...((current.codiumSteps ?? 0) + item.codiumSteps
+        ? { codiumSteps: (current.codiumSteps ?? 0) + item.codiumSteps }
+        : {}),
     })
     return result
   }, new Map<string, Omit<UsageHelper, "sessions"> & { sessions: Set<string> }>())
@@ -1395,13 +1525,14 @@ export function summarizeUsage(
     .sort((a, b) => b.cost - a.cost || b.tokens - a.tokens || a.id.localeCompare(b.id))
 
   const tokens = [
-    ...assistant.map((message) => message.tokens),
-    ...[...attempts.values()].flatMap((usage) => (usage?.tokens ? [usage.tokens] : [])),
+    ...metered.map((message) => message.tokens),
+    ...[...attempts.values()].flatMap((usage) => (usage?.tokens && !Billing.of(usage) ? [usage.tokens] : [])),
   ]
   return {
     lifetimeTokens,
     lifetimeCost: activity.reduce((total, day) => total + day.cost, 0),
     ...(unpricedResponses ? { unpricedResponses } : {}),
+    ...(codiumResponses ? { codiumResponses } : {}),
     inputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.input)), 0),
     outputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.output)), 0),
     reasoningTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.reasoning)), 0),
@@ -1420,7 +1551,7 @@ export function summarizeUsage(
     completedChats: completed.size,
     conversations: new Set(own.map((message) => message.sessionID)).size,
     activeDays: active.size,
-    averageTokensPerChat: completed.size > 0 ? Math.round(lifetimeTokens / completed.size) : 0,
+    averageTokensPerChat: ownChats.size > 0 ? Math.round(lifetimeTokens / ownChats.size) : 0,
     modelResponses: assistant.length,
     favoriteModels: [...modelGroups.values()]
       .map((model): UsageModel => ({ ...model, percentage: percentage(model.tokens, model.responses) }))
@@ -1434,7 +1565,14 @@ export function summarizeUsage(
   }
 }
 
-function usageTokens(message: Pick<typeof SessionV1.Assistant.Type, "tokens">) {
+function usageTokens(
+  message: Pick<typeof SessionV1.Assistant.Type, "tokens"> & {
+    billing?: string
+    providerID?: string
+    model?: { providerID?: string }
+  },
+) {
+  if (Billing.of(message)) return 0
   const components =
     message.tokens.input +
     message.tokens.output +

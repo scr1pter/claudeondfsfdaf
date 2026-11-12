@@ -1,11 +1,14 @@
+import { eq } from "drizzle-orm"
 import { describe, expect, spyOn } from "bun:test"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Database } from "@vectordevai/core/database/database"
+import { SessionTable, SessionMessageTable } from "@vectordevai/core/session/sql"
+import { SessionMessage } from "@vectordevai/schema/session-message"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { EventV2 } from "@vectordevai/core/event"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
@@ -44,6 +47,7 @@ const step = Effect.fn("StatsTest.step")(function* (
   sessionID: SessionID,
   created: number,
   cost: number,
+  providerID = "lmstudio",
   unpriced = false,
 ) {
   const session = yield* Session.Service
@@ -61,7 +65,7 @@ const step = Effect.fn("StatsTest.step")(function* (
     path: { cwd: "/tmp", root: "/tmp" },
     tokens,
     modelID: "test",
-    providerID: "lmstudio",
+    providerID,
     time: { created, completed: created },
   } as unknown as SessionV1.Info)
   yield* session.updatePart({
@@ -278,7 +282,7 @@ describe("vector stats", () => {
       const before = yield* aggregateSessionStats(7)
       const lifetime = yield* aggregateSessionStats()
       const info = yield* session.create({ title: "uncertain usage" })
-      yield* step(info.id, Date.now(), 0, true)
+      yield* step(info.id, Date.now(), 0, "lmstudio", true)
       yield* events.publish(SessionEvent.AncillaryUsage, {
         sessionID: info.id,
         timestamp: DateTime.makeUnsafe(Date.now()),
@@ -318,3 +322,294 @@ describe("vector stats", () => {
     }),
   )
 })
+
+for (const days of [undefined, 7]) {
+  it.instance(`Codium V1 and helper figures stay out of ${days ? "window" : "lifetime"} own statistics`, () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const before = yield* aggregateSessionStats(days)
+      const info = yield* session.create({ title: "mixed Codium usage" })
+      const helper = yield* session.create({
+        title: "Codium helper",
+        internal: "vectorscope.review",
+        parentID: info.id,
+      })
+      yield* step(info.id, Date.now(), 0.12)
+      yield* step(info.id, Date.now(), 999, "vector-plan")
+      yield* step(helper.id, Date.now(), 999, "vector-plan")
+      const after = yield* aggregateSessionStats(days)
+      expect(after.totalCost - before.totalCost).toBeCloseTo(0.12)
+      expect(after.totalTokens.input - before.totalTokens.input).toBe(1000)
+      expect(after.totalTokens.output - before.totalTokens.output).toBe(100)
+      expect(after.codiumResponses - before.codiumResponses).toBe(2)
+      expect(after.helpers.tokens - before.helpers.tokens).toBe(0)
+      expect(after.helpers.codiumResponses - before.helpers.codiumResponses).toBe(1)
+      expect(after.modelUsage["vector-plan/test"]).toMatchObject({
+        billing: "codium",
+        cost: 0,
+        tokens: { input: 0, output: 0 },
+      })
+      yield* session.remove(info.id)
+    }),
+  )
+}
+
+for (const days of [undefined, 7]) {
+  it.instance(
+    `a Codium helper receipt counts once as Codium in ${days ? "window" : "lifetime"} statistics, never as tokens, dollars or unknown cost`,
+    () =>
+      Effect.gen(function* () {
+        const session = yield* Session.Service
+        const events = yield* EventV2.Service
+        const before = yield* aggregateSessionStats(days)
+        const info = yield* session.create({ title: "Codium title" })
+        yield* step(info.id, Date.now(), 0.1)
+        yield* events.publish(SessionEvent.AncillaryUsage, {
+          sessionID: info.id,
+          timestamp: DateTime.makeUnsafe(Date.now()),
+          usageID: EventV2.ID.create(),
+          model: { providerID: ProviderV2.ID.make("vector-plan"), id: ModelV2.ID.make("codium-title") },
+          purpose: "title",
+          cost: 0,
+          unpriced: true,
+          billing: "codium",
+          tokens: { input: 24_000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
+        const after = yield* aggregateSessionStats(days)
+        expect(after.totalCost - before.totalCost).toBeCloseTo(0.1)
+        expect(after.totalTokens.input - before.totalTokens.input).toBe(1_000)
+        expect(after.helpers.cost - before.helpers.cost).toBeCloseTo(0)
+        expect(after.helpers.tokens - before.helpers.tokens).toBe(0)
+        expect(after.unpricedSteps - before.unpricedSteps).toBe(0)
+        expect(after.codiumResponses - before.codiumResponses).toBe(1)
+        expect(after.helpers.codiumResponses - before.helpers.codiumResponses).toBe(1)
+        expect(after.modelUsage["vector-plan/codium-title"]).toMatchObject({
+          billing: "codium",
+          messages: 1,
+          cost: 0,
+          tokens: { input: 0, output: 0 },
+        })
+        yield* session.remove(info.id)
+      }),
+  )
+}
+
+it.instance("V2 stored billing and Codium compaction are omitted from printed own figures", () =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const database = yield* Database.Service
+    const info = yield* session.create({ title: "V2 Codium" })
+    const now = Date.now()
+    for (const [seq, type] of ["assistant", "compaction"].entries()) {
+      const message = Schema.encodeSync(SessionMessage.Message)(
+        Schema.decodeUnknownSync(SessionMessage.Message)({
+          id: `msg_stats_codium_${seq}`,
+          type,
+          time: { created: now },
+          billing: "codium",
+          cost: 999,
+          tokens: { input: 24000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
+          ...(type === "assistant"
+            ? { agent: "build", model: { providerID: "test", id: "test" }, content: [] }
+            : { reason: "auto", summary: "summary", recent: "recent" }),
+        }),
+      )
+      const { id, type: messageType, ...data } = message
+      yield* database.db
+        .insert(SessionMessageTable)
+        .values({
+          id: SessionMessage.ID.make(id),
+          session_id: info.id,
+          type: messageType,
+          seq,
+          time_created: now,
+          time_updated: now,
+          data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+    }
+    for (const days of [undefined, 7]) {
+      const stats = yield* aggregateSessionStats(days)
+      expect(stats.codiumResponses).toBe(2)
+      expect(stats.totalCost).toBe(0)
+      expect(stats.totalTokens.input).toBe(0)
+      const lines: string[] = []
+      const log = spyOn(console, "log").mockImplementation((...items) => {
+        lines.push(items.join(" "))
+      })
+      try {
+        displayStats(stats)
+      } finally {
+        log.mockRestore()
+      }
+      expect(lines.join("\n")).toContain('Vector Codium usage: see "vector codium".')
+      expect(lines.join("\n")).not.toContain("$0.00")
+      expect(lines.join("\n")).not.toContain("24000")
+    }
+    yield* session.remove(info.id)
+  }),
+)
+
+it.instance(
+  "unknown historical totals retain own dollars without exposing flagless compaction or empty-provider tokens",
+  () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const { db } = yield* Database.Service
+      const before = yield* aggregateSessionStats()
+      const info = yield* session.create({ title: "history missing" })
+      yield* db
+        .update(SessionTable)
+        .set({
+          tokens_own_only: false,
+          tokens_input: 987654,
+          cost: 0.12,
+          codium_steps: 1,
+          model: { id: "own", providerID: "own" },
+        })
+        .where(eq(SessionTable.id, info.id))
+        .run()
+        .pipe(Effect.orDie)
+      const message = Schema.encodeSync(SessionMessage.Message)(
+        Schema.decodeUnknownSync(SessionMessage.Message)({
+          id: "msg_missing_compaction",
+          type: "compaction",
+          time: { created: Date.now() },
+          reason: "auto",
+          summary: "summary",
+          recent: "recent",
+          cost: 0,
+          tokens: { input: 876543, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
+      )
+      const { id, type, ...data } = message
+      yield* db
+        .insert(SessionMessageTable)
+        .values({
+          id: SessionMessage.ID.make(id),
+          session_id: info.id,
+          type,
+          seq: 0,
+          time_created: Date.now(),
+          time_updated: Date.now(),
+          data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const after = yield* aggregateSessionStats()
+      expect(after.totalCost - before.totalCost).toBeCloseTo(0.12)
+      expect(after.totalTokens.input - before.totalTokens.input).toBe(0)
+      expect(after.codiumResponses - before.codiumResponses).toBe(1)
+      yield* session.remove(info.id)
+      const empty = yield* session.create({ title: "blank provider" })
+      yield* step(empty.id, Date.now(), 0.12, "  ")
+      const stats = yield* aggregateSessionStats()
+      expect(stats.modelUsage["  /test"]).toBeUndefined()
+      expect(stats.totalTokens.input - before.totalTokens.input).toBe(0)
+      expect(stats.totalCost - before.totalCost).toBeCloseTo(0.12)
+      yield* session.remove(empty.id)
+    }),
+)
+
+for (const days of [undefined, 7]) {
+  it.instance(
+    `a V2 compaction summary without Codium counts in ${days ? "window" : "lifetime"} own cost and tokens, as on main`,
+    () =>
+      Effect.gen(function* () {
+        const session = yield* Session.Service
+        const { db } = yield* Database.Service
+        const before = yield* aggregateSessionStats(days)
+        const info = yield* session.create({ title: "V2 compaction" })
+        // What the projector leaves for a priced compaction summary: its cost and tokens, and no own-only proof.
+        yield* db
+          .update(SessionTable)
+          .set({ cost: 0.05, tokens_input: 3_000, tokens_output: 200, tokens_own_only: false })
+          .where(eq(SessionTable.id, info.id))
+          .run()
+          .pipe(Effect.orDie)
+        const message = Schema.encodeSync(SessionMessage.Message)(
+          Schema.decodeUnknownSync(SessionMessage.Message)({
+            id: "msg_stats_own_compaction",
+            type: "compaction",
+            time: { created: Date.now() },
+            reason: "auto",
+            summary: "summary",
+            recent: "recent",
+            cost: 0.05,
+            tokens: { input: 3_000, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+          }),
+        )
+        const { id, type, ...data } = message
+        yield* db
+          .insert(SessionMessageTable)
+          .values({
+            id: SessionMessage.ID.make(id),
+            session_id: info.id,
+            type,
+            seq: 0,
+            time_created: Date.now(),
+            time_updated: Date.now(),
+            data,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const after = yield* aggregateSessionStats(days)
+        expect(after.totalCost - before.totalCost).toBeCloseTo(0.05)
+        expect(after.totalTokens.input - before.totalTokens.input).toBe(3_000)
+        expect(after.totalTokens.output - before.totalTokens.output).toBe(200)
+        expect(after.unpricedSteps - before.unpricedSteps).toBe(0)
+        expect(after.codiumResponses - before.codiumResponses).toBe(0)
+        yield* session.remove(info.id)
+      }),
+  )
+}
+
+it.instance("lifetime statistics show 1.99.112 Codium history as Codium, not as unpriced requests", () =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const events = yield* EventV2.Service
+    const { db } = yield* Database.Service
+    const before = yield* aggregateSessionStats()
+    const info = yield* session.create({ title: "Codium on 1.99.112" })
+    // 1.99.112 stamped no Codium flag: each Codium step and its Codium title were recorded unpriced.
+    yield* step(info.id, Date.now(), 0, "vector-plan", true)
+    yield* step(info.id, Date.now(), 0, "vector-plan", true)
+    yield* events.publish(SessionEvent.AncillaryUsage, {
+      sessionID: info.id,
+      timestamp: DateTime.makeUnsafe(Date.now()),
+      usageID: EventV2.ID.create(),
+      model: { providerID: ProviderV2.ID.make("vector-plan"), id: ModelV2.ID.make("codium-title") },
+      purpose: "title",
+      cost: 0,
+      unpriced: true,
+      tokens: { input: 500, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    // ...and counted all three as ordinary unpriced steps, with no Codium step.
+    yield* db
+      .update(SessionTable)
+      .set({ unpriced_steps: 3, codium_steps: 0 })
+      .where(eq(SessionTable.id, info.id))
+      .run()
+      .pipe(Effect.orDie)
+    const after = yield* aggregateSessionStats()
+    expect(after.unpricedSteps - before.unpricedSteps).toBe(0)
+    expect(after.codiumResponses - before.codiumResponses).toBe(3)
+    expect(after.totalCost - before.totalCost).toBeCloseTo(0)
+    expect(after.totalTokens.input - before.totalTokens.input).toBe(0)
+    const lines: string[] = []
+    const log = spyOn(console, "log").mockImplementation((...items) => {
+      lines.push(items.join(" "))
+    })
+    try {
+      displayStats(after)
+    } finally {
+      log.mockRestore()
+    }
+    const output = lines.join("\n")
+    expect(output).not.toContain("Unpriced/incomplete requests")
+    expect(output).not.toContain("+ unknown")
+    expect(output).toMatch(/Uncached Input\s+Codium/)
+    yield* session.remove(info.id)
+  }),
+)

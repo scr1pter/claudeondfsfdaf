@@ -1,5 +1,6 @@
 import { Agent } from "@/agent/agent"
-import { BackgroundJob } from "@/background/job"
+import { Permission } from "@/permission"
+import { WorkflowOwner } from "@/orchestration/owner"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MCP } from "@/mcp"
@@ -9,33 +10,76 @@ import { SessionPrompt } from "@/session/prompt"
 import { TaskManager } from "@/task/manager"
 import { DesktopTasks } from "@/task/desktop"
 import { TaskBridge } from "@vectordevai/schema/task-bridge"
+import type { Task } from "@vectordevai/schema/task"
 import type { TaskPromptOps } from "@/tool/task"
-import type { SessionID } from "@/session/schema"
+import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
+import { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
+import { Provider } from "@/provider/provider"
+import { ProviderV2 } from "@vectordevai/core/provider"
+import { ModelV2 } from "@vectordevai/core/model"
+import { freeModelMayTrain, FREE_MODEL_TRAINING_OWNER_ONLY } from "@vectordevai/core/free-model-choice"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import {
   SessionListQuery,
+  SessionStopInput,
+  TaskBackgroundInput,
+  TaskChangesQuery,
+  TaskDiscardInput,
+  TaskMergeInput,
   ToolListQuery,
   WorktreeApiError,
   TaskApiError,
+  WorkflowApiError,
   TaskListQuery,
   TaskMessageInput,
+  TaskResumeInput,
   TaskStopInput,
   TaskWaitInput,
 } from "../groups/experimental"
-import { RequestPrincipal, allowsSession } from "@vectordevai/protocol/middleware/authorization"
+import {
+  RequestPrincipal,
+  allowsSession,
+  guestWorkspaceDirectory,
+} from "@vectordevai/protocol/middleware/authorization"
 import { ForbiddenError } from "@vectordevai/protocol/errors"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
 import { allowsSessionID } from "./session-access"
 
 function mapWorktreeError<A, R>(self: Effect.Effect<A, Worktree.Error, R>) {
   return self.pipe(
     Effect.mapError((error) => new WorktreeApiError({ name: error._tag, data: { message: error.message } })),
   )
+}
+
+type TaskResult = {
+  readonly task?: Task.Info
+  readonly tasks?: readonly Task.Info[]
+  readonly shells?: readonly Task.Shell[] | number
+}
+
+// A task result without any helper's absolute isolation directory, or any background command's output path (I19).
+function withoutDirectories<T extends TaskResult>(result: T): T {
+  const hide = (task: Task.Info): Task.Info =>
+    task.isolation?.directory === undefined
+      ? task
+      : { ...task, isolation: SubagentLifecycle.withoutDirectory(task.isolation) }
+  const unpathed = (shell: Task.Shell): Task.Shell => {
+    const { outputPath: _, ...rest } = shell
+    return rest
+  }
+  return {
+    ...result,
+    ...(result.task ? { task: hide(result.task) } : {}),
+    ...(result.tasks ? { tasks: result.tasks.map(hide) } : {}),
+    ...(Array.isArray(result.shells) ? { shells: result.shells.map(unpathed) } : {}),
+  }
 }
 
 export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "experimental", (handlers) =>
@@ -46,15 +90,22 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const registry = yield* ToolRegistry.Service
     const worktreeSvc = yield* Worktree.Service
     const sessions = yield* Session.Service
-    const background = yield* BackgroundJob.Service
     const flags = yield* RuntimeFlags.Service
     const tasks = yield* TaskManager.Service
+    const workflow = yield* Effect.serviceOption(WorkflowOwner.Service)
     const desktop = yield* DesktopTasks.Service
     const prompts = yield* SessionPrompt.Service
+    // The server provides it to every handler; a test that builds these handlers alone may leave it out.
+    const provider = yield* Effect.serviceOption(Provider.Service)
     const taskPrompts: TaskPromptOps = {
       cancel: prompts.cancel,
       resolvePromptParts: prompts.resolvePromptParts,
       prompt: (input) => prompts.prompt(input).pipe(Effect.orDie),
+    }
+    // A guest's work must not reach a free model that may train through the owner's acceptance.
+    const guestPrompts: TaskPromptOps = {
+      ...taskPrompts,
+      prompt: (input) => prompts.prompt(input, { refuseTrainingFreeModels: true }).pipe(Effect.orDie),
     }
 
     const access = Effect.fn("ExperimentalHttpApi.taskAccess")(function* (sessionID: SessionID, control = false) {
@@ -65,22 +116,36 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
     const taskError = <A, R>(effect: Effect.Effect<A, TaskManager.Error, R>) =>
       effect.pipe(Effect.mapError((error) => new TaskApiError({ code: error.code, message: error.message })))
+    // A helper's absolute isolation directory and details go only to the authenticated owner (I19). A controlling
+    // guest, or owner credentials relaying a guest, are still guests.
+    const shown = <T extends TaskResult>(result: T) =>
+      Effect.map(RequestOwner.owner, (owner) => (owner ? result : withoutDirectories(result)))
 
     const taskList = Effect.fn("ExperimentalHttpApi.taskList")(function* (ctx: {
       params: { sessionID: SessionID }
       query: typeof TaskListQuery.Type
     }) {
       yield* access(ctx.params.sessionID)
-      return yield* taskError(
-        tasks.list({ sessionID: ctx.params.sessionID, descendants: ctx.query.descendants, limit: ctx.query.limit }),
+      const result = yield* taskError(
+        tasks.list({
+          sessionID: ctx.params.sessionID,
+          descendants: ctx.query.descendants,
+          limit: ctx.query.limit,
+          active: ctx.query.active,
+          shells: ctx.query.shells,
+        }),
       )
+      // The limits line carries the owner's configured limits, which only the owner sees (I19).
+      const { limits, ...rest } = result
+      const owner = yield* RequestOwner.owner
+      return yield* shown(owner && limits ? { ...rest, limits } : rest)
     })
 
     const taskInspect = Effect.fn("ExperimentalHttpApi.taskInspect")(function* (ctx: {
       params: { sessionID: SessionID; taskID: string }
     }) {
       yield* access(ctx.params.sessionID)
-      return yield* taskError(tasks.inspect(ctx.params))
+      return yield* shown(yield* taskError(tasks.inspect(ctx.params)))
     })
 
     const taskMessage = Effect.fn("ExperimentalHttpApi.taskMessage")(function* (ctx: {
@@ -88,17 +153,46 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       payload: typeof TaskMessageInput.Type
     }) {
       yield* access(ctx.params.sessionID, true)
-      // A guest's message to a worker must not reach a free model that may train through the owner's acceptance.
-      const guest = (yield* RequestPrincipal).kind !== "owner"
+      const guest = !(yield* RequestOwner.owner)
       return yield* taskError(
-        tasks.message(
-          { ...ctx.params, ...ctx.payload },
-          guest
-            ? {
-                ...taskPrompts,
-                prompt: (input) => prompts.prompt(input, { refuseTrainingFreeModels: true }).pipe(Effect.orDie),
-              }
-            : taskPrompts,
+        tasks.message({ ...ctx.params, ...ctx.payload, origin: "user" }, guest ? guestPrompts : taskPrompts),
+      )
+    })
+
+    // Resume (D.3): the user continues stopped, failed or interrupted helpers. A guest's resume runs under the guest
+    // limits and budget, and is refused at once for a helper on a free model that may train. Only this session's own
+    // children are checked, so the answer says nothing about other sessions (I19); resume refuses those itself.
+    const taskResume = Effect.fn("ExperimentalHttpApi.taskResume")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof TaskResumeInput.Type
+    }) {
+      yield* access(ctx.params.sessionID, true)
+      const guest = !(yield* RequestOwner.owner)
+      if (guest && Option.isSome(provider))
+        for (const taskID of new Set(ctx.payload.taskIDs)) {
+          const id = Schema.decodeUnknownOption(SessionID)(taskID)
+          const record = Option.isNone(id)
+            ? undefined
+            : yield* sessions.get(id.value).pipe(
+                Effect.map((child) =>
+                  child.parentID === ctx.params.sessionID ? SubagentLifecycle.read(child) : undefined,
+                ),
+                Effect.catchCause(() => Effect.succeed(undefined)),
+              )
+          const model =
+            record &&
+            (yield* provider.value
+              .getModel(ProviderV2.ID.make(record.model.providerID), ModelV2.ID.make(record.model.modelID))
+              .pipe(Effect.catchCause(() => Effect.succeed(undefined))))
+          if (model && freeModelMayTrain(model))
+            return yield* new TaskApiError({ code: "forbidden", message: FREE_MODEL_TRAINING_OWNER_ONLY })
+        }
+      return yield* shown(
+        yield* taskError(
+          tasks.resume(
+            { sessionID: ctx.params.sessionID, ...ctx.payload, origin: "user", guest },
+            guest ? guestPrompts : taskPrompts,
+          ),
         ),
       )
     })
@@ -108,7 +202,29 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       payload: typeof TaskStopInput.Type
     }) {
       yield* access(ctx.params.sessionID, true)
-      return yield* taskError(tasks.stop({ ...ctx.params, ...ctx.payload }, taskPrompts))
+      return yield* shown(yield* taskError(tasks.stop({ ...ctx.params, ...ctx.payload, origin: "user" }, taskPrompts)))
+    })
+
+    // "Stop including helpers" (5.D.1). Plain abort stays as it was, so revert, undo and halt never stop helpers.
+    const sessionStop = Effect.fn("ExperimentalHttpApi.sessionStop")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof SessionStopInput.Type
+    }) {
+      yield* access(ctx.params.sessionID, true)
+      return yield* shown(
+        yield* taskError(tasks.interrupt({ sessionID: ctx.params.sessionID, ...ctx.payload }, taskPrompts)),
+      )
+    })
+
+    // Move to background (5.D.2): the session's running foreground subagents, or the selected ones.
+    const taskBackground = Effect.fn("ExperimentalHttpApi.taskBackground")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: void | typeof TaskBackgroundInput.Type
+    }) {
+      yield* access(ctx.params.sessionID, true)
+      return yield* shown(
+        yield* taskError(tasks.promote({ sessionID: ctx.params.sessionID, taskIDs: ctx.payload?.taskIDs })),
+      )
     })
 
     const taskWait = Effect.fn("ExperimentalHttpApi.taskWait")(function* (ctx: {
@@ -116,20 +232,63 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       payload: typeof TaskWaitInput.Type
     }) {
       yield* access(ctx.params.sessionID)
-      return yield* taskError(tasks.wait({ ...ctx.params, ...ctx.payload }))
+      return yield* shown(yield* taskError(tasks.wait({ ...ctx.params, ...ctx.payload })))
     })
 
-    const owner = Effect.gen(function* () {
-      if ((yield* RequestPrincipal).kind !== "owner")
-        return yield* new ForbiddenError({
-          message: "Desktop task connections require the authenticated server owner.",
-        })
+    // Owner-only routes refuse a guest, a guest in control and owner credentials that relay a guest alike (I11).
+    const owner = (message: string) =>
+      Effect.gen(function* () {
+        if (!(yield* RequestOwner.owner)) return yield* new ForbiddenError({ message })
+      })
+    const bridgeOwner = owner("Desktop task connections require the authenticated server owner.")
+
+    // Route 4: the owner gets the full changes; another viewer with ordinary view scope gets only the server-built
+    // counts projection, which reads the registry and never Git. The usual raw-content check would refuse every
+    // owner-only family, so plain view scope is checked here; no header or query flag widens the projection.
+    const taskChanges = Effect.fn("ExperimentalHttpApi.taskChanges")(function* (ctx: {
+      params: { sessionID: SessionID; taskID: string }
+      query: typeof TaskChangesQuery.Type
+    }) {
+      if (yield* RequestOwner.owner)
+        return yield* taskError(tasks.changes({ ...ctx.params, diff: ctx.query.diff, control: true }))
+      const principal = yield* RequestPrincipal
+      const viewable =
+        allowsSession(principal, ctx.params.sessionID) ||
+        (yield* sessions.get(ctx.params.sessionID).pipe(
+          Effect.map((item) => guestWorkspaceDirectory(principal, item.workspaceID) === item.directory),
+          Effect.catchCause(() => Effect.succeed(false)),
+        ))
+      if (!viewable)
+        return yield* new ForbiddenError({ message: "This session's tasks are outside your authorized sessions" })
+      return SessionAudienceHttp.projected(HttpServerResponse.jsonUnsafe(yield* taskError(tasks.counts(ctx.params))))
+    })
+    const taskMerge = Effect.fn("ExperimentalHttpApi.taskMerge")(function* (ctx: {
+      params: { sessionID: SessionID; taskID: string }
+      payload: void | typeof TaskMergeInput.Type
+    }) {
+      yield* owner("Only the server owner can merge or discard a subagent's worktree.")
+      return yield* taskError(
+        tasks.merge({
+          ...ctx.params,
+          files: ctx.payload?.files,
+          includeStacked: ctx.payload?.includeStacked,
+          force: ctx.payload?.force,
+          by: { kind: "owner" },
+        }),
+      )
+    })
+    const taskDiscard = Effect.fn("ExperimentalHttpApi.taskDiscard")(function* (ctx: {
+      params: { sessionID: SessionID; taskID: string }
+      payload: void | typeof TaskDiscardInput.Type
+    }) {
+      yield* owner("Only the server owner can merge or discard a subagent's worktree.")
+      return yield* taskError(tasks.discard({ ...ctx.params, reason: ctx.payload?.reason, by: { kind: "owner" } }))
     })
     const taskBridgeRegister = Effect.fn("ExperimentalHttpApi.taskBridgeRegister")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof TaskBridge.RegisterInput.Type
     }) {
-      yield* owner
+      yield* bridgeOwner
       return yield* desktop
         .register({ ...ctx.params, ...ctx.payload })
         .pipe(Effect.mapError((error) => new TaskApiError({ code: error.code, message: error.message })))
@@ -138,7 +297,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       params: { sessionID: SessionID }
       payload: typeof TaskBridge.PollInput.Type
     }) {
-      yield* owner
+      yield* bridgeOwner
       return yield* desktop
         .poll({ ...ctx.params, ...ctx.payload })
         .pipe(Effect.mapError((error) => new TaskApiError({ code: error.code, message: error.message })))
@@ -147,14 +306,48 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       params: { sessionID: SessionID }
       payload: typeof TaskBridge.ReceiptInput.Type
     }) {
-      yield* owner
+      yield* bridgeOwner
       return yield* desktop
         .receipt({ ...ctx.params, ...ctx.payload })
         .pipe(Effect.mapError((error) => new TaskApiError({ code: error.code, message: error.message })))
     })
 
+    const workflowService = Effect.gen(function* () {
+      if (Option.isNone(workflow))
+        return yield* new WorkflowApiError({ code: "invalid", message: "Workflow service is unavailable." })
+      return workflow.value
+    })
+    const workflowOwner = Effect.gen(function* () {
+      if (!(yield* RequestOwner.owner))
+        return yield* new ForbiddenError({ message: "Only the server owner can validate or start workflows." })
+    })
+    const workflowError = <A, R>(effect: Effect.Effect<A, WorkflowOwner.Error, R>) =>
+      effect.pipe(
+        Effect.mapError(
+          (error) =>
+            new WorkflowApiError({
+              code: error.code,
+              message: error.message,
+              ...(error.issues?.length ? { issues: error.issues } : {}),
+            }),
+        ),
+      )
+
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
-      return { backgroundSubagents: flags.backgroundSubagents }
+      const agent = yield* agents.defaultInfo()
+      const disabled = Permission.disabled(["task", "workflow"], agent.permission)
+      return {
+        workflows: flags.backgroundSubagents && !disabled.has("task") && !disabled.has("workflow"),
+        backgroundSubagents: flags.backgroundSubagents,
+        subagentLimits: true,
+        workDelegation: true,
+        sessionStop: true,
+        taskPromote: true,
+        taskResume: true,
+        taskAttention: true,
+        taskIsolation: true,
+        backgroundShells: true,
+      }
     })
 
     const tool = Effect.fn("ExperimentalHttpApi.tool")(function* (ctx: { query: typeof ToolListQuery.Type }) {
@@ -235,20 +428,12 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const sessionBackground = Effect.fn("ExperimentalHttpApi.sessionBackground")(function* (ctx: {
       params: { sessionID: SessionID }
     }) {
-      if (!flags.backgroundSubagents) return false
-      // A subagent's own tasks stay in the foreground, as the task tool keeps them: a background result would start a
-      // turn of the subagent after its run ended, which no one reads and stopping the root cannot reach.
-      const session = yield* sessions.get(ctx.params.sessionID).pipe(Effect.option)
-      if (Option.isNone(session) || session.value.parentID) return false
-      const jobs = (yield* background.list()).filter(
-        (job) =>
-          job.type === "task" &&
-          job.status === "running" &&
-          job.metadata?.parentSessionId === ctx.params.sessionID &&
-          job.metadata.background !== true,
-      )
-      const promoted = yield* Effect.forEach(jobs, (job) => background.promote(job.id), { concurrency: "unbounded" })
-      return promoted.some((job) => job !== undefined)
+      yield* access(ctx.params.sessionID, true)
+      // The older form of the task background route: whether anything moved, and false for a session it cannot reach.
+      const result = yield* tasks
+        .promote({ sessionID: ctx.params.sessionID })
+        .pipe(Effect.catchTag("TaskManager.Error", () => Effect.succeed({ tasks: [] })))
+      return result.tasks.length > 0
     })
 
     const resource = Effect.fn("ExperimentalHttpApi.resource")(function* () {
@@ -256,6 +441,50 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
 
     return handlers
+      .handle("workflowSaved", () =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          const service = yield* workflowService
+          return yield* workflowError(service.saved())
+        }),
+      )
+      .handle("workflowValidate", ({ payload }) =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          const service = yield* workflowService
+          return yield* workflowError(service.validate(payload))
+        }),
+      )
+      .handle("workflowStart", ({ params, payload }) =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          yield* access(params.sessionID, true)
+          const service = yield* workflowService
+          return yield* workflowError(service.start(params.sessionID, payload))
+        }),
+      )
+      .handle("workflowList", ({ params }) =>
+        Effect.gen(function* () {
+          yield* access(params.sessionID)
+          const service = yield* workflowService
+          return yield* workflowError(service.list(params.sessionID))
+        }),
+      )
+      .handle("workflowGet", ({ params }) =>
+        Effect.gen(function* () {
+          yield* access(params.sessionID)
+          const service = yield* workflowService
+          return yield* workflowError(service.get(params.sessionID, params.runID, yield* RequestOwner.owner))
+        }),
+      )
+      .handle("workflowResume", ({ params, payload }) =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          yield* access(params.sessionID, true)
+          const service = yield* workflowService
+          return yield* workflowError(service.start(params.sessionID, { ...(payload ?? {}), runID: params.runID }))
+        }),
+      )
       .handle("capabilities", capabilities)
       .handle("tool", tool)
       .handle("toolIDs", toolIDs)
@@ -266,11 +495,17 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("session", session)
       .handle("sessionUsage", sessionUsage)
       .handle("sessionBackground", sessionBackground)
+      .handle("sessionStop", sessionStop)
       .handle("taskList", taskList)
       .handle("taskInspect", taskInspect)
       .handle("taskMessage", taskMessage)
       .handle("taskStop", taskStop)
       .handle("taskWait", taskWait)
+      .handle("taskBackground", taskBackground)
+      .handle("taskResume", taskResume)
+      .handle("taskChanges", taskChanges)
+      .handle("taskMerge", taskMerge)
+      .handle("taskDiscard", taskDiscard)
       .handle("taskBridgeRegister", taskBridgeRegister)
       .handle("taskBridgePoll", taskBridgePoll)
       .handle("taskBridgeReceipt", taskBridgeReceipt)

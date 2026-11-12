@@ -6,11 +6,15 @@ const LEASE_MS = 60_000
 const MINIMUM_REMAINING_MS = BILLING_MUTATION_TIMEOUT_MS + 5_000
 const developmentLocks = new Set<string>()
 
-/** Serialize fresh device reads and writes across serverless instances. */
+/**
+ * Serialize fresh device reads and writes across serverless instances. `options.key` names the lease's store key
+ * outright, for callers that keep their keys in a namespace of their own (Codium's `codiumKey("lease", id)`).
+ */
 export async function withBillingMutation<T>(
   customer: string,
   work: (verify: () => Promise<void>) => Promise<T>,
   fetcher: typeof fetch = fetch,
+  options: { key?: string } = {},
 ) {
   const kv = { url: process.env.KV_REST_API_URL?.trim(), token: process.env.KV_REST_API_TOKEN?.trim() }
   const upstash = {
@@ -22,12 +26,13 @@ export async function withBillingMutation<T>(
     if (process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production") {
       throw new ApiError(503, "BILLING_LOCK_UNAVAILABLE", "License changes are temporarily unavailable.")
     }
-    if (developmentLocks.has(customer)) throw busy()
-    developmentLocks.add(customer)
+    const lock = options.key ?? customer
+    if (developmentLocks.has(lock)) throw busy()
+    developmentLocks.add(lock)
     try {
       return await work(async () => {})
     } finally {
-      developmentLocks.delete(customer)
+      developmentLocks.delete(lock)
     }
   }
 
@@ -44,7 +49,7 @@ export async function withBillingMutation<T>(
     }
     return payload.result
   }
-  const key = `vector:billing-mutation:${createHash("sha256").update(customer).digest("hex")}`
+  const key = options.key ?? `vector:billing-mutation:${createHash("sha256").update(customer).digest("hex")}`
   const token = randomUUID()
   const acquiredAt = Date.now()
   const acquired = await command(["SET", key, token, "NX", "PX", String(LEASE_MS)])

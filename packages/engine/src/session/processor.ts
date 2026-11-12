@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { createHash } from "node:crypto"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -32,6 +33,7 @@ import { Database } from "@vectordevai/core/database/database"
 import { Usage, type LLMEvent } from "@vectordevai/llm"
 import { EffectBridge } from "@/effect/bridge"
 import { NativePatch } from "./llm/native-patch"
+import { SessionFork } from "./fork"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { NEXT_STEP_SLACK } from "@vectordevai/core/review/plan"
 import { providerCredentialAllowed, providerUsable } from "@vectordevai/core/provider-policy"
@@ -100,6 +102,8 @@ interface ProcessorContext extends Input {
     output?: string
     error?: string
     providerExecuted: boolean
+    // A StructuredOutput call whose value was kept: the run's final answer.
+    final?: boolean
   }[]
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
@@ -132,6 +136,7 @@ const layer = Layer.effect(
     const guard = yield* SpendGuard.Service
     const provider = yield* Provider.Service
     const slots = yield* ModelSlots.Service
+    const forks = yield* SessionFork.Service
     // The user message each root session last answered, so its first step for a new prompt drops waiting helpers.
     const prompts = new Map<SessionID, string>()
 
@@ -197,6 +202,7 @@ const layer = Layer.effect(
         Effect.catch(() => Effect.succeed(undefined)),
         Effect.map((signIn) =>
           SpendGuard.costKindOf({
+            codium: Billing.isCodium(input.model.providerID),
             free: isFreeModel(input.model) || input.model.freeModel !== undefined,
             oauthPlan:
               signIn?.type === "oauth" &&
@@ -317,7 +323,13 @@ const layer = Layer.effect(
         const digest = createHash("sha256")
           .update([output.output, ...(output.attachments ?? []).map((attachment) => attachment.url)].join("\n"))
           .digest("hex")
-        ctx.stepTools = ctx.stepTools.map((item) => (item.callID === toolCallID ? { ...item, output: digest } : item))
+        // StructuredOutput says whether it kept the value; an invalid call it answered with an error is not final.
+        const final = output.metadata.valid === true || output.metadata.captured === true
+        ctx.stepTools = ctx.stepTools.map((item) =>
+          item.callID === toolCallID
+            ? { ...item, output: digest, ...(item.tool === "StructuredOutput" && final ? { final } : {}) }
+            : item,
+        )
         yield* session.updatePart({
           ...match.part,
           state: {
@@ -345,7 +357,11 @@ const layer = Layer.effect(
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
-        if (error instanceof PermissionV1.RejectedError || error instanceof Question.RejectedError) {
+        // A question no one answered in time (ask_timeout) lets the agent carry on with its own judgement.
+        if (
+          error instanceof PermissionV1.RejectedError ||
+          (error instanceof Question.RejectedError && !error.timedOut)
+        ) {
           ctx.blocked = ctx.shouldBreak
         }
         ctx.stepTools = ctx.stepTools.map((item) =>
@@ -422,6 +438,7 @@ const layer = Layer.effect(
           spentUsd: run?.spentUsd,
           capUsd: run?.budget.usd,
           unpricedSteps: run?.unpricedSteps,
+          codiumSteps: run?.codiumSteps,
           estimate: stop.estimate,
         }).toObject()
         ctx.blocked = true
@@ -699,6 +716,7 @@ const layer = Layer.effect(
               tokens: usage.tokens,
               cost: usage.cost,
               ...(usage.unpriced ? { unpriced: true } : {}),
+              ...(usage.billing ? { billing: usage.billing } : {}),
             }
             // The provider has billed this step, so its usage is recorded whole before the snapshot, which can wait
             // on the worktree's snapshot lock long enough for a cancel to land.
@@ -713,6 +731,8 @@ const layer = Layer.effect(
                 yield* session.updatePart(stepFinish)
                 yield* session.updateMessage(ctx.assistantMessage)
                 yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
+                // A fork this step launched starts now that its reasoning metadata is final (5.E.3).
+                yield* forks.stepFinished(ctx.assistantMessage.id, value.reason)
                 // The step is over once the provider's terminal event is recorded, so the loop moves on now. The closing
                 // snapshot and the step's patch run in the session's snapshot queue, ahead of the next step's tools.
                 const start = ctx.snapshot
@@ -744,10 +764,10 @@ const layer = Layer.effect(
                     unpriced: usage.unpriced,
                     tokens: usage.tokens,
                     // The loop's own rule: it goes on after "tool-calls", and after local tool calls under any finish
-                    // reason. A StructuredOutput call is the final answer.
+                    // reason. Only a StructuredOutput call whose value was kept is the final answer.
                     continues:
                       (value.reason === "tool-calls" || ctx.stepTools.some((item) => !item.providerExecuted)) &&
-                      !ctx.stepTools.some((item) => item.tool === "StructuredOutput"),
+                      !ctx.stepTools.some((item) => item.final),
                     // The step's patch is taken off the request path, so a successful edit tool stands in for it here.
                     patched: ctx.stepTools.some((item) => FILE_TOOLS.has(item.tool) && item.error === undefined),
                   },
@@ -875,6 +895,7 @@ const layer = Layer.effect(
           tokens: usage.tokens,
           cost: usage.cost,
           ...(usage.unpriced ? { unpriced: true } : {}),
+          ...(usage.billing ? { billing: usage.billing } : {}),
         })
         yield* session.updateMessage(ctx.assistantMessage)
       })
@@ -939,9 +960,12 @@ const layer = Layer.effect(
         ctx.toolcalls = {}
         ctx.assistantMessage.time.completed = Date.now()
         yield* session.updateMessage(ctx.assistantMessage)
+        // A step that ended without its step-finish stops the forks it launched; after a step-finish this does nothing.
+        yield* forks.stepFinished(ctx.assistantMessage.id, "abort")
       })
 
       const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
+        yield* forks.stepFinished(ctx.assistantMessage.id, aborted ? "abort" : "error")
         yield* Effect.logError("process", {
           "session.id": input.sessionID,
           messageID: input.assistantMessage.id,
@@ -1111,6 +1135,7 @@ const layer = Layer.effect(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
+                yield* forks.stepFinished(ctx.assistantMessage.id, "abort")
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
                 }
@@ -1226,6 +1251,7 @@ export const node = LayerNode.make({
     SpendGuard.node,
     Provider.node,
     ModelSlots.node,
+    SessionFork.node,
   ],
 })
 

@@ -1232,6 +1232,7 @@ export function PullRequests(props: {
               costUsd: progress.costUsd,
               tokens: progress.tokens,
               ...(progress.partial ? { partial: true } : {}),
+              ...(progress.codium ? { codium: true } : {}),
             })
           if (controller.signal.aborted) return
           if (progress.type === "status") setBusy(progress.text)

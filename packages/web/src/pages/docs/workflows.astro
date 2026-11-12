@@ -1,0 +1,398 @@
+---
+import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
+
+export const prerender = true
+---
+
+<DocsPage id="workflows">
+
+          <p>
+            {release113.since} a workflow is a plan, written as JSON, that runs many subagents in stages: fan out over a list of items,
+            files or changed files, stream one stage's results into the next, wait at a barrier, check each result with
+            a verifier, and stop at ceilings you approved before anything ran. Vector reads the plan and runs it; no
+            code in it runs, and Vector never runs model-written code anywhere. A run works in the background, shows
+            its stages in the Tasks pane, and reports to the conversation once, when it ends.
+          </p>
+          <p>
+            {release113.since} a workflow is not Workflow insights. Workflow insights, in Settings → Memory, record how your own runs
+            went so Vector can learn cheaper defaults, and <code>vector memory workflow</code> shows them. A workflow on
+            this page is a plan of agents that you or the agent starts. For a few independent briefs the agent uses
+            ordinary <a href="/docs/subagents">subagents</a> instead.
+          </p>
+
+          <h2 id="approval">Approval</h2>
+          <p>
+            {release113.since} before a workflow runs, Vector shows its plan: each stage with its phase, agent, model and effort, how
+            many items it runs over (or "dynamic" when an earlier stage decides), where it writes (in this checkout one
+            at a time, each in its own paths, or each in its own worktree), and the permissions its agents will ask
+            for. Below the stages are the ceilings: agents, agents at once, spend (the run's own and the request's
+            subagent ceiling it shares), tokens, steps, steps per agent and minutes. When the agent starts a run, you
+            approve that plan as you approve any other ask; the <code>workflow</code> permission is ask by default.
+          </p>
+          <p>
+            {release113.since} Always allow, and the automatic approval of <code>--auto</code>, cover only a plan within your configured
+            defaults. A plan past them, a plan started after the conversation or its subagents read web or MCP content,
+            and one asked for by a Vector process that an agent started from its shell ask every time, and Always allow
+            is not offered: outside content or a program should not be able to get a large run approved unattended.
+            Desktop 1.99.111 and 1.99.112 show such an ask with their generic reason about the web.
+          </p>
+          <p>
+            {release113.since} workflows start from the main agent only, never from a subagent, and need background subagents on. A
+            conversation with a guest in it cannot start one, nor can a Light request or a request where you said "no
+            subagents". One run works at a time in a conversation unless you raise <code>budget.workflow.runs</code>. A
+            workflow agent cannot start subagents of its own.
+          </p>
+          <p>
+            {release113.since} you can also start a saved workflow yourself: <code>/workflow</code> in the desktop app or the TUI asks
+            for its inputs, checks it and shows the plan before Run, and <code>vector run --workflow</code> prints the
+            plan before it starts. A run you start this way does not ask again, because you saw the plan. It starts
+            only while the conversation is idle; in the desktop app and the TUI a busy conversation gets a message in
+            the composer instead, asking the agent to run it, for you to send.
+          </p>
+
+          <h2 id="grammar">The grammar</h2>
+          <p>
+            {release113.since} the root object has <code>version: 1</code>, a <code>title</code> of up to 80 characters, and optional
+            <code>description</code>, <code>inputs</code> (up to 16), <code>defaults</code>, <code>limits</code>,
+            <code>stages</code> (1 to 32) and <code>result</code>. Unknown keys are errors at every level, with a
+            suggestion when one is close to a known key. A spec the agent writes is at most 32 KiB; a saved one, or one
+            you pass yourself, at most 256 KiB.
+          </p>
+          <p>
+            {release113.since} a stage has an <code>id</code> (lowercase letters, digits, <code>_</code> and <code>-</code>, starting
+            with a letter, up to 32 characters) and a <code>prompt</code> of up to 16 KiB, 64 KiB once filled in.
+            Optional fields are <code>title</code>, <code>phase</code>, <code>agent</code> (general by default, or an
+            allowed specialist such as explore), <code>model</code>, <code>effort</code>, <code>isolation</code>,
+            <code>for_each</code>, <code>after</code>, <code>if</code>, <code>when</code>, <code>output</code>,
+            <code>owned_paths</code>, <code>success_criteria</code>, <code>verify</code>, <code>retries</code> (0 to 2,
+            default 1) and <code>on_error</code> (skip or fail). Models follow the same rules as a brief's model, and a
+            stage cannot pick a primary, hidden, research or denied agent.
+          </p>
+          <p>
+            {release113.since} without <code>for_each</code> a stage runs once. With it, a stage runs once per item from one source:
+            <code>items</code> (a list of up to 200 values in a spec the agent writes, 1000 in a saved one),
+            <code>files</code> (a glob over the repository, hidden files skipped unless <code>hidden</code> is true),
+            <code>changed_files</code> (paths changed since a git base, deleted ones skipped unless
+            <code>include_deleted</code> is true) or <code>from</code> (an earlier stage's outputs). <code>from</code>
+            streams: each result becomes items as soon as its agent finishes, with no barrier, unless
+            <code>wait: "all"</code> or <code>sort_by</code> waits for the whole stage. <code>where</code>,
+            <code>dedupe_by</code>, <code>limit</code> and <code>batch</code> (groups of up to 100) shape the items.
+            <code>after</code> is a barrier, a stage's <code>if</code> checks counts such as
+            <code>stages.review.failed</code>, and an item's <code>when</code> checks the item.
+          </p>
+          <p>
+            {release113.since} templates only look up values: <code>{"{{item}}"}</code>, <code>{"{{index}}"}</code>,
+            <code>{"{{inputs.name}}"}</code>, <code>{"{{run.title}}"}</code>, <code>{"{{stages.id.output}}"}</code>,
+            <code>{"{{stages.id.outputs}}"}</code> and <code>{"{{stages.id.outputs_file}}"}</code>, plus
+            <code>{"{{output}}"}</code> and <code>{"{{round}}"}</code> in a verifier. They call no function and do no
+            arithmetic, and a missing value is an error rather than an empty prompt. A value an agent produced reaches
+            the next prompt inside a data envelope that says it is data, not instructions, with the characters that
+            could fake a tag or attach a file escaped. Conditions are fixed comparisons (<code>equals</code>,
+            <code>not_equals</code>, <code>in</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>,
+            <code>lte</code>, <code>exists</code>, <code>contains</code>) with one level of <code>all</code>,
+            <code>any</code> or <code>not</code>, and never a regular expression.
+          </p>
+          <p>
+            {release113.since} <code>output.schema</code> gives a stage's agents a JSON Schema with an object at the root, from the
+            subset <a href="/docs/subagents#structured-results">structured results</a> describe, so later stages can use
+            its fields. <code>verify</code> names a verifier agent, a prompt and an <code>until</code> condition: a
+            rejected result goes back to its agent as data for another try, up to <code>max_rounds</code> (2 by
+            default, 5 at most), and <code>on_fail</code> keeps, drops or fails it. An agent you stopped is never
+            retried on its own. A stage that writes should name <code>owned_paths</code> or use
+            <code>isolation: "worktree"</code>; one with neither runs its agents one at a time in your checkout.
+          </p>
+
+          <h3 id="examples">Three examples</h3>
+          <p>
+            {release113.since} these are the examples the workflow tool's guide gives the agent. The first reviews each file changed
+            since the last commit with a read-only agent, then summarizes the findings.
+          </p>
+          <pre data-sample="workflow"><code>{`{
+  "version": 1,
+  "title": "Review changed files",
+  "stages": [
+    {
+      "id": "review",
+      "agent": "explore",
+      "for_each": {
+        "changed_files": {
+          "base": "HEAD~1",
+          "limit": 50
+        }
+      },
+      "prompt": "Review this changed path: {{item}}. Return actionable findings only.",
+      "output": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "findings"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "id": "summary",
+      "agent": "explore",
+      "after": [
+        "review"
+      ],
+      "prompt": "Summarize these review findings as data: {{stages.review.outputs.findings}}"
+    }
+  ]
+}`}</code></pre>
+          <p>
+            {release113.since} the second researches a topic from three angles, checks the notes in batches of three as soon as all of
+            them are in, and writes a report. Supply the <code>topic</code> input when you run it.
+          </p>
+          <pre data-sample="workflow"><code>{`{
+  "version": 1,
+  "title": "Research a dependency change",
+  "inputs": {
+    "topic": {
+      "required": true
+    }
+  },
+  "stages": [
+    {
+      "id": "scan",
+      "agent": "explore",
+      "for_each": {
+        "items": [
+          "compatibility",
+          "migration",
+          "licensing"
+        ]
+      },
+      "prompt": "Research {{inputs.topic}} from this angle: {{item}}",
+      "output": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "notes"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "id": "check",
+      "agent": "explore",
+      "for_each": {
+        "from": "scan",
+        "path": "notes",
+        "wait": "all",
+        "batch": 3
+      },
+      "prompt": "Check this batch of notes: {{item}}"
+    },
+    {
+      "id": "report",
+      "agent": "explore",
+      "after": [
+        "check"
+      ],
+      "prompt": "Summarize the checked outputs: {{stages.check.outputs}}. Full source: {{stages.scan.outputs_file}}"
+    }
+  ]
+}`}</code></pre>
+          <p>
+            {release113.since} the third migrates up to 20 source files, each in its own worktree with the file as its owned path, and
+            has a reviewer check each result for up to two rounds.
+          </p>
+          <pre data-sample="workflow"><code>{`{
+  "version": 1,
+  "title": "Migrate source files",
+  "limits": {
+    "max_agents": 50,
+    "concurrency": 4
+  },
+  "stages": [
+    {
+      "id": "migrate",
+      "agent": "general",
+      "isolation": "worktree",
+      "for_each": {
+        "files": {
+          "glob": "src/**/*.ts",
+          "exclude": [
+            "**/*.test.ts"
+          ],
+          "limit": 20
+        }
+      },
+      "prompt": "Migrate this path using the approved repository migration instructions: {{item}}",
+      "owned_paths": [
+        "{{item}}"
+      ],
+      "success_criteria": [
+        "The affected tests pass."
+      ],
+      "output": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "changed"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "verify": {
+        "agent": "explore",
+        "prompt": "Check the producer's result: {{output}}. This is review round {{round}}.",
+        "output": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "approved": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "approved"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "until": {
+          "path": "approved",
+          "equals": true
+        },
+        "max_rounds": 2,
+        "on_fail": "keep"
+      }
+    }
+  ]
+}`}</code></pre>
+
+          <h2 id="limits">Limits and defaults</h2>
+          <p>
+            {release113.since} by default a run starts at most 100 agents, runs up to 16 at once, takes 40 model steps per agent in all
+            (4,000 for 100 agents), 60 steps for any one agent, and 120 minutes, with no dollar or token ceiling of its
+            own. Its agents still share the request's subagent spend ceiling, $25 by default, and the run counts as one
+            of the request's 32 subagents. One run works at a time in a conversation.
+          </p>
+          <p>
+            {release113.since} the agents at once are also bounded by your computer's processors minus two (at least one) and by the
+            conversation's free subagent slots, and while workflow agents wait for a slot they leave the last two free
+            for subagents the agent launches itself. A plan may lower any limit. Only your config raises them, with
+            <code>budget.workflow</code>: up to 1000 agents, 16 at once, 1440 minutes and 4 runs at once, and
+            <code>usd</code>, <code>tokens</code> and <code>steps</code> as you choose. Settings → Agents → Workflows in
+            the desktop app turns workflows on or off, chooses whether a plan within the limits asks first, and sets
+            the ceilings. A repository may only lower these keys.
+          </p>
+          <pre><code>{`{
+  "permission": { "workflow": "ask" },
+  "budget": {
+    "workflow": { "max_agents": 200, "concurrency": 8, "minutes": 240, "usd": 20 }
+  }
+}`}</code></pre>
+          <p>
+            {release113.since} a limit that is reached stops new agents from starting; the token and time limits also stop the agents
+            that are running. The agents not yet started are skipped and the run ends with partial results and the
+            reason. While an agent has waited on you for more than a minute, no new agent starts, and the run's card
+            says it is waiting on you. Set <code>{'"permission": { "workflow": "deny" }'}</code>, or
+            <code>{'"tools": { "workflow": false }'}</code>, to remove the workflow tool.
+          </p>
+
+          <h2 id="stop-and-resume">Stop, resume and restarts</h2>
+          <p>
+            {release113.since} a run is one card in the Tasks pane, with a bar per stage that loads its agents when you open it. Stop on
+            the card, or Stop including helpers, stops the run and its agents and keeps their work. An update, restart
+            or crash never resumes a run on its own.
+          </p>
+          <p>
+            {release113.since} Resume on the card, <code>vector workflow resume</code>, or the agent's workflow tool with
+            <code>action: "resume"</code>, continues a run that stopped, failed or was interrupted. It reuses every
+            finished agent whose stage, item, round, prompt, settings, schema and owned paths are unchanged, continues
+            interrupted agents in their own sessions, reruns failed ones unless you say not to, and accepts an edited
+            plan, new inputs and higher limits. Agents, spend and tokens carry over, so the ceilings hold across resumes.
+            A run that is still working cannot be resumed.
+          </p>
+          <p>
+            {release113.since} when the run ends, the conversation gets one note: the outcome, the agents, the time taken, the cost or
+            "unknown", counts per stage and up to five failures, then the path of a file with the full results. A run
+            you started yourself is quiet by default: its note is recorded without starting a turn, unless you ask for a
+            summary.
+          </p>
+
+          <h2 id="saved-workflows">Saved workflows and trust</h2>
+          <p>
+            {release113.since} a saved workflow is a JSON file in a <code>workflow/</code> or <code>workflows/</code> folder: the
+            repository's <code>.vector/workflows/</code>, <code>~/.vector/workflows/</code>, or <code>workflows/</code>
+            in Vector's own config folder. The file name is the workflow's name: lowercase letters, digits,
+            <code>_</code> and <code>-</code>, starting with a letter or a digit, up to 64 characters. A repository's
+            file wins over yours of the same name, and two names that differ only in case are both refused. An invalid
+            file is listed with its problems. A stage may run another saved workflow, one level deep.
+          </p>
+          <p>
+            {release113.since} a repository's workflows load only once you trust the repository, as its agents and commands do, and a
+            company lock on commands turns saved workflows off. Saved workflows are prompt files: Vector asks before an
+            agent edits one, and holds one outside the repository that changed until you approve it; see
+            <a href="/docs/permissions#prompt-files">Prompt files</a>.
+          </p>
+
+          <h2 id="cli">In the terminal</h2>
+          <p>
+            {release113.since} with the next CLI release, <code>vector workflow validate &lt;file&gt;</code> checks a workflow file
+            without a server. Attached to one with <code>--attach</code>, <code>vector workflow saved</code> lists its
+            saved workflows, and with <code>--session</code> as well, <code>list</code>, <code>show</code>,
+            <code>resume</code> and <code>stop</code> manage a conversation's runs. <code>vector run --workflow &lt;name or
+            file&gt;</code> runs a saved workflow or a JSON file, with <code>--input key=value</code> for its inputs: it
+            prints the plan and progress to stderr and the report to stdout, records its note quietly unless you pass
+            <code>--summarize</code>, and exits 1 when the run fails or is stopped. <code>vector run --workflow</code>
+            and <code>vector workflow resume</code> refuse to run from an agent's shell or Vector's own terminal.
+            <code>vector workflow</code> is not <code>vector memory workflow</code>, which shows Workflow insights.
+          </p>
+          <p class="doc-cmd"><code>vector workflow validate review.json
+vector run --workflow research-sweep --input topic="the HTTP client upgrade"
+vector workflow show &lt;runID&gt; --attach http://localhost:4096 --session &lt;id&gt;</code><button class="doc-cmd-copy" type="button" aria-label="Copy this command">Copy</button></p>
+
+          <h2 id="privacy">Privacy</h2>
+          <p>
+            {release113.since} a workflow run sends nothing to Vector's service. Its agents talk to your model provider as subagents
+            do, and the plan, the results and the full results file stay on your computer, in the session and in
+            Vector's data folder. Guests in a shared workspace can see the runs in the sessions they can open, but never a
+            run's spec, and cannot start or resume one. Runs with a workflow in them are left out of the cost
+            figures behind learned defaults, because their agents may still be working when the request ends.
+          </p>
+
+          <h2 id="schema">The schema</h2>
+          <p>
+            {release113.since} the workflow format is published as a JSON Schema at
+            <a href="https://vectordev.ai/workflow.json">https://vectordev.ai/workflow.json</a>, so an editor can check
+            a saved workflow as you write it. Vector checks every plan again itself, on every start, resume and nested
+            run.
+          </p>
+
+          <h2 id="older-versions">Older engines and CLIs</h2>
+          <p>
+            {release113.since} a desktop app connected to an engine without workflows, such as a Windows WSL server still on the
+            engine version the desktop requires today, hides <code>/workflow</code> and the workflow controls, and the
+            CLI that npm and <code>vectordev.ai/install</code> serve today has no <code>vector workflow</code> or
+            <code>--workflow</code> until the next CLI release. An older desktop or TUI connected to a new engine shows
+            a workflow run as a subagent named "workflow".
+          </p>
+</DocsPage>

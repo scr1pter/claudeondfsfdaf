@@ -128,18 +128,10 @@ function withLocal<A, E, R>(
   )
 }
 
-const qwen = (id: string) => ({
-  id,
-  name: id,
-  tool_call: true,
-  cost: { input: 0, output: 0 },
-  limit: { context: 100_000, output: 8_000 },
-})
-
 // Vector Local as the owner sets it in their own config, so the config watcher, which may read the files again at
-// any moment, applies the same policy instead of turning Vector Local off in the middle of a test. A watcher can
-// outlive every test here: the process-wide AppRuntime, which another file in the same Bun process may have started,
-// keeps its config layer, and so its watcher, until the run ends, and re-reads the files 50ms after each change.
+// any moment, applies the same policy instead of turning Vector Local off in the middle of a test. A watcher stays
+// open for the whole process once any test file in it has built the app runtime, and fires 50 ms after a test before
+// this one removed the file. Each describe that uses it turns it off after each test.
 function setLocal(block?: ConfigLocalV1.Info) {
   const file = path.join(Global.Path.config, "vector.json")
   rmSync(file, { force: true })
@@ -150,6 +142,18 @@ function setLocal(block?: ConfigLocalV1.Info) {
   Config.refreshLocal()
   Config.confirmLocal()
 }
+
+function off() {
+  setLocal()
+}
+
+const qwen = (id: string) => ({
+  id,
+  name: id,
+  tool_call: true,
+  cost: { input: 0, output: 0 },
+  limit: { context: 100_000, output: 8_000 },
+})
 
 describe("the provider under Vector Local", () => {
   const it = testEffect(LayerNode.compile(LayerNode.group([Provider.node, Env.node, Plugin.node, Auth.node])))
@@ -1476,7 +1480,6 @@ describe("the agent's own actions under Vector Local", () => {
       asked.length = 0
       setLocal({ enabled: true, web })
     })
-  const off = () => setLocal()
   afterEach(() => {
     off()
     rmSync(Config.localConfirmedFile(), { force: true })
@@ -1880,6 +1883,11 @@ describe("the agent's own actions under Vector Local", () => {
 })
 
 describe("Vector's own installs under Vector Local", () => {
+  afterEach(() => {
+    off()
+    rmSync(Config.localConfirmedFile(), { force: true })
+  })
+
   test("a language server installer starts only when Vector Local lets it reach its registry, Web access None first", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "vector-lsp-local-"))
     const ran = path.join(dir, "ran.txt")
@@ -1898,15 +1906,15 @@ describe("Vector's own installs under Vector Local", () => {
     process.env.PATH = path.join(dir, "bin")
     try {
       // Allowed, but Web access None reaches no internet registry: nothing starts.
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true, web: "none", allow: [allowed] } }))
+      setLocal({ enabled: true, web: "none", allow: [allowed] })
       expect(await Gopls.spawn(dir, {} as never, flags)).toBeUndefined()
       expect(await Bun.file(ran).exists()).toBe(false)
       // Not allowed: nothing starts either.
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+      setLocal({ enabled: true })
       expect(await Gopls.spawn(dir, {} as never, flags)).toBeUndefined()
       expect(await Bun.file(ran).exists()).toBe(false)
       // Allowed with Web access Ask: the installer runs.
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true, allow: [allowed] } }))
+      setLocal({ enabled: true, allow: [allowed] })
       await Gopls.spawn(dir, {} as never, flags)
       expect((await Bun.file(ran).text()).replaceAll('"', "")).toContain("install golang.org/x/tools/gopls@latest")
     } finally {
@@ -1917,6 +1925,11 @@ describe("Vector's own installs under Vector Local", () => {
 })
 
 describe("Vector's own services under Vector Local", () => {
+  afterEach(() => {
+    off()
+    rmSync(Config.localConfirmedFile(), { force: true })
+  })
+
   test("are skipped without an attempt, and work as before with it off", async () => {
     const sent: string[] = []
     const fetch = Object.assign(
@@ -1930,7 +1943,7 @@ describe("Vector's own services under Vector Local", () => {
     const link = `https://vectordev.ai/s/${"a".repeat(32)}`
     const free = FreeModels.createClient({ request: fetch, local: () => Egress.policy().enabled })
 
-    Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+    setLocal({ enabled: true })
     const refused = await share.read(link).catch((error: unknown) => error)
     expect(refused).toMatchObject({
       code: "UNAVAILABLE",
@@ -1939,7 +1952,7 @@ describe("Vector's own services under Vector Local", () => {
     expect((await free.catalog(true)).enabled).toBe(false)
     expect(sent).toEqual([])
 
-    Egress.configure(LocalPolicy.OFF)
+    off()
     await share.read(link).catch(() => undefined)
     await free.catalog(true)
     expect(sent).toEqual([`https://vectordev.ai/api/shares/${"a".repeat(32)}`, FreeModels.CATALOG_URL])
@@ -1949,7 +1962,7 @@ describe("Vector's own services under Vector Local", () => {
 describe("Vector's own git and the V2 runner under Vector Local", () => {
   const git = testEffect(LayerNode.compile(LayerNode.group([Git.node, CrossSpawnSpawner.node])))
   afterEach(() => {
-    setLocal()
+    off()
     rmSync(Config.localConfirmedFile(), { force: true })
   })
 
