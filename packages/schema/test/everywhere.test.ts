@@ -27,6 +27,7 @@ import {
   decodeOfferClaims,
   decodeReport,
   decodeSettle,
+  githubThreadUrl,
   installationPlatform,
   isBranch,
   isIssueKey,
@@ -46,6 +47,16 @@ const device = "abcdefghijklmnopqrstuA"
 const account = "0b6f7a9e-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
 const linearOrg = "6c1d0f0e-7a2b-4c3d-9e8f-102938475610"
 const jiraCloud = "1f2e3d4c-5b6a-4978-8a9b-abcdefabcdef"
+
+test("GitHub display links use a fixed canonical host and strict repository/reference inputs", () => {
+  expect(githubThreadUrl("Owner/Repo", "issue", 12)).toBe("https://github.com/Owner/Repo/issues/12")
+  expect(githubThreadUrl("Owner/Repo", "pr", 7)).toBe("https://github.com/Owner/Repo/pull/7")
+  for (const number of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, "12"])
+    expect(githubThreadUrl("acme/app", "issue", number)).toBeUndefined()
+  for (const repository of ["https://GitHub.COM/acme/app", "evil.example/acme/app", "acme/../app", "acme/app\n", "acme/app?host=evil.example"])
+    expect(githubThreadUrl(repository, "issue", 1)).toBeUndefined()
+  expect(githubThreadUrl("acme/app", "comment", 1)).toBeUndefined()
+})
 
 function refused<T>(result: Decoded<T>) {
   if (result.ok) throw new Error("expected the decoder to refuse")

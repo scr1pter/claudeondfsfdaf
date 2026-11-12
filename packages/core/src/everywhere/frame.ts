@@ -5,6 +5,7 @@ import {
   DELEGATION_TASK,
   LIMITS,
   contextChars,
+  githubThreadUrl,
   isPlatform,
   isRepositoryName,
   threadUrlAllowed,
@@ -96,9 +97,7 @@ export type FrameOptions = {
 function threadLink(job: FrameJob, platform: PlatformId, options: FrameOptions) {
   if (options.threadUrl !== undefined) return threadUrlAllowed(platform, options.threadUrl) ? options.threadUrl : undefined
   if (platform !== "github" || !job.github || !isRepositoryName(job.repository?.fullName)) return undefined
-  const number = job.github.number
-  if (!Number.isSafeInteger(number) || number < 1) return undefined
-  return `https://github.com/${job.repository.fullName}/${job.github.kind === "pr" ? "pull" : "issues"}/${number}`
+  return githubThreadUrl(job.repository.fullName, job.github.kind, job.github.number)
 }
 
 function requestOf(job: FrameJob, platform: PlatformId, options: FrameOptions) {

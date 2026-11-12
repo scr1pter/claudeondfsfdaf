@@ -258,6 +258,12 @@ export function isRepositoryName(value: unknown): value is string {
   return name !== "." && name !== ".."
 }
 
+/** Canonical display link only: ids and repository names never become an arbitrary host or URL. No I/O. */
+export function githubThreadUrl(repository: unknown, kind: unknown, number: unknown): string | undefined {
+  if (!isRepositoryName(repository) || (kind !== "issue" && kind !== "pr") || typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) return undefined
+  return `https://github.com/${repository}/${kind === "pr" ? "pull" : "issues"}/${number}`
+}
+
 /** The platform an installation key belongs to, when it is well formed. */
 export function installationPlatform(key: unknown): PlatformId | undefined {
   if (typeof key !== "string") return undefined

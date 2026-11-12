@@ -135,3 +135,8 @@ These change choices recorded above; where they differ, this entry wins. Two of 
 - **Production event wiring.** The deployed jobs API is built with all five event hooks, shared with the sweep. P2 supplies configured platform adapters in the runtime; no platform or relay is activated by this package.
 
 Validation receipts and remaining phase gates are recorded in `vector-everywhere-progress.md`.
+
+
+## 2026-11-11, handoff CI: canonical display-link ownership
+
+The real general CI failure on both platforms was the unlisted pure GitHub display address in core/everywhere/frame.ts. The shared schema already owns import-free platform URL validation. `githubThreadUrl` now owns canonical display-link construction there too, and core framing delegates to it. Valid outputs are unchanged; new cases reject invalid ids and repository/host injection. No address string was obscured and no compliance test or source registry was edited. The unchanged compliance test passes locally; fresh hosted confirmation awaits the phase push.

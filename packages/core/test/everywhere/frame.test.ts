@@ -209,6 +209,15 @@ describe("frameTask", () => {
     expect(frameTask(job(), { threadUrl: "https://linear.app/acme/issue/ENG-1" })).not.toContain("Thread:")
   })
 
+  test("GitHub thread display links retain their exact issue/PR form and omit invalid ids", () => {
+    const github = job({ platform: "github", task: "", github: { kind: "issue", number: 12 } })
+    const options = { thread: { task: "Fix retry handling", context: [] } }
+    expect(frameTask(github, options)).toContain('Thread: "https://github.com/acme/widgets/issues/12"')
+    expect(frameTask({ ...github, github: { kind: "pr", number: 7 } }, options)).toContain('Thread: "https://github.com/acme/widgets/pull/7"')
+    for (const number of [0, -1, 1.5, Infinity])
+      expect(frameTask({ ...github, github: { kind: "issue", number } }, options)).not.toContain("Thread:")
+  })
+
   test("context over the limits or with an unknown source is refused", () => {
     const many = Array.from({ length: 31 }, () => ({ from: "teammate" as const, text: "x" }))
     expect(() => frameTask(job({ context: many }))).toThrow()

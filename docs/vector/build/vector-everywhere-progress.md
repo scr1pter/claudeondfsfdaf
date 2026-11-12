@@ -42,8 +42,7 @@ The first intake/sweep run exposed fixture mistakes (harness method and mapping
 codec). They were corrected using the actual harness and `setMapping`, retaining
 the assertions. Final runs pass. The API typecheck passes with the lane's
 `bun typecheck --project ../../tsconfig.json` command from `packages/engine`.
-Website typecheck passes: zero errors, zero warnings and 207 hints. Six
-real-Redis cases remain for CI.
+Website typecheck passes: zero errors, zero warnings and 207 hints. The real-Redis group remains for CI (four test cases and two skipped setup/teardown hooks locally).
 
 At this checkpoint dedicated handoff-head run `43143498748` had passed scope and
 the API/desktop/app/schema typechecks; other jobs were queued. No all-green
@@ -53,3 +52,12 @@ security and code-fit reviews and repairs before a push.
 P2 builds the dormant platform intakes. P3, P4, Surfaces and go-live wait for the
 handoff's specified merges and owner actions. No app registration, production
 deployment, paid inference, pull request or release occurred at this checkpoint.
+
+
+## Handoff-head hosted result and address-inventory repair
+
+The dedicated run [43143498748](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43143498748) at `f9b19a041` passed all nine jobs. Its jobs suite passed 46 cases / 349 assertions, including the four real Redis cases: claim-versus-dispatch, twelve concurrent claims, the three-live-job cap, and lease timeout/body erasure. This qualifies the handed-off source, not VE-06's changed Lua.
+
+General run `43141563331` at `12f1793fe` exposed the same deterministic failure on Linux engine shard 1/4 (job `130929521373`) and Windows engine shard 5/12 (`130929521532`): the address inventory did not list the pure GitHub display-link formatter in core/frame.ts. This was not classified as a flake.
+
+The canonical display-link helper now lives beside the existing import-free shared-schema URL validation; core framing delegates to it. No network operation, source registration or compliance assertion was weakened. Valid issue/PR links retain their exact output; malformed repository/reference inputs are refused. Root's focused results: schema 53 passed / 394 assertions, core frame 18 / 465, unchanged egress inventory 5 / 12, and schema/core typechecks pass. Fresh general hosted confirmation remains for the phase push.
