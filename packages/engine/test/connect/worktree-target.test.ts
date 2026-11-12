@@ -4,6 +4,7 @@ import path from "node:path"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Global } from "@vectordevai/core/global"
 import { Npm } from "@vectordevai/core/npm"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -33,7 +34,7 @@ import { FileLock } from "@/tool/file-lock"
 import type { Tool } from "@/tool/tool"
 import { Worktree } from "@/worktree"
 import { NpmTest } from "../fake/npm"
-import { disposeAllInstances, trustWorkspace, tmpdir } from "../fixture/fixture"
+import { disposeAllInstances, trustWorkspace, tmpdir, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -106,6 +107,7 @@ const live = testEffect(
       SpendGuard.node,
       Agent.node,
       Git.node,
+      CrossSpawnSpawner.node,
       InstanceStore.node,
       Worktree.node,
       TaskIsolation.node,
@@ -135,7 +137,7 @@ const git = Effect.fn("ConnectWorktreeTest.git")(function* (directory: string, a
   if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   return result.text().trim()
 })
-const fixture = Effect.gen(function* () {
+const fixture = Effect.fn("ConnectWorktreeTest.fixture")(function* (attributes?: string) {
   const home = yield* InstanceState.context
   const llm = yield* TestLLMServer
   const provider = testProviderConfig(llm.url)
@@ -143,6 +145,7 @@ const fixture = Effect.gen(function* () {
   yield* git(home.directory, ["config", "core.autocrlf", "false"])
   yield* write(home.directory, "vector.json", JSON.stringify({ ...provider, model: "lmstudio/test-model" }))
   yield* write(home.directory, "probe.txt", "PARENT_ONLY_CONTENT\n")
+  if (attributes) yield* write(home.directory, ".gitattributes", attributes)
   yield* git(home.directory, ["add", "-A"])
   yield* git(home.directory, ["commit", "-qm", "base"])
   yield* Effect.promise(() => trustWorkspace(home.directory))
@@ -242,7 +245,7 @@ live.instance(
   "the actual reviewer reads the task copy, retains the requester lineage and spends from its live run",
   () =>
     Effect.gen(function* () {
-      const f = yield* fixture
+      const f = yield* fixture()
       const saved = yield* f.settle()
       expect(saved.state).toBe("changed")
       const guard = yield* SpendGuard.Service
@@ -288,11 +291,186 @@ live.instance(
   60_000,
 )
 
+// The native Git/filter boundary is Linux-only; the fixed disposable filter only counts and preserves stdin bytes.
+const nativeTaskReview = process.platform === "linux" ? live.instance : live.instance.skip
+nativeTaskReview(
+  "a real saved-task review reaches provider context without executing its reachable clean filter",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture("src/task-context.ts filter=vectorcwitask\n")
+      const control = yield* tmpdirScoped()
+      const counter = path.join(control, "clean-calls.txt")
+      const script = path.join(control, "clean-filter.cjs")
+      const file = path.join(f.workPath, "src/task-context.ts")
+      const savedText = 'export function computeTaskReviewValue() { return "WORKTREE_ONLY_CONTEXT" }\n'
+      const cleanCalls = () =>
+        Effect.promise(async () => {
+          const text = await fs.readFile(counter, "utf8").catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return ""
+            throw error
+          })
+          return text.split("\n").filter((line) => line === "clean").length
+        })
+      yield* write(
+        control,
+        "clean-filter.cjs",
+        [
+          'const fs = require("node:fs");',
+          'fs.appendFileSync(process.argv[2], "clean\\n");',
+          "fs.writeFileSync(1, fs.readFileSync(0));",
+          "",
+        ].join("\n"),
+      )
+      // Keep the old probe unchanged, so parent-only bytes are not legitimate removed lines in this review's diff.
+      yield* write(f.workPath, "probe.txt", "PARENT_ONLY_CONTENT\n")
+      yield* write(f.workPath, "src/task-context.ts", savedText)
+      yield* write(
+        f.workPath,
+        "src/task-caller.ts",
+        'import { computeTaskReviewValue } from "./task-context"\nexport const result = computeTaskReviewValue()\n',
+      )
+      const saved = yield* f.settle()
+      expect(saved.state).toBe("changed")
+      expect(saved.tip).toBeDefined()
+      const savedTip = saved.tip
+      if (!savedTip) throw new Error("The settled task did not retain its tip")
+      expect(saved.gitCommonDirectory).toBeDefined()
+      // These current parent files are untracked and never part of the task's starting or saved trees.
+      yield* write(
+        f.home.directory,
+        "src/task-context.ts",
+        'export function computeTaskReviewValue() { return "PARENT_ONLY_CONTEXT" }\n',
+      )
+      yield* write(f.home.directory, "src/task-caller.ts", 'export const result = "PARENT_ONLY_CALLER"\n')
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          // Disable the deliberate filter before fixture/worktree cleanup, while the counter script still exists.
+          const service = yield* Git.Service
+          for (const name of ["clean", "required"])
+            yield* service.run(["config", "--local", "--unset-all", `filter.vectorcwitask.${name}`], {
+              cwd: f.home.directory,
+            })
+        }).pipe(Effect.orDie),
+      )
+      // Enable the filter only after the real reserve/start/settle path has saved its genuine task range.
+      yield* git(f.home.directory, [
+        "config",
+        "--local",
+        "filter.vectorcwitask.clean",
+        [process.execPath, script, counter].map((value) => "'" + value.replaceAll("'", "'\\''") + "'").join(" "),
+      ])
+      yield* git(f.home.directory, ["config", "--local", "filter.vectorcwitask.required", "true"])
+      yield* git(f.workPath, [
+        "update-index",
+        "--no-assume-unchanged",
+        "--no-skip-worktree",
+        "--",
+        "src/task-context.ts",
+      ])
+      yield* Effect.promise(async () => {
+        await fs.writeFile(file, "C".repeat(Buffer.byteLength(savedText) - 1) + "\n")
+        await fs.utimes(file, 1_900_000_001, 1_900_000_001)
+      })
+      const ordinaryStat = yield* Effect.promise(() => fs.stat(file))
+      expect(ordinaryStat.size).toBe(Buffer.byteLength(savedText))
+      expect(yield* git(f.workPath, ["status", "--porcelain", "--untracked-files=all"])).toContain(
+        "src/task-context.ts",
+      )
+      expect(yield* cleanCalls()).toBeGreaterThan(0)
+      yield* Effect.promise(async () => {
+        await fs.writeFile(file, savedText)
+        await fs.utimes(file, 1_900_000_111, 1_900_000_111)
+      })
+      const restored = yield* Effect.promise(() => fs.stat(file))
+      expect(restored.size).toBe(ordinaryStat.size)
+      expect(restored.mtimeMs).not.toBe(ordinaryStat.mtimeMs)
+      expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe(savedText)
+      expect(yield* git(f.workPath, ["rev-parse", "HEAD"])).toBe(savedTip)
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(f.parent.id, { usd: 0.5, steps: 20 })
+      yield* Effect.addFinalizer(() => guard.end(f.parent.id).pipe(Effect.orDie))
+      yield* f.llm.push(reply().tool("read", { filePath: "src/task-context.ts" }).usage({ input: 100, output: 20 }))
+      yield* f.llm.push(
+        reply()
+          .tool("StructuredOutput", {
+            summary: "The saved task context is sound.",
+            risk: "low",
+            files: [{ path: "src/task-context.ts", note: "The task-specific value is retained" }],
+            findings: [],
+          })
+          .usage({ input: 100, output: 20 }),
+      )
+      // Reset last. Only the real Hub/Placement/TaskIsolation.review/private Git/CLI/context/provider path follows.
+      yield* Effect.promise(() => fs.writeFile(counter, ""))
+      const run = yield* f.run()
+      expect(run.result?.state, run.result?.summary).toBe("completed")
+      expect(run.result?.verdict).toBe("clean")
+      expect(run.result?.target).toEqual({ kind: "task", task: f.child.id })
+      expect(run.result?.base).toBe(saved.reviewBase ?? saved.seed)
+      expect(run.result?.head).toBe(saved.tip)
+      expect(run.result?.cached).toBe(false)
+      const requests = yield* f.llm.inputs
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(requests)).toContain("WORKTREE_ONLY_CONTEXT")
+      expect(JSON.stringify(requests)).toContain("src/task-caller.ts")
+      expect(JSON.stringify(requests)).not.toContain("PARENT_ONLY")
+      expect(yield* cleanCalls()).toBe(0)
+      expect(run.result!.sessions.length).toBeGreaterThan(0)
+      for (const id of run.result!.sessions) {
+        const reviewer = yield* f.sessions.get(id)
+        const place = reviewer.parentID ? yield* f.sessions.get(reviewer.parentID) : undefined
+        expect(place?.internal).toBe("vectorscope.place")
+        expect(place?.parentID).toBe(f.parent.id)
+        expect(reviewer.directory).toBe(f.home.directory)
+        expect(yield* guard.rootOf(id)).toBe(f.parent.id)
+        const read = (yield* f.sessions.messages({ sessionID: id }))
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool" && part.tool === "read")
+        const output = read?.type === "tool" && read.state.status === "completed" ? read.state.output : ""
+        expect(output).toContain("WORKTREE_ONLY_CONTEXT")
+        expect(output).not.toContain("PARENT_ONLY")
+      }
+      const spend = yield* guard.snapshot(f.parent.id)
+      expect(spend?.steps).toBe(2)
+      expect(spend!.spentUsd).toBeGreaterThan(0)
+      expect((yield* f.store.loaded()).some((ctx) => FileLock.key(ctx.directory) === FileLock.key(f.workPath))).toBe(
+        false,
+      )
+      // Same saved size but genuinely unsaved bytes must be refused before another provider/helper or filter runs.
+      yield* Effect.promise(async () => {
+        await fs.writeFile(file, "U".repeat(Buffer.byteLength(savedText) - 1) + "\n")
+        await fs.utimes(file, 1_900_000_222, 1_900_000_222)
+      })
+      const unsaved = yield* Effect.promise(() => fs.stat(file))
+      expect(unsaved.size).toBe(restored.size)
+      expect(unsaved.mtimeMs).not.toBe(restored.mtimeMs)
+      const children = yield* f.sessions.children(f.parent.id)
+      yield* Effect.promise(() => fs.writeFile(counter, ""))
+      const refused = yield* f.run()
+      expect(refused.result?.state, refused.result?.summary).toBe("refused")
+      expect(refused.result?.summary).toContain("unsaved changes")
+      expect(refused.result?.sessions).toEqual([])
+      expect(yield* f.llm.inputs).toHaveLength(requests.length)
+      expect(yield* cleanCalls()).toBe(0)
+      expect((yield* f.sessions.children(f.parent.id)).map((session) => session.id).sort()).toEqual(
+        children.map((session) => session.id).sort(),
+      )
+      const after = yield* guard.snapshot(f.parent.id)
+      expect(after?.steps).toBe(spend?.steps)
+      expect(after?.spentUsd).toBe(spend?.spentUsd)
+      expect(
+        yield* Effect.promise(() => fs.readFile(path.join(f.home.directory, "src/task-context.ts"), "utf8")),
+      ).toContain("PARENT_ONLY_CONTEXT")
+    }),
+  { git: true },
+  60_000,
+)
+
 live.instance(
   "a full task re-review compares its stored findings and refuses since from another valid task",
   () =>
     Effect.gen(function* () {
-      const f = yield* fixture
+      const f = yield* fixture()
       yield* f.settle()
       const flagged = () =>
         reply().tool("StructuredOutput", {
@@ -373,7 +551,7 @@ for (const action of ["deny", "ask"] as const) {
     `an original absolute read ${action} blocks files that exist only in the task worktree before consent`,
     () =>
       Effect.gen(function* () {
-        const f = yield* fixture
+        const f = yield* fixture()
         yield* write(f.workPath, "private/new.txt", "TASK_PRIVATE_CONTENT\n")
         yield* f.settle()
         yield* f.sessions.setPermission({
@@ -401,7 +579,7 @@ live.instance(
   "a restricted file appearing after preflight cannot be read by a placed helper",
   () =>
     Effect.gen(function* () {
-      const f = yield* fixture
+      const f = yield* fixture()
       yield* f.settle()
       yield* f.sessions.setPermission({
         sessionID: f.parent.id,
@@ -445,7 +623,7 @@ live.instance(
   "running tasks and tasks from another conversation are refused without model calls",
   () =>
     Effect.gen(function* () {
-      const f = yield* fixture
+      const f = yield* fixture()
       expect((yield* f.run()).result?.state).toBe("refused")
       yield* f.settle()
       const other = yield* f.sessions.create({ title: "Other owner" })
@@ -466,7 +644,7 @@ live.instance(
   "canceling during task consent releases the isolation lock before any model starts",
   () =>
     Effect.gen(function* () {
-      const f = yield* fixture
+      const f = yield* fixture()
       yield* f.settle()
       const entered = yield* Deferred.make<void>()
       const caller = new AbortController()
@@ -497,7 +675,7 @@ live.instance(
   "canceling after a real reviewer starts joins the helper, disposes its placement and releases the task lock",
   () =>
     Effect.gen(function* () {
-      const f = yield* fixture
+      const f = yield* fixture()
       yield* f.settle()
       yield* f.llm.hang
       const caller = new AbortController()
@@ -534,7 +712,7 @@ live.instance(
   "deleting a target during its real review cannot accept the old task result",
   () =>
     Effect.gen(function* () {
-      const f = yield* fixture
+      const f = yield* fixture()
       yield* f.settle()
       const release = Promise.withResolvers<void>()
       yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()))
