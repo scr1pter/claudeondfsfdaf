@@ -176,14 +176,21 @@ function same(a: Identity, b: Identity) {
   return a.pid === b.pid && a.start === b.start && a.uid === b.uid
 }
 
-function assertBaseline(current: Identity[], baseline: Identity[]) {
+function assertBaseline(current: Identity[], baseline: Identity[], phase: string) {
+  const missing = baseline.filter((before) => !current.some((after) => same(before, after)))
   requireValue(
-    baseline.every((before) => current.some((after) => same(before, after))),
-    "The engine or namespace keeper disappeared during host observation",
+    missing.length === 0,
+    `The engine or namespace keeper disappeared during ${phase}: ${JSON.stringify(
+      missing.map((entry) => ({ pid: entry.pid, start: entry.start, uid: entry.uid, group: entry.group })),
+    )}`,
   )
 }
 
-async function acknowledge(observer: string, index: number, phase: "baseline" | "spawned" | "ready" | "stopped") {
+async function acknowledge(
+  observer: string,
+  index: number,
+  phase: "baseline" | "spawned" | "ready" | "stopped" | "summary",
+) {
   const file = `${observer}/${index}-${phase}.ack`
   const existing = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return
@@ -207,11 +214,11 @@ async function acknowledge(observer: string, index: number, phase: "baseline" | 
   )
 }
 
-async function stopped(uid: number, baseline: Identity[]) {
+async function stopped(uid: number, baseline: Identity[], phase: string) {
   const deadline = Date.now() + 5000
   while (true) {
     const current = await snapshot(uid)
-    assertBaseline(current, baseline)
+    assertBaseline(current, baseline, phase)
     const survivors = current.filter((after) => !baseline.some((before) => same(before, after)))
     if (survivors.length === 0) return
     requireValue(Date.now() < deadline, "A namespace-launch descendant survived before the final UID sweep")
@@ -349,7 +356,7 @@ async function main() {
       const mode = value.index === 0 ? "normal" : value.index <= 4 ? "delay" : "wait"
       requireValue(value.mode === mode, "The engine changed a fixed cancellation case")
       const processes = await snapshot(uid)
-      assertBaseline(processes, baseline)
+      assertBaseline(processes, baseline, `launch-${value.index}-${value.phase}`)
       const leader = processes.find((entry) => entry.pid === value.pid)
       requireValue(
         leader && leader.group === leader.pid && !baseline.some((entry) => same(entry, leader)),
@@ -407,7 +414,7 @@ async function main() {
           "Cancellation did not occur at its fixed readiness phase",
         )
       }
-      await stopped(uid, baseline)
+      await stopped(uid, baseline, `complete-${current.index}-${current.mode}`)
       current.result = {
         code: value.code,
         signal: value.signal,
@@ -436,8 +443,9 @@ async function main() {
         value.readyCancellations === 4,
       "The fixed engine experiment was incomplete",
     )
-    await stopped(uid, baseline)
+    await stopped(uid, baseline, "final-summary")
     summary = true
+    await acknowledge(observer, 9, "summary")
   }
   child.stderr.on("data", (chunk: Buffer) => {
     stderrBytes += chunk.byteLength

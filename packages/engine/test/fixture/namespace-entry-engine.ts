@@ -95,7 +95,7 @@ async function readSpec() {
   }
 }
 
-async function ack(directory: string, index: number, phase: "baseline" | "spawned" | "ready" | "stopped") {
+async function ack(directory: string, index: number, phase: "baseline" | "spawned" | "ready" | "stopped" | "summary") {
   const path = `${directory}/${index}-${phase}.ack`
   const deadline = Date.now() + 5000
   while (true) {
@@ -349,6 +349,8 @@ async function main() {
     earlyCancellations: 4,
     readyCancellations: 4,
   })
+  // The host's final no-survivor check still requires the engine baseline to be alive.
+  await ack(spec.observer, 9, "summary")
 }
 
 if (process.argv.slice(2).join(" ") === "--module-load-check") {
