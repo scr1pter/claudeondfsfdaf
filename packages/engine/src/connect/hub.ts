@@ -46,6 +46,7 @@ import { ConnectNote } from "./note"
 import { ConnectContext } from "./context"
 import { ConnectPlacement } from "./placement"
 import { ConnectDirectory } from "./directory"
+import type { ConnectDirectoryRequest } from "./directory-request"
 import { FileLock } from "@/tool/file-lock"
 import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
 import type { RunBudget } from "@vectordevai/schema/run-budget"
@@ -104,6 +105,8 @@ export interface Call {
   /** Owner-only directory execution, never accepted from public input or a model tool call. */
   readonly directory?: {
     readonly token: ConnectDirectory.Token
+    readonly request: ConnectDirectoryRequest.Proof
+    readonly bind: (run: Connect.Run) => Effect.Effect<void, ConnectDirectoryRequest.Error>
     readonly complete: (run: Connect.Run) => Effect.Effect<string, ConnectDirectory.Error>
   }
   /** Internal after-run work: opt-in authorizes the review, but no fresh question or write may be started. */
@@ -161,6 +164,10 @@ export interface Interface {
   ) => Effect.Effect<Connect.Run | undefined, E, R>
   /** A run of this instance's ledger, else (with `sessionID`) the one saved in that session. */
   readonly get: (runID: string, sessionID?: SessionID) => Effect.Effect<Connect.Run | undefined>
+  /** A stable owner retry returns only its original actual private directory job, never a new run. */
+  readonly replayDirectory: (
+    input: ConnectDirectoryRequest.Proof & { readonly runID: Connect.RunID; readonly anchorID: SessionID },
+  ) => Effect.Effect<Connect.Run | undefined>
   /** The ledger's runs, newest first; with `sessionID`, only the runs that session asked for. */
   readonly runs: (input?: { readonly sessionID?: SessionID }) => Effect.Effect<Connect.Run[]>
   /** The request a session is in (the message the user last wrote) and the review runs it already recorded. */
@@ -524,6 +531,34 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           (run) => run.id === runID && run.request.requester.sessionID === sessionID,
         )
         return found
+      })
+
+      const replayDirectory: Interface["replayDirectory"] = Effect.fn("ConnectHub.replayDirectory")(function* (input) {
+        const original = yield* get(input.runID)
+        if (
+          !original ||
+          original.request.requester.kind !== "user" ||
+          original.request.requester.sessionID !== undefined ||
+          original.request.to !== "vectorscope" ||
+          original.request.action !== "review"
+        )
+          return undefined
+        const current = yield* InstanceState.context
+        const receipt = yield* ConnectDirectory.load(
+          { projectID: current.project.id, directory: current.directory },
+          input.runID,
+        )
+        if (!receipt || receipt.anchor !== input.anchorID) return undefined
+        const job = (yield* jobStore.forParent(input.anchorID)).find((row) => row.id === input.runID)
+        if (
+          !job ||
+          job.type !== JOB_TYPE ||
+          job.metadata?.requestKey !== input.key ||
+          job.metadata.inputDigest !== input.inputDigest ||
+          job.metadata.scopeDigest !== input.scopeDigest
+        )
+          return undefined
+        return original
       })
 
       // With a session, the runs it saved join the ledger's (the ledger wins on an id), so the list survives a
@@ -1140,6 +1175,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             decoded.value.to !== "vectorscope" ||
             decoded.value.action !== "review" ||
             decoded.value.target.kind === "task" ||
+            !input.call.directory.request ||
+            !Schema.is(Connect.DirectoryRequestKey)(input.call.directory.request.key) ||
+            input.call.directory.request.key !== input.call.directory.request.key.toLowerCase() ||
+            !/^[0-9a-f]{64}$/.test(input.call.directory.request.inputDigest) ||
+            !/^[0-9a-f]{64}$/.test(input.call.directory.request.scopeDigest) ||
             !decoded.value.background
           )
             return unrecorded(
@@ -1280,6 +1320,20 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         Effect.gen(function* () {
           const request = entry.run.request
           const minutes = request.budget?.timeoutMinutes
+          const requestProof = entry.call.directory?.request
+          const directoryMetadata = {
+            directoryReview: true,
+            runID: entry.run.id,
+            member: request.to,
+            action: request.action,
+            ...(requestProof
+              ? {
+                  requestKey: requestProof.key,
+                  inputDigest: requestProof.inputDigest,
+                  scopeDigest: requestProof.scopeDigest,
+                }
+              : {}),
+          }
           const admission = yield* Deferred.make<boolean>()
           const lease = entry.directory ? yield* background.lease() : undefined
           // Stopping the job (deleting its session, say) cancels the run, and the job ends only once the run did.
@@ -1317,12 +1371,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                     durable: {
                       parentSessionID: entry.directory.sessionID,
                       directory: entry.directory.directory,
-                      metadata: {
-                        directoryReview: true,
-                        runID: entry.run.id,
-                        member: request.to,
-                        action: request.action,
-                      },
+                      metadata: directoryMetadata,
                     },
                   }
                 : {}),
@@ -1348,14 +1397,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 background: true,
                 startedAt: started.started_at,
                 owner: lease,
-                metadata: {
-                  directoryReview: true,
-                  runID: entry.run.id,
-                  member: request.to,
-                  action: request.action,
-                },
+                metadata: directoryMetadata,
               })
               yield* entry.call.directory.complete(entry.run)
+              yield* entry.call.directory.bind(entry.run)
             }).pipe(Effect.exit)
             yield* Deferred.succeed(admission, Exit.isSuccess(persisted))
             if (Exit.isFailure(persisted)) {
@@ -1507,7 +1552,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return list.map((member) => withActivity(member, state))
       })
 
-      return Service.of({ run, cancel, get, runs, request, members, dismiss })
+      return Service.of({ run, cancel, get, replayDirectory, runs, request, members, dismiss })
     }),
   )
 

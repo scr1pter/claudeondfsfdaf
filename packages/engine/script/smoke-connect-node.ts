@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { realpath } from "node:fs/promises"
 import { createConnection } from "node:net"
@@ -119,7 +120,8 @@ export async function connectedReviews(engine: { url: URL; authorization: string
       .sort()
   }
   const visibleBefore = await visibleSessions()
-  const directoryRun = await json("/experimental/connect/review", { background: true })
+  const directoryInput = { requestKey: randomUUID(), background: true }
+  const directoryRun = await json("/experimental/connect/review", directoryInput)
   assert.ok(isRecord(directoryRun) && typeof directoryRun.id === "string" && isRecord(directoryRun.request))
   assert.notEqual(directoryRun.status, "done", "the owner must receive a real queued directory job before consent")
   const directoryRequest = directoryRun.request
@@ -147,6 +149,22 @@ export async function connectedReviews(engine: { url: URL; authorization: string
   assert.equal(directoryApproval.metadata.directoryReview, true)
   assert.equal(directoryApproval.metadata.directory, directoryRequest.directory)
   assert.equal(directoryApproval.permission, "connect")
+  const directoryRetry = await json("/experimental/connect/review", {
+    ...directoryInput,
+    requestKey: directoryInput.requestKey.toUpperCase(),
+  })
+  assert.ok(isRecord(directoryRetry))
+  assert.equal(directoryRetry.id, directoryRun.id, "the native explicit retry started another directory job")
+  const retryApprovals = await json("/permission")
+  assert.ok(Array.isArray(retryApprovals))
+  assert.deepEqual(
+    retryApprovals.map((row: unknown) => {
+      assert.ok(isRecord(row))
+      return row.id
+    }),
+    [directoryApproval.id],
+    "the native explicit retry created another owner consent request",
+  )
   assert.deepEqual(
     await json(`/session/${directoryApproval.sessionID}/message`),
     [],
@@ -162,6 +180,11 @@ export async function connectedReviews(engine: { url: URL; authorization: string
     return isRecord(value) && value.status === "done" && isRecord(value.result) && value.result.state === "cancelled"
   }, "the native directory cancel left a real job running")
   assert.deepEqual(await json("/permission"), [], "the canceled directory review left owner consent pending")
+  const directoryTerminalRetry = await json("/experimental/connect/review", directoryInput)
+  assert.ok(isRecord(directoryTerminalRetry) && isRecord(directoryTerminalRetry.result))
+  assert.equal(directoryTerminalRetry.id, directoryRun.id, "a terminal native retry replaced the original job")
+  assert.equal(directoryTerminalRetry.result.state, "cancelled")
+  assert.deepEqual(await json("/permission"), [], "a terminal native retry created new owner consent")
   assert.deepEqual(await visibleSessions(), visibleBefore, "the canceled directory review left a visible conversation")
   return [] as string[]
 }

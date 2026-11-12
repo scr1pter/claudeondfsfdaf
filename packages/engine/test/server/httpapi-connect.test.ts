@@ -1,5 +1,6 @@
 import { afterEach, expect } from "bun:test"
-import { ConfigProvider, Effect, Fiber, Layer, Option, Schema } from "effect"
+import { randomUUID } from "node:crypto"
+import { ConfigProvider, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { Connect } from "@vectordevai/schema/connect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { createVectorClient } from "@vectordevai/sdk/v2"
@@ -188,7 +189,13 @@ it.live("the actual directory API queues sessionless owner consent and refuses g
     )
     expect(wrongOwner.status).toBe(401)
     expect((yield* call(() => f.client.session.list())).data).toEqual([])
-    const response = yield* call(() => f.client.connect.directoryReview({ connectReviewInput: { background: true } }))
+    const oldClient = yield* f.raw("/experimental/connect/review", owner, { background: true })
+    expect(oldClient.status).toBe(400)
+    expect((yield* call(() => f.client.session.list({ internal: true }))).data).toEqual([])
+    expect((yield* call(() => f.client.connect.runs())).data).toEqual([])
+    const response = yield* call(() =>
+      f.client.connect.directoryReview({ connectDirectoryReviewInput: { requestKey: randomUUID(), background: true } }),
+    )
     const run = Schema.decodeUnknownSync(Connect.Run)(response.data)
     expect(run.status).not.toBe("done")
     expect(run.request.requester.kind).toBe("user")
@@ -230,6 +237,79 @@ it.live("the actual directory API queues sessionless owner consent and refuses g
     expect(yield* f.llm.inputs).toHaveLength(0)
     expect((yield* call(() => f.client.session.list())).data).toEqual([])
   }),
+)
+
+it.live(
+  "a lost actual directory POST response and case-variant explicit retry recover one run without another ask",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(true, "web", false)
+      const input = { requestKey: randomUUID(), background: true }
+      let lost = false
+      let discardedStatus: number | undefined
+      const uncertain = createVectorClient({
+        baseUrl: f.baseUrl,
+        directory: f.directory,
+        headers: owner,
+        throwOnError: true,
+        fetch: async (request) => {
+          const response = await f.fetchRequest(request)
+          if (
+            !lost &&
+            request.method === "POST" &&
+            new URL(request.url).pathname.endsWith("/experimental/connect/review")
+          ) {
+            lost = true
+            discardedStatus = response.status
+            await response.arrayBuffer()
+            throw new TypeError("The fixture discarded the genuine server response")
+          }
+          return response
+        },
+      })
+      const missing = yield* Effect.tryPromise(() =>
+        uncertain.connect.directoryReview({ connectDirectoryReviewInput: input }),
+      ).pipe(Effect.exit)
+      expect(Exit.isFailure(missing)).toBe(true)
+      expect(discardedStatus).toBe(200)
+      const pending = yield* pollWithTimeout(
+        call(() => f.client.permission.list()).pipe(
+          Effect.map((response) => response.data?.find((entry) => entry.metadata.directoryReview === true)),
+        ),
+        "The original lost-response request did not create owner consent",
+        "10 seconds",
+      )
+      const recovered = Schema.decodeUnknownSync(Connect.Run)(
+        (yield* call(() =>
+          f.client.connect.directoryReview({
+            connectDirectoryReviewInput: { ...input, requestKey: input.requestKey.toUpperCase() },
+          }),
+        )).data,
+      )
+      expect(recovered.id).toBe(Schema.decodeUnknownSync(Connect.RunID)(pending.metadata.runID))
+      const requests = (yield* call(() => f.client.permission.list())).data ?? []
+      expect(requests.filter((entry) => entry.metadata.runID === recovered.id)).toHaveLength(1)
+      expect((yield* call(() => f.client.connect.runs())).data?.map((run) => run.id)).toEqual([recovered.id])
+      expect((yield* call(() => f.client.session.list({ internal: true }))).data).toHaveLength(1)
+      const changed = yield* f.raw("/experimental/connect/review", owner, { ...input, target: { kind: "staged" } })
+      expect(changed.status).toBe(400)
+      expect((yield* call(() => f.client.connect.runs())).data?.map((run) => run.id)).toEqual([recovered.id])
+      expect(yield* f.llm.inputs).toHaveLength(0)
+      expect((yield* call(() => f.client.connect.cancel({ runID: recovered.id }))).data).toBe(true)
+      const canceled = yield* pollWithTimeout(
+        call(() => f.client.connect.get({ runID: recovered.id })).pipe(
+          Effect.map((response) => (response.data?.status === "done" ? response.data : undefined)),
+        ),
+        "The recovered original run did not cancel",
+        "10 seconds",
+      )
+      expect(canceled.result?.state).toBe("cancelled")
+      const replay = yield* call(() => f.client.connect.directoryReview({ connectDirectoryReviewInput: input }))
+      expect(replay.data?.id).toBe(recovered.id)
+      expect(replay.data?.result?.state).toBe("cancelled")
+      expect((yield* call(() => f.client.permission.list())).data).toEqual([])
+      expect(yield* f.llm.inputs).toHaveLength(0)
+    }),
 )
 
 it.live("a directory header cannot attach a hand-off to another directory's conversation", () =>

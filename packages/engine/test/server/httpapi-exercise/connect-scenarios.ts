@@ -49,12 +49,12 @@ export const connectScenarios: Scenario[] = [
     .jsonEffect(400, disabled),
   http.protected
     .post(`${root}/review`, "experimental.connect.directory.disabled")
-    .probe({ path: `${root}/review`, body: { background: false } })
+    .probe({ path: `${root}/review`, body: { requestKey: "0196aa50-50d0-4f17-9c1d-85eff018e829", background: false } })
     .seeded((ctx) => ctx.session({ title: "Connected directory owner" }))
     .at((ctx) => ({
       path: `${root}/review`,
       headers: ctx.headers(),
-      body: { target: { kind: "uncommitted" }, background: false },
+      body: { requestKey: "0196aa50-50d0-4f17-9c1d-85eff018e829", target: { kind: "uncommitted" }, background: false },
     }))
     .jsonEffect(400, disabled),
   http.protected

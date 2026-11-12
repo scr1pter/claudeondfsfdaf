@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect } from "bun:test"
+import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { spawn } from "node:child_process"
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { Database } from "@vectordevai/core/database/database"
@@ -15,6 +17,7 @@ import { Connect } from "@vectordevai/schema/connect"
 import { BackgroundJob } from "@/background/job"
 import type { ConnectAdapter } from "@/connect/adapter"
 import { ConnectDirectory } from "@/connect/directory"
+import { ConnectDirectoryRequest } from "@/connect/directory-request"
 import { ConnectHub } from "@/connect/hub"
 import { ConnectOwner } from "@/connect/owner"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -111,6 +114,8 @@ const graph = (enabled: boolean) =>
   AppNodeBuilder.build(
     LayerNode.group([
       ConnectOwner.node,
+      ConnectDirectoryRequest.node,
+      Global.node,
       ConnectHub.node,
       Session.node,
       Permission.node,
@@ -131,10 +136,16 @@ const graph = (enabled: boolean) =>
   )
 const it = testEffect(graph(true))
 const off = testEffect(graph(false))
+const reviewInput = (input: Connect.ReviewInput = {}): Connect.DirectoryReviewInput => ({
+  requestKey: randomUUID(),
+  ...input,
+})
 const options = { config: { permission: { connect: "allow" as const, connect_model: "ask" as const } } }
 
 const fixture = Effect.gen(function* () {
   const owner = yield* ConnectOwner.Service
+  const requests = yield* ConnectDirectoryRequest.Service
+  const global = yield* Global.Service
   const sessions = yield* Session.Service
   const permission = yield* Permission.Service
   const store = yield* InstanceStore.Service
@@ -178,8 +189,174 @@ const fixture = Effect.gen(function* () {
       yield* permission.reply({ requestID: ask.id, reply: "once" })
       return ask
     })
-  return { owner, sessions, permission, current, scope, jobs, background, store, pending, ended, approve, reload }
+  return {
+    owner,
+    requests,
+    global,
+    sessions,
+    permission,
+    current,
+    scope,
+    jobs,
+    background,
+    store,
+    pending,
+    ended,
+    approve,
+    reload,
+  }
 })
+
+it.instance(
+  "concurrent exact retries and UUID case variants keep one actual owner job, ask and paid execution",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput({ background: true })
+      const attempts = yield* Effect.all(
+        [
+          f.owner.directoryReview(input).pipe(Effect.exit),
+          f.owner.directoryReview({ ...input, requestKey: input.requestKey.toUpperCase() }).pipe(Effect.exit),
+        ],
+        { concurrency: "unbounded" },
+      )
+      const accepted = attempts.filter(Exit.isSuccess).map((result) => result.value)
+      expect(accepted.length).toBeGreaterThan(0)
+      expect(new Set(accepted.map((run) => run.id)).size).toBe(1)
+      const first = accepted[0]
+      if (!first) throw new Error("The genuine first writer did not return a run")
+      const ask = yield* f.pending(first.id)
+      const retry = yield* f.owner.directoryReview({ ...input, requestKey: input.requestKey.toUpperCase() })
+      expect(retry.id).toBe(first.id)
+      expect(script.calls).toBe(0)
+      expect((yield* f.permission.list()).filter((row) => row.metadata.runID === first.id)).toHaveLength(1)
+      expect(
+        (yield* f.sessions.list({ internal: true, roots: true })).filter(
+          (row) => row.internal === ConnectDirectory.INTERNAL,
+        ),
+      ).toHaveLength(1)
+      expect(yield* f.jobs.forParent(ask.sessionID)).toHaveLength(1)
+      const changed = yield* f.owner.directoryReview({ ...input, target: { kind: "staged" } }).pipe(Effect.exit)
+      expect(Exit.isFailure(changed)).toBe(true)
+      yield* f.permission.reply({ requestID: ask.id, reply: "once" })
+      const done = yield* f.ended(first.id)
+      expect(yield* f.owner.directoryReview(input)).toEqual(done)
+      expect(script.calls).toBe(1)
+      expect(yield* f.permission.list()).toEqual([])
+      expect(yield* f.jobs.forParent(ask.sessionID)).toHaveLength(1)
+    }),
+  options,
+)
+
+it.instance(
+  "an exited process's pending request refuses before another owner anchor or job is created",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput({ background: true })
+      const outcome = yield* Effect.promise(
+        () =>
+          new Promise<{ code: number; errors: string }>((resolve) => {
+            const proc = spawn(
+              process.execPath,
+              [
+                path.join(import.meta.dir, "../fixture/directory-request-worker.ts"),
+                JSON.stringify({ data: f.global.data, scope: f.scope, input }),
+              ],
+              { cwd: path.join(import.meta.dir, "../..") },
+            )
+            const errors: Buffer[] = []
+            proc.stderr.on("data", (value) => errors.push(Buffer.from(value)))
+            proc.on("close", (code) => resolve({ code: code ?? 1, errors: Buffer.concat(errors).toString() }))
+          }),
+      )
+      expect(outcome.code, outcome.errors).toBe(0)
+      expect(Exit.isFailure(yield* f.owner.directoryReview(input).pipe(Effect.exit))).toBe(true)
+      expect(yield* f.sessions.list({ internal: true })).toEqual([])
+      expect(yield* f.permission.list()).toEqual([])
+      expect(script.calls).toBe(0)
+    }),
+  options,
+  30_000,
+)
+
+it.instance(
+  "a consumed key whose receipt was retired cannot create a replacement review",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput()
+      const first = yield* f.owner.directoryReview(input)
+      const ask = yield* f.approve(first.id)
+      yield* f.ended(first.id)
+      expect((yield* f.background.wait({ id: first.id, timeout: 5_000 })).timedOut).toBe(false)
+      yield* Effect.promise(() =>
+        fs.rm(path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${first.id}.json`)),
+      )
+      expect(Exit.isFailure(yield* f.owner.directoryReview(input).pipe(Effect.exit))).toBe(true)
+      expect(yield* f.jobs.forParent(ask.sessionID)).toHaveLength(1)
+      expect(
+        (yield* f.sessions.list({ internal: true, roots: true })).filter(
+          (row) => row.internal === ConnectDirectory.INTERNAL,
+        ),
+      ).toHaveLength(1)
+      expect(script.calls).toBe(1)
+    }),
+  options,
+)
+
+it.instance(
+  "a failed genuine queued-job binding cannot release execution or create a replacement on retry",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const input = reviewInput({ background: true })
+      const admission = yield* f.requests.reserve(f.scope, input)
+      if (admission.kind !== "reserved") throw new Error("No genuine first reservation")
+      const folder = path.join(f.global.data, "storage", ...ConnectDirectoryRequest.prefix(admission.claim.scope))
+      yield* Effect.promise(() => fs.writeFile(path.join(folder, "bindings", `${input.requestKey}.json`), "{"))
+      const audience = yield* SessionAudience.Service
+      const hub = yield* ConnectHub.Service
+      const anchor = yield* f.sessions.create({ internal: ConnectDirectory.INTERNAL })
+      yield* audience.fenceIsolation({ sessionID: anchor.id, actor: "owner" })
+      const token = yield* ConnectDirectory.issue({ sessionID: anchor.id, ...f.scope }, admission.claim.scope)
+      const failed = yield* hub.run({
+        request: {
+          to: "vectorscope",
+          action: "review",
+          requester: { kind: "user", agent: "build" },
+          directory: f.scope.directory,
+          target: { kind: "uncommitted" },
+          background: true,
+        },
+        call: {
+          directory: {
+            token,
+            request: admission.claim.proof,
+            bind: (run) => f.requests.bind(admission.token, { anchorID: anchor.id, runID: run.id }),
+            complete: (run) => ConnectDirectory.write(token, run),
+          },
+          promptOps: {
+            cancel: () => Effect.void,
+            resolvePromptParts: () => Effect.succeed([]),
+            prompt: () => Effect.die("The failed binder must not prompt"),
+          },
+        },
+      })
+      expect(failed.status).toBe("done")
+      expect(failed.result?.verdict).not.toBe("clean")
+      expect(script.calls).toBe(0)
+      expect(yield* f.permission.list()).toEqual([])
+      expect(Exit.isFailure(yield* f.owner.directoryReview(input).pipe(Effect.exit))).toBe(true)
+      expect(
+        (yield* f.sessions.list({ internal: true, roots: true })).filter(
+          (row) => row.internal === ConnectDirectory.INTERNAL,
+        ),
+      ).toHaveLength(1)
+      expect(yield* f.jobs.forParent(anchor.id)).toHaveLength(1)
+    }),
+  options,
+)
 
 it.instance(
   "directory review queues a genuine durable job and asks the private owner without a conversation",
@@ -195,7 +372,7 @@ it.instance(
         return Effect.void
       })
       yield* Effect.addFinalizer(() => unsubscribe)
-      const queued = yield* f.owner.directoryReview({ background: true })
+      const queued = yield* f.owner.directoryReview(reviewInput({ background: true }))
       expect(queued.status).not.toBe("done")
       expect(queued.request.requester).toEqual({ kind: "user", agent: "build" })
       const ask = yield* f.pending(queued.id)
@@ -240,10 +417,13 @@ it.instance(
     Effect.gen(function* () {
       const f = yield* fixture
       const hub = yield* ConnectHub.Service
+      const requests = yield* ConnectDirectoryRequest.Service
+      const admission = yield* requests.reserve(f.scope, reviewInput({ background: true }))
+      if (admission.kind !== "reserved") throw new Error("The writer fixture did not reserve a genuine request")
       const audience = yield* SessionAudience.Service
       const anchor = yield* f.sessions.create({ internal: ConnectDirectory.INTERNAL })
       yield* audience.fenceIsolation({ sessionID: anchor.id, actor: "owner" })
-      const token = yield* ConnectDirectory.issue({ sessionID: anchor.id, ...f.scope })
+      const token = yield* ConnectDirectory.issue({ sessionID: anchor.id, ...f.scope }, admission.claim.scope)
       const writing = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
       yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined).pipe(Effect.asVoid))
@@ -259,6 +439,8 @@ it.instance(
         call: {
           directory: {
             token,
+            request: admission.claim.proof,
+            bind: (run) => requests.bind(admission.token, { anchorID: anchor.id, runID: run.id }),
             complete: (run) =>
               Effect.gen(function* () {
                 if (run.status === "done") {
@@ -295,7 +477,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.approve(queued.id)
       const done = yield* f.ended(queued.id)
       const next = yield* f.reload(queued.id, ask.sessionID)
@@ -315,7 +497,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.pending(queued.id)
       expect(yield* f.owner.cancel(queued.id)).toBe(true)
       const done = yield* f.ended(queued.id)
@@ -337,7 +519,7 @@ it.instance(
     Effect.gen(function* () {
       const f = yield* fixture
       script.gate = yield* Deferred.make<void>()
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.approve(queued.id)
       yield* pollWithTimeout(
         Effect.sync(() => (script.calls === 1 ? true : undefined)),
@@ -358,7 +540,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       yield* f.approve(queued.id)
       yield* f.ended(queued.id)
       const other = yield* Effect.acquireRelease(
@@ -381,7 +563,7 @@ it.instance(
     Effect.gen(function* () {
       const f = yield* fixture
       script.verdict = "incomplete"
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.approve(queued.id)
       yield* f.ended(queued.id)
       const receipt = yield* ConnectDirectory.load(f.scope, queued.id)
@@ -431,7 +613,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const first = yield* f.owner.directoryReview({})
+      const first = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.approve(first.id)
       yield* f.ended(first.id)
       expect((yield* f.background.wait({ id: first.id, timeout: 5_000 })).timedOut).toBe(false)
@@ -439,7 +621,7 @@ it.instance(
       yield* database.db.delete(BackgroundJobTable).where(eq(BackgroundJobTable.id, first.id)).run().pipe(Effect.orDie)
       expect(Exit.isFailure(yield* f.owner.get(first.id).pipe(Effect.exit))).toBe(true)
       expect((yield* f.owner.runs()).map((run) => run.id)).not.toContain(first.id)
-      const second = yield* f.owner.directoryReview({})
+      const second = yield* f.owner.directoryReview(reviewInput())
       const nextAsk = yield* f.approve(second.id)
       yield* f.ended(second.id)
       expect((yield* f.background.wait({ id: second.id, timeout: 5_000 })).timedOut).toBe(false)
@@ -456,7 +638,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.pending(queued.id)
       yield* f.sessions.remove(ask.sessionID)
       expect(script.calls).toBe(0)
@@ -471,7 +653,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.approve(queued.id)
       const done = yield* f.ended(queued.id)
       const receipt = yield* ConnectDirectory.load(f.scope, queued.id)
@@ -503,7 +685,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.approve(queued.id)
       const done = yield* f.ended(queued.id)
       if (!done.result) throw new Error("Actual result missing")
@@ -537,7 +719,7 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       yield* f.approve(queued.id)
       yield* f.ended(queued.id)
       expect((yield* f.background.wait({ id: queued.id, timeout: 5_000 })).timedOut).toBe(false)
@@ -568,7 +750,7 @@ it.instance(
     Effect.gen(function* () {
       const f = yield* fixture
       script.oversized = true
-      const queued = yield* f.owner.directoryReview({})
+      const queued = yield* f.owner.directoryReview(reviewInput())
       const ask = yield* f.approve(queued.id)
       const done = yield* f.ended(queued.id)
       expect(done.result?.state).toBe("failed")
@@ -589,10 +771,14 @@ it.instance(
       const f = yield* fixture
       expect(
         Exit.isFailure(
-          yield* f.owner.directoryReview({ target: { kind: "task", task: SessionID.create() } }).pipe(Effect.exit),
+          yield* f.owner
+            .directoryReview(reviewInput({ target: { kind: "task", task: SessionID.create() } }))
+            .pipe(Effect.exit),
         ),
       ).toBe(true)
-      expect(Exit.isFailure(yield* f.owner.directoryReview({ to: "another" }).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* f.owner.directoryReview(reviewInput({ to: "another" })).pipe(Effect.exit))).toBe(
+        true,
+      )
       const hub = yield* ConnectHub.Service
       const forged = yield* hub.run({
         request: {
@@ -603,7 +789,14 @@ it.instance(
           target: { kind: "uncommitted" },
           background: true,
         },
-        call: { directory: { token: {}, complete: () => Effect.succeed("not-a-receipt") } },
+        call: {
+          directory: {
+            token: {},
+            request: { key: randomUUID(), inputDigest: "0".repeat(64), scopeDigest: "0".repeat(64) },
+            bind: () => Effect.void,
+            complete: () => Effect.succeed("not-a-receipt"),
+          },
+        },
       })
       expect(forged.result?.state).toBe("refused")
       expect(forged.result?.refusal).toBe("not-allowed")
@@ -619,7 +812,7 @@ off.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture
-      expect(Exit.isFailure(yield* f.owner.directoryReview({}).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* f.owner.directoryReview(reviewInput()).pipe(Effect.exit))).toBe(true)
       expect(yield* f.sessions.list({ internal: true })).toEqual([])
       expect(yield* ConnectDirectory.list(f.scope, 50)).toEqual([])
       expect(script.calls).toBe(0)

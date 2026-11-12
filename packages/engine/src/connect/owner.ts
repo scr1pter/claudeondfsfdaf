@@ -9,6 +9,7 @@ import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Instruction } from "@/session/instruction"
 import { ConnectContext } from "./context"
 import { ConnectDirectory } from "./directory"
+import { ConnectDirectoryRequest } from "./directory-request"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { ConnectFrame } from "@vectordevai/core/connect/frame"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -54,7 +55,7 @@ export interface Interface {
     options?: { readonly abort?: AbortSignal },
   ) => Effect.Effect<Connect.Run, Error>
   readonly directoryReview: (
-    input: Connect.ReviewInput,
+    input: Connect.DirectoryReviewInput,
     options?: { readonly abort?: AbortSignal },
   ) => Effect.Effect<Connect.Run, Error>
   readonly register: (input: Connect.RegisterInput) => Effect.Effect<Connect.Run, Error>
@@ -67,6 +68,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const hub = yield* ConnectHub.Service
+    const directoryRequests = yield* ConnectDirectoryRequest.Service
     const brain = yield* Brain.Service
     const brainDatabase = yield* BrainDatabase.Service
     const instruction = yield* Instruction.Service
@@ -365,11 +367,16 @@ const layer = Layer.effect(
     const directoryReview: Interface["directoryReview"] = (input, options) =>
       Effect.gen(function* () {
         yield* enabled
+        const checked = yield* Schema.decodeUnknownEffect(Connect.DirectoryReviewInput)(input).pipe(
+          Effect.mapError(
+            () => new Error({ code: "invalid", message: "A directory review requires a stable UUID request key." }),
+          ),
+        )
         if (options?.abort?.aborted) return yield* Effect.interrupt
         if (
-          (input.to !== undefined && input.to !== "vectorscope") ||
-          input.target?.kind === "task" ||
-          input.background === false
+          (checked.to !== undefined && checked.to !== "vectorscope") ||
+          checked.target?.kind === "task" ||
+          checked.background === false
         )
           return yield* new Error({
             code: "invalid",
@@ -382,6 +389,24 @@ const layer = Layer.effect(
             code: "forbidden",
             message: "Review this task from its launching conversation so its worktree ownership stays protected.",
           })
+        const attempt = yield* directoryRequests
+          .reserve({ projectID: current.project.id, directory: current.directory }, checked)
+          .pipe(Effect.mapError((error) => new Error({ code: "invalid", message: error.message })))
+        if (attempt.kind === "bound") {
+          const original = yield* hub.replayDirectory({
+            ...attempt.proof,
+            runID: attempt.binding.runID,
+            anchorID: attempt.binding.anchorID,
+          })
+          if (!original)
+            return yield* new Error({
+              code: "invalid",
+              message:
+                "This request key is consumed, but its original owned run is unavailable. No new review was started.",
+            })
+          return original
+        }
+        const requested = attempt.claim.input
         const name = yield* agents.defaultAgent()
         const agent = yield* agents.get(name)
         if (!agent) return yield* new Error({ code: "invalid", message: "The owner's agent is unavailable." })
@@ -396,25 +421,33 @@ const layer = Layer.effect(
               () => new Error({ code: "forbidden", message: "The directory owner could not be verified." }),
             ),
           )
-        const token = yield* ConnectDirectory.issue({
-          sessionID: anchor.id,
-          projectID: current.project.id,
-          directory: current.directory,
-        }).pipe(Effect.mapError((error) => new Error({ code: "invalid", message: error.message })))
+        const token = yield* ConnectDirectory.issue(
+          {
+            sessionID: anchor.id,
+            projectID: current.project.id,
+            directory: current.directory,
+          },
+          attempt.claim.scope,
+        ).pipe(Effect.mapError((error) => new Error({ code: "invalid", message: error.message })))
         const run = yield* hub.run({
           request: {
             to: "vectorscope",
             action: "review",
             requester: { kind: "user", agent: agent.name },
             directory: current.directory,
-            target: input.target ?? { kind: "uncommitted" },
+            target: requested.target ?? { kind: "uncommitted" },
             background: true,
-            ...(input.budget ? { budget: input.budget } : {}),
-            ...(input.security !== undefined ? { security: input.security } : {}),
-            ...(input.since ? { since: input.since } : {}),
+            ...(requested.budget ? { budget: requested.budget } : {}),
+            ...(requested.security !== undefined ? { security: requested.security } : {}),
+            ...(requested.since ? { since: requested.since } : {}),
           },
           call: {
-            directory: { token, complete: (run) => ConnectDirectory.write(token, run) },
+            directory: {
+              token,
+              request: attempt.claim.proof,
+              bind: (run) => directoryRequests.bind(attempt.token, { anchorID: anchor.id, runID: run.id }),
+              complete: (run) => ConnectDirectory.write(token, run),
+            },
             promptOps,
             ...(options?.abort ? { abort: options.abort } : {}),
             update: (run) => ConnectDirectory.write(token, run).pipe(Effect.asVoid, Effect.orDie),
@@ -675,6 +708,7 @@ export const node = LayerNode.make({
   layer,
   deps: [
     ConnectHub.node,
+    ConnectDirectoryRequest.node,
     Brain.node,
     BrainDatabase.node,
     Instruction.node,

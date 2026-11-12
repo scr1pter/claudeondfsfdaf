@@ -52,11 +52,20 @@ const snapshot = (directory: string) => {
   return { canonical: FileLock.key(directory), identity: `${info.dev}:${info.ino}` }
 }
 
-export const issue = Effect.fn("ConnectDirectory.issue")(function* (input: Scope) {
-  const identity = yield* Effect.try({
-    try: () => snapshot(input.directory),
+export const capture = Effect.fn("ConnectDirectory.capture")(function* (directory: string) {
+  return yield* Effect.try({
+    try: () => snapshot(directory),
     catch: () => new Error({ message: "The selected directory identity could not be verified." }),
   })
+})
+
+export const issue = Effect.fn("ConnectDirectory.issue")(function* (
+  input: Scope,
+  expected?: { readonly canonical: string; readonly identity: string },
+) {
+  const identity = yield* capture(input.directory)
+  if (expected && (identity.canonical !== expected.canonical || identity.identity !== expected.identity))
+    return yield* new Error({ message: "The selected directory was replaced before the review started." })
   const token = Object.freeze({})
   bindings.set(token, Object.freeze({ ...input, ...identity }))
   writers.set(token, { tail: Promise.resolve(), terminal: false })

@@ -50,7 +50,7 @@ export const ConnectApi = HttpApi.make("connect").add(
       }).annotateMerge(endpoint("review", "Review changes in a conversation")),
       HttpApiEndpoint.post("directoryReview", `${root}/review`, {
         query: WorkspaceRoutingQuery,
-        payload: Connect.ReviewInput,
+        payload: Connect.DirectoryReviewInput,
         success: Connect.Run,
         error: ConnectApiError,
       }).annotateMerge(endpoint("directoryReview", "Review the selected directory")),

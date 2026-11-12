@@ -1,4 +1,6 @@
 import { afterEach, expect } from "bun:test"
+import { randomUUID } from "node:crypto"
+import type { Connect } from "@vectordevai/schema/connect"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Effect, Layer } from "effect"
@@ -182,6 +184,11 @@ const fixture = (read?: Record<string, "allow" | "deny" | "ask">) =>
       )
     return { current, llm, base, owner, permission, sessions, background, jobs, store, pending, ended }
   })
+const reviewInput = (input: Connect.ReviewInput = {}): Connect.DirectoryReviewInput => ({
+  requestKey: randomUUID(),
+  ...input,
+})
+
 const report = () =>
   reply()
     .tool("StructuredOutput", {
@@ -216,13 +223,40 @@ const retarget = Effect.fn("ConnectDirectoryLiveTest.retarget")(function* (direc
 })
 
 live.instance(
+  "a stable explicit retry recovers one actual paid review and never makes another provider call",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const input = reviewInput({ security: false, background: true })
+      yield* f.llm.push(report())
+      const original = yield* f.owner.directoryReview(input)
+      const ask = yield* f.pending(original.id)
+      expect(yield* f.llm.inputs).toHaveLength(0)
+      const recovered = yield* f.owner.directoryReview({ ...input, requestKey: input.requestKey.toUpperCase() })
+      expect(recovered.id).toBe(original.id)
+      expect((yield* f.permission.list()).filter((entry) => entry.metadata.runID === original.id)).toHaveLength(1)
+      yield* f.permission.reply({ requestID: ask.id, reply: "once" })
+      const done = yield* f.ended(original.id)
+      expect(done.result?.state, done.result?.summary).toBe("completed")
+      expect(done.result?.cost?.kind).toBe("priced")
+      expect(done.result?.cost?.usd).toBeGreaterThan(0)
+      expect(yield* f.owner.directoryReview(input)).toEqual(done)
+      expect(yield* f.llm.inputs).toHaveLength(1)
+      expect(yield* f.jobs.forParent(ask.sessionID)).toHaveLength(1)
+      expect(yield* f.permission.list()).toEqual([])
+    }),
+  { git: true },
+  60_000,
+)
+
+live.instance(
   "actual directory review withholds priced HTTP calls until owner approval, reads the selected copy and reloads a sealed result",
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
       yield* f.llm.push(reply().tool("read", { filePath: "probe.txt" }).usage({ input: 100, output: 20 }))
       yield* f.llm.push(report())
-      const queued = yield* f.owner.directoryReview({ security: false })
+      const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       expect(ask.permission).toBe("connect_model")
       expect(yield* f.llm.inputs).toHaveLength(0)
@@ -267,7 +301,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
-      const queued = yield* f.owner.directoryReview({ security: false })
+      const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       expect(yield* f.llm.inputs).toHaveLength(0)
       expect(yield* f.owner.cancel(queued.id)).toBe(true)
@@ -286,7 +320,7 @@ live.instance(
     Effect.gen(function* () {
       const f = yield* fixture()
       yield* f.llm.hang
-      const queued = yield* f.owner.directoryReview({ security: false })
+      const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       yield* f.permission.reply({ requestID: ask.id, reply: "once" })
       yield* f.llm.wait(1)
@@ -320,7 +354,7 @@ live.instance(
       const other = yield* tmpdirScoped()
       yield* write(other, "probe.txt", "NEVER_SEND_RETARGETED_WORKSPACE_CANARY\n")
       yield* f.llm.push(report())
-      const queued = yield* f.owner.directoryReview({ security: false })
+      const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       const restore = yield* retarget(f.current.directory, other)
       yield* f.permission.reply({ requestID: ask.id, reply: "once" })
@@ -348,7 +382,7 @@ live.instance(
         reply().tool("read", { filePath: "probe.txt" }).usage({ input: 100, output: 20 }).wait(release.promise),
       )
       yield* f.llm.push(report())
-      const queued = yield* f.owner.directoryReview({ security: false })
+      const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       yield* f.permission.reply({ requestID: ask.id, reply: "once" })
       yield* f.llm.wait(1)
@@ -375,7 +409,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture({ "*": "allow", "private/*": "deny" })
-      const queued = yield* f.owner.directoryReview({ security: false })
+      const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       yield* write(f.current.directory, "private/new.txt", "NEVER_SEND_THIS_DIRECTORY_SECRET\n")
       yield* f.permission.reply({ requestID: ask.id, reply: "once" })
