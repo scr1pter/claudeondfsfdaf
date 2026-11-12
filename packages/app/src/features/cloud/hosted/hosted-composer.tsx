@@ -3,6 +3,7 @@ import { Dialog } from "@vectordevai/ui/dialog"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { usePlatform, type HostedPlatform } from "@/context/platform"
+import { useSDK } from "@/context/sdk"
 import { onCodiumChange } from "@/vector-account"
 import { showToast } from "@/utils/toast"
 import {
@@ -95,8 +96,9 @@ function schedule() {
 }
 
 /** The cloud computer for one composer: whether it shows, the window's shared status, and requests. */
-export function useHostedComputer() {
+export function useHostedComputer(sessionID: () => string | undefined) {
   const platform = usePlatform()
+  const sdk = useSDK()
   const [plan, { refetch: refetchPlan }] = createResource(
     () => Boolean(platform.hosted && platform.vectorAccount?.codium),
     () => platform.vectorAccount?.codium?.().catch(() => undefined),
@@ -133,7 +135,30 @@ export function useHostedComputer() {
     schedule()
   }
   const live = createMemo(() => (status()?.sessions ?? []).filter(isLive))
-  return { platform, shown, overnight, status, live, refresh, request }
+  const [linked, { refetch: reconnect }] = createResource(
+    () => shown() && sessionID() ? { client: sdk().client, sessionID: sessionID()! } : undefined,
+    async (input) => input.client.experimental.hosted.jobs({ sessionID: input.sessionID }, { throwOnError: true })
+      .then((answer) => answer.data).catch(() => undefined),
+  )
+  const prepareReturn = async () => {
+    const id = sessionID()
+    if (!id) throw new Error("Start a conversation first so the hosted report can return here.")
+    const client = sdk().client
+    await client.experimental.hosted.jobs({ sessionID: id }, { throwOnError: true })
+    // Capture both conversation and directory-scoped client before the remote queue request. Navigation while it is
+    // in flight must never redirect a finished job into another conversation.
+    return async (jobID: string) => {
+      await client.experimental.hosted.attach({ sessionID: id, jobID }, { throwOnError: true })
+      if (sessionID() === id) void reconnect()
+    }
+  }
+  const returnHere = async (jobID: string) => {
+    const id = sessionID()
+    if (!id) throw new Error("Open the conversation where this hosted report should return.")
+    await sdk().client.experimental.hosted.attach({ sessionID: id, jobID }, { throwOnError: true })
+    void reconnect()
+  }
+  return { platform, shown, overnight, status, live, refresh, request, sessionID, linked, prepareReturn, returnHere }
 }
 
 export type HostedComputer = ReturnType<typeof useHostedComputer>
@@ -372,6 +397,9 @@ export function DialogRunOnCloudComputer(props: { computer: HostedComputer; prom
         if (!list) return setProblem("Write one to ten success criteria, one per line, each under 300 characters.")
         const at = deliverBy()
         if (!at) return setProblem("Choose a time within the next day, at least half an hour away.")
+        let returnReport: (jobID: string) => Promise<void>
+        try { returnReport = await props.computer.prepareReturn() }
+        catch { return setProblem("Open a conversation on a current Vector engine before queueing this job so its report can return here.") }
         const answer = await props.computer.request({
           kind: "queue",
           prompt: text.slice(0, LIMITS.jobPrompt),
@@ -382,7 +410,16 @@ export function DialogRunOnCloudComputer(props: { computer: HostedComputer; prom
           ...(title() ? { title: title() } : {}),
         })
         if (!answer.ok) return setProblem(hostedErrorText(answer))
-        showToast({ title: "Queued for the morning", description: `${DELIVER_LABEL} ${when(at)}.` })
+        const job = decodeJobAnswer(answer.body)?.job
+        if (job) {
+          try {
+            await returnReport(job.id)
+            showToast({ title: "Queued for the morning", description: `${DELIVER_LABEL} ${when(at)}. Its report will return to this conversation.` })
+          } catch {
+            // Queueing already succeeded. Never leave a second Queue action inviting the owner to start it twice.
+            showToast({ variant: "error", title: "Job queued; reconnect its report", description: "Open Cloud computer → Jobs and choose Return report here. Your queued job keeps running." })
+          }
+        } else showToast({ variant: "error", title: "Job queued; check Jobs", description: "Vector could not read its job ID. Open Cloud computer → Jobs to reconnect its report." })
       }
       await props.computer.refresh()
       dialog.close()
@@ -572,6 +609,15 @@ export function DialogHostedJobs(props: { computer: HostedComputer }) {
                       )}
                     </Show>
                     <div class="hosted-actions hosted-actions--start">
+                      <Show when={props.computer.sessionID()}>
+                        <ButtonV2 variant="ghost" disabled={busy() === job.id || props.computer.linked()?.some((item) => item.id === job.id)}
+                          onClick={() => void act(job, async () => {
+                            await props.computer.returnHere(job.id)
+                            return undefined
+                          })}>
+                          {props.computer.linked()?.some((item) => item.id === job.id) ? "Report connected here" : "Return report here"}
+                        </ButtonV2>
+                      </Show>
                       <Show when={job.report?.pullRequest}>
                         <ButtonV2 variant="contrast" disabled={busy() === job.id} onClick={() => void approve(job)}>
                           {job.approvedAt ? "Open the pull request" : "Approve: open the pull request"}
