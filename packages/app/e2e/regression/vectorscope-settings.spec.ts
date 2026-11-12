@@ -106,7 +106,27 @@ test("the owner saves a separate model, variant and disable setting only after c
   await expect(picker).toBeVisible()
   const anthropic = picker.locator("button[data-model-section-toggle]").filter({ hasText: "Anthropic" })
   await expect(anthropic).toHaveAttribute("aria-expanded", "false")
+  await anthropic.evaluate((header) => {
+    const key = "vector.model-picker.open-sections.v1"
+    const diagnostic = { nativeClicks: 0, writes: [] as string[], before: localStorage.getItem(key) }
+    const click = () => diagnostic.nativeClicks++
+    const write = Storage.prototype.setItem
+    header.addEventListener("click", click, true)
+    Storage.prototype.setItem = function (this: Storage, name, value) {
+      if (name === key) diagnostic.writes.push(value)
+      return write.call(this, name, value)
+    }
+    ;(window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic = () => {
+      header.removeEventListener("click", click, true)
+      Storage.prototype.setItem = write
+      return { ...diagnostic, after: localStorage.getItem(key), headerConnected: header.isConnected }
+    }
+  })
   await anthropic.click()
+  console.log(
+    "SCOPE_PICKER_CLICK_DIAGNOSTIC",
+    await page.evaluate(() => (window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic()),
+  )
   await expect(anthropic).toHaveAttribute("aria-expanded", "true")
   const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
   await expect(chosen).toContainText("Maker Text")
