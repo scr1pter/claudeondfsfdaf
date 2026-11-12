@@ -76,6 +76,29 @@ async function fixture(attributes = "probe.txt filter=fixture\n") {
   }
 }
 
+local("private lifetime becomes closed synchronously and cannot be reset by its caller", async () => {
+  const f = await fixture()
+  const repository = await ReadOnlyGit.open(f.input)
+  let closing: Promise<void> | undefined
+  try {
+    expect(repository.isOpen()).toBe(true)
+    expect(Reflect.set(repository, "isOpen", () => true)).toBe(false)
+    expect(Object.getOwnPropertyDescriptor(repository, "isOpen")).toMatchObject({
+      writable: false,
+      configurable: false,
+    })
+    closing = repository.close()
+    expect(repository.isOpen()).toBe(false)
+    await expect(repository.read({ kind: "status" })).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+    await closing
+    expect(repository.isOpen()).toBe(false)
+    await repository.close()
+    expect(repository.isOpen()).toBe(false)
+  } finally {
+    await (closing ?? repository.close())
+  }
+})
+
 local.each(["clean", "process"])(
   "private status never executes an active %s filter or read-side programs",
   async (kind) => {

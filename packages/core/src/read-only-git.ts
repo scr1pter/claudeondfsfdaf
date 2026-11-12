@@ -667,6 +667,8 @@ export interface Repository {
   readonly head: string
   readonly branch?: string
   readonly shallow: boolean
+  /** Synchronous lifetime witness; false as soon as close starts. */
+  readonly isOpen: () => boolean
   readonly status: () => Promise<{ head: string; dirty: boolean }>
   readonly read: (operation: Read) => Promise<{ code: number; bytes: Buffer }>
   readonly close: () => Promise<void>
@@ -1084,18 +1086,23 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     }
     await status()
     transferred = true
-    return {
-      directory: root,
-      gitDirectory: git,
-      commonDirectory: common,
-      commonIdentity,
-      head: capturedHead,
-      branch,
-      shallow: !!shallow?.byteLength,
-      status,
-      read: safeRead,
-      close,
-    }
+    return Object.defineProperty(
+      {
+        directory: root,
+        gitDirectory: git,
+        commonDirectory: common,
+        commonIdentity,
+        head: capturedHead,
+        branch,
+        shallow: !!shallow?.byteLength,
+        isOpen: () => !closed,
+        status,
+        read: safeRead,
+        close,
+      },
+      "isOpen",
+      { writable: false, configurable: false },
+    )
   } catch (error) {
     throw unavailable(error)
   } finally {
