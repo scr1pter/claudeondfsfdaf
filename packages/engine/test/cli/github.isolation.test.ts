@@ -39,6 +39,7 @@ function fixture() {
   const hooks: { reply?: (operation: string, result: unknown) => unknown; installed?: () => void } = {}
   const embedded = asset()
   const ports: GithubIsolation.Ports = {
+    temporary: LinuxIsolation.HOST_TEMP,
     asset: embedded,
     inspect: async (name) => files.get(name),
     nonce: () => "a".repeat(32),
@@ -79,7 +80,15 @@ function fixture() {
             ...common,
             event: "ready",
             public: publicSpec,
-            live: { keeper: true, broker: true, namespaces: true, socket: true, admission: true },
+            live: {
+              keeper: true,
+              broker: true,
+              namespaces: true,
+              socket: true,
+              admission: true,
+              masks: true,
+              protectedMountTargets: [...LinuxIsolation.MASKS],
+            },
           }
         if (operation === "cleanup")
           return {
@@ -102,8 +111,15 @@ function fixture() {
 
 test("native selection is compile-time only and absent build bytes cannot activate a runtime path", () => {
   expect(GithubIsolation.enabled()).toBe(false)
-  expect(() => GithubIsolation.fromBuild()).toThrow()
+  expect(() => GithubIsolation.fromBuild(LinuxIsolation.HOST_TEMP)).toThrow()
   expect(GithubIsolation.validState({ ...scope, native: true })).toBe(false)
+})
+
+test("unsupported hosted temporary parents refuse before any privileged executor", () => {
+  const f = fixture()
+  for (const temporary of ["/tmp", "/alternate", "/home/runner/work/_temp/", "/home/runner/work/_temp/../other"])
+    expect(() => GithubIsolation.create({ ...f.ports, temporary })).toThrow(LinuxIsolation.Unavailable)
+  expect(f.calls).toHaveLength(0)
 })
 
 test("intent precedes root work and only verified native cleanup admits artifact preparation", async () => {
@@ -232,7 +248,7 @@ test("a lost or malformed installation response cannot advance to native prepare
 })
 
 test("structural adopted JSON alone cannot substitute for live process, namespace, socket and broker admission proof", async () => {
-  for (const missing of ["all", "keeper", "broker", "namespaces", "socket", "admission"]) {
+  for (const missing of ["all", "keeper", "broker", "namespaces", "socket", "admission", "masks"]) {
     const f = fixture()
     const ready = await f.adapter.prepare(f.adapter.intent(scope))
     f.hooks.reply = (operation, result) => {
@@ -247,12 +263,43 @@ test("structural adopted JSON alone cannot substitute for live process, namespac
         }
       return {
         ...result,
-        live: { keeper: true, broker: true, namespaces: true, socket: true, admission: true, [missing]: false },
+        live: {
+          keeper: true,
+          broker: true,
+          namespaces: true,
+          socket: true,
+          admission: true,
+          masks: true,
+          protectedMountTargets: [...LinuxIsolation.MASKS],
+          [missing]: false,
+        },
       }
     }
     await expect(f.adapter.validate(ready)).rejects.toThrow()
     expect(f.operations).toEqual(["install", "prepare", "inspect"])
   }
+})
+
+test("positive live flags cannot hide an unsupported nested different-filesystem source", async () => {
+  const f = fixture()
+  const ready = await f.adapter.prepare(f.adapter.intent(scope))
+  f.hooks.reply = (operation, result) =>
+    operation === "inspect" && result && typeof result === "object"
+      ? {
+          ...result,
+          live: {
+            keeper: true,
+            broker: true,
+            namespaces: true,
+            socket: true,
+            admission: true,
+            masks: true,
+            protectedMountTargets: [...LinuxIsolation.MASKS, "/tmp/private"],
+          },
+        }
+      : result
+  await expect(f.adapter.validate(ready)).rejects.toThrow(LinuxIsolation.Unavailable)
+  expect(f.operations).toEqual(["install", "prepare", "inspect"])
 })
 
 test("actual Sandbox rejects a required native run without intent and preserves its failed-before-intent fence", async () => {

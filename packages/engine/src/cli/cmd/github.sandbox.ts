@@ -9,6 +9,7 @@ import { GithubSecrets } from "./github.secrets"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { GithubSessionProof } from "./github.session-proof"
 import { GithubIsolation } from "./github.isolation"
+import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
 
 const execute = promisify(execFile)
 const USER = GithubAgents.SANDBOX_USER
@@ -432,6 +433,7 @@ export async function prepare(env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
   const selected = mode(env)
   if (env.RUNNER_ENVIRONMENT !== "github-hosted") throw refused()
+  if (env.VECTOR_AGENT_SUDO !== "1" && GithubIsolation.enabled()) LinuxIsolation.hostedTemporary(env.RUNNER_TEMP)
   const workspace = await checkout(env)
   if ((await command("/usr/bin/id", ["-u", USER], [0, 1])).code === 0) throw refused()
   if (
@@ -549,7 +551,7 @@ export async function prepare(env: Env = process.env) {
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
   if (!state.sudo && GithubIsolation.enabled()) {
     // Compile-time CI only. Persist intent before any root installation or native child exists.
-    const adapter = GithubIsolation.fromBuild()
+    const adapter = GithubIsolation.fromBuild(env.RUNNER_TEMP)
     if (state.uid === undefined || state.gid === undefined) throw refused()
     state.native = adapter.intent({ uid: state.uid, gid: state.gid, container })
     await writeState(env, state)
@@ -672,7 +674,9 @@ export async function run(args: readonly string[], env: Env = process.env) {
     throw refused()
   if (hosted && !state!.sudo && (state!.nativeRequired || state!.native || GithubIsolation.enabled())) {
     // A native intent can never select a legacy launch on missing bytes, changed receipts or another build.
-    await GithubIsolation.fromBuild().validate(nativeState(state!))
+    await GithubIsolation.fromBuild(env.RUNNER_TEMP).validate(nativeState(state!))
+    LinuxIsolation.assertUnmaskedRuntime(node)
+    LinuxIsolation.assertUnmaskedRuntime(binary)
   }
   if (
     hosted &&
@@ -829,6 +833,8 @@ export async function run(args: readonly string[], env: Env = process.env) {
 export async function finish(env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
   mode(env)
+  if (env.RUNNER_ENVIRONMENT === "github-hosted" && env.VECTOR_AGENT_SUDO !== "1" && GithubIsolation.enabled())
+    LinuxIsolation.hostedTemporary(env.RUNNER_TEMP)
   let cancelled = false
   const interrupt = () => {
     cancelled = true
@@ -858,7 +864,9 @@ export async function finish(env: Env = process.env) {
     let cleanupAllowed = false
     // Native cleanup seals traversal, stops UID processes BEFORE its broker, then verifies the fixed receipt.
     // On failure do not quarantine, copy, remove state or use the legacy UID loop as an artifact fallback.
-    const nativeReceipt = state?.native ? await GithubIsolation.fromBuild().cleanup(nativeState(state)) : undefined
+    const nativeReceipt = state?.native
+      ? await GithubIsolation.fromBuild(env.RUNNER_TEMP).cleanup(nativeState(state))
+      : undefined
     const nativeMissing = Boolean(
       state && !state.sudo && (state.nativeRequired || GithubIsolation.enabled()) && !state.native,
     )

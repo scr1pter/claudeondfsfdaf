@@ -68,6 +68,7 @@ export interface Invocation {
   readonly env: Readonly<Record<string, string>>
 }
 export interface Ports {
+  readonly temporary: string
   readonly asset: Asset
   readonly inspect: (name: string) => Promise<Metadata | undefined>
   readonly execute: (invocation: Invocation) => Promise<string>
@@ -226,8 +227,10 @@ finally: os.close(source)
 namespace = {"__name__":"vector_native_status","__file__":entry}
 exec(compile(code,entry,"exec",dont_inherit=True),namespace)
 native = SimpleNamespace(**namespace)
-public = json.loads(sys.stdin.buffer.read(65537).decode("utf-8","strict"))
-native.validate_spec(public)
+request = json.loads(sys.stdin.buffer.read(65537).decode("utf-8","strict"))
+need(type(request) is dict and set(request) == {"public","maskSources"})
+public = native.validate_spec(request["public"])
+protected_targets = native.validate_masks(public["keeper"]["pid"],public["keeper"]["start"],public["uid"],public["gid"],request["maskSources"])
 for capability in range(64):
     if native.LIBC.prctl(24, capability, 0, 0, 0) != 0:
         native.require(ctypes.get_errno() == errno.EINVAL)
@@ -241,7 +244,8 @@ descriptors = native.receive_namespaces(public)
 try: native.require(len(descriptors) == 3)
 finally:
     for descriptor in descriptors.values(): os.close(descriptor)
-print(json.dumps({"v":1,"event":"broker-live","nonce":public["nonce"]}),flush=True)
+print(json.dumps({"v":1,"event":"broker-live","nonce":public["nonce"],"masks":True,
+                  "protectedMountTargets":protected_targets}),flush=True)
 '''
 def proc_text(pid, name, limit=65536):
     with open(f"/proc/{pid}/{name}","rb") as stream: data = stream.read(limit + 1)
@@ -262,7 +266,7 @@ def endpoint(public):
     need(os.path.realpath(public["socket"]) == public["socket"] and stat.S_ISSOCK(item.st_mode) and
          item.st_uid == 0 and item.st_gid == gid and stat.S_IMODE(item.st_mode) == 0o660 and
          item.st_dev == public["socketIdentity"]["device"] and item.st_ino == public["socketIdentity"]["inode"])
-def live(public):
+def live(public, mask_sources):
     descriptors = []
     try:
         # Pin first. Reused PID paths cannot pass the final poll of the original process identity.
@@ -286,16 +290,21 @@ def live(public):
             need(proc_text(public["keeper"]["pid"],"uid_map").split() == ["0",str(uid),"1"] and
                  proc_text(public["keeper"]["pid"],"gid_map").split() == ["0",str(gid),"1"])
             endpoint(public)
-            probe = subprocess.run([python,"-I","-S","-B","-c",CLIENT,asset_sha],input=json.dumps(public).encode("ascii"),
+            probe = subprocess.run([python,"-I","-S","-B","-c",CLIENT,asset_sha],input=json.dumps({"public":public,"maskSources":mask_sources}).encode("ascii"),
                                    stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=True,timeout=3,
                                    env=ENV,close_fds=True)
-            need(len(probe.stdout) <= 4096 and json.loads(probe.stdout.decode("ascii","strict")) ==
-                 {"v":1,"event":"broker-live","nonce":public["nonce"]})
+            need(len(probe.stdout) <= 4096)
+            proof = json.loads(probe.stdout.decode("ascii","strict"))
+            need(type(proof) is dict and set(proof) == {"v","event","nonce","masks","protectedMountTargets"} and
+                 proof["v"] == 1 and proof["event"] == "broker-live" and proof["nonce"] == public["nonce"] and
+                 proof["masks"] is True and type(proof["protectedMountTargets"]) is list and
+                 len(proof["protectedMountTargets"]) <= 64)
             endpoint(public)
             identity(public["keeper"],uid,gid); identity(public["broker"],0,0)
             for fd in descriptors:
                 poll = select.poll(); poll.register(fd,select.POLLIN); need(not poll.poll(0))
-            return {"keeper":True,"broker":True,"namespaces":True,"socket":True,"admission":True}
+            return {"keeper":True,"broker":True,"namespaces":True,"socket":True,"admission":True,"masks":True,
+                    "protectedMountTargets":proof["protectedMountTargets"]}
         finally:
             for fd in namespace_fds.values(): os.close(fd)
     finally:
@@ -360,7 +369,7 @@ try:
                  value["phase"] == "adopted" and value["brokerPending"] is False)
             public = json.loads(read(ROOT + "/run.json",0o444,65536).decode("utf-8","strict"))
             need(public == value["public"])
-            proof = live(public)
+            proof = live(public, value["maskSources"])
             if operation == "prepare": installation["phase"] = "ready"; record(installation)
             print(json.dumps({"v":1,"event":"ready","installNonce":nonce,"assetSHA":asset_sha,"public":public,
                               "live":proof}),flush=True)
@@ -388,6 +397,7 @@ export function enabled() {
 
 /** Only trusted runner code constructs this port. It is never a request/configuration JSON service. */
 export function create(ports: Ports) {
+  LinuxIsolation.hostedTemporary(ports.temporary)
   exact(ports.asset, ["v", "entry", "sha256"])
   if (ports.asset.v !== 1 || typeof ports.asset.entry !== "string" || !ports.asset.entry.isWellFormed()) refused()
   hex(ports.asset.sha256, 64)
@@ -464,8 +474,10 @@ export function create(ports: Ports) {
       result.assetSHA !== state.assetSHA
     )
       refused()
-    exact(result.live, ["keeper", "broker", "namespaces", "socket", "admission"])
-    if (Object.values(result.live).some((value) => value !== true)) refused()
+    exact(result.live, ["keeper", "broker", "namespaces", "socket", "admission", "masks", "protectedMountTargets"])
+    for (const key of ["keeper", "broker", "namespaces", "socket", "admission", "masks"])
+      if (result.live[key] !== true) refused()
+    LinuxIsolation.assertMaskMountTargets(result.live.protectedMountTargets)
     const spec = LinuxIsolation.parseSpec(result.public)
     if (
       spec.container !== state.container ||
@@ -626,9 +638,15 @@ function execute(invocation: Invocation): Promise<string> {
 }
 
 /** Compile-time CI selection only. True + absent/bad bytes refuses; it never selects the legacy tool path. */
-export function fromBuild(): Adapter {
+export function fromBuild(temporary: string | undefined): Adapter {
   if (!enabled() || GithubIsolationBuild.asset === undefined) refused()
-  return create({ asset: GithubIsolationBuild.asset, inspect, execute, nonce: () => randomBytes(16).toString("hex") })
+  return create({
+    asset: GithubIsolationBuild.asset,
+    temporary: LinuxIsolation.hostedTemporary(temporary),
+    inspect,
+    execute,
+    nonce: () => randomBytes(16).toString("hex"),
+  })
 }
 
 export * as GithubIsolation from "./github.isolation"
