@@ -51,6 +51,14 @@ export const REMOTE_ROUTES: readonly Route[] = [
   { method: "GET", path: "/project", global: true },
   { method: "GET", path: "/session", query: { roots: isBoolean, limit: isInteger, start: isInteger, search: isText } },
   { method: "GET", path: "/session/status" },
+  { method: "GET", path: "/experimental/capabilities" },
+  { method: "GET", path: "/experimental/session/:sessionID/tasks", query: { descendants: isBoolean, active: isBoolean, shells: isBoolean, limit: (value) => isInteger(value) && Number(value) >= 1 && Number(value) <= 200 } },
+  { method: "POST", path: "/experimental/session/:sessionID/stop", body: (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+    const body = value as Record<string, unknown>
+    if (Object.keys(body).some((key) => key !== "helpers") || typeof body.helpers !== "boolean") return undefined
+    return { helpers: body.helpers }
+  } },
   { method: "GET", path: "/session/:sessionID" },
   { method: "GET", path: "/session/:sessionID/children" },
   { method: "GET", path: "/session/:sessionID/todo" },

@@ -25,6 +25,7 @@ import { codiumActions, codiumErrorText } from "@/components/codium-error"
 import { useCodiumPurchase } from "@/components/codium-purchase"
 import { createNotificationEventGate, sessionNotificationAllowed } from "./notification-event-gate"
 import { alertTitle, sendPhoneAlert } from "./phone-alerts"
+import { helperPhoneAlert } from "./helper-phone-alert"
 
 type NotificationBase = {
   directory?: string
@@ -445,8 +446,20 @@ function createServerNotificationState(input: {
     })
   }
 
+  const helperAlerts = new Set<string>()
   const unsub = serverSDK().event.listen((e) => {
     const event = e.details
+    if (event.type === "session.updated") {
+      const notice = helperPhoneAlert(event.properties.info, Date.now())
+      if (!notice || helperAlerts.has(notice.key)) return
+      helperAlerts.add(notice.key)
+      if (helperAlerts.size > 500) helperAlerts.delete(helperAlerts.values().next().value!)
+      void lookup(e.name, notice.parent).then((session) => {
+        if (meta.disposed || !session || !sessionNotificationAllowed(notice.parent, session) || viewedInCurrentSession(e.name, notice.parent)) return
+        void sendPhoneAlert(platform, settings.notifications, { event: "needsYou", title: alertTitle(notice.label, session.title), route: "sessions" })
+      })
+      return
+    }
     if (event.type === "tui.toast.show") {
       showToast({
         title: event.properties.title,

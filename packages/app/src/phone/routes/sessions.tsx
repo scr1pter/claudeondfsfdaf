@@ -16,6 +16,7 @@ import {
 } from "../remote/model"
 import { Empty, InstallCard, Notice, Panel, type RouteProps } from "./parts"
 import { ConnectionNotice, useRemoteView } from "./remote-parts"
+import { SessionTasks } from "./session-tasks"
 
 // Remote's sessions (WP A42): the sessions on each paired computer, streamed end-to-end encrypted through the relay
 // while this page is open, and one session to read, steer or stop. What a phone may ask is the computer's allowlist
@@ -340,6 +341,7 @@ function SessionView(props: { remote: PhoneRemote; computer: string; session: Se
           Stop
         </button>
       </Show>
+      <SessionTasks remote={props.remote} computer={props.computer} session={props.session.id} directory={directory} />
       <p class="phone-meta">Turns you start here are never approved automatically: their requests wait in Approvals.</p>
       <Notice text={problem()} />
     </section>

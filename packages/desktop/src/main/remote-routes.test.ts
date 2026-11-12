@@ -62,6 +62,15 @@ async function setup() {
 const code = (answer: { body: unknown }) => (answer.body as { error?: { code?: string } }).error?.code
 
 describe("route allowlist", () => {
+  test("paired phones can read bounded tasks and explicitly stop helpers, with no extra control fields", async () => {
+    const { ask, calls } = await setup()
+    expect((await ask({ method: "GET", path: "/experimental/session/ses_1/tasks", directory: "/repo", query: { shells: "true", limit: "100" } })).status).toBe(200)
+    expect((await ask({ method: "POST", path: "/experimental/session/ses_1/stop", directory: "/repo", body: { helpers: true } })).status).toBe(200)
+    expect(calls.at(-1)?.body).toEqual({ helpers: true })
+    expect((await ask({ method: "POST", path: "/experimental/session/ses_1/stop", directory: "/repo", body: { helpers: true, permission: "always" } })).status).toBe(400)
+    expect((await ask({ method: "GET", path: "/experimental/session/ses_1/tasks", directory: "/repo", query: { limit: "201" } })).status).toBe(400)
+    expect((await ask({ method: "POST", path: "/experimental/session/ses_1/tasks/resume", directory: "/repo", body: {} })).status).toBe(403)
+  })
   test("passes the reads a phone needs to the engine, with the project's directory", async () => {
     const { ask, calls } = await setup()
     for (const path of [
@@ -209,6 +218,8 @@ describe("route allowlist", () => {
     expect(matchRoute("POST", "/session/ses_1")).toBeUndefined()
     // Every allowlisted route is a V1 instance route the app itself uses; none writes files or settings.
     expect(REMOTE_ROUTES.map((route) => `${route.method} ${route.path}`).sort()).toEqual([
+      "GET /experimental/capabilities",
+      "GET /experimental/session/:sessionID/tasks",
       "GET /permission",
       "GET /project",
       "GET /question",
@@ -220,6 +231,7 @@ describe("route allowlist", () => {
       "GET /session/:sessionID/message/:messageID",
       "GET /session/:sessionID/todo",
       "GET /session/status",
+      "POST /experimental/session/:sessionID/stop",
       "POST /permission/:requestID/reply",
       "POST /question/:requestID/reject",
       "POST /question/:requestID/reply",
