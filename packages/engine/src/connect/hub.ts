@@ -39,6 +39,7 @@ import { ADAPTERS, DEPS as ADAPTER_DEPS } from "./adapters"
 import { ConnectMembers } from "./members"
 import { ConnectNote } from "./note"
 import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
+import type { RunBudget } from "@vectordevai/schema/run-budget"
 
 // Connected tools' hub: one place where every hand-off starts, is checked, asks, runs, is recorded and ends.
 //
@@ -91,6 +92,16 @@ export type StartRequest =
 
 /** What a tool call (or the owner service) lends the hub for one run. */
 export interface Call {
+  /** Internal after-run work: opt-in authorizes the review, but no fresh question or write may be started. */
+  readonly unattended?: boolean
+  /** Only the after-run owner may request a waking note for blocking findings. */
+  readonly repair?: boolean
+  readonly repairBudget?: RunBudget.Info
+  /** Internal automatic work stays attached to this original human request across admission races. */
+  readonly expectedRequestID?: string
+  /** Private after-run admission proofs, captured by the owner rather than accepted from a request. */
+  readonly afterRunCurrent?: Effect.Effect<boolean>
+  readonly repairCurrent?: Effect.Effect<boolean>
   /**
    * The tool call's `ctx.ask`, so asks attach to the call. Without it the hub asks through Permission with the
    * requester's merged rules; a run with no session and no `ask` is refused at its first ask.
@@ -442,6 +453,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           // `connect` is asked once per run, `connect_model` once per request for each model, `connect_write` always.
           if (checked.permission === "connect" && entry.asked.has(key)) return
           if (
+            !entry.call.unattended &&
             checked.permission === "connect_model" &&
             checked.patterns.every((pattern) => state.models.has(`${requestID}\u0000${pattern}`))
           )
@@ -460,6 +472,25 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               ...(checked.findings ? { findings: [...checked.findings] } : {}),
               ...(checked.diff !== undefined ? { diff: checked.diff } : {}),
             },
+          }
+          if (entry.call.unattended) {
+            // Explicit after-run configuration authorizes the read hand-off, never an explicit deny or any write.
+            // Model consent still uses the real saved approvals; preflight cannot create an ask or auto-answer it.
+            const allowed =
+              checked.permission === "connect"
+                ? checked.patterns.every(
+                    (pattern) => Permission.evaluate(checked.permission, pattern, rules).action !== "deny",
+                  )
+                : checked.permission === "connect_model" && sessionID && permission.canAllow
+                  ? yield* permission.canAllow({ ...ask, sessionID, ruleset: rules })
+                  : false
+            if (!allowed)
+              return yield* refusal(
+                "permission",
+                `The automatic review was not run because it needs your approval: ${checked.message}`,
+              )
+            entry.asked.add(key)
+            return
           }
           // Once a background run's caller stopped waiting, its call is over: the requester's session is asked instead.
           const call = entry.detached ? undefined : entry.call.ask
@@ -793,6 +824,22 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const state = yield* InstanceState.get(ledger)
         const requester = decoded.value.requester
         const saved = requester.sessionID ? yield* recorded(requester.sessionID) : undefined
+        if (input.call?.expectedRequestID !== undefined && saved?.requestID !== input.call.expectedRequestID)
+          return unrecorded(
+            id,
+            input.request,
+            created,
+            "not-allowed",
+            "The automatic review was superseded by a new request.",
+          )
+        if (input.call?.afterRunCurrent && !(yield* input.call.afterRunCurrent))
+          return unrecorded(
+            id,
+            input.request,
+            created,
+            "not-allowed",
+            "The automatic review is no longer authorized for this request.",
+          )
         const configured = ConfigConnectV1.review((yield* config.get()).connect).max_cost_usd
         const request: Connect.Request = {
           ...decoded.value,
@@ -929,9 +976,27 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           }).pipe(Effect.provideService(Database.Service, database), Effect.forkIn(scope, { startImmediately: true }))
         const ops = entry.call.promptOps
         if (!sessionID || !ops) return
+        const budget = ConnectNote.repairBudget(run, entry.call.repairBudget)
+        const proof = entry.call.repairCurrent ?? Effect.succeed(false)
+        const repair =
+          entry.call.repair === true &&
+          budget !== undefined &&
+          (yield* recorded(sessionID)).requestID === run.request.requestID &&
+          (yield* proof)
         yield* notify.enqueue({
           parentID: sessionID,
-          note: ConnectNote.note(run, part?.messageID),
+          note: {
+            ...ConnectNote.note(run, part?.messageID, { repair, automatic: entry.call.unattended }),
+            ...(repair && budget
+              ? {
+                  connectRepair: {
+                    requestID: run.request.requestID,
+                    budget,
+                    current: proof,
+                  },
+                }
+              : {}),
+          },
           ops,
           agent: run.request.requester.agent ?? (yield* agents.defaultAgent()),
         })

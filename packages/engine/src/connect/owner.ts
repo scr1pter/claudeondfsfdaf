@@ -20,6 +20,16 @@ import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { WorkflowMarkers } from "@/orchestration/constants"
 import { WorkflowOwnerHandoffFailure } from "@/orchestration/owner-failure"
+import { Config } from "@/config/config"
+import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { InstanceHooks } from "@/project/instance-hooks"
+import { ConnectAfterRun } from "./after-run"
+import { ConnectNote } from "./note"
+import { TaskNotify } from "@/task/notify"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectOwner.Error", {
   code: Schema.Literals(["disabled", "forbidden", "not_found", "invalid"]),
@@ -38,6 +48,7 @@ export interface Interface {
   ) => Effect.Effect<Connect.Run, Error>
   readonly register: (input: Connect.RegisterInput) => Effect.Effect<Connect.Run, Error>
   readonly dismiss: (runID: string, input: Connect.DismissInput) => Effect.Effect<Connect.Run, Error>
+  readonly init: () => Effect.Effect<void>
 }
 export class Service extends Context.Service<Service, Interface>()("@vector/ConnectOwner") {}
 
@@ -53,6 +64,12 @@ const layer = Layer.effect(
     const guests = yield* FreeModelGuests.Service
     const state = yield* SessionRunState.Service
     const status = yield* SessionStatus.Service
+    const config = yield* Config.Service
+    const audience = yield* SessionAudience.Service
+    const guard = yield* SpendGuard.Service
+    const events = yield* EventV2Bridge.Service
+    const hooks = yield* InstanceHooks.Service
+    const notify = yield* TaskNotify.Service
     const promptOps = {
       cancel: prompts.cancel,
       resolvePromptParts: prompts.resolvePromptParts,
@@ -129,25 +146,31 @@ const layer = Layer.effect(
       sessionID: SessionID,
       text: string,
       input: Record<string, unknown>,
+      afterRun?: ConnectAfterRun.Marker,
     ) {
       // Reserve the explicit owner action before model/config resolution can let a newer human message arrive.
-      const userID = MessageID.ascending()
+      const userID = afterRun?.requestID ?? MessageID.ascending()
       const assistantID = MessageID.ascending()
       const session = yield* requireSession(sessionID)
       const agent = yield* agents.get(session.agent ?? "build")
       if (!agent) return yield* new Error({ code: "invalid", message: "The conversation's agent is unavailable." })
       const model = yield* prompts.currentModel(sessionID, agent.model)
+      if (afterRun && (yield* hub.request(sessionID)).requestID !== afterRun.requestID)
+        return yield* new Error({ code: "invalid", message: "The automatic review was superseded by a new request." })
       const context = yield* InstanceState.context
       const now = yield* Clock.currentTimeMillis
-      yield* sessions.updateMessage({
-        id: userID,
-        sessionID,
-        role: "user",
-        agent: agent.name,
-        model,
-        time: { created: now },
-      })
-      yield* sessions.updatePart({ id: PartID.ascending(), sessionID, messageID: userID, type: "text", text })
+      if (!afterRun) {
+        yield* sessions.updateMessage({
+          id: userID,
+          sessionID,
+          role: "user",
+          agent: agent.name,
+          model,
+          time: { created: now },
+        })
+        yield* sessions.updatePart({ id: PartID.ascending(), sessionID, messageID: userID, type: "text", text })
+      }
+      const provenance = { ownerStart: true, [WorkflowMarkers.OWNER_START]: true, ...(afterRun ? { afterRun } : {}) }
       const assistant: SessionV1.Assistant = yield* sessions.updateMessage({
         id: assistantID,
         sessionID,
@@ -172,7 +195,7 @@ const layer = Layer.effect(
         state: {
           status: "running",
           input,
-          metadata: { ownerStart: true, [WorkflowMarkers.OWNER_START]: true },
+          metadata: provenance,
           time: { start: now },
         },
       })
@@ -188,7 +211,7 @@ const layer = Layer.effect(
                     status: "running",
                     input,
                     title: "VectorScope review",
-                    metadata: { ownerStart: true, [WorkflowMarkers.OWNER_START]: true, ...ConnectHub.metadata(run) },
+                    metadata: { ...provenance, ...ConnectHub.metadata(run) },
                     time: { start: now },
                   },
                 })
@@ -206,7 +229,7 @@ const layer = Layer.effect(
               output: run.result
                 ? ConnectFrame.frame(run.result, { run: run.id })
                 : "Review running in the background.",
-              metadata: { ownerStart: true, [WorkflowMarkers.OWNER_START]: true, ...ConnectHub.metadata(run) },
+              metadata: { ...provenance, ...ConnectHub.metadata(run) },
               time: { start: now, end },
             },
           })
@@ -238,8 +261,7 @@ const layer = Layer.effect(
                 error: message,
                 metadata: {
                   ...("metadata" in current.state ? current.state.metadata : {}),
-                  ownerStart: true,
-                  [WorkflowMarkers.OWNER_START]: true,
+                  ...provenance,
                 },
                 time: { start: now, end },
               },
@@ -365,7 +387,143 @@ const layer = Layer.effect(
       Effect.fail(
         new Error({ code: "disabled", message: "Owner review dismissal is not available in this build yet." }),
       )
-    return Service.of({ members, runs, get, cancel, review, register, dismiss })
+    const loops = yield* InstanceState.make(() =>
+      Effect.gen(function* () {
+        const context = yield* InstanceState.context
+        const pending = new Set<SessionID>()
+        const busy = new Set<SessionID>()
+        const after = Effect.fn("ConnectOwner.afterRun")(function* (sessionID: SessionID) {
+          if (!flags.experimentalConnect || pending.has(sessionID)) return
+          const settings = (yield* config.get()).connect
+          const selected = ConfigConnectV1.review(settings)
+          if (selected.after_run === "off") return
+          const session = yield* sessions.get(sessionID).pipe(Effect.option)
+          if (Option.isNone(session)) return
+          if (session.value.parentID || session.value.internal || (session.value.agent ?? "build") !== "build") return
+          const current = yield* hub.request(sessionID)
+          if (!current.requestID) return
+          const messages = yield* sessions.messages({ sessionID })
+          const previous = ConnectAfterRun.history(messages, yield* hub.runs({ sessionID }), current.requestID)
+          const snapshot = yield* guard.snapshot(sessionID)
+          const next = ConnectAfterRun.eligible({
+            session: session.value,
+            messages,
+            config: settings,
+            ...(previous ? { previous } : {}),
+            stopped: !!((yield* guard.stopped(sessionID)) ?? snapshot?.stopped),
+            guest: (yield* audience.hasGuestInput(sessionID)) || (yield* guests.marked(sessionID)),
+            requestID: current.requestID,
+          })
+          if (!next) return
+          const remaining =
+            snapshot?.budget.usd === undefined ? 0.5 : Math.max(0, snapshot.budget.usd - snapshot.spentUsd)
+          if (remaining <= 0) return
+          const repairBudget = {
+            ...snapshot?.budget,
+            usd: remaining,
+            ...(snapshot?.budget.steps !== undefined
+              ? { steps: Math.max(0, snapshot.budget.steps - snapshot.steps) }
+              : {}),
+            ...(snapshot?.budget.unpricedSteps !== undefined
+              ? { unpricedSteps: Math.max(0, snapshot.budget.unpricedSteps - snapshot.unpricedSteps) }
+              : {}),
+          }
+          const marker = Schema.decodeUnknownSync(ConnectAfterRun.Marker)({ ...next, version: 1 })
+          const afterRunCurrent = Effect.gen(function* () {
+            if ((yield* hub.request(sessionID)).requestID !== next.requestID) return false
+            if ((yield* audience.hasGuestInput(sessionID)) || (yield* guests.marked(sessionID))) return false
+            return ConfigConnectV1.review((yield* config.get()).connect).after_run !== "off"
+          })
+          const repairCurrent = afterRunCurrent.pipe(
+            Effect.flatMap((allowed) =>
+              allowed
+                ? config.get().pipe(Effect.map((value) => ConfigConnectV1.review(value.connect).after_run === "repair"))
+                : Effect.succeed(false),
+            ),
+          )
+          pending.add(sessionID)
+          yield* own(
+            sessionID,
+            Effect.gen(function* () {
+              const saved = yield* recorder(sessionID, "", { action: "review", automatic: true }, marker)
+              return yield* Effect.gen(function* () {
+                const run = yield* hub.run({
+                  request: {
+                    to: "vectorscope",
+                    action: "review",
+                    requester: { kind: "agent", sessionID, agent: saved.agent.name },
+                    directory: saved.context.directory,
+                    target: { kind: "uncommitted" },
+                    background: true,
+                    budget: { maxCostUsd: Math.min(selected.max_cost_usd, remaining) },
+                  },
+                  call: {
+                    promptOps,
+                    unattended: true,
+                    repair: next.mode === "repair",
+                    repairBudget,
+                    expectedRequestID: next.requestID,
+                    afterRunCurrent,
+                    repairCurrent,
+                    part: { messageID: saved.part.messageID, callID: saved.part.callID },
+                    update: saved.update,
+                  },
+                })
+                const message = yield* saved.complete(run)
+                // A run that finished before detach returned has no background note; the automatic caller reports it.
+                if (run.status === "done") {
+                  const budget = ConnectNote.repairBudget(run, repairBudget)
+                  const repair = next.mode === "repair" && budget !== undefined && (yield* repairCurrent)
+                  yield* notify.enqueue({
+                    parentID: sessionID,
+                    note: {
+                      ...ConnectNote.note(run, saved.part.messageID, { automatic: true, repair }),
+                      ...(repair && budget
+                        ? {
+                            connectRepair: {
+                              requestID: next.requestID,
+                              budget,
+                              current: repairCurrent,
+                            },
+                          }
+                        : {}),
+                    },
+                    ops: promptOps,
+                    agent: saved.agent.name,
+                  })
+                }
+                return { value: run, message }
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isFailure(exit) ? saved.fail(Cause.hasInterrupts(exit.cause)) : Effect.void,
+                ),
+              )
+            }),
+          ).pipe(Effect.ensuring(Effect.sync(() => pending.delete(sessionID))))
+        })
+        const unsubscribe = yield* events.listen((event) => {
+          if (event.type !== SessionStatusEvent.Status.type || event.location?.directory !== context.directory)
+            return Effect.void
+          const decoded = Schema.decodeUnknownOption(SessionStatusEvent.Status.data)(event.data)
+          if (Option.isNone(decoded)) return Effect.void
+          if (decoded.value.status.type === "busy") {
+            busy.add(decoded.value.sessionID)
+            return Effect.void
+          }
+          // A recovery or cold idle notification must never start implicit work from an earlier process.
+          if (decoded.value.status.type !== "idle" || !busy.delete(decoded.value.sessionID)) return Effect.void
+          // Admission is awaited before later /event listeners can observe this idle. The real cr_ BackgroundJob
+          // and its durable tool row exist before the headless client decides whether it has work left to await.
+          return after(decoded.value.sessionID).pipe(
+            Effect.catchCause((cause) => Effect.logWarning("after-run review did not start", { cause })),
+          )
+        })
+        yield* Effect.addFinalizer(() => unsubscribe)
+      }),
+    )
+    const init = () => (flags.experimentalConnect ? InstanceState.get(loops).pipe(Effect.asVoid) : Effect.void)
+    yield* hooks.register("connected-tools", init())
+    return Service.of({ members, runs, get, cancel, review, register, dismiss, init })
   }),
 )
 
@@ -382,5 +540,11 @@ export const node = LayerNode.make({
     FreeModelGuests.node,
     SessionRunState.node,
     SessionStatus.node,
+    Config.node,
+    SessionAudience.node,
+    SpendGuard.node,
+    EventV2Bridge.node,
+    InstanceHooks.node,
+    TaskNotify.node,
   ],
 })
