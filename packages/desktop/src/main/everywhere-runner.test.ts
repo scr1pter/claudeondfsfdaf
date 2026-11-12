@@ -48,7 +48,7 @@ function fixture() {
     summary: async () => "Fixed retry handling.", posting: async (parts) => ({ status: "clean", parts }),
   }
   const git: RunnerGit = {
-    run: async () => "", unchanged: async () => true,
+    run: async () => "", unchanged: async () => true, mapped: async () => true,
     snapshot: async (directory) => ({ config: [], pushUrl: "https://github.com/acme/app.git", baseSha: (directory ? "b" : "a").repeat(40) }),
     fetch: async () => "b".repeat(40),
     stage: async () => ({ held: [], files: 1, diff: "diff --git a/file.ts b/file.ts\n+const retry = true\n" }),
@@ -111,6 +111,14 @@ test("an unmapped repository declines under its exact lease", async () => {
   await createEverywhereRunner(f.deps).offer("fixture-offer")
   expect(f.calls.find((call) => call.kind === "decline")?.value).toEqual({ reason: "not-mapped", lease: f.job.lease.id })
   expect(f.calls.some((call) => call.kind === "create")).toBe(false)
+})
+
+test("a stale project declaration cannot authorize a different repository in that folder", async () => {
+  const f = fixture()
+  f.git.mapped = async () => false
+  await createEverywhereRunner(f.deps).offer("fixture-offer")
+  expect(f.calls.find((call) => call.kind === "decline")?.value).toEqual({ reason: "not-mapped", lease: f.job.lease.id })
+  expect(f.calls.some((call) => ["create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
 })
 
 test("absence of the safe worktree capability never calls an unsafe engine endpoint", async () => {

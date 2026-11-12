@@ -7,6 +7,15 @@ export async function repositoryPrivate(access: GithubAccess, job: EverywhereJob
   return row.id === job.repository.id && row.full_name.toLowerCase() === job.repository.fullName.toLowerCase() && row.private === true
 }
 
+function pullRequestUrl(raw: string, repository: string) {
+  const url = new URL(raw)
+  const prefix = `/${repository}/pull/`
+  if (url.origin !== "https://github.com" || url.username || url.password || url.search || url.hash ||
+    !url.pathname.toLowerCase().startsWith(prefix.toLowerCase()) || !/^[1-9][0-9]*$/.test(url.pathname.slice(prefix.length)))
+    throw new Error("Invalid Everywhere PR response")
+  return url.href
+}
+
 /** The requester's task and the checked summary reach only the fixed template. No model-provided PR body is used. */
 export async function openEverywherePr(input: {
   readonly access: GithubAccess
@@ -25,9 +34,7 @@ export async function openEverywherePr(input: {
   const existing = await githubJson<{ html_url: string; body?: string }[]>(input.access, `${path}?state=open&head=${encodeURIComponent(`${owner}:${input.branch}`)}`)
   const marker = `<!-- vector:job ${input.job.jid} -->`
   const found = existing.find((item) => item.body?.includes(marker))
-  if (found) return found.html_url
+  if (found) return pullRequestUrl(found.html_url, input.job.repository.fullName)
   const created = await githubJson<{ html_url: string }>(input.access, path, { method: "POST", body: { head: input.branch, base: input.base, draft: true, ...template } })
-  const url = new URL(created.html_url)
-  if (url.origin !== "https://github.com" || !url.pathname.startsWith(`/${input.job.repository.fullName}/pull/`)) throw new Error("Invalid Everywhere PR response")
-  return url.href
+  return pullRequestUrl(created.html_url, input.job.repository.fullName)
 }

@@ -29,6 +29,7 @@ test("actual git ignores hooks, holds workflow files, and detects metadata chang
     git("init", "-q", "-b", "main")
     git("config", "user.name", "Fixture")
     git("config", "user.email", "fixture@example.invalid")
+    git("remote", "add", "origin", "git@github.com:acme/app.git")
     await writeFile(path.join(directory, "README.md"), "before\n")
     await mkdir(path.join(directory, ".husky"))
     await writeFile(path.join(directory, ".husky", "pre-commit"), "#!/bin/sh\nprintf ran > hook-ran\n")
@@ -37,6 +38,7 @@ test("actual git ignores hooks, holds workflow files, and detects metadata chang
     git("add", ".")
     git("commit", "-qm", "fixture")
     const runner = createEverywhereGit({ directory, repository: "acme/app", identity: { name: "Fixture", email: "fixture@example.invalid" } })
+    expect(await runner.mapped()).toBe(true)
     const snapshot = await runner.snapshot()
     await writeFile(path.join(directory, "README.md"), "after\n")
     await writeFile(path.join(directory, ".husky", "pre-commit"), "#!/bin/sh\nprintf malicious > hook-ran\n")
@@ -50,6 +52,24 @@ test("actual git ignores hooks, holds workflow files, and detects metadata chang
     git("config", "core.fsmonitor", "changed")
     expect(await runner.unchanged(snapshot)).toBe(false)
     expect(await runner.stage(snapshot, directory)).toBeUndefined()
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
+test("the actual local remote must match the declared allowed project before work can start", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "everywhere-remote-"))
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, env: runnerGitEnvironment(), stdio: "pipe" })
+  try {
+    git("init", "-q")
+    const runner = createEverywhereGit({ directory, repository: "acme/app", identity: { name: "Fixture", email: "fixture@example.invalid" } })
+    expect(await runner.mapped()).toBe(false)
+    git("remote", "add", "origin", "https://github.com/acme/other.git")
+    expect(await runner.mapped()).toBe(false)
+    git("remote", "set-url", "origin", "https://github.com.evil.invalid/acme/app.git")
+    expect(await runner.mapped()).toBe(false)
+    git("remote", "set-url", "origin", "ssh://git@github.com/ACME/APP.git")
+    expect(await runner.mapped()).toBe(true)
+    git("config", "include.path", "ignored-fixture-config")
+    expect(await runner.mapped()).toBe(false)
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
 

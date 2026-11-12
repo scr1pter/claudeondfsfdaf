@@ -5,12 +5,22 @@ import path from "node:path"
 import os from "node:os"
 import { heldBack } from "@vectordevai/core/everywhere/publish"
 import { BRANCH_PATTERN, HEAD_SHA_PATTERN, JOB_ID_PATTERN, isRepositoryName } from "@vectordevai/schema/everywhere"
+import { parseGithubRemote } from "./github-api"
 
 const SAFE_CONFIG = /^(?:core\.(?:repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|worktree|hookspath|fsmonitor|sshcommand|longpaths)|extensions\.(?:worktreeconfig|objectformat)|user\.(?:name|email)|(?:commit|tag)\.gpgsign|remote\.[a-z0-9_.-]+\.(?:url|pushurl|fetch|tagopt|prune)|branch\.[a-z0-9_./-]+\.(?:remote|merge|pushremote))$/i
 
 /** Repository config cannot introduce a filter, include, URL rewrite, proxy, command, or credential helper. */
 export function safeRepositoryConfig(text: string) {
   return text.split("\0").filter(Boolean).every((item) => SAFE_CONFIG.test(item.split("\n", 1)[0]!))
+}
+
+function mapsRepository(config: string, repository: string) {
+  return config.split("\0").some((entry) => {
+    const newline = entry.indexOf("\n")
+    if (newline < 0 || !/^remote\.[a-z0-9_.-]+\.url$/i.test(entry.slice(0, newline))) return false
+    const remote = parseGithubRemote(entry.slice(newline + 1))
+    return remote !== undefined && `${remote.owner}/${remote.name}`.toLowerCase() === repository.toLowerCase()
+  })
 }
 
 export const GIT_HARDENING = [
@@ -75,9 +85,14 @@ export function createEverywhereGit(input: {
   return {
     run,
     unchanged,
+    async mapped() {
+      const config = await run(["config", "--null", "--list", "--local", "--no-includes"])
+      return safeRepositoryConfig(config) && mapsRepository(config, input.repository)
+    },
     async snapshot(cwd = input.directory): Promise<GitSnapshot> {
       const config = await run(["config", "--null", "--list", "--local", "--no-includes"], cwd)
       if (!safeRepositoryConfig(config)) throw new Error("Everywhere refuses executable repository configuration")
+      if (!mapsRepository(config, input.repository)) throw new Error("The Everywhere project remote does not match")
       const directory = (await run(["rev-parse", "--absolute-git-dir"], cwd)).trim()
       const common = path.resolve(cwd, (await run(["rev-parse", "--git-common-dir"], cwd)).trim())
       const files = [path.join(common, "config"), path.join(directory, "config.worktree"), path.join(common, "info", "attributes")]

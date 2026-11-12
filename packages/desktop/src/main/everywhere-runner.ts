@@ -131,6 +131,12 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         settled = true
         return
       }
+      const git = deps.git(project.directory, project.repository, controller.signal)
+      if (!await git.mapped()) {
+        await deps.jobs.decline(jid, "not-mapped", job.lease.id)
+        settled = true
+        return
+      }
       if (!deps.safeWorktree || deps.safeWorktree.policy !== "unattended-v1") {
         await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "held", summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed." })
         settled = true
@@ -169,7 +175,6 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         if (now() - acknowledgedAt >= 60_000) await report("heartbeat", true)
       })
       if (deadline <= now() || !await report("started", true)) throw new Error("Everywhere has no current lease")
-      const git = deps.git(project.directory, project.repository, controller.signal)
       const original = await git.snapshot()
       const from = await git.fetch(original, project.base, jid)
       const branch = branchFor(jid, job.issue ? { key: job.issue.key, platform: job.platform } : undefined)
