@@ -8,6 +8,7 @@ import { makeGlobalNode } from "../effect/app-node"
 import { SessionTable } from "../session/sql"
 import { PINNED_SESSION_PREFIX } from "./prompt"
 import { ReviewRequestTable, ReviewSessionFenceTable, type Phase } from "./request.sql"
+import { ReviewSourceBinding } from "./source-binding"
 
 export class Refused extends Schema.TaggedErrorClass<Refused>()("ReviewRequestStore.Refused", {
   code: Schema.Literals(["invalid", "conflict", "unavailable", "corrupt", "busy"]),
@@ -21,6 +22,7 @@ export interface Row {
   runID?: SessionID
   owner?: BackgroundJobStore.Owner
   phase: Phase
+  sourceBinding?: ReviewSourceBinding.Info
 }
 type Identity = { parentID: SessionID; requestID: string; ownerNonce: string; runID: SessionID }
 export interface Interface {
@@ -29,6 +31,8 @@ export interface Interface {
     request: ReviewRun.Start
     ownerNonce: string
     owner: BackgroundJobStore.Owner
+    /** Private genuine-admission data; omitted legacy reservations remain unbound. */
+    sourceBinding?: ReviewSourceBinding.Info
   }) => Effect.Effect<{ claimed: boolean; row: Row }, Refused>
   /** Only the INSERT winner may attach its fresh session, exactly once, before model work. */
   readonly attach: (input: {
@@ -56,6 +60,7 @@ export interface Interface {
     | {
         request: ReviewRun.Start
         phase: "running" | "settled"
+        sourceBinding?: ReviewSourceBinding.Info
       }
     | undefined,
     Refused
@@ -151,6 +156,7 @@ export function make(db: Database.Interface["db"]): Interface {
               id: ReviewRequestTable.request_id,
               request: ReviewRequestTable.request,
               phase: ReviewRequestTable.phase,
+              binding: ReviewRequestTable.source_binding,
             })
             .from(ReviewRequestTable)
             .where(and(eq(ReviewRequestTable.parent_session_id, parentID), eq(ReviewRequestTable.run_id, runID)))
@@ -168,19 +174,35 @@ export function make(db: Database.Interface["db"]): Interface {
         if (Option.isNone(request) || request.value.requestID !== row.id)
           return Effect.fail(new Refused({ code: "corrupt", message: "The retained review source is invalid." }))
         if (row.phase !== "running" && row.phase !== "settled") return Effect.succeed(undefined)
-        return Effect.succeed({ request: request.value, phase: row.phase })
+        const binding =
+          row.binding == null ? undefined : Schema.decodeUnknownOption(ReviewSourceBinding.Info)(row.binding)
+        if (binding && Option.isNone(binding))
+          return Effect.fail(
+            new Refused({ code: "corrupt", message: "The retained review source binding is invalid." }),
+          )
+        return Effect.succeed({
+          request: request.value,
+          phase: row.phase,
+          ...(binding && Option.isSome(binding) ? { sourceBinding: binding.value } : {}),
+        })
       }),
     )
   }
   const reserve: Interface["reserve"] = Effect.fn("ReviewRequestStore.reserve")(function* (input) {
     const decoded = Schema.decodeUnknownOption(ReviewRun.Start)(input.request)
+    const binding =
+      input.sourceBinding === undefined
+        ? undefined
+        : Schema.decodeUnknownOption(ReviewSourceBinding.Info)(input.sourceBinding)
     if (
       Option.isNone(decoded) ||
       !/^[0-9a-f-]{36}$/i.test(input.ownerNonce) ||
-      Option.isNone(Schema.decodeUnknownOption(ownerSchema)(input.owner))
+      Option.isNone(Schema.decodeUnknownOption(ownerSchema)(input.owner)) ||
+      (binding && Option.isNone(binding))
     )
       return yield* new Refused({ code: "invalid", message: "Invalid local review reservation." })
     const request = decoded.value
+    const sourceBinding = binding && Option.isSome(binding) ? structuredClone(binding.value) : undefined
     // BEGIN IMMEDIATE serializes the first read across SQLite connections and
     // processes. The composite key remains the final atomic admission arbiter.
     return yield* db
@@ -222,6 +244,7 @@ export function make(db: Database.Interface["db"]): Interface {
                     owner: input.owner,
                     phase: "reserved",
                     request,
+                    source_binding: sourceBinding,
                     time_created: Date.now(),
                   })
                   .onConflictDoNothing()
@@ -238,12 +261,17 @@ export function make(db: Database.Interface["db"]): Interface {
                 .get()
                 .pipe(Effect.orDie))
             const stored = saved ? Schema.decodeUnknownOption(ReviewRun.Start)(saved.request) : Option.none()
+            const retained =
+              saved?.source_binding == null
+                ? undefined
+                : Schema.decodeUnknownOption(ReviewSourceBinding.Info)(saved.source_binding)
             if (
               !saved ||
               Option.isNone(stored) ||
               saved.request_id !== stored.value.requestID ||
               Option.isNone(Schema.decodeUnknownOption(phaseSchema)(saved.phase)) ||
-              (saved.phase !== "settled" && Option.isNone(Schema.decodeUnknownOption(ownerSchema)(saved.owner)))
+              (saved.phase !== "settled" && Option.isNone(Schema.decodeUnknownOption(ownerSchema)(saved.owner))) ||
+              (retained && Option.isNone(retained))
             )
               return yield* new Refused({ code: "corrupt", message: "The saved local review reservation is invalid." })
             if (canonical(stored.value) !== canonical(request))
@@ -260,6 +288,7 @@ export function make(db: Database.Interface["db"]): Interface {
                 ...(saved.owner ? { owner: saved.owner } : {}),
                 phase: saved.phase,
                 ...(saved.run_id ? { runID: saved.run_id } : {}),
+                ...(retained && Option.isSome(retained) ? { sourceBinding: retained.value } : {}),
               },
             }
           }),

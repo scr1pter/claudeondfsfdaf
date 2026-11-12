@@ -54,5 +54,6 @@ export const migrations = (
     import("./migration/20261103025953_workflow_checkpoint"),
     import("./migration/20261112110316_review_request"),
     import("./migration/20261112120658_review_deletion_fence"),
+    import("./migration/20261112181354_review_source_binding"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

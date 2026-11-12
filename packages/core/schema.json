@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "146d5c74-9159-496c-9a18-f67500e03017",
+  "id": "9b320725-d13b-49da-ba09-914cf41305be",
   "prevIds": [
-    "7827100c-a2cb-4e60-b147-e75fbdce05bc"
+    "146d5c74-9159-496c-9a18-f67500e03017"
   ],
   "ddl": [
     {
@@ -485,6 +485,16 @@
       "default": null,
       "generated": null,
       "name": "request",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_binding",
       "entityType": "columns",
       "table": "review_request"
     },

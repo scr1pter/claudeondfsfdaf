@@ -3,6 +3,7 @@ import type { ReviewRun } from "@vectordevai/schema/review-run"
 import { SessionTable } from "../session/sql"
 import type { SessionSchema } from "../session/schema"
 import type { BackgroundJobStore } from "../background-job-store"
+import type { ReviewSourceBinding } from "./source-binding"
 
 export type Phase = "reserved" | "attached" | "running" | "settled"
 
@@ -24,6 +25,8 @@ export const ReviewRequestTable = sqliteTable(
     phase: text().$type<Phase>().notNull().default("settled"),
     run_id: text().$type<SessionSchema.ID>(),
     request: text({ mode: "json" }).$type<ReviewRun.Start>().notNull(),
+    // Only the first genuine server admission writes this. Legacy rows stay unbound.
+    source_binding: text({ mode: "json" }).$type<ReviewSourceBinding.Info>(),
     time_created: integer().notNull(),
   },
   (table) => [

@@ -57,6 +57,7 @@ export default {
           \`phase\` text DEFAULT 'settled' NOT NULL,
           \`run_id\` text,
           \`request\` text NOT NULL,
+          \`source_binding\` text,
           \`time_created\` integer NOT NULL,
           CONSTRAINT \`review_request_pk\` PRIMARY KEY(\`parent_session_id\`, \`request_id\`),
           CONSTRAINT \`fk_review_request_parent_session_id_session_id_fk\` FOREIGN KEY (\`parent_session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
