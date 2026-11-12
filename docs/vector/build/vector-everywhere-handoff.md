@@ -1,0 +1,108 @@
+# Vector everywhere: handoff (2026-11-11)
+
+This build moves to a new agent. Start here, then read the contract (`vector-everywhere-spec.md`) and the deviations log (`vector-everywhere-deviations.md`) in this folder. The deviations log records every reading the build made where the contract was silent or wrong about the code; it wins over the contract where they differ.
+
+**What Vector everywhere is:** an @Vector bot on GitHub, Slack, Linear and Jira that is local-first.
+- When the owner's computer is online, jobs run there through the Vector Remote relay.
+- Otherwise they run in the owner's own GitHub Actions (that route comes after @vector merges), or they wait.
+- Vector's servers relay messages and never hold code.
+
+## Where it stands
+
+- **Branch** `vector-everywhere`, cut from `main` at `0dcbb8e2` (PR #20). The branch is pushed and clean. Everything is on GitHub.
+- **Built, reviewed and repaired:** phases P1a and P1b, which cover VE-00 to VE-05. After each phase, three reviews ran (works for real, security and fail-closed, fits the code base), followed by one repair commit.
+
+| WP | What | Commit |
+|---|---|---|
+| VE-00 | CI lane (`.github/workflows/vector-everywhere.yml`) | `44e50686a` |
+| VE-01 | Shared types and limits | `f608e7628` |
+| VE-02 | Pure policy and framing | `1e4a1180a` |
+| P1a review repairs | | `87501d140` |
+| VE-03 | Server foundation | `5f8c1d837` |
+| VE-04 | Identity, links, installs and mappings | `948ccf156` |
+| VE-05 | Jobs, offers and leases | `73c52bd8a` |
+| P1b review repairs | | `12f1793fe` |
+
+- **CI at handoff:** on `12f1793fe`, typecheck passed. The `Vector everywhere` lane (run 43141557877) and `test` (run 43141563331) were still queued.
+  - Check them first.
+  - The lane has not yet been confirmed green on GitHub; every WP so far lists that as its open item.
+  - The real-Redis cases run only in the lane, which has Redis. Redis must not run on the owner's Mac.
+- Only this handoff note and the spec's status line came after `12f1793fe`.
+
+## What to build next, in order
+
+1. **Phase P1c:**
+   - VE-06: router, ports, the intake core and the sweep. VE-05 left a note: the deployed `everywhereJobsApi` has no event hooks yet. VE-06 must build the production jobs API with its `claimed`, `declined`, `reported`, `settled` and `ended` events, or nothing gets posted back to platforms.
+   - VE-07: laptop runner core, desktop, unwired.
+   - VE-08: engine behaviour check, test only, no engine source change.
+2. **Phase P2, the platform intakes:** VE-10 GitHub, VE-11 Slack, VE-12 Linear, VE-13 Jira (VE-13 starts by re-reading the Atlassian pages). The real OAuth exchanges for Slack and Linear plug into `createAccountApi({exchanges})`. Until they exist, `oauth-finish` answers 501 for those platforms.
+3. **Final review** of the whole branch (`a6db1513d..HEAD`), then repair.
+4. **Later phases wait,** as the contract says:
+   - Phase 3 (VE-20 to VE-22, laptop route): after `codium` merges.
+   - Phase 4 (VE-30 to VE-33, Actions fallback and GitHub laptop-first): after `vector-at-mention` merges, plus Codium's A59. VE-30 also adds the Actions settle transition.
+   - Phase S (VE-40 to VE-44, surfaces): lands as one piece after the next large merge.
+   - VE-50 (go-live): runs with the owner after each platform is registered.
+
+Each phase was built one WP at a time: build it, run its own test files, typecheck, commit. Then three reviews ran across the phase, one repair commit followed, then a push and CI. Keep that pattern; it found real issues in both phases.
+
+## Owner decisions
+
+- **Confirmed by the owner on 2026-11-11** ("Keep them"): the recommended answer to every question in section 10 (Q1 to Q14). Notably:
+  - no teammate allowlist at launch (Q2);
+  - refuse approvals during unattended runs (Q7);
+  - push and open draft PRs on private repositories (Q8);
+  - no "Run on Vector's computer" at launch (Q9);
+  - every paid plan gets the `everywhere` perk, with no CLI at launch (Q11).
+- **Owner actions still to come** (section 10):
+  - register each platform app (GitHub through @vector's steps, then Slack, Linear and Jira);
+  - generate the data key and the offer signing key pair;
+  - the privacy and legal read;
+  - forward the section 11 requests to the Codium, @vector, Hands and `main` owners.
+- **No platform app is registered, and nothing lands on `main`, without the owner's yes.**
+
+## Left open by the repairs
+
+Each item below is also in the deviations log.
+
+- **Records that don't decode.** A job record that doesn't decode keeps its index place and is skipped and logged. It is not removed, because it may be a newer deployment's live job after a rollback.
+- **Unknown fields.** `decodeJobRecord` keeps unknown fields so a write-back doesn't drop them.
+- **Secret scan.** `decodeSettle` has no secret scan, because the server sanitizes again in `renderResult`.
+- **Codium's ErasePart shape.** The contract's guess was wrong; it is `{id, configured(), requires?, erase(account, context)}`, and `EVERYWHERE_ERASE_PART` follows it. Codium registers it in its own file (R-C9).
+- **Revoking platform tokens on disconnect** is not built yet; see VE-04's entry.
+
+## How CI runs on this branch
+
+- The `Vector everywhere` lane runs on every push to this branch, with Redis, and covers every `everywhere` test file plus the typechecks.
+- Also dispatch the general checks:
+
+```bash
+gh workflow run test.yml -R scr1pter/claudeondfsfdaf --ref vector-everywhere
+gh workflow run typecheck.yml -R scr1pter/claudeondfsfdaf --ref vector-everywhere
+```
+
+Read failures with `gh run view <id> -R scr1pter/claudeondfsfdaf --log-failed`. Re-run once with `--failed` only when the failure is a known flake and nothing else failed in that job. Known flakes:
+- a Bun segfault on a Linux shard;
+- Windows: `local-fit.test.ts`, `prompt.test.ts` (3 s), `task-size.test.ts` (30 s), effect-flock contention, `local.test.ts` probe 400, engine `test/tool/task-manage-abort.test.ts` (2 s wait);
+- packet capture DNS, or the 55-minute packet-capture setup timeout.
+
+## Rules (from the owner; all still binding)
+
+- **Never:**
+  - push to or merge into `main`;
+  - open or merge a pull request, register an app, cut a release, or delete a branch without asking the owner first;
+  - force-push, use `--no-verify`, or use `git stash`.
+- **Installs, tests and typecheck:**
+  - Install with `bun install --ignore-scripts`.
+  - Run tests one file at a time from the package directory (`bun test --timeout 30000 <file>`), and `bun typecheck` from package directories.
+  - Full suites run in GitHub CI only. Heavy local suites have crashed the owner's Vector app.
+- **Platforms:** no test ever calls a real Slack, Linear, Atlassian, GitHub or relay host. Use the local fakes and the fetch guard (contract section 9).
+- **Things to leave alone:**
+  - Never read credential files.
+  - Never put the owner's email address in the repository.
+  - Never name the open-source project this code was forked from, anywhere.
+  - Never touch tokenomics or benchmark files or branches. Another agent owns them, and they matter a lot.
+- **Other agents' branches:** don't edit `hands`, `vector-at-mention` (Codex), `vectorscope`, `codium`, `codium-track`, `connected-workspace` or `cloud-workspaces`. Never edit a file on the contract's "Do not touch" list (6.4), and keep edits to shared files (6.5) additive, at their anchors.
+- **The owner's machine:**
+  - Never start or restart the Vector app.
+  - Never operate the owner's real computer in tests.
+- **Copy:** make no public or comparative claims, and no claim of parity with any other product, without the owner's yes.
