@@ -285,3 +285,50 @@ three times for comparison with source `693e86d042`. The coordinator owns push,
 CI dispatch, artifact verification and interpretation. No Vector app/server was
 started or restarted locally. No full-workflow, public parity, performance,
 transport/privacy certification or release-readiness claim is made.
+
+## VS-10 local adapter boundary (in progress)
+
+The first consolidation target is the local working tree or staged changes. The
+renderer also reviews remote PR diff snapshots and reconstructs excerpts when
+the checked-out head differs. The shared service currently accepts exact local
+Git targets, so routing those PRs through it would change the reviewed source.
+The existing PR path stays in place until a verified snapshot contract covers
+that case; it is not a fallback from a failed new local run.
+
+The new, currently unwired `ReviewRun.Start` wire contract accepts a retry key,
+local target kind, exact expected head and optional tighter cost ceiling. It
+accepts no caller placement, parent, read rules, instruction/model options,
+trust, check or publishing authority. `ReviewLocalAdmission.prepare` receives
+those facts from a trusted server adapter, checks the actual Git worktree/head,
+pins settings to that head and freezes canonical denied destinations before any
+asynchronous setup. Read asks are conservatively withheld until a dedicated
+approval handshake exists. Search restrictions the adapter cannot preserve
+refuse the run; global saved output from other conversations remains denied.
+These are intentional restrictions of the new opt-in local path.
+
+The admission fixture uses real Git repositories and the shared local service.
+It covers nested placement, forbidden request authority, stale heads, unrelated
+roots, inherited asks and a symlink retarget/caller mutation during setup. Its
+four runtime cases pass in batch 044 (2.77 seconds), as do Schema types (1.84
+seconds) and engine types (38.6 seconds). This is an admission foundation, not
+completed VS-10 acceptance. No public route, generated client, renderer runner
+or model request is activated by these files.
+
+Next, the local lifecycle must use the existing BackgroundJob lease and durable
+session artifacts, with an exact session/run ownership check for start/get/stop.
+A repeated retry key joins the same admitted run; a changed payload conflicts.
+Disconnect must leave engine-owned work running, while explicit stop cancels and
+joins only that run and retains completed partial output. A restart records
+interrupted work without automatically retrying a provider. Durable run status
+cannot be inferred merely from a process-local map: a still-live foreign lease
+must remain untouched, and unknown liveness must fail closed. The existing task
+recovery ignores new job types, so its current behavior alone is insufficient.
+The run artifact needs a bounded, versioned decoder before it becomes a public
+result; it must reuse the runner's placed findings, finalizer and usage rather
+than recompute selection in the renderer.
+
+Public protocol generation and owner/guest transport tests follow that source
+checkpoint. App runner/session wiring waits for the recorded post-`8152d3f51`
+production measurement, keeps the default-off gate and must prove legacy request
+parity when unset. Real reconnect/cancel/browser replay and per-surface payload
+checks remain acceptance work, not a claim made by this admission foundation.
