@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
 import { ReviewRun } from "@vectordevai/schema/review-run"
@@ -198,7 +199,8 @@ export function make(db: Database.Interface["db"]): Interface {
       Option.isNone(decoded) ||
       !/^[0-9a-f-]{36}$/i.test(input.ownerNonce) ||
       Option.isNone(Schema.decodeUnknownOption(ownerSchema)(input.owner)) ||
-      (binding && Option.isNone(binding))
+      (binding && Option.isNone(binding)) ||
+      (binding && Option.isSome(binding) && binding.value.witnesses !== undefined)
     )
       return yield* new Refused({ code: "invalid", message: "Invalid local review reservation." })
     const request = decoded.value
@@ -244,7 +246,16 @@ export function make(db: Database.Interface["db"]): Interface {
                     owner: input.owner,
                     phase: "reserved",
                     request,
-                    source_binding: sourceBinding,
+                    source_binding: sourceBinding
+                      ? {
+                          ...sourceBinding,
+                          witnesses: {
+                            version: 1,
+                            parent: `vrw1_${randomBytes(16).toString("hex")}`,
+                            review: `vrw1_${randomBytes(16).toString("hex")}`,
+                          },
+                        }
+                      : undefined,
                     time_created: Date.now(),
                   })
                   .onConflictDoNothing()

@@ -3,11 +3,13 @@ export * as ReviewStore from "./review-store"
 import { and, eq, inArray, like, or, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { BrainDatabase } from "./database"
+import { ReviewWitness } from "./review-witness"
 import {
   BrainEventTable,
   BrainReviewMemoryScopeStateTable,
   BrainReviewMemoryStateTable,
   BrainReviewMemoryTable,
+  BrainReviewMemorySourceTable,
   BrainTombstoneTable,
 } from "./sql"
 
@@ -56,7 +58,8 @@ const components = Effect.fnUntraced(function* (tx: Handle, repository: string) 
     const existing = yield* tx.select().from(BrainReviewMemoryStateTable).limit(1)
     const namespaces = yield* tx.select().from(BrainReviewMemoryScopeStateTable).limit(1)
     const content = yield* tx.select({ id: BrainReviewMemoryTable.id }).from(BrainReviewMemoryTable).limit(1)
-    if (existing.length || namespaces.length || content.length) return
+    const sources = yield* tx.select().from(BrainReviewMemorySourceTable).limit(1)
+    if (existing.length || namespaces.length || content.length || sources.length) return
   }
   const invalidGlobalScope = yield* tx
     .select()
@@ -68,7 +71,12 @@ const components = Effect.fnUntraced(function* (tx: Handle, repository: string) 
     .from(BrainReviewMemoryTable)
     .where(eq(BrainReviewMemoryTable.repository_id, GLOBAL))
     .limit(1)
-  if (invalidGlobalScope.length || invalidGlobalContent.length) return
+  const invalidGlobalSources = yield* tx
+    .select()
+    .from(BrainReviewMemorySourceTable)
+    .where(eq(BrainReviewMemorySourceTable.repository_id, GLOBAL))
+    .limit(1)
+  if (invalidGlobalScope.length || invalidGlobalContent.length || invalidGlobalSources.length) return
   const local = rows.find((row) => row.repository === repository && row.repository !== GLOBAL)
   const marker = repository === GLOBAL ? undefined : yield* marked(tx, repository)
   if (marker && marker.until !== FOREVER) return
@@ -83,7 +91,12 @@ const components = Effect.fnUntraced(function* (tx: Handle, repository: string) 
       .from(BrainReviewMemoryScopeStateTable)
       .where(eq(BrainReviewMemoryScopeStateTable.repository_id, repository))
       .limit(1)
-    if (content.length || namespaces.length || marker) return
+    const sources = yield* tx
+      .select()
+      .from(BrainReviewMemorySourceTable)
+      .where(eq(BrainReviewMemorySourceTable.repository_id, repository))
+      .limit(1)
+    if (content.length || namespaces.length || marker || sources.length) return
   }
   const localGeneration = local?.generation ?? 0
   const globalGeneration = global?.generation ?? 0
@@ -112,7 +125,17 @@ export const state = Effect.fnUntraced(function* (tx: Handle, repository: string
       .from(BrainReviewMemoryTable)
       .where(and(eq(BrainReviewMemoryTable.repository_id, repository), eq(BrainReviewMemoryTable.scope_id, scope)))
       .limit(1)
-    if (marker || content.length) return
+    const sources = yield* tx
+      .select()
+      .from(BrainReviewMemorySourceTable)
+      .where(
+        and(
+          eq(BrainReviewMemorySourceTable.repository_id, repository),
+          eq(BrainReviewMemorySourceTable.scope_id, scope),
+        ),
+      )
+      .limit(1)
+    if (marker || content.length || sources.length) return
   }
   const localGeneration = local?.generation ?? 0
   if (!counter(localGeneration)) return
@@ -139,6 +162,11 @@ const requireRepository = Effect.fnUntraced(function* (tx: Handle, repository: s
     .from(BrainReviewMemoryTable)
     .where(eq(BrainReviewMemoryTable.repository_id, repository))
     .all()
+  const sources = yield* tx
+    .select({ scope: BrainReviewMemorySourceTable.scope_id })
+    .from(BrainReviewMemorySourceTable)
+    .where(eq(BrainReviewMemorySourceTable.repository_id, repository))
+    .all()
   const markers = yield* tx
     .select({ hash: BrainTombstoneTable.norm_hash })
     .from(BrainTombstoneTable)
@@ -149,6 +177,7 @@ const requireRepository = Effect.fnUntraced(function* (tx: Handle, repository: s
   const scopes = new Set(namespaces.map((row) => row.scope))
   if (
     rows.some((row) => row.scope !== null && (!scopeValue(row.scope) || !scopes.has(row.scope))) ||
+    sources.some((row) => !scopeValue(row.scope) || !scopes.has(row.scope)) ||
     markers.some((row) => !scopes.has(row.hash.slice(SCOPE_MARKER.length)))
   )
     return yield* invalid()
@@ -258,7 +287,18 @@ export const reconcile = Effect.fnUntraced(function* (tx: Handle, repository: st
         ),
       )
       .limit(1)
-    if (!content.length && !enabled.length && current.base.local?.enabled !== 1) return 0
+    const sources = yield* tx
+      .select({ id: BrainReviewMemorySourceTable.review_session_id })
+      .from(BrainReviewMemorySourceTable)
+      .where(
+        and(
+          eq(BrainReviewMemorySourceTable.repository_id, repository),
+          eq(BrainReviewMemorySourceTable.state, "active"),
+        ),
+      )
+      .limit(1)
+    if (!content.length && !enabled.length && !sources.length && current.base.local?.enabled !== 1) return 0
+    yield* ReviewWitness.erase(tx, { repositories: [repository] })
     const removed = yield* tx
       .delete(BrainReviewMemoryTable)
       .where(eq(BrainReviewMemoryTable.repository_id, repository))
@@ -275,24 +315,69 @@ export const reconcile = Effect.fnUntraced(function* (tx: Handle, repository: st
     yield* revoke(tx, repository)
     return removed.length
   }
-  if (yield* marked(tx, repository, scope)) return 0
+  if (yield* marked(tx, repository, scope)) {
+    const source = yield* ReviewWitness.reconcile(tx, repository, scope)
+    if (source.changed) {
+      yield* advance(tx, repository, scope)
+      yield* revoke(tx, repository)
+    }
+    return source.removed
+  }
   const status = yield* requireState(tx, repository, scope)
+  const sources = yield* ReviewWitness.erase(tx, { repositories: [repository], scope })
   const removed = yield* tx
     .delete(BrainReviewMemoryTable)
     .where(and(eq(BrainReviewMemoryTable.repository_id, repository), eq(BrainReviewMemoryTable.scope_id, scope)))
     .returning({ id: BrainReviewMemoryTable.id })
     .all()
-  if (removed.length || status.enabled) {
+  if (removed.length || status.enabled || sources) {
     yield* advance(tx, repository, scope, false)
     yield* revoke(tx, repository)
   }
   return removed.length
 })
 
+/** Fresh Main INSERT winners only; readers/configuration must never call this registration port. */
+export const registerSource = (db: Database, input: ReviewWitness.Proof) =>
+  db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const proof = ReviewWitness.proof(input)
+          if (!proof) return false
+          // Capture this BEFORE reconciliation can purge an unwitnessed legacy
+          // row. Purging it must not turn the same old source into a fresh one.
+          const existing = yield* tx
+            .select({ id: BrainReviewMemoryTable.id })
+            .from(BrainReviewMemoryTable)
+            .where(
+              and(
+                eq(BrainReviewMemoryTable.repository_id, proof.repository),
+                eq(BrainReviewMemoryTable.scope_id, proof.scope),
+                eq(BrainReviewMemoryTable.review_session_id, proof.reviewID),
+              ),
+            )
+            .limit(1)
+          yield* reconcile(tx, proof.repository, proof.scope)
+          const current = yield* state(tx, proof.repository, proof.scope)
+          if (
+            existing.length ||
+            !current?.enabled ||
+            !(yield* marked(tx, proof.repository)) ||
+            !(yield* marked(tx, proof.repository, proof.scope))
+          )
+            return false
+          return yield* ReviewWitness.register(tx, proof)
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+
 /** The owner clears only the selected physical namespace; another clone retains its own content and consent. */
 export const eraseNamespace = Effect.fnUntraced(function* (tx: Handle, repository: string, scope: string) {
   yield* requireRepository(tx, repository, 1)
   yield* requireState(tx, repository, scope)
+  yield* ReviewWitness.erase(tx, { repositories: [repository], scope, drop: true })
   const removed = yield* tx
     .delete(BrainReviewMemoryTable)
     .where(and(eq(BrainReviewMemoryTable.repository_id, repository), eq(BrainReviewMemoryTable.scope_id, scope)))
@@ -319,6 +404,11 @@ export const eraseScope = Effect.fnUntraced(function* (tx: Handle, repositories:
     .from(BrainReviewMemoryStateTable)
     .where(repositories ? inArray(BrainReviewMemoryStateTable.repository_id, [...repositories]) : undefined)
     .all()
+  const sources = yield* tx
+    .select({ repository: BrainReviewMemorySourceTable.repository_id })
+    .from(BrainReviewMemorySourceTable)
+    .where(repositories ? inArray(BrainReviewMemorySourceTable.repository_id, [...repositories]) : undefined)
+    .all()
   const namespaces = yield* tx
     .select({ repository: BrainReviewMemoryScopeStateTable.repository_id })
     .from(BrainReviewMemoryScopeStateTable)
@@ -338,6 +428,7 @@ export const eraseScope = Effect.fnUntraced(function* (tx: Handle, repositories:
     ...new Set([
       ...(repositories ?? []),
       ...rows.map((row) => row.repository),
+      ...sources.map((row) => row.repository),
       ...states.map((row) => row.repository),
       ...namespaces.map((row) => row.repository),
       ...markers.map((row) => row.repository),
@@ -347,6 +438,7 @@ export const eraseScope = Effect.fnUntraced(function* (tx: Handle, repositories:
   const prepared = new Map<string, Set<string>>()
   for (const repository of affected)
     prepared.set(repository, (yield* requireRepository(tx, repository, repositories === undefined ? 3 : 2)).scopes)
+  yield* ReviewWitness.erase(tx, { ...(repositories ? { repositories } : {}), drop: true })
   yield* tx
     .delete(BrainReviewMemoryTable)
     .where(repositories ? inArray(BrainReviewMemoryTable.repository_id, [...repositories]) : undefined)
@@ -378,6 +470,11 @@ export const eraseSession = Effect.fnUntraced(function* (
 ) {
   yield* requireRepository(tx, repository, 1)
   if (scope !== undefined) yield* requireState(tx, repository, scope)
+  const sources = yield* ReviewWitness.erase(tx, {
+    repositories: [repository],
+    ...(scope === undefined ? {} : { scope }),
+    sessionID,
+  })
   const removed = yield* tx
     .delete(BrainReviewMemoryTable)
     .where(
@@ -393,7 +490,7 @@ export const eraseSession = Effect.fnUntraced(function* (
     .returning({ id: BrainReviewMemoryTable.id })
     .all()
   const current = yield* components(tx, repository)
-  if (current?.local || removed.length) {
+  if (current?.local || removed.length || sources) {
     if (scope === undefined) yield* advanceEpoch(tx, repository)
     else yield* advance(tx, repository, scope)
     yield* revoke(tx, repository)

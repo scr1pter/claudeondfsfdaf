@@ -13,6 +13,7 @@ import reviewMemory from "../../src/brain/migration/20261213000000_review_memory
 import reviewMemoryScope from "../../src/brain/migration/20261214000000_review_memory_scope"
 import { DatabaseMigration } from "../../src/database/migration"
 import { ReviewMemory } from "../../src/brain/review-memory"
+import { ReviewWitness } from "../../src/brain/review-witness"
 import { ReviewStore } from "../../src/brain/review-store"
 import {
   BrainEntryTable,
@@ -40,6 +41,25 @@ const draft: ReviewMemory.Draft = {
   reason: "An explicit owner preference.",
   visibility: "repository",
 }
+// Fixed private test authority only; production IDs come from the winning Main INSERT, not request JSON.
+const witness = (request: ReviewMemory.Source & { repository: string; scope: string }): ReviewWitness.Proof => ({
+  ...request,
+  witnesses: {
+    version: 1,
+    parent: `vrw1_${createHash("sha256")
+      .update(
+        JSON.stringify([request.repository, request.scope, request.parentID, request.reviewID, request.head, "parent"]),
+      )
+      .digest("hex")
+      .slice(0, 32)}`,
+    review: `vrw1_${createHash("sha256")
+      .update(
+        JSON.stringify([request.repository, request.scope, request.parentID, request.reviewID, request.head, "review"]),
+      )
+      .digest("hex")
+      .slice(0, 32)}`,
+  },
+})
 function value<A>(result: ReviewMemory.Result<A>): A {
   if (!result.ok) throw new Error(result.reason)
   return result.value
@@ -85,6 +105,7 @@ type Setup = {
   db: BrainDatabase.Database
   selected: { value: Physical }
   calls: ReviewMemory.OwnerRequest[]
+  registrations: Set<string>
 }
 async function open<A>(selected: Physical, body: (setup: Setup) => Effect.Effect<A, unknown>) {
   await using directory = await tmpdir()
@@ -103,7 +124,7 @@ async function open<A>(selected: Physical, body: (setup: Setup) => Effect.Effect
       request.parentID === current.value.source.parentID &&
       request.reviewID === current.value.source.reviewID &&
       request.head === current.value.source.head
-        ? use()
+        ? use(witness(request))
         : Effect.succeed({ ok: false, reason: "source-unavailable" }),
   }
   const layer = Layer.mergeAll(Brain.layer, ReviewMemory.layerWith(authority)).pipe(
@@ -123,6 +144,7 @@ async function open<A>(selected: Physical, body: (setup: Setup) => Effect.Effect
         db: (yield* BrainDatabase.Service).db,
         selected: current,
         calls,
+        registrations: new Set(),
       })
     }).pipe(Effect.provide(layer)),
   )
@@ -131,7 +153,14 @@ const enable = (setup: Setup, target: Physical) =>
   Effect.gen(function* () {
     setup.selected.value = target
     const state = value(yield* setup.memory.inspect(target.place))
-    return value(yield* setup.memory.configure(target.place, { expected: state.generation, enabled: true }))
+    const enabled = value(yield* setup.memory.configure(target.place, { expected: state.generation, enabled: true }))
+    const proof = witness({ repository: target.place.repository, scope: target.place.scope, ...target.source })
+    const key = JSON.stringify(proof)
+    if (!setup.registrations.has(key)) {
+      setup.registrations.add(key)
+      expect(yield* ReviewStore.registerSource(setup.db, proof)).toBe(true)
+    }
+    return enabled
   })
 const snapshot = (setup: Setup) =>
   Effect.gen(function* () {
@@ -228,13 +257,12 @@ describe("review memory physical repository namespaces", () => {
               generation: 0,
               entries: [],
             })
+            expect(yield* setup.memory.context(repos.b.place, { source: repos.b.source, files: ["src/a.ts"] })).toEqual(
+              { ok: false, reason: "source-unavailable" },
+            )
             expect(
-              value(yield* setup.memory.context(repos.b.place, { source: repos.b.source, files: ["src/a.ts"] }))
-                .entries,
-            ).toEqual([])
-            expect(
-              value(yield* setup.memory.current(repos.b.place, { source: repos.b.source, generation: a.generation })),
-            ).toBe(false)
+              yield* setup.memory.current(repos.b.place, { source: repos.b.source, generation: a.generation }),
+            ).toEqual({ ok: false, reason: "source-unavailable" })
             const after = yield* snapshot(setup)
             expect(after.entries).toEqual(before.entries)
             expect(after.epochs).toEqual(before.epochs)
@@ -336,7 +364,7 @@ describe("review memory physical repository namespaces", () => {
             .from(BrainReviewMemoryTable)
             .where(eq(BrainReviewMemoryTable.id, "legacy_unbound")))[0].scope_id,
         ).toBeNull()
-        expect(yield* setup.brain.erase(repos.a.place, "repository")).toBe(2)
+        expect(yield* setup.brain.erase(repos.a.place, "repository")).toBe(4)
         expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
         expect((yield* setup.db.select().from(BrainReviewMemoryScopeStateTable)).every((row) => !row.enabled)).toBe(
           true,
@@ -358,7 +386,7 @@ describe("review memory physical repository namespaces", () => {
           setup.selected.value = repos.a
           const first = value(yield* setup.memory.inspect(repos.a.place))
           if (mode === "namespace") value(yield* setup.memory.erase(repos.a.place, { expected: first.generation }))
-          if (mode === "repository" || mode === "all") expect(yield* setup.brain.erase(repos.a.place, mode)).toBe(2)
+          if (mode === "repository" || mode === "all") expect(yield* setup.brain.erase(repos.a.place, mode)).toBe(6)
           if (mode === "older-repository")
             yield* setup.db
               .delete(BrainTombstoneTable)
@@ -375,9 +403,10 @@ describe("review memory physical repository namespaces", () => {
                 ),
               )
               .run()
-          expect(
-            value(yield* setup.memory.context(repos.a.place, { source: repos.a.source, files: ["src/a.ts"] })).entries,
-          ).toEqual([])
+          expect(yield* setup.memory.context(repos.a.place, { source: repos.a.source, files: ["src/a.ts"] })).toEqual({
+            ok: false,
+            reason: "source-unavailable",
+          })
           setup.selected.value = repos.b
           const other = value(yield* setup.memory.inspect(repos.b.place))
           if (mode === "namespace" || mode === "scope-witness") {

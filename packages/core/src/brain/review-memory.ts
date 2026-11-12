@@ -7,6 +7,7 @@ import type { Brain } from "./brain"
 import { BrainDatabase } from "./database"
 import { BrainPrivate } from "./private"
 import { ReviewStore } from "./review-store"
+import { ReviewWitness } from "./review-witness"
 import { BrainScan } from "./scan"
 import { BrainReviewMemoryTable } from "./sql"
 import { Token } from "../util/token"
@@ -78,7 +79,7 @@ export interface Authority {
   ) => Effect.Effect<Result<A>>
   readonly source: <A>(
     request: Source & { repository: string; scope: string },
-    use: () => Effect.Effect<Result<A>>,
+    use: (proof: ReviewWitness.Proof) => Effect.Effect<Result<A>>,
   ) => Effect.Effect<Result<A>>
 }
 export const unavailable: Authority = Object.freeze({
@@ -131,7 +132,19 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
   }
   const source = <A>(place: Place, input: Source, use: () => Effect.Effect<Result<A>>) => {
     if (!repository(place) || !sourceValue(input)) return Effect.succeed(fail("invalid"))
-    return authority.source(Object.freeze({ repository: place.repository, scope: place.scope, ...input }), use)
+    return authority.source(Object.freeze({ repository: place.repository, scope: place.scope, ...input }), (value) => {
+      const proof = ReviewWitness.proof(value)
+      if (
+        !proof ||
+        proof.repository !== place.repository ||
+        proof.scope !== place.scope ||
+        proof.parentID !== input.parentID ||
+        proof.reviewID !== input.reviewID ||
+        proof.head !== input.head
+      )
+        return Effect.succeed(fail("source-unavailable"))
+      return use().pipe(Effect.provideService(ReviewWitness.Current, proof))
+    })
   }
   // Reconciliation and the read/write share one SQLite transaction on EVERY boundary, including warmed services.
   const within = <A>(place: Place, use: (tx: ReviewStore.Handle, state: State) => Effect.Effect<Result<A>, unknown>) =>
@@ -142,6 +155,14 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
           yield* ReviewStore.reconcile(tx, place.repository, place.scope)
           const state = yield* ReviewStore.state(tx, place.repository, place.scope)
           if (!state) return fail("stale")
+          const proof = yield* ReviewWitness.Current
+          if (
+            proof &&
+            (proof.repository !== place.repository ||
+              proof.scope !== place.scope ||
+              !(yield* ReviewWitness.current(tx, proof)))
+          )
+            return fail("source-unavailable")
           return yield* use(tx, state)
         }),
       )
@@ -576,6 +597,8 @@ function entryValue(row: typeof BrainReviewMemoryTable.$inferSelect): Entry | un
     (row.status !== "proposed" && row.status !== "active") ||
     (row.origin !== "owner" && row.origin !== "review") ||
     (row.origin === "review" && !source) ||
+    (row.origin === "owner" &&
+      (row.parent_session_id !== null || row.review_session_id !== null || row.source_head !== null)) ||
     (row.status === "active" && (!row.approved_by || !row.approved_at)) ||
     !Number.isSafeInteger(row.created_at) ||
     !Number.isSafeInteger(row.updated_at)

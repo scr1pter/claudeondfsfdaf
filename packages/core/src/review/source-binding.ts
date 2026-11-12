@@ -13,6 +13,16 @@ const identity = Schema.Struct({
   birth: Schema.String.check(Schema.isPattern(/^[1-9][0-9]{0,29}$/)),
 }).annotate({ parseOptions: { onExcessProperty: "error" } })
 
+export const MarkerID = Schema.String.check(Schema.isPattern(/^vrw1_[0-9a-f]{32}$/))
+export const Witnesses = Schema.Struct({
+  version: Schema.Literal(1),
+  parent: MarkerID,
+  review: MarkerID,
+})
+  .check(Schema.makeFilter((value) => value.parent !== value.review))
+  .annotate({ parseOptions: { onExcessProperty: "error" } })
+export type Witnesses = typeof Witnesses.Type
+
 /** Private winning-reservation data, never accepted by the public review Start schema. */
 export const Info = Schema.Struct({
   version: Schema.Literal(1),
@@ -22,5 +32,7 @@ export const Info = Schema.Struct({
   gitDirectory: location,
   commonDirectory: location,
   commonIdentity: identity,
+  // Absent on legacy reservations; retries never add registration authority.
+  witnesses: Schema.optional(Witnesses),
 }).annotate({ parseOptions: { onExcessProperty: "error" } })
 export type Info = typeof Info.Type
