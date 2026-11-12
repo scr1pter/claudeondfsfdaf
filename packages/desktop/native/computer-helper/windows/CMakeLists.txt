@@ -86,7 +86,7 @@ add_library(computer-core STATIC src/core.cpp src/protocol.cpp src/server.cpp sr
   src/user_input.cpp src/user_input_native.cpp src/privileged_self_test.cpp src/privileged_target.cpp)
 target_include_directories(computer-core PUBLIC src "${VECTOR_COMPUTER_GENERATED_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(computer-core PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-target_link_libraries(computer-core PUBLIC windowsapp uiautomationcore d3d11 dxgi gdi32 user32 shcore wintrust crypt32 advapi32 shell32 ole32 bcrypt xmllite version dwmapi propsys uuid shlwapi windowscodecs imm32 normaliz comctl32 kernelbase)
+target_link_libraries(computer-core PUBLIC windowsapp uiautomationcore d3d11 dxgi gdi32 user32 shcore wintrust crypt32 advapi32 shell32 ole32 bcrypt xmllite version dwmapi propsys uuid shlwapi windowscodecs imm32 normaliz comctl32)
 
 # This support library is linked only by tests and the dedicated driver, never by the shipping entry.
 add_library(overlay-driver-support STATIC src/overlay_driver.cpp)

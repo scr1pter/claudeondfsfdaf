@@ -457,5 +457,16 @@
       "seconds": 2.69,
       "exitCode": 0
     }
+  },
+  "workerFirstNativeBuild": {
+    "revision": "39d36ca3700fdb65a4761fc25dca2e0b1a2eb637",
+    "run": 43144573475,
+    "job": 130941181412,
+    "result": "failed",
+    "command": "Build only the x64 native diagnostic artifacts",
+    "observed": "C++ compiled including capture_worker.cpp and capture_worker_protocol.cpp; linker LNK1181 could not open kernelbase.lib for helper/caller/target. Native runtime tests not run.",
+    "repair": "Remove newly added unavailable Kernelbase import library. Existing WindowsApp.lib umbrella covers documented Windows10 handle API; actual CompareObjectHandles equality/authentication requirement unchanged.",
+    "reference": "https://learn.microsoft.com/en-us/uwp/win32-and-com/win32-apis",
+    "qualification": "New exact-source native linker/runtime result required."
   }
 }
