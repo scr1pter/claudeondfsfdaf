@@ -27,6 +27,34 @@ export const REVIEW_VERDICTS = [
 ] as const
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number]
 
+export interface PostingPlan {
+  createReview: boolean
+  marker?: "<!-- vectorscope-verdict: incomplete -->"
+}
+
+/** Pure posting policy; only trusted verdicts can authorize a review object. */
+export function postingPlan(
+  verdict: ReviewVerdict,
+  inlineCount: number,
+  options: { failOn: "never" | "blocking" | "blocking-or-incomplete" },
+): PostingPlan {
+  if (
+    !REVIEW_VERDICTS.includes(verdict) ||
+    !["never", "blocking", "blocking-or-incomplete"].includes(options.failOn) ||
+    !Number.isSafeInteger(inlineCount) ||
+    inlineCount <= 0 ||
+    verdict === "not-reviewed" ||
+    verdict === "policy-skip"
+  )
+    return { createReview: false }
+  return {
+    createReview: true,
+    ...(verdict === "incomplete" && options.failOn === "blocking-or-incomplete"
+      ? { marker: "<!-- vectorscope-verdict: incomplete -->" as const }
+      : {}),
+  }
+}
+
 // The parts of a ReviewOutcome the verdict reads; a ReviewOutcome is assignable as it is. The rest is ready for values
 // other packages add, each absent until a runner produces it:
 // - `partial` also takes VS-23's and VS-24's zero-attempt stops, which ReviewOutcome has had since VS-27a;
