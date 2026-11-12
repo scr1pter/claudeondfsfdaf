@@ -8,6 +8,7 @@ import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { EffectFlock } from "@vectordevai/core/util/effect-flock"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { FileLock } from "@/tool/file-lock"
+import { ReviewMemoryErasure } from "./memory-erasure"
 
 // An engine worker/finalizer cannot synchronously delete an active review and
 // then wait for its own (or another mutually waiting worker's) cancellation.
@@ -43,11 +44,12 @@ export interface Interface {
 }
 export class Service extends Context.Service<Service, Interface>()("@vector/ReviewLifecycle") {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const flock = yield* EffectFlock.Service
     const requests = yield* ReviewRequestStore.Service
+    const memory = yield* ReviewMemoryErasure.Service
     const lock = <A, E, R>(sessionID: SessionID, effect: Effect.Effect<A, E, R>) => {
       const database = databaseKey()
       const directory =
@@ -99,6 +101,9 @@ const layer = Layer.effect(
               const candidate = candidates.get(nonce)
               if (candidate?.database === databaseKey()) yield* candidate.cancel()
             }
+            // This is an enforced erasure boundary, not a best-effort cleanup
+            // hook. Failure leaves the conversation present and reports refusal.
+            yield* memory.remove(sessionID, ownerNonce)
             return yield* effect
           }).pipe(Effect.ensuring(requests.endDelete(sessionID, ownerNonce)))
         }).pipe(Effect.ensuring(Effect.sync(() => BackgroundJobStore.close(owner))))
@@ -106,5 +111,9 @@ const layer = Layer.effect(
     return Service.of({ within, deleting })
   }),
 )
-export const node = LayerNode.make({ service: Service, layer, deps: [EffectFlock.node, ReviewRequestStore.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [EffectFlock.node, ReviewRequestStore.node, ReviewMemoryErasure.node],
+})
 export * as ReviewLifecycle from "./lifecycle"

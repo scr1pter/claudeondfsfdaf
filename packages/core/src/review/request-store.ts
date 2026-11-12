@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { SessionID } from "@vectordevai/schema/session-id"
 import { Database } from "../database/database"
@@ -48,6 +48,30 @@ export interface Interface {
     insideReview: boolean
   }) => Effect.Effect<string[], Refused>
   readonly endDelete: (sessionID: SessionID, ownerNonce: string) => Effect.Effect<void>
+  /** Read-only metadata: missing sessions or a persistent closing fence are never live source authority. */
+  readonly sourceSnapshot: (
+    parentID: SessionID,
+    runID: SessionID,
+  ) => Effect.Effect<
+    | {
+        request: ReviewRun.Start
+        phase: "running" | "settled"
+      }
+    | undefined,
+    Refused
+  >
+  /** Deletion metadata is available only to the exact holder of the durable closing fence. */
+  readonly closingSnapshot: (
+    sessionID: SessionID,
+    ownerNonce: string,
+  ) => Effect.Effect<
+    | {
+        repository: (typeof SessionTable.$inferSelect)["project_id"]
+        directory: string
+      }
+    | undefined,
+    Refused
+  >
 }
 export class Service extends Context.Service<Service, Interface>()("@vector/ReviewRequestStore") {}
 
@@ -88,7 +112,66 @@ const open = (tx: Transaction, parentID: SessionID, runID?: SessionID) =>
     return run?.parentID === parentID && run.marker === `${PINNED_SESSION_PREFIX}run`
   })
 
+// Bun's SQLite adapter can throw during statement preparation before its typed
+// query error exists. Use this only around bounded database reads, never an
+// owner/source callback or request validation, and retain cancellation.
+const metadataRead = <A, E, R>(query: Effect.Effect<A, E, R>, message: string) =>
+  query.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.fail(new Refused({ code: "unavailable", message })),
+    ),
+  )
+
 export function make(db: Database.Interface["db"]): Interface {
+  const closingSnapshot: Interface["closingSnapshot"] = (sessionID, ownerNonce) => {
+    if (!Schema.is(SessionID)(sessionID) || !/^[0-9a-f-]{36}$/i.test(ownerNonce))
+      return Effect.fail(new Refused({ code: "invalid", message: "Invalid review deletion identity." }))
+    return metadataRead(
+      db
+        .select({ repository: SessionTable.project_id, directory: SessionTable.directory })
+        .from(SessionTable)
+        .innerJoin(ReviewSessionFenceTable, eq(ReviewSessionFenceTable.session_id, SessionTable.id))
+        .where(and(eq(SessionTable.id, sessionID), eq(ReviewSessionFenceTable.owner_nonce, ownerNonce)))
+        .get(),
+      "The review deletion source is unavailable.",
+    )
+  }
+  const sourceSnapshot: Interface["sourceSnapshot"] = (parentID, runID) => {
+    if (!Schema.is(SessionID)(parentID) || !Schema.is(SessionID)(runID) || parentID === runID)
+      return Effect.fail(new Refused({ code: "invalid", message: "Invalid review source identity." }))
+    // The caller must hold ReviewLifecycle.within(parent, run) for its entire
+    // source callback. This read observes a deletion which released that lock
+    // after durably closing, without starting or resuming any work.
+    return metadataRead(
+      db.transaction((tx) =>
+        Effect.gen(function* () {
+          if (!(yield* open(tx, parentID, runID))) return undefined
+          const rows = yield* tx
+            .select({
+              id: ReviewRequestTable.request_id,
+              request: ReviewRequestTable.request,
+              phase: ReviewRequestTable.phase,
+            })
+            .from(ReviewRequestTable)
+            .where(and(eq(ReviewRequestTable.parent_session_id, parentID), eq(ReviewRequestTable.run_id, runID)))
+            .limit(2)
+            .all()
+          if (rows.length !== 1) return undefined
+          return rows[0]!
+        }),
+      ),
+      "The retained review source is unavailable.",
+    ).pipe(
+      Effect.flatMap((row) => {
+        if (!row) return Effect.succeed(undefined)
+        const request = Schema.decodeUnknownOption(ReviewRun.Start, { onExcessProperty: "error" })(row.request)
+        if (Option.isNone(request) || request.value.requestID !== row.id)
+          return Effect.fail(new Refused({ code: "corrupt", message: "The retained review source is invalid." }))
+        if (row.phase !== "running" && row.phase !== "settled") return Effect.succeed(undefined)
+        return Effect.succeed({ request: request.value, phase: row.phase })
+      }),
+    )
+  }
   const reserve: Interface["reserve"] = Effect.fn("ReviewRequestStore.reserve")(function* (input) {
     const decoded = Schema.decodeUnknownOption(ReviewRun.Start)(input.request)
     if (
@@ -362,7 +445,7 @@ export function make(db: Database.Interface["db"]): Interface {
       )
       .run()
       .pipe(Effect.orDie, Effect.asVoid)
-  return { reserve, attach, ready, begin, finish, beginDelete, endDelete }
+  return { reserve, attach, ready, begin, finish, beginDelete, endDelete, sourceSnapshot, closingSnapshot }
 }
 
 const layer = Layer.effect(

@@ -3,11 +3,16 @@ import { randomUUID } from "node:crypto"
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { eq, sql } from "drizzle-orm"
 import { Deferred, Effect, Exit, Option, Result, Schema, Scope } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Database } from "@vectordevai/core/database/database"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
+import { ReviewStore } from "@vectordevai/core/brain/review-store"
+import { BrainEntryTable, BrainReviewMemoryStateTable, BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
+import { SessionTable } from "@vectordevai/core/session/sql"
 import { BackgroundJob as CoreBackgroundJob } from "@vectordevai/core/background-job"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -26,6 +31,7 @@ import { ReviewLocalRun } from "@/review/local-run"
 import type { ReviewLocalAdmission } from "@/review/local-admission"
 import type { RunInput } from "@/review/run"
 import { Session } from "@/session/session"
+import { SessionCleanup } from "@/session/cleanup"
 import { TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 
@@ -38,6 +44,7 @@ const it = testEffect(
       BackgroundJob.node,
       BackgroundJobStore.node,
       Database.node,
+      BrainDatabase.node,
       ReviewRequestStore.node,
       ReviewLifecycle.node,
       Git.node,
@@ -509,6 +516,197 @@ describe("durable server-owned local review runs", () => {
             verdict: { verdict: "not-reviewed", causes: ["review-error"], notes: [] },
           }),
         ).toBeUndefined()
+      }),
+    options,
+  )
+
+  it.instance(
+    "actual Session.remove erases approved review provenance before removal and refuses corrupt review state without changing any Brain table",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const database = yield* Database.Service
+        const brain = yield* BrainDatabase.Service
+        const jobs = yield* BackgroundJob.Service
+        const original = yield* fixture
+        const snapshot = () =>
+          Effect.gen(function* () {
+            const tables = yield* brain.db.all<{ name: string }>(
+              sql`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
+            )
+            return yield* Effect.forEach(tables, (table) =>
+              Effect.gen(function* () {
+                const rows = yield* brain.db.all(sql`SELECT * FROM ${sql.identifier(table.name)}`)
+                return { table: table.name, rows: rows.map((row) => JSON.stringify(row)).sort() }
+              }),
+            )
+          })
+        for (const corrupt of [false, true]) {
+          const parent = corrupt
+            ? yield* sessions.create({ title: "Corrupt review-memory deletion fixture" }, "owner")
+            : original.parent
+          const repo = { ...original, parent, source: { ...original.source, sessionID: parent.id } }
+          const runs = yield* ReviewLocalRun.make({
+            resolveModel,
+            runReview: (input: RunInput) => Effect.succeed(outcome(input)),
+          })
+          const started = yield* runs.start(repo.request, repo.source)
+          yield* jobs.wait({ id: started.runID })
+          expect((yield* runs.get(repo.parent.id, started.runID)).status).toBe("completed")
+          const repository = repo.parent.projectID
+          const reviewEntry = `source-${started.runID}`
+          const ownerEntry = `owner-${started.runID}`
+          const ordinaryEntry = `ordinary-${started.runID}`
+          yield* brain.db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* ReviewStore.register(tx, repository)
+              yield* ReviewStore.advance(tx, repository, true)
+              yield* tx
+                .insert(BrainReviewMemoryTable)
+                .values([
+                  {
+                    id: reviewEntry,
+                    repository_id: repository,
+                    kind: "outcome",
+                    status: "active",
+                    visibility: "repository",
+                    body: "Explicitly approved review excerpt",
+                    paths: ["visible.ts"],
+                    citations: [
+                      { path: "visible.ts", line: 1, head: repo.request.target.head, quote: "export const count = 2" },
+                    ],
+                    reason: "Approved fixture finding",
+                    parent_session_id: repo.parent.id,
+                    review_session_id: started.runID,
+                    source_head: repo.request.target.head,
+                    origin: "review",
+                    approved_by: "fixture-owner",
+                    approved_at: 2,
+                    created_at: 1,
+                    updated_at: 2,
+                  },
+                  {
+                    id: ownerEntry,
+                    repository_id: repository,
+                    kind: "preference",
+                    status: "active",
+                    visibility: "repository",
+                    body: "Owner preference remains",
+                    paths: [],
+                    citations: [],
+                    reason: "Owner entry",
+                    origin: "owner",
+                    created_at: 1,
+                    updated_at: 1,
+                  },
+                ])
+                .run()
+              yield* tx.run(
+                sql`INSERT INTO brain_entry (id, scope, repository_id, kind, origin, status, body, paths, terms, norm_hash, confidence, related, created_at, updated_at) VALUES (${ordinaryEntry}, 'repository', ${repository}, 'fact', 'user', 'active', 'Ordinary memory remains', '[]', '', ${ordinaryEntry}, 1, '[]', 1, 1)`,
+              )
+            }),
+          )
+          const ordinary = yield* brain.db
+            .select()
+            .from(BrainEntryTable)
+            .where(eq(BrainEntryTable.id, ordinaryEntry))
+            .get()
+          const owned = yield* brain.db
+            .select()
+            .from(BrainReviewMemoryTable)
+            .where(eq(BrainReviewMemoryTable.id, ownerEntry))
+            .get()
+          const atCleanup = Effect.gen(function* () {
+            return {
+              parent: yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, repo.parent.id)).get(),
+              review: yield* brain.db
+                .select()
+                .from(BrainReviewMemoryTable)
+                .where(eq(BrainReviewMemoryTable.id, reviewEntry))
+                .get(),
+              owner: yield* brain.db
+                .select()
+                .from(BrainReviewMemoryTable)
+                .where(eq(BrainReviewMemoryTable.id, ownerEntry))
+                .get(),
+              ordinary: yield* brain.db
+                .select()
+                .from(BrainEntryTable)
+                .where(eq(BrainEntryTable.id, ordinaryEntry))
+                .get(),
+            }
+          })
+          const observed: { calls: number; value?: Effect.Success<typeof atCleanup> } = { calls: 0 }
+          // This hook only observes ordering. All assertions occur outside the
+          // best-effort hook; the actual lifecycle eraser is the enforced boundary.
+          const unregister = SessionCleanup.register((info) =>
+            info.id !== repo.parent.id
+              ? Effect.void
+              : Effect.gen(function* () {
+                  observed.calls++
+                  observed.value = yield* atCleanup
+                }),
+          )
+          const global = yield* brain.db
+            .select()
+            .from(BrainReviewMemoryStateTable)
+            .where(eq(BrainReviewMemoryStateTable.repository_id, ReviewStore.GLOBAL))
+            .get()
+          if (!global || !ordinary || !owned) throw new Error("Incomplete session erasure fixture")
+          yield* Effect.gen(function* () {
+            if (corrupt)
+              yield* brain.db
+                .update(BrainReviewMemoryStateTable)
+                .set({ generation: -1 })
+                .where(eq(BrainReviewMemoryStateTable.repository_id, ReviewStore.GLOBAL))
+                .run()
+            const before = yield* snapshot()
+            const result = yield* sessions.remove(repo.parent.id).pipe(Effect.result)
+            if (corrupt) {
+              expect(Result.isFailure(result) && result.failure._tag).toBe("SessionBusyError")
+              expect(yield* snapshot()).toEqual(before)
+              expect(yield* sessions.get(repo.parent.id)).toMatchObject({ id: repo.parent.id })
+              expect(yield* sessions.get(started.runID)).toMatchObject({ id: started.runID })
+              expect(observed.calls).toBe(0)
+            } else {
+              expect(Result.isSuccess(result)).toBe(true)
+              expect(observed.calls).toBe(1)
+              expect(observed.value?.parent?.id).toBe(repo.parent.id)
+              expect(observed.value?.review).toBeUndefined()
+              expect(observed.value?.ordinary).toEqual(ordinary)
+              expect(observed.value?.owner).toEqual(owned)
+              expect(
+                yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, repo.parent.id)).get(),
+              ).toBeUndefined()
+              expect(
+                yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, started.runID)).get(),
+              ).toBeUndefined()
+              expect(
+                yield* brain.db.select().from(BrainEntryTable).where(eq(BrainEntryTable.id, ordinaryEntry)).get(),
+              ).toEqual(ordinary)
+              expect(
+                yield* brain.db
+                  .select()
+                  .from(BrainReviewMemoryTable)
+                  .where(eq(BrainReviewMemoryTable.id, ownerEntry))
+                  .get(),
+              ).toEqual(owned)
+            }
+          }).pipe(
+            Effect.ensuring(
+              Effect.gen(function* () {
+                unregister()
+                if (corrupt)
+                  yield* brain.db
+                    .update(BrainReviewMemoryStateTable)
+                    .set({ generation: global.generation })
+                    .where(eq(BrainReviewMemoryStateTable.repository_id, ReviewStore.GLOBAL))
+                    .run()
+                    .pipe(Effect.orDie)
+              }),
+            ),
+          )
+        }
       }),
     options,
   )
