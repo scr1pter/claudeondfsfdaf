@@ -504,6 +504,11 @@ test("Windows driver diagnostic enums match the native allowlists exactly", asyn
   expect(enumerators?.split(",").map((name) => name.trim().replaceAll("_", "-"))).toEqual([
     ...COMPUTER_SMOKE_DRIVER_STAGES,
   ])
+  expect(COMPUTER_SMOKE_DRIVER_STAGES.slice(-3)).toEqual([
+    "probe-mode",
+    "probe-move",
+    "guardian-observe-reply-negative-low32-tag-candidate",
+  ])
   expect(COMPUTER_SMOKE_DRIVER_NATIVE_CODES).toEqual([...Computer.ComputerErrorCode.literals, "unknown"])
   const uia = await readFile(path.join(native, "uia_native.h"), "utf8")
   const phases = uia.match(/windows_uia_phases\s*\{([^}]+)\};/)?.[1]

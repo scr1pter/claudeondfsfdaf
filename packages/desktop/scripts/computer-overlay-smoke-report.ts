@@ -575,6 +575,7 @@ export const COMPUTER_SMOKE_DRIVER_STAGES = [
   "uia-actor-com-expired",
   "probe-mode",
   "probe-move",
+  "guardian-observe-reply-negative-low32-tag-candidate",
 ] as const
 export const COMPUTER_SMOKE_DRIVER_NATIVE_CODES = [
   "unavailable",

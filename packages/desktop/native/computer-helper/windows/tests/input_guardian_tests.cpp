@@ -246,9 +246,9 @@ size_t run_input_guardian_tests() {
   });
   test([] {
     InputGuardianReceiptEvidence evidence;
-    evidence.own_move=true; evidence.own_up=true; evidence.own_down_refused=true; evidence.own_tag_unflagged=true;
+    evidence.own_move=true; evidence.own_up=true; evidence.own_down_refused=true; evidence.own_tag_unflagged=true; evidence.low32_tag_candidate=true;
     check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::none,"guardian.diagnostic-evidence-is-inert-without-opt-in");
-    evidence={true,false,false,false,false};
+    evidence={true,false,false,false,false,false};
     check(input_guardian_receipt_diagnostic(evidence,100,100)==InputGuardianReceiptDiagnostic::no_callback_pump_stalled &&
           input_guardian_receipt_diagnostic(evidence,100,101)==InputGuardianReceiptDiagnostic::no_callback_pump_progressed &&
           input_guardian_receipt_diagnostic(evidence,100,99)==InputGuardianReceiptDiagnostic::no_callback_pump_stalled,
@@ -411,6 +411,61 @@ size_t run_input_guardian_tests() {
           "guardian.erased-unflagged-interval-never-leaks-into-successor");
     check(!ledger.pending() && ledger.releases().empty() && ledger.released_count()==0,
           "guardian.all-unflagged-move-evidence-stays-nonauthoritative");
+  });
+  test([] {
+    check(static_cast<uint8_t>(InputGuardianReceiptDiagnostic::low32_tag_candidate)==8,"guardian.low32-candidate-appends-private-code8");
+    InputGuardianReceiptEvidence evidence; evidence.low32_tag_candidate=true;
+    check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::none,"guardian.low32-candidate-is-inert-without-opt-in");
+    evidence.enabled=true;
+    check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::low32_tag_candidate,"guardian.low32-correlation-is-explicitly-only-a-candidate");
+    evidence.own_move=true;
+    check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::own_move_only,"guardian.full64-callback-evidence-precedes-weak-candidate-metadata");
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); const auto ticket=reserve(ledger,mouse(),true), ordinary=reserve(ledger,mouse(1));
+    InputGuardianReceiptDiagnostic diagnostic; const auto projected=uint64_t(static_cast<uint32_t>(own_tag));
+    for (const auto sample : {InputGuardianEvent{ticket.release,projected,false,true,100},
+        InputGuardianEvent{ticket.release,projected ^ 1U,true,true,100}, InputGuardianEvent{ticket.release,0,true,true,100},
+        InputGuardianEvent{ticket.release,projected | (uint64_t{1} << 32),true,true,100},
+        InputGuardianEvent{InputRelease{InputReleaseKind::mouse_button,1,0,false,0},projected,true,true,100},
+        InputGuardianEvent{mouse(2),projected,true,true,100}, InputGuardianEvent{ordinary.release,projected,true,true,100}}) {
+      check(!ledger.observe(sample) && !ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+            "guardian.low32-candidate-needs-injected-zero-upper-nonzero-matching-low-and-valid-opted-descriptor");
+    }
+    check(!ledger.observed(ordinary,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::none,"guardian.projected-tag-never-labels-ordinary-reservation");
+    InputGuardianLedger zero_low(own_tag & 0xffffffff00000000ULL); const auto zero=reserve(zero_low,mouse(),true);
+    check(!zero_low.observe({zero.release,0,true,true,100}) && !zero_low.observed(zero,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+          "guardian.zero-projection-is-never-a-low32-candidate");
+    InputGuardianLedger narrow(projected); const auto full=reserve(narrow,mouse(),true);
+    check(narrow.observe({full.release,projected,true,true,100}) && narrow.observed(full,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::none,
+          "guardian-zero-own-upper-bits-follow-only-original-full-tag-authority");
+  });
+  test([] {
+    const auto projected=uint64_t(static_cast<uint32_t>(own_tag));
+    for (const auto release : {mouse(),scan(),unicode()}) {
+      InputGuardianLedger ledger(own_tag); const auto ticket=reserve(ledger,release,true); InputGuardianReceiptDiagnostic diagnostic;
+      check(!ledger.observe({release,projected,true,true,100}) && !ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::low32_tag_candidate,
+            "guardian.low32-candidate-down-never-establishes-receipt-for-any-release-kind");
+      ledger.retire(ticket);
+      check(!ledger.pending() && ledger.releases().empty() && ledger.released_count()==0,"guardian.low32-candidate-never-creates-release-debt-or-order");
+      check(ledger.observe(event(release,true)) && ledger.pending() && ledger.releases()==std::vector{ticket},"guardian.full64-injected-down-still-alone-creates-debt");
+      check(!ledger.observe({release,projected,true,false,200}) && ledger.pending() && ledger.released_count()==0 && ledger.releases()==std::vector{ticket},
+            "guardian.low32-candidate-up-never-clears-existing-debt-or-counts-release");
+      check(ledger.observe(event(release,false)) && !ledger.pending() && ledger.released_count()==1 && !ledger.diagnostics_enabled(),"guardian.full64-injected-up-alone-completes-original-cleanup");
+    }
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); const auto projected=uint64_t(static_cast<uint32_t>(own_tag)); ledger.observe_move(projected,true);
+    const auto ticket=reserve(ledger,mouse(),true), ordinary=reserve(ledger,mouse(1)), key=reserve(ledger,scan(),true); InputGuardianReceiptDiagnostic diagnostic;
+    ledger.observe_move(projected,false); ledger.observe_move(projected ^ 1U,true); ledger.observe_move(projected | (uint64_t{1} << 32),true);
+    check(!ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,"guardian.projected-move-needs-valid-current-candidate-interval");
+    ledger.observe_move(projected,true);
+    check(!ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::low32_tag_candidate,"guardian.projected-move-records-only-a-weak-candidate");
+    check(!ledger.observed(ordinary,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::none,"guardian.projected-move-never-labels-unopted-mouse");
+    check(!ledger.observed(key,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,"guardian.projected-move-never-labels-key-reservation");
+    check(!ledger.pending() && ledger.releases().empty() && ledger.released_count()==0,"guardian.projected-move-never-creates-down-or-debt");
+    ledger.retire(ticket,true); const auto successor=reserve(ledger,mouse(),true);
+    check(!ledger.observed(successor,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,"guardian.projected-candidate-metadata-does-not-survive-slot-reuse");
   });
   return groups;
 }

@@ -56,9 +56,9 @@ enum class OverlayDriverStage : uint8_t {
   uia_root_pid, uia_hit_setup, uia_hit_loop, uia_hit_cycle, uia_hit_pid, uia_hit_equal, uia_hit_depth, uia_hit_children, uia_hit_enqueue, uia_hit_queue_limit, uia_hit_ambiguous, uia_hit_empty, uia_hit_end, uia_children_limit, uia_children_first, uia_children_loop, uia_children_capacity, uia_children_wrap, uia_children_append, uia_children_next, uia_children_sibling_failed, uia_children_compare, uia_children_cycle, uia_children_end, uia_parent_read, uia_parent_wrap,
   uia_actor_current, uia_actor_current_budget, uia_actor_complete, uia_actor_expired, uia_actor_cancelled,
   uia_actor_revoked, uia_actor_com_uninitialized, uia_actor_com_cancellation_unavailable, uia_actor_com_timer_unavailable, uia_actor_com_expired,
-  probe_mode, probe_move
+  probe_mode, probe_move, guardian_observe_reply_negative_low32_tag_candidate
 };
-inline constexpr std::array<std::wstring_view, 171> overlay_driver_stages{
+inline constexpr std::array<std::wstring_view, 172> overlay_driver_stages{
   L"dpi", L"parent", L"files", L"observe-parent", L"observe-bootstrap", L"isolation",
   L"token", L"desktop", L"ready-write", L"envelope-read", L"envelope-shape", L"request",
   L"foreground", L"guardian-create", L"backend-create", L"uia-create", L"uia-available", L"window-observe",
@@ -88,9 +88,9 @@ inline constexpr std::array<std::wstring_view, 171> overlay_driver_stages{
   L"uia-root-pid", L"uia-hit-setup", L"uia-hit-loop", L"uia-hit-cycle", L"uia-hit-pid", L"uia-hit-equal", L"uia-hit-depth", L"uia-hit-children", L"uia-hit-enqueue", L"uia-hit-queue-limit", L"uia-hit-ambiguous", L"uia-hit-empty", L"uia-hit-end", L"uia-children-limit", L"uia-children-first", L"uia-children-loop", L"uia-children-capacity", L"uia-children-wrap", L"uia-children-append", L"uia-children-next", L"uia-children-sibling-failed", L"uia-children-compare", L"uia-children-cycle", L"uia-children-end", L"uia-parent-read", L"uia-parent-wrap",
   L"uia-actor-current", L"uia-actor-current-budget", L"uia-actor-complete", L"uia-actor-expired", L"uia-actor-cancelled",
   L"uia-actor-revoked", L"uia-actor-com-uninitialized", L"uia-actor-com-cancellation-unavailable", L"uia-actor-com-timer-unavailable", L"uia-actor-com-expired",
-  L"probe-mode", L"probe-move"
+  L"probe-mode", L"probe-move", L"guardian-observe-reply-negative-low32-tag-candidate"
 };
-static_assert(overlay_driver_stages.size() == static_cast<size_t>(OverlayDriverStage::probe_move) + 1);
+static_assert(overlay_driver_stages.size() == static_cast<size_t>(OverlayDriverStage::guardian_observe_reply_negative_low32_tag_candidate) + 1);
 // HRESULTs are reported only as one of these buckets, never as a value.
 inline constexpr std::array<std::wstring_view, 5> overlay_driver_hresult_classes{L"access_denied", L"rpc", L"not_found", L"timeout", L"other"};
 struct OverlayDriverResult {

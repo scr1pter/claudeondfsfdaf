@@ -32,6 +32,7 @@ InputGuardianReceiptDiagnostic input_guardian_receipt_diagnostic(const InputGuar
   if (evidence.own_tag_unflagged) return InputGuardianReceiptDiagnostic::own_tag_unflagged;
   if (evidence.own_up) return InputGuardianReceiptDiagnostic::own_up_only;
   if (evidence.own_move) return InputGuardianReceiptDiagnostic::own_move_only;
+  if (evidence.low32_tag_candidate) return InputGuardianReceiptDiagnostic::low32_tag_candidate;
   return pump_after > pump_before ? InputGuardianReceiptDiagnostic::no_callback_pump_progressed : InputGuardianReceiptDiagnostic::no_callback_pump_stalled;
 }
 InputGuardianLedger::InputGuardianLedger(uint64_t tag) : tag_(tag) {}
@@ -56,6 +57,13 @@ bool InputGuardianLedger::observe(const InputGuardianEvent& event) noexcept {
     std::lock_guard lock(mutex_);
     for (auto& entry : entries_) if (entry.ticket.id && entry.diagnostic.enabled && entry.ticket.release == event.release)
       entry.diagnostic.own_tag_unflagged = true;
+  }
+  // A projected marker can correlate with another injector; retain one opted-in boolean only.
+  // It never enters the full64 ownership predicate or changes down/up/order/release state.
+  if (event.injected && event.tag != tag_ && diagnostics_enabled() && is_low32_tag_candidate(event.tag, true) && valid_input_release(event.release)) {
+    std::lock_guard lock(mutex_);
+    for (auto& entry : entries_) if (entry.ticket.id && entry.diagnostic.enabled && entry.ticket.release == event.release)
+      entry.diagnostic.low32_tag_candidate = true;
   }
   if (!event.injected || event.tag != tag_ || !valid_input_release(event.release)) return false;
   std::lock_guard lock(mutex_);
@@ -88,11 +96,17 @@ bool InputGuardianLedger::observed(const InputGuardianTicket& ticket, bool down,
   return false;
 }
 bool InputGuardianLedger::diagnostics_enabled() const noexcept { return diagnostic_entries_.load() != 0; }
+bool InputGuardianLedger::is_low32_tag_candidate(uint64_t observed_tag, bool injected) const noexcept {
+  return injected && (observed_tag >> 32) == 0 && (tag_ >> 32) != 0 &&
+    static_cast<uint32_t>(tag_) != 0 && static_cast<uint32_t>(observed_tag) == static_cast<uint32_t>(tag_);
+}
 void InputGuardianLedger::observe_move(uint64_t tag, bool injected) noexcept {
-  if (tag != tag_ || !diagnostics_enabled()) return;
+  const bool candidate = is_low32_tag_candidate(tag, injected);
+  if ((tag != tag_ && !candidate) || !diagnostics_enabled()) return;
   std::lock_guard lock(mutex_);
   for (auto& entry : entries_) if (entry.ticket.id && entry.diagnostic.enabled && entry.ticket.release.kind == InputReleaseKind::mouse_button) {
-    if (injected) entry.diagnostic.own_move = true;
+    if (candidate) entry.diagnostic.low32_tag_candidate = true;
+    else if (injected) entry.diagnostic.own_move = true;
     else entry.diagnostic.own_tag_unflagged = true;
   }
 }
@@ -148,7 +162,7 @@ bool valid_diagnostic_shape(const Packet& packet) noexcept {
   if (packet.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
   if (!packet.response) return packet.op==Op::reserve && !packet.ok && !packet.down && packet.diagnostic==InputGuardianReceiptDiagnostic::opt_in;
   return packet.op==Op::observed && !packet.ok && packet.down &&
-    packet.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && packet.diagnostic<=InputGuardianReceiptDiagnostic::own_tag_unflagged;
+    packet.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && packet.diagnostic<=InputGuardianReceiptDiagnostic::low32_tag_candidate;
 }
 constexpr size_t packet_size = 80;
 using Bytes = std::array<uint8_t,packet_size>;
@@ -165,7 +179,7 @@ Bytes encode(const Packet& packet) {
   std::copy(packet.nonce.begin(),packet.nonce.end(),bytes.begin()+48); return bytes;
 }
 std::optional<Packet> decode(const Bytes& bytes) {
-  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='2' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]>static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_tag_unflagged)) return {};
+  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='2' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]>static_cast<uint8_t>(InputGuardianReceiptDiagnostic::low32_tag_candidate)) return {};
   Packet packet; packet.op=static_cast<Op>(bytes[4]); packet.response=bytes[5]!=0; packet.ok=bytes[6]!=0; packet.down=bytes[7]!=0;
   packet.sequence=get(bytes,8,8); packet.ticket=get(bytes,16,8); packet.tag=get(bytes,24,8);
   packet.budget=static_cast<uint32_t>(get(bytes,32,4)); packet.count=static_cast<uint32_t>(get(bytes,36,4));
@@ -196,7 +210,7 @@ bool valid_reply(const Packet& reply, const Packet& request, bool diagnostic) {
       ((request.op!=Op::drain && request.op!=Op::close) && reply.count!=0)) return false;
   if (reply.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
   return diagnostic && request.op==Op::observed && request.down && !reply.ok &&
-    reply.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && reply.diagnostic<=InputGuardianReceiptDiagnostic::own_tag_unflagged;
+    reply.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && reply.diagnostic<=InputGuardianReceiptDiagnostic::low32_tag_candidate;
 }
 // Anonymous pipes are synchronous. The independent watcher repeats cancellation after the absolute
 // deadline, covering cancellation-before-ReadFile races without holding an authority/journal lock.
@@ -467,6 +481,7 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
         case InputGuardianReceiptDiagnostic::own_down_refused: phase=InputGuardianPhase::reply_negative_own_down_refused; break;
         case InputGuardianReceiptDiagnostic::own_up_only: phase=InputGuardianPhase::reply_negative_own_up_only; break;
         case InputGuardianReceiptDiagnostic::own_tag_unflagged: phase=InputGuardianPhase::reply_negative_own_tag_unflagged; break;
+        case InputGuardianReceiptDiagnostic::low32_tag_candidate: phase=InputGuardianPhase::reply_negative_low32_tag_candidate; break;
         default: break;
       }
     }
@@ -680,7 +695,7 @@ bool input_guardian_protocol_self_test() {
   Packet reply=packet; reply.response=true;
   if (!valid_reply(reply,packet,false)) return false;
   for (uint8_t code=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::no_callback_pump_stalled);
-       code<=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_tag_unflagged); ++code) {
+       code<=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::low32_tag_candidate); ++code) {
     reply.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
     const auto received=decode(encode(reply));
     if (!received || !valid_reply(*received,packet,true) || valid_reply(*received,packet,false)) return false;
@@ -694,7 +709,7 @@ bool input_guardian_protocol_self_test() {
       if (field==3) malformed.op=Op::reserve;
       if (field==4) malformed.op=Op::retire;
       if (field==5) malformed.diagnostic=InputGuardianReceiptDiagnostic::opt_in;
-      if (field==6) malformed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(8);
+      if (field==6) malformed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(9);
       if (field==7) malformed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(255);
       if (decode(encode(malformed)) || valid_reply(malformed,packet,true)) return false;
     }
@@ -711,7 +726,7 @@ bool input_guardian_protocol_self_test() {
       if (valid_reply(malformed,packet,true)) return false;
     }
   }
-  for (const auto code : {uint8_t{8},uint8_t{255}}) {
+  for (const auto code : {uint8_t{9},uint8_t{255}}) {
     auto invalid=packet; invalid.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
     if (valid_request(invalid,command,0) || decode(encode(invalid))) return false;
   }
