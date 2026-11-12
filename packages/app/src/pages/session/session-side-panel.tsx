@@ -94,6 +94,7 @@ import type { Message, Part, SnapshotFileDiff, VcsFileDiff } from "@vectordevai/
 import { Message as SessionMessage } from "@vectordevai/session-ui/message-part"
 import { ResearchSourcesTab } from "@/features/research/sources-tab"
 import { registerResearchReportCard } from "@/features/research/report-card"
+import { registerConnectFindingsCard } from "@/features/connect/findings-card"
 import { registerLearnedChip } from "@/features/memory/learned-chip"
 import { registerWorkflowChip } from "@/features/memory/workflow-chip"
 import { OPEN_SOURCES, sessionRuns, type OpenSources } from "@/features/research/research-model"
@@ -3868,6 +3869,7 @@ registerResearchReportCard()
 registerLearnedChip()
 // Under a reply a learned workflow default shaped, what it changed and why.
 registerWorkflowChip()
+registerConnectFindingsCard()
 
 // A page the Sources tab asked Preview to open, for the browser context it names.
 const [previewRequest, setPreviewRequest] = createSignal<{ contextId: string; url: string }>()
