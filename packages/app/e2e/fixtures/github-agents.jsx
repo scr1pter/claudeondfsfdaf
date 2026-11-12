@@ -70,6 +70,9 @@ const repoName = (cwd) =>
   `${auth.owner}/${cwd === "/repo/one" ? (auth.repositoryId === "19" ? "changed" : "one") : "two"}`
 const binding = (cwd) => ({
   repositoryId: repository(cwd),
+  ...(query.get("rowAuthority") === "off"
+    ? {}
+    : { authorityId: `binding-authority-${auth.owner}-${repository(cwd)}-${auth.vectorSignedIn ? "on" : "off"}` }),
   repository: repoName(cwd),
   binder: { login: auth.owner },
   boundAt: 1,
@@ -117,7 +120,7 @@ window.api = {
           noSecret: listed && query.get("noSecret") !== "off",
           brain: listed,
         },
-        bound: "yours",
+        bound: query.get("bound") === "other" ? "not-yours-or-unknown" : "yours",
         binding: binding(cwd),
       }
       await pause("status", "pendingStatus")
@@ -142,10 +145,12 @@ window.api = {
     async setup(input) {
       calls.push(["setup", input])
       await pause("setup", "pendingSetup")
+      if (query.get("failSetup") === "1") throw new Error("synthetic uncertain setup")
       return { url: "https://github.com/owner/one/pull/1" }
     },
     async bind(input) {
       calls.push(["bind", input])
+      if (query.get("failBind") === "1") throw new Error("synthetic uncertain bind")
       return { state: "bound" }
     },
     async run(input) {
@@ -157,6 +162,7 @@ window.api = {
     async schedules(input) {
       calls.push(["schedules", input])
       await pause("schedules", "pendingSchedule")
+      if (query.get("failSchedule") === "1") throw new Error("synthetic uncertain schedule")
       return { url: "https://github.com/owner/one/pull/2" }
     },
     async bindings() {
@@ -196,8 +202,11 @@ window.api = {
       await pause("runs", "pendingRuns")
       return value
     },
-    async unbind(repositoryId) {
-      calls.push(["unbind", repositoryId])
+    async unbind(input) {
+      calls.push(["unbind", input])
+      await pause("unbind", "pendingUnbind")
+      calls.push(["unbindReturned", input])
+      if (query.get("failUnbind") === "1") throw new Error("synthetic uncertain unbind")
     },
     async previewBrain(cwd) {
       calls.push(["previewBrain", cwd])

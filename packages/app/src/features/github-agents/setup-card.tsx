@@ -171,7 +171,10 @@ export function GithubAgentsSetup(props: {
       })
       .catch(() => {
         if (revision === token)
-          setState("error", "Could not open the setup pull request. Check GitHub before trying again.")
+          setState(
+            "error",
+            "The setup result may be uncertain. Check open pull requests before continuing. Vector does not resend automatically.",
+          )
       })
     if (revision === token) setState("busy", false)
   }
@@ -204,7 +207,10 @@ export function GithubAgentsSetup(props: {
       })
       .catch(() => {
         if (revision === token)
-          setState("error", "Could not bind this repository. Check your account and GitHub access.")
+          setState(
+            "error",
+            "The connection result may be uncertain. Check its Actions run and refresh your bindings before continuing. Vector does not resend automatically.",
+          )
       })
     if (revision === token) setState("busy", false)
   }

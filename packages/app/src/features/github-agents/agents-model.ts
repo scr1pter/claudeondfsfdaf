@@ -3,6 +3,8 @@ import type { AgentsWorkflowOptions } from "@vectordevai/core/review/workflow"
 export const ACTIONS_COPY = "in your own repo, on your own Actions minutes"
 export type AgentListing = { agents: boolean; scheduled: boolean; noSecret: boolean; brain: boolean }
 export type AgentBinding = {
+  /** Main-issued consent for this exact current account and binding; never a credential. */
+  authorityId?: string
   repositoryId: string
   repository?: string
   binder?: { login: string }
@@ -97,7 +99,7 @@ export type GithubAgentsAPI = {
     } & AgentMutationScope,
   ): Promise<{ url: string }>
   bindings(): Promise<AgentBinding[]>
-  unbind(repositoryId: string): Promise<void>
+  unbind(input: { repositoryId: string; authorityId: string; operationId: string }): Promise<void>
   runs(): Promise<AgentRun[]>
   previewBrain(cwd: string): Promise<BrainPreview>
   previewReturned(input: { cwd: string; rid: string; artifactId: string }): Promise<ReturnedPreview>

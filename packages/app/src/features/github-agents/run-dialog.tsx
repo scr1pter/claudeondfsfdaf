@@ -148,7 +148,7 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
         if (revision === token)
           setState(
             "error",
-            "Could not start the run. Check GitHub before retrying. Brain approval is not reused for another run.",
+            `The run result may be uncertain. Check GitHub Actions before continuing. Vector does not resend automatically.${state.includeBrain ? " Preview and approve Brain again for another run." : ""}`,
           )
       })
     if (revision === token) setState({ busy: false, starting: false, approved: undefined, preview: undefined })
@@ -249,6 +249,10 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
                   <p>
                     Preview the exact repository memory and skills before approving them. Upload starts only when you
                     start this run.
+                  </p>
+                  <p>
+                    Vector stores the encrypted attachment and a wrapped key for up to two hours; the authorized GitHub
+                    run decrypts the content.
                   </p>
                   <button type="button" disabled={state.busy || !ready()} onClick={() => void preview()}>
                     Preview Brain

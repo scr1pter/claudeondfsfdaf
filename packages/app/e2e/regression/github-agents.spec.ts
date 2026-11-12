@@ -107,6 +107,9 @@ test("Brain starts unchecked, shows readable exact content and sends only the ap
   await expect(include).not.toBeChecked()
   expect(await requests(page, "previewBrain")).toHaveLength(0)
   await include.check()
+  await expect(dialog).toContainText(
+    "Vector stores the encrypted attachment and a wrapped key for up to two hours; the authorized GitHub run decrypts the content.",
+  )
   await expect(dialog.getByRole("button", { name: "Start run", exact: true })).toBeDisabled()
   await dialog.getByRole("button", { name: "Preview Brain", exact: true }).click()
   await expect(dialog.getByLabel("Brain preview", { exact: true })).toContainText("Inspect auth tests before editing")
@@ -138,6 +141,8 @@ test("Brain approval resets with a new preview, failed run, and repository chang
   await approval.check()
   await dialog.getByRole("button", { name: "Start run", exact: true }).click()
   await expect(dialog.getByRole("alert")).toBeVisible()
+  await expect(dialog.getByRole("alert")).toContainText("Vector does not resend automatically.")
+  expect(await requests(page, "run")).toHaveLength(1)
   await expect(approval).toHaveCount(0)
   await expect(dialog.getByRole("button", { name: "Start run", exact: true })).toBeDisabled()
   await page.evaluate(() =>
@@ -398,5 +403,113 @@ test("an old account's pending schedule result is retired without a local fallba
   await release(page, "schedules")
   await expect(checkbox).not.toBeChecked()
   await expect(page.getByRole("link", { name: "Open schedule update pull request" })).toHaveCount(0)
+  expect(await requests(page, "localCreate")).toHaveLength(0)
+})
+
+test("a binding without a current opaque row authority cannot be unbound", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&manager=1&rowAuthority=off")
+  await expect(page.getByRole("button", { name: "Unbind", exact: true }).first()).toBeDisabled()
+  await expect(page.getByText("Refresh GitHub access to manage this binding.").first()).toBeVisible()
+  await expect(page.getByRole("button", { name: "Confirm unbind" })).toHaveCount(0)
+  expect(await requests(page, "unbind")).toHaveLength(0)
+})
+
+test("an account switch clears unbind consent and the next owner sends only their displayed row authority", async ({
+  page,
+}) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&manager=1")
+  await page.getByRole("button", { name: "Unbind", exact: true }).first().click()
+  await expect(page.getByRole("button", { name: "Confirm unbind" })).toBeVisible()
+  await signal(page, "switchAccount")
+  await expect(page.getByRole("heading", { name: "Ready in other/one" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Confirm unbind" })).toHaveCount(0)
+  expect(await requests(page, "unbind")).toHaveLength(0)
+  await page.getByRole("button", { name: "Unbind", exact: true }).first().click()
+  await page.getByRole("button", { name: "Confirm unbind" }).click()
+  await expect.poll(async () => (await requests(page, "unbind")).length).toBe(1)
+  const scope = (await requests(page, "unbind"))[0][1] as {
+    repositoryId: string
+    authorityId: string
+    operationId: string
+  }
+  expect(scope).toMatchObject({ repositoryId: "17", authorityId: "binding-authority-other-17-on" })
+  expect(scope.operationId).toMatch(/^[0-9a-f-]{36}$/)
+})
+
+test("an old owner's pending unbind response cannot refresh or repopulate the next account's binding view", async ({
+  page,
+}) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&manager=1&pendingUnbind=1")
+  await page.getByRole("button", { name: "Unbind", exact: true }).first().click()
+  await page.getByRole("button", { name: "Confirm unbind" }).click()
+  await expect.poll(async () => (await requests(page, "unbind")).length).toBe(1)
+  expect((await requests(page, "unbind"))[0][1]).toMatchObject({
+    repositoryId: "17",
+    authorityId: "binding-authority-owner-17-on",
+  })
+  await signal(page, "switchAccount")
+  await expect(page.getByRole("heading", { name: "Ready in other/one" })).toBeVisible()
+  await expect.poll(async () => (await requests(page, "bindings")).length).toBe(2)
+  await release(page, "unbind")
+  await expect.poll(async () => (await requests(page, "unbindReturned")).length).toBe(1)
+  await expect(page.getByRole("heading", { name: "Ready in other/one" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Confirm unbind" })).toHaveCount(0)
+  expect(await requests(page, "bindings")).toHaveLength(2)
+})
+
+test("retrying the same displayed unbind confirmation preserves its operation ID and row authority", async ({
+  page,
+}) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&manager=1&failUnbind=1")
+  await page.getByRole("button", { name: "Unbind", exact: true }).first().click()
+  await page.getByRole("button", { name: "Confirm unbind" }).click()
+  await expect(page.getByRole("alert")).toContainText("The disconnect result may be uncertain.")
+  await expect(page.getByRole("alert")).toContainText("Vector does not resend automatically.")
+  expect(await requests(page, "unbind")).toHaveLength(1)
+  await page.getByRole("button", { name: "Confirm unbind" }).click()
+  await expect.poll(async () => (await requests(page, "unbind")).length).toBe(2)
+  const effects = await requests(page, "unbind")
+  expect(effects[1][1]).toEqual(effects[0][1])
+  expect(effects[0][1]).toMatchObject({
+    repositoryId: "17",
+    authorityId: "binding-authority-owner-17-on",
+    operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+  })
+})
+
+test("an uncertain setup directs the owner to pull requests and does not resend automatically", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?workflow=missing&listed=off&failSetup=1")
+  await page.getByRole("button", { name: "Preview workflow", exact: true }).click()
+  await page.getByRole("button", { name: "Open setup pull request" }).click()
+  await expect(page.getByRole("alert")).toContainText(
+    "The setup result may be uncertain. Check open pull requests before continuing.",
+  )
+  await expect(page.getByRole("alert")).toContainText("Vector does not resend automatically.")
+  expect(await requests(page, "setup")).toHaveLength(1)
+})
+
+test("an uncertain bind directs the owner to Actions and retains the same explicit retry intent", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&bound=other&failBind=1")
+  await page.getByRole("button", { name: "Bind repository", exact: true }).click()
+  await expect(page.getByRole("alert")).toContainText("The connection result may be uncertain. Check its Actions run")
+  await expect(page.getByRole("alert")).toContainText("Vector does not resend automatically.")
+  expect(await requests(page, "bind")).toHaveLength(1)
+  await page.getByRole("button", { name: "Bind repository", exact: true }).click()
+  await expect.poll(async () => (await requests(page, "bind")).length).toBe(2)
+  const effects = await requests(page, "bind")
+  expect(effects[1][1]).toEqual(effects[0][1])
+})
+
+test("an uncertain schedule does not create a local fallback or resend the request", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?view=automations&listed=off&failSchedule=1")
+  await page.getByRole("button", { name: "New automation", exact: true }).click()
+  await page.getByLabel("What should Vector do, every time?").fill("Check dependencies")
+  await page.getByLabel("Run in GitHub Actions when this computer is off", { exact: false }).check()
+  await page.getByRole("button", { name: "Open schedule update pull request", exact: true }).click()
+  await expect(page.getByRole("alert")).toContainText(
+    "The schedule result may be uncertain. Check open pull requests before continuing.",
+  )
+  await expect(page.getByRole("alert")).toContainText("Vector does not resend automatically.")
+  expect(await requests(page, "schedules")).toHaveLength(1)
   expect(await requests(page, "localCreate")).toHaveLength(0)
 })

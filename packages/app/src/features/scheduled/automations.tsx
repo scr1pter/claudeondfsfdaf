@@ -574,7 +574,10 @@ function AutomationForm(props: {
         })
         .catch(() => {
           if (operation === scheduleOperation && requestedKey === scheduleInputKey())
-            setGithub("error", "Could not open the schedule update pull request. Check GitHub before trying again.")
+            setGithub(
+              "error",
+              "The schedule result may be uncertain. Check open pull requests before continuing. Vector does not resend automatically.",
+            )
         })
       if (operation === scheduleOperation) {
         setGithub("pending", false)

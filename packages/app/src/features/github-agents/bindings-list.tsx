@@ -11,7 +11,7 @@ export function GithubBindingsList(props: { cwd?: string; status: AgentsStatus }
     busy: boolean
     error?: string
     revision: number
-    confirm?: string
+    confirm?: { repositoryId: string; authorityId: string; operationId: string }
     artifacts?: { artifactId: string; name: string; expiresAt?: string }[]
     selectedRun?: string
     preview?: ReturnedPreview
@@ -72,18 +72,36 @@ export function GithubBindingsList(props: { cwd?: string; status: AgentsStatus }
           setState({ loading: false, error: "Could not load GitHub bindings and runs. Try again." })
       })
   })
-  const unbind = async (repositoryId: string) => {
+  const unbind = async (binding: AgentBinding) => {
     const api = agentsApi()
-    if (!api || state.busy || state.confirm !== repositoryId) return
+    const confirmation = state.confirm
+    if (
+      !api ||
+      state.busy ||
+      !binding.authorityId ||
+      !confirmation ||
+      confirmation.repositoryId !== binding.repositoryId ||
+      confirmation.authorityId !== binding.authorityId
+    )
+      return
+    const scope = {
+      repositoryId: confirmation.repositoryId,
+      authorityId: confirmation.authorityId,
+      operationId: confirmation.operationId,
+    }
     const token = ++revision
     setState({ busy: true, error: undefined })
     await api
-      .unbind(repositoryId)
+      .unbind(scope)
       .then(() => {
         if (revision === token) setState("revision", (value) => value + 1)
       })
       .catch(() => {
-        if (revision === token) setState("error", "Could not unbind the repository. Check your account and try again.")
+        if (revision === token)
+          setState(
+            "error",
+            "The disconnect result may be uncertain. Refresh your bindings before continuing. Vector does not resend automatically.",
+          )
       })
     if (revision === token) setState("busy", false)
   }
@@ -187,24 +205,41 @@ export function GithubBindingsList(props: { cwd?: string; status: AgentsStatus }
                   Codium {binding.codium === "ready" && !binding.suspended ? "ready" : "unavailable"}
                 </p>
                 <Show
-                  when={state.confirm === binding.repositoryId}
+                  when={
+                    state.confirm?.repositoryId === binding.repositoryId &&
+                    state.confirm?.authorityId === binding.authorityId
+                  }
                   fallback={
                     <button
                       type="button"
-                      disabled={state.busy}
-                      onClick={() => setState("confirm", binding.repositoryId)}
+                      disabled={state.busy || !binding.authorityId}
+                      onClick={() => {
+                        if (binding.authorityId)
+                          setState("confirm", {
+                            repositoryId: binding.repositoryId,
+                            authorityId: binding.authorityId,
+                            operationId: crypto.randomUUID(),
+                          })
+                      }}
                     >
                       Unbind
                     </button>
                   }
                 >
                   <p>Stop new runs from using this binding?</p>
-                  <button type="button" disabled={state.busy} onClick={() => void unbind(binding.repositoryId)}>
+                  <button
+                    type="button"
+                    disabled={state.busy || !binding.authorityId}
+                    onClick={() => void unbind(binding)}
+                  >
                     Confirm unbind
                   </button>{" "}
                   <button type="button" disabled={state.busy} onClick={() => setState("confirm", undefined)}>
                     Keep binding
                   </button>
+                </Show>
+                <Show when={!binding.authorityId}>
+                  <p>Refresh GitHub access to manage this binding.</p>
                 </Show>
               </article>
             )}
