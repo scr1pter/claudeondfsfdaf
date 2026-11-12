@@ -47,6 +47,10 @@ import type {
   EventTuiPromptAppend,
   EventTuiSessionSelect,
   EventTuiToastShow,
+  ExperimentalBrainImportProposalsErrors,
+  ExperimentalBrainImportProposalsResponses,
+  ExperimentalBrainPreviewErrors,
+  ExperimentalBrainPreviewResponses,
   ExperimentalCapabilitiesGetErrors,
   ExperimentalCapabilitiesGetResponses,
   ExperimentalConsoleGetErrors,
@@ -57,6 +61,14 @@ import type {
   ExperimentalConsoleSwitchOrgResponses,
   ExperimentalControlPlaneMoveSessionErrors,
   ExperimentalControlPlaneMoveSessionResponses,
+  ExperimentalHostedAttachErrors,
+  ExperimentalHostedAttachResponses,
+  ExperimentalHostedJobsErrors,
+  ExperimentalHostedJobsResponses,
+  ExperimentalPlaybooksInstallErrors,
+  ExperimentalPlaybooksInstallResponses,
+  ExperimentalPlaybooksListErrors,
+  ExperimentalPlaybooksListResponses,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
   ExperimentalResourceListErrors,
@@ -1843,6 +1855,250 @@ export class Task extends HeyApiClient {
   }
 }
 
+export class Brain extends HeyApiClient {
+  /**
+   * Preview explicitly selected repository Brain bytes without uploading
+   */
+  public preview<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      includeBrain?: true
+      publicRepository?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "includeBrain" },
+            { in: "body", key: "publicRepository" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainPreviewResponses,
+      ExperimentalBrainPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-bundle/preview",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Stage owner-selected returned Brain drafts for review
+   */
+  public importProposals<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: "brain/proposals.json"
+      base64url?: string
+      sha256?: string
+      publicRepository?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "base64url" },
+            { in: "body", key: "sha256" },
+            { in: "body", key: "publicRepository" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainImportProposalsResponses,
+      ExperimentalBrainImportProposalsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-proposals/import",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Playbooks extends HeyApiClient {
+  /**
+   * List owner Playbooks for personal installation
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalPlaybooksListResponses,
+      ExperimentalPlaybooksListErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Install a selected Playbook in owner configuration
+   */
+  public install<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      version?: string
+      sha256?: string
+      replace?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "version" },
+            { in: "body", key: "sha256" },
+            { in: "body", key: "replace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalPlaybooksInstallResponses,
+      ExperimentalPlaybooksInstallErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks/install",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Hosted extends HeyApiClient {
+  /**
+   * Reconnect hosted jobs to their original owner conversation
+   */
+  public jobs<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalHostedJobsResponses,
+      ExperimentalHostedJobsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Return a current-account hosted job report to this owner conversation
+   */
+  public attach<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      jobID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "jobID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalHostedAttachResponses,
+      ExperimentalHostedAttachErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Workflow extends HeyApiClient {
   /**
    * List trusted saved workflows
@@ -2448,6 +2704,21 @@ export class Experimental extends HeyApiClient {
   private _task?: Task
   get task(): Task {
     return (this._task ??= new Task({ client: this.client }))
+  }
+
+  private _brain?: Brain
+  get brain(): Brain {
+    return (this._brain ??= new Brain({ client: this.client }))
+  }
+
+  private _playbooks?: Playbooks
+  get playbooks(): Playbooks {
+    return (this._playbooks ??= new Playbooks({ client: this.client }))
+  }
+
+  private _hosted?: Hosted
+  get hosted(): Hosted {
+    return (this._hosted ??= new Hosted({ client: this.client }))
   }
 
   private _workflow?: Workflow
@@ -6737,6 +7008,7 @@ export class Memory extends HeyApiClient {
     parameters?: {
       directory?: string
       workspace?: string
+      section?: "memory" | "skills" | "insights"
       text?: string
       repository?: string
       worktree?: string
@@ -6750,6 +7022,7 @@ export class Memory extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "section" },
             { in: "body", key: "text" },
             { in: "body", key: "repository" },
             { in: "body", key: "worktree" },

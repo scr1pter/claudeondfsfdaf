@@ -48,6 +48,12 @@ import type {
   EventSubscribeData,
   EventSubscribeErrors,
   EventSubscribeResponses,
+  ExperimentalBrainImportProposalsData,
+  ExperimentalBrainImportProposalsErrors,
+  ExperimentalBrainImportProposalsResponses,
+  ExperimentalBrainPreviewData,
+  ExperimentalBrainPreviewErrors,
+  ExperimentalBrainPreviewResponses,
   ExperimentalCapabilitiesGetData,
   ExperimentalCapabilitiesGetErrors,
   ExperimentalCapabilitiesGetResponses,
@@ -63,6 +69,18 @@ import type {
   ExperimentalControlPlaneMoveSessionData,
   ExperimentalControlPlaneMoveSessionErrors,
   ExperimentalControlPlaneMoveSessionResponses,
+  ExperimentalHostedAttachData,
+  ExperimentalHostedAttachErrors,
+  ExperimentalHostedAttachResponses,
+  ExperimentalHostedJobsData,
+  ExperimentalHostedJobsErrors,
+  ExperimentalHostedJobsResponses,
+  ExperimentalPlaybooksInstallData,
+  ExperimentalPlaybooksInstallErrors,
+  ExperimentalPlaybooksInstallResponses,
+  ExperimentalPlaybooksListData,
+  ExperimentalPlaybooksListErrors,
+  ExperimentalPlaybooksListResponses,
   ExperimentalProjectCopyGenerateNameData,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
@@ -1453,6 +1471,110 @@ export class Task extends HeyApiClient {
   }
 }
 
+export class Brain extends HeyApiClient {
+  /**
+   * Preview explicitly selected repository Brain bytes without uploading
+   */
+  public preview<ThrowOnError extends boolean = false>(options?: Options<ExperimentalBrainPreviewData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainPreviewResponses,
+      ExperimentalBrainPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-bundle/preview",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Stage owner-selected returned Brain drafts for review
+   */
+  public importProposals<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalBrainImportProposalsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainImportProposalsResponses,
+      ExperimentalBrainImportProposalsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-proposals/import",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Playbooks extends HeyApiClient {
+  /**
+   * List owner Playbooks for personal installation
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<ExperimentalPlaybooksListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      ExperimentalPlaybooksListResponses,
+      ExperimentalPlaybooksListErrors,
+      ThrowOnError
+    >({ url: "/experimental/workflow/playbooks", ...options })
+  }
+
+  /**
+   * Install a selected Playbook in owner configuration
+   */
+  public install<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalPlaybooksInstallData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalPlaybooksInstallResponses,
+      ExperimentalPlaybooksInstallErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks/install",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Hosted extends HeyApiClient {
+  /**
+   * Reconnect hosted jobs to their original owner conversation
+   */
+  public jobs<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedJobsData, ThrowOnError>) {
+    return (options.client ?? this.client).get<
+      ExperimentalHostedJobsResponses,
+      ExperimentalHostedJobsErrors,
+      ThrowOnError
+    >({ url: "/experimental/session/{sessionID}/hosted-jobs", ...options })
+  }
+
+  /**
+   * Return a current-account hosted job report to this owner conversation
+   */
+  public attach<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedAttachData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalHostedAttachResponses,
+      ExperimentalHostedAttachErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+}
+
 export class Workflow extends HeyApiClient {
   /**
    * List trusted saved workflows
@@ -1729,6 +1851,21 @@ export class Experimental extends HeyApiClient {
   private _task?: Task
   get task(): Task {
     return (this._task ??= new Task({ client: this.client }))
+  }
+
+  private _brain?: Brain
+  get brain(): Brain {
+    return (this._brain ??= new Brain({ client: this.client }))
+  }
+
+  private _playbooks?: Playbooks
+  get playbooks(): Playbooks {
+    return (this._playbooks ??= new Playbooks({ client: this.client }))
+  }
+
+  private _hosted?: Hosted
+  get hosted(): Hosted {
+    return (this._hosted ??= new Hosted({ client: this.client }))
   }
 
   private _workflow?: Workflow
