@@ -8,6 +8,20 @@ import { createManagedAccountLifecycle } from "./vector-account-lifecycle"
 
 const STORE = "vector-account"
 const TOKEN_PURPOSE = "vector-account-token"
+let authorityRevision = 0
+const authorityListeners = new Set<() => void>()
+function changedAuthority() {
+  authorityRevision++
+  for (const listener of authorityListeners) listener()
+}
+export const vectorAccountAuthorityRevision = () => authorityRevision
+/** Main-only authority invalidation; no credentials or identity are exposed to renderer listeners. */
+export function onVectorAccountAuthorityChange(listener: () => void) {
+  authorityListeners.add(listener)
+  return () => {
+    authorityListeners.delete(listener)
+  }
+}
 const engine: {
   ready?: () => Promise<{ url: string; username: string | null; password: string | null }>
 } = {}
@@ -15,8 +29,14 @@ const managed = createManagedAccountLifecycle()
 
 export const vectorAccount = createVectorAccount({
   read: () => getStore(STORE).get("account"),
-  write: (value) => getStore(STORE).set("account", value),
+  write: (value) => {
+    const previous = getStore(STORE).get("account")
+    getStore(STORE).set("account", value)
+    if (!(previous instanceof Object) || !("ciphertext" in previous) || previous.ciphertext !== value.ciphertext)
+      changedAuthority()
+  },
   clear: async () => {
+    changedAuthority()
     getStore(STORE).delete("account")
     await removeStoreFileIfEmpty(STORE)
   },
