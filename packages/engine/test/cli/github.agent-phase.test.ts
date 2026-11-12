@@ -12,6 +12,8 @@ import { Effect } from "effect"
 import { buildInlineBody } from "@vectordevai/core/review/format"
 import type { Finding } from "@vectordevai/core/review/types"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { Shell } from "@vectordevai/core/shell"
+import { Config } from "../../src/config/config"
 import { GithubRunCommand } from "../../src/cli/cmd/github"
 import {
   AGENT_NEEDS_CHANNEL,
@@ -41,7 +43,7 @@ import { LLMRequestPrep } from "../../src/session/llm/request"
 import { SessionPrompt } from "../../src/session/prompt"
 import { Session } from "../../src/session/session"
 import { SessionID } from "../../src/session/schema"
-import { ref, runtime, setup } from "../lib/research"
+import { calls, output, ref, runtime, setup } from "../lib/research"
 import { FakeWeb } from "../../../core/test/lib/fake-web"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import {
@@ -432,6 +434,40 @@ describe("the agent phase's task", () => {
         })
         expect(bundle.patch).toContain("README.md")
         expect(bundle.summary?.body).toContain("README.md")
+        // Diagnose the real setup command without exposing its transcript, command, paths or environment.
+        const sessionLine = run.lines.find((line) => /^vector session ses_[a-f0-9]{12}[0-9A-Za-z]{14}$/.test(line))
+        if (!sessionLine) throw new Error("The setup command's session record is missing.")
+        const commands = yield* calls(SessionID.make(sessionLine.slice("vector session ".length)), "bash")
+        const command = commands.at(0)
+        const status = commands.length > 1 ? "unexpected-count" : (command?.state.status ?? "missing")
+        const exit =
+          command?.state.status === "completed" &&
+          typeof command.state.metadata.exit === "number" &&
+          Number.isSafeInteger(command.state.metadata.exit)
+            ? command.state.metadata.exit
+            : null
+        const config = yield* Config.Service
+        const selected = Shell.name(Shell.acceptable((yield* config.get()).shell))
+        const text = output(command)
+        const diagnostic = {
+          platform: process.platform,
+          shell: ["bash", "sh", "dash", "ksh", "zsh", "pwsh", "powershell", "cmd"].includes(selected)
+            ? selected
+            : "other",
+          status,
+          exit,
+          reason:
+            status === "completed" && exit === 0
+              ? "ok"
+              : /touch[^\n]*(?:invalid|illegal|unrecognized|unsupported)\s+(?:option|argument)/i.test(text)
+                ? "touch-unsupported"
+                : /command not found|not recognized|CommandNotFoundException/i.test(text)
+                  ? "command-missing"
+                  : /(?:fatal|error):[^\n]*git|usage: git|git:[^\n]*(?:failed|error)/i.test(text)
+                    ? "git-command-failure"
+                    : "unknown",
+        }
+        expect(diagnostic).toEqual({ ...diagnostic, status: "completed", exit: 0, reason: "ok" })
         // The shell's config took, and no hook or fsmonitor ran.
         expect(yield* Effect.promise(() => git(test.dir, ["config", "--local", "core.hooksPath"]))).toBe(
           path.join(traps, "hooks"),

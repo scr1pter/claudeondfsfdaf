@@ -14,6 +14,62 @@ const asset = () => ({
   sha256: sha("# Inert contract bytes; never executed.\n"),
 })
 const scope = { uid: 1002, gid: 1002, container: LinuxIsolation.CONTAINERS[0] }
+
+test("build coherence accepts only matching immutable source or bundled selections", () => {
+  const embedded = asset()
+  expect(() =>
+    GithubIsolation.assertBuildCoherence({ enabled: false, entrySHA: undefined }, { enabled: false, asset: undefined }),
+  ).not.toThrow()
+  for (const enabled of [false, true])
+    expect(() =>
+      GithubIsolation.assertBuildCoherence({ enabled, entrySHA: embedded.sha256 }, { enabled, asset: embedded }),
+    ).not.toThrow()
+
+  const refused: Parameters<typeof GithubIsolation.assertBuildCoherence>[] = [
+    [
+      { enabled: false, entrySHA: embedded.sha256 },
+      { enabled: true, asset: embedded },
+    ],
+    [
+      { enabled: true, entrySHA: embedded.sha256 },
+      { enabled: false, asset: embedded },
+    ],
+    [
+      { enabled: true, entrySHA: undefined },
+      { enabled: true, asset: embedded },
+    ],
+    [
+      { enabled: true, entrySHA: embedded.sha256 },
+      { enabled: true, asset: undefined },
+    ],
+    [
+      { enabled: false, entrySHA: undefined },
+      { enabled: false, asset: embedded },
+    ],
+    [
+      { enabled: false, entrySHA: embedded.sha256 },
+      { enabled: false, asset: undefined },
+    ],
+    [
+      { enabled: true, entrySHA: "g".repeat(64) },
+      { enabled: true, asset: embedded },
+    ],
+    [
+      { enabled: true, entrySHA: "f".repeat(64) },
+      { enabled: true, asset: embedded },
+    ],
+    [
+      { enabled: true, entrySHA: embedded.sha256 },
+      { enabled: true, asset: { ...embedded, entry: embedded.entry + "# changed\n" } },
+    ],
+    [
+      { enabled: true, entrySHA: undefined },
+      { enabled: true, asset: undefined },
+    ],
+  ]
+  for (const [core, engine] of refused) expect(() => GithubIsolation.assertBuildCoherence(core, engine)).toThrow()
+})
+
 function fixture() {
   const files = new Map<string, GithubIsolation.Metadata>()
   function directory(name: string, mode = 0o755) {
@@ -336,7 +392,12 @@ test("actual Sandbox rejects a required native run without intent and preserves 
       nativeRequired: true,
     }
     await fs.writeFile(statePath, JSON.stringify(state), { mode: 0o600, flag: "wx" })
-    await expect(run([process.execPath, "--version"], env)).rejects.toThrow("trusted Linux runner adapter")
+    await expect(run([process.execPath, "--version"], env)).rejects.toThrow(
+      process.platform === "linux"
+        ? "trusted Linux runner adapter"
+        : "The GitHub agent sandbox could not verify its isolation or cleanup. The run is refused.",
+    )
+    expect(await fs.readFile(statePath, "utf8")).toBe(JSON.stringify(state))
     const failedBeforeIntent = JSON.stringify({
       v: 1,
       workspace,
