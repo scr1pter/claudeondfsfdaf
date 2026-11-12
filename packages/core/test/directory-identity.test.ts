@@ -346,6 +346,101 @@ async function witnessDirectory() {
   }
 }
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+function diagnostic(text: string) {
+  const names = [
+    "ArgumentError",
+    "BlockingIOError",
+    "FileNotFoundError",
+    "ImportError",
+    "ModuleNotFoundError",
+    "OSError",
+    "PermissionError",
+    "RuntimeError",
+    "SyntaxError",
+    "TypeError",
+    "ValueError",
+    "RangeError",
+    "ReferenceError",
+    "Error",
+  ] as const
+  const python = /Traceback \(most recent call last\)|Fatal Python error:/.test(text),
+    stage = /(?:^|\n)strace:/.test(text)
+      ? "strace"
+      : python
+        ? "python-wrapper"
+        : /(?:^|\n)(?:Failed to |Unknown assignment|Job for )/.test(text)
+          ? "systemd"
+          : "runtime-fixture"
+  const kind = names.find((name) => new RegExp(`(?:^|\\n)(?:ctypes\\.)?${name}(?::| \\[)`).test(text)) ?? "Unknown"
+  const number = /\[Errno ([0-9]{1,3})\]/.exec(text)?.[1]
+  const errors = new Map([
+    ["1", "EPERM"],
+    ["2", "ENOENT"],
+    ["9", "EBADF"],
+    ["12", "ENOMEM"],
+    ["13", "EACCES"],
+    ["22", "EINVAL"],
+    ["23", "ENFILE"],
+    ["24", "EMFILE"],
+    ["38", "ENOSYS"],
+  ])
+  const codes = [
+    "ERR_MODULE_NOT_FOUND",
+    "ERR_UNKNOWN_BUILTIN_MODULE",
+    "ERR_INVALID_ARG_TYPE",
+    "ERR_OUT_OF_RANGE",
+    "ERR_ACCESS_DENIED",
+    "ERR_UNKNOWN_FILE_EXTENSION",
+    "ERR_REQUIRE_ESM",
+    "ERR_DLOPEN_FAILED",
+    "EBADF",
+    "EACCES",
+    "ENOENT",
+    "EPERM",
+    "EMFILE",
+    "ENFILE",
+    "ENOSYS",
+  ] as const
+  const phrases = [
+    ["No such file or directory", "ENOENT"],
+    ["Permission denied", "EACCES"],
+    ["Operation not permitted", "EPERM"],
+    ["Bad file descriptor", "EBADF"],
+    ["Too many open files", "EMFILE"],
+    ["Function not implemented", "ENOSYS"],
+  ] as const
+  const code = number
+    ? (errors.get(number) ?? "Unknown")
+    : (codes.find((code) => new RegExp(`\\b${code}\\b`).test(text)) ??
+      phrases.find(([phrase]) => text.includes(phrase))?.[1] ??
+      "Unknown")
+  return { stage, class: kind, code }
+}
+test("CI failure diagnostics expose only fixed metadata and never echo stderr paths, environment or body", () => {
+  expect(
+    diagnostic(
+      'Traceback (most recent call last):\n  File "/private/example.py", line 1\nOSError: [Errno 9] private body and environment=value',
+    ),
+  ).toEqual({ stage: "python-wrapper", class: "OSError", code: "EBADF" })
+  expect(diagnostic("node:internal/modules/example\nError: private body\n  code: 'ERR_MODULE_NOT_FOUND'")).toEqual({
+    stage: "runtime-fixture",
+    class: "Error",
+    code: "ERR_MODULE_NOT_FOUND",
+  })
+  expect(diagnostic("strace: private/path: Permission denied")).toEqual({
+    stage: "strace",
+    class: "Unknown",
+    code: "EACCES",
+  })
+  expect(diagnostic("Failed to start private-unit.service: private body")).toEqual({
+    stage: "systemd",
+    class: "Unknown",
+    code: "Unknown",
+  })
+  const secret = "PRIVATE_VALUE_THAT_MUST_NEVER_BE_LOGGED"
+  expect(JSON.stringify(diagnostic(secret.repeat(100)))).not.toContain(secret)
+  expect(diagnostic(secret)).toEqual({ stage: "runtime-fixture", class: "Unknown", code: "Unknown" })
+})
 async function control(operation: "stop" | "kill" | "reset-failed", unit: string) {
   return await new Promise<number | null>((resolve, reject) => {
     const options = operation === "kill" ? ["--kill-whom=all", "--signal=SIGKILL"] : []
@@ -394,7 +489,9 @@ async function run(
     closed = false,
     output = "",
     size = 0,
-    failure: unknown
+    errorOutput = "",
+    errorSize = 0,
+    failure: "timeout" | "stdout-bound" | "stderr-bound" | "spawn" | undefined
   let release: ((code: number | null) => void) | undefined
   const completion = new Promise<number | null>((resolve) => {
     release = resolve
@@ -404,7 +501,7 @@ async function run(
     wake = resolve
   })
   const timer = setTimeout(() => {
-    failure = new Error("CI witness timed out")
+    failure = "timeout"
     wake?.()
   }, 30_000)
   try {
@@ -435,17 +532,26 @@ async function run(
         ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
         ...command,
       ],
-      { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, stdio: ["ignore", "pipe", "ignore"] },
+      { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, stdio: ["ignore", "pipe", "pipe"] },
     )
     child.stdout?.on("data", (chunk: Buffer) => {
       size += chunk.length
       if (size > 4096) {
-        failure = new Error("CI witness exceeded output bound")
+        failure = "stdout-bound"
         wake?.()
       } else output += chunk.toString()
     })
-    child.once("error", (error) => {
-      failure = error
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const available = Math.max(0, 4096 - errorSize)
+      errorOutput += chunk.subarray(0, available).toString()
+      errorSize += chunk.length
+      if (errorSize > 4096) {
+        failure = "stderr-bound"
+        wake?.()
+      }
+    })
+    child.once("error", () => {
+      failure = "spawn"
       wake?.()
     })
     child.once("close", (code) => {
@@ -454,8 +560,8 @@ async function run(
       wake?.()
     })
     await event
-  } catch (error) {
-    failure = error
+  } catch {
+    failure = "spawn"
   } finally {
     clearTimeout(timer)
     // Remove the condition FIRST: delayed registration may never start its payload after cancellation.
@@ -488,8 +594,13 @@ async function run(
     await control("reset-failed", unit)
     owned.delete(unit)
   }
-  if (failure) throw failure
-  return { code: await completion, output }
+  const code = child ? await completion : null
+  // The private stderr buffer never leaves this classifier. Emit only fixed enum metadata after cleanup.
+  if (failure || code !== 0)
+    throw new Error(
+      `CI_WITNESS_FAILURE ${JSON.stringify({ exit: code, reason: failure ?? "exit", ...diagnostic(errorOutput) })}`,
+    )
+  return { code, output }
 }
 for (const name of ["node", "bun"] as const)
   for (const scenario of [

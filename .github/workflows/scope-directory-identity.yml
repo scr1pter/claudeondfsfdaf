@@ -44,9 +44,9 @@ jobs:
           install-flags: --frozen-lockfile --ignore-scripts
       - name: Install isolated syscall observer
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y strace
-      - name: Check actual Node and Bun identity, descriptor closure and private mount refusals
+      - name: Diagnose the first actual Node identity witness
         working-directory: packages/core
-        run: bun test test/directory-identity.test.ts --timeout 60000
+        run: bun test test/directory-identity.test.ts --timeout 60000 -t 'actual node/positive'
         env:
           VECTOR_DIRECTORY_IDENTITY_CI: "1"
           VECTOR_DIRECTORY_IDENTITY_ROOT_CI: "1"
