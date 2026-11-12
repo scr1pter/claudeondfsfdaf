@@ -1,6 +1,8 @@
 /**
  * Engine-authored code only: command text and environment travel over stdin as JSON, never into this script.
  * Keep it small enough for PowerShell's UTF-16 -EncodedCommand on Windows (32,767 command-line characters).
+ * Windows 10+ JOB_LIST assigns containment during creation, preventing an orphan if the holder dies before return;
+ * unsupported atomic assignment refuses the payload. Keep this explanation outside the encoded command's budget.
  */
 const source = String.raw`
 using System;
@@ -94,8 +96,6 @@ public static class VectorShellHolder {
       attrs=Marshal.AllocHGlobal(size); Check(InitializeProcThreadAttributeList(attrs,2,0,ref size),"Process attributes"); attrsReady=true;
       handles=Marshal.AllocHGlobal(IntPtr.Size*2); Marshal.WriteIntPtr(handles,0,input); Marshal.WriteIntPtr(handles,IntPtr.Size,output);
       Check(UpdateProcThreadAttribute(attrs,0,new IntPtr(0x20002),handles,new IntPtr(IntPtr.Size*2),IntPtr.Zero,IntPtr.Zero),"Handle whitelist");
-      // Assign during creation: holder death between CreateProcess and a later assignment must leave no orphan.
-      // Windows 10+ supports JOB_LIST; failure refuses the command instead of launching without containment.
       jobs=Marshal.AllocHGlobal(IntPtr.Size); Marshal.WriteIntPtr(jobs,job);
       Check(UpdateProcThreadAttribute(attrs,0,new IntPtr(0x2000d),jobs,new IntPtr(IntPtr.Size),IntPtr.Zero,IntPtr.Zero),"Atomic job assignment");
       var values=new SortedDictionary<string,string>(cfg.env,StringComparer.OrdinalIgnoreCase); var block=new StringBuilder();
@@ -154,7 +154,12 @@ public static class VectorShellHolder {
 }
 `
 
-export const script = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';try { Add-Type -TypeDefinition @'\n${source}\n'@ -ReferencedAssemblies System.Web.Extensions } catch { [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"error","terminationProven":true,"message":"Windows containment helper unavailable"}'); exit 1 }; exit [VectorShellHolder]::Run()`
+// Resolve the Windows PowerShell built-in by its Microsoft strong name. The helper intentionally has no inherited
+// PSModulePath: command discovery can otherwise wait indefinitely before Add-Type starts, even with -NoProfile.
+export const preparation =
+  "Import-Module -Assembly ([Reflection.Assembly]::Load('Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')); "
+
+export const script = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';try { ${preparation}Add-Type -TypeDefinition @'\n${source}\n'@ -ReferencedAssemblies System.Web.Extensions } catch { [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"error","terminationProven":true,"message":"Windows containment helper unavailable"}'); exit 1 }; exit [VectorShellHolder]::Run()`
 
 export function argumentsForHolder() {
   const encoded = Buffer.from(script, "utf16le").toString("base64")

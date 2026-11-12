@@ -19,23 +19,10 @@ const minimal = Object.fromEntries(
 const systemPath = [path.win32.join(root, "System32"), root, path.win32.dirname(powershell)].join(";")
 const modulePath = path.win32.join(path.win32.dirname(powershell), "Modules")
 const baseline = { ...minimal, PATH: systemPath, PSModulePath: modulePath }
-const identity =
-  /^(COMSPEC|PATHEXT|OS|COMPUTERNAME|USERNAME|USERDOMAIN|USERDOMAIN_ROAMINGPROFILE|LOGONSERVER|SESSIONNAME|NUMBER_OF_PROCESSORS|PROCESSOR_.*)$/i
-const folders =
-  /^(USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|PUBLIC|ALLUSERSPROFILE|PROGRAMDATA|PROGRAMFILES.*|PROGRAMW6432|COMMONPROGRAMFILES.*|COMMONPROGRAMW6432)$/i
 const powershellKeys = /^(__PS|PS|POWERSHELL)/i
-const dotnet =
-  /^(DOTNET|COMPLUS|FRAMEWORK|MSBUILD|MSBUILDEXTENSIONSPATH|DEVENVDIR|VISUALSTUDIO|VSCMD|VCTOOLS|WINDOWSSDK)/i
-const runner = /^(GITHUB_|RUNNER_|ACTIONS_|CI$)/i
-const remaining = (name: string) =>
-  ![identity, folders, powershellKeys, dotnet, runner, /^(SYSTEMROOT|WINDIR|TEMP|TMP|PATH)$/i].some((rule) =>
-    rule.test(name),
-  )
-const selected = (rule: RegExp | ((name: string) => boolean)) =>
-  Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => (typeof rule === "function" ? rule(name) : rule.test(name))),
-  )
 const source = WindowsHolder.script
+  // Negative control retains the pre-fix module-discovery path; it never resumes its disposable payload.
+  .replace(WindowsHolder.preparation, "")
   .replace(
     "try { Add-Type",
     "[Console]::Error.WriteLine('VECTOR_HOLDER_PHASE host'); $null=Get-Command Add-Type -CommandType Cmdlet; [Console]::Error.WriteLine('VECTOR_HOLDER_PHASE compiler'); try { Add-Type",
@@ -55,10 +42,7 @@ args[args.length - 1] = Buffer.from(source, "utf16le").toString("base64")
 if (args[args.length - 1]!.length > 32_000) throw new Error("Diagnostic exceeds Windows command-line bound")
 const imported = [...args]
 imported[imported.length - 1] = Buffer.from(
-  source.replace(
-    "$null=Get-Command Add-Type",
-    "Import-Module -Name ([IO.Path]::Combine($PSHOME,'Microsoft.PowerShell.Commands.Utility.dll')) -ErrorAction Stop; $null=Get-Command Add-Type",
-  ),
+  source.replace("$null=Get-Command Add-Type", WindowsHolder.preparation + "$null=Get-Command Add-Type"),
   "utf16le",
 ).toString("base64")
 if (imported[imported.length - 1]!.length > 32_000) throw new Error("Diagnostic exceeds Windows command-line bound")
@@ -66,22 +50,12 @@ const directory = await mkdtemp(path.join(os.tmpdir(), "vector-holder-startup-")
 try {
   for (const mode of [
     { name: "host-control", env: process.env },
-    { name: "comspec", env: { ...baseline, ...selected(/^COMSPEC$/i) } },
-    { name: "pathext", env: { ...baseline, ...selected(/^PATHEXT$/i) } },
-    { name: "identity", env: { ...baseline, ...selected(identity) } },
-    { name: "folders", env: { ...baseline, ...selected(folders) } },
-    { name: "powershell", env: { ...baseline, ...selected(powershellKeys) } },
-    { name: "dotnet", env: { ...baseline, ...selected(dotnet) } },
-    {
-      name: "platform",
-      env: {
-        ...baseline,
-        ...selected((name) => [identity, folders, powershellKeys, dotnet].some((rule) => rule.test(name))),
-      },
-    },
-    { name: "runner", env: { ...baseline, ...selected(runner) } },
-    { name: "other", env: { ...baseline, ...selected(remaining) } },
-    { name: "trusted-utility", env: baseline, args: imported },
+    { name: "minimal-old", env: minimal },
+    ...Object.entries(process.env)
+      .filter(([key]) => powershellKeys.test(key))
+      .slice(0, 8)
+      .map(([key, value]) => ({ name: `powershell-key:${key}`, env: { ...baseline, [key]: value } })),
+    { name: "strong-utility", env: minimal, args: imported },
   ]) {
     const started = performance.now()
     const result = await observe(mode.env, "args" in mode && mode.args ? mode.args : args)

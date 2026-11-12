@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { ChildProcess } from "effect/unstable/process"
 import { execFile, spawn } from "node:child_process"
-import { access, mkdtemp, mkdir, readFile, rm } from "node:fs/promises"
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { WindowsHolder } from "../../src/tool/shell/windows-holder"
@@ -424,8 +424,17 @@ describe("native Windows job containment (hosted Windows only)", () => {
   windows("only the payload receives user environment while Vector credentials stay private", async () => {
     await using dir = await fixture()
     const output: Buffer[] = []
+    const module = path.join(dir.path, "Microsoft.PowerShell.Utility")
+    const marker = path.join(dir.path, "untrusted-module-ran.txt")
+    await mkdir(module)
+    await writeFile(
+      path.join(module, "Microsoft.PowerShell.Utility.psm1"),
+      `[IO.File]::WriteAllText(${literal(marker)},'unexpected'); throw 'untrusted fixture module must not run'`,
+    )
     const text =
-      '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::Write($env:USER_VALUE); [Console]::Write("|"); [Console]::Write([string]($null -eq $env:VECTOR_CLOUD_TOKEN)); [Console]::Write("|"); [Console]::Write($env:NODE_OPTIONS)'
+      '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::Write($env:USER_VALUE); [Console]::Write("|"); [Console]::Write([string]($null -eq $env:VECTOR_CLOUD_TOKEN)); [Console]::Write("|"); [Console]::Write($env:NODE_OPTIONS); [Console]::Write("|"); [Console]::Write([string]($env:PSModulePath -eq ' +
+      literal(dir.path) +
+      "))"
     const handle = await WindowsProcess.start(
       ChildProcess.make(powershell(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", text], {
         cwd: dir.path,
@@ -434,6 +443,7 @@ describe("native Windows job containment (hosted Windows only)", () => {
         env: {
           USER_VALUE: 'α "quoted" value',
           NODE_OPTIONS: "user-preload",
+          PSModulePath: dir.path,
           VECTOR_CLOUD_TOKEN: "private-fixture-value",
         },
       }),
@@ -446,7 +456,8 @@ describe("native Windows job containment (hosted Windows only)", () => {
     )
     try {
       expect(await handle.completion).toEqual({ exitCode: 0, terminated: true })
-      expect(Buffer.concat(output).toString()).toBe('α "quoted" value|True|user-preload')
+      expect(Buffer.concat(output).toString()).toBe('α "quoted" value|True|user-preload|True')
+      expect(await exists(marker)).toBe(false)
     } finally {
       await handle.stop().catch(() => {})
     }
