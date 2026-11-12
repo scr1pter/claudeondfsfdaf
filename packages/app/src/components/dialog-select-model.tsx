@@ -8,7 +8,9 @@ import {
   createSignal,
   createUniqueId,
   For,
+  getOwner,
   JSX,
+  onCleanup,
   onMount,
   Show,
   ValidComponent,
@@ -95,6 +97,8 @@ function createModelSections(input: {
       toggle: number
       lifecycle: number
       render: number
+      each: number
+      cleanup: number
     }
   }
   const diagnostic = (host.scopePickerTrace ??= {
@@ -104,21 +108,43 @@ function createModelSections(input: {
     toggle: 0,
     lifecycle: 0,
     render: 0,
+    each: 0,
+    cleanup: 0,
   })
   const instance = ++diagnostic.instances
   const trace = (phase: string, value: unknown) => {
-    const category = phase.startsWith("toggle-")
-      ? "toggle"
-      : phase === "views" || phase.endsWith("-render")
-        ? "render"
-        : "lifecycle"
-    const limit = category === "toggle" ? 8 : category === "render" ? 12 : 24
+    const category = phase.endsWith("-cleanup")
+      ? "cleanup"
+      : phase === "popover-for-each"
+        ? "each"
+        : phase.startsWith("toggle-")
+          ? "toggle"
+          : phase === "views" || phase.endsWith("-render")
+            ? "render"
+            : "lifecycle"
+    const limit = category === "toggle" ? 8 : category === "render" ? 12 : category === "each" ? 16 : 24
     if (!diagnostic.armed || diagnostic[category]++ >= limit) return
     console.debug(
       "SCOPE_PICKER_REACTIVITY",
       JSON.stringify({ instance, sequence: ++diagnostic.sequence, phase, value }),
     )
   }
+  const owners = new WeakMap<object, number>()
+  let ownerSequence = 0
+  const ownerID = (owner: object | null) => {
+    if (!owner) return null
+    const previous = owners.get(owner)
+    if (previous !== undefined) return previous
+    const next = ++ownerSequence
+    owners.set(owner, next)
+    return next
+  }
+  const modelOwner = ownerID(getOwner())
+  let modelDisposed = false
+  onCleanup(() => {
+    modelDisposed = true
+    trace("model-owner-cleanup", { owner: modelOwner })
+  })
   const models = createMemo(() => {
     const provider = input.provider()
     return input.model
@@ -143,11 +169,13 @@ function createModelSections(input: {
   )
   const [open, setOpenSections] = createSignal(readOpenSections())
   const views = createMemo(() => {
+    const owner = ownerID(getOwner())
+    onCleanup(() => trace("views-owner-cleanup", { owner }))
     const expanded = open()
     const next = pickerSectionViews(sections(), expanded, input.search()).map((view) =>
       input.fixed ? { ...view, toggle: false, open: true } : view,
     )
-    trace("views", { open: [...expanded], sections: next.map((view) => [view.section.id, view.open]) })
+    trace("views", { owner, open: [...expanded], sections: next.map((view) => [view.section.id, view.open]) })
     return next
   })
   // Navigation order is render order: every visible header and row, then Connect provider.
@@ -160,7 +188,7 @@ function createModelSections(input: {
   const currentRow = () => pickerCurrentRow(navigation(), current())
   const toggle = (id: string) => {
     const next = toggleOpenSection(open(), id)
-    trace("toggle-before", { id, before: [...open()], next: [...next] })
+    trace("toggle-before", { id, modelOwner, modelDisposed, before: [...open()], next: [...next] })
     setOpenSections(next)
     trace("toggle-after", { id, open: [...open()] })
     writeOpenSections(next)
@@ -171,7 +199,7 @@ function createModelSections(input: {
     trace("reload", { before: [...open()], next: [...next] })
     setOpenSections(next)
   }
-  return { current, currentRow, sections, views, navigation, toggle, reload, trace }
+  return { current, currentRow, sections, views, navigation, toggle, reload, trace, ownerID }
 }
 
 /** Pointer highlight that follows real movement only. Rows render under a resting
@@ -419,6 +447,13 @@ export function ModelSelectorPopoverV2(props: {
     fixed: props.fixedCatalog,
   })
   const sections = picker.sections
+  // This replaces the existing For getter, reads the memo once and adds no reactive observer.
+  const sectionViews = () => {
+    const owner = picker.ownerID(getOwner())
+    const next = picker.views()
+    picker.trace("popover-for-each", { owner, sections: next.map((view) => [view.section.id, view.open]) })
+    return next
+  }
   const offInLocal = useOffInLocal()
   const keys = () => picker.navigation().keys
   const uid = createUniqueId()
@@ -564,9 +599,11 @@ export function ModelSelectorPopoverV2(props: {
           >
             <div data-slot="model-picker-list">
               <Show when={sections().length > 0} fallback={<PickerEmpty term={store.search} />}>
-                <For each={picker.views()}>
+                <For each={sectionViews()}>
                   {(view) => {
-                    picker.trace("popover-render", { id: view.section.id, open: view.open })
+                    const owner = picker.ownerID(getOwner())
+                    picker.trace("popover-render", { owner, id: view.section.id, open: view.open })
+                    onCleanup(() => picker.trace("popover-section-cleanup", { owner, id: view.section.id }))
                     const section = view.section
                     const rows = `${uid}-${section.id}`
                     return (

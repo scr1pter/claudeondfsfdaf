@@ -114,14 +114,22 @@ test("the owner saves a separate model, variant and disable setting only after c
     const diagnostic = { nativeClicks: 0, writes: [] as string[], before: localStorage.getItem(key) }
     const trace = (
       globalThis as unknown as {
-        scopePickerTrace?: { armed: boolean; sequence: number; toggle: number; lifecycle: number; render: number }
+        scopePickerTrace?: {
+          armed: boolean
+          sequence: number
+          toggle: number
+          lifecycle: number
+          render: number
+          each: number
+          cleanup: number
+        }
       }
     ).scopePickerTrace
     if (!trace) throw new Error("The focused picker diagnostic hook is unavailable")
     // Capture arms collection immediately before the real component click handler, after initial rendering.
     const click = () => {
       diagnostic.nativeClicks++
-      Object.assign(trace, { armed: true, sequence: 0, toggle: 0, lifecycle: 0, render: 0 })
+      Object.assign(trace, { armed: true, sequence: 0, toggle: 0, lifecycle: 0, render: 0, each: 0, cleanup: 0 })
     }
     const write = Storage.prototype.setItem
     header.addEventListener("click", click, true)
