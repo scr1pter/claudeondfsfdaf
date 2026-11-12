@@ -292,7 +292,9 @@ for (const variant of ["overflow", "still-open"] as const)
     const state = await engine(page, { current: await completed(request, variant) })
     await open(page)
     await page.getByRole("button", { name: "Open review", exact: true }).click()
-    await expect(panel(page).getByText("blocking", { exact: true })).toBeVisible()
+    const verdict = panel(page).getByRole("strong")
+    await expect(verdict).toHaveText("blocking")
+    await expect(verdict).toBeVisible()
     await expect(
       panel(page).getByText(variant === "overflow" ? "Overflow-only blocker" : "Earlier blocker still open", {
         exact: false,
