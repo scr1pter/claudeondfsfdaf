@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { ModelPlans } from "@vectordevai/core/model-plans"
+import type { ReviewOutcome } from "@vectordevai/core/review/types"
 import { SessionRetry } from "@/session/retry"
 import { CliError } from "../effect-cmd"
 import { GithubBundle } from "./github.bundle"
@@ -12,6 +13,10 @@ import { GithubSecrets } from "./github.secrets"
 export interface CodiumReviewControl {
   signal: AbortSignal
   stopped: () => GithubBundle.Stop | undefined
+  /** A completed provider step ends any association with an earlier retried gateway refusal. */
+  stepFinished: () => void
+  /** Apply the terminal gateway row only after the runner confirms that no model result recovered it. */
+  reviewFinished: (outcome: Pick<ReviewOutcome, "partial" | "specialists">) => void
   redact: (text: string) => string
   outcome: (value: GithubAgents.Outcome) => void
 }
@@ -44,7 +49,11 @@ export function withCodiumReview<A, E, R>(
     if (!credentials.runToken() || deadline === undefined)
       return Effect.fail(new CliError({ message: GithubSecrets.CODIUM_UNAUTHORIZED, exitCode: 1 }))
     const controller = new AbortController()
-    const state = { stop: undefined as GithubBundle.Stop | undefined, outcome: "failed" as GithubAgents.Outcome }
+    const state = {
+      stop: undefined as GithubBundle.Stop | undefined,
+      pending: undefined as GithubBundle.Stop | undefined,
+      outcome: "failed" as GithubAgents.Outcome,
+    }
     const halt = (reason: GithubBundle.Stop) => {
       state.stop ??= reason
       controller.abort(state.stop)
@@ -54,8 +63,13 @@ export function withCodiumReview<A, E, R>(
       ...rule,
       classify: (error, provider) => {
         const decision = rule.classify(error, provider)
-        if (provider === ModelPlans.PROVIDER_ID && decision === "stop")
-          halt(GithubBundle.stopReason(error, { codium: true }))
+        if (provider === ModelPlans.PROVIDER_ID) {
+          const reason = GithubBundle.stopReason(error, { codium: true })
+          if (decision === "stop") halt(reason)
+          // BUSY/RENEWING follow ordinary bounded retries, while concurrency has its own window. An observed
+          // refusal is not yet a stop: a later successful step must be able to recover it without a false label.
+          else state.pending = reason
+        }
         return decision
       },
     }
@@ -63,6 +77,18 @@ export function withCodiumReview<A, E, R>(
     const control: CodiumReviewControl = {
       signal: controller.signal,
       stopped: () => state.stop,
+      stepFinished: () => {
+        state.pending = undefined
+      },
+      reviewFinished: (outcome) => {
+        const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify")
+        if (
+          outcome.partial === "model-error" ||
+          (reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed"))
+        )
+          halt(state.pending ?? GithubBundle.stopReason(undefined, { codium: true }))
+        state.pending = undefined
+      },
       redact: (text) => redactCodiumReviewText(credentials.redact(text)),
       outcome: (value) => (state.outcome = value),
     }

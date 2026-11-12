@@ -709,14 +709,16 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       ...(deps.cloud ? { checks: false, stopSignal: deps.cloud.signal } : {}),
       ...(triage ? { triage } : {}),
       knownPath: known,
-      onProgress: (event) =>
+      onProgress: (event) => {
+        if (event.type === "cost") deps.cloud?.stepFinished()
         log(
           event.type === "cost"
             ? deps.cloud || event.kind === "codium" || (event.codium && event.costUsd === 0)
               ? "Spent: Codium"
               : `Spent $${event.costUsd.toFixed(4)}${event.codium ? " + Codium" : ""}`
             : `${event.name}: ${event.status}`,
-        ),
+        )
+      },
       onCheckpoint: async (cost) => {
         spent = cost
         await upsertSticky(buildRunningBody({ previous: before, head, startedAt, state: running(cost.costUsd) })).catch(
@@ -728,6 +730,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       inlinePosted: state?.inlinePosted ?? 0,
     }
     const outcome = await deps.runReview(input)
+    deps.cloud?.reviewFinished(outcome)
     if (outcome.cost) spent = outcome.cost
 
     // No specialist produced output: the head stays where it was, so a re-run retries.
