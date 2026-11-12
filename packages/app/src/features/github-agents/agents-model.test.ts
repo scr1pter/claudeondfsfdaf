@@ -15,6 +15,7 @@ const status = (patch: Partial<AgentsStatus> = {}): AgentsStatus => ({
   canDispatch: true,
   workflow: "current",
   bound: "yours",
+  binding: { repositoryId: "17", boundAt: 1, workflowVersion: "3", codium: "ready" },
   listed: agentListing(),
   options: {
     mode: "own-key",
@@ -78,6 +79,20 @@ describe("GitHub agents view", () => {
     expect(runMinutes(status())).toBeUndefined()
     for (const timeoutMinutes of [0, -1, 1.2, Infinity]) expect(runMinutes(status({ timeoutMinutes }))).toBeUndefined()
     expect(runMinutes(status({ timeoutMinutes: 42 }))).toContain("42 minutes")
+  })
+
+  test("an owned Codium binding needs current availability and no suspension; own-key stays independent", () => {
+    const codium = status({ options: { ...status().options!, mode: "codium" }, listed: agentListing({ agents: true }) })
+    for (const binding of [
+      undefined,
+      { ...codium.binding!, codium: "unavailable" as const },
+      { ...codium.binding!, suspended: "transferred" },
+      { ...codium.binding!, suspended: "binder-left" },
+    ]) {
+      expect(agentsView({ ...codium, binding }).kind).toBe("unavailable")
+      expect(agentsView(status({ binding })).kind).toBe("ready")
+    }
+    expect(agentsView(codium).kind).toBe("ready")
   })
 
   test("Brain approval binds the exact current repository and preview digest", () => {

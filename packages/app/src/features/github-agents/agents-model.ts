@@ -26,6 +26,8 @@ export type AgentRun = {
   verdict?: "pass" | "fail" | "none"
 }
 export type AgentsStatus = {
+  /** Opaque main-issued consent scope; changes with sign-in, repository, visibility, workflow or binding. */
+  authorityId?: string
   repo?: string
   repositoryId?: string
   defaultBranch?: string
@@ -49,6 +51,7 @@ export type AgentSetupInput = {
   autoReview: boolean
   share?: boolean
 }
+export type AgentMutationScope = { expectedRepositoryId: string; authorityId: string; operationId: string }
 export type AgentSetupPreview = {
   path: string
   content: string
@@ -76,17 +79,23 @@ export type ReturnedPreview = {
 export type GithubAgentsAPI = {
   status(cwd: string): Promise<AgentsStatus>
   preview(input: AgentSetupInput): Promise<AgentSetupPreview>
-  setup(input: AgentSetupInput): Promise<{ url: string }>
-  bind(cwd: string): Promise<{ state: "bound" | "pending" | "failed"; runUrl?: string; workflowUpdate?: string }>
-  run(input: {
-    cwd: string
-    prompt: string
-    brain?: { previewId: string; approvedSha256: string }
-  }): Promise<{ runUrl?: string; dispatchedAt: number }>
-  schedules(input: {
-    cwd: string
-    schedules: NonNullable<AgentsWorkflowOptions["schedules"]>
-  }): Promise<{ url: string }>
+  setup(input: AgentSetupInput & AgentMutationScope): Promise<{ url: string }>
+  bind(
+    input: { cwd: string } & AgentMutationScope,
+  ): Promise<{ state: "bound" | "pending" | "failed"; runUrl?: string; workflowUpdate?: string }>
+  run(
+    input: {
+      cwd: string
+      prompt: string
+      brain?: { previewId: string; approvedSha256: string }
+    } & AgentMutationScope,
+  ): Promise<{ runUrl?: string; dispatchedAt: number }>
+  schedules(
+    input: {
+      cwd: string
+      schedules: NonNullable<AgentsWorkflowOptions["schedules"]>
+    } & AgentMutationScope,
+  ): Promise<{ url: string }>
   bindings(): Promise<AgentBinding[]>
   unbind(repositoryId: string): Promise<void>
   runs(): Promise<AgentRun[]>
@@ -131,6 +140,11 @@ export function agentsView(status: AgentsStatus | undefined) {
   if (status.workflow === "missing" || status.workflow === "old") return { ...availability, kind: "setup" as const }
   if (status.options?.mode === "codium" && !listed.agents) return { ...availability, kind: "unavailable" as const }
   if (status.options?.mode === "codium" && status.bound !== "yours") return { ...availability, kind: "bind" as const }
+  if (
+    status.options?.mode === "codium" &&
+    (!status.binding || status.binding.codium !== "ready" || status.binding.suspended)
+  )
+    return { ...availability, kind: "unavailable" as const }
   return { ...availability, kind: "ready" as const }
 }
 

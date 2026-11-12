@@ -20,7 +20,6 @@ export function GithubAgentsSetup(props: {
   onStatus?: (status: AgentsStatus | undefined) => void
   onGithubConnected?: () => void
 }) {
-  const status = useAgentsStatus(() => props.cwd)
   const [state, setState] = createStore<{
     mode: "own-key" | "codium"
     model: string
@@ -32,6 +31,8 @@ export function GithubAgentsSetup(props: {
     opened?: string
     error?: string
     busy: boolean
+    operationId: string
+    bindOperationId: string
     signingIn: boolean
     run: boolean
   }>({
@@ -41,9 +42,28 @@ export function GithubAgentsSetup(props: {
     autoReview: false,
     share: false,
     busy: false,
+    operationId: crypto.randomUUID(),
+    bindOperationId: crypto.randomUUID(),
     signingIn: false,
     run: false,
   })
+  let revision = 0
+  const status = useAgentsStatus(
+    () => props.cwd,
+    () => {
+      revision += 1
+      setState({
+        preview: undefined,
+        previewKey: undefined,
+        opened: undefined,
+        error: undefined,
+        busy: false,
+        signingIn: false,
+        run: false,
+      })
+      props.onStatus?.(undefined)
+    },
+  )
   const view = createMemo(() => agentsView(status.state.status))
   const input = createMemo(() => ({
     cwd: props.cwd ?? "",
@@ -60,11 +80,28 @@ export function GithubAgentsSetup(props: {
     autoReview: state.mode === "own-key" && state.autoReview,
     share: state.mode === "own-key" && state.share,
   }))
-  const key = createMemo(() => JSON.stringify(input()))
+  const key = createMemo(() =>
+    JSON.stringify({
+      input: input(),
+      authority: {
+        epoch: status.state.authorityEpoch,
+        authorityId: status.state.status?.authorityId,
+        repositoryId: status.state.status?.repositoryId,
+        repository: status.state.status?.repo,
+        defaultBranch: status.state.status?.defaultBranch,
+        publicRepository: status.state.status?.publicRepository,
+        workflow: status.state.status?.workflow,
+        bound: status.state.status?.bound,
+        binding: status.state.status?.binding,
+      },
+    }),
+  )
   const allowed = createMemo(
     () =>
       !!props.cwd &&
       !!status.state.status?.signedIn &&
+      !!status.state.status.repositoryId &&
+      !!status.state.status.authorityId &&
       !!status.state.status.canDispatch &&
       view().kind !== "update-cli" &&
       (state.mode === "own-key" || view().codium) &&
@@ -75,11 +112,18 @@ export function GithubAgentsSetup(props: {
             .filter((value) => value.trim())
             .every((value) => /^[A-Z_][A-Z0-9_]*$/.test(value.trim())))),
   )
-  let revision = 0
   createEffect(() => {
     key()
     revision += 1
-    setState({ preview: undefined, previewKey: undefined, opened: undefined, error: undefined, busy: false })
+    setState({
+      preview: undefined,
+      previewKey: undefined,
+      opened: undefined,
+      error: undefined,
+      busy: false,
+      operationId: crypto.randomUUID(),
+      bindOperationId: crypto.randomUUID(),
+    })
   })
   createEffect(() => {
     const next = status.state.status
@@ -96,7 +140,7 @@ export function GithubAgentsSetup(props: {
     await api
       .preview(request)
       .then((value) => {
-        if (revision === token) setState({ preview: value, previewKey: requestedKey })
+        if (revision === token && requestedKey === key()) setState({ preview: value, previewKey: requestedKey })
       })
       .catch(() => {
         if (revision === token)
@@ -106,11 +150,22 @@ export function GithubAgentsSetup(props: {
   }
   const setup = async () => {
     const api = agentsApi()
-    if (!api || !allowed() || state.busy || !state.preview || state.previewKey !== key()) return
+    const expectedRepositoryId = status.state.status?.repositoryId
+    const authorityId = status.state.status?.authorityId
+    if (
+      !api ||
+      !expectedRepositoryId ||
+      !authorityId ||
+      !allowed() ||
+      state.busy ||
+      !state.preview ||
+      state.previewKey !== key()
+    )
+      return
     const token = ++revision
     setState({ busy: true, error: undefined })
     await api
-      .setup(input())
+      .setup({ ...input(), expectedRepositoryId, authorityId, operationId: state.operationId })
       .then((value) => {
         if (revision === token) setState({ opened: value.url, preview: undefined, previewKey: undefined })
       })
@@ -123,11 +178,22 @@ export function GithubAgentsSetup(props: {
   const bind = async () => {
     const api = agentsApi()
     const cwd = props.cwd
-    if (!api || !cwd || state.busy || !status.state.status?.canDispatch || !view().codium) return
+    const expectedRepositoryId = status.state.status?.repositoryId
+    const authorityId = status.state.status?.authorityId
+    if (
+      !api ||
+      !cwd ||
+      !expectedRepositoryId ||
+      !authorityId ||
+      state.busy ||
+      !status.state.status?.canDispatch ||
+      !view().codium
+    )
+      return
     const token = ++revision
     setState({ busy: true, error: undefined })
     await api
-      .bind(cwd)
+      .bind({ cwd, expectedRepositoryId, authorityId, operationId: state.bindOperationId })
       .then((value) => {
         if (revision !== token) return
         if (value.state === "failed") setState("error", "Binding did not complete. Check the workflow and try again.")
@@ -218,6 +284,17 @@ export function GithubAgentsSetup(props: {
                 onClick={() => void bind()}
               >
                 {state.busy ? "Waiting for GitHub…" : "Bind repository"}
+              </button>
+            </section>
+          </Show>
+          <Show when={view().kind === "unavailable" && view().codium}>
+            <section>
+              <h3>Codium is unavailable for this binding</h3>
+              <p id="github-binding-unavailable">
+                Check your account and repository access, then check again before starting a Codium run.
+              </p>
+              <button type="button" disabled aria-describedby="github-binding-unavailable">
+                Run in GitHub
               </button>
             </section>
           </Show>

@@ -438,7 +438,14 @@ function AutomationForm(props: {
     props.focusedRepository ? { [props.focusedRepository]: { directory: props.focusedRepository, sessionId: "" } } : {},
   )
   const [submitting, setSubmitting] = createSignal(false)
-  const [github, setGithub] = createStore<{ enabled: boolean; error?: string; url?: string }>({ enabled: false })
+  const [github, setGithub] = createStore<{
+    enabled: boolean
+    error?: string
+    url?: string
+    pending: boolean
+    operationId: string
+  }>({ enabled: false, pending: false, operationId: crypto.randomUUID() })
+  let scheduleOperation = 0
 
   const drafts = createMemo(() =>
     props.repositories.map((repository) => ({
@@ -457,7 +464,11 @@ function AutomationForm(props: {
     const selected = drafts().filter((target) => target.enabled)
     return supportsGithubSchedule(kind(), selected) ? selected[0].directory : undefined
   })
-  const remote = useAgentsStatus(directory)
+  const remote = useAgentsStatus(directory, () => {
+    scheduleOperation += 1
+    if (github.pending) setSubmitting(false)
+    setGithub({ enabled: false, error: undefined, url: undefined, pending: false })
+  })
   const githubAvailable = createMemo(() => {
     const status = remote.state.status
     return (
@@ -465,12 +476,33 @@ function AutomationForm(props: {
       !!status &&
       agentsView(status).kind === "ready" &&
       status.canDispatch &&
+      !!status.repositoryId &&
+      !!status.authorityId &&
       agentsView(status).scheduled
     )
   })
   const cron = createMemo(() => {
     const result = built()
     return result.ok ? cronFor(result.input.recurrence, Intl.DateTimeFormat().resolvedOptions().timeZone) : undefined
+  })
+  const scheduleInputKey = createMemo(() =>
+    JSON.stringify({
+      draft: built(),
+      cwd: directory(),
+      cron: cron(),
+      epoch: remote.state.authorityEpoch,
+      repositoryId: remote.state.status?.repositoryId,
+      repository: remote.state.status?.repo,
+      authorityId: remote.state.status?.authorityId,
+      defaultBranch: remote.state.status?.defaultBranch,
+      publicRepository: remote.state.status?.publicRepository,
+      workflow: remote.state.status?.workflow,
+      options: remote.state.status?.options,
+    }),
+  )
+  createEffect(() => {
+    scheduleInputKey()
+    setGithub({ error: undefined, url: undefined, operationId: crypto.randomUUID() })
   })
   createEffect(() => {
     directory()
@@ -511,7 +543,11 @@ function AutomationForm(props: {
       const cwd = directory()
       const schedule = cron()
       const status = remote.state.status
-      if (!api || !cwd || !schedule || !status || !githubAvailable()) return
+      const expectedRepositoryId = status?.repositoryId
+      const authorityId = status?.authorityId
+      if (!api || !cwd || !schedule || !status || !expectedRepositoryId || !authorityId || !githubAvailable()) return
+      const operation = ++scheduleOperation
+      const requestedKey = scheduleInputKey()
       const existing = status.options?.schedules ?? []
       if (existing.length >= 20 || existing.some((entry) => entry.cron === schedule.cron)) {
         setGithub(
@@ -521,23 +557,29 @@ function AutomationForm(props: {
         return
       }
       setSubmitting(true)
-      setGithub({ error: undefined, url: undefined })
+      setGithub({ error: undefined, url: undefined, pending: true })
       await api
         .schedules({
           cwd,
+          expectedRepositoryId,
+          authorityId,
+          operationId: github.operationId,
           schedules: [
             ...existing,
             { id: `automation-${crypto.randomUUID()}`, cron: schedule.cron, prompt: result.input.prompt },
           ],
         })
         .then((value) => {
-          if (cwd === directory()) setGithub("url", value.url)
+          if (operation === scheduleOperation && requestedKey === scheduleInputKey()) setGithub("url", value.url)
         })
         .catch(() => {
-          if (cwd === directory())
+          if (operation === scheduleOperation && requestedKey === scheduleInputKey())
             setGithub("error", "Could not open the schedule update pull request. Check GitHub before trying again.")
         })
-      setSubmitting(false)
+      if (operation === scheduleOperation) {
+        setGithub("pending", false)
+        setSubmitting(false)
+      }
       return
     }
     setSubmitting(true)

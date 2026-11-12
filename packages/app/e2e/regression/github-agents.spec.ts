@@ -3,11 +3,23 @@ import { expect, test, type Page } from "@playwright/test"
 type Fixture = {
   calls: [string, unknown?][]
   switchRepository(): void
+  switchRemote(): void
+  switchAccount(): void
+  signOut(): void
+  codiumChanged(): void
+  release(name: string): void
   releasePreview?: () => void
 }
 const calls = (page: Page) =>
   page.evaluate(() => (window as unknown as { githubAgentsFixture: Fixture }).githubAgentsFixture.calls)
 const requests = async (page: Page, name: string) => (await calls(page)).filter(([method]) => method === name)
+const signal = (page: Page, name: "switchAccount" | "signOut" | "codiumChanged" | "switchRemote") =>
+  page.evaluate((name) => (window as unknown as { githubAgentsFixture: Fixture }).githubAgentsFixture[name](), name)
+const release = (page: Page, name: string) =>
+  page.evaluate(
+    (name) => (window as unknown as { githubAgentsFixture: Fixture }).githubAgentsFixture.release(name),
+    name,
+  )
 
 test("workflow permission recovery refreshes setup and its enclosing GitHub view after sign-in", async ({ page }) => {
   await page.goto("/e2e/fixtures/github-agents.html?signedIn=off&workflow=missing&listed=off")
@@ -103,8 +115,10 @@ test("Brain starts unchecked, shows readable exact content and sends only the ap
   await page.screenshot({ path: testInfo.outputPath("github-run-approved-preview.png") })
   await dialog.getByRole("button", { name: "Start run", exact: true }).click()
   await expect(dialog.getByRole("status")).toContainText("Run dispatched")
-  expect((await requests(page, "run"))[0][1]).toEqual({
+  expect((await requests(page, "run"))[0][1]).toMatchObject({
     cwd: "/repo/one",
+    expectedRepositoryId: "17",
+    authorityId: "authority-owner-17-on",
     prompt: "Fix the auth test",
     brain: { previewId: "preview-/repo/one", approvedSha256: "a".repeat(64) },
   })
@@ -143,7 +157,12 @@ test("own-key run has no Brain controls and stays stateless with Codium listed",
   await dialog.getByLabel("What should Vector do?").fill("Fix the test")
   await dialog.getByRole("button", { name: "Start run", exact: true }).click()
   await expect.poll(async () => (await requests(page, "run")).length).toBe(1)
-  expect((await requests(page, "run"))[0][1]).toEqual({ cwd: "/repo/one", prompt: "Fix the test" })
+  expect((await requests(page, "run"))[0][1]).toMatchObject({
+    cwd: "/repo/one",
+    expectedRepositoryId: "17",
+    authorityId: "authority-owner-17-on",
+    prompt: "Fix the test",
+  })
   for (const name of ["bindings", "runs", "previewBrain", "returnedArtifacts", "previewReturned", "importReturned"])
     expect(await requests(page, name)).toHaveLength(0)
 })
@@ -166,7 +185,7 @@ test("bindings hide lost-access names and returned Brain imports require preview
   await page.getByRole("button", { name: "Import as proposals" }).click()
   await expect(page.getByRole("status")).toContainText("1 proposals queued for review")
   expect((await requests(page, "importReturned"))[0][1]).toEqual({
-    previewId: "returned-preview",
+    previewId: "returned-preview-owner",
     approvedSha256: "a".repeat(64),
   })
 })
@@ -188,4 +207,196 @@ test("GitHub scheduling opens an update PR without also creating a local automat
   await page.goto("/e2e/fixtures/github-agents.html?view=automations&mode=codium&scheduled=off")
   await page.getByRole("button", { name: "New automation", exact: true }).click()
   await expect(page.getByLabel("Run in GitHub Actions when this computer is off", { exact: false })).toHaveCount(0)
+})
+
+test("a delayed status from the previous account cannot replace the new account at the same directory", async ({
+  page,
+}) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&pendingStatus=1")
+  await expect.poll(async () => (await requests(page, "status")).length).toBe(1)
+  await signal(page, "switchAccount")
+  await expect(page.getByRole("heading", { name: "Ready in other/one" })).toBeVisible()
+  await release(page, "status")
+  await expect(page.getByRole("heading", { name: "Ready in other/one" })).toBeVisible()
+  await expect(page.locator("body")).not.toContainText("Ready in owner/one")
+})
+
+for (const event of ["switchAccount", "codiumChanged"] as const) {
+  test(`${event} immediately removes plaintext Brain and approval from an open run`, async ({ page }) => {
+    await page.goto("/e2e/fixtures/github-agents.html?mode=codium")
+    await page.getByRole("button", { name: "Run in GitHub", exact: true }).click()
+    await page.getByLabel("Include repository Brain for this run").check()
+    await page.getByRole("button", { name: "Preview Brain", exact: true }).click()
+    await expect(page.getByLabel("Brain preview", { exact: true })).toContainText("owner-Brain-secret")
+    await page.getByLabel("I approve this exact Brain content for this repository and this run.").check()
+    await signal(page, event)
+    await expect(page.getByRole("dialog", { name: "Run in GitHub", exact: true })).toHaveCount(0)
+    await expect(page.locator("body")).not.toContainText("owner-Brain-secret")
+    await page.getByRole("button", { name: "Run in GitHub", exact: true }).click()
+    await expect(page.getByLabel("Include repository Brain for this run")).not.toBeChecked()
+    expect(await requests(page, "run")).toHaveLength(0)
+  })
+}
+
+test("old account binding, history and Brain responses are retired even when they finish later", async ({ page }) => {
+  await page.goto(
+    "/e2e/fixtures/github-agents.html?mode=codium&manager=1&pendingBindings=1&pendingRuns=1&pendingBrain=1",
+  )
+  await expect.poll(async () => (await requests(page, "bindings")).length).toBe(1)
+  await page.getByRole("button", { name: "Run in GitHub", exact: true }).click()
+  await page.getByLabel("Include repository Brain for this run").check()
+  await page.getByRole("button", { name: "Preview Brain", exact: true }).click()
+  await expect.poll(async () => (await requests(page, "previewBrain")).length).toBe(1)
+  await signal(page, "switchAccount")
+  await expect(page.getByRole("heading", { name: "Ready in other/one" })).toBeVisible()
+  for (const name of ["bindings", "runs", "brain"]) await release(page, name)
+  await expect(page.locator("body")).not.toContainText("owner-Brain-secret")
+  await expect(page.locator("body")).not.toContainText("owner/one")
+  await expect(page.getByRole("dialog", { name: "Run in GitHub", exact: true })).toHaveCount(0)
+  expect(await requests(page, "run")).toHaveLength(0)
+})
+
+test("sign-out immediately clears returned plaintext, approval and unbind confirmation", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&manager=1")
+  await page.getByRole("button", { name: "Find returned Brain proposals" }).click()
+  await page.getByRole("button", { name: "Preview vector-session-7" }).click()
+  await expect(page.getByLabel("Returned Brain preview")).toContainText("owner-returned-secret")
+  await page
+    .getByLabel("Queue this exact content as proposals for this repository. Review is required before applying it.")
+    .check()
+  await page.getByRole("button", { name: "Unbind", exact: true }).first().click()
+  await expect(page.getByRole("button", { name: "Confirm unbind" })).toBeVisible()
+  await signal(page, "signOut")
+  await expect(page.locator("body")).not.toContainText("owner-returned-secret")
+  await expect(page.getByRole("button", { name: "Import as proposals" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Confirm unbind" })).toHaveCount(0)
+  expect(await requests(page, "importReturned")).toHaveLength(0)
+  expect(await requests(page, "unbind")).toHaveLength(0)
+})
+
+test("a delayed returned preview cannot reappear after switching accounts", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?mode=codium&manager=1&pendingReturned=1")
+  await page.getByRole("button", { name: "Find returned Brain proposals" }).click()
+  await page.getByRole("button", { name: "Preview vector-session-7" }).click()
+  await expect.poll(async () => (await requests(page, "previewReturned")).length).toBe(1)
+  await signal(page, "switchAccount")
+  await expect(page.getByRole("heading", { name: "Ready in other/one" })).toBeVisible()
+  await release(page, "returned")
+  await expect(page.getByLabel("Returned Brain preview")).toHaveCount(0)
+  await expect(page.locator("body")).not.toContainText("owner-returned-secret")
+  expect(await requests(page, "importReturned")).toHaveLength(0)
+})
+
+test("checking a changed remote at the same directory retires its old preview and binds the new effect to its verified ID", async ({
+  page,
+}) => {
+  await page.goto("/e2e/fixtures/github-agents.html?workflow=missing&listed=off")
+  await page.getByRole("button", { name: "Preview workflow", exact: true }).click()
+  await expect(page.getByLabel("Workflow preview")).toContainText("repository 17")
+  await signal(page, "switchRemote")
+  await page.getByRole("button", { name: "Check again", exact: true }).click()
+  await expect(page.getByLabel("Workflow preview")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
+  await page.getByRole("button", { name: "Preview workflow", exact: true }).click()
+  await expect(page.getByLabel("Workflow preview")).toContainText("repository 19")
+  await page.getByRole("button", { name: "Open setup pull request" }).click()
+  expect((await requests(page, "setup"))[0][1]).toMatchObject({
+    expectedRepositoryId: "19",
+    authorityId: "authority-owner-19-on",
+  })
+})
+
+test("an old account's delayed workflow preview cannot enable setup for the next account", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?workflow=missing&listed=off&pending=1")
+  await page.getByRole("button", { name: "Preview workflow", exact: true }).click()
+  await expect.poll(async () => (await requests(page, "preview")).length).toBe(1)
+  await signal(page, "switchAccount")
+  await expect(page.getByRole("button", { name: "Preview workflow", exact: true })).toBeEnabled()
+  await release(page, "preview")
+  await expect(page.getByLabel("Workflow preview")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
+  expect(await requests(page, "setup")).toHaveLength(0)
+})
+
+for (const binding of ["unavailable", "suspended"] as const) {
+  test(`an owned ${binding} Codium binding disables Run and offers repair guidance`, async ({ page }) => {
+    await page.goto(`/e2e/fixtures/github-agents.html?mode=codium&binding=${binding}`)
+    await expect(page.getByRole("heading", { name: "Codium is unavailable for this binding" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Run in GitHub", exact: true })).toBeDisabled()
+    await expect(page.getByRole("button", { name: "Preview workflow", exact: true })).toBeEnabled()
+    expect(await requests(page, "run")).toHaveLength(0)
+  })
+}
+
+test("a pending run cannot be dismissed and reopened to send another Start", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?pendingRun=1&listed=off")
+  await page.getByRole("button", { name: "Run in GitHub", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "Run in GitHub", exact: true })
+  await dialog.getByLabel("What should Vector do?").fill("Fix the test")
+  await dialog.getByRole("button", { name: "Start run", exact: true }).click()
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeDisabled()
+  await page.keyboard.press("Escape")
+  await expect(dialog).toBeVisible()
+  expect(await requests(page, "run")).toHaveLength(1)
+  await release(page, "run")
+  await expect(dialog.getByRole("status")).toContainText("Run dispatched")
+  await dialog.getByRole("button", { name: "Close", exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+})
+
+test("one dialog keeps the same operation ID for an explicit retry after an uncertain start", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?failRun=1&listed=off")
+  await page.getByRole("button", { name: "Run in GitHub", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "Run in GitHub", exact: true })
+  await dialog.getByLabel("What should Vector do?").fill("Fix the test")
+  await dialog.getByRole("button", { name: "Start run", exact: true }).click()
+  await expect(dialog.getByRole("alert")).toBeVisible()
+  await dialog.getByRole("button", { name: "Start run", exact: true }).click()
+  const effects = await requests(page, "run")
+  expect(effects).toHaveLength(2)
+  expect((effects[1][1] as { operationId: string }).operationId).toBe(
+    (effects[0][1] as { operationId: string }).operationId,
+  )
+  expect((effects[0][1] as { operationId: string }).operationId).toMatch(/^[0-9a-f-]{36}$/)
+})
+
+test("a delayed schedule PR does not appear as the result of edited recurrence and prompt", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?view=automations&listed=off&pendingSchedule=1")
+  await page.getByRole("button", { name: "New automation", exact: true }).click()
+  await page.getByLabel("What should Vector do, every time?").fill("Old task")
+  await page.getByLabel("Run in GitHub Actions when this computer is off", { exact: false }).check()
+  await page.getByRole("button", { name: "Open schedule update pull request", exact: true }).click()
+  await expect.poll(async () => (await requests(page, "schedules")).length).toBe(1)
+  await page.getByLabel("What should Vector do, every time?").fill("New task")
+  await page.getByLabel("Time", { exact: true }).fill("10:15")
+  await release(page, "schedules")
+  await expect(page.getByRole("button", { name: "Open schedule update pull request", exact: true })).toBeEnabled()
+  await expect(page.getByRole("link", { name: "Open schedule update pull request" })).toHaveCount(0)
+  await page.getByRole("button", { name: "Open schedule update pull request", exact: true }).click()
+  const effects = await requests(page, "schedules")
+  expect(effects).toHaveLength(2)
+  expect(effects[1][1]).toMatchObject({
+    expectedRepositoryId: "17",
+    authorityId: "authority-owner-17-on",
+    schedules: [expect.objectContaining({ prompt: "New task" })],
+  })
+  expect((effects[1][1] as { operationId: string }).operationId).not.toBe(
+    (effects[0][1] as { operationId: string }).operationId,
+  )
+  expect(await requests(page, "localCreate")).toHaveLength(0)
+})
+
+test("an old account's pending schedule result is retired without a local fallback", async ({ page }) => {
+  await page.goto("/e2e/fixtures/github-agents.html?view=automations&listed=off&pendingSchedule=1")
+  await page.getByRole("button", { name: "New automation", exact: true }).click()
+  await page.getByLabel("What should Vector do, every time?").fill("Check dependencies")
+  const checkbox = page.getByLabel("Run in GitHub Actions when this computer is off", { exact: false })
+  await checkbox.check()
+  await page.getByRole("button", { name: "Open schedule update pull request", exact: true }).click()
+  await expect.poll(async () => (await requests(page, "schedules")).length).toBe(1)
+  await signal(page, "switchAccount")
+  await release(page, "schedules")
+  await expect(checkbox).not.toBeChecked()
+  await expect(page.getByRole("link", { name: "Open schedule update pull request" })).toHaveCount(0)
+  expect(await requests(page, "localCreate")).toHaveLength(0)
 })

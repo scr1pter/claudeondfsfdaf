@@ -11,6 +11,7 @@ import {
   type BrainPreview,
 } from "./agents-model"
 import "./github-agents.css"
+import { useAgentsAuthority } from "./use-authority"
 
 export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onClose: () => void }) {
   const [state, setState] = createStore<{
@@ -22,8 +23,16 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
     error?: string
     runUrl?: string
     dispatched: boolean
-  }>({ prompt: "", includeBrain: false, busy: false, dispatched: false })
-  const ready = createMemo(() => agentsView(props.status).kind === "ready" && props.status.canDispatch)
+    starting: boolean
+  }>({ prompt: "", includeBrain: false, busy: false, dispatched: false, starting: false })
+  const ready = createMemo(
+    () =>
+      agentsView(props.status).kind === "ready" &&
+      props.status.canDispatch &&
+      !!props.status.repositoryId &&
+      !!props.status.authorityId,
+  )
+  const operationId = crypto.randomUUID()
   const brainAvailable = createMemo(
     () =>
       props.status.options?.mode === "codium" &&
@@ -40,6 +49,24 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
   )
   let revision = 0
   let dialog: HTMLDivElement | undefined
+  useAgentsAuthority(() => {
+    revision += 1
+    setState({
+      prompt: "",
+      includeBrain: false,
+      preview: undefined,
+      approved: undefined,
+      error: undefined,
+      busy: false,
+      starting: false,
+      dispatched: false,
+      runUrl: undefined,
+    })
+    props.onClose()
+  })
+  const close = () => {
+    if (!state.starting) props.onClose()
+  }
   const previous = document.activeElement
   onMount(() => dialog?.querySelector<HTMLTextAreaElement>("textarea")?.focus())
   onCleanup(() => {
@@ -49,6 +76,8 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
   createEffect(() => {
     props.cwd
     props.status.repositoryId
+    props.status.authorityId
+    ready()
     props.status.publicRepository
     brainAvailable()
     revision += 1
@@ -60,6 +89,7 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
       busy: false,
       dispatched: false,
       runUrl: undefined,
+      starting: false,
     })
   })
   const preview = async () => {
@@ -98,10 +128,13 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
     )
       return
     const token = ++revision
-    setState({ busy: true, error: undefined })
+    setState({ busy: true, starting: true, error: undefined })
     await api
       .run({
         cwd: props.cwd,
+        expectedRepositoryId: props.status.repositoryId!,
+        authorityId: props.status.authorityId!,
+        operationId,
         prompt: state.prompt.trim(),
         ...(state.includeBrain && state.preview
           ? { brain: { previewId: state.preview.id, approvedSha256: state.preview.sha256 } }
@@ -118,7 +151,7 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
             "Could not start the run. Check GitHub before retrying. Brain approval is not reused for another run.",
           )
       })
-    if (revision === token) setState({ busy: false, approved: undefined, preview: undefined })
+    if (revision === token) setState({ busy: false, starting: false, approved: undefined, preview: undefined })
   }
   return (
     <Portal>
@@ -133,7 +166,8 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation()
-              props.onClose()
+              event.preventDefault()
+              close()
               return
             }
             if (event.key !== "Tab") return
@@ -156,7 +190,7 @@ export function GithubRunDialog(props: { cwd: string; status: AgentsStatus; onCl
         >
           <header class="github-agents-actions">
             <h2 class="flex-1">Run in GitHub</h2>
-            <button type="button" onClick={props.onClose}>
+            <button type="button" disabled={state.starting} onClick={close}>
               Close
             </button>
           </header>

@@ -1,6 +1,7 @@
 import { createEffect, For, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { agentsApi, type AgentBinding, type AgentRun, type AgentsStatus, type ReturnedPreview } from "./agents-model"
+import { useAgentsAuthority } from "./use-authority"
 
 export function GithubBindingsList(props: { cwd?: string; status: AgentsStatus }) {
   const [state, setState] = createStore<{
@@ -16,16 +17,35 @@ export function GithubBindingsList(props: { cwd?: string; status: AgentsStatus }
     preview?: ReturnedPreview
     approved?: string
     result?: string
-  }>({ bindings: [], runs: [], loading: true, busy: false, revision: 0 })
+    retired: boolean
+  }>({ bindings: [], runs: [], loading: true, busy: false, revision: 0, retired: false })
   let revision = 0
+  useAgentsAuthority(() => {
+    revision += 1
+    setState({
+      bindings: [],
+      runs: [],
+      loading: false,
+      busy: false,
+      error: undefined,
+      confirm: undefined,
+      artifacts: undefined,
+      selectedRun: undefined,
+      preview: undefined,
+      approved: undefined,
+      result: undefined,
+      retired: true,
+    })
+  })
   onCleanup(() => {
     revision += 1
   })
   createEffect(() => {
     props.cwd
     props.status.repositoryId
+    props.status.authorityId
     props.status.publicRepository
-    const listed = props.status.listed.agents && props.status.options?.mode === "codium"
+    const listed = !state.retired && props.status.listed.agents && props.status.options?.mode === "codium"
     state.revision
     const token = ++revision
     const api = agentsApi()
@@ -143,7 +163,7 @@ export function GithubBindingsList(props: { cwd?: string; status: AgentsStatus }
     if (revision === token) setState({ busy: false, approved: undefined })
   }
   return (
-    <Show when={props.status.listed.agents && props.status.options?.mode === "codium"}>
+    <Show when={!state.retired && props.status.listed.agents && props.status.options?.mode === "codium"}>
       <div class="github-agents">
         <section class="github-agents-grid">
           <h3>Repository bindings</h3>
