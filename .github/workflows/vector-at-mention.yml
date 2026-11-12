@@ -114,7 +114,7 @@ jobs:
         shell: env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}
         run: node /usr/libexec/vector-namespace-probe/vector-namespace-entry-host.mjs
 
-      - name: Stop the disposable UID before removing owned namespace pins
+      - name: Stop the disposable UID before releasing the descriptor broker
         id: namespace_cleanup
         if: always()
         working-directory: ${{ runner.temp }}

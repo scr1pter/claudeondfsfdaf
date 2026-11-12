@@ -1,6 +1,6 @@
 """Disposable CI experiment, not the production process floor.
 
-Only prepare/cleanup run as root. The engine invokes the fixed launch mode after
+Only prepare/cleanup and the descriptor-only broker run as root. The engine invokes the fixed launch mode after
 loading its real private channel. No channel value is passed to this module.
 """
 
@@ -14,8 +14,11 @@ import os
 import pathlib
 import pwd
 import resource
+import select
 import signal
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -72,6 +75,14 @@ def write_json(path, value, mode):
         json.dump(value, file, separators=(",", ":"))
 
 
+def atomic_json(path, value, mode, replace=False):
+    temporary = path + "." + os.urandom(12).hex() + ".tmp"
+    write_json(temporary, value, mode)
+    if not replace:
+        require(not os.path.lexists(path), "An owned lifecycle record already exists")
+    os.replace(temporary, path)
+
+
 def process_identity(pid):
     text = pathlib.Path(f"/proc/{pid}/stat").read_text()
     fields = text[text.rindex(")") + 2:].split()
@@ -100,8 +111,9 @@ def validate_spec(value):
     require(value["scratch"] == value["container"] + "/namespace-entry-scratch", "Invalid prototype scratch")
     require(value["directory"] == value["container"] + "/tool-namespaces", "Invalid prototype handles")
     require(value["observer"] == value["container"] + "/namespace-observer", "Invalid prototype observer")
-    for kind in KINDS:
-        require(value["pins"][kind] == value["directory"] + "/" + kind, "Unexpected namespace path")
+    require(value["socket"] == value["directory"] + "/broker.sock", "Unexpected namespace socket")
+    require(type(value["nonce"]) is str and len(value["nonce"]) == 32 and
+            all(character in "0123456789abcdef" for character in value["nonce"]), "Invalid broker scope")
     return value
 
 
@@ -161,9 +173,9 @@ def prepare(state_path):
     scratch = container + "/namespace-entry-scratch"
     canary_directory = container + "/trusted-namespace-canary"
     canary = canary_directory + "/module.py"
-    pins = {kind: directory + "/" + kind for kind in KINDS}
     value = {"v": 1, "container": container, "uid": account.pw_uid, "gid": account.pw_gid,
-             "stage": container + "/checkout", "scratch": scratch, "directory": directory, "pins": pins,
+             "stage": container + "/checkout", "scratch": scratch, "directory": directory,
+             "socket": directory + "/broker.sock", "nonce": os.urandom(16).hex(),
              "observer": container + "/namespace-observer"}
     # Record cleanup ownership before starting any long-lived child or creating a mount.
     write_json(PRIVATE, value, 0o600)
@@ -177,9 +189,6 @@ def prepare(state_path):
     pathlib.Path(canary).write_text("print('trusted-namespace-canary')\n")
     os.chown(canary, account.pw_uid, account.pw_gid)
     os.chmod(canary, 0o666)
-    for pin in pins.values():
-        fd = os.open(pin, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
-        os.close(fd)
     # Valid ancestor handles are installed by trusted root after readiness, not guessed from PID numbers in a tool.
     for kind in ("user", "pid"):
         fd = os.open(directory + "/ancestor-" + kind, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
@@ -225,57 +234,123 @@ def prepare(state_path):
     require(namespaces == ready["namespaces"], "Host and keeper namespace observations disagree")
     require(all(namespaces[kind] != os.stat("/proc/self/ns/" + kind).st_ino for kind in KINDS),
             "The keeper shares a host namespace")
-    for kind, pin in pins.items():
-        # Keep the same bounded clean-environment root helper, but retain the kernel's errno instead of mount(8)'s 32.
-        fixed(["/usr/bin/python3", "-I", "-S", SELF, "pin", kind, str(pid), identity["start"],
-               str(devices[kind]), str(namespaces[kind])])
     value.update({"namespaces": namespaces, "devices": devices, "runtimeImages": images,
                   "keeper": {"pid": pid, "start": identity["start"]},
                   "canary": {"path": canary, "sha256": hashlib.sha256(pathlib.Path(canary).read_bytes()).hexdigest()}})
-    for descriptor in validate_pins(value).values():
-        os.close(descriptor)
-    # bwrap's ordinary slave propagation still receives future parent mounts. Make this base fully private before capture.
-    fixed(["/usr/bin/nsenter", "--mount=" + pins["mnt"], "--pid=" + pins["pid"], "--",
-           "/usr/bin/mount", "--make-rprivate", "/"], stdout=subprocess.DEVNULL)
-    # The root helper exits before credential capture. It mounts only the base keeper's own ancestor user/PID handles.
-    # No engine, host user/PID namespace or host proc tree is made available to a tool.
+    descriptors = {kind: os.open(f"/proc/{pid}/ns/{kind}", os.O_RDONLY | os.O_CLOEXEC) for kind in KINDS}
+    validate_descriptors(value, descriptors)
+    # Root helpers hold only the prevalidated secret-free keeper descriptors and exit before capture.
+    # No namespace inode is bind-mounted on the host: MNT pins cannot survive a later engine CLONE_NEWNS.
+    enter = ["/usr/bin/nsenter", f"--mount=/proc/self/fd/{descriptors['mnt']}",
+             f"--pid=/proc/self/fd/{descriptors['pid']}", "--"]
+    fixed([*enter, "/usr/bin/mount", "--make-rprivate", "/"],
+          pass_fds=(descriptors["mnt"], descriptors["pid"]), stdout=subprocess.DEVNULL)
     for kind in ("user", "pid"):
-        fixed(["/usr/bin/nsenter", "--mount=" + pins["mnt"], "--pid=" + pins["pid"], "--",
-               "/usr/bin/mount", "--bind", "/proc/1/ns/" + kind, directory + "/ancestor-" + kind],
-              stdout=subprocess.DEVNULL)
+        fixed([*enter, "/usr/bin/mount", "--bind", "/proc/1/ns/" + kind, directory + "/ancestor-" + kind],
+              pass_fds=(descriptors["mnt"], descriptors["pid"]), stdout=subprocess.DEVNULL)
     mounts = pathlib.Path(f"/proc/{pid}/mountinfo").read_text().splitlines()
     require(all(not any(field.startswith(("shared:", "master:", "propagate_from:"))
                         for field in line.split()[6:line.split().index("-")]) for line in mounts),
             "The secret-free base has shared or slave propagation")
     require("ro" in next(line.split()[5] for line in mounts if line.split()[4] == "/").split(","),
             "The base trusted root is not read-only")
+    atomic_json(PRIVATE, value, 0o600, replace=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+    listener.bind(value["socket"])
+    os.chown(value["socket"], 0, value["gid"])
+    os.chmod(value["socket"], 0o660)
+    info = os.lstat(value["socket"])
+    value["socketIdentity"] = {"device": info.st_dev, "inode": info.st_ino}
+    value["brokerPending"] = True
+    atomic_json(PRIVATE, value, 0o600, replace=True)
+    log = os.open(directory + "/broker.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        broker = subprocess.Popen(["/usr/bin/python3", "-I", "-S", SELF, "broker", str(os.getpid()),
+                                   str(listener.fileno()), *(str(descriptors[kind]) for kind in KINDS)],
+                                  stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                  pass_fds=(listener.fileno(), *descriptors.values()), start_new_session=True,
+                                  env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    finally:
+        os.close(log)
+        listener.close()
+        for descriptor in descriptors.values():
+            os.close(descriptor)
+    # Until this adoption record is durable the broker remains bound to this parent's death.
+    value["broker"] = {"pid": broker.pid, "start": process_identity(broker.pid)["start"], "uid": 0, "gid": 0}
+    value["brokerPending"] = False
+    atomic_json(PRIVATE, value, 0o600, replace=True)
+    deadline = time.monotonic() + 5
+    while not os.path.exists(directory + "/broker-ready.json"):
+        require(broker.poll() is None, "The descriptor-only broker refused startup")
+        require(time.monotonic() < deadline, "The broker did not acknowledge readiness")
+        time.sleep(0.01)
+    ready = read_json(directory + "/broker-ready.json", 0)
+    require(ready == {"v": 1, "pid": broker.pid, "nonce": value["nonce"]}, "The broker ready identity changed")
+    atomic_json(directory + "/broker-adopt.json", {"v": 1, "nonce": value["nonce"]}, 0o600)
+    while not os.path.exists(directory + "/broker-adopted.json"):
+        require(broker.poll() is None and time.monotonic() < deadline, "The broker adoption did not complete")
+        time.sleep(0.01)
+    require(read_json(directory + "/broker-adopted.json", 0) == ready, "The broker adoption identity changed")
+    rejected_request(value)  # A root peer is not the configured disposable agent, despite owning the socket.
+    value["brokerRootPeerDenied"] = True
     write_json(SPEC, value, 0o444)
     output({"event": "namespace-prepared", "v": 1, "separateNamespaces": True, "exactMapping": True,
             "emptyGroups": True, "readOnlyBase": True, "engineReadOnlyQualified": False})
 
 
-def validate_pins(value):
-    descriptors = {}
-    try:
-        for kind, path in value["pins"].items():
-            descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-            descriptors[kind] = descriptor
-            require(fcntl.ioctl(descriptor, NS_GET_NSTYPE) == KINDS[kind], "A namespace handle has the wrong type")
-            info = os.fstat(descriptor)
-            require(info.st_ino == value["namespaces"][kind] and info.st_dev == value["devices"][kind],
-                    "A namespace handle was replaced")
-        owner = array.array("I", [0])
-        fcntl.ioctl(descriptors["user"], NS_GET_OWNER_UID, owner, True)
-        require(owner[0] == value["uid"], "The tool user namespace has the wrong owning UID")
+def validate_descriptors(value, descriptors, owner=True):
+    require(set(descriptors) == set(KINDS) and len(set(descriptors.values())) == 3, "The broker did not provide exactly three handles")
+    for kind, descriptor in descriptors.items():
+        require(fcntl.ioctl(descriptor, NS_GET_NSTYPE) == KINDS[kind], "A namespace handle has the wrong type")
+        info = os.fstat(descriptor)
+        require(info.st_ino == value["namespaces"][kind] and info.st_dev == value["devices"][kind],
+                "A namespace handle was replaced")
+    if owner:
+        identifier = array.array("I", [0])
+        fcntl.ioctl(descriptors["user"], NS_GET_OWNER_UID, identifier, True)
+        require(identifier[0] == value["uid"], "The tool user namespace has the wrong owning UID")
         for kind in ("mnt", "pid"):
             owner_fd = fcntl.ioctl(descriptors[kind], NS_GET_USERNS)
             try:
                 require(os.fstat(owner_fd).st_ino == value["namespaces"]["user"], "A namespace has a different owner")
             finally:
                 os.close(owner_fd)
-        return descriptors.copy()
+
+
+def receive_namespaces(value, authenticate=True):
+    descriptors = {}
+    received = []
+    try:
+        before = os.lstat(value["socket"])
+        require(stat.S_ISSOCK(before.st_mode) and before.st_dev == value["socketIdentity"]["device"] and
+                before.st_ino == value["socketIdentity"]["inode"], "The immutable broker socket changed")
+        if authenticate:
+            require(before.st_uid == 0 and before.st_gid == value["gid"] and stat.S_IMODE(before.st_mode) == 0o660,
+                    "The broker socket has mutable ownership or permissions")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC) as transport:
+            transport.settimeout(1)
+            transport.connect(value["socket"])
+            peer = struct.unpack("3i", transport.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if authenticate:
+                require(peer == (value["broker"]["pid"], 0, 0), "The descriptor broker has the wrong peer identity")
+            request = b"vector.ns.v1 " + value["nonce"].encode("ascii") + b"\n"
+            transport.sendall(request)
+            message, ancillary, flags, _ = transport.recvmsg(64, socket.CMSG_SPACE(3 * array.array("i").itemsize), socket.MSG_CMSG_CLOEXEC)
+            for level, kind, data in ancillary:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    numbers = array.array("i")
+                    numbers.frombytes(data[:len(data) - len(data) % numbers.itemsize])
+                    received.extend(numbers)
+            require(not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) and message == request and len(ancillary) == 1 and
+                    ancillary[0][0:2] == (socket.SOL_SOCKET, socket.SCM_RIGHTS) and len(received) == 3,
+                    "The broker response is not the fixed namespace-only protocol")
+        # The transport is closed before any namespace entry. No root socket enters the tool namespace.
+        descriptors = dict(zip(KINDS, received, strict=True))
+        require(all(not os.get_inheritable(fd) for fd in received), "The broker sent inheritable descriptors")
+        validate_descriptors(value, descriptors, owner=authenticate)
+        return descriptors
     except BaseException:
-        for descriptor in descriptors.values():
+        for descriptor in received:
             os.close(descriptor)
         raise
 
@@ -305,6 +380,120 @@ def drop_capabilities():
     # The parent is still in the host PID namespace. Its new proc mount intentionally has no /proc/self until fork.
 
 
+def descriptor_broker(parent, listener_fd, descriptors):
+    require(os.getuid() == 0 and os.geteuid() == 0 and os.getgid() == 0 and os.getppid() == parent and parent > 1,
+            "The broker has no trusted startup parent or root identity")
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    require(LIBC.prctl(1, signal.SIGKILL, 0, 0, 0) == 0 and os.getppid() == parent,
+            "The broker could not fence its startup parent")
+    value = validate_spec(read_json(PRIVATE, 0))
+    require(3 <= listener_fd < 128 and all(3 <= fd < 128 for fd in descriptors.values()) and
+            len({listener_fd, *descriptors.values()}) == 4, "The broker inherited overlapping descriptors")
+    validate_descriptors(value, descriptors)
+    for descriptor in (listener_fd, *descriptors.values()):
+        os.set_inheritable(descriptor, False)
+    listener = socket.socket(fileno=listener_fd)
+    require(listener.family == socket.AF_UNIX and listener.type == socket.SOCK_SEQPACKET and
+            listener.getsockname() == value["socket"] and listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 0,
+            "The broker listener was already listening or has the wrong transport")
+    # Popen passes exactly these four descriptors. Refuse any accidental extra authority before accepting clients.
+    for name in os.listdir("/proc/self/fd"):
+        fd = int(name)
+        if fd < 3 or fd in {listener_fd, *descriptors.values()}:
+            continue
+        try:
+            os.fstat(fd)
+        except OSError as error:
+            require(error.errno == errno.EBADF, "Unexpected broker descriptor check failure")
+            continue
+        raise RuntimeError("An unexpected descriptor reached the root broker")
+    require(not any(name.startswith(("GITHUB_", "ACTIONS_", "VECTOR_", "LD_")) for name in os.environ),
+            "The broker inherited credential or loader environment")
+    state = {"quiesced": False, "stopping": False}
+
+    def quiesce(number, frame):
+        state["quiesced"] = True
+
+    def stop(number, frame):
+        state["quiesced"] = state["stopping"] = True
+
+    signal.signal(signal.SIGUSR1, quiesce)
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    os.setgroups([])
+    os.chdir("/")
+    resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
+    require(LIBC.prctl(38, 1, 0, 0, 0) == 0, "The broker could not enable no-new-privileges")
+    drop_capabilities()
+    assert_caps()
+    # SO_PEERCRED captures the listening task, not the earlier root process that merely bound/passed the socket.
+    listener.listen(16)
+    listener.settimeout(0.1)
+    ready = {"v": 1, "pid": os.getpid(), "nonce": value["nonce"]}
+    atomic_json(value["directory"] + "/broker-ready.json", ready, 0o600)
+    deadline = time.monotonic() + 5
+    while not os.path.exists(value["directory"] + "/broker-adopt.json"):
+        require(time.monotonic() < deadline, "The broker was never adopted")
+        time.sleep(0.01)
+    require(read_json(value["directory"] + "/broker-adopt.json", 0) == {"v": 1, "nonce": value["nonce"]},
+            "The broker adoption record changed")
+    recorded = read_json(PRIVATE, 0)["broker"]
+    identity = process_identity(os.getpid())
+    require(recorded["pid"] == os.getpid() and recorded["start"] == identity["start"] and recorded["uid"] == 0,
+            "The broker has no durable cleanup owner")
+    require(LIBC.prctl(1, 0, 0, 0, 0) == 0, "The adopted broker could not release its startup parent")
+    atomic_json(value["directory"] + "/broker-adopted.json", ready, 0o600)
+    request = b"vector.ns.v1 " + value["nonce"].encode("ascii") + b"\n"
+    requests = 0
+    acknowledged = False
+    try:
+        while not state["stopping"]:
+            if state["quiesced"] and not acknowledged:
+                atomic_json(value["directory"] + "/broker-closed.json", ready, 0o600)
+                acknowledged = True
+            try:
+                connection, _ = listener.accept()
+            except TimeoutError:
+                continue
+            requests += 1
+            if requests > 256:
+                state["quiesced"] = True
+            with connection:
+                connection.settimeout(0.2)
+                if state["quiesced"]:
+                    continue
+                try:
+                    peer = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                    if peer[0] <= 1 or peer[1:] != (value["uid"], value["gid"]):
+                        continue
+                    peer_identity = process_identity(peer[0])
+                    if peer_identity["uid"] != value["uid"] or peer_identity["state"] == "Z":
+                        continue
+                    try:
+                        keeper_identity = process_identity(value["keeper"]["pid"])
+                    except (OSError, ValueError, StopIteration):
+                        state["quiesced"] = True
+                        continue
+                    if keeper_identity["uid"] != value["uid"] or keeper_identity["start"] != value["keeper"]["start"] or keeper_identity["state"] == "Z":
+                        state["quiesced"] = True
+                        continue
+                    # A zero ancillary buffer discards/closes any injected rights in the kernel; CTRUNC is refused.
+                    message, ancillary, flags, _ = connection.recvmsg(len(request), 0, socket.MSG_CMSG_CLOEXEC)
+                    if message != request or ancillary or flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or state["quiesced"]:
+                        continue
+                    if process_identity(peer[0])["start"] != peer_identity["start"]:
+                        continue
+                    sent = connection.sendmsg([request], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                                          array.array("i", [descriptors[kind] for kind in KINDS]))])
+                    require(sent == len(request), "The namespace reply was incomplete")
+                except (OSError, ValueError, StopIteration):
+                    continue
+    finally:
+        listener.close()
+        for descriptor in descriptors.values():
+            os.close(descriptor)
+
+
 def launch(engine, mode):
     require(type(engine) is int and engine > 1 and mode in ("normal", "wait", "delay"), "Invalid fixed launch mode")
     require(os.getgroups() == [], "The engine retained supplementary groups")
@@ -329,7 +518,7 @@ def launch(engine, mode):
             require(error.errno == errno.EBADF, "Unexpected inherited-descriptor closure failure")
         else:
             raise RuntimeError("An engine descriptor survived close_range")
-    descriptors = validate_pins(value)
+    descriptors = receive_namespaces(value)
     # The engine is in the owning parent user namespace, never a sibling of this secret-free tool namespace.
     os.setns(descriptors["user"], KINDS["user"])
     os.setns(descriptors["mnt"], KINDS["mnt"])
@@ -397,6 +586,42 @@ def refused_namespace(path, kind, expected):
         os.close(descriptor)
 
 
+def rejected_request(value, inject=False):
+    received = []
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC) as transport:
+            transport.settimeout(1)
+            transport.connect(value["socket"])
+            message = b"vector.ns.v1 " + value["nonce"].encode("ascii") + b"\n"
+            try:
+                if inject:
+                    transport.sendmsg([message], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [1]))])
+                else:
+                    transport.sendall(message if os.geteuid() == 0 else b"not-the-fixed-protocol\n")
+                response, ancillary, flags, _ = transport.recvmsg(64, socket.CMSG_SPACE(12), socket.MSG_CMSG_CLOEXEC)
+            except (ConnectionResetError, BrokenPipeError):
+                response, ancillary, flags = b"", [], 0
+            for level, kind, data in ancillary:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    numbers = array.array("i")
+                    numbers.frombytes(data[:len(data) - len(data) % numbers.itemsize])
+                    received.extend(numbers)
+            require(response == b"" and not ancillary and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC),
+                    "The broker accepted a foreign peer or injected protocol")
+    finally:
+        for descriptor in received:
+            os.close(descriptor)
+
+
+def refused_descriptor(descriptor, kind):
+    try:
+        os.setns(descriptor, KINDS[kind])
+    except OSError as error:
+        require(error.errno == errno.EPERM, "Unexpected broker-descriptor ascent failure")
+        return True
+    raise RuntimeError("A model child ascended through a broker namespace descriptor")
+
+
 def payload(engine, mode, device, inode, digest):
     # Host root is intentionally unmapped here. Bind the public data to the exact root-verified bytes captured before entry.
     value = validate_spec(read_json(SPEC, digest=digest))
@@ -428,6 +653,15 @@ def payload(engine, mode, device, inode, digest):
         os.close(descriptor)
     ancestor_user = refused_namespace(value["directory"] + "/ancestor-user", "user", value["namespaces"]["user"])
     ancestor_pid = refused_namespace(value["directory"] + "/ancestor-pid", "pid", value["namespaces"]["pid"])
+    # The same UID may obtain the public tool namespace handles directly; kernel ancestry still must refuse ascent.
+    descriptors = receive_namespaces(value, authenticate=False)
+    try:
+        require(all(refused_descriptor(descriptors[kind], kind) for kind in KINDS), "A broker handle permitted namespace ascent")
+    finally:
+        for descriptor in descriptors.values():
+            os.close(descriptor)
+    rejected_request(value)
+    rejected_request(value, inject=True)
     canary = value["canary"]["path"]
     for action in (lambda: os.open(canary, os.O_WRONLY), lambda: os.rename(canary, canary + ".poison"),
                    lambda: os.chmod(canary, 0o777), lambda: os.symlink("/dev/null", canary + ".link")):
@@ -498,14 +732,36 @@ def payload(engine, mode, device, inode, digest):
             "stdio": True, "privateProc": True, "signalBlocked": True, "groupsEmpty": True,
             "capabilitiesDropped": True, "noNewPrivileges": True, "readOnly": True, "worktreeWritable": True,
             "scratchWritable": True,
-            "ancestorUserDenied": ancestor_user, "ancestorPidDenied": ancestor_pid})
+            "ancestorUserDenied": ancestor_user, "ancestorPidDenied": ancestor_pid,
+            "ancestorMountDenied": True, "brokerProtocolRejected": True})
 
 
 def cleanup():
-    require(os.geteuid() == 0, "Only trusted root may unpin namespaces")
+    require(os.geteuid() == 0, "Only trusted root may stop the namespace owner")
     value = validate_spec(read_json(PRIVATE, 0))
+    canary_verified = False
     # First seal every model-writable root, then stop the whole disposable UID, not just a leader PID or namespace.
     fixed(["/usr/bin/chmod", "0700", value["container"]], stdout=subprocess.DEVNULL)
+    if os.path.isdir(value["directory"]):
+        fixed(["/usr/bin/chmod", "0700", value["directory"]], stdout=subprocess.DEVNULL)
+    broker_fd = None
+    broker_error = value.get("brokerPending", False)
+    if "broker" in value:
+        try:
+            broker_fd = os.pidfd_open(value["broker"]["pid"], 0)
+            identity = process_identity(value["broker"]["pid"])
+            require(identity["uid"] == 0 and identity["start"] == value["broker"]["start"] and identity["state"] != "Z",
+                    "The owned broker process identity changed")
+            signal.pidfd_send_signal(broker_fd, signal.SIGUSR1)
+            deadline = time.monotonic() + 1
+            while not os.path.exists(value["directory"] + "/broker-closed.json"):
+                require(time.monotonic() < deadline, "The broker did not stop admission")
+                time.sleep(0.01)
+            require(read_json(value["directory"] + "/broker-closed.json", 0) ==
+                    {"v": 1, "pid": value["broker"]["pid"], "nonce": value["nonce"]},
+                    "The broker shutdown acknowledgement changed")
+        except (OSError, RuntimeError, ValueError, StopIteration):
+            broker_error = True
     deadline = time.monotonic() + 2
     while True:
         living = []
@@ -526,14 +782,32 @@ def cleanup():
                     os.close(descriptor)
         if not living:
             break
-        require(time.monotonic() < deadline, "Disposable UID cleanup was not proven; namespace pins remain")
+        require(time.monotonic() < deadline, "Disposable UID cleanup was not proven; broker namespace handles remain")
         time.sleep(0.01)
-    # Lost/partial prepare is still an owned operation; only exact fixed pin paths can be unmounted.
-    for kind in reversed(tuple(KINDS)):
-        pin = value["pins"][kind]
-        result = subprocess.run(["/usr/bin/umount", "--", pin], capture_output=True, timeout=5,
-                                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-        require(result.returncode == 0 or not os.path.ismount(pin), "Owned namespace pin could not be removed")
+    # Broker descriptors are released only after the whole disposable UID is proven stopped.
+    if broker_fd is not None:
+        try:
+            identity = process_identity(value["broker"]["pid"])
+            if identity["uid"] != 0 or identity["start"] != value["broker"]["start"]:
+                broker_error = True
+            else:
+                poll = select.poll()
+                poll.register(broker_fd, select.POLLIN)
+                signal.pidfd_send_signal(broker_fd, signal.SIGTERM)
+                if not poll.poll(1000):
+                    signal.pidfd_send_signal(broker_fd, signal.SIGKILL)
+                    require(poll.poll(1000), "The owned broker did not stop")
+        except (ProcessLookupError, FileNotFoundError):
+            broker_error = True
+        finally:
+            os.close(broker_fd)
+    if os.path.lexists(value["socket"]):
+        info = os.lstat(value["socket"])
+        expected = value.get("socketIdentity")
+        require(expected and stat.S_ISSOCK(info.st_mode) and info.st_uid == 0 and
+                info.st_dev == expected["device"] and info.st_ino == expected["inode"], "An unowned socket replaced the broker")
+        os.unlink(value["socket"])
+    require(not broker_error, "The broker lifetime or stop-admission fence was not proven; artifacts are refused")
     if os.path.exists(SPEC):
         public = validate_spec(read_json(SPEC, 0))
         require(public["uid"] == value["uid"] and public["container"] == value["container"], "Prototype scope changed")
@@ -544,59 +818,11 @@ def cleanup():
                 "The trusted next-step canary was poisoned")
         require(fixed(["/usr/bin/python3", "-I", "-S", public["canary"]["path"]], capture_output=True).stdout ==
                 b"trusted-namespace-canary\n", "Trusted next-step behavior changed")
+        canary_verified = True
         os.unlink(SPEC)
     os.unlink(PRIVATE)
-    output({"event": "namespace-cleaned", "v": 1, "uidStoppedBeforeUnpin": True, "trustedCanaryUnchanged": True})
-
-
-def mount_flags(pid, target):
-    """Only fixed root/destination propagation booleans, never raw host mountinfo."""
-    try:
-        with open(f"/proc/{pid}/mountinfo", "r", encoding="utf8") as file:
-            text = file.read(65537)
-        if len(text) > 65536:
-            return {"available": False, "truncated": True}
-        lines = [line.split() for line in text.splitlines()]
-        covering = [fields for fields in lines if fields[4] == "/" or target == fields[4] or target.startswith(fields[4] + "/")]
-        fields = max(covering, key=lambda item: len(item[4]))
-        propagation = fields[6:fields.index("-")]
-        return {"available": True, "readOnly": "ro" in fields[5].split(","),
-                "shared": any(item.startswith("shared:") for item in propagation),
-                "slave": any(item.startswith("master:") for item in propagation),
-                "propagateFrom": any(item.startswith("propagate_from:") for item in propagation)}
-    except (OSError, ValueError, IndexError):
-        return {"available": False}
-
-
-def pin_namespace(kind, pid, start, device, inode):
-    require(os.geteuid() == 0 and kind in KINDS and 1 < pid < (1 << 31) and start.isdigit() and len(start) <= 32,
-            "Invalid fixed namespace pin request")
-    value = validate_spec(read_json(PRIVATE, 0))
-    descriptor = os.open(f"/proc/{pid}/ns/{kind}", os.O_RDONLY | os.O_CLOEXEC)
-    try:
-        identity = process_identity(pid)
-        require(identity["uid"] == value["uid"] and identity["start"] == start and identity["state"] != "Z",
-                "The namespace keeper identity changed before binding")
-        info = os.fstat(descriptor)
-        require(fcntl.ioctl(descriptor, NS_GET_NSTYPE) == KINDS[kind] and
-                info.st_dev == device and info.st_ino == inode, "The namespace source handle changed before binding")
-        # A pinned source FD avoids a PID reuse between validation and the identical MS_BIND syscall.
-        result = LIBC.mount(os.fsencode(f"/proc/self/fd/{descriptor}"), os.fsencode(value["pins"][kind]), None, 4096, None)
-        code = ctypes.get_errno() if result != 0 else 0
-        if result != 0:
-            try:
-                current_mount = os.stat("/proc/self/ns/mnt").st_ino
-                keeper_mount = os.stat(f"/proc/{pid}/ns/mnt").st_ino
-            except OSError:
-                current_mount = keeper_mount = None
-            output({"event": "namespace-pin-refused", "kind": kind, "errno": code,
-                    "category": errno.errorcode.get(code, "UNKNOWN"), "kernel": os.uname().release[:128],
-                    "currentMountNamespace": current_mount, "keeperMountNamespace": keeper_mount,
-                    "hostDestination": mount_flags("self", value["directory"]),
-                    "keeperDestination": mount_flags(pid, value["directory"])})
-            raise RuntimeError(f"The fixed {kind} namespace bind failed with {errno.errorcode.get(code, 'UNKNOWN')} ({code})")
-    finally:
-        os.close(descriptor)
+    output({"event": "namespace-cleaned", "v": 1, "uidStoppedBeforeBroker": True, "brokerStopped": True,
+            "trustedCanaryUnchanged": canary_verified})
 
 
 def observe(pid, start):
@@ -642,7 +868,7 @@ if __name__ == "__main__":
         cleanup()
     elif len(sys.argv) == 4 and sys.argv[1] == "observe":
         observe(int(sys.argv[2]), sys.argv[3])
-    elif len(sys.argv) == 7 and sys.argv[1] == "pin":
-        pin_namespace(sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5]), int(sys.argv[6]))
+    elif len(sys.argv) == 7 and sys.argv[1] == "broker":
+        descriptor_broker(int(sys.argv[2]), int(sys.argv[3]), dict(zip(KINDS, map(int, sys.argv[4:]), strict=True)))
     else:
         raise RuntimeError("Unexpected namespace-entry prototype invocation")

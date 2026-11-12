@@ -236,6 +236,25 @@ async function main() {
   const uid = spec.uid
   const gid = spec.gid
   const keeper = { pid: spec.keeper.pid, start: spec.keeper.start }
+  requireValue(
+    record(spec.broker) &&
+      integer(spec.broker.pid) &&
+      spec.broker.pid > 1 &&
+      typeof spec.broker.start === "string" &&
+      spec.broker.uid === 0 &&
+      spec.broker.gid === 0 &&
+      spec.brokerRootPeerDenied === true,
+    "The root namespace broker was not sealed before capture",
+  )
+  const broker = { pid: spec.broker.pid, start: spec.broker.start }
+  const brokerLive = async () => {
+    const actual = await identity(broker.pid, 0)
+    requireValue(
+      actual && actual.uid === 0 && actual.start === broker.start && actual.state !== "Z",
+      "The root namespace broker disappeared or changed identity",
+    )
+  }
+  await brokerLive()
   const directory = await fs.lstat(observer)
   requireValue(
     directory.isDirectory() && directory.uid === 0 && !(directory.mode & 0o022),
@@ -273,6 +292,7 @@ async function main() {
     }, 1000)
   }, 90_000)
   const handle = async (line: string) => {
+    await brokerLive()
     const value: unknown = JSON.parse(line)
     requireValue(record(value) && value.v === 1, "Invalid namespace engine protocol")
     if (value.event === "namespace-engine-ready") {
@@ -464,6 +484,7 @@ async function main() {
       engineReadOnlyQualified: false,
       actualToolSeamsQualified: false,
       container: spec.container,
+      broker,
       uid,
       baseline,
       rounds,
@@ -552,6 +573,15 @@ async function finalAssertion() {
   requireValue(
     container === undefined && (await snapshot(report.uid)).length === 0,
     "The disposable sandbox or a live agent process remains after trusted cleanup",
+  )
+  requireValue(
+    record(report.broker) && integer(report.broker.pid) && typeof report.broker.start === "string",
+    "The host report has no broker lifetime identity",
+  )
+  const broker = await identity(report.broker.pid, 0)
+  requireValue(
+    !broker || broker.start !== report.broker.start || broker.state === "Z",
+    "The root namespace broker survived trusted cleanup",
   )
   console.log(
     "Namespace-entry prototype passed its bounded host observations; production floor and engine read-only qualification remain pending.",

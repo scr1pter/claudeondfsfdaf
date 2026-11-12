@@ -26,6 +26,8 @@ const proofFlags = [
   "scratchWritable",
   "ancestorUserDenied",
   "ancestorPidDenied",
+  "ancestorMountDenied",
+  "brokerProtocolRejected",
 ] as const
 
 function requireValue(condition: unknown, message: string): asserts condition {
@@ -65,6 +67,16 @@ async function readSpec() {
     )
     const value: unknown = JSON.parse(await file.readFile("utf8"))
     requireValue(record(value) && value.v === 1, "Invalid prototype metadata")
+    requireValue(
+      record(value.broker) &&
+        typeof value.broker.pid === "number" &&
+        value.broker.pid > 1 &&
+        value.broker.uid === 0 &&
+        value.broker.gid === 0 &&
+        typeof value.broker.start === "string" &&
+        value.brokerRootPeerDenied === true,
+      "The namespace broker has no root-sealed startup proof",
+    )
     requireValue(typeof value.container === "string" && containers.includes(value.container), "Invalid prototype scope")
     requireValue(value.observer === value.container + "/namespace-observer", "Invalid observer directory")
     requireValue(
