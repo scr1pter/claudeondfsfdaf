@@ -6,6 +6,8 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { GithubSecrets } from "./github.secrets"
+import { GithubToolIsolation } from "./github.tool-isolation"
+import { GithubSessionProof } from "./github.session-proof"
 
 const execute = promisify(execFile)
 const USER = GithubAgents.SANDBOX_USER
@@ -25,6 +27,7 @@ const State = z
     uid: z.number().int().positive().optional(),
     gid: z.number().int().positive().optional(),
     prepared: z.boolean(),
+    isolatedTools: z.boolean().optional(),
   })
   .strict()
 type State = z.infer<typeof State>
@@ -266,14 +269,25 @@ async function prepareBundle(directory: string) {
 /** The caller supplies only trusted paths; no secret name or credential enters the child's OS environment. */
 export function sandboxEnvironment(
   env: Env,
-  locations: { home: string; temporary: string; event: string; node: string },
+  locations: {
+    home: string
+    temporary: string
+    event: string
+    node: string
+    toolIsolation?: "pid"
+    sessionProof?: true
+  },
 ): Record<string, string> {
   mode(env)
   const names = new Set(env.VECTOR_SECRET_ENV_NAMES?.split(",") ?? [])
   return {
     ...Object.fromEntries(
       GithubAgents.SANDBOX_ENV_ALLOW.flatMap((name) =>
-        env[name] === undefined || names.has(name) || GithubAgents.SECRET_NAME_PATTERN.test(name)
+        name === GithubAgents.TOOL_PID_NAMESPACE_ENV ||
+        name === GithubAgents.SESSION_PROOF_ENV ||
+        env[name] === undefined ||
+        names.has(name) ||
+        GithubAgents.SECRET_NAME_PATTERN.test(name)
           ? []
           : [[name, env[name]!]],
       ),
@@ -291,6 +305,8 @@ export function sandboxEnvironment(
     RUNNER_TEMP: absolute(locations.temporary),
     GITHUB_EVENT_PATH: absolute(locations.event),
     VECTOR_SECRET_CHANNEL: "stdin",
+    ...(locations.toolIsolation === "pid" ? { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "pid" } : {}),
+    ...(locations.sessionProof ? { [GithubAgents.SESSION_PROOF_ENV]: "fd3" } : {}),
   }
 }
 
@@ -323,7 +339,12 @@ export async function secretChannel(
 }
 
 /** Copy only a bounded, unlinked regular file, including checks on the parent directory. */
-export async function copyBundleFile(source: string, destination: string, name: string) {
+export async function copyBundleFile(
+  source: string,
+  destination: string,
+  name: string,
+  proof?: GithubSessionProof.Proof,
+) {
   const limit =
     name === "patch.diff"
       ? GithubAgents.PATCH_LIMITS.bytes
@@ -347,6 +368,10 @@ export async function copyBundleFile(source: string, destination: string, name: 
       size += part.bytesRead
     }
     if (size > limit) throw refused()
+    if (name === GithubAgents.SESSION_FILE) {
+      const actual = GithubSessionProof.digest(buffer.subarray(0, size))
+      if (!proof || actual.bytes !== proof.bytes || actual.sha256 !== proof.sha256) throw refused()
+    }
     const output = await fs.open(
       path.join(destination, name),
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -473,6 +498,19 @@ export async function prepare(env: Env = process.env) {
   if (groups !== String(state.gid)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/sudo", "-n", "true"], [0, 1])).code !== (state.sudo ? 0 : 1)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
+  if (!state.sudo) {
+    GithubToolIsolation.assertBinary()
+    if (
+      (
+        await sudo(
+          [...asAgent, GithubToolIsolation.BINARY, ...GithubToolIsolation.argumentsForTool("/bin/true", [], staged)],
+          [0, 1],
+        )
+      ).code !== 0
+    )
+      throw refused()
+    state.isolatedTools = true
+  }
   for (const name of FILE_COMMANDS) {
     const file = env[name]
     if (!file) continue
@@ -525,6 +563,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
       !state.created ||
       !state.uid ||
       !state.gid ||
+      (!state.sudo && !state.isolatedTools) ||
       state.workspace !== workspace ||
       state.mode !== env.VECTOR_MODE)
   )
@@ -537,6 +576,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
   )
     throw refused()
   if (hosted) {
+    if (!state!.sudo) GithubToolIsolation.assertBinary()
     await verifyContainer(state!.container, true)
     await placeholder(workspace)
   }
@@ -555,13 +595,37 @@ export async function run(args: readonly string[], env: Env = process.env) {
     home,
     temporary,
     event: hosted ? `${AGENT_HOME}/event.json` : absolute(env.GITHUB_EVENT_PATH),
+    ...(hosted && !state!.sudo ? { toolIsolation: "pid" as const } : {}),
+    ...(hosted && state!.mode === "codium" && !state!.sudo ? { sessionProof: true as const } : {}),
   })
   clean.GITHUB_WORKSPACE = working
   const channel = await secretChannel(env)
+  const proofPath =
+    hosted && state!.mode === "codium" ? path.join(stateDirectory(env), "session-proof.json") : undefined
+  if (proofPath) {
+    const file = await fs.open(
+      proofPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    )
+    await file.close()
+  }
   const launcher = hosted ? "/usr/bin/sudo" : binary
   const arguments_ = hosted
     ? [
         "-n",
+        // sudo closes extra descriptors. This fixed bridge opens FD3 only after sudo, before the UID switch.
+        ...(proofPath
+          ? [
+              "/bin/bash",
+              "--noprofile",
+              "--norc",
+              "-c",
+              'exec 3>"$1"; shift; exec "$@"',
+              "vector-session-proof",
+              proofPath,
+            ]
+          : []),
         "/usr/bin/prlimit",
         "--core=0:0",
         "--",
@@ -699,13 +763,14 @@ export async function finish(env: Env = process.env) {
         }
       }
       if (isolationError) throw isolationError
+      const proof = !cancelled && state?.mode === "codium" ? await readSessionProof(env) : undefined
       if (!cancelled)
         for (const name of [...GithubAgents.BUNDLE_FILES, GithubAgents.SESSION_FILE]) {
           const directory = path.join(
             absolute(env.RUNNER_TEMP),
             name === GithubAgents.SESSION_FILE ? "vector-session" : "vector-out",
           )
-          await copyBundleFile(path.join(quarantine, GithubAgents.BUNDLE_DIR), directory, name).catch(
+          await copyBundleFile(path.join(quarantine, GithubAgents.BUNDLE_DIR), directory, name, proof).catch(
             (error: NodeJS.ErrnoException) => {
               if (error.code !== "ENOENT") throw refused()
             },
@@ -738,5 +803,33 @@ export async function finish(env: Env = process.env) {
   } finally {
     process.removeListener("SIGINT", interrupt)
     process.removeListener("SIGTERM", terminate)
+  }
+}
+
+async function readSessionProof(env: Env) {
+  await privateDirectory(stateDirectory(env))
+  const file = await fs
+    .open(path.join(stateDirectory(env), "session-proof.json"), constants.O_RDONLY | constants.O_NOFOLLOW)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw refused()
+      return undefined
+    })
+  if (!file) return
+  try {
+    const info = await file.stat()
+    if (
+      !info.isFile() ||
+      info.nlink !== 1 ||
+      info.uid !== process.getuid?.() ||
+      info.mode & 0o077 ||
+      info.size > GithubSessionProof.LIMIT
+    )
+      throw refused()
+    if (info.size === 0) return
+    const bytes = Buffer.alloc(GithubSessionProof.LIMIT + 1)
+    const part = await file.read(bytes, 0, bytes.byteLength, 0)
+    return GithubSessionProof.parse(bytes.subarray(0, part.bytesRead))
+  } finally {
+    await file.close()
   }
 }

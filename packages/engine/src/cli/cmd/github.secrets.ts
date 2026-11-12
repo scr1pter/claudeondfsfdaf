@@ -3,6 +3,7 @@ import { constants, type Stats } from "node:fs"
 import path from "node:path"
 import type { Readable } from "node:stream"
 import { z } from "zod"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 
 const token = z
   .string()
@@ -53,6 +54,26 @@ const Channel = z
 
 export type Channel = z.infer<typeof Channel>
 const CHANNEL_LIMIT = 131_072
+
+/** Debug transports expose the private in-memory channel, even when its values were removed from the environment. */
+export function debuggerRequested(argv: readonly string[], env: Readonly<Record<string, string | undefined>>) {
+  return (
+    argv.some((value) => /^--(?:inspect|debug)(?:[=-]|$)/.test(value)) ||
+    [env.NODE_OPTIONS, env.BUN_OPTIONS].some((value) =>
+      value ? /(?:^|[\s"'])--(?:inspect|debug)(?:[\s="'-]|$)/.test(value) : false,
+    ) ||
+    Object.entries(env).some(([name, value]) => /^BUN_INSPECT(?:_|$)/.test(name) && !!value)
+  )
+}
+
+export async function assertNoDebugger(env: Readonly<Record<string, string | undefined>> = process.env) {
+  if (debuggerRequested(process.execArgv, env)) throw unavailable()
+  // Published native CLIs run on Bun. Node launchers/bundles also need to reject an inspector already opened by signal.
+  if (!process.versions.bun) {
+    const { url } = await import("node:inspector")
+    if (url()) throw unavailable()
+  }
+}
 
 export function validRunToken(value: unknown): value is string {
   return runToken.safeParse(value).success
@@ -218,11 +239,18 @@ export function createGithubSecrets() {
   let authorized = false
   let authorization = 0
   let loading: Promise<void> | undefined
+  let isolatedTools = false
+  let sessionProof = false
   const load = async (env: Record<string, string | undefined>, input: AsyncIterable<Uint8Array | string>) => {
     if (env.GITHUB_ACTIONS !== "true") throw unavailable()
+    const isolation = env[GithubAgents.TOOL_PID_NAMESPACE_ENV]
+    const proof = env[GithubAgents.SESSION_PROOF_ENV]
     const supplied = env.VECTOR_SECRET_ENV_NAMES?.split(",").filter(Boolean) ?? []
     let capture: unknown
     try {
+      if (isolation !== undefined && isolation !== "pid") throw unavailable()
+      if (proof !== undefined && proof !== "fd3") throw unavailable()
+      await assertNoDebugger(env)
       capture =
         env.VECTOR_SECRET_CHANNEL === "stdin"
           ? await channelLine(input)
@@ -258,6 +286,9 @@ export function createGithubSecrets() {
       .sort((a, b) => b.length - a.length)
       .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     outputPattern = patterns.length ? new RegExp(patterns.join("|"), "g") : undefined
+    // Capture authority once, before project/tool environments can change. Codium never permits the sudo exception.
+    isolatedTools = parsed.data.runToken !== undefined || isolation === "pid"
+    sessionProof = parsed.data.runToken !== undefined && isolation === "pid" && proof === "fd3"
     held = parsed.data
   }
   return {
@@ -267,6 +298,8 @@ export function createGithubSecrets() {
       }))
     },
     loaded: () => held !== undefined,
+    isolatedTools: () => held !== undefined && isolatedTools,
+    sessionProof: () => held !== undefined && sessionProof,
     pendingRunToken: () => held?.runToken,
     runToken: () => (authorized ? held?.runToken : undefined),
     githubToken: () => held?.githubToken,

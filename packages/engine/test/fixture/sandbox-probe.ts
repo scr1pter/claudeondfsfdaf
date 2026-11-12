@@ -6,6 +6,8 @@ import { promisify } from "node:util"
 import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
+import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
+import { probeToolProcesses } from "./sandbox-tool-probe"
 
 const execute = promisify(execFile)
 const self = fileURLToPath(import.meta.url)
@@ -169,6 +171,16 @@ if (process.argv[2] === "--crash") {
   if (!report.crash?.hardZero || !report.crash?.noDump || !report.crash?.noNewPrivileges)
     throw new Error("Missing crash isolation evidence")
   if (
+    !report.toolProcess?.actualShellTool ||
+    !report.toolProcess?.sameUid ||
+    !report.toolProcess?.targetInvisible ||
+    !report.toolProcess?.signalBlocked ||
+    !report.toolProcess?.inspectorStayedClosed ||
+    !report.toolProcess?.controlInspectorOpened ||
+    !report.toolProcess?.activeInspectorRefused
+  )
+    throw new Error("Missing actual ShellTool process-isolation acceptance")
+  if (
     !report.channel ||
     !report.scan.commandDirectoryChecked ||
     report.scan.leaks.length ||
@@ -220,6 +232,20 @@ if (process.argv[2] === "--crash") {
     .stat(path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", "upload-allowed"))
     .catch(() => undefined)
   if (Boolean(uploaded) === failure) throw new Error("A failed cleanup reached the artifact boundary")
+  const session = await fs
+    .readFile(path.join(process.env.RUNNER_TEMP!, "vector-session", "session.vsa"))
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error
+      return undefined
+    })
+  if (process.env.PROBE_SCENARIO === "session-replaced" && session)
+    throw new Error("The runner copied model-planted session bytes")
+  if (
+    !failure &&
+    process.env.VECTOR_MODE === "codium" &&
+    session?.toString() !== "synthetic ciphertext output for the disposable provenance probe"
+  )
+    throw new Error("The runner did not preserve the trusted exact session bytes")
   if (
     !failure &&
     JSON.stringify(
@@ -249,6 +275,7 @@ if (process.argv[2] === "--crash") {
         holder.pendingRunToken() === undefined &&
         holder.providerKeys().DEEPSEEK_KEY === markers[4])
   if (!channel) throw new Error("The probe could not receive its private credential channel")
+  const toolProcess = await probeToolProcesses()
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
   const child = await execute(
     "/bin/bash",
@@ -277,10 +304,17 @@ if (process.argv[2] === "--crash") {
   await fs.writeFile("vector-out/patch.diff", "", { mode: 0o600 })
   await fs.writeFile(
     "vector-out/summary.json",
-    JSON.stringify({ channel, scan: report, crash, detached: detachedIdentity }),
+    JSON.stringify({ channel, scan: report, crash, toolProcess, detached: detachedIdentity }),
     { mode: 0o600 },
   )
-  await fs.writeFile("vector-out/session.vsa", "synthetic probe session", { mode: 0o600 })
+  if (process.env.VECTOR_MODE === "codium") {
+    // This fixture tests private provenance and byte binding, not the separate real encryption codec.
+    const bytes = Buffer.from("synthetic ciphertext output for the disposable provenance probe")
+    await fs.writeFile("vector-out/session.vsa", bytes, { mode: 0o600, flag: "wx" })
+    if (!GithubSessionProof.attestSessionArtifact(bytes)) throw new Error("The trusted session proof was not recorded")
+    if (process.argv.includes("--session-replaced"))
+      await fs.writeFile("vector-out/session.vsa", "model-planted plaintext after the trusted writer")
+  }
   if (process.argv.includes("--bundle-refusal")) {
     await fs.unlink("vector-out/patch.diff")
     await fs.symlink("/etc/passwd", "vector-out/patch.diff")

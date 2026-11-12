@@ -24,6 +24,9 @@ on:
       - packages/core/src/free-models.ts
       - packages/core/src/share/transport.ts
       - packages/engine/src/cli/cmd/github*.ts
+      - packages/engine/src/index.ts
+      - packages/engine/src/tool/shell.ts
+      - packages/engine/script/stage-sandbox-probe.ts
       - packages/engine/src/provider/provider.ts
       - packages/engine/src/session/llm/request.ts
       - packages/engine/src/session/posting.ts
@@ -228,6 +231,11 @@ jobs:
             scenario: cancelled
           - mode: codium
             scenario: seal-refusal
+          - mode: codium
+            scenario: session-replaced
+          - mode: codium
+            scenario: success
+            runtime: bun
     env:
       VECTOR_MODE: ${{ matrix.mode }}
       VECTOR_SECRET_ENV_NAMES: DEEPSEEK_KEY
@@ -236,6 +244,7 @@ jobs:
       DEEPSEEK_KEY: probe-provider-private-44de
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: probe-oidc-private-73af
       PROBE_SCENARIO: ${{ matrix.scenario }}
+      PROBE_RUNTIME: ${{ matrix.runtime || 'node' }}
     defaults:
       run:
         shell: bash
@@ -257,6 +266,8 @@ jobs:
 
       - name: Install probe build dependencies
         run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap
           bun install --frozen-lockfile --ignore-scripts
           bun run script/prepare-gitlab.ts
           bun run --cwd packages/core fix-node-pty
@@ -270,8 +281,16 @@ jobs:
           grep -q 'run' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           grep -q 'finish' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
-          bun build --target=node packages/engine/test/fixture/sandbox-probe.ts --outfile "$RUNNER_TEMP/vector-probe-tools/probe.mjs"
+          bun packages/engine/script/stage-sandbox-probe.ts
+          bun build --target=node packages/engine/src/cli/cmd/github.secrets.ts --outfile "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
+          sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
+          if [ -d "$RUNNER_TEMP/vector-probe-tools/assets" ]; then
+            sudo -n mkdir -p /opt/assets
+            sudo -n cp -R "$RUNNER_TEMP/vector-probe-tools/assets/." /opt/assets/
+            sudo -n chmod -R a+rX,go-w /opt/assets
+          fi
           node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --install
 
       - name: Prepare the agent sandbox
@@ -283,6 +302,10 @@ jobs:
         run: |
           if [ "$PROBE_SCENARIO" = bundle-refusal ]; then
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --bundle-refusal
+          elif [ "$PROBE_SCENARIO" = session-replaced ]; then
+            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --session-replaced
+          elif [ "$PROBE_RUNTIME" = bun ]; then
+            vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe.mjs
           else
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
           fi

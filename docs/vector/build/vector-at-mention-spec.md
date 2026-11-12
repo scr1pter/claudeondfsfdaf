@@ -2,10 +2,9 @@
 
 This is the build contract for **@vector**: mentioning Vector in a GitHub issue, pull request or review comment starts Vector inside that repository's own GitHub Actions, on the repository owner's own Actions minutes, doing that repository's software work. It is product and engineering design for engineer-agents to build from, one work package at a time.
 
-**Target.** Built on branch `vector-at-mention`, cut from `main` at `78526052`. Every package works against `main` as it is. Codium's lane later backs our entitlement seam, registers our run-token verifier and gateway hook, and backs our `revokedBefore` seam in its integration package A59, which needs this branch merged to `main` first. @vector on Codium is _listed_ only after A59 and the live checks in section 4; until then every Codium surface stays hidden (INV-H2). The own-key path works end to end without Codium.
+**Target.** Built on branch `vector-at-mention`, cut from `main` at `78526052`. Every package works against `main` as it is. Codium's lane later backs our entitlement seam, registers our run-token verifier and gateway hook, and backs our `revokedBefore` seam in its integration package A59, which needs this branch merged to `main` first. @vector on Codium is *listed* only after A59 and the live checks in section 4; until then every Codium surface stays hidden (INV-H2). The own-key path works end to end without Codium.
 
 **Principles every package keeps:**
-
 - **The user's repo, the user's minutes.** Runs happen only in the repository's own Actions. Vector sells Codium model access inside the run, never Actions, and runs do only that repository's software work.
 - **Writers only.** A run starts only for someone with write, maintain or admin permission. Strangers, bots and forks are refused before any code runs or any credential is requested.
 - **The agent cannot write, and cannot read credentials.** The model runs as a separate unprivileged user in a sandbox (2.11.3, V16). No process it can start can read the OIDC request token, the run token, the GitHub token, a provider key or the runner's own tokens. The job that runs the model has a read-only GitHub token. A separate publish job pushes the result; it runs no repository code and takes its routing only from trusted sources.
@@ -28,40 +27,40 @@ This is the build contract for **@vector**: mentioning Vector in a GitHub issue,
 
 Phases: foundations (1 to 4), server (5 to 14), workflow and engine (15 to 23), apps and website (24 to 27), continuity, webhooks, docs and the mocked journey (28 to 31).
 
-| #   | Id  | Package                                                                                       | Depends on                   | Size |
-| --- | --- | --------------------------------------------------------------------------------------------- | ---------------------------- | ---- |
-| 1   | V00 | CI lane and test wiring                                                                       | none                         | M    |
-| 2   | V01 | Shared constants (`GithubAgents`)                                                             | V00                          | S    |
-| 3   | V02 | Mention parsing: word boundaries and the App handle                                           | V01                          | M    |
-| 4   | V03 | Actions safety floor: withheld tools, env stripping, repo-work policy                         | V01                          | M    |
-| 5   | V04 | Entitlement seam with the local limits table and the `revokedBefore` seam                     | V01                          | M    |
-| 6   | V05 | Repo bindings, bind codes and generations                                                     | V01                          | M    |
-| 7   | V06 | Hours, slots and scheduled-runs ledger, and the gateway hook                                  | V04, V05                     | L    |
-| 8   | V07 | Run tokens and the verifier seam                                                              | V04, V05, V06                | M    |
-| 9   | V08 | OIDC verifier: `mint` and `bind` audiences, job-workflow claims, review comments, the App bot | V01                          | M    |
-| 10  | V09 | App trust policy: split jobs, comment and thread checks, binder access, bot tickets           | V05, V08                     | M    |
-| 11  | V10 | Bind API and binding management                                                               | V05, V08, V09                | M    |
-| 12  | V11 | Run records and the stored-data list                                                          | V05, V10                     | S    |
-| 13  | V12 | Mint, heartbeat and settle API                                                                | V04, V06, V07, V09, V10, V11 | L    |
-| 14  | V13 | `startCloudRun` and one-time tickets                                                          | V12                          | M    |
-| 15  | V14 | Workflow generator v3                                                                         | V01, V02                     | L    |
-| 16  | V15 | Engine: `mint` and `bind` commands, account gate, run credential, heartbeat                   | V12, V14                     | L    |
-| 17  | V16 | Agent sandbox: separate user, secret channel, process cleanup, runner probe                   | V14, V15                     | L    |
-| 18  | V17 | Lift `githubRun` helpers to module scope (no behaviour change)                                | V03                          | M    |
-| 19  | V18 | Engine: agent phase, run bundle, untrusted thread text, deadline and stop codes               | V03, V15, V16, V17           | L    |
-| 20  | V19 | Codium-only evidence and log copy (P6)                                                        | V18                          | S    |
-| 21  | V20 | Codium review path                                                                            | V14, V15, V18, V19           | M    |
-| 22  | V21 | Engine: publish phase                                                                         | V09, V17, V18                | L    |
-| 23  | V22 | Scheduled runs                                                                                | V14, V18, V21                | M    |
-| 24  | V23 | `vector github install` for Codium and own key                                                | V14, V15                     | M    |
-| 25  | V24 | Desktop main: setup PR, bind, Run in GitHub, bindings, runs                                   | V10, V11, V12, V14, V23      | L    |
-| 26  | V25 | App UI: setup card, Run in GitHub, Settings → GitHub, automations switch                      | V24                          | L    |
-| 27  | V26 | Website account page: bindings and bind codes                                                 | V10                          | M    |
-| 28  | V27 | Follow-ups: encrypted session artifacts                                                       | V12, V16, V18, V21           | L    |
-| 29  | V28 | Webhook handlers for the shared router (A47)                                                  | V05                          | S    |
-| 30  | V29 | Docs, website copy and the owner doc                                                          | V22, V23, V25, V26           | M    |
-| 31  | V30 | End-to-end mocked journey (acceptance)                                                        | every package above          | L    |
-| —   | V31 | Ship Desk capture job (deferred until Codium A49 is on `main`)                                | V14, Codium A49              | S    |
+| # | Id | Package | Depends on | Size |
+|---|---|---|---|---|
+| 1 | V00 | CI lane and test wiring | none | M |
+| 2 | V01 | Shared constants (`GithubAgents`) | V00 | S |
+| 3 | V02 | Mention parsing: word boundaries and the App handle | V01 | M |
+| 4 | V03 | Actions safety floor: withheld tools, env stripping, repo-work policy | V01 | M |
+| 5 | V04 | Entitlement seam with the local limits table and the `revokedBefore` seam | V01 | M |
+| 6 | V05 | Repo bindings, bind codes and generations | V01 | M |
+| 7 | V06 | Hours, slots and scheduled-runs ledger, and the gateway hook | V04, V05 | L |
+| 8 | V07 | Run tokens and the verifier seam | V04, V05, V06 | M |
+| 9 | V08 | OIDC verifier: `mint` and `bind` audiences, job-workflow claims, review comments, the App bot | V01 | M |
+| 10 | V09 | App trust policy: split jobs, comment and thread checks, binder access, bot tickets | V05, V08 | M |
+| 11 | V10 | Bind API and binding management | V05, V08, V09 | M |
+| 12 | V11 | Run records and the stored-data list | V05, V10 | S |
+| 13 | V12 | Mint, heartbeat and settle API | V04, V06, V07, V09, V10, V11 | L |
+| 14 | V13 | `startCloudRun` and one-time tickets | V12 | M |
+| 15 | V14 | Workflow generator v3 | V01, V02 | L |
+| 16 | V15 | Engine: `mint` and `bind` commands, account gate, run credential, heartbeat | V12, V14 | L |
+| 17 | V16 | Agent sandbox: separate user, secret channel, process cleanup, runner probe | V14, V15 | L |
+| 18 | V17 | Lift `githubRun` helpers to module scope (no behaviour change) | V03 | M |
+| 19 | V18 | Engine: agent phase, run bundle, untrusted thread text, deadline and stop codes | V03, V15, V16, V17 | L |
+| 20 | V19 | Codium-only evidence and log copy (P6) | V18 | S |
+| 21 | V20 | Codium review path | V14, V15, V18, V19 | M |
+| 22 | V21 | Engine: publish phase | V09, V17, V18 | L |
+| 23 | V22 | Scheduled runs | V14, V18, V21 | M |
+| 24 | V23 | `vector github install` for Codium and own key | V14, V15 | M |
+| 25 | V24 | Desktop main: setup PR, bind, Run in GitHub, bindings, runs | V10, V11, V12, V14, V23 | L |
+| 26 | V25 | App UI: setup card, Run in GitHub, Settings → GitHub, automations switch | V24 | L |
+| 27 | V26 | Website account page: bindings and bind codes | V10 | M |
+| 28 | V27 | Follow-ups: encrypted session artifacts | V12, V16, V18, V21 | L |
+| 29 | V28 | Webhook handlers for the shared router (A47) | V05 | S |
+| 30 | V29 | Docs, website copy and the owner doc | V22, V23, V25, V26 | M |
+| 31 | V30 | End-to-end mocked journey (acceptance) | every package above | L |
+| — | V31 | Ship Desk capture job (deferred until Codium A49 is on `main`) | V14, Codium A49 | S |
 
 ### 0.2 Branch, commit and ownership rules
 
@@ -72,7 +71,7 @@ Phases: foundations (1 to 4), server (5 to 14), workflow and engine (15 to 23), 
 - **Push.** After each package, run `cd /home/user/wt/at-mention && /home/user/.tools/vector-serial git push origin vector-at-mention`. The pre-push hook typechecks all 23 packages. Never bypass it. If it fails, fix the cause and push again. Never force-push, amend pushed commits, `git stash` or `git reset --hard`.
 - **Files we own** (they were Codex's): `api/cloud-agents/*`, `api/_lib/cloud-agents-*.ts`, `api/_lib/github-oidc.ts`, `api/_lib/github-webhook-handlers/cloud-agents.ts`, `packages/core/src/review/workflow.ts`, `packages/core/src/review/schedule.ts`, `packages/engine/src/cli/cmd/github.*`, `packages/desktop/src/main/github-*.ts`, the GitHub sections of `packages/web/src/pages/docs/vectorscope.astro`, and `docs/vector/owner-actions/vector-mention.md`. We also edit, as the GitHub integration's owner, `api/_lib/github-api.ts`, `api/_lib/github-app.ts`, `api/github/*` except `api/github/webhook.ts`, and `packages/core/src/review/command.ts`.
 - **Shared files we touch** (list each in the commit body): `packages/core/src/child-environment.ts`, `packages/engine/src/tool/registry.ts`, `packages/engine/src/index.ts`, `packages/engine/src/cli/vector-account.ts`, `packages/engine/src/effect/app-node-builder-v1.ts`, `packages/engine/src/provider/provider.ts` (the free `vector` provider in Codium runs only), `packages/engine/src/session/retry.ts` (the pinned Codium gateway rule, used only while a Codium agent phase runs), `packages/engine/src/cli/cmd/github.review.ts` and `github.evidence.ts` (also edited by Codium's A26), `packages/desktop/src/main/ipc.ts`, `ipc-security.ts`, `packages/desktop/src/preload/*`, `packages/app/src/components/settings-v2/settings-registry.ts` and its test, `packages/app/src/features/scheduled/*`, `packages/web/src/components/marketing/account/AccountPage.tsx`, `docs/vector/owner-actions/github-app.md`.
-- **Never edit** Codium's files: `api/_lib/codium-*.ts`, `api/_lib/model-plan-*.ts`, `api/model-plans/*`, `packages/schema/src/codium-*.ts`. We may _import_ `modelPlanStatus`, `readModelPlanAccount` and `modelPlansEnabled` from them. Do not create `api/_lib/model-plan-caller.ts`, `api/_lib/model-plan-gateway-hooks.ts`, `api/github/webhook.ts` or `api/_lib/github-webhook.ts`: those are Codium's (A16, A17, A47).
+- **Never edit** Codium's files: `api/_lib/codium-*.ts`, `api/_lib/model-plan-*.ts`, `api/model-plans/*`, `packages/schema/src/codium-*.ts`. We may *import* `modelPlanStatus`, `readModelPlanAccount` and `modelPlansEnabled` from them. Do not create `api/_lib/model-plan-caller.ts`, `api/_lib/model-plan-gateway-hooks.ts`, `api/github/webhook.ts` or `api/_lib/github-webhook.ts`: those are Codium's (A16, A17, A47).
 - **Never build:** Slack, Linear or Jira integrations; team features; Vector Labs; a Vector-hosted sandbox or runner for @vector; anything on Actions that is not that repository's software work; "Continue in GitHub" (amendment 17; recommended after 1.99.113).
 - **The repo is public.** Never name the open-source project Vector derives from. Never print or commit credentials, tokens, personal emails or account emails.
 
@@ -98,12 +97,12 @@ Phases: foundations (1 to 4), server (5 to 14), workflow and engine (15 to 23), 
 - **Free users** use it with their own provider key as a repo secret.
 - **Per-plan limits** (Codium only). Code and copy take these numbers from the entitlement seam (2.3) and, after A59, from Codium's `ENTITLEMENTS`; copy never types them in (SPEC §1.1).
 
-  | Plan  | At once | Hours a month | Longest run | Scheduled runs a day |
-  | ----- | ------- | ------------- | ----------- | -------------------- |
-  | Plus  | 1       | 5             | 30 min      | —                    |
-  | Pro   | 1       | 15            | 45 min      | —                    |
-  | Max   | 2       | 40            | 45 min      | 5                    |
-  | Ultra | 6       | 120           | 120 min     | 20                   |
+  | Plan | At once | Hours a month | Longest run | Scheduled runs a day |
+  |---|---|---|---|---|
+  | Plus | 1 | 5 | 30 min | — |
+  | Pro | 1 | 15 | 45 min | — |
+  | Max | 2 | 40 | 45 min | 5 |
+  | Ultra | 6 | 120 | 120 min | 20 |
 
 - Vector sells Codium model access inside the run, never Actions.
 - **The handle.** The bot handle comes from `VECTOR_GITHUB_APP_SLUG`. Until the owner registers the GitHub App, copy says `/vector`.
@@ -117,18 +116,18 @@ The owner decisions of 27 Oct (V3C §6–§7 and the task) win. Then this contra
 
 **We provide** the following, each with the package that builds it:
 
-| What                                                                                                               | Package       |
-| ------------------------------------------------------------------------------------------------------------------ | ------------- |
-| The seam module `api/_lib/cloud-agents-entitlement.ts`, with `cloudAgentEntitlement` and `cloudAgentRevokedBefore` | V04           |
-| `cloudAgentSecondsUsed(accountId, meterEpoch)` and `cloudAgentsGatewayHook` (for `registerGatewayHook`)            | V06           |
-| `cloudAgentsRunVerifier` (for `registerRunVerifier("vrt_", …)`)                                                    | V07           |
-| `recordRepoBinding` and `bindingFor`                                                                               | V05           |
-| `startCloudRun(trigger)` with a one-time ticket for the App bot actor                                              | V13           |
-| Run records for Remote's run list, with a `verdict` for Ship Desk                                                  | V11           |
-| The stored-data list for Codium's privacy draft (A30)                                                              | V11           |
-| The encrypted session artifact path that Codium's B08 builds on                                                    | V27           |
-| Webhook handlers for A47's router                                                                                  | V28           |
-| The `vector ship capture` workflow job                                                                             | V31, deferred |
+| What | Package |
+|---|---|
+| The seam module `api/_lib/cloud-agents-entitlement.ts`, with `cloudAgentEntitlement` and `cloudAgentRevokedBefore` | V04 |
+| `cloudAgentSecondsUsed(accountId, meterEpoch)` and `cloudAgentsGatewayHook` (for `registerGatewayHook`) | V06 |
+| `cloudAgentsRunVerifier` (for `registerRunVerifier("vrt_", …)`) | V07 |
+| `recordRepoBinding` and `bindingFor` | V05 |
+| `startCloudRun(trigger)` with a one-time ticket for the App bot actor | V13 |
+| Run records for Remote's run list, with a `verdict` for Ship Desk | V11 |
+| The stored-data list for Codium's privacy draft (A30) | V11 |
+| The encrypted session artifact path that Codium's B08 builds on | V27 |
+| Webhook handlers for A47's router | V28 |
+| The `vector ship capture` workflow job | V31, deferred |
 
 ## 1.3 The user journey
 
@@ -210,15 +209,15 @@ The owner decisions of 27 Oct (V3C §6–§7 and the task) win. Then this contra
 
 The server checks and reserves every limit atomically at mint (V06, V12). The gateway separately enforces state, model access, rate, requests at once, the daily limit, the run ceiling and the deadline (Codium A17).
 
-| Limit                                                                      | Where enforced                                                         | What the user sees                                                                                                                                                                                                                                    |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| At once (1 / 1 / 2 / 6)                                                    | mint (`MODEL_PLAN_RUN_LIMIT` `at-once`)                                | The agent job retries the mint every 30 s for up to 10 min, then posts one comment: "Vector is already running as many runs at once as this repository's Codium binding allows. Mention Vector again when the current run finishes."                  |
-| Hours (5 / 15 / 40 / 120 a month)                                          | mint reserves; settle charges agent time (INV-C3)                      | When less than 5 minutes remain, the mint is refused and a comment says agent time for this binding is used up until it renews.                                                                                                                       |
-| Longest run (30 / 45 / 45 / 120 min)                                       | deadline in the token; gateway; engine stops 3 min early               | Draft PR with the work so far.                                                                                                                                                                                                                        |
-| Scheduled a day (0 / 0 / 5 / 20)                                           | mint, counted from the signed `event_name: schedule` claim per UTC day | Counts GitHub `schedule` events only (INV-C4). On Plus and Pro, scheduled mints are refused (`CODIUM_PERK_REQUIRED` `scheduled`). Over the daily cap they are refused (`MODEL_PLAN_RUN_LIMIT` `scheduled`). Both are logged only: there is no thread. |
-| One run's ceiling (10% of the month, clamped to the daily share by Codium) | gateway (`MODEL_PLAN_RUN_LIMIT` `ceiling`)                             | Draft PR.                                                                                                                                                                                                                                             |
-| Daily limit, monthly pool, requests at once and per minute                 | gateway                                                                | Draft PR, or a wait (2.9.2).                                                                                                                                                                                                                          |
-| Own key                                                                    | none of the above                                                      | GitHub's own job timeout (60 min, O8) and the user's provider limits.                                                                                                                                                                                 |
+| Limit | Where enforced | What the user sees |
+|---|---|---|
+| At once (1 / 1 / 2 / 6) | mint (`MODEL_PLAN_RUN_LIMIT` `at-once`) | The agent job retries the mint every 30 s for up to 10 min, then posts one comment: "Vector is already running as many runs at once as this repository's Codium binding allows. Mention Vector again when the current run finishes." |
+| Hours (5 / 15 / 40 / 120 a month) | mint reserves; settle charges agent time (INV-C3) | When less than 5 minutes remain, the mint is refused and a comment says agent time for this binding is used up until it renews. |
+| Longest run (30 / 45 / 45 / 120 min) | deadline in the token; gateway; engine stops 3 min early | Draft PR with the work so far. |
+| Scheduled a day (0 / 0 / 5 / 20) | mint, counted from the signed `event_name: schedule` claim per UTC day | Counts GitHub `schedule` events only (INV-C4). On Plus and Pro, scheduled mints are refused (`CODIUM_PERK_REQUIRED` `scheduled`). Over the daily cap they are refused (`MODEL_PLAN_RUN_LIMIT` `scheduled`). Both are logged only: there is no thread. |
+| One run's ceiling (10% of the month, clamped to the daily share by Codium) | gateway (`MODEL_PLAN_RUN_LIMIT` `ceiling`) | Draft PR. |
+| Daily limit, monthly pool, requests at once and per minute | gateway | Draft PR, or a wait (2.9.2). |
+| Own key | none of the above | GitHub's own job timeout (60 min, O8) and the user's provider limits. |
 
 **Agent time** is how long a run is active, from its start to its last activity (its last heartbeat or its last Codium request), capped at the plan's longest run. Vector measures it; it is not GitHub minutes.
 
@@ -230,13 +229,11 @@ Every invariant is a requirement on the whole feature. Each names its test and t
 
 **INV-S1. Only writers start runs.** A run starts only for an actor whose current permission from `GET /repos/{o}/{r}/collaborators/{login}/permission` is admin, maintain or write. `author_association` never decides. The route job checks every comment, issue and review-comment event. For `issues` events, the issue's author must be the event's sender and a writer. With the App installed, the mint checks again on the server, including the issue's author and that its title or body still holds a task. A refusal starts no further job.
 Tests:
-
 - `packages/engine/test/cli/github.route-script.test.ts` › "read and triage commenters are refused before any job"; "an issue opened by someone other than the sender is refused" (V14)
 - `packages/web/test/github-app-api.test.ts` › "mint verification refuses a commenter who lost write access"; "issue author must equal the actor" (V09)
 
 **INV-S2. Bots never start runs.** The only exception is Vector's own App bot (`<slug>[bot]`, with the App bot's user id) dispatching with a valid one-time ticket for that repository and binding. Every other bot actor is refused at the mint with `ACTOR_NOT_ALLOWED`, whether or not the App is installed. The same check stops loops: Vector's own comments never trigger it.
 Tests:
-
 - `github.route-script.test.ts` › "bot comments and bot dispatches without a ticket route to none" (V14)
 - `packages/web/test/cloud-agents-mint-api.test.ts` › "dispatch tokens from github-actions[bot] and dependabot[bot] are refused, with and without the App" (V12)
 - `packages/web/test/github-app-api.test.ts` › "a Bot-type author without the [bot] suffix is refused" (V09)
@@ -245,12 +242,10 @@ Tests:
 
 **INV-S3. Fork heads never run with a credential.** PR tasks whose head repository differs from the base are refused in the route job, before checkout, OIDC or a key. With the App, the server refuses them too.
 Tests:
-
 - `github.route-script.test.ts` › "fork PR task refused before checkout" (V14)
 - `github-app-api.test.ts` › "fork review comment refused" (V09)
 
 **INV-S4. The agent cannot write to the repository.**
-
 - In workflow v3, the agent job's permissions are `contents: read`, `issues: read`, `pull-requests: read` and `actions: read`, plus `id-token: write` on Codium only.
 - Every checkout has `persist-credentials: false`.
 - The agent job never receives an App token.
@@ -258,29 +253,26 @@ Tests:
 - **The one exception is the Codium review job** (V20): the model and `pull-requests: write` share a job, as in today's review job. It is acceptable because the reviewer's model has read-only tools only (`reviewPermissionRules` with `checks` forced off on Codium: no shell, no edit, no paths outside the checkout), it loads no repository configuration or plugins, and its token has no `contents: write`.
 
 Tests:
-
 - `packages/engine/test/cli/github.workflow.test.ts` › "only route, publish and review jobs can write; every checkout drops credentials" (V14)
 - `github-app-api.test.ts` › "a Vector agent job cannot obtain an App token" (V09)
 - `packages/engine/test/cli/github.review-codium.test.ts` › "Codium reviews run with checks off and read-only tools" (V20)
 
 **INV-S5. No process the model can start can read a credential.** On a GitHub-hosted runner, no process the model can start, now or later in the job, can read any of these, from its own environment, another process's `/proc/<pid>/environ` or memory, a file, or a file-command file:
-
 - the OIDC request pair (`ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`) and every other `ACTIONS_*` value, including `ACTIONS_RUNTIME_TOKEN`;
 - the run token, `GITHUB_TOKEN`, `GH_TOKEN`, `VECTOR_CLI_TOKEN`, `VECTOR_BIND_CODE`, `VECTOR_TICKET`;
 - every repository secret the workflow passes (the exact names in `VECTOR_SECRET_ENV_NAMES`) and any name ending `_TOKEN`, `_KEY`, `_SECRET` or `_PASSWORD`.
 
 It also cannot gain root (no sudo entry, no Docker socket) or append to `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT` or `$GITHUB_STATE`. This holds because the model runs as a separate user in the sandbox (2.11.3, V16), the engine starts with an allowlisted environment and receives credentials over a private channel, `kernel.yama.ptrace_scope` is at least 2, and every process of the agent user is killed before the next step. **Residual risk:** a writer can still extract a run token by editing `vector.yml`; it is bounded by the token's deadline and the plan's caps.
-
 The separate UID does not isolate the engine from its own same-UID tools. V16 therefore also requires a fresh tool PID namespace with a private `/proc` on hosted Codium and default own-key runs. The trusted launcher verifies that boundary as the agent user before marking preparation complete; a launcher-derived `VECTOR_GITHUB_TOOL_PID_NAMESPACE=pid` is captured with private-channel authority and cannot be lowered by a project environment. Every actual ShellTool command, foreground or background, applies that compulsory boundary without an optional unsandboxed permission fallback. Missing kernel support refuses execution. The explicit own-key sudo exception in O3 and self-hosted own-key execution make no such boundary claim. Debug/inspector options and an already active Node inspector are refused before a private channel is loaded; the published CLI is a compiled Bun executable, so a Node-only command-line flag is not used as the primary protection.
 Tests:
 
+Tests:
 - the V00 lane's `sandbox-probe` job on `ubuntu-latest` (CI only): a probe run in the sandbox in place of the engine holds the channel's values, and a child it starts scans every readable `/proc/*/environ`, tries its parent's `/proc/<pid>/mem`, reads and appends to the file-command files, tries `sudo -n true` and `docker info`, and leaves a detached process behind; the job asserts that no planted value or capability is found and that the next step is untouched (V16)
-- the same job invokes the real ShellTool against a disposable same-UID Node process: its host PID must be invisible and SIGUSR1 must fail. A parent-side positive control must then open that process's inspector, and the private-channel startup guard must refuse that active inspector. Generic child-shell observations alone do not satisfy this acceptance.
+- the disposable hosted probe also runs the actual ShellTool against a same-UID Node engine-shaped target: the host PID is invisible, SIGUSR1 is denied and its inspector stays closed; a parent-owned positive control opens the inspector, and startup refuses that active debugger (V16)
 - `packages/core/test/child-environment.test.ts` › "Actions runs hide runner, GitHub, provider and named secrets from children" (V03; the filter is defence in depth for self-hosted own-key runs)
 
 **INV-S6. No account token in Codium workflows.** A Codium workflow contains no `VECTOR_CLI_TOKEN`, no provider key and no sharing consent. The mint authenticates only with GitHub OIDC plus the repo binding, and never accepts a `vct_` token.
 Tests:
-
 - `github.workflow.test.ts` › "Codium workflow has no repository secret and no sharing" (V14)
 - `cloud-agents-mint-api.test.ts` › "a CLI token is not a mint credential" (V12)
 
@@ -288,7 +280,6 @@ Tests:
 Test: `packages/web/test/cloud-agents-run-token.test.ts` › "domain separation both ways" (V07)
 
 **INV-S8. Run tokens die on time and on change.**
-
 - At the gateway, a token is refused once `now ≥ deadline`.
 - At our service endpoints, it is refused once `now ≥ exp`, where `exp` is the deadline plus 15 minutes.
 - It is refused everywhere after any of these:
@@ -302,12 +293,10 @@ Test: `cloud-agents-run-token.test.ts` › "rebind, unbind, settle, replacement,
 
 **INV-S9. One live token per check run.** A mint from a check run that already holds a live reservation keeps that reservation's start and deadline, charges nothing extra and returns a new token; the earlier token stops working. Once that deadline has passed, such a mint is refused (`at-once`) and the earlier token keeps working, so the run can still be settled. A re-run gets a new attempt and check-run id and so a new run.
 Tests:
-
 - `packages/web/test/cloud-agents-ledger.test.ts` › "minting again from the same check run keeps its deadline"; "a re-mint at or after the deadline is refused and leaves the token that still settles the run alone" (V06)
 - `cloud-agents-run-token.test.ts` › "the replaced token is refused" (V07)
 
 **INV-S10. OIDC is strict per audience.**
-
 - Each endpoint takes exactly one audience (2.10).
 - Tokens are RS256, at most 300 s old, and single-use (`consumeGithubOidc`).
 - `job_workflow_ref` and `job_workflow_sha` are accepted only when they equal `workflow_ref` and `workflow_sha`, or when both are absent.
@@ -318,19 +307,16 @@ Tests:
 Test: `packages/web/test/github-oidc.test.ts` › the V08 cases (V08)
 
 **INV-S11. The default ref is recorded at bind and required at mint.**
-
 - Bind records the default branch only when it is verified: by the App, by `ref_protected`, by the default branch the binder's desktop sent with the bind code, or, for a public repository, by GitHub's public repository record. Otherwise bind answers 409 `BIND_NEEDS_DEFAULT_BRANCH`.
 - A mint from any other ref is refused, except the App-verified review-comment path, which also requires the PR's `vector.yml` to be byte-identical to the default branch's.
 - A changed `repository_owner_id` suspends the binding.
 
 Tests:
-
 - `cloud-agents-mint-api.test.ts` › "non-default ref and transferred owner refused" (V12)
 - `packages/web/test/cloud-agents-bind-api.test.ts` › "bind from an unverified branch is refused" (V10)
 - `github-app-api.test.ts` › "a review-comment run with a changed workflow file is refused" (V09)
 
 **INV-S12. Publish validates, and runs nothing from the repository.**
-
 - `vector github publish`, `mint` and `bind` load no project instance, configuration or plugin (`instance: false`, plus `VECTOR_PURE=1` and `VECTOR_DISABLE_PROJECT_CONFIG=1`).
 - Publish runs with its working directory in `$RUNNER_TEMP`, downloads the bundle to `$RUNNER_TEMP/vector-bundle`, and refuses a bundle with any entry other than `patch.diff` and `summary.json`.
 - The patch must stay within the limits in 2.12. No path may be under `.git/` or contain `..` or an absolute component. There must be no symlink pointing outside the repository and no gitlink (mode 160000) change.
@@ -343,7 +329,6 @@ Tests: `packages/engine/test/cli/github.publish.test.ts` › "patch validator re
 Test: `packages/engine/test/tool/registry-actions.test.ts` › "bridged and computer tools never register in Actions" (V03)
 
 **INV-S14. Repository work only, and thread text is data.**
-
 - Every Actions task session carries `REPO_WORK_POLICY` (2.17) and the untrusted-data rule in its system instructions, never in the user turn.
 - Every issue, PR, comment and review body reaches the prompt JSON-encoded inside its wrapper, so it cannot close the wrapper, and labelled with its author's permission (`writer` or `untrusted`). The one exception is the task itself: the trigger text of an author whose write access the agent phase has checked again (the trigger comment's body, an `issues` event's text after the mention, a dispatch's `VECTOR_PROMPT`) goes first, as written. The whole issue or PR is in the thread block either way, labelled.
 - Comments by non-writers, other than the issue or PR body itself, are collapsed to a count by default.
@@ -358,7 +343,6 @@ Test: `github.workflow.test.ts` › "no event or input expression in any run lin
 Test: each API test › "store outage fails closed" and "rate limit" (V10, V12, V27)
 
 **INV-S17. Publish routes from trusted sources and pushes only to Vector's branches.**
-
 - Publish takes the kind, thread, PR, issue, head branch, base SHA and schedule id only from the route job's outputs, the event payload and the checked-out HEAD. `summary.json` may echo them; publish refuses the bundle when an echo differs.
 - The status comes only from the mint step's output. The bundle's outcome and draft flag can only make the result more conservative.
 - Model text loses closing keywords before issue references, and its `@` mentions are wrapped in code. Publish adds its own `Closes #<issue>` for issue tasks.
@@ -369,7 +353,6 @@ Test: `github.publish.test.ts` › "tampered routing echoes are refused"; "a bod
 
 **INV-S18. Vector's pushes start no workflows by default.** Publish uses the repository's `GITHUB_TOKEN` unless the workflow opts in with `publishAuth: "app"` (O14). Even with the opt-in it uses `GITHUB_TOKEN` for review-comment runs, for runs started by `startCloudRun`, and whenever the thread holds text from a non-writer.
 Tests:
-
 - `github.workflow.test.ts` › "the generator's default publish credential is GITHUB_TOKEN" (V14)
 - `github.publish.test.ts` › "a thread with a non-writer comment publishes with GITHUB_TOKEN"; "a patch touching .github/actions/x/action.yml is held back" (V21)
 
@@ -379,13 +362,11 @@ Tests: `github-oidc.test.ts` › "runner_environment is recorded" (V08); `cloud-
 ### Privacy
 
 **INV-P1. P6: Codium runs never publish usage or billing state.**
-
 - PR bodies, comments, check text and the CLI's Actions logs for a Codium run say "Codium".
 - They never contain a plan id (`vector-10|50|100|200`), the words "Plus plan", "Pro plan", "Max plan" or "Ultra plan", a percentage of usage, Codium token counts, a price, or a billing state (`payment`, `dispute`, `fraud`, `past_due`, `payment_failed`, `closing`).
 - No `/api/cloud-agents/*` response carries a plan, a share or a refusal `reason`. The CLI never prints a server error body in Actions.
 
 Tests:
-
 - `packages/engine/test/cli/github.evidence.test.ts` › "Codium-only and mixed cost lines" (V19)
 - `packages/engine/test/cli/github.agents-journey.test.ts` › "captured logs and posts pass the P6 scan" (V30)
 - `cloud-agents-mint-api.test.ts` › "responses pass the P6/P1 scan" (V12)
@@ -423,7 +404,6 @@ Test: `cloud-agents-ledger.test.ts` › "settle bounds and the idle window"; "a 
 
 **INV-C4. Scheduled runs are counted per UTC day from GitHub `schedule` events.** The count comes from the signed `event_name` alone and is 0 on Plus and Pro. One check run is one schedule event: it is counted on the UTC day it first reserves, and a mint of the same check run that replaces its live record (after a generation change, or once it went idle) is not counted again. It limits GitHub schedule events only: a dispatch from another workflow is a `github-dispatch` run and is not counted. That is an accepted risk (deviations file); the hours cap is the real limit, and copy never presents the scheduled cap as unbypassable.
 Tests:
-
 - `cloud-agents-ledger.test.ts` and `cloud-agents-mint-api.test.ts` › "Plus schedule refused; Max sixth schedule refused; resets at 00:00 UTC" (V06, V12)
 - `cloud-agents-ledger.test.ts` › "a scheduled check run that mints again after a generation change is counted once" (V06)
 
@@ -445,7 +425,6 @@ Tests: `packages/engine/test/cli/github.cloud.test.ts` › "own key calls no clo
 Test: `packages/app/src/features/github-agents/agents-model.test.ts` › "own-key setup and Run in GitHub never read plan state or listing" (V25)
 
 **INV-K3. The seam has the exact shape.**
-
 - `cloudAgentEntitlement` returns the §4.18 union exactly (2.3).
 - The limits it returns per plan equal the §4.1 `cloudAgents` row; the test reads them through `createCloudAgentEntitlement(...)` results, never through `CLOUD_AGENT_LIMITS`, which only the entitlement module imports.
 - Every cap is non-decreasing from Plus to Ultra.
@@ -467,7 +446,6 @@ Tests: `cloud-agents-run-token.test.ts` (V07); `cloud-agents-ledger.test.ts` ›
 ### Copy
 
 **INV-H1. Cloud-agent copy follows SPEC H3–H4.**
-
 - It says "in your own repo, on your own Actions minutes".
 - It never says "hosted", "compute", "cloud hours", "cloud capacity", "our cloud", "exclusive", "every PR", "every pull request", "guaranteed", "24/7" or "SLA", and never implies Vector runs the computer (for example "when my Mac is off").
 - It names the handle only from `VECTOR_GITHUB_APP_SLUG`, otherwise it says `/vector`.
@@ -492,28 +470,27 @@ Tests: `agents-model.test.ts` › "Codium surfaces need the listed perk" (V25); 
 
 ## 1.7 Open owner decisions (recommended defaults; build with the default, do not block)
 
-| #   | Question                                                                                                                | Recommended default                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| O1  | Accept the literal `@vector`?                                                                                           | No. Accept `@<slug>` only. Accept `@vector` itself only if the registered slug is `vector`. Anything else notifies an unrelated GitHub account.                                                                                                                                                                                                                                                                                                                                  |
-| O2  | Does the own-key path still need a free Vector account in Actions?                                                      | Yes, through the existing `VECTOR_CLI_TOKEN` secret (`/auth/cli`). Unmarked tokens keep working for free paths (SPEC S2). The own-key path needs no binding, OIDC or Codium.                                                                                                                                                                                                                                                                                                     |
-| O3  | How is the model kept away from the runner's credentials?                                                               | The agent sandbox (V16), for Codium and own key alike on GitHub-hosted runners: a separate user with no sudo and no Docker group, a clean environment, credentials over a private channel, `ptrace_scope` at least 2, and every agent process killed before the next step. A repository variable `VECTOR_AGENT_SUDO=1` gives the agent user sudo on own key only, and the docs explain the risk; the Codium generator never writes it and the sandbox refuses it in Codium mode. |
-| O4  | Do Codium reviews count toward hours and take an at-once slot?                                                          | Yes. A review is a run with purpose `review`. Automatic reviews on `pull_request` events stay own-key only in v3. Codium reviews start from `/vector review`.                                                                                                                                                                                                                                                                                                                    |
-| O5  | Restrict Codium spending in a bound repository to GitHub accounts linked to the binder? (SPEC §8.3 "Still open" item 4) | No: anyone with write access to a bound repository spends the binder's plan, bounded by its caps. Settings shows the sentence.                                                                                                                                                                                                                                                                                                                                                   |
-| O6  | Binding takeover by another account                                                                                     | Refused with 409 `REPO_BOUND_ELSEWHERE` while the current binding was used in the last 30 days. A takeover is allowed at once when the binding is suspended (including `binder-left`), when the binder's allowance is inactive, or when the App verifies the new binder as an admin. A takeover bumps the generation.                                                                                                                                                            |
-| O7  | Codium runs from `pull_request_review_comment`                                                                          | Only with the App installed. The server then verifies the commenter, the comment, a same-repository head and an unchanged `vector.yml`. Without the App: 403 `EVENT_NEEDS_APP`, and publish replies that a PR conversation comment works instead.                                                                                                                                                                                                                                |
-| O8  | Job timeouts                                                                                                            | Codium agent job: 135 min (120 plus margin; the server deadline does the per-plan work). Own-key agent job: 60 min. Publish: 15 min. Bind: 5 min. Route: 3 min. Review: 20 min.                                                                                                                                                                                                                                                                                                  |
-| O9  | Run in GitHub without the App                                                                                           | Allowed. The desktop dispatches with the user's own GitHub sign-in (`repo` scope). The App is needed only for server-started runs (`startCloudRun`).                                                                                                                                                                                                                                                                                                                             |
-| O10 | Our kill switch                                                                                                         | Before A59: env `VECTOR_CLOUD_AGENTS_ENABLED` (default unset, meaning off). A59 replaces the function that reads it, so afterwards Codium's `cloudAgents` runtime switch (with `MODEL_PLANS_ENABLED` and the `codium` switch) is the only gate.                                                                                                                                                                                                                                  |
-| O11 | Session continuity for own-key runs                                                                                     | No. It needs the server's key. Own-key follow-ups use thread context.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| O12 | Session artifact retention                                                                                              | 7 days. Run bundles: 1 day.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| O13 | App uninstall                                                                                                           | Keep bindings, which do not depend on the App. Drop App-only extras such as review-comment runs.                                                                                                                                                                                                                                                                                                                                                                                 |
-| O14 | Publishing credential                                                                                                   | `GITHUB_TOKEN` by default, so Vector's pushes start no CI. App publishing (`publishAuth: "app"`) is a per-repository opt-in whose setup copy says: "CI will run Vector's changes with this repository's secrets before anyone reviews them." Ship Desk (Codium A49) sees App-bot PRs only in opted-in repositories unless it also reads the run marker (section 5).                                                                                                              |
-| O15 | Self-hosted runners                                                                                                     | Codium runs are refused (INV-S19). Own-key runs are allowed, with a docs warning that the sandbox does not apply.                                                                                                                                                                                                                                                                                                                                                                |
+| # | Question | Recommended default |
+|---|---|---|
+| O1 | Accept the literal `@vector`? | No. Accept `@<slug>` only. Accept `@vector` itself only if the registered slug is `vector`. Anything else notifies an unrelated GitHub account. |
+| O2 | Does the own-key path still need a free Vector account in Actions? | Yes, through the existing `VECTOR_CLI_TOKEN` secret (`/auth/cli`). Unmarked tokens keep working for free paths (SPEC S2). The own-key path needs no binding, OIDC or Codium. |
+| O3 | How is the model kept away from the runner's credentials? | The agent sandbox (V16), for Codium and own key alike on GitHub-hosted runners: a separate user with no sudo and no Docker group, a clean environment, credentials over a private channel, `ptrace_scope` at least 2, and every agent process killed before the next step. A repository variable `VECTOR_AGENT_SUDO=1` gives the agent user sudo on own key only, and the docs explain the risk; the Codium generator never writes it and the sandbox refuses it in Codium mode. |
+| O4 | Do Codium reviews count toward hours and take an at-once slot? | Yes. A review is a run with purpose `review`. Automatic reviews on `pull_request` events stay own-key only in v3. Codium reviews start from `/vector review`. |
+| O5 | Restrict Codium spending in a bound repository to GitHub accounts linked to the binder? (SPEC §8.3 "Still open" item 4) | No: anyone with write access to a bound repository spends the binder's plan, bounded by its caps. Settings shows the sentence. |
+| O6 | Binding takeover by another account | Refused with 409 `REPO_BOUND_ELSEWHERE` while the current binding was used in the last 30 days. A takeover is allowed at once when the binding is suspended (including `binder-left`), when the binder's allowance is inactive, or when the App verifies the new binder as an admin. A takeover bumps the generation. |
+| O7 | Codium runs from `pull_request_review_comment` | Only with the App installed. The server then verifies the commenter, the comment, a same-repository head and an unchanged `vector.yml`. Without the App: 403 `EVENT_NEEDS_APP`, and publish replies that a PR conversation comment works instead. |
+| O8 | Job timeouts | Codium agent job: 135 min (120 plus margin; the server deadline does the per-plan work). Own-key agent job: 60 min. Publish: 15 min. Bind: 5 min. Route: 3 min. Review: 20 min. |
+| O9 | Run in GitHub without the App | Allowed. The desktop dispatches with the user's own GitHub sign-in (`repo` scope). The App is needed only for server-started runs (`startCloudRun`). |
+| O10 | Our kill switch | Before A59: env `VECTOR_CLOUD_AGENTS_ENABLED` (default unset, meaning off). A59 replaces the function that reads it, so afterwards Codium's `cloudAgents` runtime switch (with `MODEL_PLANS_ENABLED` and the `codium` switch) is the only gate. |
+| O11 | Session continuity for own-key runs | No. It needs the server's key. Own-key follow-ups use thread context. |
+| O12 | Session artifact retention | 7 days. Run bundles: 1 day. |
+| O13 | App uninstall | Keep bindings, which do not depend on the App. Drop App-only extras such as review-comment runs. |
+| O14 | Publishing credential | `GITHUB_TOKEN` by default, so Vector's pushes start no CI. App publishing (`publishAuth: "app"`) is a per-repository opt-in whose setup copy says: "CI will run Vector's changes with this repository's secrets before anyone reviews them." Ship Desk (Codium A49) sees App-bot PRs only in opted-in repositories unless it also reads the run marker (section 5). |
+| O15 | Self-hosted runners | Codium runs are refused (INV-S19). Own-key runs are allowed, with a docs warning that the sandbox does not apply. |
 
 ## 1.8 Out of scope
 
 Out of scope:
-
 - Slack, Linear and Jira, and the reserved relay pieces `isComputerOnline` and `job.offer`;
 - team features, Vector Labs and top-ups;
 - a hosted runner or sandbox;
@@ -530,71 +507,70 @@ Live App registration, real runs and enabling production are owner steps (sectio
 
 This section is the single definition of every name, type, key, route, error code, workflow shape and number that more than one package uses. Packages use these shapes exactly. A package that needs a field that is missing here adds it here first, in its own commit.
 
-| File                                                             | Created by    |
-| ---------------------------------------------------------------- | ------------- |
-| `packages/core/src/github-agents.ts` (2.1)                       | V01           |
-| `api/_lib/cloud-agents-entitlement.ts` (2.3)                     | V04           |
-| `api/_lib/cloud-agents-binding.ts` (2.5)                         | V05           |
-| `api/_lib/cloud-agents-ledger.ts` (2.6)                          | V06           |
-| `api/_lib/cloud-agents-run-token.ts` (2.4)                       | V07           |
-| `api/_lib/cloud-agents-runs.ts` (2.16)                           | V11           |
+| File | Created by |
+|---|---|
+| `packages/core/src/github-agents.ts` (2.1) | V01 |
+| `api/_lib/cloud-agents-entitlement.ts` (2.3) | V04 |
+| `api/_lib/cloud-agents-binding.ts` (2.5) | V05 |
+| `api/_lib/cloud-agents-ledger.ts` (2.6) | V06 |
+| `api/_lib/cloud-agents-run-token.ts` (2.4) | V07 |
+| `api/_lib/cloud-agents-runs.ts` (2.16) | V11 |
 | `api/_lib/cloud-agents-api.ts` and `api/cloud-agents/*.ts` (2.8) | V10, V12, V27 |
-| `api/_lib/cloud-agents-start.ts` (2.5)                           | V13           |
-| `packages/engine/src/cli/cmd/github.sandbox.ts` (2.11.3, 2.13)   | V16           |
-| `packages/core/src/review/schedule.ts` (V22)                     | V22           |
-| `api/_lib/github-webhook-handlers/cloud-agents.ts` (2.14)        | V28           |
+| `api/_lib/cloud-agents-start.ts` (2.5) | V13 |
+| `packages/engine/src/cli/cmd/github.sandbox.ts` (2.11.3, 2.13) | V16 |
+| `packages/core/src/review/schedule.ts` (V22) | V22 |
+| `api/_lib/github-webhook-handlers/cloud-agents.ts` (2.14) | V28 |
 
 ## 2.1 Constants: `packages/core/src/github-agents.ts`
 
 The file must have **no imports**, so `api/` can import it as `../../packages/core/src/github-agents.js`. It ends with `export * as GithubAgents from "./github-agents.js"`. The engine, desktop and app import it as `@vectordevai/core/github-agents`.
 
-| Constant                                          | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_FILE`                                   | `".github/workflows/vector.yml"` (`workflow.ts` re-exports it)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `WORKFLOW_VERSION`                                | `"3"`, written by the v3 builder. `workflow.ts`'s `GITHUB_WORKFLOW_VERSION` (what the CLI compares against) stays `"2"` until V24 sets it to this value (2.11.4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `MIN_CODIUM_WORKFLOW_VERSION`                     | `3`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `MIN_AGENTS_CLI`                                  | (added by V14) the first CLI version that carries V15–V22; set in V14 to the next CLI release's version and recorded in the progress file (section 4 step 7)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `JOB`                                             | `{ agent: "Vector agent", publish: "Vector publish", review: "Vector review", bind: "Vector bind", legacyTask: "Vector task" }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `AUDIENCE`                                        | `{ mint: "https://vectordev.ai/api/cloud-agents/mint", bind: "https://vectordev.ai/api/cloud-agents/bind" }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `ENDPOINT`                                        | `{ bindCode, bind, bindings, unbind, mint, heartbeat, settle, runs, artifactKey }` as `/api/cloud-agents/<kebab-name>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `COMMAND_MENTIONS`                                | `["/vector", "/vs"]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `LEGACY_MENTIONS`                                 | `["/vectorscope", "/vx"]` (installed workflows still use them)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `mentions(slug?: string)`                         | with slug: `["@" + slug, ...COMMAND_MENTIONS, ...LEGACY_MENTIONS]`; without: `[...COMMAND_MENTIONS, ...LEGACY_MENTIONS]`; slug must match `^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$` or is ignored                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `slugFromInstallUrl(url)`                         | the `<slug>` of `https://github.com/apps/<slug>/installations/new`, or `undefined`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `onActionsRunner(env)`                            | `env.GITHUB_ACTIONS === "true"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `withheldOnActions(toolId)`                       | `true` for `browser`, `vectorcloud`, `researchbrowser` and any id (MCP tool names included) matching `/^computer(?:$                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | [_-])/i`                                                                                                                              |
-| `computerUse(name)`                               | `true` when `name` matches `/^computer(?:$                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | [_-])/i`: the pattern half of `withheldOnActions`, which the engine asks of an MCP server's own name and an MCP tool's own name (V03) |
-| `RUN_ID_PATTERN`                                  | `/^[A-Za-z0-9_.-]{1,128}$/` (Codium's run-id grammar; `-` alone is refused)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `runId(repositoryId, runId, attempt, checkRunId)` | `` `gh-${repositoryId}-${runId}-${attempt}-${checkRunId}` `` (decimal ids; at most 87 characters)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `THREAD_PATTERN`                                  | `/^(?:[1-9]\d{0,9}\|dispatch-[1-9]\d{0,19}\|schedule-[0-9a-f]{8})$/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `BRANCH_PREFIX`                                   | `"vector"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `BUNDLE_DIR` / `BUNDLE_FILES`                     | `"vector-out"` / `["patch.diff", "summary.json"]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `SESSION_FILE`                                    | `"session.vsa"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `bundleArtifact(runId, attempt)`                  | `` `vector-run-${runId}-${attempt}` ``                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `sessionArtifact(thread)`                         | `` `vector-session-${thread}` ``                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `SANDBOX_USER`                                    | `"vector-agent"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `SANDBOX_ENV_ALLOW`                               | the only names the engine starts with in the sandbox: `PATH`, `LANG`, `LC_ALL`, `TZ`, `CI`, `GITHUB_ACTIONS`, `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, `GITHUB_REPOSITORY_OWNER`, `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH` (a copy the agent user can read), `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_SHA`, `GITHUB_REF`, `GITHUB_SERVER_URL`, `GITHUB_API_URL`, `GITHUB_WORKSPACE`, `RUNNER_OS`, `MENTIONS`, `MODEL`, `SHARE`, `VECTOR_SHARE_CONSENT`, and `VECTOR_MODE`, `VECTOR_THREAD`, `VECTOR_PROMPT`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_WORKFLOW_VERSION`, `VECTOR_DISABLE_USAGE`, `VECTOR_PURE`, `VECTOR_DISABLE_PROJECT_CONFIG`, `VECTOR_RUN_DEADLINE`, `VECTOR_RUN_ID`, `VECTOR_BUNDLE_DIR`, `VECTOR_SECRET_CHANNEL`; plus `HOME` and `RUNNER_TEMP` set to the agent user's own directories |
-| `SECRET_NAME_PATTERN`                             | `/(?:_TOKEN\|_KEY\|_SECRET\|_PASSWORD)$/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `HEARTBEAT_SECONDS`                               | `60`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `IDLE_SECONDS`                                    | `600`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `MIN_LEFT_SECONDS`                                | `300`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `STOP_MARGIN_SECONDS`                             | `180`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `SETTLE_GRACE_SECONDS`                            | `900`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `CONCURRENCY_RETRY_MS`                            | `900_000`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `AT_ONCE_WAIT_MS` / `AT_ONCE_POLL_MS`             | `600_000` / `30_000`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `BIND_CODE_SECONDS` / `TICKET_SECONDS`            | `600` / `900`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `TIMEOUT_MIN`                                     | `{ codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20 }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `PATCH_LIMITS`                                    | `{ bytes: 8_000_000, files: 2_000, fileBytes: 10_000_000, summaryBytes: 262_144, sessionBytes: 20_000_000 }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `RUN_LOGIN_DAYS` / `RUNS_KEPT`                    | `90` / `200` per account                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `SESSION_DAYS` / `BUNDLE_DAYS`                    | `7` / `1`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `MINT_STATUS` / `MintStatus`                      | a readonly tuple of `"ok" \| "not-bound" \| "suspended" \| "update-required" \| "binding-unavailable" \| "not-in-plan" \| "service-off" \| "source-unavailable" \| "runner" \| "hours" \| "at-once" \| "scheduled" \| "denied" \| "needs-app" \| "unavailable"`; `type MintStatus = (typeof MINT_STATUS)[number]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `OUTCOME` / `Outcome`                             | a readonly tuple of `"changes" \| "no-changes" \| "draft" \| "failed" \| "refused" \| "cancelled"`; `type Outcome = (typeof OUTCOME)[number]`, the `Outcome` of 2.8 (settle) and 2.16. 2.12's `RunSummary.outcome` is the subset `"changes" \| "no-changes" \| "draft" \| "failed"` (`BUNDLE_OUTCOMES`): `"refused"` and `"cancelled"` are settle outcomes with no bundle                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `STOP_CODES` / `StopCode`                         | a readonly tuple of the codes 2.9.2 names that end in a draft, the wait rows included (they end in a draft as busy); `type StopCode = (typeof STOP_CODES)[number]`. `"deadline"` (the heartbeat and local-deadline row) and the default row's codes are not stop codes. `RunSummary.stop` (2.12) is closed: a `StopCode` or `"deadline"`. The default row records no stop, and every row whose reason is "Codium is unavailable for this binding" records `MODEL_PLAN_BLOCKED` (P6)                                                                                                                                                                                                                                                                                                                              |
+| Constant | Value |
+|---|---|
+| `WORKFLOW_FILE` | `".github/workflows/vector.yml"` (`workflow.ts` re-exports it) |
+| `WORKFLOW_VERSION` | `"3"`, written by the v3 builder. `workflow.ts`'s `GITHUB_WORKFLOW_VERSION` (what the CLI compares against) stays `"2"` until V24 sets it to this value (2.11.4) |
+| `MIN_CODIUM_WORKFLOW_VERSION` | `3` |
+| `MIN_AGENTS_CLI` | (added by V14) the first CLI version that carries V15–V22; set in V14 to the next CLI release's version and recorded in the progress file (section 4 step 7) |
+| `JOB` | `{ agent: "Vector agent", publish: "Vector publish", review: "Vector review", bind: "Vector bind", legacyTask: "Vector task" }` |
+| `AUDIENCE` | `{ mint: "https://vectordev.ai/api/cloud-agents/mint", bind: "https://vectordev.ai/api/cloud-agents/bind" }` |
+| `ENDPOINT` | `{ bindCode, bind, bindings, unbind, mint, heartbeat, settle, runs, artifactKey }` as `/api/cloud-agents/<kebab-name>` |
+| `COMMAND_MENTIONS` | `["/vector", "/vs"]` |
+| `LEGACY_MENTIONS` | `["/vectorscope", "/vx"]` (installed workflows still use them) |
+| `mentions(slug?: string)` | with slug: `["@" + slug, ...COMMAND_MENTIONS, ...LEGACY_MENTIONS]`; without: `[...COMMAND_MENTIONS, ...LEGACY_MENTIONS]`; slug must match `^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$` or is ignored |
+| `slugFromInstallUrl(url)` | the `<slug>` of `https://github.com/apps/<slug>/installations/new`, or `undefined` |
+| `onActionsRunner(env)` | `env.GITHUB_ACTIONS === "true"` |
+| `withheldOnActions(toolId)` | `true` for `browser`, `vectorcloud`, `researchbrowser` and any id (MCP tool names included) matching `/^computer(?:$|[_-])/i` |
+| `computerUse(name)` | `true` when `name` matches `/^computer(?:$|[_-])/i`: the pattern half of `withheldOnActions`, which the engine asks of an MCP server's own name and an MCP tool's own name (V03) |
+| `RUN_ID_PATTERN` | `/^[A-Za-z0-9_.-]{1,128}$/` (Codium's run-id grammar; `-` alone is refused) |
+| `runId(repositoryId, runId, attempt, checkRunId)` | `` `gh-${repositoryId}-${runId}-${attempt}-${checkRunId}` `` (decimal ids; at most 87 characters) |
+| `THREAD_PATTERN` | `/^(?:[1-9]\d{0,9}\|dispatch-[1-9]\d{0,19}\|schedule-[0-9a-f]{8})$/` |
+| `BRANCH_PREFIX` | `"vector"` |
+| `BUNDLE_DIR` / `BUNDLE_FILES` | `"vector-out"` / `["patch.diff", "summary.json"]` |
+| `SESSION_FILE` | `"session.vsa"` |
+| `bundleArtifact(runId, attempt)` | `` `vector-run-${runId}-${attempt}` `` |
+| `sessionArtifact(thread)` | `` `vector-session-${thread}` `` |
+| `SANDBOX_USER` | `"vector-agent"` |
+| `SANDBOX_ENV_ALLOW` | the only names the engine starts with in the sandbox: `PATH`, `LANG`, `LC_ALL`, `TZ`, `CI`, `GITHUB_ACTIONS`, `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, `GITHUB_REPOSITORY_OWNER`, `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH` (a copy the agent user can read), `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_SHA`, `GITHUB_REF`, `GITHUB_SERVER_URL`, `GITHUB_API_URL`, `GITHUB_WORKSPACE`, `RUNNER_OS`, `MENTIONS`, `MODEL`, `SHARE`, `VECTOR_SHARE_CONSENT`, and `VECTOR_MODE`, `VECTOR_THREAD`, `VECTOR_PROMPT`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_WORKFLOW_VERSION`, `VECTOR_DISABLE_USAGE`, `VECTOR_PURE`, `VECTOR_DISABLE_PROJECT_CONFIG`, `VECTOR_RUN_DEADLINE`, `VECTOR_RUN_ID`, `VECTOR_BUNDLE_DIR`, `VECTOR_SECRET_CHANNEL`; plus `HOME` and `RUNNER_TEMP` set to the agent user's own directories |
+| `SECRET_NAME_PATTERN` | `/(?:_TOKEN\|_KEY\|_SECRET\|_PASSWORD)$/` |
+| `HEARTBEAT_SECONDS` | `60` |
+| `IDLE_SECONDS` | `600` |
+| `MIN_LEFT_SECONDS` | `300` |
+| `STOP_MARGIN_SECONDS` | `180` |
+| `SETTLE_GRACE_SECONDS` | `900` |
+| `CONCURRENCY_RETRY_MS` | `900_000` |
+| `AT_ONCE_WAIT_MS` / `AT_ONCE_POLL_MS` | `600_000` / `30_000` |
+| `BIND_CODE_SECONDS` / `TICKET_SECONDS` | `600` / `900` |
+| `TIMEOUT_MIN` | `{ codiumAgent: 135, ownKeyAgent: 60, publish: 15, bind: 5, route: 3, review: 20 }` |
+| `PATCH_LIMITS` | `{ bytes: 8_000_000, files: 2_000, fileBytes: 10_000_000, summaryBytes: 262_144, sessionBytes: 20_000_000 }` |
+| `RUN_LOGIN_DAYS` / `RUNS_KEPT` | `90` / `200` per account |
+| `SESSION_DAYS` / `BUNDLE_DAYS` | `7` / `1` |
+| `MINT_STATUS` / `MintStatus` | a readonly tuple of `"ok" \| "not-bound" \| "suspended" \| "update-required" \| "binding-unavailable" \| "not-in-plan" \| "service-off" \| "source-unavailable" \| "runner" \| "hours" \| "at-once" \| "scheduled" \| "denied" \| "needs-app" \| "unavailable"`; `type MintStatus = (typeof MINT_STATUS)[number]` |
+| `OUTCOME` / `Outcome` | a readonly tuple of `"changes" \| "no-changes" \| "draft" \| "failed" \| "refused" \| "cancelled"`; `type Outcome = (typeof OUTCOME)[number]`, the `Outcome` of 2.8 (settle) and 2.16. 2.12's `RunSummary.outcome` is the subset `"changes" \| "no-changes" \| "draft" \| "failed"` (`BUNDLE_OUTCOMES`): `"refused"` and `"cancelled"` are settle outcomes with no bundle |
+| `STOP_CODES` / `StopCode` | a readonly tuple of the codes 2.9.2 names that end in a draft, the wait rows included (they end in a draft as busy); `type StopCode = (typeof STOP_CODES)[number]`. `"deadline"` (the heartbeat and local-deadline row) and the default row's codes are not stop codes. `RunSummary.stop` (2.12) is closed: a `StopCode` or `"deadline"`. The default row records no stop, and every row whose reason is "Codium is unavailable for this binding" records `MODEL_PLAN_BLOCKED` (P6) |
 
 ## 2.2 Mentions (amendment 4)
 
 `parseReviewCommand(body, mentions)` in `packages/core/src/review/command.ts` stays self-contained, because the route script embeds its `toString()`. It changes as follows:
-
 - **What is ignored.** It still strips HTML comments, fenced blocks and `>` quoted lines, and now also inline code spans (`` `…` ``).
 - **Word boundaries.** A mention counts only when it is preceded by the start of the line, whitespace, `(`, `[`, `"` or `'`. It must be followed by the end of the line, whitespace, one of `)]}"',:;!?`, or a `.` that ends the text or precedes whitespace. Matching is case-insensitive.
   - Refused: `/vscode`, `src/vs/x`, `/vectorize`, `@vector-io` when the slug is `vector`, `a@vector.dev`, `@vector.dev`.
@@ -606,87 +582,37 @@ The generated workflow bakes `GithubAgents.mentions(slug)` into the route script
 ## 2.3 Entitlement seam: `api/_lib/cloud-agents-entitlement.ts`
 
 ```ts
-export type CodiumPlanId = "vector-10" | "vector-50" | "vector-100" | "vector-200" // CodiumPlan.PLANS ids
-export const RUN_SOURCES = [
-  "desktop",
-  "cli",
-  "phone",
-  "schedule",
-  "ops",
-  "github-comment",
-  "github-dispatch",
-  "github-schedule",
-  "slack",
-  "linear",
-  "jira",
-] as const
+export type CodiumPlanId = "vector-10" | "vector-50" | "vector-100" | "vector-200"   // CodiumPlan.PLANS ids
+export const RUN_SOURCES = ["desktop", "cli", "phone", "schedule", "ops",
+  "github-comment", "github-dispatch", "github-schedule", "slack", "linear", "jira"] as const
 export type RunSource = (typeof RUN_SOURCES)[number]
-export const ENABLED_SOURCES: ReadonlySet<RunSource> // all but slack, linear, jira
-export type RunTrigger = {
-  // origin/codium packages/schema/src/codium-run-trigger.ts, readonly as there
-  readonly source: RunSource
-  readonly account: string
+export const ENABLED_SOURCES: ReadonlySet<RunSource>            // all but slack, linear, jira
+export type RunTrigger = {                                       // origin/codium packages/schema/src/codium-run-trigger.ts, readonly as there
+  readonly source: RunSource; readonly account: string
   readonly requestedBy?: { readonly platform: string; readonly userId: string }
-  readonly target:
-    | { readonly kind: "github-run"; readonly repositoryId: number; readonly branch?: string }
+  readonly target: { readonly kind: "github-run"; readonly repositoryId: number; readonly branch?: string }
     | { readonly kind: "hosted-job"; readonly size?: "standard" | "large" }
-  readonly prompt: string
-  readonly criteria?: readonly string[]
-  readonly deliverBy?: number
-  readonly purpose: "task" | "review" | "scheduled" | "incident" | "changes"
-}
-export type CloudAgentLimits = {
-  atOnce: number
-  hours: number
-  longestRunMin: number
-  scheduledPerDay: number
-  runCeilingShare: number
-}
-export const CLOUD_AGENT_LIMITS: Readonly<Record<CodiumPlanId, CloudAgentLimits>> // imported only by this module and its own test
+  readonly prompt: string; readonly criteria?: readonly string[]; readonly deliverBy?: number
+  readonly purpose: "task" | "review" | "scheduled" | "incident" | "changes" }
+export type CloudAgentLimits = { atOnce: number; hours: number; longestRunMin: number; scheduledPerDay: number; runCeilingShare: number }
+export const CLOUD_AGENT_LIMITS: Readonly<Record<CodiumPlanId, CloudAgentLimits>>   // imported only by this module and its own test
 //   vector-10: 1 / 5 / 30 / 0 / 0.10    vector-50: 1 / 15 / 45 / 0 / 0.10
 //   vector-100: 2 / 40 / 45 / 5 / 0.10   vector-200: 6 / 120 / 120 / 20 / 0.10
 export type CloudAgentAllowance =
-  | {
-      active: true
-      plan: CodiumPlanId
-      limits: CloudAgentLimits
-      allowanceSeconds: number
-      meterEpoch: string
-      periodEnd: number
-      premiumModels: boolean
-      revokedBefore?: number
-    }
-  | {
-      active: false
-      reason:
-        | "none"
-        | "payment"
-        | "dispute"
-        | "fraud"
-        | "closing"
-        | "service-off"
-        | "source-unavailable"
-        | "not-in-plan"
-    }
-export function cloudAgentEntitlement(
-  accountId: string,
-  input: { source: RunSource; now?: number },
-  fetcher?: typeof fetch,
-): Promise<CloudAgentAllowance>
+  | { active: true; plan: CodiumPlanId; limits: CloudAgentLimits; allowanceSeconds: number
+      meterEpoch: string; periodEnd: number; premiumModels: boolean; revokedBefore?: number }
+  | { active: false; reason: "none" | "payment" | "dispute" | "fraud" | "closing" | "service-off" | "source-unavailable" | "not-in-plan" }
+export function cloudAgentEntitlement(accountId: string, input: { source: RunSource; now?: number },
+  fetcher?: typeof fetch): Promise<CloudAgentAllowance>
 export function cloudAgentRevokedBefore(accountId: string, fetcher?: typeof fetch): Promise<number | undefined>
 export function createCloudAgentEntitlement(deps: {
-  enabled(): boolean // default: modelPlansEnabled() && VECTOR_CLOUD_AGENTS_ENABLED === "true"
-  plan(
-    accountId: string,
-    fetcher: typeof fetch,
-  ): Promise<
-    { active: false; closing?: boolean } | { active: true; plan: CodiumPlanId; periodStart: number; periodEnd: number }
-  >
+  enabled(): boolean                                   // default: modelPlansEnabled() && VECTOR_CLOUD_AGENTS_ENABLED === "true"
+  plan(accountId: string, fetcher: typeof fetch): Promise<
+    { active: false; closing?: boolean } | { active: true; plan: CodiumPlanId; periodStart: number; periodEnd: number }>
 }): typeof cloudAgentEntitlement
 ```
 
 The local backing works as follows until A59. It is dormant in production, because the kill switch stays unset until A59 replaces it (O10):
-
 1. Not `enabled()` → `service-off`.
 2. A source outside `ENABLED_SOURCES` → `source-unavailable`.
 3. Otherwise `plan()` decides. The default `plan()` reads `readModelPlanAccount(accountId)?.closing` first (closing → `closing`), then `modelPlanStatus(accountId)` from `api/_lib/model-plan-account.ts`, cached per account for 60 s in memory so at-once retries do not repeat it. Its answers map like this:
@@ -698,7 +624,6 @@ The local backing works as follows until A59. It is dormant in production, becau
 `cloudAgentRevokedBefore` returns `undefined` locally. At A59, Codium backs it with `runTokensRevokedBefore(accountId, fetcher)` from `api/_lib/codium-provisioners.ts`, which fails closed (503) when its mark cannot be read.
 
 At A59, Codium:
-
 - replaces the body of `cloudAgentEntitlement` with `return cloudAgentAllowance(accountId, input, fetcher)` and the body of `cloudAgentRevokedBefore` with `return runTokensRevokedBefore(accountId, fetcher)`;
 - replaces the local types with imports, and keeps `RUN_SOURCES` and `ENABLED_SOURCES` as value exports re-exported from `../../packages/schema/src/codium-run-trigger.js` (a relative path: `api/` never imports a workspace package by name);
 - deletes `CLOUD_AGENT_LIMITS`, `createCloudAgentEntitlement` and `packages/web/test/cloud-agents-entitlement.test.ts`, whose assertions its contract test takes over (INV-K3).
@@ -716,26 +641,25 @@ The names here deliberately differ from Codium's, so that no import alias is eve
 ```ts
 type RunTokenClaims = {
   v: 1
-  sub: string // Vector account id: a lowercase UUID in Codium's registry form (version 1-8, variant 8-b)
-  rid: string // GithubAgents.runId(...): "gh-<repositoryId>-<runId>-<runAttempt>-<checkRunId>", whose repositoryId is `repo`
-  repo: string // repositoryId, decimal with no leading zero, a safe integer
-  thr: string // thread, GithubAgents.THREAD_PATTERN, fixed at mint: reserveRun's `thread` (a renewal answers the record's)
-  gen: number // binding generation at mint, an integer of at least 1
+  sub: string                     // Vector account id: a lowercase UUID in Codium's registry form (version 1-8, variant 8-b)
+  rid: string                     // GithubAgents.runId(...): "gh-<repositoryId>-<runId>-<runAttempt>-<checkRunId>", whose repositoryId is `repo`
+  repo: string                    // repositoryId, decimal with no leading zero, a safe integer
+  thr: string                     // thread, GithubAgents.THREAD_PATTERN, fixed at mint: reserveRun's `thread` (a renewal answers the record's)
+  gen: number                     // binding generation at mint, an integer of at least 1
   src: "github-comment" | "github-dispatch" | "github-schedule"
-  pur: "task" | "review" | "scheduled" // "scheduled" exactly when src is "github-schedule"
-  epoch: string // the live record's meter epoch, reserveRun's `epoch`; matches METER_EPOCH_PATTERN (2.6)
-  dl: number // deadline, ms
-  exp: number // dl + SETTLE_GRACE_SECONDS × 1000, exactly
-  iat: number // ms, before dl
-  jti: string // 16 random bytes, base64url (22 characters); equals the live record's jti
-  cs?: number // run ceiling share, finite, in (0, 1]
+  pur: "task" | "review" | "scheduled"   // "scheduled" exactly when src is "github-schedule"
+  epoch: string                   // the live record's meter epoch, reserveRun's `epoch`; matches METER_EPOCH_PATTERN (2.6)
+  dl: number                      // deadline, ms
+  exp: number                     // dl + SETTLE_GRACE_SECONDS × 1000, exactly
+  iat: number                     // ms, before dl
+  jti: string                     // 16 random bytes, base64url (22 characters); equals the live record's jti
+  cs?: number                     // run ceiling share, finite, in (0, 1]
 }
 ```
 
 `dl`, `exp` and `iat` are positive safe integers. The payload is read with these rules alone; its key order does not matter, though `mintRunToken` always writes the order above. It never carries an email, a plan, limits or model authority. The gateway reads model access from the snapshot (SPEC §4.18).
 
 **Functions.** Each takes the optional dependencies `deps: RunTokenDeps = { now?: number; store?: typeof persistentStore; revokedBefore?: typeof cloudAgentRevokedBefore }` where noted; the defaults are `Date.now()`, `persistentStore` and `cloudAgentRevokedBefore`.
-
 - `mintRunToken(claims: Omit<RunTokenClaims, "v" | "exp">): { token: string; deadline: number; expiresAt: number }`. It sets `v = 1` and `exp = dl + SETTLE_GRACE_SECONDS × 1000`, and answers 400 `INVALID_REQUEST` for any claim the reader would refuse, an unknown key included, so nothing is signed that `readRunToken` refuses. `deadline` is `dl` and `expiresAt` is `exp`.
 - `readRunToken(token: string, now: number): RunTokenClaims`. This makes no store call: it checks the prefix, the length (before any HMAC), the format, the timing-safe signature, the schema and the rules above, and then `now < exp` (401 `MODEL_PLAN_RUN_EXPIRED` otherwise).
 - `verifyRunToken(token, deps?): Promise<RunCaller>` is the gateway path. After `readRunToken`, it requires `now < dl`, then makes one EVAL round trip and one seam call, started together:
@@ -747,17 +671,12 @@ type RunTokenClaims = {
 - `cloudAgentsRunVerifier = { prefix: "vrt_" as const, verify: (token: string) => verifyRunToken(token) }`. **This is the seam.** In A59, Codium adds `registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)` to its static registrations (`api/_lib/model-plan-caller.ts`). We never change `requireModelPlanUser`.
 
 ```ts
-type RunCaller = {
-  account: { id: string }
-  kind: "run"
-  purpose: "cloud-agents"
-  run: { id: string; source: RunSource; deadline: number; ceilingShare?: number; service: "cloud-agents" }
-}
+type RunCaller = { account: { id: string }; kind: "run"; purpose: "cloud-agents"
+  run: { id: string; source: RunSource; deadline: number; ceilingShare?: number; service: "cloud-agents" } }
 // run.id === claims.rid, always; run.deadline is dl; ceilingShare is cs, absent when cs is
 ```
 
 This shape passes Codium's registry checks as they stand on `origin/codium` and `origin/codium-next` (`model-plan-caller.ts`, with the grammar from `codium-pool.ts` and `codium-deviations.md` "One run-id grammar"):
-
 - a UUID account in the registry's form (`sub` is minted only in that form);
 - `kind` `run`;
 - a pool purpose;
@@ -768,7 +687,6 @@ This shape passes Codium's registry checks as they stand on `origin/codium` and 
 - a ceiling share in (0, 1].
 
 **Errors.** Each code has one message whatever its cause, so no response says why a run was stopped (INV-P1).
-
 - 400 `INVALID_REQUEST` (mint only): a claim the reader would refuse.
 - 401 `RUN_TOKEN_INVALID`: no `Bearer` header, format, length, signature or schema.
 - 401 `MODEL_PLAN_RUN_EXPIRED`: deadline or exp passed, generation moved (rebind, takeover, unbind or suspension), another account bound at the same generation, settled, replaced, revoked, or before `revokedBefore`.
@@ -817,7 +735,6 @@ bindingKey(repositoryId: string): string; generationKey(repositoryId: string): s
 `recordRepoBinding(...)`, named in SPEC §4.18, is exported as the thin wrapper `redeemAndBind` uses.
 
 **Bind codes.**
-
 - Format: `vbc_` plus 32 random bytes in base64url, shown once.
 - The server stores only `sha256(code)`, with `{account, repository, repositoryId?, githubUserId?, defaultRef?, exp}`, for 600 s.
 - Steps that can fail (the takeover check, the App or default-branch check, `consumeGithubOidc`) only peek. The code is consumed once, by `redeemAndBind`, in the same EVAL that writes the binding, so a failure never burns it and two parallel binds yield exactly one binding.
@@ -832,7 +749,6 @@ bindingKey(repositoryId: string): string; generationKey(repositoryId: string): s
 **Binder-left outlives the binding.** The script that records `binder-left` also adds the repository id to the binding account's `binder-left:<account>` set (2.7). An unbind or a takeover deletes the binding, while the account's run records stay (2.18), so the set, not the binding, is what keeps them hidden (2.16). The member is the account's fact, so a `binder-left` decided against a binding that has since gone (the counter passed its generation) or been replaced by another account's later binding still adds it, and the set ends the same whichever script lands first; only a later binding of the same account skips it. A later bind of the repository by the same account removes its member, because that binding's binder has write access again; nothing else does, except the account's erasure.
 
 **Tickets** (`startCloudRun`):
-
 - `startCloudRun(trigger, deps = {})` accepts injectable `store`, `entitlement`, `app`, `now` and `fetcher`. It is an internal library, never a public route. `peekRunTicket(ticket, identity, binding, deps = {})` returns a validated ticket plus its hashed key, or `undefined` for missing/expired/mismatched credentials; store corruption and outages fail closed. Its deps are `store`, `app` and `now`. Bindings without a stored verified `installationId` require an App-backed rebind before server dispatch; no installation enumeration or inferred by-id lookup is permitted.
 - Issuing a ticket checks account revocation and the current unsuspended binding account/generation in the same EVAL as `SET NX EX 900`. Neither prompts nor requester identity are stored in the ticket. Dispatch failure deletes an unconsumed ticket; a lost dispatch response cannot prove that GitHub did not start a job, so `dispatch-failed` is not a no-side-effect guarantee. Any already-started job must still pass mint admission.
 - Format: `vtk_` plus 32 random bytes.
@@ -885,7 +801,6 @@ liveKey(account: string): string; usedKey(account: string, epoch: string): strin
 **Reserved up front, one charge formula.** A fresh reserve adds its whole reservation, `(deadline − startedAt) / 1000`, to `used:<account>:<epoch>`. Every settle path (explicit, idle, generation change) gives back the reservation minus the charge `clamp(max(lastRequest ?? 0, lastReport) − startedAt, 0, deadline − startedAt)`, rounded up to whole seconds, and deletes the live record; the give-back goes only into the run's own epoch, and only when the settle names that epoch: a run of another epoch that a reserve removes (idle, or replaced after a generation change) and a run settled with a token of another epoch keep their whole reservation in the run's epoch. So `used` holds settled seconds plus the reservations of that epoch's live runs. The live hash outlives every `used` key its runs are charged to (2.7), so a run nobody settles is never read at its whole reservation: once idle, the next reserve or agent-time read of its epoch settles it by the formula before reading `used`. A run is **idle** when `now − max(lastReport, lastRequest ?? 0) > IDLE_SECONDS`.
 
 `reserveRun` does the following, in order, in one script:
-
 1. Note whether `rid` already has a live record of a `github-schedule` run (step 5). Settle every idle live run of the account with the formula. An idle run of another epoch than the allowance's is removed with no give-back: its reservation stays charged in its own epoch.
 2. If `rid` is already live with the same generation and `now` is before its deadline, store the new `jti` and change nothing else, consume `consumeKey` if given, and answer `{ok: true, renewed: true}` with the record's start, deadline, epoch, thread, source and purpose, with no further checks and no extra charge (INV-S9). At or after its deadline, answer `at-once` and leave the record and `consumeKey` alone: a token for that deadline would be dead at once, and a new `jti` would kill the token the run still settles with. If it is live with an older generation, settle it with the formula and continue; a run of another epoch than the allowance's is removed with no give-back, as in step 1. If it is live with a newer generation, answer `at-once` and leave it alone.
 3. If `consumeKey` is given and no longer exists (another check run's reservation consumed it, or it expired, after the mint peeked it), answer `{ok: false, refusal: "ticket"}`.
@@ -900,7 +815,6 @@ liveKey(account: string): string; usedKey(account: string, epoch: string): strin
    - extend `live:<account>` to expire no sooner than `used` and than the new deadline plus 1 day.
 
 A refusal never consumes `consumeKey`, and a renewal needs none: the check run's own fresh reservation consumed it. Every `ok` answer's deadline is after `now`. Only `reserveRun` and `cloudAgentSecondsUsed` judge runs idle; the other functions touch only their own run.
-
 - `reportRun` sets `lastReport = max(lastReport, now)` and answers `{live: true, deadline}` only for the token that holds the run (its `jti` is the record's); otherwise `{live: false}`, and nothing is created.
 - `recordCodiumRequest` sets `lastRequest = max(lastRequest, at)` on a live record. It does nothing for a settled or unknown run, or for an `at` before the run's start (the gateway's clock and the mint's differ).
 - `settleRun` acts only for the token that holds the run. It gives back into the token's `epoch`; with an epoch other than the record's, the whole reservation stays charged. `seconds` is what the run stays charged.
@@ -927,31 +841,29 @@ It is typed locally and structurally against Codium's `GatewayHook` (`api/_lib/m
 
 ## 2.7 Store keys (prefix `vector:cloud-agents:`)
 
-| Key                                        | Type   | Holds                                                                                                        | Expiry                                                                                                                                    |
-| ------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `binding:<repositoryId>`                   | HASH   | `RepoBinding` fields (below)                                                                                 | none (removed on unbind or erase)                                                                                                         |
-| `gen:<repositoryId>`                       | STRING | generation counter                                                                                           | none (no personal data)                                                                                                                   |
-| `bindings:<account>`                       | SET    | repository ids                                                                                               | none                                                                                                                                      |
-| `binder-left:<account>`                    | SET    | repository ids whose binder lost access while bound to the account (2.5)                                     | none (a member goes when the account binds that repository again; the key on erase)                                                       |
-| `bind-code:<sha256 hex of the whole code>` | STRING | JSON (below)                                                                                                 | 600 s                                                                                                                                     |
-| `ticket:<sha256>`                          | STRING | JSON                                                                                                         | 900 s                                                                                                                                     |
-| `binder-ok:<repositoryId>`                 | STRING | JSON `{account, githubId, generation}`: the owning Vector account, verified binder and binding generation    | 1 hour                                                                                                                                    |
-| `default-branch:<repositoryId>`            | STRING | a public repository's default branch, read without credentials                                               | 1 hour                                                                                                                                    |
-| `live:<account>`                           | HASH   | `rid` → JSON `LiveRun`                                                                                       | extended at each fresh reserve to at least that reserve's `used` expiry and its deadline + 1 day; never shortened; goes with its last run |
-| `used:<account>:<meterEpoch>`              | STRING | seconds charged: settled runs, plus the reservations of live runs (a settle gives back the unused part; 2.6) | `max(periodEnd, now)` + 40 days, set at each fresh reserve                                                                                |
-| `sched:<account>:<YYYY-MM-DD>`             | STRING | scheduled check runs first reserved that UTC day                                                             | 2 days from the last counted mint                                                                                                         |
-| `run:<rid>`                                | HASH   | run record (2.16)                                                                                            | 90 days                                                                                                                                   |
-| `run:<rid>:actor`                          | HASH   | triggering GitHub login and id                                                                               | 90 days                                                                                                                                   |
-| `runs:<account>`                           | ZSET   | `rid` by start time, trimmed to 200                                                                          | 90 days, refreshed                                                                                                                        |
+| Key | Type | Holds | Expiry |
+|---|---|---|---|
+| `binding:<repositoryId>` | HASH | `RepoBinding` fields (below) | none (removed on unbind or erase) |
+| `gen:<repositoryId>` | STRING | generation counter | none (no personal data) |
+| `bindings:<account>` | SET | repository ids | none |
+| `binder-left:<account>` | SET | repository ids whose binder lost access while bound to the account (2.5) | none (a member goes when the account binds that repository again; the key on erase) |
+| `bind-code:<sha256 hex of the whole code>` | STRING | JSON (below) | 600 s |
+| `ticket:<sha256>` | STRING | JSON | 900 s |
+| `binder-ok:<repositoryId>` | STRING | JSON `{account, githubId, generation}`: the owning Vector account, verified binder and binding generation | 1 hour |
+| `default-branch:<repositoryId>` | STRING | a public repository's default branch, read without credentials | 1 hour |
+| `live:<account>` | HASH | `rid` → JSON `LiveRun` | extended at each fresh reserve to at least that reserve's `used` expiry and its deadline + 1 day; never shortened; goes with its last run |
+| `used:<account>:<meterEpoch>` | STRING | seconds charged: settled runs, plus the reservations of live runs (a settle gives back the unused part; 2.6) | `max(periodEnd, now)` + 40 days, set at each fresh reserve |
+| `sched:<account>:<YYYY-MM-DD>` | STRING | scheduled check runs first reserved that UTC day | 2 days from the last counted mint |
+| `run:<rid>` | HASH | run record (2.16) | 90 days |
+| `run:<rid>:actor` | HASH | triggering GitHub login and id | 90 days |
+| `runs:<account>` | ZSET | `rid` by start time, trimmed to 200 | 90 days, refreshed |
 
 The binding keys hold strings only; ids are decimal and times are milliseconds.
-
 - `binding:<repositoryId>` fields: `repositoryId`, `ownerId`, `repository`, `account`, `visibility`, `defaultRef`, `generation`, `binderGithubId`, `binderLogin`, `workflowVersion`, `boundAt`, and optionally `lastUsedAt`, `suspended` and server-verified `installationId`. No other field is ever written; a reader answers 503 for an unknown, missing or malformed one.
 - `bind-code:<sha256>` JSON: `{account, repository, repositoryId?, githubUserId?, defaultRef?, exp}`, with ids as strings and `exp` in ms. The code itself is never stored.
 - While a binding exists, its `generation` field equals `GET gen:<repositoryId>`.
 
 Abuse scopes go through `enforceRateLimit` (HMAC-keyed, `requirePersistent: true`):
-
 - `cloud-agents-ip`: 120 per 5 min;
 - `cloud-agents-bind-code-account`: 10 per hour;
 - `cloud-agents-bind-repo`: 10 per hour;
@@ -970,7 +882,6 @@ Each route is a three-line file in `api/cloud-agents/`: `export const config = {
 Every response is JSON with `no-store`, `nosniff` and `no-referrer`. Unknown errors become 503 `CLOUD_AGENTS_UNAVAILABLE`, and upstream errors are never serialized. No response carries a refusal `reason` (INV-P1). This reuses the `safe()` pattern of `github-api.ts`. V09 exports that file's `proof()` as `githubProof(request, response, audience, verify)`, so both APIs share it.
 
 **Account auth** (`requireCloudAgentsUser`) is either of:
-
 - a Supabase session (`requireAccountUser`);
 - a desktop `vct_` token, via `verifyDesktopToken`, which requires client `desktop`. An unmarked `vct_` gets 403 `DESKTOP_SIGN_IN_REQUIRED`.
 
@@ -982,20 +893,19 @@ The bind code's account is checked for revocation again when redeemed. The App's
 
 The public default-branch cache uses `default-branch:<repositoryId>` and JSON `{repository, ownerId, defaultRef}`, checked against the signed identity on every read, with `EX 3600`. Only a successful unauthenticated GitHub response whose numeric repository and owner ids, full name, public visibility and branch match the identity may populate it. A malformed cache or store outage is 503; a valid cache for a different repository name or owner is refreshed. No private repository request is made for the fallback. A missing repository, non-public response or different ref gives `BIND_NEEDS_DEFAULT_BRANCH` without consuming the code. A non-binder's unbind gives 403 `ACTOR_NOT_ALLOWED`.
 
-| Route                                       | Auth                    | Request body                                                                                    | 200 response                                                                                                                                                                                                                       |
-| ------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/cloud-agents/bind-code`          | account                 | `{repository: "owner/name", repositoryId?: number, githubUserId?: number, defaultRef?: string}` | `{code, expiresAt}`                                                                                                                                                                                                                |
-| `POST /api/cloud-agents/bind`               | OIDC, audience `bind`   | `{code, workflowVersion}`                                                                       | `{bound: true, repository, repositoryId, generation, workflowUpdate: boolean}`                                                                                                                                                     |
-| `GET /api/cloud-agents/bindings`            | account                 | —                                                                                               | `{bindings: [{repository, repositoryId, boundAt, lastUsedAt?, binder: {login}, workflowVersion, codium: "ready" \| "unavailable", suspended?}]}`; a `binder-left` binding shows no repository name, whatever its stored visibility |
-| `POST /api/cloud-agents/unbind`             | account                 | `{repositoryId}`                                                                                | `{ok: true}`                                                                                                                                                                                                                       |
-| `POST /api/cloud-agents/mint`               | OIDC, audience `mint`   | `{purpose: "task" \| "review", thread, workflowVersion, commentId?, pullRequest?, ticket?}`     | `{token, runId, deadline, heartbeatSeconds: 60, idleSeconds: 600}`                                                                                                                                                                 |
-| `POST /api/cloud-agents/heartbeat`          | `vrt_` until `exp`      | `{state: "starting" \| "running"}`                                                              | `{ok: true, stop: boolean}` (`stop` once `now ≥ deadline − 180 s`)                                                                                                                                                                 |
-| `POST /api/cloud-agents/settle`             | `vrt_` until `exp`      | `{outcome: OUTCOME}`                                                                            | `{ok: true}`                                                                                                                                                                                                                       |
-| `GET /api/cloud-agents/runs`                | account                 | —                                                                                               | `{runs: CloudRun[]}` (2.16)                                                                                                                                                                                                        |
-| `POST /api/cloud-agents/artifact-key` (V27) | `vrt_` until `deadline` | `{thread}` (must equal the token's `thr`)                                                       | `{key, keyId}`                                                                                                                                                                                                                     |
+| Route | Auth | Request body | 200 response |
+|---|---|---|---|
+| `POST /api/cloud-agents/bind-code` | account | `{repository: "owner/name", repositoryId?: number, githubUserId?: number, defaultRef?: string}` | `{code, expiresAt}` |
+| `POST /api/cloud-agents/bind` | OIDC, audience `bind` | `{code, workflowVersion}` | `{bound: true, repository, repositoryId, generation, workflowUpdate: boolean}` |
+| `GET /api/cloud-agents/bindings` | account | — | `{bindings: [{repository, repositoryId, boundAt, lastUsedAt?, binder: {login}, workflowVersion, codium: "ready" \| "unavailable", suspended?}]}`; a `binder-left` binding shows no repository name, whatever its stored visibility |
+| `POST /api/cloud-agents/unbind` | account | `{repositoryId}` | `{ok: true}` |
+| `POST /api/cloud-agents/mint` | OIDC, audience `mint` | `{purpose: "task" \| "review", thread, workflowVersion, commentId?, pullRequest?, ticket?}` | `{token, runId, deadline, heartbeatSeconds: 60, idleSeconds: 600}` |
+| `POST /api/cloud-agents/heartbeat` | `vrt_` until `exp` | `{state: "starting" \| "running"}` | `{ok: true, stop: boolean}` (`stop` once `now ≥ deadline − 180 s`) |
+| `POST /api/cloud-agents/settle` | `vrt_` until `exp` | `{outcome: OUTCOME}` | `{ok: true}` |
+| `GET /api/cloud-agents/runs` | account | — | `{runs: CloudRun[]}` (2.16) |
+| `POST /api/cloud-agents/artifact-key` (V27) | `vrt_` until `deadline` | `{thread}` (must equal the token's `thr`) | `{key, keyId}` |
 
 **Mint order** (V12). Each step either passes or answers with the code shown:
-
 1. Clean URL; POST only.
 2. `githubProof` with audience `mint`: IP rate limit, Bearer, JSON body of at most 2,000 bytes, `verifyGithubOidc(token, "mint")`, then the per-repository verified-proof limit.
 3. Body keys must be a subset of the six above, with exact types; `purpose`, `thread` and `workflowVersion` are required and `thread` matches `THREAD_PATTERN`. Otherwise 400 `INVALID_REQUEST`.
@@ -1025,7 +935,6 @@ The public default-branch cache uses `default-branch:<repositoryId>` and JSON `{
 **Ticket sequencing.** V12 refuses all bot actors and all supplied tickets while the V13 producer/validator is absent. V13 replaces that fail-closed gate with the specified one-time ticket checks and proves the configured-App-bot exception.
 
 **Bind order** (V10):
-
 1. `githubProof` with audience `bind`. The event must be `workflow_dispatch` (otherwise 403 `EVENT_NOT_ALLOWED`).
 2. `peekBindCode`. Unknown, expired, used or mismatched → 403 `BIND_CODE_INVALID`, the same code for every cause.
 3. Takeover rule O6 (read only) → 409 `REPO_BOUND_ELSEWHERE`.
@@ -1039,29 +948,28 @@ The public default-branch cache uses `default-branch:<repositoryId>` and JSON `{
 
 ### 2.9.1 Mint, bind and account endpoints
 
-| Status | Code                                                                                                       | Body extra                                           | `MINT_STATUS`                               | Publish comment (2.17)                                                                                                       |
-| ------ | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 400    | `INVALID_REQUEST`, `INVALID_JSON`                                                                          | —                                                    | `denied`                                    | generic failure                                                                                                              |
-| 401    | `OIDC_INVALID`                                                                                             | —                                                    | `denied`                                    | generic failure                                                                                                              |
-| 403    | `WORKFLOW_NOT_TRUSTED`, `EVENT_NOT_ALLOWED`, `ACTOR_NOT_ALLOWED`, `COMMENT_CHANGED`                        | —                                                    | `denied`                                    | none for stranger refusals; otherwise generic failure                                                                        |
-| 403    | `EVENT_NEEDS_APP`                                                                                          | —                                                    | `needs-app`                                 | "use a PR conversation comment"                                                                                              |
-| 403    | `RUNNER_NOT_SUPPORTED`                                                                                     | —                                                    | `runner`                                    | "Codium runs need GitHub-hosted runners"                                                                                     |
-| 403    | `BIND_CODE_INVALID`                                                                                        | —                                                    | (bind)                                      | —                                                                                                                            |
-| 404    | `REPO_NOT_BOUND`                                                                                           | —                                                    | `not-bound`                                 | how to bind                                                                                                                  |
-| 409    | `BINDING_SUSPENDED`                                                                                        | —                                                    | `suspended`                                 | bind again                                                                                                                   |
-| 409    | `OIDC_REPLAYED`                                                                                            | —                                                    | retried with a fresh token, at most 3 times | —                                                                                                                            |
-| 409    | `REPO_BOUND_ELSEWHERE`, `BIND_NEEDS_DEFAULT_BRANCH`                                                        | —                                                    | (bind)                                      | —                                                                                                                            |
-| 426    | `WORKFLOW_UPDATE_REQUIRED`                                                                                 | —                                                    | `update-required`                           | update the workflow (amendment 15)                                                                                           |
-| 403    | `BINDING_UNAVAILABLE`                                                                                      | —                                                    | `binding-unavailable`                       | "Codium isn't available for this repository right now. The account that connected it can check Settings → GitHub in Vector." |
-| 403    | `CODIUM_PERK_REQUIRED`                                                                                     | `{perk: "scheduled"}`, with **no** `plan` field (P6) | `not-in-plan`                               | log only (schedules have no thread)                                                                                          |
-| 403    | `CLOUD_AGENTS_SOURCE_UNAVAILABLE`                                                                          | —                                                    | `source-unavailable`                        | generic failure                                                                                                              |
-| 503    | `MODEL_PLANS_DISABLED`                                                                                     | —                                                    | `service-off`                               | Codium agents are off right now                                                                                              |
-| 429    | `MODEL_PLAN_RUN_LIMIT`                                                                                     | `{limit: "hours" \| "at-once" \| "scheduled"}`       | `hours` / `at-once` / `scheduled`           | 1.4                                                                                                                          |
-| 429    | `RATE_LIMITED`                                                                                             | `retry-after`                                        | retried at most 3 times, then `unavailable` | generic failure                                                                                                              |
-| 503    | `PERSISTENT_STORE_UNAVAILABLE`, `GITHUB_UNAVAILABLE`, `RUN_TOKENS_UNAVAILABLE`, `CLOUD_AGENTS_UNAVAILABLE` | —                                                    | `unavailable`                               | generic failure                                                                                                              |
+| Status | Code | Body extra | `MINT_STATUS` | Publish comment (2.17) |
+|---|---|---|---|---|
+| 400 | `INVALID_REQUEST`, `INVALID_JSON` | — | `denied` | generic failure |
+| 401 | `OIDC_INVALID` | — | `denied` | generic failure |
+| 403 | `WORKFLOW_NOT_TRUSTED`, `EVENT_NOT_ALLOWED`, `ACTOR_NOT_ALLOWED`, `COMMENT_CHANGED` | — | `denied` | none for stranger refusals; otherwise generic failure |
+| 403 | `EVENT_NEEDS_APP` | — | `needs-app` | "use a PR conversation comment" |
+| 403 | `RUNNER_NOT_SUPPORTED` | — | `runner` | "Codium runs need GitHub-hosted runners" |
+| 403 | `BIND_CODE_INVALID` | — | (bind) | — |
+| 404 | `REPO_NOT_BOUND` | — | `not-bound` | how to bind |
+| 409 | `BINDING_SUSPENDED` | — | `suspended` | bind again |
+| 409 | `OIDC_REPLAYED` | — | retried with a fresh token, at most 3 times | — |
+| 409 | `REPO_BOUND_ELSEWHERE`, `BIND_NEEDS_DEFAULT_BRANCH` | — | (bind) | — |
+| 426 | `WORKFLOW_UPDATE_REQUIRED` | — | `update-required` | update the workflow (amendment 15) |
+| 403 | `BINDING_UNAVAILABLE` | — | `binding-unavailable` | "Codium isn't available for this repository right now. The account that connected it can check Settings → GitHub in Vector." |
+| 403 | `CODIUM_PERK_REQUIRED` | `{perk: "scheduled"}`, with **no** `plan` field (P6) | `not-in-plan` | log only (schedules have no thread) |
+| 403 | `CLOUD_AGENTS_SOURCE_UNAVAILABLE` | — | `source-unavailable` | generic failure |
+| 503 | `MODEL_PLANS_DISABLED` | — | `service-off` | Codium agents are off right now |
+| 429 | `MODEL_PLAN_RUN_LIMIT` | `{limit: "hours" \| "at-once" \| "scheduled"}` | `hours` / `at-once` / `scheduled` | 1.4 |
+| 429 | `RATE_LIMITED` | `retry-after` | retried at most 3 times, then `unavailable` | generic failure |
+| 503 | `PERSISTENT_STORE_UNAVAILABLE`, `GITHUB_UNAVAILABLE`, `RUN_TOKENS_UNAVAILABLE`, `CLOUD_AGENTS_UNAVAILABLE` | — | `unavailable` | generic failure |
 
 Allowance reasons map as follows:
-
 - `none`, `payment`, `dispute`, `fraud`, `closing` and `not-in-plan` → 403 `BINDING_UNAVAILABLE`, one code with no body extra, so no writer and no public log learns the binder's billing state. The binder sees `codium: "unavailable"` in their own bindings list and the detail on their own account page.
 - `service-off` → `MODEL_PLANS_DISABLED`;
 - `source-unavailable` → `CLOUD_AGENTS_SOURCE_UNAVAILABLE`.
@@ -1071,25 +979,24 @@ SPEC §4.10 gives no code for "scheduled used up", for a mint-time service-off o
 ### 2.9.2 Gateway codes inside a run (amendment 6)
 
 The engine's agent phase (and the Codium review path) maps the session's final error, by its `code`, to one of three behaviours:
-
 - **draft:** commit the changes and open a draft PR, or comment when nothing changed;
 - **wait:** retry;
 - **stop:** end the run.
 
-| Code                                                                                                                                                                                      | Behaviour                                                   | Reason line                                                                                     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| 401 `MODEL_PLAN_RUN_EXPIRED`                                                                                                                                                              | draft                                                       | "the run reached its time limit"                                                                |
-| 429 `MODEL_PLAN_RUN_LIMIT` (`ceiling`, `hours`, `at-once`)                                                                                                                                | draft, not retried                                          | "this run reached its share of the month" (ceiling) or "agent time for this binding is used up" |
-| 429 `MODEL_PLAN_DAILY_LIMIT`                                                                                                                                                              | draft, not retried                                          | "Codium's daily limit was reached"                                                              |
-| 402 `MODEL_PLAN_EXHAUSTED`, `MODEL_PLAN_PAYMENT_REQUIRED`, `MODEL_PLAN_REQUIRED`                                                                                                          | draft, not retried                                          | "Codium is unavailable for this binding"                                                        |
-| 402 `MODEL_PLAN_CAPACITY`; 403 `MODEL_PLAN_BLOCKED`, `CODIUM_PERK_REQUIRED`                                                                                                               | draft, not retried                                          | "Codium is unavailable for this binding"                                                        |
-| 429 `MODEL_PLAN_CONCURRENCY`                                                                                                                                                              | wait: retried for up to 15 min, then draft as busy          | "Codium was busy"                                                                               |
-| 429 `MODEL_PLAN_BUSY`, 503 `MODEL_PLAN_RENEWING`                                                                                                                                          | wait: existing client retries, then draft as busy           | "Codium was busy"                                                                               |
-| 403 `MODEL_PLAN_UPGRADE_REQUIRED`                                                                                                                                                         | draft                                                       | "the chosen model isn't included"                                                               |
-| 426 `CODIUM_UPDATE_REQUIRED`                                                                                                                                                              | draft; comment tells the user to update the workflow or CLI | "Vector needs updating"                                                                         |
-| 503 `MODEL_PLANS_DISABLED`, `MODEL_PLAN_MODEL_UNAVAILABLE`                                                                                                                                | draft                                                       | "Codium is unavailable right now"                                                               |
-| heartbeat `stop: true`, or the local deadline (`dl − 180 s`)                                                                                                                              | draft                                                       | "the run reached its time limit"                                                                |
-| any other error code (for example 401 `CODIUM_SIGN_IN_REQUIRED`, 400 `MODEL_PLAN_CONTEXT`, a passed-through 503 `PERSISTENT_STORE_UNAVAILABLE` or `CLOUD_AGENTS_UNAVAILABLE`), or any 5xx | draft when changes were made; otherwise one comment         | "Vector stopped early"                                                                          |
+| Code | Behaviour | Reason line |
+|---|---|---|
+| 401 `MODEL_PLAN_RUN_EXPIRED` | draft | "the run reached its time limit" |
+| 429 `MODEL_PLAN_RUN_LIMIT` (`ceiling`, `hours`, `at-once`) | draft, not retried | "this run reached its share of the month" (ceiling) or "agent time for this binding is used up" |
+| 429 `MODEL_PLAN_DAILY_LIMIT` | draft, not retried | "Codium's daily limit was reached" |
+| 402 `MODEL_PLAN_EXHAUSTED`, `MODEL_PLAN_PAYMENT_REQUIRED`, `MODEL_PLAN_REQUIRED` | draft, not retried | "Codium is unavailable for this binding" |
+| 402 `MODEL_PLAN_CAPACITY`; 403 `MODEL_PLAN_BLOCKED`, `CODIUM_PERK_REQUIRED` | draft, not retried | "Codium is unavailable for this binding" |
+| 429 `MODEL_PLAN_CONCURRENCY` | wait: retried for up to 15 min, then draft as busy | "Codium was busy" |
+| 429 `MODEL_PLAN_BUSY`, 503 `MODEL_PLAN_RENEWING` | wait: existing client retries, then draft as busy | "Codium was busy" |
+| 403 `MODEL_PLAN_UPGRADE_REQUIRED` | draft | "the chosen model isn't included" |
+| 426 `CODIUM_UPDATE_REQUIRED` | draft; comment tells the user to update the workflow or CLI | "Vector needs updating" |
+| 503 `MODEL_PLANS_DISABLED`, `MODEL_PLAN_MODEL_UNAVAILABLE` | draft | "Codium is unavailable right now" |
+| heartbeat `stop: true`, or the local deadline (`dl − 180 s`) | draft | "the run reached its time limit" |
+| any other error code (for example 401 `CODIUM_SIGN_IN_REQUIRED`, 400 `MODEL_PLAN_CONTEXT`, a passed-through 503 `PERSISTENT_STORE_UNAVAILABLE` or `CLOUD_AGENTS_UNAVAILABLE`), or any 5xx | draft when changes were made; otherwise one comment | "Vector stopped early" |
 
 What the bundle records (2.12): the row's code as `stop`, except that the six "unavailable for this binding" codes are all recorded as `MODEL_PLAN_BLOCKED`, because `summary.json` is a downloadable run artifact (P6). `MODEL_PLAN_RUN_LIMIT` also records the gateway's `limit` (`ceiling`, `hours` or `at-once`), so publish can tell the ceiling line from the used-up line. The heartbeat and deadline row records `"deadline"`. The default row records no stop: its outcome (`draft` or `failed` with no `stop`) is what says "Vector stopped early". Only Codium gateway errors are mapped; an own-key run's errors always take the default row (INV-K1).
 
@@ -1098,7 +1005,6 @@ What the bundle records (2.12): the row's code as `stop`, except that the six "u
 `githubOidcAudiences` gains `mint: GithubAgents.AUDIENCE.mint` and `bind: GithubAgents.AUDIENCE.bind`. (Amendment 2 asked for one `run` audience; two per-endpoint audiences keep its intent and are recorded at the top of the deviations file.)
 
 The following apply to every audience:
-
 - RS256 with `kid`, against the fixed JWKS;
 - `maxTokenAge` 300 and `clockTolerance` 30;
 - `jti` single-use;
@@ -1110,11 +1016,11 @@ The job-workflow claims are accepted only when `job_workflow_ref === workflow_re
 
 **Actors.** Today's actor pattern (`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`) stays for every audience and event, with one exception: on the `mint` audience, for `workflow_dispatch` only, an actor matching `^[a-z0-9][a-z0-9-]{0,98}\[bot\]$` is accepted and recorded with `actorIsBot: true`. The mint then applies step 8 of 2.8; nothing else accepts a `[bot]` login. The token carries no account-type claim, so a Bot account whose login has no `[bot]` suffix (GitHub's `Copilot`, for one) matches today's pattern and is recorded with `actorIsBot: false` on every audience and event: `actorIsBot: false` means "no `[bot]` suffix", not "a human". With the App, V09's author-type check refuses such an author on comment, review-comment and issue events; without the App, the route job's `user.type != 'Bot'` pre-filter (2.11.3) is the only check, as the route job's writer check is for INV-S1.
 
-| Audience                            | Events                                                     | Ref and subject                                                                                                                                                                                                                                                               |
-| ----------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `token`, `installation` (unchanged) | `issue_comment`, `issues`, `workflow_dispatch`, `schedule` | `refs/heads/*`, `ref_type: branch`, no `head_ref`/`base_ref`, legacy or immutable `ref:` subject                                                                                                                                                                              |
-| `mint`                              | the four above plus `pull_request_review_comment`          | as above, except review comments: `ref` matches `^refs/pull/[1-9]\d{0,9}/merge$`; `ref_type` is `branch` or absent [verify with a live token]; `head_ref` and `base_ref` are present; subject `repo:O/R:pull_request` or its immutable form. The identity gains `pullRequest` |
-| `bind`                              | `workflow_dispatch` only                                   | `refs/heads/*`                                                                                                                                                                                                                                                                |
+| Audience | Events | Ref and subject |
+|---|---|---|
+| `token`, `installation` (unchanged) | `issue_comment`, `issues`, `workflow_dispatch`, `schedule` | `refs/heads/*`, `ref_type: branch`, no `head_ref`/`base_ref`, legacy or immutable `ref:` subject |
+| `mint` | the four above plus `pull_request_review_comment` | as above, except review comments: `ref` matches `^refs/pull/[1-9]\d{0,9}/merge$`; `ref_type` is `branch` or absent [verify with a live token]; `head_ref` and `base_ref` are present; subject `repo:O/R:pull_request` or its immutable form. The identity gains `pullRequest` |
+| `bind` | `workflow_dispatch` only | `refs/heads/*` |
 
 The identity also gains `runnerEnvironment` (from `runner_environment`, required on `mint`), `refProtected` (from `ref_protected`), `actorIsBot`, and the optional `repositoryVisibility`, `jobWorkflowRef`, `pullRequest`, `headRef` and `baseRef`. Nothing authorizes on `sub`. Everything keys on `repository_id` plus `repository_owner_id`.
 
@@ -1122,30 +1028,18 @@ The identity also gains `runnerEnvironment` (from `runner_environment`, required
 
 ```ts
 type GithubIdentity = {
-  repository: string
-  repositoryId: string
-  owner: string
-  ownerId: string
-  actor: string
-  actorId: string
-  actorIsBot: boolean // true only for a `<slug>[bot]` actor on mint with workflow_dispatch; false is not "a human"
-  runId: string
-  runAttempt: string
-  checkRunId: string // decimal ids, safe integers
-  sha: string
-  workflowSha: string
-  ref: string
-  workflowRef: string
-  jobWorkflowRef: string | undefined // equal to workflowRef when present; no jobWorkflowSha, which would equal workflowSha
-  event: string
-  subject: string
-  jti: string
-  expiresAt: number // expiresAt in seconds
+  repository: string; repositoryId: string; owner: string; ownerId: string
+  actor: string; actorId: string
+  actorIsBot: boolean                       // true only for a `<slug>[bot]` actor on mint with workflow_dispatch; false is not "a human"
+  runId: string; runAttempt: string; checkRunId: string   // decimal ids, safe integers
+  sha: string; workflowSha: string; ref: string; workflowRef: string
+  jobWorkflowRef: string | undefined        // equal to workflowRef when present; no jobWorkflowSha, which would equal workflowSha
+  event: string; subject: string; jti: string; expiresAt: number   // expiresAt in seconds
   audience: (typeof githubOidcAudiences)[GithubOidcPurpose]
-  runnerEnvironment: string | undefined // ^[a-z][a-z0-9-]{0,39}$; always a string on mint
-  refProtected: boolean // true only for the claim string "true"
+  runnerEnvironment: string | undefined     // ^[a-z][a-z0-9-]{0,39}$; always a string on mint
+  refProtected: boolean                     // true only for the claim string "true"
   repositoryVisibility: "public" | "private" | "internal" | undefined
-  pullRequest: number | undefined // these three only for a mint review comment
+  pullRequest: number | undefined           // these three only for a mint review comment
   headRef: string | undefined
   baseRef: string | undefined
 }
@@ -1156,7 +1050,6 @@ type GithubIdentity = {
 **The added claims.** On `mint` and `bind`, `runner_environment` (`^[a-z][a-z0-9-]{0,39}$`), `ref_protected` (`"true"` or `"false"`) and `repository_visibility` (`public`, `private` or `internal`) must each be absent or well-formed, and `mint` requires `runner_environment`. On `token` and `installation`, which never read them, a malformed value is recorded as absent (`refProtected: false`), so those audiences accept exactly what they accepted before V08, apart from the job-workflow rule.
 
 **Refusal codes, in check order** (today's codes and order):
-
 1. 401 `OIDC_INVALID`: the format, header, signature, issuer, audience and times; `environment`; the job-workflow rule, checked against the raw claims; then every claim's shape: repository and owner, the event name, the ref (`^refs/pull/[1-9]\d{0,9}/merge$` for a mint review comment, `refs/heads/*` otherwise), the added claims above, the actor (a `[bot]` login only on mint with `workflow_dispatch`), the ids, `sha`, `workflow_sha`, `workflow_ref`, `sub` and `jti`.
 2. 403 `WORKFLOW_NOT_TRUSTED`: `ref_type` (`branch`; for a review comment, `branch` or absent); `head_ref` and `base_ref` (absent or empty, except on a review comment, where both must match `^[^\s:~^?*\[\\]{1,240}$`); `workflow_ref` other than `<repository>/.github/workflows/vector.yml@<ref>`; `workflow_sha ≠ sha`.
 3. 401 `OIDC_INVALID`: a `sub` that is not one of the event's two subject forms.
@@ -1210,31 +1103,30 @@ on:
   issue_comment: { types: [created] }
   pull_request_review_comment: { types: [created] }
   issues: { types: [opened] }
-  pull_request: { types: [opened, synchronize, reopened, ready_for_review] } # own-key autoReview only
-  schedule: [{ cron: "<cron>" }, …] # only when schedules exist
+  pull_request: { types: [opened, synchronize, reopened, ready_for_review] }   # own-key autoReview only
+  schedule: [{ cron: "<cron>" }, …]                                            # only when schedules exist
   workflow_dispatch:
     inputs:
-      mode: { type: choice, options: [task, review, bind], default: task }
+      mode:   { type: choice, options: [task, review, bind], default: task }
       prompt: { type: string, required: false }
-      pr: { type: string, required: false }
-      code: { type: string, required: false }
+      pr:     { type: string, required: false }
+      code:   { type: string, required: false }
       ticket: { type: string, required: false }
 ```
 
 ### 2.11.3 Jobs
 
-| Job (id / name)                | Runs when                                                                           | Permissions                                                                                                                                      | Steps                                                                                                                                                                               |
-| ------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `route`                        | pre-filter `if:` (below)                                                            | `contents: read`, `issues: write`, `pull-requests: write`                                                                                        | `actions/github-script@v7` running `buildRouteScript(mentions, handle)`. Outputs: `kind` (`task`, `review`, `review-full`, `bind`, `control`, `none`), `pr`, `ref`, `thread`, `app` |
-| `agent` / **Vector agent**     | `needs.route.outputs.kind == 'task'`                                                | `contents: read`, `issues: read`, `pull-requests: read`, `actions: read`; Codium adds `id-token: write`                                          | below                                                                                                                                                                               |
-| `publish` / **Vector publish** | `always() && needs.route.outputs.kind == 'task'`                                    | `contents: write`, `pull-requests: write`, `issues: write`; `actions: write` when autoReview; `id-token: write` only when `publishAuth` is `app` | below                                                                                                                                                                               |
-| `bind` / **Vector bind**       | `needs.route.outputs.kind == 'bind'`                                                | `id-token: write` only                                                                                                                           | setup-node; Install Vector; `vector github bind` with `VECTOR_BIND_CODE: ${{ inputs.code }}` in `env:`. No checkout                                                                 |
-| `review` / **Vector review**   | `kind` is `review` or `review-full`; own key also on `pull_request` when autoReview | own key: as today; Codium: below                                                                                                                 | own key: as today, with version 3; Codium: below                                                                                                                                    |
+| Job (id / name) | Runs when | Permissions | Steps |
+|---|---|---|---|
+| `route` | pre-filter `if:` (below) | `contents: read`, `issues: write`, `pull-requests: write` | `actions/github-script@v7` running `buildRouteScript(mentions, handle)`. Outputs: `kind` (`task`, `review`, `review-full`, `bind`, `control`, `none`), `pr`, `ref`, `thread`, `app` |
+| `agent` / **Vector agent** | `needs.route.outputs.kind == 'task'` | `contents: read`, `issues: read`, `pull-requests: read`, `actions: read`; Codium adds `id-token: write` | below |
+| `publish` / **Vector publish** | `always() && needs.route.outputs.kind == 'task'` | `contents: write`, `pull-requests: write`, `issues: write`; `actions: write` when autoReview; `id-token: write` only when `publishAuth` is `app` | below |
+| `bind` / **Vector bind** | `needs.route.outputs.kind == 'bind'` | `id-token: write` only | setup-node; Install Vector; `vector github bind` with `VECTOR_BIND_CODE: ${{ inputs.code }}` in `env:`. No checkout |
+| `review` / **Vector review** | `kind` is `review` or `review-full`; own key also on `pull_request` when autoReview | own key: as today; Codium: below | own key: as today, with version 3; Codium: below |
 
 `runs-on` is `ubuntu-latest` for every job.
 
 **The route job.**
-
 - Pre-filter (`contains()` is only a cheap substring check; the script decides):
 
   ```
@@ -1252,7 +1144,6 @@ on:
 - `thread` is the issue or PR number, `dispatch-<run_id>` or the schedule thread, always matching `THREAD_PATTERN`.
 
 **The agent job's steps**, in order:
-
 1. setup-node 20.
 2. `actions/cache/restore@v4` for `~/.npm`. Restore only: never save after the agent has run.
 3. Install Vector (pinned).
@@ -1264,20 +1155,19 @@ on:
    - validates the checkout with a bounded lstat-only walk (at most 200,000 entries, depth 64), refusing special nodes and multiply linked regular files; stages it by same-device rename under a fresh dedicated container in a canonical root-owned, non-writable, traversable `/mnt`, `/var/lib` or `/home` parent; records that exact container and an explicit successful-creation phase before moving anything, replaces the original workspace immediately with an empty runner-owned mode-0700 directory, makes the staging parent root-owned mode 0755, and chowns only the validated staged checkout to the agent. Unsupported filesystem layouts fail closed; no cross-device copy or runner-HOME traversal is granted;
    - stops `docker.socket` and `docker.service` and sets the socket to mode 0600;
    - raises `kernel.yama.ptrace_scope` to at least 2 (it never lowers it), pins `kernel.core_pattern=/dev/null`, and launches the hosted child with hard and soft `RLIMIT_CORE=0`; the controls are verified before a credential-bearing engine starts;
+   - verifies the mandatory tool namespace as the agent user and records the verified boundary in private preparation state;
    - copies the event payload to a file the agent user can read;
-   - verifies tool PID/proc namespace support and records that result in the private preparation manifest on default no-sudo runs;
    - then verifies, as the agent user, that `sudo -n true` and `docker info` fail, that the user's groups are exactly its own, that `ptrace_scope ≥ 2`, and that the runner's file-command files are not writable by it. Any failure exits 1, so the run fails closed.
 7. `id: agent`, `if:` the mint condition on Codium, with
    `shell: env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}`
    and `run: vector github sandbox run -- vector github run --phase agent`. The `shell:` override keeps the OIDC request pair out of the environment of both the step's shell and `sandbox run`. `sandbox run` starts the command as the agent user with `env -i` plus `SANDBOX_ENV_ALLOW`; GNU env changes into the staged checkout only after the UID switch, so private checkout permissions remain supported. It writes the secret channel (2.13) to its stdin, and waits. On a self-hosted runner (own key only) it runs the command as the runner user with the same clean environment and channel, and logs that the sandbox does not apply.
-8. `id: sandbox_finish`, `vector github sandbox finish`, `if: always()`. Hosted preparation records only the exact canonical original workspace, selected fixed staging container, newly created agent UID/GID and setup state in a runner-owned private manifest. Cleanup validates that authority, refuses a replaced UID, and is harmless when preparation never ran. A selected container path grants no cleanup authority until exclusive creation has succeeded and the private manifest records it. Sealing or quarantine failures still attempt UID shutdown and owned-path cleanup but prohibit copying. The original workspace remains an empty runner-owned placeholder throughout agent execution and later post steps; untrusted checkout contents are never restored there. Before slow process or tree operations, finish makes the validated staging container private to the runner and renames the staged checkout into its private same-device cleanup child. Partial preparation and cleanup retain manifest authority until removal succeeds. SIGINT/SIGTERM is intercepted synchronously while private metadata establishes authority; no env-selected path is mutated before validation. A cancelled finish completes bounded cleanup but exits non-success, keeping uploads closed. No existing system account or staging container is adopted. Default no-sudo launches use `setpriv --no-new-privs`, preventing setuid/file-capability helpers such as fusermount from acquiring privileges; explicit own-key sudo is the documented exception. After every live agent-UID process is killed (including `setsid`/`nohup` children), artifact preparation checks only the fixed bundle directory and individually bounded, unlinked regular files before changing their ownership; it never recursively chowns an agent-written tree. The copier uses `O_NOFOLLOW`, rejects linked parents and nonregular/multiply linked files, and bounds actual bytes. It copies `vector-out/patch.diff`, `summary.json` and `session.vsa` to runner-owned `$RUNNER_TEMP/vector-out/` and `vector-session/`, then removes the entire staging container. Failure or cancellation keeps uploads closed; successful cleanup leaves only the empty original workspace for GitHub post actions. Self-hosted own-key execution retains the clean channel without the hosted UID/staging boundary and warns accordingly.
+8. `id: sandbox_finish`, `vector github sandbox finish`, `if: always()`. Hosted preparation records only the exact canonical original workspace, selected fixed staging container, newly created agent UID/GID and setup state in a runner-owned private manifest. Cleanup validates that authority, refuses a replaced UID, and is harmless when preparation never ran. A selected container path grants no cleanup authority until exclusive creation has succeeded and the private manifest records it. Sealing or quarantine failures still attempt UID shutdown and owned-path cleanup but prohibit copying. The original workspace remains an empty runner-owned placeholder throughout agent execution and later post steps; untrusted checkout contents are never restored there. Before slow process or tree operations, finish makes the validated staging container private to the runner and renames the staged checkout into its private same-device cleanup child. Partial preparation and cleanup retain manifest authority until removal succeeds. SIGINT/SIGTERM is intercepted synchronously while private metadata establishes authority; no env-selected path is mutated before validation. A cancelled finish completes bounded cleanup but exits non-success, keeping uploads closed. No existing system account or staging container is adopted. Default no-sudo launches use `setpriv --no-new-privs`, preventing setuid/file-capability helpers such as fusermount from acquiring privileges; explicit own-key sudo is the documented exception. After every live agent-UID process is killed (including `setsid`/`nohup` children), artifact preparation checks only the fixed bundle directory and individually bounded, unlinked regular files before changing their ownership; it never recursively chowns an agent-written tree. The copier uses `O_NOFOLLOW`, rejects linked parents and nonregular/multiply linked files, and bounds actual bytes. The Codium launcher opens a fixed private FD3 after sudo into a runner-owned proof file before switching UID. The trusted ciphertext writer records only `{v:1,sha256,bytes}`; tools never inherit the descriptor, and their private proc mount hides the engine's descriptors. After killing the entire agent UID, the copier refuses any present session whose exact bytes do not match that private proof; an outer header is never treated as proof of encryption. It copies `vector-out/patch.diff`, `summary.json` and proven `session.vsa` to runner-owned `$RUNNER_TEMP/vector-out/` and `vector-session/`, then removes the entire staging container. Failure or cancellation keeps uploads closed; successful cleanup leaves only the empty original workspace for GitHub post actions. Self-hosted own-key execution retains the clean channel without the hosted UID/staging boundary and warns accordingly.
 9. `actions/upload-artifact@v4` of `${{ runner.temp }}/vector-out/`, name `vector-run-${{ github.run_id }}-${{ github.run_attempt }}`, `retention-days: 1`, `if: always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'`.
 10. **Codium only:** `actions/upload-artifact@v4` of `${{ runner.temp }}/vector-session/`, name `vector-session-${{ needs.route.outputs.thread }}`, `retention-days: 7`, `if-no-files-found: ignore`, `if: always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'` (V27).
 
 The agent job's outputs are `status: ${{ steps.mint.outputs.status }}` and `rid: ${{ steps.mint.outputs.rid }}`, both written by the mint step before any repository code is on disk. The agent step writes no output.
 
 **Env on the agent step** (the sandbox moves every credential into the channel and starts the engine with `SANDBOX_ENV_ALLOW` only):
-
 - Always: `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE`, `GITHUB_TOKEN` (read-only here), `VECTOR_DISABLE_USAGE: "1"`, `VECTOR_PURE: "1"`, `MENTIONS`, `VECTOR_THREAD`.
 - `VECTOR_PROMPT: ${{ inputs.prompt }}`, as env only.
 - `VECTOR_SCHEDULE_PROMPTS: '<JSON cron → {id, prompt}, $ encoded>'`, single-quoted YAML, round-trip tested.
@@ -1285,21 +1175,18 @@ The agent job's outputs are `status: ${{ steps.mint.outputs.status }}` and `rid:
 - Own key: `MODEL: <provider>/<model>`, `VECTOR_CLI_TOKEN: ${{ secrets.VECTOR_CLI_TOKEN }}`, each `KEY: ${{ secrets.KEY }}`, `VECTOR_SECRET_ENV_NAMES: "<KEY,KEY>"`, and `SHARE`/`VECTOR_SHARE_CONSENT` as today.
 
 **The publish job's steps:**
-
 1. setup-node 20; Install Vector (pinned, **no cache**).
 2. Checkout of `needs.route.outputs.ref` (`persist-credentials: false`, `fetch-depth: 0`).
 3. `actions/download-artifact@v4` of `vector-run-${{ github.run_id }}-${{ github.run_attempt }}` with `path: ${{ runner.temp }}/vector-bundle` (`continue-on-error: true`).
 4. `vector github publish` with `working-directory: ${{ runner.temp }}` and `env:` `VECTOR_REPO_DIR: ${{ github.workspace }}`, `VECTOR_BUNDLE_DIR: ${{ runner.temp }}/vector-bundle`, `VECTOR_ROUTE_KIND`, `VECTOR_ROUTE_PR`, `VECTOR_ROUTE_REF` and `VECTOR_THREAD` from `needs.route.outputs`, `VECTOR_AGENT_STATUS: ${{ needs.agent.outputs.status }}` (own key: the literal `ok`), `VECTOR_RUN_ID: ${{ needs.agent.outputs.rid }}`, `VECTOR_GITHUB_AUTH`, `GITHUB_TOKEN`, `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE`, `MENTIONS`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_PURE: "1"` and `VECTOR_DISABLE_PROJECT_CONFIG: "1"`.
 
 **The Codium review job** (V20; own-key reviews keep today's shape):
-
 - Permissions: `contents: read`, `pull-requests: write`, `issues: write`, `id-token: write`.
 - Steps, in order: setup-node 20; `actions/cache/restore@v4`; Install Vector (pinned); `id: mint`, `vector github mint --purpose review`, with the agent job's mint env; checkout of `needs.route.outputs.ref` (`fetch-depth: 1`, `persist-credentials: false`, `if:` mint ok); the review step, `if:` mint ok, with the same `shell: env -u …` override, `run: vector github review`.
 - Review step env: `VECTOR_WORKFLOW_VERSION`, `VECTOR_MODE: codium`, `GITHUB_TOKEN`, `VECTOR_DISABLE_USAGE`, `VECTOR_REVIEW_PR`, `VECTOR_REVIEW_REF`, `MODEL: ${{ vars.VECTOR_MODEL || 'vector-plan' }}`, `VECTOR_PURE`, `VECTOR_DISABLE_PROJECT_CONFIG` and `VECTOR_CONFIG_CONTENT` with checks off. No `VECTOR_CLI_TOKEN`, no key lines, no `REVIEW_MAX_COST_USD_PER_MONTH`.
 - It needs no sandbox: the reviewer's model has read-only tools (INV-S4 exception).
 
 **Concurrency:**
-
 - route: above;
 - agent: `vector-${{ needs.route.outputs.thread }}-${{ github.event.comment.id || github.run_id }}`, `cancel-in-progress: false`;
 - schedules: `vector-schedule-${{ needs.route.outputs.thread }}`, where dropping a duplicate tick is fine;
@@ -1315,7 +1202,7 @@ Plan limits are never enforced through Actions concurrency.
 - **Mint** refuses versions below 3 (426 `WORKFLOW_UPDATE_REQUIRED`).
 - **Bind** answers `workflowUpdate`.
 - **Desktop.** Its status reads the header and offers an update PR when the version is old or the handle is missing.
-- **CLI.** `prepareGithubEnvironment` warns when the workflow's version is numerically _below_ `GITHUB_WORKFLOW_VERSION` (V14). V24, which moves the last caller to v3, sets `GITHUB_WORKFLOW_VERSION` to `GithubAgents.WORKFLOW_VERSION` and updates the engine tests and scripts that hard-code `"2"` (`github.workflow.test.ts`, `github.review.test.ts`, `github.run-routing.test.ts`, `script/verify-sharing.ts`, `script/verify-github-app.ts`). When the CLI gets 426 `CODIUM_UPDATE_REQUIRED` from the gateway, it says: "Update Vector: merge the workflow update from the Vector app, or run `vector github install` again." When id-token is added to more Codium jobs later, the version is bumped again.
+- **CLI.** `prepareGithubEnvironment` warns when the workflow's version is numerically *below* `GITHUB_WORKFLOW_VERSION` (V14). V24, which moves the last caller to v3, sets `GITHUB_WORKFLOW_VERSION` to `GithubAgents.WORKFLOW_VERSION` and updates the engine tests and scripts that hard-code `"2"` (`github.workflow.test.ts`, `github.review.test.ts`, `github.run-routing.test.ts`, `script/verify-sharing.ts`, `script/verify-github-app.ts`). When the CLI gets 426 `CODIUM_UPDATE_REQUIRED` from the gateway, it says: "Update Vector: merge the workflow update from the Vector app, or run `vector github install` again." When id-token is added to more Codium jobs later, the version is bumped again.
 - **Pinned CLI.** V3 requires the supplied version to be canonical semver; the v2 development fallback does not apply. A v3 file pins a CLI that has the v3 commands. `buildAgentsWorkflow` throws when the pinned version is below `GithubAgents.MIN_AGENTS_CLI`, and the desktop status says "Update Vector" instead of offering setup. The desktop's `vectorRequiredCliVersion` (`packages/desktop/package.json`) must be raised to that release before a desktop release offers @vector setup (section 4 step 7).
 
 ### 2.11.5 Own-key compatibility
@@ -1324,13 +1211,13 @@ Plan limits are never enforced through Actions concurrency.
 
 ### 2.11.6 GitHub App permission set (owner registers once; V29 documents it)
 
-| Grant                                                   | Never grant                 |
-| ------------------------------------------------------- | --------------------------- |
-| Contents, Pull requests, Issues: read and write         | Administration              |
-| Actions: read and write (dispatch and run verification) | Secrets                     |
-| Checks: read                                            | Workflows                   |
-| Deployments: read (amendment 14)                        | Members                     |
-| Metadata: read                                          | Any organization permission |
+| Grant | Never grant |
+|---|---|
+| Contents, Pull requests, Issues: read and write | Administration |
+| Actions: read and write (dispatch and run verification) | Secrets |
+| Checks: read | Workflows |
+| Deployments: read (amendment 14) | Members |
+| Metadata: read | Any organization permission |
 
 Installation tokens are always requested per job profile (V09). The **Vector publish** profile is `contents: write`, `pull_requests: write`, `issues: write`, `checks: read`, `metadata: read`, with no `actions: write`, so an App-published run cannot dispatch the repository's other workflows. The v2 **Vector task** profile is unchanged.
 
@@ -1339,39 +1226,26 @@ The webhook goes to `https://vectordev.ai/api/github/webhook` with `VECTOR_GITHU
 ## 2.12 Run bundle (agent job → publish job)
 
 The engine, as the agent user, writes `vector-out/`; the sandbox copies the two bundle files out (2.11.3 step 8) and they are uploaded as the artifact `vector-run-<run_id>-<attempt>` for 1 day. The bundle holds exactly:
-
 - `patch.diff`: `git add -A && git diff --cached --binary <baseSha>`, both outside `vector-out/`, staged in a private index read from `<baseSha>` (never the agent's `.git/index`), at most `PATCH_LIMITS.bytes`. Over a limit (more than `files` paths, a new blob over `fileBytes`, or a patch over `bytes`), it is empty and the summary is `failed` with `refused` naming the limit; it is never truncated. Untracked repositories of their own, names git refuses to stage, gitlinks and links that leave the tree (INV-S12) are left out and listed in `dropped`;
 - `summary.json`, of at most `summaryBytes`, with this strict schema:
 
 ```ts
-type RunSummary = {
-  v: 1
-  mode: "codium" | "own-key"
-  outcome: "changes" | "no-changes" | "draft" | "failed" // from the patch: changes → changes, or draft after a stop;
-  // none → no-changes, or failed after a stop or a refusal
-  stop?: StopCode | "deadline" // absent for the default row; unavailable rows record MODEL_PLAN_BLOCKED
-  limit?: "ceiling" | "hours" | "at-once" // only with stop MODEL_PLAN_RUN_LIMIT
-  refused?: "files" | "fileBytes" | "bytes" // only with outcome failed; publish words the comment (V21)
+type RunSummary = { v: 1; mode: "codium" | "own-key"
+  outcome: "changes" | "no-changes" | "draft" | "failed"   // from the patch: changes → changes, or draft after a stop;
+                                                            // none → no-changes, or failed after a stop or a refusal
+  stop?: StopCode | "deadline"                    // absent for the default row; unavailable rows record MODEL_PLAN_BLOCKED
+  limit?: "ceiling" | "hours" | "at-once"         // only with stop MODEL_PLAN_RUN_LIMIT
+  refused?: "files" | "fileBytes" | "bytes"       // only with outcome failed; publish words the comment (V21)
   // Echoes only. Publish computes each from trusted sources and refuses the bundle when an echo differs (INV-S17).
-  kind: "issue" | "pr" | "dispatch" | "schedule"
-  thread: string
-  baseSha: string
-  headRef?: string
-  pr?: number
-  issue?: number
-  scheduleId?: string
-  title: string
-  body: string
-  comment: string // markers escaped with escapeVectorMarkers; title one line of at most
-  // 256 characters; body and comment ≤ BODY_MAX_CHARS each
-  draft: boolean // true exactly for outcome draft
-  heldBack: string[]
-  dropped: string[]
-} // paths under .github/ in the patch; paths left out of it
+  kind: "issue" | "pr" | "dispatch" | "schedule"; thread: string
+  baseSha: string; headRef?: string; pr?: number; issue?: number; scheduleId?: string
+  title: string; body: string; comment: string    // markers escaped with escapeVectorMarkers; title one line of at most
+                                                  // 256 characters; body and comment ≤ BODY_MAX_CHARS each
+  draft: boolean                                  // true exactly for outcome draft
+  heldBack: string[]; dropped: string[] }         // paths under .github/ in the patch; paths left out of it
 ```
 
 **Publish treats the whole bundle as untrusted:** an injected agent can rewrite it before the sandbox ends its processes.
-
 - It never runs anything from the bundle.
 - **Routing.** It computes `kind`, `thread`, `pr`, `issue`, `headRef`, `baseSha` and `scheduleId` from `VECTOR_ROUTE_*`, `VECTOR_THREAD`, the event payload, `VECTOR_SCHEDULE_PROMPTS` and the checked-out HEAD.
 - **Status** comes only from `VECTOR_AGENT_STATUS` (the mint step's output).
@@ -1386,22 +1260,21 @@ type RunSummary = {
 
 ## 2.13 CLI commands, environment and outputs
 
-| Command                                                             | Where   | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Exit                                                                                                                                                                                        |
-| ------------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vector github install [--own-key] [--schedule "<cron>=<prompt>"]…` | local   | interactive as today, plus the mode choice when Codium is listed (V23); the unadvertised `--codium` flag skips the listing check for owner acceptance                                                                                                                                                                                                                                                                                                                            | 0 / 1                                                                                                                                                                                       |
-| `vector github run [--phase agent]`                                 | Actions | `--phase agent` runs inside the sandbox: reads the secret channel, writes the bundle (2.12) and, on Codium, `vector-out/session.vsa`; without it, today's single job                                                                                                                                                                                                                                                                                                             | 0 when a bundle or result was written, whatever the outcome, and when the agent phase refuses the event with one log line and no bundle (`RunSummary` has no refused outcome); 1 on a crash |
-| `vector github mint --purpose task\|review`                         | Actions | OIDC (`mint`) → `/api/cloud-agents/mint` with `VECTOR_THREAD`. On `ok`: prints `::add-mask::<token>`, writes the token to `$RUNNER_TEMP/vector-secrets/run-token` (directory 0700, file 0600, created exclusively) after a strict charset check, and appends only `VECTOR_RUN_DEADLINE` and `VECTOR_RUN_ID` to `$GITHUB_ENV`. Always writes `status=<MINT_STATUS>` and, on `ok`, `rid=<rid>` to `$GITHUB_OUTPUT`. Waits on `at-once` as in 1.4. Never prints a server error body | 0 when a status was decided; 1 on a crash                                                                                                                                                   |
-| `vector github sandbox prepare` / `run -- <command>` / `finish`     | Actions | 2.11.3 steps 6–8                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | prepare: 0 ready, 1 any check failed; run: the command's exit code; finish: 0                                                                                                               |
-| `vector github bind`                                                | Actions | Refuses locally (exit 2, "Run the bind from the default branch.") when `GITHUB_REF` is not `refs/heads/<repository.default_branch>` from `GITHUB_EVENT_PATH`. Otherwise OIDC (`bind`) → `/api/cloud-agents/bind` with `VECTOR_BIND_CODE`. Prints "Bound owner/repo to a Vector account." and nothing about the account                                                                                                                                                           | 0 bound, 2 refused, 1 error                                                                                                                                                                 |
-| `vector github publish`                                             | Actions | 2.12, INV-S17, INV-S18 and 1.3 E. App token via `/api/github/token` with job **Vector publish** only when `publishAuth` is `app` and INV-S18 allows it                                                                                                                                                                                                                                                                                                                           | 0 / 1                                                                                                                                                                                       |
-| `vector github review`                                              | Actions | as today; on Codium it reads the run token file, unlinks it, and adds the account gate, heartbeat, settle, stop codes and P6 (V20)                                                                                                                                                                                                                                                                                                                                               | as today                                                                                                                                                                                    |
+| Command | Where | Does | Exit |
+|---|---|---|---|
+| `vector github install [--own-key] [--schedule "<cron>=<prompt>"]…` | local | interactive as today, plus the mode choice when Codium is listed (V23); the unadvertised `--codium` flag skips the listing check for owner acceptance | 0 / 1 |
+| `vector github run [--phase agent]` | Actions | `--phase agent` runs inside the sandbox: reads the secret channel, writes the bundle (2.12) and, on Codium, `vector-out/session.vsa`; without it, today's single job | 0 when a bundle or result was written, whatever the outcome, and when the agent phase refuses the event with one log line and no bundle (`RunSummary` has no refused outcome); 1 on a crash |
+| `vector github mint --purpose task\|review` | Actions | OIDC (`mint`) → `/api/cloud-agents/mint` with `VECTOR_THREAD`. On `ok`: prints `::add-mask::<token>`, writes the token to `$RUNNER_TEMP/vector-secrets/run-token` (directory 0700, file 0600, created exclusively) after a strict charset check, and appends only `VECTOR_RUN_DEADLINE` and `VECTOR_RUN_ID` to `$GITHUB_ENV`. Always writes `status=<MINT_STATUS>` and, on `ok`, `rid=<rid>` to `$GITHUB_OUTPUT`. Waits on `at-once` as in 1.4. Never prints a server error body | 0 when a status was decided; 1 on a crash |
+| `vector github sandbox prepare` / `run -- <command>` / `finish` | Actions | 2.11.3 steps 6–8 | prepare: 0 ready, 1 any check failed; run: the command's exit code; finish: 0 |
+| `vector github bind` | Actions | Refuses locally (exit 2, "Run the bind from the default branch.") when `GITHUB_REF` is not `refs/heads/<repository.default_branch>` from `GITHUB_EVENT_PATH`. Otherwise OIDC (`bind`) → `/api/cloud-agents/bind` with `VECTOR_BIND_CODE`. Prints "Bound owner/repo to a Vector account." and nothing about the account | 0 bound, 2 refused, 1 error |
+| `vector github publish` | Actions | 2.12, INV-S17, INV-S18 and 1.3 E. App token via `/api/github/token` with job **Vector publish** only when `publishAuth` is `app` and INV-S18 allows it | 0 / 1 |
+| `vector github review` | Actions | as today; on Codium it reads the run token file, unlinks it, and adds the account gate, heartbeat, settle, stop codes and P6 (V20) | as today |
 
 `github mint`, `github bind`, `github publish` and `github sandbox` are registered with `instance: false` and set `VECTOR_PURE=1` and `VECTOR_DISABLE_PROJECT_CONFIG=1` before anything loads (INV-S12).
 
 **The secret channel.** `sandbox run` writes one JSON line to the child's stdin and closes it: `{v: 1, githubToken, runToken?, cliToken?, keys: {<NAME>: <value>}}`. It gathers `GITHUB_TOKEN`, `VECTOR_CLI_TOKEN`, every name in `VECTOR_SECRET_ENV_NAMES` from its own environment, and the run token from the file, which it unlinks. The child sees `VECTOR_SECRET_CHANNEL=stdin`. The engine's credential loader (`github.secrets.ts`, V15) reads the line before anything else runs, keeps every value in memory only, puts provider keys where the provider layer reads them without exporting them to the environment, and closes stdin. No credential name is ever in the engine's environment, so `untrustedChildEnvironment` has nothing to leak; it still strips `SECRET_NAME_PATTERN` and the INV-S5 names as defence in depth.
 
 **Account gate** (`packages/engine/src/index.ts`, `ensureVectorAccount`):
-
 - Under `GITHUB_ACTIONS=true`, `github mint`, `github bind`, `github sandbox` and `github publish` skip it. They are authenticated by OIDC, or do no model work.
 - The credential loader runs before the gate. When it holds a `vrt_` run token, `ensureVectorAccount` verifies the token through `POST /api/cloud-agents/heartbeat {state: "starting"}`. Only a strict 200 `{ok: true, stop: false}` continues; `stop: true` refuses a late start. Anything else exits 1 with "This Codium run is not authorized." There is no offline grace.
 - With a CLI token from the channel (own key), the gate checks it as it checks `VECTOR_CLI_TOKEN` today.
@@ -1418,7 +1291,6 @@ The fixed Codium `/models` and chat transports may use the authorized run token;
 Successful cloud responses reject unknown fields and malformed values; failure bodies are never printed. Mint's replay/rate retries use fresh OIDC proof and at most three retries. Rate-limit waits are bounded to 30 seconds each (a malformed/missing retry header uses one second), separate from the at-once loop's at most twenty 30-second waits. A monotonic ten-minute deadline includes response, OIDC and retry time after the first at-once refusal; every later wait/request is bounded by the remaining time, and late responses cannot write a token or trigger another mint. A private-file or file-command failure throws a neutral local error and never emits a token as an Actions output or environment value.
 
 **New environment names:**
-
 - `VECTOR_MODE`
 - `VECTOR_RUN_DEADLINE`, `VECTOR_RUN_ID` (the run token itself is never an environment variable)
 - `VECTOR_PROMPT`, `VECTOR_SCHEDULE_PROMPTS`, `VECTOR_THREAD`
@@ -1431,16 +1303,11 @@ Successful cloud responses reject unknown fields and malformed values; failure b
 ```ts
 // api/_lib/github-webhook-handlers/cloud-agents.ts
 export type GithubWebhookEvent = { name: string; action?: string; deliveryId: string; payload: Record<string, unknown> }
-export type GithubWebhookHandler = {
-  id: string
-  events: readonly string[]
-  handle(event: GithubWebhookEvent): Promise<void>
-}
-export const cloudAgentsWebhookHandler: GithubWebhookHandler // id "cloud-agents", events ["repository"]
+export type GithubWebhookHandler = { id: string; events: readonly string[]; handle(event: GithubWebhookEvent): Promise<void> }
+export const cloudAgentsWebhookHandler: GithubWebhookHandler  // id "cloud-agents", events ["repository"]
 ```
 
 **The router (A47)** does the following, in order:
-
 1. verifies `x-hub-signature-256` over the raw body;
 2. dedupes by `x-github-delivery`;
 3. filters by the union of the handlers' `events` before any store read;
@@ -1449,7 +1316,6 @@ export const cloudAgentsWebhookHandler: GithubWebhookHandler // id "cloud-agents
 Handlers are idempotent and never throw on unknown shapes.
 
 **Ours:**
-
 - `repository.transferred` → `bindingFor(id)`, then, unless its `ownerId` already equals the payload's `repository.owner.id` (bound after the transfer), `suspendBinding(binding, "transferred")`;
 - `repository.deleted` → `bindingFor(id)`, then `suspendBinding(binding, "deleted")`;
 - `repository.renamed` → `renameBinding`.
@@ -1476,7 +1342,6 @@ Without webhooks, the mint's owner-id check still catches a transfer (INV-S11). 
 - **`github-agents-bindings`** `()`, **`github-agents-unbind`** `(repositoryId)` and **`github-agents-runs`** `()` call our endpoints with the desktop token.
 
 **App (renderer).**
-
 - `packages/app/src/features/github-agents/`:
   - `agents-model.ts`: pure; it decides which card, button and copy show, from `status` alone, including the listing gates (INV-H2);
   - `setup-card.tsx`;
@@ -1535,18 +1400,18 @@ eraseCloudAgentsAccount(account: string, store?): Promise<void>
 
 This list is exactly what we store (INV-P3). V11's test compares the store's keys and fields with it, and it goes to Codium's A30 privacy draft unchanged (section 5).
 
-| Data                                                                                                                                                                                                                                                      | Where                                                                                                     | Kept                                                                                                                                                                                                                |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository id → Vector account binding: repository id, owner id, repository name, visibility, default branch, binding generation, workflow version, bound at, last used at, suspension reason, optional server-verified App installation id               | `binding:<repositoryId>`, `bindings:<account>`, `gen:<repositoryId>` (the counter holds no personal data) | until unbind, account erasure, or a takeover                                                                                                                                                                        |
-| The binder's GitHub user id and login (to show "bound by" and to check the binder still has access)                                                                                                                                                       | `binding:<repositoryId>`                                                                                  | as the binding                                                                                                                                                                                                      |
-| Repositories whose binder lost access while bound to the account (repository ids only), so its bindings and run lists keep hiding their detail                                                                                                            | `binder-left:<account>`                                                                                   | until the account binds that repository again, or account erasure                                                                                                                                                   |
-| Run record: run id, owning Vector account, binding generation and token id (internal only), repository id and name, run URL, event, source, purpose, start and stop times, outcome, verdict, and for server-started runs the trigger's source and purpose | `run:<rid>`, `runs:<account>`                                                                             | 90 days                                                                                                                                                                                                             |
-| The triggering GitHub login and user id                                                                                                                                                                                                                   | `run:<rid>:actor`                                                                                         | 90 days                                                                                                                                                                                                             |
-| Agent time per meter epoch (seconds: settled runs plus live runs' reservations) and scheduled runs per UTC day (a count)                                                                                                                                  | `used:…`, `sched:…`                                                                                       | 40 days past the period's end (or past the last reservation, when later); 2 days                                                                                                                                    |
-| Live run state: start, deadline, last heartbeat, last Codium request, meter epoch, repository id, thread, source, purpose, whether it counted a scheduled run, binding generation, token id, and paired ticket trigger source/purpose when present        | `live:<account>`                                                                                          | until settled (by its token, or once idle by the account's next reserve or agent-time read), at most as long as the account's agent time (40 days past the period's end) or a run's deadline plus 1 day, when later |
-| One-time bind codes, stored under the code's hash with the account, the repository name and, when given, its id, the requesting GitHub user id and the default branch, and the expiry; run tickets (hashed)                                               | `bind-code:…`, `ticket:…`                                                                                 | 10 and 15 minutes                                                                                                                                                                                                   |
-| Short-lived caches: the owning account, binder GitHub id and generation for verified access; a public repository name, owner id and default branch                                                                                                        | `binder-ok:…`, `default-branch:…`                                                                         | 1 hour                                                                                                                                                                                                              |
-| Session artifacts                                                                                                                                                                                                                                         | the repository's own GitHub Actions artifacts, encrypted per conversation                                 | 7 days (GitHub's storage)                                                                                                                                                                                           |
+| Data | Where | Kept |
+|---|---|---|
+| Repository id → Vector account binding: repository id, owner id, repository name, visibility, default branch, binding generation, workflow version, bound at, last used at, suspension reason, optional server-verified App installation id | `binding:<repositoryId>`, `bindings:<account>`, `gen:<repositoryId>` (the counter holds no personal data) | until unbind, account erasure, or a takeover |
+| The binder's GitHub user id and login (to show "bound by" and to check the binder still has access) | `binding:<repositoryId>` | as the binding |
+| Repositories whose binder lost access while bound to the account (repository ids only), so its bindings and run lists keep hiding their detail | `binder-left:<account>` | until the account binds that repository again, or account erasure |
+| Run record: run id, owning Vector account, binding generation and token id (internal only), repository id and name, run URL, event, source, purpose, start and stop times, outcome, verdict, and for server-started runs the trigger's source and purpose | `run:<rid>`, `runs:<account>` | 90 days |
+| The triggering GitHub login and user id | `run:<rid>:actor` | 90 days |
+| Agent time per meter epoch (seconds: settled runs plus live runs' reservations) and scheduled runs per UTC day (a count) | `used:…`, `sched:…` | 40 days past the period's end (or past the last reservation, when later); 2 days |
+| Live run state: start, deadline, last heartbeat, last Codium request, meter epoch, repository id, thread, source, purpose, whether it counted a scheduled run, binding generation, token id, and paired ticket trigger source/purpose when present | `live:<account>` | until settled (by its token, or once idle by the account's next reserve or agent-time read), at most as long as the account's agent time (40 days past the period's end) or a run's deadline plus 1 day, when later |
+| One-time bind codes, stored under the code's hash with the account, the repository name and, when given, its id, the requesting GitHub user id and the default branch, and the expiry; run tickets (hashed) | `bind-code:…`, `ticket:…` | 10 and 15 minutes |
+| Short-lived caches: the owning account, binder GitHub id and generation for verified access; a public repository name, owner id and default branch | `binder-ok:…`, `default-branch:…` | 1 hour |
+| Session artifacts | the repository's own GitHub Actions artifacts, encrypted per conversation | 7 days (GitHub's storage) |
 
 Actions logs are GitHub's and are public on public repositories.
 
@@ -1557,7 +1422,6 @@ Actions logs are GitHub's and are public on public repositories.
 Each package lists its files, changes, tests, done-criteria and the checks that run only in CI. Each local test file runs alone, as in 0.3.
 
 ### V00. CI lane and test wiring
-
 - **Files:** `.github/workflows/vector-at-mention.yml` (new); `packages/cloud/src/workflow-compliance.test.ts` (add the file's policy).
 - **Changes:**
   - **Triggers:** pushes to `vector-at-mention`; PRs touching `api/github/**`, `api/cloud-agents/**`, `api/_lib/github-*.ts`, `api/_lib/cloud-agents-*.ts`, `packages/core/src/review/**`, `packages/core/src/github-agents.ts`, `packages/engine/src/cli/cmd/github*.ts`, `packages/desktop/src/main/github-*.ts` or the workflow itself; and dispatch. `test.yml` and `typecheck.yml` run only on `main` and on PRs, so this lane is the branch's only CI on push.
@@ -1578,7 +1442,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** the lane itself.
 
 ### V01. Shared constants (`GithubAgents`)
-
 - **Files:** `packages/core/src/github-agents.ts` (new); `packages/core/src/review/workflow.ts` (re-export `WORKFLOW_FILE`; `GITHUB_WORKFLOW_VERSION` stays `"2"`); `packages/core/test/github-agents.test.ts` (new).
 - **Changes:** everything in 2.1. It stays import-free.
 - **Tests:**
@@ -1592,7 +1455,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** core typecheck and the test pass.
 
 ### V02. Mention parsing: word boundaries and the App handle
-
 - **Files:**
   - `packages/core/src/review/command.ts` (`parseReviewCommand`; `DEFAULT_MENTIONS` becomes `GithubAgents.mentions()` through a literal copy, because `command.ts` must stay import-free for `api/`);
   - `packages/engine/src/cli/cmd/github.route.ts` (`TASK_MENTIONS`);
@@ -1609,11 +1471,9 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - `DEFAULT_MENTIONS` equals `GithubAgents.mentions()`, since `command.ts` keeps a literal copy.
 
   The route-script test runs the same table through the generated script.
-
 - **Done:** the three test files pass; core and engine typecheck.
 
 ### V03. Actions safety floor: withheld tools, env stripping, repo-work policy (amendments 3, 16)
-
 - **Files:**
   - `packages/core/src/child-environment.ts` (`untrustedChildEnvironment` drops the INV-S5 names, every name matching `SECRET_NAME_PATTERN`, and every name listed in `VECTOR_SECRET_ENV_NAMES`, when the merged source environment has `GITHUB_ACTIONS === "true"`);
   - `packages/engine/src/tool/registry.ts` (under `GithubAgents.onActionsRunner(process.env)`, withholds every tool for which `GithubAgents.withheldOnActions(id)` is true, including MCP tools);
@@ -1627,7 +1487,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** INV-S13 and the V03 parts of INV-S5 and INV-S14 are green. The commit body tells the Hands lane that its E5 must call `GithubAgents.onActionsRunner` and `withheldOnActions` (section 5).
 
 ### V04. Entitlement seam with the local limits table and the `revokedBefore` seam
-
 - **Files:** `api/_lib/cloud-agents-entitlement.ts` (new); `packages/web/test/cloud-agents-entitlement.test.ts` (new).
 - **Changes:** 2.3. It imports `modelPlanStatus`, `readModelPlanAccount` and `modelPlansEnabled` and edits none of them.
 - **Tests:**
@@ -1643,11 +1502,9 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - a JSON scan of results for amounts (INV-P2).
 
   `plan()` is injected, so no Stripe or OpenRouter call is made.
-
 - **Done:** the API typecheck and the test pass; `test/api-module-loading.test.ts` passes.
 
 ### V05. Repo bindings, bind codes and generations
-
 - **Files:** `api/_lib/cloud-agents-binding.ts` (new); `packages/web/test/cloud-agents-binding.test.ts` (new, real Valkey).
 - **Changes:** 2.5 bindings and bind codes, plus 2.7's keys. Tickets come in V13.
 - **Tests:**
@@ -1664,7 +1521,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes against a loopback Redis; the API typecheck passes.
 
 ### V06. Hours, slots and scheduled-runs ledger, and the gateway hook
-
 - **Files:** `api/_lib/cloud-agents-ledger.ts` (new); `packages/web/test/cloud-agents-ledger.test.ts` (new, real Valkey).
 - **Changes:** 2.6, including `cloudAgentsGatewayHook` and the key builders.
 - **Tests:** INV-S9 and INV-C1 to INV-C5, plus:
@@ -1688,7 +1544,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes; each function is one EVAL (counted).
 
 ### V07. Run tokens and the verifier seam
-
 - **Files:** `api/_lib/cloud-agents-run-token.ts` (new); `packages/web/test/cloud-agents-run-token.test.ts` (new); `test/cli-token.test.ts` (one new case: a `vrt_` token is refused by `verifyCliToken`).
 - **Changes:** 2.4. The EVAL reads the binding and ledger keys only through those modules' key builders; the revocation mark's key, which `revocation.ts` keeps private, is pinned by the test through `revokeAccountTokens` and `requireUnrevokedAccount`.
 - **Tests:**
@@ -1704,7 +1559,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** both tests pass; the API typecheck passes.
 
 ### V08. OIDC verifier: `mint` and `bind` audiences, job-workflow claims, review comments, the App bot
-
 - **Files:** `api/_lib/github-oidc.ts`; `packages/web/test/github-oidc.test.ts`.
 - **Changes:** 2.10.
 - **Tests** (`github-oidc.test.ts`; "every audience" is `token`, `installation`, `mint`, `bind` and a mint review comment, each signed for the audience it is verified against):
@@ -1728,7 +1582,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** `github-app-api.test.ts` (Redis); run it locally only with a loopback Redis.
 
 ### V09. App trust policy: split jobs, comment and thread checks, binder access, bot tickets
-
 - **Files:** `api/_lib/github-app.ts`; `api/_lib/github-api.ts`; `packages/web/test/github-app.test.ts`; `github-app-api.test.ts`; `github-app-fixture.ts`.
 - **Changes:**
   - **Job-name map and profiles:** `Vector task` → task (v2, unchanged); `Vector publish` → the new `publish` profile (2.11.6, no `actions: write`); `Vector review` → review; `Vector agent` and `Vector bind` → verification only (`token()` refuses them).
@@ -1759,7 +1612,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the tests pass (Redis ones in CI or on a loopback Redis).
 
 ### V10. Bind API and binding management
-
 - **Files:**
   - `api/_lib/cloud-agents-api.ts` (new: `createCloudAgentsApi`, `requireCloudAgentsUser`, `bindCode`, `bind`, `bindings`, `unbind`);
   - `api/cloud-agents/bind-code.ts`, `bind.ts`, `bindings.ts`, `unbind.ts` (new);
@@ -1782,7 +1634,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes; `test/api-module-loading.test.ts` passes.
 
 ### V11. Run records and the stored-data list
-
 - **Files:** `api/_lib/cloud-agents-runs.ts` (new); `api/_lib/cloud-agents-api.ts` (runs handler); `api/_lib/cloud-agents-binding.ts` (atomic revocation check); `api/_lib/github-app.ts` (attributable binder cache); `api/cloud-agents/runs.ts` (new); `packages/web/test/cloud-agents-runs.test.ts` (new).
 - **Changes:** 2.16, 2.18, plus `GET /api/cloud-agents/runs`.
 - **Tests:**
@@ -1797,7 +1648,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes.
 
 ### V12. Mint, heartbeat and settle API
-
 - **Files:** `api/_lib/cloud-agents-api.ts` (`mint`, `heartbeat`, `settle`); `api/cloud-agents/mint.ts`, `heartbeat.ts`, `settle.ts` (new); `packages/web/test/cloud-agents-mint-api.test.ts` (new).
 - **Changes:** 2.8 mint order; heartbeat and settle; logging. `deps.entitlement` and `deps.revokedBefore` are injectable.
 - **Tests:**
@@ -1817,7 +1667,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes.
 
 ### V13. `startCloudRun` and one-time tickets
-
 - **Files:** `api/_lib/cloud-agents-start.ts` (new); `api/_lib/github-app.ts` (`dispatch(repositoryId, inputs)`); `api/_lib/cloud-agents-api.ts` (the mint peeks tickets and passes their key to `reserveRun`); `packages/web/test/cloud-agents-start.test.ts` (new); `github-app-fixture.ts` (installation tokens answer GitHub's real permission set, `metadata: read` included).
 - **Changes:** 2.5 tickets, the claims mapping and `startCloudRun`. This is a library only, with no public route; Codium's ops (A48, A50) call it on a user tap. `dispatch` requests exactly `{actions: "write", metadata: "read"}`, verifies the persisted installation with the App JWT and resolves current repository identity through the repository-scoped installation token, and revokes the token in `finally`.
 - **Tests:**
@@ -1833,7 +1682,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes.
 
 ### V14. Workflow generator v3
-
 - **Files:** `packages/core/src/review/workflow.ts` (`AgentsWorkflowOptions`, `buildAgentsWorkflow`, `readWorkflowOptions`, the v3 route script; the v2 builder writes the literal `"2"`); `packages/engine/src/cli/cmd/github.environment.ts` (the version comparison becomes numeric "below"); `packages/core/src/github-agents.ts` (`MIN_AGENTS_CLI`); `packages/engine/test/cli/github.workflow.test.ts` (new goldens: Codium; own key with autoReview; own key with schedules and App publishing); `github.route-script.test.ts`.
 - **Changes:** 2.11. No caller changes: `vector github install` and the desktop keep the v2 builder until V23 and V24.
 - **Tests:**
@@ -1854,7 +1702,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** both tests pass; core and engine typecheck.
 
 ### V15. Engine: `mint` and `bind` commands, account gate, run credential, heartbeat
-
 - **Files:**
   - `packages/engine/src/cli/cmd/github.cloud.ts` (new: `mintRunToken`, `bindRepository`, `heartbeat`, `settle`, over the `github.auth.ts` `Services` pattern for OIDC, `setSecret` and request);
   - `github.ts` (register `mint` and `bind` with `instance: false`);
@@ -1882,7 +1729,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** if the gate test needs `process.exit`, run it in a child, which makes the file CI-only. Otherwise run it locally.
 
 ### V16. Agent sandbox: separate user, secret channel, process cleanup, runner probe (amendment 3, O3)
-
 - **Files:** `packages/engine/src/cli/cmd/github.sandbox.ts` (new: `prepare`, `run`, `finish`, and the pure helpers `sandboxEnvironment(env)`, `secretChannel(env, files)`, `copyBundleFile(...)`); `github.ts` (register `sandbox` with `instance: false`); `packages/engine/test/cli/github.sandbox.test.ts` (new, pure parts); `.github/workflows/vector-at-mention.yml` (the `sandbox-probe` job); `packages/engine/test/fixture/sandbox-probe.ts` (new: the probe command).
 - **Changes:** 2.11.3 steps 6–8 and the secret channel (2.13).
   - `prepare` and `finish` use the runner's `sudo -n` with fixed argument lists (`useradd`, `chown`, `systemctl`, `chmod`, `sysctl`, `pkill`, `rm`, `install`), never a shell string built from input.
@@ -1897,12 +1743,10 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
     - spawns a detached `setsid` process that waits for the next step and then repeats the scan and appends to `$GITHUB_ENV`.
 
     A following step asserts that the probe found no planted value, `ACTIONS_RUNTIME_TOKEN` or capability, that the detached process is gone, that the next step's environment is unchanged, that the staged checkout/container no longer exists, and that the original workspace is an empty runner-owned placeholder.
-
 - **Done:** the pure test passes; the engine typechecks; the `sandbox-probe` job is green in the V00 lane (record the run in the progress file).
 - **CI-only:** the probe job.
 
 ### V17. Lift `githubRun` helpers to module scope (no behaviour change)
-
 - **Files:** `packages/engine/src/cli/cmd/github.run-helpers.ts` (new); `github.handler.ts`.
 - **Changes:** move the closures inside `githubRun` that later packages reuse into `github.run-helpers.ts`, each taking an explicit context instead of closing over `githubRun`'s locals: `getUserPrompt` (about line 819), `checkoutLocalBranch`, `generateBranchName`, `pushToNewBranch`, `pushToLocalBranch` (about lines 1108–1165), `createComment`, `createPR` (about lines 1326–1333), `evidence`, `collectChanges` (about lines 1437–1451), `fetchIssue`, `buildPromptDataForIssue`, `fetchPR` and `buildPromptDataForPR` (about lines 1499–1712). `githubRun` calls them with the same arguments, and its output, comments, reactions and pushes stay byte-identical.
 - **Tests:** none new. The proof is the existing `github.run-routing.test.ts` and `github.review.test.ts`, which spawn the CLI and so run only in CI, plus `github.evidence.test.ts`.
@@ -1910,7 +1754,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** the run-routing and review suites.
 
 ### V18. Engine: agent phase, run bundle, untrusted thread text, deadline and stop codes
-
 - **Files:** `packages/engine/src/cli/cmd/github.bundle.ts` (new: `writeBundle`, `stopReason(error)`, `RunSummary` schema); `github.run-helpers.ts` (prompt builders, and `githubRun`'s session helpers lifted with explicit contexts); `github.agent.ts` (new: the `--phase agent` path, so `githubRun` stays as it is for 2.11.5); `github.ts` (the `--phase` option); `github.handler.ts` (`githubRun` calls the lifted helpers; `fixContext` takes the finding's format); `github.lifecycle.ts` (`withRunHeartbeat` around a Codium agent phase); `packages/engine/src/session/retry.ts` (shared: the Codium gateway rule a Codium agent phase pins, V18c); `packages/engine/test/cli/github.bundle.test.ts` (new).
 - **Changes:**
   - **Credentials.** The agent phase calls V15's loader on the secret channel before the account gate and before any session, tool or child exists (2.13).
@@ -1944,7 +1787,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes and the engine typechecks.
 
 ### V19. Codium-only evidence and log copy (P6, amendment 7)
-
 - **Files:** `packages/engine/src/cli/cmd/github.evidence.ts` (`measureCost`, `formatCost`); the engine log points that print Codium status in Actions; `packages/engine/test/cli/github.evidence.test.ts`.
 - **Changes:** the strings of Codium's label plan §3.8, exactly, so V19 and Codium's A26 assert the same text:
   - **Codium-only turns:** `**Cost:** Codium · Vector Codium · <model name> · N turns`.
@@ -1957,12 +1799,10 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - INV-P1 scan.
 
   The scan matches plan ids, "<Plan> plan" phrases and the billing-state words, not bare words, because model names such as "Kimi K3.1 Pro" contain them.
-
 - **Done:** the test passes.
 - **Coordination:** Codium's A26 also edits `github.evidence.ts` and asserts the same label-plan strings. Whichever lands second rebases onto the other (section 5).
 
 ### V20. Codium review path
-
 - **Files:** `packages/engine/src/cli/cmd/github.review.ts`; `github.ts` (the review command reads the token file when `VECTOR_MODE=codium`); `packages/engine/test/cli/github.review-codium.test.ts` (new).
 - **Changes:**
   - On Codium, `vector github review` reads the run token from `$RUNNER_TEMP/vector-secrets/run-token`, unlinks it, keeps it in memory, and passes the account gate with it.
@@ -1978,7 +1818,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** if the test spawns the CLI, it runs only in CI.
 
 ### V21. Engine: publish phase
-
 - **Files:** `packages/engine/src/cli/cmd/github.publish.ts` (new: `validatePatch` (pure), `publishRouting` (pure), `sanitizeModelText` (pure), `publishBundle`, the refusal-comment table); `github.ts` (register `publish` with `instance: false`); `github.run-helpers.ts` (`createPR` gains `draft`); `github.git.ts` (reuse `prepareGithubGit`); `packages/engine/test/cli/github.publish.test.ts` (new).
 - **Changes:**
   - It runs from `$RUNNER_TEMP`, with the repository at `VECTOR_REPO_DIR` and the bundle at `VECTOR_BUNDLE_DIR`; a bundle with any entry other than `patch.diff` and `summary.json` is refused.
@@ -2010,7 +1849,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** none expected (git subprocesses only); if the test spawns Bun, leave it to CI.
 
 ### V22. Scheduled runs
-
 - **Files:** `packages/core/src/review/schedule.ts` (new: `cronFor(recurrence, timeZone)` and the schedule-id and minute-spreading rule); `packages/core/test/review/schedule.test.ts` (new); `packages/engine/src/cli/cmd/github.schedule.ts` (new: the prompt lookup); `github.run-helpers.ts` (`getUserPrompt` for `schedule`); `github.publish.ts` (update an open schedule PR); tests.
 - **Changes:**
   - The prompt comes from `VECTOR_SCHEDULE_PROMPTS[payload.schedule]`. An unknown cron logs and exits 0 with outcome `refused`.
@@ -2027,7 +1865,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the tests pass; core and engine typecheck.
 
 ### V23. `vector github install` for Codium and own key
-
 - **Files:** `github.handler.ts` (`githubInstall`); `github.app.ts` (the slug from `installUrl`); `packages/engine/test/cli/github.install.test.ts` (new, with fake prompts).
 - **Changes:**
   - **Builder:** `vector github install` now writes v3 with `buildAgentsWorkflow`.
@@ -2048,7 +1885,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes.
 
 ### V24. Desktop main: setup PR, bind, Run in GitHub, bindings, runs
-
 - **Files:** `packages/desktop/src/main/github-agents.ts` (new); `github-pr.ts` (`autoReviewWorkflow` and the setup helpers delegate to it and move to `buildAgentsWorkflow`; the secret copy changes per mode); `github-pr.test.ts`; `ipc.ts`; `ipc-security.ts`; `packages/desktop/src/preload/index.ts`; `preload/types.ts`; `packages/desktop/src/main/github-agents.test.ts` (new); `packages/core/src/review/workflow.ts` and the engine tests and scripts listed in 2.11.4 (the version flip).
 - **Changes:**
   - 2.15 IPC. All GitHub calls go through `githubJson` with the existing sign-in. vectordev.ai calls use the desktop token. Neither token is ever sent to the other host.
@@ -2068,7 +1904,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the tests pass; desktop, core and engine typecheck.
 
 ### V25. App UI: setup card, Run in GitHub, Settings → GitHub, automations switch
-
 - **Files:**
   - `packages/app/src/features/github-agents/` (new: `agents-model.ts`, `agents-model.test.ts`, `setup-card.tsx`, `run-dialog.tsx`, `bindings-list.tsx`);
   - `packages/app/src/components/settings-v2/github-agents.tsx` (new);
@@ -2091,7 +1926,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** any browser fixture for the dialog runs in CI only.
 
 ### V26. Website account page: bindings and bind codes
-
 - **Files:** `packages/web/src/components/marketing/account/GithubAgents.tsx` (new); `AccountPage.tsx` (section `id="github"`); `packages/web/test/account-github-agents.test.ts` (new).
 - **Changes:** 2.15 website. The section renders only when `github-agents` is listed, or at `/account?github-preview=1#github`. A code is shown once, with a copy button and the steps to run `mode=bind` from the Actions tab on the default branch. Bindings show last use, whether Codium is ready, and Unbind; a `binder-left` binding shows no name.
 - **Tests:**
@@ -2103,7 +1937,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes and the web typecheck passes.
 
 ### V27. Follow-ups: encrypted session artifacts (amendment 9)
-
 - **Files:** `api/_lib/cloud-agents-api.ts` (`artifactKey`); `api/cloud-agents/artifact-key.ts` (new); `packages/engine/src/cli/cmd/github.session.ts` (new); `github.handler.ts` (agent phase: restore before the prompt, save after); `packages/engine/test/cli/github.session.test.ts`; `packages/web/test/cloud-agents-artifact-key.test.ts` (new).
 - **Changes:**
   - **The key:** `HMAC-SHA256(VECTOR_RUN_ARTIFACT_SECRET or derived from VECTOR_LICENSE_SECRET with label "vector-run-artifact-key-v1", account|repositoryId|generation|thr)`, where `thr` comes only from the token's claim. The endpoint refuses a body `thread` that differs from `thr`, and any token past its deadline. It is rate-limited per run.
@@ -2121,7 +1954,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the tests pass; the privacy copy switches from "private Actions artifacts" to "encrypted per conversation" in V29.
 
 ### V28. Webhook handlers for the shared router (A47)
-
 - **Files:** `api/_lib/github-webhook-handlers/cloud-agents.ts` (new); `packages/web/test/cloud-agents-webhook.test.ts` (new).
 - **Changes:** 2.14. There is no route: A47 owns `api/github/webhook.ts`. The registration line is added by whichever of A47 and our merge lands second (2.14).
 - **Tests:**
@@ -2132,7 +1964,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes.
 
 ### V29. Docs, website copy and the owner doc
-
 - **Files:**
   - `packages/web/src/pages/docs/vectorscope.astro`: the GitHub sections, with anchors `#github`, `#github-codium`, `#github-own-key`, `#github-limits`, `#github-schedules`, `#github-run-in-github`, `#github-follow-ups` and `#github-privacy`;
   - `packages/web/src/data/docs-content.ts` if it indexes them;
@@ -2166,7 +1997,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes; the web typecheck passes.
 
 ### V30. End-to-end mocked journey (acceptance)
-
 - **Files:** `packages/web/test/cloud-agents-journey.test.ts` (server); `packages/engine/test/cli/github.agents-journey.test.ts` (engine).
 - **Changes:** none to product code, unless the journey finds a bug. That bug is fixed in its owning file, in this commit, with a regression test.
 - **Server journey:**
@@ -2186,7 +2016,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **CI-only:** the engine journey, if it spawns the CLI.
 
 ### V31. Ship Desk capture job (deferred)
-
 - **Depends:** V14 and Codium A49 on `main`.
 - **Files:** `packages/core/src/review/workflow.ts`.
 - **Changes:** a job **Vector capture** with `if: vars.VECTOR_SHIP_DESK == '1'`, after publish. It has no `id-token` and no run token. It runs `vector ship capture --pr <n>` with A49's capture ticket (one PR, at most 8 files, 15 minutes).
@@ -2208,7 +2037,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
    - `VECTOR_RUN_TOKEN_SECRET` and `VECTOR_RUN_ARTIFACT_SECRET` (each 32 or more random characters, generated outside chat);
    - `VECTOR_CLOUD_AGENTS_ENABLED`: leave it unset. It matters only before A59, and nothing needs it on.
 5. **Decode one live OIDC token** per event on a private test repository: `issue_comment`, `issues`, `workflow_dispatch`, `schedule` and `pull_request_review_comment`.
-   - Use a throwaway step that prints only claim _names_ and these facts:
+   - Use a throwaway step that prints only claim *names* and these facts:
      - whether `job_workflow_ref == workflow_ref` and `job_workflow_sha == workflow_sha`;
      - the `ref` and `ref_type`;
      - the shape of `sub`;
@@ -2239,26 +2068,25 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 
 # Section 5: Codium coordination
 
-| Codium package                               | What it takes from us                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A16 (callers, on `codium` and `codium-next`) | `cloudAgentsRunVerifier` (V07)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Codium registers it statically in A59. Our run id is `gh-<repositoryId>-<runId>-<runAttempt>-<checkRunId>`, in Codium's run-id grammar (`codium-deviations.md`, "One run-id grammar") and unique across services; `RunCaller.run.id === rid`. The account id is minted only in the registry's `ACCOUNT` form, and `revokedBefore` answers milliseconds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| A17 (admission and chat)                     | `cloudAgentsGatewayHook` (V06), registered with `registerGatewayHook` in A59; it calls `recordCodiumRequest` from `afterSettle`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | The gateway enforces the deadline, ceiling, daily limit, requests at once and the computer-use refusal (`MODEL_PLAN_BLOCKED`). We enforce mint-time limits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| A18 and A24 (status, Settings → Usage)       | `cloudAgentSecondsUsed` (V06) for `meters.cloudAgents {used, exhausted}`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | A share only, no seconds, in responses. The two-argument call reads the clock itself and settles only that epoch's idle runs; it answers settled seconds, without live runs' reservations.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| A26 (label C11)                              | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Edits `github.evidence.ts` and the `github.review.ts` log line. V19 and A26 assert the same label-plan §3.8 strings; whichever lands second rebases.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| A27 (listing)                                | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | We read its listed set (`GET /api/model-plans/config`) for INV-H2; a missing set means nothing is listed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| A29 (docs)                                   | anchors `/docs/vectorscope#github*` (V29)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `/docs/codium#github` shows no trigger syntax and links to us; our `#github-limits` links to `/docs/codium#plans`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| A30 (legal drafts)                           | the stored-data list (2.18) and the agent-time sentence (1.4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Publish them as given; INV-P3 asserts against the same list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| A40 and A42 (Remote run list)                | `listCloudRuns` (V11)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Every paid plan.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| A47 (webhook router)                         | `cloudAgentsWebhookHandler` (V28) and the 2.14 shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | A47 owns the route and its signature check. Whichever of A47 and our merge lands second adds the registration line. Its owner step should list `repository` and `installation_repositories`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| A48 and A50 (Release Guard, On Call)         | `startCloudRun` (V13)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Only on a user tap. These runs publish with `GITHUB_TOKEN` (their prompts carry third-party data), so their PRs start no CI by themselves.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| A49 (Ship Desk)                              | `CloudRun.verdict` (V11) found through the PR body's `<!-- vector:rid <rid> -->` marker; the capture job (V31)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | The command is A49's. With `GITHUB_TOKEN` publishing (the default), Vector's PRs are authored by `github-actions[bot]`, not the App bot; A49 must recognise them by the rid marker plus a run record whose repository matches, or Ship Desk covers only repositories that opted in to App publishing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| A57 (account deletion)                       | `eraseCloudAgentsAccount` (V11)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | The revocation key already blocks mints and tokens after deletion.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| A59 (integration)                            | in `cloud-agents-entitlement.ts`: the `cloudAgentEntitlement` body (→ `cloudAgentAllowance`), the `cloudAgentRevokedBefore` body (→ `runTokensRevokedBefore`), types imported, `RUN_SOURCES` and `ENABLED_SOURCES` re-exported from `../../packages/schema/src/codium-run-trigger.js`, deletion of `CLOUD_AGENT_LIMITS` and `createCloudAgentEntitlement` (the ledger imports the types `CloudAgentAllowance` and `RunSource` from this file, so A59 keeps exporting those names, and the ledger test never imports `createCloudAgentEntitlement`); deletion of `packages/web/test/cloud-agents-entitlement.test.ts`; `registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)`; `registerGatewayHook(cloudAgentsGatewayHook)`; the webhook registration if A47 landed first; meter wiring; the contract test | Needs this branch merged to `main` first. Only A59 edits `cloud-agents-entitlement.ts`, and we authorize it to delete that test. After A59 the kill switch is Codium's `cloudAgents` runtime switch. No audience change is needed. Its contract test, `packages/web/test/cloud-agents-entitlement-contract.test.ts`, matches the lane's `test/cloud-agents-*.test.ts` glob, so it also runs in `vector-at-mention.yml`'s web step (V04 deviation 1), which a pull request carrying A59's `api/**` or `packages/web/test/cloud-agents-*` changes starts: from `packages/web`, with `GITHUB_ACTIONS=false`, Valkey at `VECTOR_TEST_REDIS_URL` and no Postgres or Codium environment, in one Bun process after `github-oidc`, `github-app` and `github-app-api` (so it restores any environment it changes). It must pass there; if it needs more, Codium tells us before A59 builds and we change the step, because A59 does not edit this lane (1.6 item 8). |
-| B08 (Brain in cloud runs)                    | the session artifact `manifest.files[]` (V27)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | For owner-started desktop runs only. Coordinate the file split before B08 builds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Hands lane (E5)                              | `GithubAgents.onActionsRunner` and `withheldOnActions` (V03)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | E5's `computer` registration must call them. `registry-actions.test.ts` proves the guard with a stub id before Hands merges.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Codium package | What it takes from us | Notes |
+|---|---|---|
+| A16 (callers, on `codium` and `codium-next`) | `cloudAgentsRunVerifier` (V07) | Codium registers it statically in A59. Our run id is `gh-<repositoryId>-<runId>-<runAttempt>-<checkRunId>`, in Codium's run-id grammar (`codium-deviations.md`, "One run-id grammar") and unique across services; `RunCaller.run.id === rid`. The account id is minted only in the registry's `ACCOUNT` form, and `revokedBefore` answers milliseconds. |
+| A17 (admission and chat) | `cloudAgentsGatewayHook` (V06), registered with `registerGatewayHook` in A59; it calls `recordCodiumRequest` from `afterSettle` | The gateway enforces the deadline, ceiling, daily limit, requests at once and the computer-use refusal (`MODEL_PLAN_BLOCKED`). We enforce mint-time limits. |
+| A18 and A24 (status, Settings → Usage) | `cloudAgentSecondsUsed` (V06) for `meters.cloudAgents {used, exhausted}` | A share only, no seconds, in responses. The two-argument call reads the clock itself and settles only that epoch's idle runs; it answers settled seconds, without live runs' reservations. |
+| A26 (label C11) | — | Edits `github.evidence.ts` and the `github.review.ts` log line. V19 and A26 assert the same label-plan §3.8 strings; whichever lands second rebases. |
+| A27 (listing) | — | We read its listed set (`GET /api/model-plans/config`) for INV-H2; a missing set means nothing is listed. |
+| A29 (docs) | anchors `/docs/vectorscope#github*` (V29) | `/docs/codium#github` shows no trigger syntax and links to us; our `#github-limits` links to `/docs/codium#plans`. |
+| A30 (legal drafts) | the stored-data list (2.18) and the agent-time sentence (1.4) | Publish them as given; INV-P3 asserts against the same list. |
+| A40 and A42 (Remote run list) | `listCloudRuns` (V11) | Every paid plan. |
+| A47 (webhook router) | `cloudAgentsWebhookHandler` (V28) and the 2.14 shape | A47 owns the route and its signature check. Whichever of A47 and our merge lands second adds the registration line. Its owner step should list `repository` and `installation_repositories`. |
+| A48 and A50 (Release Guard, On Call) | `startCloudRun` (V13) | Only on a user tap. These runs publish with `GITHUB_TOKEN` (their prompts carry third-party data), so their PRs start no CI by themselves. |
+| A49 (Ship Desk) | `CloudRun.verdict` (V11) found through the PR body's `<!-- vector:rid <rid> -->` marker; the capture job (V31) | The command is A49's. With `GITHUB_TOKEN` publishing (the default), Vector's PRs are authored by `github-actions[bot]`, not the App bot; A49 must recognise them by the rid marker plus a run record whose repository matches, or Ship Desk covers only repositories that opted in to App publishing. |
+| A57 (account deletion) | `eraseCloudAgentsAccount` (V11) | The revocation key already blocks mints and tokens after deletion. |
+| A59 (integration) | in `cloud-agents-entitlement.ts`: the `cloudAgentEntitlement` body (→ `cloudAgentAllowance`), the `cloudAgentRevokedBefore` body (→ `runTokensRevokedBefore`), types imported, `RUN_SOURCES` and `ENABLED_SOURCES` re-exported from `../../packages/schema/src/codium-run-trigger.js`, deletion of `CLOUD_AGENT_LIMITS` and `createCloudAgentEntitlement` (the ledger imports the types `CloudAgentAllowance` and `RunSource` from this file, so A59 keeps exporting those names, and the ledger test never imports `createCloudAgentEntitlement`); deletion of `packages/web/test/cloud-agents-entitlement.test.ts`; `registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)`; `registerGatewayHook(cloudAgentsGatewayHook)`; the webhook registration if A47 landed first; meter wiring; the contract test | Needs this branch merged to `main` first. Only A59 edits `cloud-agents-entitlement.ts`, and we authorize it to delete that test. After A59 the kill switch is Codium's `cloudAgents` runtime switch. No audience change is needed. Its contract test, `packages/web/test/cloud-agents-entitlement-contract.test.ts`, matches the lane's `test/cloud-agents-*.test.ts` glob, so it also runs in `vector-at-mention.yml`'s web step (V04 deviation 1), which a pull request carrying A59's `api/**` or `packages/web/test/cloud-agents-*` changes starts: from `packages/web`, with `GITHUB_ACTIONS=false`, Valkey at `VECTOR_TEST_REDIS_URL` and no Postgres or Codium environment, in one Bun process after `github-oidc`, `github-app` and `github-app-api` (so it restores any environment it changes). It must pass there; if it needs more, Codium tells us before A59 builds and we change the step, because A59 does not edit this lane (1.6 item 8). |
+| B08 (Brain in cloud runs) | the session artifact `manifest.files[]` (V27) | For owner-started desktop runs only. Coordinate the file split before B08 builds. |
+| Hands lane (E5) | `GithubAgents.onActionsRunner` and `withheldOnActions` (V03) | E5's `computer` registration must call them. `registry-actions.test.ts` proves the guard with a stub id before Hands merges. |
 
 **Send now** (owner step 10), so Codium builds against the same text:
-
 - to A47: the 2.14 handler shape, the second-lander registration rule, and the `repository` and `installation_repositories` events for its owner step;
 - to A30: the stored-data list (2.18) and the agent-time sentence (1.4), replacing "hours are measured from Codium requests";
 - to A49: the verdict field and the rid marker, and that Vector PRs are `github-actions[bot]`-authored by default;
@@ -2266,7 +2094,6 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - to A26: that V19 adopts the label plan's §3.8 strings unchanged.
 
 **Code anchors on `main` at `78526052`:**
-
 - `api/_lib/github-oidc.ts` (verifier, audiences, the actor pattern at about line 93);
 - `api/_lib/github-app.ts` (`authorize`, job names, permission profiles, the exact-permission check in `mint()` at about line 166, the `actor.type` check at about line 240, the head checks at about lines 224 and 285);
 - `api/_lib/github-api.ts` (`proof`, `mintLimits`, `safe`);
@@ -2301,7 +2128,6 @@ The contract was revised on 2026-10-30 against a three-part critique (security, 
 **Applied as proposed, or with only naming changes:** the colon-free run id and Codium's current registry rules; the `revokedBefore` seam; the gateway hook; the bot actor on the `mint` audience with the ticket rule applied with or without the App; listing gates (INV-H2); the run token in a 0600 file instead of `$GITHUB_ENV`; the Codium review job spelled out, with an explicit INV-S4 exception; one settle formula and idle rule; re-mint keeping its deadline with a `jti`; publish routing from trusted sources only, model-text sanitizing and bot-only markers; `instance: false` and an out-of-workspace publish; `GITHUB_TOKEN` publishing by default and `.github/**` held back; push-target rules; the thread bound into the token and the artifact key; the self-hosted runner refusal; neutral refusal codes with no `reason`; binder access checks and takeover exceptions; `$` encoding and name validation in the generator; route concurrency and association-gated 😕; the `issues` author rule; the bind default-branch rule; the settle and artifact-key rate limits; the scheduled-cap restatement; the stop-code default row and missing codes; the wider tool guard; the label-plan cost strings; the copy fixes ("exclusive", the switch label, the `scheduled` sources); the kill switch after A59; the local `plan()` limits; the A59 test deletion and relative re-exports; the webhook registration timing; amendment departures recorded; the agent-time wording; `CloudRun.verdict`; the readonly `RunTrigger` and ticket claims mapping; the run credential's scope; the review-comment workflow blob check; decision 10 moved to O5; the V06/V07 order; the version flip moved to V24; the separate v3 builder so callers keep compiling; `MIN_AGENTS_CLI`; the helper lift; no network git and the PR head SHA as `ref`; the `issues` prompt; the Codium review package; the unchanged public installation response; the dispatch permission set and identity; ticket and bind-code peeking with atomic consumption; the session artifact upload step, zip container, newest-first restore and rewording; `cronFor` in core; the V00 lane's full environment and steps; the review-comment head checks; `GITHUB_TOKEN` for review-comment publishes; sharing on own key only; the 60-s `plan()` cache; heartbeat and settle on Codium only; the local bind refusal on a non-default branch; `settings-registry.test.ts`.
 
 **Proposed fixes not taken as written, and why:**
-
 1. **"Delete the sudoers entries" for the runner user** (credential-isolation blocker). Not taken. The sandbox needs the runner's sudo to create the agent user and to switch to it, so the runner keeps sudo. Isolation comes instead from running the model as a separate user that has no sudoers entry and is not in the `docker` group, with `ptrace_scope` at least 2, and from killing every agent process and removing the checkout before any later runner step. The probe in V16 proves the agent user cannot read the runner's processes or gain root.
 2. **`exec env -u …` on the agent run line.** Replaced by the step-level `shell: env -u … bash …` override, which also keeps the pair out of the step's own bash; the uid separation makes either one defence in depth.
 3. **"Collapse non-writer text other than the mention itself."** Narrowed. The issue or PR body is always kept, JSON-encoded and labelled untrusted when its author is not a writer, because the common case is a maintainer asking Vector to fix a stranger's bug report; removing the body would make that impossible. Other non-writer comments are collapsed by default.
