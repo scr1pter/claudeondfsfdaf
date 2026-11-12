@@ -328,6 +328,10 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 4096))
 secret = os.open(sys.argv[1], os.O_RDONLY)
 os.dup2(secret, 3, inheritable=True)
 os.dup2(secret, 2003, inheritable=True)
+os.set_inheritable(3, True)
+os.set_inheritable(2003, True)
+if not (os.get_inheritable(3) and os.get_inheritable(2003)):
+    os._exit(125)
 resource.setrlimit(resource.RLIMIT_NOFILE, (256, 4096))
 os.execve(sys.argv[2], sys.argv[2:], {"PATH":"/usr/bin:/bin","LC_ALL":"C"})
 `
@@ -347,6 +351,19 @@ async function witnessDirectory() {
 }
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 function diagnostic(text: string) {
+  const fixtures = new Map([
+    ["Missing CI fixture inputs", "fixture-input"],
+    ["No actual lowered descriptor limit", "fixture-prlimit"],
+    ["Missing actual inherited private descriptor", "fixture-private-fd"],
+    ["Missing actual child start identity", "fixture-child-start"],
+    ["Missing actual replacement repository", "fixture-replacement"],
+    ["Wrong actual pinned directory", "fixture-directory"],
+    ["Actual proof child was not reaped", "fixture-child-reap"],
+  ])
+  // Match only an emitted error line, never the quoted source excerpts printed with a stack trace.
+  const fixture = [...text.matchAll(/^[ \t]*(?:Error|error): ([^\r\n]*)$/gm)]
+    .map((line) => fixtures.get(line[1]))
+    .find((stage) => stage !== undefined)
   const names = [
     "ArgumentError",
     "BlockingIOError",
@@ -364,14 +381,18 @@ function diagnostic(text: string) {
     "Error",
   ] as const
   const python = /Traceback \(most recent call last\)|Fatal Python error:/.test(text),
-    stage = /(?:^|\n)strace:/.test(text)
-      ? "strace"
-      : python
-        ? "python-wrapper"
-        : /(?:^|\n)(?:Failed to |Unknown assignment|Job for )/.test(text)
-          ? "systemd"
-          : "runtime-fixture"
-  const kind = names.find((name) => new RegExp(`(?:^|\\n)(?:ctypes\\.)?${name}(?::| \\[)`).test(text)) ?? "Unknown"
+    stage =
+      fixture ??
+      (/(?:^|\n)strace:/.test(text)
+        ? "strace"
+        : python
+          ? "python-wrapper"
+          : /(?:^|\n)(?:Failed to |Unknown assignment|Job for )/.test(text)
+            ? "systemd"
+            : "runtime-fixture")
+  const kind = fixture
+    ? "Error"
+    : (names.find((name) => new RegExp(`(?:^|\\n)(?:ctypes\\.)?${name}(?::| \\[)`).test(text)) ?? "Unknown")
   const number = /\[Errno ([0-9]{1,3})\]/.exec(text)?.[1]
   const errors = new Map([
     ["1", "EPERM"],
@@ -400,6 +421,7 @@ function diagnostic(text: string) {
     "EMFILE",
     "ENFILE",
     "ENOSYS",
+    "EINVAL",
   ] as const
   const phrases = [
     ["No such file or directory", "ENOENT"],
@@ -408,6 +430,7 @@ function diagnostic(text: string) {
     ["Bad file descriptor", "EBADF"],
     ["Too many open files", "EMFILE"],
     ["Function not implemented", "ENOSYS"],
+    ["Invalid argument", "EINVAL"],
   ] as const
   const code = number
     ? (errors.get(number) ?? "Unknown")
@@ -440,6 +463,30 @@ test("CI failure diagnostics expose only fixed metadata and never echo stderr pa
   const secret = "PRIVATE_VALUE_THAT_MUST_NEVER_BE_LOGGED"
   expect(JSON.stringify(diagnostic(secret.repeat(100)))).not.toContain(secret)
   expect(diagnostic(secret)).toEqual({ stage: "runtime-fixture", class: "Unknown", code: "Unknown" })
+  for (const [message, stage] of [
+    ["Missing CI fixture inputs", "fixture-input"],
+    ["No actual lowered descriptor limit", "fixture-prlimit"],
+    ["Missing actual inherited private descriptor", "fixture-private-fd"],
+    ["Missing actual child start identity", "fixture-child-start"],
+    ["Missing actual replacement repository", "fixture-replacement"],
+    ["Wrong actual pinned directory", "fixture-directory"],
+    ["Actual proof child was not reaped", "fixture-child-reap"],
+  ]) {
+    for (const prefix of ["Error", "error"])
+      expect(diagnostic(`${prefix}: ${message}\n    at /private/example.js:1:1`)).toEqual({
+        stage,
+        class: "Error",
+        code: "Unknown",
+      })
+    expect(diagnostic(`20 | throw new Error("${message}")\nError: ${secret}`).stage).toBe("runtime-fixture")
+    expect(JSON.stringify(diagnostic(`Error: ${message} ${secret}`))).not.toContain(secret)
+    expect(diagnostic(`Error: ${message} ${secret}`).stage).toBe("runtime-fixture")
+  }
+  expect(diagnostic(`Error: EINVAL: invalid argument, read /private/file\n  code: 'EINVAL'`)).toEqual({
+    stage: "runtime-fixture",
+    class: "Error",
+    code: "EINVAL",
+  })
 })
 async function control(operation: "stop" | "kill" | "reset-failed", unit: string) {
   return await new Promise<number | null>((resolve, reject) => {
@@ -810,6 +857,10 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 4096))
 secret = os.open(sys.argv[3], os.O_RDONLY)
 os.dup2(secret, 3, inheritable=True)
 os.dup2(secret, 2003, inheritable=True)
+os.set_inheritable(3, True)
+os.set_inheritable(2003, True)
+if not (os.get_inheritable(3) and os.get_inheritable(2003)):
+    os._exit(125)
 os.execve(sys.argv[4], sys.argv[4:], {"PATH":"/usr/bin:/bin","LC_ALL":"C"})
 `
 const rootCI = test.skipIf(
