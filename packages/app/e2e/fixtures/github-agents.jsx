@@ -6,6 +6,7 @@ import { codiumChanged } from "../../src/vector-account"
 import { GithubAgentsSetup } from "../../src/features/github-agents/setup-card"
 import { GithubBindingsList } from "../../src/features/github-agents/bindings-list"
 import { Automations } from "../../src/features/scheduled/automations"
+import { yieldLaunchScreen } from "../../src/features/launch/launch-bridge"
 import "../../src/index.css"
 import "../../src/vector-premium.css"
 
@@ -275,6 +276,8 @@ const platform = {
     },
   },
 }
+// This standalone component fixture has no app-shell startup probes, like the account/settings fixtures.
+yieldLaunchScreen("app")
 render(
   () => (
     <PlatformProvider value={platform}>
