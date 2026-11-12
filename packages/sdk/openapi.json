@@ -14014,7 +14014,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConnectReviewInput"
+                "$ref": "#/components/schemas/ConnectDirectoryReviewInput"
               }
             }
           }
@@ -52696,6 +52696,44 @@
             "maxLength": 64
           }
         },
+        "additionalProperties": false
+      },
+      "ConnectDirectoryReviewInput": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "requestKey": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "format": "uuid"
+          }
+        },
+        "required": ["requestKey"],
         "additionalProperties": false
       },
       "ConnectRegisterInput": {

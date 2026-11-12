@@ -7677,6 +7677,16 @@ export type ConnectReviewInput = {
   since?: string
 }
 
+export type ConnectDirectoryReviewInput = {
+  to?: string
+  target?: ConnectTarget
+  security?: boolean
+  background?: boolean
+  budget?: ConnectBudget
+  since?: string
+  requestKey: string
+}
+
 export type ConnectRegisterInput = {
   sessionID: string
   target: ConnectTarget
@@ -17120,7 +17130,7 @@ export type ConnectReviewResponses = {
 export type ConnectReviewResponse = ConnectReviewResponses[keyof ConnectReviewResponses]
 
 export type ConnectDirectoryReviewData = {
-  body?: ConnectReviewInput
+  body?: ConnectDirectoryReviewInput
   path?: never
   query?: {
     directory?: string

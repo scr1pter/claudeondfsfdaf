@@ -43,6 +43,7 @@ import type {
   ConnectCancelErrors,
   ConnectCancelResponses,
   ConnectDirectoryReviewErrors,
+  ConnectDirectoryReviewInput,
   ConnectDirectoryReviewResponses,
   ConnectDismissErrors,
   ConnectDismissInput,
@@ -6945,7 +6946,7 @@ export class Connect extends HeyApiClient {
     parameters?: {
       directory?: string
       workspace?: string
-      connectReviewInput?: ConnectReviewInput
+      connectDirectoryReviewInput?: ConnectDirectoryReviewInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6956,7 +6957,7 @@ export class Connect extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { key: "connectReviewInput", map: "body" },
+            { key: "connectDirectoryReviewInput", map: "body" },
           ],
         },
       ],
