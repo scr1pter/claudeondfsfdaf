@@ -986,10 +986,10 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   // What the panel says about the double-check. The shared policy (plan.ts) accounts for every candidate left without a
   // verdict, whether or not the pass finished, in the engine's words. The legacy rule gives one note for a pass that did
   // not finish.
-  const finished = verify?.status === "ok"
+  const verifyFinished = verify?.status === "ok"
   const unanswered =
     config.verifyPolicy === "shared" && verify ? verifyUnanswered(candidates, verdicts, triage !== undefined).length : 0
-  const why = finished
+  const why = verifyFinished
     ? "unanswered"
     : verify?.status === "skipped" && stop.stopped() === "timeout"
       ? "time"
@@ -1004,13 +1004,13 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
                   unconfirmed,
                   modelName(triage),
                   modelName(model),
-                  finished ? "unanswered" : "unfinished",
+                  verifyFinished ? "unanswered" : "unfinished",
                 ),
               ]
             : []),
           ...(unanswered ? [noteVerifyUnfinished(unanswered, why)] : []),
         ]
-      : !finished
+      : !verifyFinished
         ? [
             triage && unconfirmed
               ? noteTriageUnchecked(unconfirmed, modelName(triage), modelName(model))

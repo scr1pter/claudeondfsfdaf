@@ -2218,6 +2218,7 @@ describe("ReviewEval.project", () => {
           defaultModel: () => Effect.die("booted a provider"),
           savedModel: () => Effect.die("booted a provider"),
           freeSignIn: () => Effect.die("booted a provider"),
+          codiumAuto: () => Effect.die("booted a provider"),
         })
         // Not a checkout at all: a refusal after any git work would say so instead.
         const nowhere = replayCase("/nonexistent/vs21b", "a".repeat(40), "b".repeat(40))
