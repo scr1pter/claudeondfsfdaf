@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Locator, type Page } from "@playwright/test"
 import { reply } from "../utils/mock-server"
 import { port, provider, rootID, setup, type Setup } from "../utils/multiagent"
 
@@ -9,6 +9,16 @@ async function openSettings(page: Page) {
   await expect(settings).toBeVisible()
   await settings.getByRole("tab", { name: "Agents", exact: true }).click()
   return settings
+}
+async function disableReviews(settings: Locator) {
+  const enabled = settings.getByRole("switch", { name: "Enable VectorScope reviews", exact: true })
+  await expect(enabled).toBeChecked()
+  // Kobalte's visible control covers its native input. Exercise the ordinary
+  // keyboard interaction instead of forcing a pointer through that control.
+  await enabled.focus()
+  await expect(enabled).toBeFocused()
+  await enabled.press("Space")
+  await expect(enabled).not.toBeChecked()
 }
 function engine(extra: Setup = {}): Setup {
   return {
@@ -41,26 +51,40 @@ async function catalog(page: Page) {
 
 for (const mode of ["default-off", "old-engine", "guest", "owner-check-error", "owner-check-malformed"] as const)
   test(`VectorScope settings stay hidden for ${mode}`, async ({ page }) => {
-    const app = await setup(
-      page,
-      engine(
-        mode === "default-off"
-          ? { globalConfig: {} }
-          : mode === "old-engine"
-            ? { capabilities: { subagentLimits: true } }
-            : mode === "guest"
-              ? { workflow: () => reply(403, { name: "Forbidden", data: { message: "Owner only" } }) }
-              : mode === "owner-check-error"
-                ? { workflow: () => reply(500, { name: "UnknownError", data: { message: "Unavailable" } }) }
-                : { workflow: () => ({ workflows: "malformed" }) },
-      ),
+    let ownerProbes = 0
+    const behavior = engine(
+      mode === "default-off"
+        ? { globalConfig: {} }
+        : mode === "old-engine"
+          ? { capabilities: { subagentLimits: true } }
+          : mode === "guest"
+            ? { workflow: () => reply(403, { name: "Forbidden", data: { message: "Owner only" } }) }
+            : mode === "owner-check-error"
+              ? { workflow: () => reply(500, { name: "UnknownError", data: { message: "Unavailable" } }) }
+              : { workflow: () => ({ workflows: "malformed" }) },
     )
+    const app = await setup(page, {
+      ...behavior,
+      workflow: (request) => {
+        if (request.action === "saved") ownerProbes++
+        return behavior.workflow?.(request)
+      },
+    })
+    const checked = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.port === port && url.pathname === "/experimental/workflow/saved"
+    })
     await app.open()
     const settings = await openSettings(page)
     await expect(settings.getByRole("heading", { name: "Subagents", exact: true })).toBeVisible()
-    await expect
-      .poll(() => app.capture.workflow.filter((request) => request.path.endsWith("/saved")).length)
-      .toBeGreaterThan(0)
+    await (await checked).finished()
+    // The mock's mutation capture intentionally excludes GET. Observe the
+    // actual owner probe and let its response reach Solid before asserting a
+    // negative gate, rather than passing while authorization is still pending.
+    expect(ownerProbes).toBeGreaterThan(0)
+    await page.evaluate(
+      () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))),
+    )
     await expect(card(page)).toHaveCount(0)
     expect(app.capture.config).toEqual([])
   })
@@ -78,14 +102,19 @@ test("the owner saves a separate model, variant and disable setting only after c
     "Unavailable: missing/old",
   )
   await settings.getByRole("button", { name: "VectorScope model", exact: true }).click()
-  await page
-    .getByRole("menuitemradio", { name: /Maker Text/ })
-    .first()
-    .click()
+  const picker = page.locator(".vector-model-popover")
+  await expect(picker).toBeVisible()
+  const anthropic = picker.locator("button[data-model-section-toggle]").filter({ hasText: "Anthropic" })
+  await expect(anthropic).toHaveAttribute("aria-expanded", "false")
+  await anthropic.click()
+  await expect(anthropic).toHaveAttribute("aria-expanded", "true")
+  const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
+  await expect(chosen).toContainText("Maker Text")
+  await chosen.click()
   await expect(settings.getByRole("button", { name: "VectorScope model", exact: true })).toContainText("Maker Text")
   await settings.locator('[data-component="select-v2"]').click()
   await page.getByRole("option", { name: "high", exact: true }).click()
-  await settings.getByRole("switch", { name: "Enable VectorScope reviews", exact: true }).click()
+  await disableReviews(settings)
   expect(app.capture.config).toEqual([])
   await settings.getByRole("button", { name: "Save VectorScope settings", exact: true }).click()
   const confirm = page.getByRole("dialog", { name: "Save VectorScope settings?", exact: true })
@@ -121,7 +150,7 @@ test("failed saves retain the draft and retry without showing an unsaved choice 
   await app.open()
   await openSettings(page)
   const settings = card(page)
-  await settings.getByRole("switch", { name: "Enable VectorScope reviews", exact: true }).click()
+  await disableReviews(settings)
   await settings.getByRole("button", { name: "Save VectorScope settings", exact: true }).click()
   await expect(settings.getByRole("alert")).toBeVisible()
   await expect(settings.getByRole("status")).toHaveCount(0)
