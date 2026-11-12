@@ -1004,13 +1004,38 @@ describe("consent", () => {
       yield* say(denied.id, "review")
       const ruled = yield* hub.run({ request: review(denied.id, directory) })
       expect(ruled.result?.refusal).toBe("permission")
+    }),
+  )
 
-      // A person's run on a directory with no session has nowhere to ask unless its caller lends an ask.
-      const nobody = yield* hub.run({
-        request: { ...review(requester.id, directory), requester: { kind: "user" } } as ConnectHub.StartRequest,
-      })
-      expect(nobody.result?.refusal).toBe("denied")
-      expect(nobody.result?.summary).toContain("no session to ask")
+  it.instance("a sessionless direct call needs private owner authority before any consent or helper work", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester, sessions } = yield* setup()
+      const permissions = yield* Permission.Service
+      const before = yield* sessions.list({ internal: true })
+      const messages = yield* sessions.messages({ sessionID: requester.id })
+      const { asks, ask } = asker()
+      const { ops, prompts, cancels } = recorder()
+
+      // Lending an approval callback and prompt operations does not lend the owner's private directory token.
+      for (const call of [undefined, { ask, promptOps: ops }]) {
+        const nobody = yield* hub.run({
+          request: { ...review(requester.id, directory), requester: { kind: "user" } },
+          call,
+        })
+        expect(nobody.result?.state).toBe("refused")
+        expect(nobody.result?.refusal).toBe("not-allowed")
+        expect(nobody.result?.summary).toContain("current owner's execution authority")
+      }
+
+      expect(seen).toEqual([])
+      expect(asks).toEqual([])
+      expect(yield* permissions.list()).toEqual([])
+      expect(prompts).toEqual([])
+      expect(cancels).toEqual([])
+      expect((yield* sessions.list({ internal: true })).map((session) => session.id)).toEqual(
+        before.map((session) => session.id),
+      )
+      expect(yield* sessions.messages({ sessionID: requester.id })).toEqual(messages)
     }),
   )
 })
