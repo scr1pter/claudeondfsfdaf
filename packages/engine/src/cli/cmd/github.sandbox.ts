@@ -78,10 +78,11 @@ async function command(file: string, args: readonly string[], allowed = [0], tim
     timeout,
     maxBuffer: 65_536,
   }).then(
-    (value) => ({ code: 0, stdout: value.stdout }),
-    (error: { code?: unknown; stdout?: unknown }) => ({
+    (value) => ({ code: 0, stdout: value.stdout, stderr: value.stderr }),
+    (error: { code?: unknown; stdout?: unknown; stderr?: unknown }) => ({
       code: typeof error.code === "number" ? error.code : -1,
       stdout: typeof error.stdout === "string" ? error.stdout : "",
+      stderr: typeof error.stderr === "string" ? error.stderr : "",
     }),
   )
   if (!allowed.includes(result.code)) {
@@ -500,27 +501,19 @@ export async function prepare(env: Env = process.env) {
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
   if (!state.sudo) {
     ProcessIsolation.assertBinary()
-    if (
-      (
-        await sudo(
-          [
-            ProcessIsolation.BINARY,
-            ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
-          ],
-          [0, 1],
-        )
-      ).code !== 0
+    const engineProbe = await sudo(
+      [
+        ProcessIsolation.BINARY,
+        ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
+      ],
+      [0, 1],
     )
-      throw refused()
-    if (
-      (
-        await sudo(
-          [...asAgent, ProcessIsolation.BINARY, ...ProcessIsolation.argumentsForTool("/bin/true", [], staged)],
-          [0, 1],
-        )
-      ).code !== 0
+    if (engineProbe.code !== 0) throw namespaceProbeFailure("engine mount", engineProbe)
+    const toolProbe = await sudo(
+      [...asAgent, ProcessIsolation.BINARY, ...ProcessIsolation.argumentsForTool("/bin/true", [], staged)],
+      [0, 1],
     )
-      throw refused()
+    if (toolProbe.code !== 0) throw namespaceProbeFailure("tool PID/proc", toolProbe)
     state.isolatedTools = true
   }
   for (const name of FILE_COMMANDS) {
@@ -536,6 +529,18 @@ export async function prepare(env: Env = process.env) {
   }
   state.prepared = true
   await writeState(env, state)
+}
+
+function namespaceProbeFailure(kind: string, result: { code: number; stderr: string }) {
+  // Both probes run only fixed /bin/true commands in a clean PATH environment before channel capture.
+  // No general command stderr is logged: it may contain credentials or repository-controlled output.
+  const detail = result.stderr
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .slice(0, 800)
+  return new Error(
+    `The mandatory ${kind} namespace probe failed (exit ${result.code}): ${detail || "no diagnostic"}. The run is refused.`,
+  )
 }
 
 async function executable(name: string, env: Env) {
