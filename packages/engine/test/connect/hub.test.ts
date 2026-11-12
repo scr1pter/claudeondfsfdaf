@@ -1402,14 +1402,14 @@ describe("the read scan", () => {
           for (let index = 0; index < 50; index++)
             await fs.symlink(path.join(root, "store", `pkg${index}`), path.join(root, "ws/node_modules", `pkg${index}`))
           expect(await ConnectHub.scan(root, patterns, rules, { limit: 180 })).toEqual({})
+          // Past the limit, the scan says so and the hub refuses.
+          expect(await ConnectHub.scan(root, patterns, rules, { limit: 10 })).toEqual({ tooMany: true })
           // A link a rule names by its own name is still walked under that name.
           await fs.mkdir(path.join(root, "conf/kube"), { recursive: true })
           await fs.writeFile(path.join(root, "conf/kube/config"), "")
           await fs.symlink(path.join(root, "conf/kube"), path.join(root, ".kube"))
           const linked = await ConnectHub.scan(root, patterns, rules)
           expect("block" in linked && linked.block?.path).toBe(".kube/config")
-          // Past the limit, the scan says so and the hub refuses.
-          expect(await ConnectHub.scan(root, patterns, rules, { limit: 10 })).toEqual({ tooMany: true })
         }),
       (root) => Effect.promise(() => fs.rm(root, { recursive: true, force: true })),
     ),
