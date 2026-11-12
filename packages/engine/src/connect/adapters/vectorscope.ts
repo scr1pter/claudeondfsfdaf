@@ -861,9 +861,33 @@ export const drifted = Effect.fnUntraced(function* (git: Git.Interface, root: st
       // Out of the repository at `from`: fine while it still leads out.
       const now = item.now === undefined ? outside(yield* Effect.promise(() => resolved(item.full))) : item.where
       if (now !== true) edited.push(item.file)
-    } else if (item.now !== undefined) edited.push(item.file)
+    } else if (item.now !== undefined && !(item.where === true && (yield* ledOutAt(git, root, from, item.file))))
+      edited.push(item.file)
   }
   return edited
+})
+
+/**
+ * Whether `file` passed at `from` through a link to a Windows drive or network path. Git follows only a target that
+ * starts with "/" out of the tree, and reads `C:\...` as a path inside it that is not there, so on Windows a link
+ * that led out at `from` comes back from `cat-file --follow-symlinks` as no file at all. Anything git cannot answer
+ * reads as no such link, so the file still counts as edited.
+ */
+const ledOutAt = Effect.fnUntraced(function* (git: Git.Interface, root: string, from: string, file: string) {
+  if (process.platform !== "win32") return false
+  const parts = file.split("/")
+  for (let end = 1; end <= parts.length; end++) {
+    const listed = yield* git.run(["ls-tree", "-z", from, "--", parts.slice(0, end).join("/")], { cwd: root })
+    const entry = listed.exitCode === 0 ? listed.text().split("\0")[0] : undefined
+    if (!entry || !entry.includes("\t")) return false
+    const [mode, type, oid] = entry.slice(0, entry.indexOf("\t")).split(" ")
+    if (mode === "120000" && oid) {
+      const target = yield* git.run(["cat-file", "blob", oid], { cwd: root })
+      return target.exitCode === 0 && /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(target.text())
+    }
+    if (type !== "tree") return false
+  }
+  return false
 })
 
 // `git cat-file --batch --follow-symlinks` output, one record per requested object, or undefined when it does not

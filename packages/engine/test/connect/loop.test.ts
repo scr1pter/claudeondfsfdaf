@@ -12,6 +12,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { ConnectHub } from "@/connect/hub"
@@ -394,6 +395,31 @@ const isolated = testEffect(
   ),
 )
 
+// What a failed worktree launch needs explained: whether the parent and the child's checkout are trusted, and whether
+// the two snapshots of vector.json read the same.
+const launchFacts = (directory: string, project: string, child: string | undefined) =>
+  Effect.promise(async () => {
+    const work = child ? path.join(Global.Path.data, "task-worktree", project, child) : undefined
+    const snap = (root: string) => WorkspaceTrust.snapshot(root, [path.join(root, "vector.json")])
+    const trusted = (root: string) =>
+      snap(root).then(
+        async (value) => (await WorkspaceTrust.status(Global.Path.state, value)).trusted,
+        (cause) => String(cause),
+      )
+    return {
+      parentTrusted: await trusted(directory),
+      worktree: work,
+      worktreeFiles: work ? await fs.readdir(work).catch((cause) => String(cause)) : undefined,
+      worktreeTrusted: work ? await trusted(work) : undefined,
+      sameContent: work
+        ? await Promise.all([snap(directory), snap(work)]).then(
+            ([left, right]) => WorkspaceTrust.contentKey(left) === WorkspaceTrust.contentKey(right),
+            (cause) => String(cause),
+          )
+        : undefined,
+    }
+  })
+
 const FIX_CHILD = (hit: { body: Record<string, unknown> }) =>
   lastUserText(hit.body).includes("Fix findings that VectorScope reported")
 const PARENT = (hit: { body: Record<string, unknown> }) => !REVIEW(hit) && !FIX_CHILD(hit)
@@ -471,8 +497,14 @@ isolated.instance(
       const fixAsks = yield* answering(send("Fix the last() finding in a worktree."), "connect_write")
       expect(fixAsks).toHaveLength(1)
       const fixed = (yield* connectCalls(requester.id))[1]
-      // The output carries the fix child's own error, so a failed launch says why.
-      expect({ state: fixed?.run?.result?.state, output: fixed?.output }).toMatchObject({ state: "completed" })
+      // A failed launch says why: the fix child's own error, and whether its worktree could take on this trust.
+      expect({
+        state: fixed?.run?.result?.state,
+        output: fixed?.output,
+        ...(fixed?.run?.result?.state === "completed"
+          ? {}
+          : yield* launchFacts(directory, project, fixed?.run?.result?.sessions[0])),
+      }).toMatchObject({ state: "completed" })
       expect(fixed?.run?.result?.findings.map((item) => item.status)).toEqual(["fixing"])
       const childID = fixed!.run!.result!.sessions[0]!
       children.push(childID)
