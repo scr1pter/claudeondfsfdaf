@@ -1,7 +1,7 @@
 import fs from "node:fs/promises"
 import { constants } from "node:fs"
 import path from "node:path"
-import { spawn, execFile } from "node:child_process"
+import { spawn, execFile, type SpawnOptions } from "node:child_process"
 import { promisify } from "node:util"
 
 /** CI-only: the real ShellTool must not signal an engine-shaped process outside its tool namespace. */
@@ -20,9 +20,63 @@ export async function probeToolProcesses() {
   process.env.VECTOR_BRAIN_EMBED = "off"
   process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
   process.env.VECTOR_PURE = "1"
+  const controlNode = path.join(process.env.PATH!.split(path.delimiter)[0]!, "node")
+  const originalSpawn = spawn
+  const describeOptions = (options: SpawnOptions) => ({
+    cwd: options.cwd === undefined ? null : String(options.cwd),
+    processCwd: process.cwd(),
+    shell: options.shell ?? null,
+    uid: options.uid ?? null,
+    gid: options.gid ?? null,
+    argv0: options.argv0 ?? null,
+    stdio: options.stdio,
+  })
+  async function control(stage: string) {
+    const options: SpawnOptions = { stdio: ["ignore", "ignore", "pipe", "ipc"] }
+    const child = spawn(controlNode, ["-e", 'process.send({kind:"fixed-control"});process.disconnect()'], options)
+    const observation: {
+      stage: string
+      executable: string
+      options: ReturnType<typeof describeOptions>
+      sameSpawn: boolean
+      acknowledged: boolean
+      error?: string
+      code?: number | null
+      signal?: string | null
+    } = {
+      stage,
+      executable: controlNode,
+      options: describeOptions(options),
+      sameSpawn: spawn === originalSpawn,
+      acknowledged: false,
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL")
+        reject(new Error(`Fixed Node IPC control did not complete: ${JSON.stringify(observation)}`))
+      }, 5000)
+      child.on("error", (error: Error & { code?: string }) => {
+        observation.error = error.code ?? error.name
+      })
+      child.on("message", (value: unknown) => {
+        if (value && typeof value === "object" && "kind" in value && value.kind === "fixed-control")
+          observation.acknowledged = true
+      })
+      child.once("close", (code, signal) => {
+        clearTimeout(timer)
+        observation.code = code
+        observation.signal = signal
+        resolve()
+      })
+    })
+    console.log(`Fixed Node IPC control: ${JSON.stringify(observation)}`)
+    return observation
+  }
+  const beforeGuard = await control("before-strict-guard")
   const { EgressGuard } = await import("@vectordevai/core/local-mode/guard")
   const network = EgressGuard.installStrict()
   try {
+    const afterGuard = await control("after-strict-guard")
     const { Effect, Layer, Cause, Exit } = await import("effect")
     const { LayerNode } = await import("@vectordevai/core/effect/layer-node")
     const { CrossSpawnSpawner } = await import("@vectordevai/core/cross-spawn-spawner")
@@ -105,6 +159,7 @@ export async function probeToolProcesses() {
         })),
       ),
     }
+    const dummyOptions: SpawnOptions = { stdio: ["ignore", "ignore", "pipe", "ipc"] }
     const dummy = spawn(
       node,
       [
@@ -126,7 +181,7 @@ export async function probeToolProcesses() {
     setInterval(()=>void privateValue,1000);
   `,
       ],
-      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      dummyOptions,
     )
     let phase = "ready"
     let probeError: unknown
@@ -165,6 +220,9 @@ export async function probeToolProcesses() {
       JSON.stringify({
         phase,
         executable,
+        spawnOptions: describeOptions(dummyOptions),
+        sameSpawn: spawn === originalSpawn,
+        controls: { beforeGuard, afterGuard },
         pid: dummy.pid,
         connected: dummy.connected,
         killed: dummy.killed,
