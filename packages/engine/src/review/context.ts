@@ -3,7 +3,7 @@
 // gathers all of it with git, so the reviewer needs no shell.
 
 import { Effect } from "effect"
-import { Git } from "@/git"
+import { ReviewGit } from "@/review/git"
 import type { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
@@ -78,7 +78,7 @@ export const relatedCode = Effect.fn("ReviewContext.relatedCode")(function* (inp
   ignore?: string[] // globs to leave out, such as the default ignores and review.json `ignore`
   ignored?: (path: string) => boolean
 }) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   if (input.head.startsWith("-")) return []
   const excludes = (input.ignore ?? []).map((glob) => `:(exclude,glob)${glob}`)
   const found = yield* Effect.forEach(
@@ -129,7 +129,7 @@ export const history = Effect.fn("ReviewContext.history")(function* (input: {
   base: string
   files: DiffFile[]
 }) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   if (input.base.startsWith("-")) return []
   const cwd = input.directory
   const shallow = (yield* git.run(["rev-parse", "--is-shallow-repository"], { cwd })).text().trim() === "true"
@@ -193,7 +193,7 @@ export const baseInstructions = Effect.fn("ReviewContext.baseInstructions")(func
   base: string
   read?: (path: string) => Effect.Effect<string | undefined>
 }) {
-  const git = yield* Git.Service
+  const git = yield* ReviewGit.client
   const read =
     input.read ??
     ((file: string) =>

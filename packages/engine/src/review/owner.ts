@@ -12,6 +12,7 @@ import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
+import { ReviewGit } from "./git"
 import { Git } from "@/git"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
@@ -33,7 +34,6 @@ const make = Effect.gen(function* () {
   const settings = yield* Config.Service
   const agents = yield* Agent.Service
   const database = yield* Database.Service
-  const git = yield* Git.Service
   const runs = yield* ReviewLocalRun.make({ runReview: Review.run, resolveModel: ReviewModel.resolveReviewModel })
 
   const placement = Effect.fn("ReviewOwner.placement")(function* (sessionID: SessionID, starting = false) {
@@ -61,18 +61,11 @@ const make = Effect.gen(function* () {
 
   const target = Effect.fn("ReviewOwner.target")(function* (sessionID: SessionID) {
     const { context } = yield* placement(sessionID, true)
-    const root = yield* git.run(["rev-parse", "--show-toplevel"], { cwd: context.directory })
-    if (
-      root.exitCode !== 0 ||
-      !root.text().trim() ||
-      FSUtil.realpath(root.text().trim()) !== FSUtil.realpath(context.worktree)
+    const observed = yield* ReviewGit.metadata(FSUtil.realpath(context.worktree)).pipe(
+      Effect.mapError((error) => new Error({ code: "placement", message: error.message })),
     )
-      return yield* new Error({ code: "placement", message: "The conversation's local Git worktree is unavailable." })
-    const result = yield* git.run(["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"], {
-      cwd: context.directory,
-    })
-    const decoded = Schema.decodeUnknownOption(ReviewRun.Target)({ kind: "working-tree", head: result.text().trim() })
-    if (result.exitCode !== 0 || Option.isNone(decoded))
+    const decoded = Schema.decodeUnknownOption(ReviewRun.Target)({ kind: "working-tree", head: observed.head })
+    if (Option.isNone(decoded))
       return yield* new Error({ code: "placement", message: "Commit a base before reviewing local changes." })
     return decoded.value
   })

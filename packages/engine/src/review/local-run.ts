@@ -319,6 +319,7 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
                   throw new Error({ code: "invalid", message: "A local review cannot publish." })
                 },
               },
+              admission.success.placement,
             )
             current.finished = true
             const artifact = encodeArtifact(result)

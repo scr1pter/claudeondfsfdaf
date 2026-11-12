@@ -50,6 +50,8 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/engine/src/review/read-authority.ts",
   "packages/engine/src/review/service.ts",
+  "packages/engine/src/review/git.ts",
+  "packages/core/src/read-only-git.ts",
   "packages/engine/src/review/local-admission.ts",
   "packages/engine/src/review/local-run.ts",
   "packages/engine/src/review/lifecycle.ts",

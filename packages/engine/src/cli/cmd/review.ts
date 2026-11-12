@@ -67,6 +67,7 @@ import type {
   Trust,
 } from "@vectordevai/core/review/types"
 import { Git } from "@/git"
+import { ReviewGit } from "@/review/git"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 import { Provider } from "@/provider/provider"
@@ -209,7 +210,9 @@ export function executeLocalReview<RunR, ModelR>(
   return Effect.gen(function* () {
     const refused = refuseFlags(options)
     if (refused) return yield* new LocalReviewError({ message: refused })
-    const git = yield* Git.Service
+    if (options.context?.identity === "vectorscope" && !(yield* ReviewGit.Current))
+      return yield* new LocalReviewError({ message: "The VectorScope service requires a private Git view." })
+    const git = yield* ReviewGit.client
     const env = options.env ?? process.env
     const now = deps.now ?? Date.now
     const say = (text: string) => deps.stderr(text + "\n")
@@ -400,6 +403,8 @@ export function executeLocalReview<RunR, ModelR>(
       })
     if (!review.length) return yield* early(noteNothingToReview(), open)
 
+    yield* ReviewGit.preflight
+
     // 5. The model, and what running tests on this branch would mean.
     // Under "modelEvidence": "warn" (VS-07) a retired model is refused as retired.
     const evidence = config.modelEvidence === "warn" ? { evidence: true } : {}
@@ -497,6 +502,7 @@ export function executeLocalReview<RunR, ModelR>(
       return yield* new LocalReviewError({ message: "The review was cancelled before it started." })
     if (options.context && (yield* commitOf(git, root, "HEAD")) !== options.context.expectedHead)
       return yield* new LocalReviewError({ message: "The review head changed before the review could start." })
+    yield* ReviewGit.preflight
     say(`Reviewing ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
     const result = yield* deps.runReview({
       directory: root,
@@ -663,7 +669,7 @@ function countAtOrAbove(findings: { severity: Severity }[], failOn: FailOn): num
 // summary carries no summary marker. One review holds the inline comments; a comment GitHub refuses to attach is
 // listed in the summary instead.
 const postToPull = Effect.fnUntraced(function* (input: {
-  git: Git.Interface
+  git: ReviewGit.Client
   root: string
   pr: number
   remote: string
@@ -872,7 +878,7 @@ function withFlags(config: ReviewConfig, options: LocalReviewOptions): ReviewCon
 
 // Your branch: section 3.4's range planning, with the last local review as the state.
 const branchRange = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   input: {
     head: string
@@ -915,7 +921,7 @@ const branchRange = Effect.fnUntraced(function* (
 
 // Uncommitted or staged changes, against HEAD, or against the merge-base when --base is given.
 const worktreeRange = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   input: { kind: "uncommitted" | "staged"; head: string; branch?: string; base?: Base },
 ) {
@@ -944,7 +950,7 @@ const worktreeRange = Effect.fnUntraced(function* (
 })
 
 // A pull request, fetched into FETCH_HEAD and never checked out.
-const pullRange = Effect.fnUntraced(function* (git: Git.Interface, root: string, pr: number, base: Base) {
+const pullRange = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, pr: number, base: Base) {
   const pulled = yield* fetchPull(git, root, pr)
   const head = pulled.sha
   const mergeBase = yield* mergeBaseOf(git, root, base, head, `pull request #${pr}`)
@@ -959,7 +965,7 @@ const pullRange = Effect.fnUntraced(function* (git: Git.Interface, root: string,
   } satisfies Range
 })
 
-const toplevel = Effect.fnUntraced(function* (git: Git.Interface, directory: string) {
+const toplevel = Effect.fnUntraced(function* (git: ReviewGit.Client, directory: string) {
   const result = yield* git.run(["rev-parse", "--show-toplevel"], { cwd: directory })
   const found = result.exitCode === 0 ? result.text().trim() : ""
   if (!found)
@@ -968,7 +974,7 @@ const toplevel = Effect.fnUntraced(function* (git: Git.Interface, directory: str
   return sameDirectory(directory, found) ? directory : found
 })
 
-const commitOf = Effect.fnUntraced(function* (git: Git.Interface, root: string, ref: string) {
+const commitOf = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, ref: string) {
   if (!ref || ref.startsWith("-")) return undefined
   const result = yield* git.run(["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], {
     cwd: root,
@@ -979,7 +985,7 @@ const commitOf = Effect.fnUntraced(function* (git: Git.Interface, root: string, 
 // --base as given; otherwise the remote-tracking default branch, as a pull request would be compared with it. A pull
 // request's own base, from `gh`, comes first when there is one.
 const resolveBase = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   input: { requested?: string; suggested?: string },
 ) {
@@ -1008,7 +1014,7 @@ const resolveBase = Effect.fnUntraced(function* (
 })
 
 const mergeBaseOf = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   base: Base,
   head: string,
@@ -1024,7 +1030,7 @@ const mergeBaseOf = Effect.fnUntraced(function* (
 })
 
 // The branch's own commits start at its merge-base with the default branch, when that can be found.
-const branchStart = Effect.fnUntraced(function* (git: Git.Interface, root: string, head: string, base?: Base) {
+const branchStart = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, head: string, base?: Base) {
   const found = base ?? (yield* resolveBase(git, root, {}).pipe(Effect.catch(() => Effect.succeed(undefined))))
   if (!found) return undefined
   return yield* mergeBaseOf(git, root, found, head, "HEAD").pipe(Effect.catch(() => Effect.succeed(undefined)))
@@ -1032,7 +1038,7 @@ const branchStart = Effect.fnUntraced(function* (git: Git.Interface, root: strin
 
 // `git fetch <remote> +refs/pull/<n>/head` with no destination and an empty --refmap: the commit lands in FETCH_HEAD
 // and no ref is created or moved.
-const fetchPull = Effect.fnUntraced(function* (git: Git.Interface, root: string, pr: number) {
+const fetchPull = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, pr: number) {
   const remotes = (yield* git.run(["remote"], { cwd: root }))
     .text()
     .split("\n")
@@ -1061,7 +1067,7 @@ const fetchPull = Effect.fnUntraced(function* (git: Git.Interface, root: string,
 
 // The working tree (untracked files included) or the index, against `from`, with the same flags as every other diff.
 const worktreeDiff = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   from: string,
   kind: "uncommitted" | "staged",
@@ -1134,7 +1140,7 @@ const generatedHeaders = Effect.fnUntraced(function* (input: {
   }
 })
 
-const otherAuthors = Effect.fnUntraced(function* (git: Git.Interface, root: string, from: string, head: string) {
+const otherAuthors = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, from: string, head: string) {
   const log = yield* git.run(["log", "--no-color", "--format=%aE", `${from}..${head}`], { cwd: root })
   const me = (yield* git.run(["config", "user.email"], { cwd: root })).text().trim().toLowerCase()
   const authors = new Set(
@@ -1149,7 +1155,7 @@ const otherAuthors = Effect.fnUntraced(function* (git: Git.Interface, root: stri
 })
 
 // Commit subjects for the prompt, where they are placed as untrusted text.
-const subjects = Effect.fnUntraced(function* (git: Git.Interface, root: string, from: string, head: string) {
+const subjects = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, from: string, head: string) {
   if (from === head) return []
   const log = yield* git.run(["log", "--no-color", "-n", String(MAX_SUBJECTS), "--format=%s", `${from}..${head}`], {
     cwd: root,
@@ -1163,7 +1169,7 @@ const subjects = Effect.fnUntraced(function* (git: Git.Interface, root: string, 
 })
 
 // Tracked changes against HEAD, and with `untracked` new files too.
-const dirty = Effect.fnUntraced(function* (git: Git.Interface, root: string, untracked: boolean) {
+const dirty = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, untracked: boolean) {
   const result = yield* git.run(
     ["status", "--porcelain", `--untracked-files=${untracked ? "normal" : "no"}`, "--no-renames"],
     { cwd: root },
@@ -1171,7 +1177,7 @@ const dirty = Effect.fnUntraced(function* (git: Git.Interface, root: string, unt
   return result.exitCode === 0 && result.text().trim() !== ""
 })
 
-const localStatePath = Effect.fnUntraced(function* (git: Git.Interface, root: string, branch: string) {
+const localStatePath = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, branch: string) {
   const result = yield* git.run(["rev-parse", "--absolute-git-dir"], { cwd: root })
   const dir = result.exitCode === 0 ? result.text().trim() : ""
   return dir ? path.join(dir, "vector", "review", `${encodeURIComponent(branch)}.json`) : undefined
@@ -1271,7 +1277,7 @@ function readWorkingFile(root: string, file: string) {
 }
 
 // A file at `rev`; an empty `rev` reads the index.
-function readBlob(git: Git.Interface, root: string, rev: string, file: string) {
+function readBlob(git: ReviewGit.Client, root: string, rev: string, file: string) {
   return git
     .run(["cat-file", "blob", `${rev}:${file}`], { cwd: root })
     .pipe(Effect.map((result) => (result.exitCode === 0 && !result.stdout.includes(0) ? result.text() : undefined)))

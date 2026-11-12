@@ -4,10 +4,11 @@ import { FSUtil } from "@vectordevai/core/fs-util"
 import { Wildcard } from "@vectordevai/core/util/wildcard"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { ReviewRun } from "@vectordevai/schema/review-run"
-import { Git } from "@/git"
+import type { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { TRUNCATION_DIR } from "@/tool/truncation-dir"
 import { readAuthority } from "./read-authority"
 import type { ReviewService } from "./service"
+import { ReviewGit } from "./git"
 
 export class Refused extends Schema.TaggedErrorClass<Refused>()("ReviewLocalAdmission.Refused", {
   code: Schema.Literals(["invalid", "placement", "permissions", "stale"]),
@@ -26,6 +27,7 @@ export interface Source {
 export interface Admitted {
   request: ReviewRun.Start
   invocation: ReviewService.Input
+  placement: ReadOnlyGit.Metadata
 }
 
 export const prepare = Effect.fn("ReviewLocalAdmission.prepare")(function* (input: unknown, source: Source) {
@@ -76,19 +78,12 @@ export const prepare = Effect.fn("ReviewLocalAdmission.prepare")(function* (inpu
   })
   if (authority.absolute.length > 1000)
     return yield* new Refused({ code: "permissions", message: "The conversation has too many read restrictions." })
-  const git = yield* Git.Service
-  const placement = yield* git.run(["rev-parse", "--show-toplevel"], { cwd: directory })
-  if (
-    placement.exitCode !== 0 ||
-    !placement.text().trim() ||
-    FSUtil.realpath(placement.text().trim()) !== root ||
-    FSUtil.realpath(worktree) !== root
+  const placement = yield* ReviewGit.metadata(root).pipe(
+    Effect.mapError((error) => new Refused({ code: "placement", message: error.message })),
   )
+  if (placement.directory !== root || FSUtil.realpath(worktree) !== root)
     return yield* new Refused({ code: "placement", message: "The conversation's Git worktree changed." })
-  const head = yield* git.run(["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"], {
-    cwd: directory,
-  })
-  if (head.exitCode !== 0 || head.text().trim() !== request.target.head)
+  if (placement.head !== request.target.head)
     return yield* new Refused({ code: "stale", message: "The review head changed. Start a new review." })
 
   const invocation: ReviewService.Input = {
@@ -102,7 +97,7 @@ export const prepare = Effect.fn("ReviewLocalAdmission.prepare")(function* (inpu
     readDenies: authority.absolute,
     ...(request.maxCost === undefined ? {} : { maxCost: request.maxCost }),
   }
-  return { request, invocation } satisfies Admitted
+  return { request, invocation, placement } satisfies Admitted
 })
 
 export * as ReviewLocalAdmission from "./local-admission"

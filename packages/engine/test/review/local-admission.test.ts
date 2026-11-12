@@ -1,6 +1,7 @@
 import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
+import { symlinkSync, unlinkSync } from "node:fs"
 import path from "node:path"
 import { Effect, Exit, Option, Schema } from "effect"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
@@ -145,7 +146,7 @@ describe("server-owned local review admission", () => {
       expect(admitted.invocation.readDenies).toContain(path.join(repo.directory, "private.ts"))
       expect(admitted.invocation.readDenies).toContain(path.join(TRUNCATION_DIR, "*"))
       const run = adapter()
-      const result = yield* ReviewService.execute(admitted.invocation, run.deps)
+      const result = yield* ReviewService.execute(admitted.invocation, run.deps, admitted.placement)
       expect(run.calls).toHaveLength(1)
       expect(run.calls[0]!.identity).toBe("vectorscope")
       expect(run.calls[0]!.files.map((file) => file.path)).toEqual(["secret-a.ts", "secret-b.ts", "visible.ts"])
@@ -159,28 +160,38 @@ describe("server-owned local review admission", () => {
       const repo = yield* fixture
       const link = path.join(repo.directory, "secret-link")
       yield* Effect.promise(() => fs.symlink("secret-a.ts", link))
-      const source = {
+      // The read port deliberately refuses untracked symlink capture. Keep this
+      // positive authority-retarget case inside its supported tracked grammar.
+      yield* git(repo.directory, "add", "secret-link")
+      yield* git(repo.directory, "commit", "-qm", "tracked denial alias")
+      const head = yield* git(repo.directory, "rev-parse", "HEAD")
+      let mutated = false
+      const permission = [{ permission: "read", pattern: "secret-link", action: "deny" as const }]
+      const source: ReviewLocalAdmission.Source = {
         ...repo.source,
-        permission: [{ permission: "read", pattern: "secret-link", action: "deny" as const }],
+        get permission() {
+          queueMicrotask(() => {
+            if (mutated) return
+            unlinkSync(link)
+            symlinkSync("secret-b.ts", link)
+            permission.length = 0
+            source.sessionID = "ses_forged_late"
+            mutated = true
+          })
+          return permission
+        },
       }
-      const actualGit = yield* Git.Service
-      const admitted = yield* ReviewLocalAdmission.prepare(repo.request, source).pipe(
-        Effect.provideService(Git.Service, {
-          ...actualGit,
-          run: (args, options) =>
-            Effect.gen(function* () {
-              yield* Effect.promise(() => fs.unlink(link))
-              yield* Effect.promise(() => fs.symlink("secret-b.ts", link))
-              source.permission.length = 0
-              source.sessionID = "ses_forged_late"
-              return yield* actualGit.run(args, options)
-            }),
-        }),
+      const admitted = yield* ReviewLocalAdmission.prepare(
+        { ...repo.request, target: { ...repo.request.target, head } },
+        source,
       )
+      expect(mutated).toBe(true)
       expect(admitted.invocation.parentID).toBe("ses_local_review_owner")
       expect(admitted.invocation.readDenies).toContain(path.join(repo.directory, "secret-a.ts"))
       const run = adapter()
-      const result = yield* ReviewService.execute(admitted.invocation, run.deps)
+      const result = yield* ReviewService.execute(admitted.invocation, run.deps, admitted.placement)
+      expect(result.error).toBeUndefined()
+      expect(run.calls).toHaveLength(1)
       expect(run.calls[0]!.files.some((file) => file.path === "secret-a.ts")).toBe(false)
       expect(yield* Effect.promise(() => run.calls[0]!.knownPath("secret-a.ts"))).toBe(false)
       expect(result.verdict.verdict).toBe("incomplete")

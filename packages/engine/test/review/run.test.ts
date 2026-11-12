@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { $ } from "bun"
 import fs from "node:fs/promises"
 import path from "path"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Stream } from "effect"
@@ -76,7 +77,7 @@ import { ReviewLocalRun } from "../../src/review/local-run"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { ReviewLifecycle } from "../../src/review/lifecycle"
 import { SessionID } from "../../src/session/schema"
-import { TestInstance, trustWorkspace, reloadInstance } from "../fixture/fixture"
+import { TestInstance, trustWorkspace, reloadInstance, tmpdirScoped } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -1420,10 +1421,11 @@ describe("Review.run", () => {
           path.join(directory, ".vector/review.json"),
           JSON.stringify({ security: "off", verify: "off" }),
         )
-        yield* files.writeWithDirs(
-          path.join(directory, "src/list.ts"),
-          "export function last(items: number[]) {\n  return items[items.length - 1]\n}\n",
-        )
+        const baseSource = LIST_SOURCE.replace("index = items.length", "index=items.length-1")
+        // A different size lets status report a change from stat data without invoking the clean filter.
+        expect(Buffer.byteLength(baseSource)).toBe(Buffer.byteLength(LIST_SOURCE))
+        yield* files.writeWithDirs(path.join(directory, "src/list.ts"), baseSource)
+        yield* files.writeWithDirs(path.join(directory, ".gitattributes"), "*.ts filter=scope-provider-probe\n")
         yield* runGit(["add", "."])
         yield* runGit(["commit", "-m", "local review base"])
         const head = yield* runGit(["rev-parse", "HEAD"])
@@ -1438,6 +1440,29 @@ describe("Review.run", () => {
         yield* reloadInstance({ directory })
         expect((yield* settings.trust()).trusted).toBe(true)
         expect((yield* settings.get()).provider?.lmstudio?.options?.baseURL).toBe(llm.url)
+        const evidence = yield* tmpdirScoped()
+        const counter = path.join(evidence, "filter-counter")
+        const quoted = "'" + counter.replaceAll("'", "'\"'\"'") + "'"
+        const command = `printf x >> ${quoted}; cat`
+        yield* runGit(["config", "filter.scope-provider-probe.clean", command])
+        yield* runGit(["config", "filter.scope-provider-probe.required", "true"])
+        expect(yield* runGit(["rev-parse", "--show-toplevel"])).toBe(directory)
+        expect(yield* runGit(["config", "--get", "filter.scope-provider-probe.clean"])).toBe(command)
+        expect(yield* runGit(["check-attr", "filter", "--", "src/list.ts"])).toContain("scope-provider-probe")
+        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, ".gitattributes"), "utf8"))).toBe(
+          "*.ts filter=scope-provider-probe\n",
+        )
+        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "src/list.ts"), "utf8"))).toBe(LIST_SOURCE)
+        yield* Effect.promise(() => fs.utimes(path.join(directory, "src/list.ts"), 1_900_000_001, 1_900_000_001))
+        // The control is a real fixture-owned Git process, independent of any
+        // engine wrapper policy; distinct mtimes defeat status-cache reuse.
+        const control = yield* Effect.promise(() =>
+          $`git -c core.fsmonitor=false status --porcelain`.cwd(directory).quiet().text(),
+        )
+        expect(control).toContain("src/list.ts")
+        expect((yield* Effect.promise(() => fs.readFile(counter, "utf8"))).length).toBeGreaterThan(0)
+        yield* Effect.promise(() => fs.writeFile(counter, ""))
+        yield* Effect.promise(() => fs.utimes(path.join(directory, "src/list.ts"), 1_900_000_111, 1_900_000_111))
         const provider = yield* Provider.Service
         expect((yield* provider.getModel(ref.providerID, ref.modelID)).id).toBe(ref.modelID)
         const parent = yield* sessions.create({ title: "Local review owner" }, "owner")
@@ -1495,6 +1520,15 @@ describe("Review.run", () => {
         expect(yield* modelRequests(llm)).toHaveLength(1)
         expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
         expect((yield* runs.get(parent.id, started.runID)).artifact).toEqual(finished.artifact)
+        expect(yield* Effect.promise(() => fs.readFile(counter, "utf8"))).toBe("")
+        yield* llm.reset
+        yield* runGit(["config", "include.path", "unsupported-review-config"])
+        const unsupported = yield* runs
+          .start({ ...request, requestID: "actual_provider_unsupported_git" }, source)
+          .pipe(Effect.result)
+        expect(Result.isFailure(unsupported)).toBe(true)
+        expect(yield* modelRequests(llm)).toHaveLength(0)
+        expect(yield* Effect.promise(() => fs.readFile(counter, "utf8"))).toBe("")
       }),
     { git: true },
     TIMEOUT,

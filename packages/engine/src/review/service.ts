@@ -2,20 +2,24 @@
 // before the existing local pipeline runs; this does not create a second loop.
 
 import { Effect } from "effect"
-import path from "node:path"
+import type { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { invocationProblems, type ReviewInvocation } from "@vectordevai/core/review/invocation"
 import { reviewVerdict, type VerdictResult } from "@vectordevai/core/review/verdict"
 import { SessionID } from "@/session/schema"
-import { Git } from "@/git"
 import type { LocalReviewDeps, LocalReviewResult } from "@/cli/cmd/review"
 import { readAuthority } from "./read-authority"
+import { ReviewGit } from "./git"
 
 export type Input = ReviewInvocation & { stopSignal?: AbortSignal }
 export interface Result extends LocalReviewResult {
   verdict: VerdictResult
 }
 
-export function execute<RunR, ModelR>(input: Input, deps: LocalReviewDeps<RunR, ModelR>) {
+export function execute<RunR, ModelR>(
+  input: Input,
+  deps: LocalReviewDeps<RunR, ModelR>,
+  placement?: ReadOnlyGit.Metadata,
+) {
   return Effect.gen(function* () {
     const { stopSignal, ...invocation } = input
     const problems = invocationProblems(invocation)
@@ -45,19 +49,7 @@ export function execute<RunR, ModelR>(input: Input, deps: LocalReviewDeps<RunR, 
     // Relative read resources name the tool worktree, even when the requested
     // directory is nested inside it. Resolve that trusted placement before
     // admitting canonical facts; a missing placement never guesses an origin.
-    const git = yield* Git.Service
-    const placement = request.readDenies?.length
-      ? yield* git.run(["rev-parse", "--show-toplevel"], { cwd: request.directory })
-      : undefined
-    const worktree = placement?.text().trim()
-    if (placement && (placement.exitCode !== 0 || !worktree || !path.isAbsolute(worktree))) {
-      const refused: Result = {
-        exitCode: 2,
-        error: "Cannot resolve the review worktree for read authority.",
-        verdict: reviewVerdict({ kind: "failure", stage: "config" }),
-      }
-      return refused
-    }
+    const worktree = placement?.directory ?? (yield* ReviewGit.root(request.directory))
     const readRoot = request.readRoot ?? worktree
     // Later adapter/model setup may add aliases, but cannot replace these paths.
     const admittedReads =
@@ -68,32 +60,41 @@ export function execute<RunR, ModelR>(input: Input, deps: LocalReviewDeps<RunR, 
             ...(readRoot ? { readRoot } : {}),
           })
         : undefined
+    const bound = placement ?? (yield* ReviewGit.metadata(worktree))
     const { executeLocalReview } = yield* Effect.promise(() => import("@/cli/cmd/review"))
-    const result: LocalReviewResult = yield* executeLocalReview(
-      {
-        directory: request.directory,
-        ...(request.target.base ? { base: request.target.base } : {}),
-        ...(request.target.kind === "working-tree" ? { uncommitted: true } : {}),
-        ...(request.target.kind === "staged" ? { staged: true } : {}),
-        ...(request.model ? { model: request.model } : {}),
-        ...(request.maxCost ? { maxCost: request.maxCost } : {}),
-        checks: false,
-        post: false,
-        full: true,
-        json: true,
-        context: {
-          ...(request.parentID ? { parentID: SessionID.make(request.parentID) } : {}),
-          expectedHead: request.target.head,
-          settingsRef: request.settingsRef,
-          stateless: true,
-          identity: "vectorscope",
-          ...(request.readDenies ? { readDenies: request.readDenies } : {}),
-          ...(readRoot ? { readRoot } : {}),
-          ...(admittedReads ? { admittedReads } : {}),
-          ...(stopSignal ? { stopSignal } : {}),
-        },
-      },
-      deps,
+    const result: LocalReviewResult = yield* ReviewGit.within(
+      bound,
+      request.target.head,
+      Effect.suspend(() =>
+        stopSignal?.aborted
+          ? Effect.succeed<LocalReviewResult>({ exitCode: 2, error: "The review was cancelled before it started." })
+          : executeLocalReview(
+              {
+                directory: request.directory,
+                ...(request.target.base ? { base: request.target.base } : {}),
+                ...(request.target.kind === "working-tree" ? { uncommitted: true } : {}),
+                ...(request.target.kind === "staged" ? { staged: true } : {}),
+                ...(request.model ? { model: request.model } : {}),
+                ...(request.maxCost ? { maxCost: request.maxCost } : {}),
+                checks: false,
+                post: false,
+                full: true,
+                json: true,
+                context: {
+                  ...(request.parentID ? { parentID: SessionID.make(request.parentID) } : {}),
+                  expectedHead: request.target.head,
+                  settingsRef: request.settingsRef,
+                  stateless: true,
+                  identity: "vectorscope",
+                  ...(request.readDenies ? { readDenies: request.readDenies } : {}),
+                  ...(readRoot ? { readRoot } : {}),
+                  ...(admittedReads ? { admittedReads } : {}),
+                  ...(stopSignal ? { stopSignal } : {}),
+                },
+              },
+              deps,
+            ),
+      ),
     )
     const completed: Result = {
       ...result,
@@ -102,7 +103,15 @@ export function execute<RunR, ModelR>(input: Input, deps: LocalReviewDeps<RunR, 
         : reviewVerdict({ kind: "failure", stage: result.error ? "review" : "start" }),
     }
     return completed
-  })
+  }).pipe(
+    Effect.catchTag("ReviewGit.Refused", (error) =>
+      Effect.succeed<Result>({
+        exitCode: 2,
+        error: error.message,
+        verdict: reviewVerdict({ kind: "failure", stage: "config" }),
+      }),
+    ),
+  )
 }
 
 export * as ReviewService from "./service"

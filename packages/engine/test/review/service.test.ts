@@ -7,12 +7,14 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { selectFindings } from "@vectordevai/core/review/select"
 import type { ReviewOutcome } from "@vectordevai/core/review/types"
 import type { LocalReviewDeps } from "@/cli/cmd/review"
 import { Git } from "@/git"
 import type { RunInput } from "@/review/run"
 import { execute, type Input } from "@/review/service"
+import { ReviewGit } from "@/review/git"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -101,6 +103,107 @@ const request = (repo: { directory: string; base: string; head: string }): Input
 })
 
 describe("shared review service", () => {
+  it.live("a real repository filter executes in the control but never in cold or warmed bound collection", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const outside = yield* tmpdirScoped()
+      const counter = path.join(outside, "filter-counter")
+      yield* Effect.promise(() =>
+        fs.writeFile(path.join(repo.directory, ".gitattributes"), "*.ts filter=scope-probe\n"),
+      )
+      yield* git(repo.directory, "add", ".gitattributes")
+      yield* git(repo.directory, "commit", "-qm", "filter attributes without a configured command")
+      const head = yield* git(repo.directory, "rev-parse", "HEAD")
+      const quoted = "'" + counter.replaceAll("'", "'\"'\"'") + "'"
+      yield* git(repo.directory, "config", "filter.scope-probe.clean", `printf x >> ${quoted}; cat`)
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          path.join(repo.directory, "visible.ts"),
+          "export function increment(value: number) { return value + 1 }\n",
+        ),
+      )
+      yield* Effect.promise(() => fs.writeFile(path.join(repo.directory, "added.ts"), "export const added = 1\n"))
+      yield* git(repo.directory, "status", "--porcelain")
+      expect((yield* Effect.promise(() => fs.readFile(counter, "utf8"))).length).toBeGreaterThan(0)
+      yield* Effect.promise(() => fs.writeFile(counter, ""))
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const owned: { view?: ReviewGit.View } = {}
+        const run = adapter()
+        const result = yield* execute(
+          { ...request(repo), target: { kind: "working-tree", head }, settingsRef: head },
+          {
+            ...run.deps,
+            resolveModel: (input) =>
+              Effect.gen(function* () {
+                owned.view = yield* ReviewGit.Current
+                expect(owned.view).toBeDefined()
+                return yield* run.deps.resolveModel(input)
+              }),
+            runReview: (input) =>
+              Effect.gen(function* () {
+                expect(yield* ReviewGit.Current).toBe(owned.view)
+                expect(input.files.map((file) => file.path)).toEqual(["visible.ts", "added.ts"])
+                expect(input.context.history?.some((entry) => entry.path === "visible.ts")).toBe(true)
+                expect(yield* Effect.promise(() => input.knownPath("visible.ts"))).toBe(true)
+                return yield* run.deps.runReview(input)
+              }),
+          },
+        )
+        expect(result.error).toBeUndefined()
+        expect(run.calls).toHaveLength(1)
+        const view = owned.view
+        if (!view) throw new Error("The bound review never acquired its private view")
+        const closed = yield* Effect.promise(() =>
+          view.repository.status().then(
+            () => false,
+            (error) => error instanceof ReadOnlyGit.Unavailable,
+          ),
+        )
+        expect(closed).toBe(true)
+        expect(yield* Effect.promise(() => fs.readFile(counter, "utf8"))).toBe("")
+      }
+    }),
+  )
+
+  it.live("unsupported repository metadata refuses before model resolution or review", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      yield* git(repo.directory, "config", "include.path", "untrusted-config")
+      const run = adapter()
+      let resolutions = 0
+      const result = yield* execute(request(repo), {
+        ...run.deps,
+        resolveModel: (input) =>
+          Effect.gen(function* () {
+            resolutions++
+            return yield* run.deps.resolveModel(input)
+          }),
+      })
+      expect(result.exitCode).toBe(2)
+      expect(result.error).toContain("includes are unsupported")
+      expect(resolutions).toBe(0)
+      expect(run.calls).toEqual([])
+      expect(result.verdict.verdict).toBe("not-reviewed")
+    }),
+  )
+
+  it.live("unsupported collector authority is refused without a live Git fallback", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const bound = yield* ReviewGit.metadata(repo.directory)
+      const result = yield* ReviewGit.within(
+        bound,
+        repo.head,
+        Effect.gen(function* () {
+          const git = yield* ReviewGit.client
+          const denied = yield* git.run(["config", "--get", "user.email"], { cwd: repo.directory })
+          expect(denied.exitCode).toBe(128)
+          return yield* ReviewGit.preflight.pipe(Effect.result)
+        }),
+      )
+      expect(result._tag).toBe("Failure")
+    }),
+  )
   it.live("retains requester read authority when the review runs in a real Git worktree", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
