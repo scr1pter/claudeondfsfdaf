@@ -25,6 +25,12 @@ export function vectorScopeKey(settings: VectorScopeSettings) {
   return JSON.stringify([settings.model, settings.variant, settings.disabled])
 }
 
+/** A controlled option may report its current value while its catalog refreshes. */
+export function vectorScopeDraft(settings: VectorScopeSettings, patch: Partial<VectorScopeSettings>) {
+  const next = { ...settings, ...patch }
+  return vectorScopeKey(next) === vectorScopeKey(settings) ? undefined : next
+}
+
 export function vectorScopeLocked(paths: readonly string[]) {
   return paths.some((path) =>
     [

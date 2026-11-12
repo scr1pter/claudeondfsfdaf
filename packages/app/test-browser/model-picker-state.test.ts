@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
-import { createMemo, createRenderEffect, createRoot, createSignal, mapArray, onCleanup } from "solid-js"
+import { createMemo, createRenderEffect, createRoot, createSignal, mapArray, onCleanup, untrack } from "solid-js"
+import { createStore } from "solid-js/store"
 import { createPickerCurrent } from "@/components/model-picker-state"
+import { vectorScopeDraft, vectorScopeKey, type VectorScopeSettings } from "@/components/settings-v2/vectorscope-model"
 import { buildModelSections, pickerSectionViews, type PickerModel } from "@/utils/provider-brand"
 
 const model = (name = "Maker", providerID = "anthropic", id = "maker/text"): PickerModel => ({
@@ -72,6 +74,59 @@ test("same-key host updates from a mapped section do not rebuild the section or 
     state.setHost({ selected: model("Same key, new object"), epoch: 102 })
     expect(state.counts().sectionsRead).toBe(2)
     expect(state.counts().effects).toBe(2)
+  } finally {
+    state.dispose()
+  }
+})
+
+test("repeated controlled variant normalization preserves draft identity and save state while real edits still apply", () => {
+  const initial: VectorScopeSettings = { model: "missing/old", variant: "old", disabled: true }
+  const state = createRoot((dispose) => {
+    const [store, setStore] = createStore({ draft: initial, error: "", saved: true })
+    let callbacks = 0
+    let writes = 0
+    const change = (patch: Partial<VectorScopeSettings>) => {
+      const next = vectorScopeDraft(store.draft, patch)
+      if (!next) return
+      writes++
+      setStore({ draft: next, error: "", saved: false })
+    }
+    // Like the actual controlled selector, a refreshed option reports its scalar
+    // value through an untracked callback. Replacing the same draft here used to
+    // invalidate the option again and recurse until Solid exhausted its stack.
+    createRenderEffect(() => {
+      const option = { value: store.draft.variant }
+      if (++callbacks > 12) throw new Error("Same-value option normalization replaced the draft recursively")
+      untrack(() => change({ variant: option.value }))
+    })
+    return { dispose, store, setStore, change, counts: () => ({ callbacks, writes }) }
+  })
+  try {
+    const draft = state.store.draft
+    for (let index = 0; index < 10; index++) state.change({ variant: "old" })
+    expect(state.store.draft).toBe(draft)
+    expect(state.counts()).toEqual({ callbacks: 1, writes: 0 })
+    expect(state.store.saved).toBe(true)
+    expect(vectorScopeKey(state.store.draft)).toBe(vectorScopeKey(initial))
+
+    state.setStore({ error: "The previous save failed", saved: false })
+    state.change({ variant: "old" })
+    expect(state.store.error).toBe("The previous save failed")
+    expect(state.store.draft).toBe(draft)
+    expect(state.counts().writes).toBe(0)
+
+    state.change({ variant: "high" })
+    expect(state.store.draft.variant).toBe("high")
+    expect(state.store.saved).toBe(false)
+    expect(state.store.error).toBe("")
+    expect(state.counts().writes).toBe(1)
+    state.change({ model: "anthropic/maker/text", variant: "low", disabled: false })
+    expect(state.store.draft).toEqual({ model: "anthropic/maker/text", variant: "low", disabled: false })
+    expect(state.counts().writes).toBe(2)
+    state.change({ model: "", variant: "" })
+    expect(state.store.draft).toEqual({ model: "", variant: "", disabled: false })
+    expect(state.counts().writes).toBe(3)
+    expect(state.counts().callbacks).toBe(4)
   } finally {
     state.dispose()
   }

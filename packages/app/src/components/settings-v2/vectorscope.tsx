@@ -12,6 +12,7 @@ import { modelDisplayName } from "@/utils/provider-brand"
 import { MIN_CONTEXT } from "@vectordevai/core/review/plan"
 import {
   readVectorScope,
+  vectorScopeDraft,
   vectorScopeKey,
   vectorScopeLocked,
   vectorScopePatch,
@@ -140,8 +141,10 @@ export function SettingsVectorScopeV2(props: {
     if (!blocked) {
       const draft = state.draft
       const previous = { ...draft }
-      const next = { ...previous, ...patch }
+      const next = vectorScopeDraft(previous, patch)
       trace("change", { draft: identity(draft), previous, next })
+      if (!next) return
+      trace("change-write", next)
       setState({ draft: next, error: "", saved: false })
     }
   }
