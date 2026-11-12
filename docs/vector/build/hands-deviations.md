@@ -1,5 +1,11 @@
 # Vector Hands build: deviations from the contract
 
+The separate movement-probe job step also prefixes every output line with
+`MOVE-PROBE-ONLY` and writes a distinct log. It cannot replace the mandatory
+baseline failure or supply release outputs. Its final focused routing check
+passed one test with 21 assertions; the earlier 20-assertion result below is
+retained at its earlier source scope.
+
 The current cleanup candidate gives only Node's removal of the owned verified
 synthetic fixture directory five transient filesystem retries with 100 ms linear
 backoff. Windows may still be releasing a terminated worker's image after the
@@ -1210,3 +1216,20 @@ is queued or in progress at this checkpoint. It supplies no completed final
 package, signing or release evidence. Final x64/ARM64 packaged pins and
 self-tests, signing/notarization, owner-device checks and publication remain
 open. Historical entries above retain their original source and run scope.
+
+## Forced-worker proof and diagnostic-only movement probe — 11 November 2026
+
+The later manual run [43158104253](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43158104253), job `130982781017`, at exact `9ec38ce4ea787a0dc30f1f892645481de8fc2ddb` passed build/link/native units and required core checks (30 passed, zero failed, one skipped). Verified isolated artifact `13916978195`, archive SHA-256 `f54c39d190b4f1afe062c280a517999370cde4a75b5c92a99960e1708d81203c`, reports 36 passed, zero failed and 11 skipped. The explicit forced-worker case at index 15 and wrapper cleanup passed. This supplies the previously missing actual worker execution proof for one acquisition. It is not a stability guarantee, a diagnosis of the earlier worker-wait/cleanup failures or proof of skipped input behavior. The `655ac0e6` failures above remain unchanged historical evidence.
+
+Stop still returns `guardian-observe-reply-negative-no-callback-pump-progressed`; the full-own-tag-without-injected-flag bucket was not observed. Its missing matching DOWN receipt remains a failure. Neither separate Raw Input readiness skips nor the advancing guardian pump prove an environment-wide limitation.
+
+The next candidate introduces a never-shipped opt-in movement diagnostic, not a production input fix or a new successful Stop path:
+
+- `VECTOR_COMPUTER_SMOKE_MOVE_PROBE` accepts only absent, `0` or `1` through the sanitized TypeScript/native environment. Absent/`0` selects the unchanged baseline; other values fail closed.
+- `1` adds one guarded MOVE after the existing reservation, to a freshly selected different pixel within the actual observed Stop. The original refreshed/prepared DOWN sequence follows with its existing 50 ms bound, actual matching receipt and release/cleanup predicates. No observation deadline is renewed, receipt inferred, DOWN split or UP authorized by the diagnostic.
+- The workflow baseline is explicitly `0`. A failure-only second invocation uses `1`, a separate log and an explicit no-release-evidence label. Its result cannot overwrite baseline status; diagnostic `continue-on-error` applies only to that second invocation.
+- Forced-worker validation now requires three independent fresh acquisitions, failing immediately on the first error. This is additional required coverage, not retry-until-success, warming or reuse. The `9ec38ce4` one-acquisition pass is not evidence that this later candidate passes all three.
+
+Source/local validation for this candidate is recorded separately from native proof: smoke report 45 passed / 28,050 assertions; smoke source 19 passed / 174 assertions; desktop typecheck passed. Full workflow-contract execution was 27 passed / three failed when WSL Bash lacked `/bin/bash`; an attempted Git Bash selection also failed because Git Bash is absent. The focused new probe workflow case was one passed / 29 filtered / 20 assertions. These facts do not promote the three failed local cases or any pending hosted/native execution to passed.
+
+Preview [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544) at `655ac0e6` is still pending at this checkpoint and supplies no completed final packaging claim. The 750 ms native acquisition/postflight, 50 ms input/UIA/StartCapture and public publication limits remain unchanged. Native Stop, repeated worker reliability, final exact-source x64/ARM64 packaged checks, signing/notarization, owner-device proof and publication remain open. No release credit.

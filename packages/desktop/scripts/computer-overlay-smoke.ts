@@ -9,6 +9,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   COMPUTER_SMOKE_LIMIT_MS,
+  computerSmokeMoveProbe,
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_CONTROLLER_MARK,
@@ -88,6 +89,9 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
   }
   if (nativeStage && (process.platform === "linux" || flags.has("--no-sandbox")))
     throw new Error("A native computer smoke stage requires its actual sandboxed host.")
+  const moveProbe = computerSmokeMoveProbe(process.env.VECTOR_COMPUTER_SMOKE_MOVE_PROBE)
+  if (moveProbe === "1" && (process.platform !== "win32" || !nativeStage))
+    throw new Error("The movement probe requires the staged Windows test driver.")
   if (process.env.CI !== "true" && process.env.VECTOR_COMPUTER_TEST_ISOLATED !== "1")
     throw new Error("The computer overlay smoke requires an explicitly isolated test environment.")
   if (!["darwin", "win32", "linux"].includes(process.platform))
@@ -159,6 +163,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       VECTOR_COMPUTER_SMOKE_PROFILE: path.join(directory, "profile"),
       VECTOR_COMPUTER_SMOKE_REQUIRE_NATIVE: flags.has("--require-native") ? "1" : "0",
       VECTOR_COMPUTER_TEST_ISOLATED: process.env.VECTOR_COMPUTER_TEST_ISOLATED === "1" ? "1" : "0",
+      ...(process.platform === "win32" && stage ? { VECTOR_COMPUTER_SMOKE_MOVE_PROBE: moveProbe } : {}),
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       ...(process.env.WINDIR ? { WINDIR: process.env.WINDIR } : {}),
       ...(process.env.TEMP ? { TEMP: directory, TMP: directory } : {}),

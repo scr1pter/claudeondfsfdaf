@@ -810,49 +810,53 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
     run(12, [&] { if (!input_ready) throw ScenarioSkip{L"input_detection_unavailable"}; require(native->state->detector->foreground_ready(native->session())); });
     run(13, [&] { throw ScenarioSkip{L"hardware_input_required"}; });
     run(15, [&] {
-      const auto available = observe_windows_availability(WindowsAvailabilityBackend::system());
-      if (windows_capture_blocked(available)) throw ScenarioSkip{L"capture_blocked"};
-      const auto shown = target->request();
-      require(valid_windows_target_state(shown) && shown.pid == initial.pid && shown.window == initial.window &&
-        target->pid() == shown.pid && shown.visible && !shown.minimized && !shown.excluded_visible);
-      const auto window = WindowsBackend::system(windows_child_shell).observe(shown.window);
-      const auto current = [active = native->state, owned = target, window] {
-        return active->available() && owned->current() && windows_window_current(window);
-      };
-      diagnostic_stage(L"capture-window-current", [&] {
-        require(current() && window.hwnd == shown.window && window.surface == shown.window &&
-          window.owner.process.pid == shown.pid && window.physical_owner.process.pid == shown.pid &&
-          window.window_class == windows_target_class && window.bounds == shown.bounds && window.bounds.contains(shown.patch));
-        require_windows_capture(available, &window.owner.process.token);
-        require_windows_capture(available, &window.physical_owner.process.token);
-        WindowsSessionPolicy(native->session()).require(window, WindowsPolicyOperation::capture);
-      });
-      const auto trace = std::make_shared<CaptureFailureTrace>(); CaptureTraceScope scope(trace);
-      const auto backend = diagnostic_capture_backend(CaptureBackend::system(windows_privileged_inventory_failure, windows_privileged_capture_read_failure));
-      CaptureBitmap image;
-      try {
-        // Force the production one-shot worker even if the ordinary service would read the screen.
-        // The read owns its unchanged acquisition deadline; this check never retries or warms it.
-        image = backend.read(CaptureReadRequest{shown.patch, window, true}, current);
-      } catch (const Failure& failure) {
-        throw ScenarioFailure{windows_privileged_reason(failure.code) ? failure.code : L"native_operation_failed",
-          windows_privileged_origin_stage(failure.message, L"capture-native-read", trace->recorded()), windows_privileged_native_code(failure.code)};
-      } catch (...) {
-        const auto stage = trace->recorded();
-        throw ScenarioFailure{L"native_operation_failed", stage.empty() ? std::wstring(L"capture-native-read") : stage, L"unknown"};
+      // Three independently required fresh processes, not retries: any failed acquisition
+      // immediately fails this case. No pixels, nonce, device or deadline is reused.
+      for (size_t acquisition = 0; acquisition < 3; ++acquisition) {
+        const auto available = observe_windows_availability(WindowsAvailabilityBackend::system());
+        if (windows_capture_blocked(available)) throw ScenarioSkip{L"capture_blocked"};
+        const auto shown = target->request();
+        require(valid_windows_target_state(shown) && shown.pid == initial.pid && shown.window == initial.window &&
+          target->pid() == shown.pid && shown.visible && !shown.minimized && !shown.excluded_visible);
+        const auto window = WindowsBackend::system(windows_child_shell).observe(shown.window);
+        const auto current = [active = native->state, owned = target, window] {
+          return active->available() && owned->current() && windows_window_current(window);
+        };
+        diagnostic_stage(L"capture-window-current", [&] {
+          require(current() && window.hwnd == shown.window && window.surface == shown.window &&
+            window.owner.process.pid == shown.pid && window.physical_owner.process.pid == shown.pid &&
+            window.window_class == windows_target_class && window.bounds == shown.bounds && window.bounds.contains(shown.patch));
+          require_windows_capture(available, &window.owner.process.token);
+          require_windows_capture(available, &window.physical_owner.process.token);
+          WindowsSessionPolicy(native->session()).require(window, WindowsPolicyOperation::capture);
+        });
+        const auto trace = std::make_shared<CaptureFailureTrace>(); CaptureTraceScope scope(trace);
+        const auto backend = diagnostic_capture_backend(CaptureBackend::system(windows_privileged_inventory_failure, windows_privileged_capture_read_failure));
+        CaptureBitmap image;
+        try {
+          // Force the production one-shot worker even if the ordinary service would read the screen.
+          // The read owns its unchanged acquisition deadline; this check never retries or warms it.
+          image = backend.read(CaptureReadRequest{shown.patch, window, true}, current);
+        } catch (const Failure& failure) {
+          throw ScenarioFailure{windows_privileged_reason(failure.code) ? failure.code : L"native_operation_failed",
+            windows_privileged_origin_stage(failure.message, L"capture-native-read", trace->recorded()), windows_privileged_native_code(failure.code)};
+        } catch (...) {
+          const auto stage = trace->recorded();
+          throw ScenarioFailure{L"native_operation_failed", stage.empty() ? std::wstring(L"capture-native-read") : stage, L"unknown"};
+        }
+        diagnostic_stage(L"capture-color-unmasked-window", [&] {
+          require(trace->read_route.load() == CaptureReadRoute::window && image.valid() &&
+            image.width == static_cast<uint32_t>(shown.patch.width) && image.height == static_cast<uint32_t>(shown.patch.height));
+          require(fixture_color(image, image.width / 2, image.height / 2));
+        });
+        diagnostic_stage(L"capture-window-current", [&] {
+          const auto fresh = target->request();
+          require(current() && valid_windows_target_state(fresh) && fresh.pid == shown.pid && fresh.window == shown.window &&
+            fresh.bounds == shown.bounds && fresh.patch == shown.patch && fresh.visible && !fresh.minimized && !fresh.excluded_visible);
+          WindowsSessionPolicy(native->session()).require(window, WindowsPolicyOperation::capture);
+          require(current());
+        });
       }
-      diagnostic_stage(L"capture-color-unmasked-window", [&] {
-        require(trace->read_route.load() == CaptureReadRoute::window && image.valid() &&
-          image.width == static_cast<uint32_t>(shown.patch.width) && image.height == static_cast<uint32_t>(shown.patch.height));
-        require(fixture_color(image, image.width / 2, image.height / 2));
-      });
-      diagnostic_stage(L"capture-window-current", [&] {
-        const auto fresh = target->request();
-        require(current() && valid_windows_target_state(fresh) && fresh.pid == shown.pid && fresh.window == shown.window &&
-          fresh.bounds == shown.bounds && fresh.patch == shown.patch && fresh.visible && !fresh.minimized && !fresh.excluded_visible);
-        WindowsSessionPolicy(native->session()).require(window, WindowsPolicyOperation::capture);
-        require(current());
-      });
     });
   } catch (const ScenarioFailure& failure) { report.checks[0] = {std::wstring(windows_privileged_checks[0]), false, false, failure.reason}; }
   catch (const ScenarioSkip& skip) { report.skip_unrun(skip.reason); }

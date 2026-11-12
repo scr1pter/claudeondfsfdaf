@@ -6,7 +6,19 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
-**Latest native observation.** At `655ac0e6`, Windows diagnostic
+**Latest native observation.** At `9ec38ce4`, Windows diagnostic
+[43158104253](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43158104253),
+job `130982781017`, passed build, native units/version/probes and required
+protocol/lifecycle (30 passed, zero failed, one skipped). Its verified isolated
+report was 36 passed, zero failed, 11 skipped, including successful forced
+worker capture and wrapper cleanup. Artifact `13916978195` has archive SHA-256
+`f54c39d190b4f1afe062c280a517999370cde4a75b5c92a99960e1708d81203c`.
+This is one actual worker execution, not a stability guarantee. Stop still
+failed with the matching-callback/pump-progressed result described below.
+The next candidate separates a diagnostic-only MOVE from the mandatory
+unchanged Stop, and requires three fresh worker acquisitions rather than one.
+
+**Earlier failed native observation.** At `655ac0e6`, Windows diagnostic
 [43154307054](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154307054),
 job `130972535343`, passed build/link, native units/version/probes and required
 protocol/lifecycle (30 passed, zero failed, one skipped). Its isolated report
@@ -20,7 +32,7 @@ wrapper's `fixture-cleanup-failed`. The native cleanup scenario at index 14
 itself was not failed. The wrapper result does not identify a cleanup cause;
 the capture phases do not establish a timing cause or worker root cause.
 The forced-worker check at index 15 ran and failed, so actual successful
-isolated-worker capture is still unproven.
+isolated-worker capture was still unproven at that revision.
 
 Stop failed `input_post_failed` /
 `guardian-observe-reply-negative-no-callback-pump-progressed`. The authenticated
@@ -1531,3 +1543,17 @@ Continuation resumed on 9 November 2026 from `4aede6ac67ac43b1ab2502103e150e24ca
 Local checks ran serially from `packages/desktop`, with Bun 1.3.14: `computer-workflow.test.ts` passed 29 tests / 1,874 assertions; `computer-overlay-workflow.test.ts` passed 6 / 104; `verify-computer-helper-windows.test.ts` passed 17 / 81. Desktop `bun typecheck` and `git diff --check` passed. Actual Windows execution of the new test wiring remains pending CI at the pushed source.
 
 The preceding full run `42466499054` at `4aede6ac` did not reach staged Windows Stop: its pinned Electron download failed. It also contains ordinary-regression and optional-native failures, so it is not a successful release validation. Focused x64 diagnostic `42723937386` and pre-integration production benchmark `42724172551` were dispatched at that exact source; their results are not claimed here while they are running. This continuation will reconcile the Hands branch with current main while retaining both computer-use privacy boundaries and the newer multi-agent/accounting behavior. No release, deployment, signing credential or OS permission was changed.
+
+## Forced-worker execution proof and next Stop diagnostic — 11 November 2026
+
+Manual diagnostic [43158104253](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43158104253), job `130982781017`, ran exact `9ec38ce4ea787a0dc30f1f892645481de8fc2ddb`. Build/link, native units and required protocol/lifecycle passed; required totals were 30 passed, zero failed, one skipped. The isolated report artifact `13916978195` was verified against archive SHA-256 `f54c39d190b4f1afe062c280a517999370cde4a75b5c92a99960e1708d81203c`. It reports 36 passed, zero failed and 11 skipped, including the explicit `capture-isolated-window-worker` case at index 15. Wrapper fixture cleanup also passed. This is one actual forced-worker process/pixel acquisition proof within the unchanged 750 ms native deadline. It does not establish stable timing, repeated acquisition success or the skipped input capabilities. The earlier `655ac0e6` worker-wait and wrapper-cleanup failures remain historical failures; this later result does not erase them or prove their cause.
+
+Staged Stop still fails with the authenticated, full-budget `guardian-observe-reply-negative-no-callback-pump-progressed` category. The new full-own-tag-without-injected-flag category was not observed. The result establishes advancing pump stamps without recorded matching reservation evidence; it does not establish a broader host/environment cause, permit a skip or replace the missing actual DOWN receipt. Native Stop remains open.
+
+The next candidate is uncommitted source at this checkpoint, with no native execution result yet. The never-shipped movement probe uses `VECTOR_COMPUTER_SMOKE_MOVE_PROBE`, parsed and forwarded through the sanitized TypeScript/native environment as absent/`0`/`1` only. Absent or `0` retains the baseline. Opt-in `1` sends one guarded MOVE to a different sampled pixel inside the actual observed Stop after reservation and before the original prepared 50 ms DOWN sequence. It neither splits nor changes that DOWN sequence, its matching receipt or release authority. The workflow explicitly runs baseline `0`; only after that step fails may a second diagnostic-only `1` invocation run in a separate log. Its result cannot replace the baseline failure or earn release credit.
+
+The same candidate strengthens the forced-worker case to require three independent fresh acquisitions. Any error immediately fails the case; these are required samples, not retries. Processes, nonces, pixels, devices and deadlines are not reused. The single acquisition pass above belongs to `9ec38ce4`, not to this later three-acquisition candidate.
+
+Local checks reported for the candidate are: smoke report 45 passed / 28,050 assertions; smoke source 19 passed / 174 assertions; desktop typecheck passed. The full workflow-contract file reported 27 passed / three failed because this host's WSL Bash could not find `/bin/bash`; a second attempt selecting the expected Git Bash path also failed because Git Bash is not installed. Those three cases remain failed local executions, not passes. The focused new movement-probe workflow case passed once, with 29 cases filtered and 20 assertions; that focused pass does not replace the full file's result.
+
+Unsigned artifacts-only preview [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544) at `655ac0e6` remains pending at this documentation checkpoint. No final package success is claimed. Native Stop, repeatable capture, exact-source x64/ARM64 packaged pins/self-tests, signing/notarization, owner-device checks and publication remain separate open gates. Historical entries retain their original run and source scope; no release credit is granted here.

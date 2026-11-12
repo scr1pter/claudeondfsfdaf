@@ -23,6 +23,7 @@ import {
   COMPUTER_SMOKE_DRIVER_REASONS,
   COMPUTER_SMOKE_NATIVE_REASONS,
   computerSmokeDriverFailure,
+  computerSmokeMoveProbe,
   parseComputerSmokeDriverResultFrame,
   COMPUTER_SMOKE_ASAR_MARK,
   COMPUTER_SMOKE_PROPERTIES_MARK,
@@ -510,9 +511,12 @@ test("Windows driver diagnostic enums match the native allowlists exactly", asyn
   expect(names[0]).toBe("none")
   const uiaEnumerators = uia.match(/enum class WindowsUiaPhase : uint8_t \{([^}]+)\};/)?.[1]
   expect(uiaEnumerators?.split(",").map((name) => name.trim().replaceAll("_", "-"))).toEqual(names)
-  expect(COMPUTER_SMOKE_DRIVER_STAGES.slice(COMPUTER_SMOKE_DRIVER_STAGES.indexOf("uia-root-current"))).toEqual(
-    names.slice(1).map((name) => `uia-${name}`),
-  )
+  expect(
+    COMPUTER_SMOKE_DRIVER_STAGES.slice(
+      COMPUTER_SMOKE_DRIVER_STAGES.indexOf("uia-root-current"),
+      COMPUTER_SMOKE_DRIVER_STAGES.indexOf("uia-actor-com-expired") + 1,
+    ),
+  ).toEqual(names.slice(1).map((name) => `uia-${name}`))
   expect(COMPUTER_SMOKE_DRIVER_CAUSES).toHaveLength(40)
   expect(new Set(COMPUTER_SMOKE_DRIVER_CAUSES).size).toBe(40)
   expect(COMPUTER_SMOKE_DRIVER_CAUSES).toContain("core_failure:unknown")
@@ -847,6 +851,22 @@ test("capture checkpoint hints can refine failure metadata without accepting run
   expect(parent.match(/FailedCheckpoint failed_checkpoint/g)).toHaveLength(1)
   expect(parent.indexOf("decode_capture_worker_output(")).toBeGreaterThan(parent.indexOf("GetExitCodeProcess("))
   expect(parent.indexOf("image.bgra.assign(")).toBeGreaterThan(parent.indexOf("capture_worker_accept("))
+})
+
+test("movement probes accept only closed opt-in values across sanitized Windows launches", async () => {
+  expect(computerSmokeMoveProbe(undefined)).toBe("0")
+  expect(computerSmokeMoveProbe("0")).toBe("0")
+  expect(computerSmokeMoveProbe("1")).toBe("1")
+  for (const value of ["", "true", "yes", "01", " 1", "1 ", "1\n", "2", 0, 1, false, true, null, {}, []])
+    expect(() => computerSmokeMoveProbe(value)).toThrow()
+  const root = fileURLToPath(new URL("../", import.meta.url))
+  for (const file of ["computer-overlay-smoke.ts", "computer-overlay-smoke-native.ts"]) {
+    const source = await readFile(path.join(root, "scripts", file), "utf8")
+    expect(source).toContain("computerSmokeMoveProbe(process.env.VECTOR_COMPUTER_SMOKE_MOVE_PROBE)")
+    expect(source).toContain('process.platform === "win32"')
+    expect(source).toContain("VECTOR_COMPUTER_SMOKE_MOVE_PROBE: moveProbe")
+    expect(source).toContain('throw new Error("The movement probe requires the staged Windows test driver.")')
+  }
 })
 
 describe("fixed real Electron computer smoke reports", () => {

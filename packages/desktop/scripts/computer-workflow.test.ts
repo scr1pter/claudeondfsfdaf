@@ -48,7 +48,7 @@ function expression(
   event = "workflow_dispatch",
   ref = "refs/heads/hands",
   needs: Record<string, unknown> = {},
-  status: { cancelled?: boolean; success?: boolean; steps?: Record<string, unknown> } = {},
+  status: { cancelled?: boolean; success?: boolean; failure?: boolean; steps?: Record<string, unknown> } = {},
   definition = helper,
 ) {
   // GitHub permits hyphens in dotted property names; translate those accesses outside string literals.
@@ -65,6 +65,7 @@ function expression(
       always: () => true,
       cancelled: () => status.cancelled ?? false,
       success: () => status.success ?? true,
+      failure: () => status.failure ?? false,
       steps: status.steps ?? {},
       github: {
         workflow: "test",
@@ -866,9 +867,12 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   expect(script).toContain("--platform win32 --arch x64 --channel prod --out native/out/win32")
   expect(script).toContain("bun install --frozen-lockfile --ignore-scripts")
   expect(script).not.toMatch(/--arch (?:arm64|x64,arm64)|--privileged (?:auto|require)|tar -|native-ready/)
-  // Only the finite staged diagnostic enters the never-shipped native stage, and no stage archive is made or restored.
+  // Only these labelled manual diagnostics enter the finite native stage; no stage archive is restored.
   const staged = current.find((step) => step.name === "Run the actual medium-token staged overlay diagnostic")!
-  for (const step of current.filter((step) => step !== staged))
+  const probe = current.find(
+    (step) => step.name === "Diagnose the failed Stop with a separate movement probe (no release evidence)",
+  )!
+  for (const step of current.filter((step) => step !== staged && step !== probe))
     expect(JSON.stringify(step), String(step.name)).not.toContain("--native-stage")
   expect(String(staged.run).match(/--native-stage/g)).toHaveLength(1)
   expect(script).not.toContain("computer-overlay-smoke-artifact.ts")
@@ -977,7 +981,7 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     expect.stringMatching(/^if \(\$LASTEXITCODE -ne 0\) \{ throw "[^"]+" \}$/),
   ])
   expect(staged["timeout-minutes"]).toBe(3)
-  expect(staged.env).toEqual({ VECTOR_COMPUTER_TEST_ISOLATED: "1" })
+  expect(staged.env).toEqual({ VECTOR_COMPUTER_TEST_ISOLATED: "1", VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "0" })
   expect(record(record(diagnostic.defaults).run).shell).toBe("pwsh")
   // A prerequisite 77 is a summarized skip that ends the step, never a pass; every other nonzero status throws.
   expect(lines(staged.run)).toEqual([
@@ -1022,6 +1026,7 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   })
   expect(lines(record(uploads[3]!.with).path)).toEqual([
     "${{ runner.temp }}/computer-win32-staged-diagnostic.log",
+    "${{ runner.temp }}/computer-win32-move-probe-diagnostic.log",
     "packages/desktop/native/out/overlay-win32/computer-overlay-smoke.json",
   ])
   expect(diagnostic["timeout-minutes"]).toBe(45)
@@ -1029,6 +1034,43 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
   for (const value of Object.values(release))
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
+})
+
+test("a movement probe is a separate failure-only diagnostic that cannot waive baseline Stop", () => {
+  const current = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
+  const baseline = current.find((step) => step.id === "staged_native")!
+  const probe = current.find(
+    (step) => step.name === "Diagnose the failed Stop with a separate movement probe (no release evidence)",
+  )!
+  const upload = current.find((step) => step.name === "Preserve the bounded staged overlay diagnostic evidence")!
+  expect(baseline["continue-on-error"]).toBeUndefined()
+  expect(record(baseline.env).VECTOR_COMPUTER_SMOKE_MOVE_PROBE).toBe("0")
+  expect(probe.if).toBe("${{ failure() && steps.staged_native.outcome == 'failure' }}")
+  expect(probe["continue-on-error"]).toBe(true)
+  expect(probe["timeout-minutes"]).toBe(3)
+  expect(probe.env).toEqual({ VECTOR_COMPUTER_TEST_ISOLATED: "1", VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "1" })
+  expect(String(probe.run).match(/--native-stage/g)).toHaveLength(1)
+  expect(String(probe.run)).toContain("DIAGNOSTIC ONLY")
+  expect(String(probe.run)).toContain('ForEach-Object { "MOVE-PROBE-ONLY $_" }')
+  expect(String(probe.run)).toContain("computer-win32-move-probe-diagnostic.log")
+  expect(String(probe.run)).not.toContain('FilePath "$env:RUNNER_TEMP/computer-win32-staged-diagnostic.log"')
+  expect(current.indexOf(probe)).toBeGreaterThan(current.indexOf(baseline))
+  expect(current.indexOf(upload)).toBeGreaterThan(current.indexOf(probe))
+  for (const failure of [false, true])
+    for (const outcome of ["success", "failure", "skipped", "cancelled"])
+      expect(
+        expression(
+          String(probe.if),
+          {},
+          "workflow_dispatch",
+          "refs/heads/hands",
+          {},
+          {
+            failure,
+            steps: { staged_native: { outcome } },
+          },
+        ),
+      ).toBe(failure && outcome === "failure")
 })
 
 test("the x64 diagnostic logs closed failed stages and codes without exposing native payloads", () => {

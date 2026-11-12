@@ -1,5 +1,10 @@
 export const COMPUTER_SMOKE_MARK = "computer-smoke "
 export const COMPUTER_SMOKE_LIMIT_MS = 120_000
+export function computerSmokeMoveProbe(value: unknown) {
+  if (value === undefined || value === "0") return "0"
+  if (value === "1") return "1"
+  throw new Error("The isolated movement probe flag is invalid.")
+}
 export const COMPUTER_SMOKE_CHECKS = [
   "overlay-count",
   "overlay-bounds",
@@ -568,6 +573,8 @@ export const COMPUTER_SMOKE_DRIVER_STAGES = [
   "uia-actor-com-cancellation-unavailable",
   "uia-actor-com-timer-unavailable",
   "uia-actor-com-expired",
+  "probe-mode",
+  "probe-move",
 ] as const
 export const COMPUTER_SMOKE_DRIVER_NATIVE_CODES = [
   "unavailable",

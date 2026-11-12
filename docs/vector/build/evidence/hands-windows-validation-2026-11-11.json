@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "hands-windows-validation-continuation",
-  "observedAtUtc": "2026-11-12T04:55:28.337613+00:00",
+  "observedAtUtc": "2026-11-12T05:30:59.358262+00:00",
   "repository": "scr1pter/claudeondfsfdaf",
   "branch": "hands",
   "parentRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
@@ -674,6 +674,90 @@
       "failed": 0,
       "assertions": 174,
       "seconds": 1.165,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
+      "exitCode": 0
+    }
+  ],
+  "checkpointNativeOutcome": {
+    "revision": "9ec38ce4ea787a0dc30f1f892645481de8fc2ddb",
+    "run": 43158104253,
+    "job": 130982781017,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43158104253/job/130982781017",
+    "conclusion": "failure",
+    "buildUnitsVersionProbes": "passed",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 36,
+      "failed": 0,
+      "skipped": 11
+    },
+    "report": {
+      "artifact": 13916978195,
+      "archiveDigest": "sha256:f54c39d190b4f1afe062c280a517999370cde4a75b5c92a99960e1708d81203c",
+      "archiveDigestMatchedAPI": true
+    },
+    "forcedIsolatedWindowWorker": "passed",
+    "wrapperCleanup": "passed",
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "One actual forced worker/pixel/deadline execution passed; no stable timing guarantee from one sample. Previous native failures retained. Exact own-tag unflagged category was not observed; absence of matching own callbacks does not establish global hook or host limitation."
+  },
+  "movementProbeCandidate": {
+    "parentRevision": "9ec38ce4ea787a0dc30f1f892645481de8fc2ddb",
+    "scope": "Never-shipped finite Windows driver only. Absent/0 mode preserves baseline; strict1 adds exactly one guarded MOVE after reservation and before original refresh/prepared50ms. Reject every other mode. Closed normalized flag crosses each existing sanitized environment boundary.",
+    "target": "One sampled different pixel within the independently observed actual Stop rectangle; bounded pure selection and cloned1x1 request repeat exact WindowFromPoint ownership/currentness. Original Stop geometry and DOWN/actual receipt/retirement remain unchanged.",
+    "pipeline": "Original mandatory baseline step explicitly0; only after its failure a separately labelled second invocation uses1, separate log with every line MOVE-PROBE-ONLY prefixed. Continued diagnostic cannot clear original failed step and has no release outputs. Probe-assisted success is not unmodified native Stop proof.",
+    "tests": "Four new native pure groups for strict mode/stages and bounded different-point selection; independent read-only reviews found no blocker. No local native operation."
+  },
+  "freshWorkerRepeatabilityCandidate": {
+    "nativeCheck": "capture-isolated-window-worker",
+    "requiredAcquisitions": 3,
+    "rule": "Each acquisition uses a fresh target observation, process, nonce, device and original deadline; all3 required. Any exception fails the case immediately, with no catch/retry/warmup/fallback between acquisitions."
+  },
+  "probeCandidateLocalChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+      "passed": 45,
+      "failed": 0,
+      "assertions": 28050,
+      "seconds": 0.272,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 1.155,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-workflow.test.ts",
+      "passed": 27,
+      "failed": 3,
+      "assertions": 1436,
+      "exitCode": 1,
+      "qualification": "Two full attempts selected Windows System32 WSL bash; /bin/bash unavailable. Proposed standard GitBash path did not exist. Three existing shell-validation cases failed before script execution; no test skip or expectation weakened. LinuxCI full-file execution required."
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-workflow.test.ts --test-name-pattern \"a movement probe is a separate failure-only diagnostic\"",
+      "passed": 1,
+      "filtered": 29,
+      "failed": 0,
+      "assertions": 21,
+      "seconds": 0.221,
       "exitCode": 0
     },
     {

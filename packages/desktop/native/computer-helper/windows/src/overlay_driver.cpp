@@ -78,6 +78,13 @@ DWORD actual_parent(DWORD pid = GetCurrentProcessId()) {
   invalid(L"parent_invalid");
 }
 bool isolated() { wchar_t value[3]{}; return GetEnvironmentVariableW(L"VECTOR_COMPUTER_TEST_ISOLATED", value, 3) == 1 && value[0] == L'1' && value[1] == L'\0'; }
+std::optional<bool> read_move_probe_mode() noexcept {
+  wchar_t value[3]{}; SetLastError(ERROR_SUCCESS);
+  const auto count = GetEnvironmentVariableW(L"VECTOR_COMPUTER_SMOKE_MOVE_PROBE", value, 3);
+  if (!count) return GetLastError() == ERROR_ENVVAR_NOT_FOUND ? overlay_driver_move_probe_mode(std::nullopt) : overlay_driver_move_probe_mode(std::wstring_view{});
+  if (count >= 3) return {};
+  return overlay_driver_move_probe_mode(std::wstring_view(value, count));
+}
 bool same_context(const TokenIdentity& a, const TokenIdentity& b) {
   return !a.user.empty() && !a.logon.empty() && a.authentication && a.user == b.user && a.logon == b.logon && a.authentication == b.authentication && a.session == b.session;
 }
@@ -268,6 +275,7 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::envelope_shape; require(keys(envelope, {L"id", L"ok", L"stop"}) && safe_integer(field(envelope, L"id")) == 1 && envelope.GetNamedBoolean(L"ok"), L"control_invalid");
   stage = Stage::request; const auto request = parse_overlay_stop_request(envelope.GetNamedObject(L"stop")); require(request && request->parent == options.parent && request->nonce == options.nonce && request->parent_created == life->birth && request->source_digest == widen(overlay_driver_identity::kSourceDigest), L"control_invalid");
   stage = Stage::foreground; DWORD foreground = 0; if (!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != options.parent) throw DriverSkip{L"foreground_unavailable"};
+  stage = Stage::probe_mode; const auto move_probe = read_move_probe_mode(); require(move_probe.has_value(), L"control_invalid");
   stage = Stage::guardian_create; const auto guardian_diagnostic = std::make_shared<InputGuardianDiagnostic>(); auto guardian = InputGuardian::native(guardian_diagnostic); stage = Stage::backend_create; auto backend = InputBackend::system({}, guardian); stage = Stage::uia_create; const auto uia_diagnostic = std::make_shared<WindowsUiaDiagnostic>(); const auto uia = WindowsUiaBackend::system(uia_diagnostic);
   struct Close { InputBackend& backend; const WindowsUiaBackend& uia; std::shared_ptr<InputGuardian> guardian; ~Close() { guardian->close(); if (backend.close) backend.close(); if (uia.close) uia.close(); } } close{backend, uia, guardian};
   stage = Stage::uia_available; if (!uia.available || !uia.available()) throw DriverSkip{L"uia_unavailable"};
@@ -281,6 +289,19 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   stage = Stage::reserve; const InputRelease release{InputReleaseKind::mouse_button, 0, 0, false, 0}; const auto ticket = guardian->reserve(release); require(ticket.has_value(), L"guardian_unavailable");
   bool attempted = false, confirmed_up = false;
   try {
+    if (*move_probe) {
+      stage = Stage::probe_move;
+      POINT cursor{}; require(GetCursorPos(&cursor) != FALSE);
+      const auto selected = overlay_driver_move_probe_point(observed_request.stop_bounds, cursor); require(selected.has_value());
+      auto probe_request = observed_request; probe_request.stop_bounds = {selected->x, selected->y, 1, 1};
+      const auto current = [&] {
+        return files.current() && windows_owner_current(bootstrap) && window_current(probe_request, parent, window, life) && backend.quiet() && guardian->alive();
+      };
+      require(current());
+      // Diagnostic-only MOVE to a different sampled pixel inside the actual observed Stop.
+      // The cloned request checks that exact point; original refresh/DOWN geometry stays intact.
+      require(backend.post({InputEventKind::move, *selected, {}, 0, 0, backend.tag}, current) == InputPostResult::accepted, L"input_post_failed");
+    }
     stage = Stage::refresh; const auto prepared = refresh_stop(uia, window, observed_request, element, stage, uia_diagnostic);
     require(files.current() && windows_owner_current(bootstrap) && window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50); stage = Stage::post;
     const auto outcome = backend.post({InputEventKind::button_down, point(observed_request), release, 0, 0, backend.tag}, [&] {
@@ -354,6 +375,8 @@ std::vector<wchar_t> child_environment(const std::filesystem::path& profile) {
   for (const auto key : {L"SystemRoot", L"WINDIR", L"SystemDrive", L"PATH", L"TEMP", L"TMP", L"APPDATA", L"LOCALAPPDATA", L"USERPROFILE"}) {
     std::wstring value(32'768, L'\0'); const auto count = GetEnvironmentVariableW(key, value.data(), static_cast<DWORD>(value.size())); if (!count) continue; require(count < value.size(), L"control_invalid"); value.resize(count); values.emplace(key, std::move(value));
   }
+  const auto move_probe = read_move_probe_mode(); require(move_probe.has_value(), L"control_invalid");
+  values.emplace(L"VECTOR_COMPUTER_SMOKE_MOVE_PROBE", *move_probe ? L"1" : L"0");
   values.emplace(L"VECTOR_COMPUTER_TEST_ISOLATED", L"1"); values.emplace(L"CI", L"true");
   values[L"USERPROFILE"] = (profile / L"home").wstring(); values[L"APPDATA"] = (profile / L"AppData" / L"Roaming").wstring(); values[L"LOCALAPPDATA"] = (profile / L"AppData" / L"Local").wstring(); values[L"TEMP"] = (profile / L"tmp").wstring(); values[L"TMP"] = values[L"TEMP"];
   std::vector<wchar_t> result; for (const auto& entry : values) { result.insert(result.end(), entry.first.begin(), entry.first.end()); result.push_back(L'='); result.insert(result.end(), entry.second.begin(), entry.second.end()); result.push_back(L'\0'); } result.push_back(L'\0'); return result;
@@ -409,6 +432,29 @@ int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<L
 }
 }
 
+std::optional<POINT> overlay_driver_move_probe_point(const WindowsRect& bounds, POINT cursor) noexcept {
+  const auto low = static_cast<int64_t>(std::numeric_limits<LONG>::min());
+  const auto high = static_cast<int64_t>(std::numeric_limits<LONG>::max());
+  if (!bounds.valid() || bounds.x < low || bounds.y < low || bounds.x > high || bounds.y > high ||
+      bounds.width - 1 > high - bounds.x || bounds.height - 1 > high - bounds.y || (bounds.width == 1 && bounds.height == 1)) return {};
+  POINT selected{static_cast<LONG>(bounds.x + bounds.width / 2), static_cast<LONG>(bounds.y + bounds.height / 2)};
+  if (selected.x == cursor.x && selected.y == cursor.y) {
+    if (bounds.width > 1) {
+      const auto next = bounds.x + bounds.width / 2 + 1;
+      selected.x = static_cast<LONG>(next < bounds.x + bounds.width ? next : int64_t(selected.x) - 1);
+    } else {
+      const auto next = bounds.y + bounds.height / 2 + 1;
+      selected.y = static_cast<LONG>(next < bounds.y + bounds.height ? next : int64_t(selected.y) - 1);
+    }
+  }
+  if (!bounds.contains(WindowsRect{selected.x, selected.y, 1, 1}) || (selected.x == cursor.x && selected.y == cursor.y)) return {};
+  return selected;
+}
+std::optional<bool> overlay_driver_move_probe_mode(std::optional<std::wstring_view> value) noexcept {
+  if (!value || *value == L"0") return false;
+  if (*value == L"1") return true;
+  return {};
+}
 bool overlay_driver_hex(std::wstring_view value, size_t size) noexcept {
   return value.size() == size && std::all_of(value.begin(), value.end(), [](wchar_t c) { return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'); });
 }

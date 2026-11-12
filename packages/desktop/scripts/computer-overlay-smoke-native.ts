@@ -17,6 +17,7 @@ import {
   COMPUTER_SMOKE_NATIVE_REASONS,
   COMPUTER_SMOKE_NATIVE_PREREQUISITES,
   computerSmokeDriverFailure,
+  computerSmokeMoveProbe,
   parseComputerSmokeDriverResultFrame,
   parseComputerSmokeNativeDiagnostic,
   type ComputerSmokeReason,
@@ -185,12 +186,16 @@ async function nativeProof(input: NativeProofInput, diagnostic: NativeDiagnostic
     height: Number(rect.h),
   })
   diagnostic.phase = "spawn"
+  const moveProbe = computerSmokeMoveProbe(process.env.VECTOR_COMPUTER_SMOKE_MOVE_PROBE)
+  if (moveProbe === "1" && process.platform !== "win32")
+    throw new Error("The movement probe requires the staged Windows test driver.")
   const child = spawn(executable, ["--overlay-stop", "--parent-pid", String(process.pid), "--nonce", input.nonce], {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     env: {
       PATH: process.env.PATH ?? "",
       VECTOR_COMPUTER_TEST_ISOLATED: "1",
+      ...(process.platform === "win32" ? { VECTOR_COMPUTER_SMOKE_MOVE_PROBE: moveProbe } : {}),
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
     },
   })

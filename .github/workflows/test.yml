@@ -321,10 +321,12 @@ jobs:
           bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
           if ($LASTEXITCODE -ne 0) { throw "The x64 native overlay diagnostic stage failed to build." }
       - name: Run the actual medium-token staged overlay diagnostic
+        id: staged_native
         if: ${{ success() && steps.required_protocol.outcome == 'success' }}
         timeout-minutes: 3
         env:
           VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "0"
         run: |
           bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-staged-diagnostic.log"
           $status = $LASTEXITCODE
@@ -334,6 +336,19 @@ jobs:
           } elseif ($status -ne 0) {
             throw "The actual medium-token staged overlay diagnostic failed."
           }
+      - name: Diagnose the failed Stop with a separate movement probe (no release evidence)
+        if: ${{ failure() && steps.staged_native.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "1"
+        run: |
+          "DIAGNOSTIC ONLY: movement-probe-assisted results never replace the failed baseline Stop." >> $env:GITHUB_STEP_SUMMARY
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 2>&1 | ForEach-Object { "MOVE-PROBE-ONLY $_" } | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-move-probe-diagnostic.log"
+          $status = $LASTEXITCODE
+          "Movement probe exit code: $status (no release evidence)." >> $env:GITHUB_STEP_SUMMARY
+          if ($status -ne 0) { throw "The separate movement probe did not pass; baseline remains failed." }
       - name: Preserve the bounded staged overlay diagnostic evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -341,6 +356,7 @@ jobs:
           name: computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/computer-win32-staged-diagnostic.log
+            ${{ runner.temp }}/computer-win32-move-probe-diagnostic.log
             packages/desktop/native/out/overlay-win32/computer-overlay-smoke.json
           if-no-files-found: ignore
           overwrite: false

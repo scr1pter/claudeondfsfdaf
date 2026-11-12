@@ -33,6 +33,46 @@ JsonObject wire_request() {
 size_t run_overlay_driver_tests() {
   size_t count = 0; const auto test = [&](const auto& body) { body(); ++count; };
   test([] {
+    const WindowsRect bounds{-200, 40, 80, 40};
+    const auto center = overlay_driver_move_probe_point(bounds, POINT{0, 0});
+    require(center && center->x == -160 && center->y == 60 && bounds.contains(WindowsRect{center->x, center->y, 1, 1}),
+      "overlay-driver.move-probe-prefers-actual-stop-center-when-cursor-differs");
+    const auto next = overlay_driver_move_probe_point(bounds, POINT{-160, 60});
+    require(next && (next->x != -160 || next->y != 60) && bounds.contains(WindowsRect{next->x, next->y, 1, 1}),
+      "overlay-driver.move-probe-selects-another-inside-pixel-if-center-is-current");
+    for (const auto tiny : {WindowsRect{10, 20, 2, 1}, WindowsRect{10, 20, 1, 2}, WindowsRect{-2, -2, 3, 3}}) {
+      const POINT cursor{static_cast<LONG>(tiny.x + tiny.width / 2), static_cast<LONG>(tiny.y + tiny.height / 2)};
+      const auto selected = overlay_driver_move_probe_point(tiny, cursor);
+      require(selected && (selected->x != cursor.x || selected->y != cursor.y) && tiny.contains(WindowsRect{selected->x, selected->y, 1, 1}),
+        "overlay-driver.move-probe-alternate-pixel-does-not-escape-thin-or-negative-stop-bounds");
+    }
+  });
+  test([] {
+    const auto low = static_cast<int64_t>(std::numeric_limits<LONG>::min());
+    const auto high = static_cast<int64_t>(std::numeric_limits<LONG>::max());
+    for (const auto invalid : {WindowsRect{0, 0, 1, 1}, WindowsRect{0, 0, 0, 4}, WindowsRect{0, 0, 4, 0},
+        WindowsRect{0, 0, -1, 4}, WindowsRect{0, 0, 4, -1}, WindowsRect{high + 1, 0, 2, 2},
+        WindowsRect{0, low - 1, 2, 2}, WindowsRect{high, 0, 2, 2}, WindowsRect{0, high, 2, 2},
+        WindowsRect{std::numeric_limits<int64_t>::max(), 0, 2, 2}, WindowsRect{0, 0, std::numeric_limits<int64_t>::max(), 2}})
+      require(!overlay_driver_move_probe_point(invalid, POINT{0, 0}), "overlay-driver.move-probe-tiny-invalid-or-long-overflow-region-fails-closed");
+  });
+  test([] {
+    require(overlay_driver_move_probe_mode(std::nullopt) == std::optional<bool>{false} &&
+      overlay_driver_move_probe_mode(std::wstring_view(L"0")) == std::optional<bool>{false},
+      "overlay-driver.move-probe-absent-or-exact-zero-preserves-baseline");
+    require(overlay_driver_move_probe_mode(std::wstring_view(L"1")) == std::optional<bool>{true},
+      "overlay-driver.move-probe-only-exact-one-opts-in");
+    for (const auto& value : {std::wstring{}, std::wstring(L"00"), std::wstring(L"01"), std::wstring(L"10"),
+        std::wstring(L"true"), std::wstring(L"false"), std::wstring(L" 1"), std::wstring(L"1 "), std::wstring(L"1\n"),
+        std::wstring(L"+1"), std::wstring(L"-1"), std::wstring(L"2"), std::wstring(L"\uff11"), std::wstring(L"1\0", 2), std::wstring(100, L'1')})
+      require(!overlay_driver_move_probe_mode(std::wstring_view(value)), "overlay-driver.move-probe-invalid-mode-is-never-coerced-or-trimmed");
+  });
+  test([] {
+    require(static_cast<size_t>(OverlayDriverStage::probe_mode) == 169 && static_cast<size_t>(OverlayDriverStage::probe_move) == 170 &&
+      overlay_driver_stage_name(OverlayDriverStage::probe_mode) == L"probe-mode" && overlay_driver_stage_name(OverlayDriverStage::probe_move) == L"probe-move",
+      "overlay-driver.probe-stages-append-without-changing-existing-169-values");
+  });
+  test([] {
     for (const auto phase : {InputGuardianPhase::none, InputGuardianPhase::confirmed, static_cast<InputGuardianPhase>(255)})
       require(!overlay_driver_guardian_stage(phase), "overlay-driver.guardian-success-or-unknown-cannot-diagnose-failed-down");
     std::set<OverlayDriverStage> stages;
