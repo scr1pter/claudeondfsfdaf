@@ -395,13 +395,26 @@ describe("the agent phase's task", () => {
             }),
           )
         })
+        const config = yield* Config.Service
+        const shell = Shell.acceptable((yield* config.get()).shell)
+        const literal = (value: string) => `'${value.replaceAll("'", "''")}'`
         yield* test.llm.tool("bash", {
-          command: [
-            "printf '# Widgets\\n' > README.md",
-            "touch -d @1000000000 NOTES.md",
-            `git config core.hooksPath '${path.join(traps, "hooks")}'`,
-            `git config core.fsmonitor '${path.join(traps, "fsmonitor")}'`,
-          ].join(" && "),
+          command: Shell.ps(shell)
+            ? [
+                "$ErrorActionPreference = 'Stop'",
+                "[System.IO.File]::WriteAllText('README.md', \"# Widgets`n\", [System.Text.UTF8Encoding]::new($false))",
+                "[System.IO.File]::SetLastWriteTimeUtc('NOTES.md', [DateTimeOffset]::FromUnixTimeSeconds(1000000000).UtcDateTime)",
+                `git config --local core.hooksPath ${literal(path.join(traps, "hooks"))}`,
+                "if ($LASTEXITCODE -ne 0) { throw 'Fixture Git hooks configuration failed.' }",
+                `git config --local core.fsmonitor ${literal(path.join(traps, "fsmonitor"))}`,
+                "if ($LASTEXITCODE -ne 0) { throw 'Fixture Git fsmonitor configuration failed.' }",
+              ].join("; ")
+            : [
+                "printf '# Widgets\\n' > README.md",
+                "touch -d @1000000000 NOTES.md",
+                `git config core.hooksPath '${path.join(traps, "hooks")}'`,
+                `git config core.fsmonitor '${path.join(traps, "fsmonitor")}'`,
+              ].join(" && "),
           description: "Tidy the readme",
         })
         yield* test.llm.text("Tidied the readme.")
@@ -446,8 +459,7 @@ describe("the agent phase's task", () => {
           Number.isSafeInteger(command.state.metadata.exit)
             ? command.state.metadata.exit
             : null
-        const config = yield* Config.Service
-        const selected = Shell.name(Shell.acceptable((yield* config.get()).shell))
+        const selected = Shell.name(shell)
         const text = output(command)
         const diagnostic = {
           platform: process.platform,
