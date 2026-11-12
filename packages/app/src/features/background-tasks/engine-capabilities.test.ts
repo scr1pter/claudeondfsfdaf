@@ -38,6 +38,7 @@ describe("engine capabilities", () => {
       backgroundSubagents: true,
       sessionStop: true,
       vectorscopeSettings: true,
+      vectorscopeRuns: true,
       taskPromote: "true",
       taskResume: 1,
       workflows: false,
@@ -46,6 +47,9 @@ describe("engine capabilities", () => {
     expect(parsed.backgroundSubagents).toBe(true)
     expect(parsed.sessionStop).toBe(true)
     expect(parsed.vectorscopeSettings).toBe(true)
+    expect(parsed.vectorscopeRuns).toBe(true)
+    expect(parseCapabilities({ vectorscopeRuns: "true" }).vectorscopeRuns).toBe(false)
+    expect(parseCapabilities({ vectorscopeSettings: true }).vectorscopeRuns).toBe(false)
     expect(parsed.taskPromote).toBe(false)
     expect(parsed.taskResume).toBe(false)
     expect(parsed.workflows).toBe(false)

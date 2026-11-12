@@ -158,6 +158,10 @@ const RETIRED_WORK_STATE_KEY = "vector.work.state.v1"
 const AGENT_TAB_ORDER_PREFIX = "vector.agent-tab-order.v1:"
 type ParallelAgentRuntime = AgentRuntime
 
+const LocalReviewPanel = lazy(() =>
+  import("@/features/vectorscope/local-review-panel").then((module) => ({ default: module.LocalReviewPanel })),
+)
+
 const ExternalAgentWorkspace = lazy(() =>
   import("@/features/agents/external-agent-workspace").then((module) => ({ default: module.ExternalAgentWorkspace })),
 )
@@ -6916,6 +6920,25 @@ export default function NewLayout(props: ParentProps) {
         open={pullRequestsOpen()}
         projectPath={activeWorkspaceScope().sourcePath}
         onClose={() => setPullRequestsOpen(false)}
+        factoryLocal={serverSync().globalConfig()?.experimental?.vectorscope === true}
+        localReview={
+          serverSync().capabilities().vectorscopeRuns
+            ? () => (
+                <Suspense
+                  fallback={
+                    <p role="status" class="p-6">
+                      Loading local reviews…
+                    </p>
+                  }
+                >
+                  <LocalReviewPanel
+                    parentID={activeWorkspaceScope().parentSessionId}
+                    directory={activeWorkspaceScope().sourcePath}
+                  />
+                </Suspense>
+              )
+            : undefined
+        }
         onReview={async (input) => {
           // The review runs on the user's own project, as the read-only review agent under read-only session
           // rules; another person's code is never opened as an instance.

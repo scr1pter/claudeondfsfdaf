@@ -41,6 +41,8 @@
     "./regression/stop-helpers.spec.ts",
     "./regression/subagent-limits.spec.ts",
     "./regression/vectorscope-settings.spec.ts",
+    "./regression/vectorscope-local.spec.ts",
+    "./regression/vectorscope-local-app.spec.ts",
     "./regression/workflow-permission.spec.ts",
     "./regression/workflow-progress.spec.ts",
     "./utils/**/*.ts"
