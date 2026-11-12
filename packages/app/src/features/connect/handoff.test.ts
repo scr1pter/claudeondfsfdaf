@@ -30,6 +30,22 @@ test("saves findings before sending only their reference to the matching session
   expect(calls).toEqual(["registered", "sent"])
 })
 
+test("an authentic registered task review guides its own task instead of sending a parent-checkout fix", async () => {
+  const run = reviewRun()
+  if (run.request.action !== "review") throw new Error("The fixture must be a review.")
+  const request = run.request
+  let sent = 0
+  await expect(
+    handoffFindings(input(), {
+      register: async () => ({ ...run, request: { ...request, target: { kind: "task", task: sessionID } } }),
+      send: async () => {
+        sent++
+      },
+    }),
+  ).rejects.toThrow("review the task again")
+  expect(sent).toBe(0)
+})
+
 test("a guest or an invalid selection makes no request", async () => {
   const calls: string[] = []
   const ports = {

@@ -7,7 +7,7 @@ import { Button } from "@vectordevai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
 import { externalAgentsApi } from "@/features/agents/external-agent-desktop"
 import { createConnectClient } from "./client"
-import { actionableFindings } from "./connect-model"
+import { actionableFindings, taskReviewFixGuidance } from "./connect-model"
 import { actOnFindings } from "./findings-card-model"
 import { requestComposerPrompt } from "@/utils/composer-handoff"
 import { memberRows, parseReviewSettings, readReviewSettings, reviewSettingsPatch, verdictLabel } from "./connect-model"
@@ -270,11 +270,19 @@ export function ConnectedTools(props: {
                         {run.result?.summary ?? run.progress?.message ?? "Queued"}
                       </p>
                       <Show when={actionableFindings(run, params.id, true).length > 0}>
+                        <Show when={taskReviewFixGuidance(run)}>
+                          {(guidance) => (
+                            <p class="settings-v2-row-description" role="status">
+                              {guidance()}
+                            </p>
+                          )}
+                        </Show>
                         <div class="flex flex-wrap gap-2">
                           <Button
                             variant="secondary"
                             size="small"
-                            disabled={!!state.acting}
+                            disabled={!!state.acting || !!taskReviewFixGuidance(run)}
+                            title={taskReviewFixGuidance(run)}
                             onClick={() => void fix(run, "fix")}
                           >
                             Fix
@@ -282,7 +290,8 @@ export function ConnectedTools(props: {
                           <Button
                             variant="secondary"
                             size="small"
-                            disabled={!!state.acting}
+                            disabled={!!state.acting || !!taskReviewFixGuidance(run)}
+                            title={taskReviewFixGuidance(run)}
                             onClick={() => void fix(run, "worktree")}
                           >
                             Fix in a worktree

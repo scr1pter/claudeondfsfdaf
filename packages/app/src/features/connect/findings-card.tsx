@@ -8,7 +8,14 @@ import { Button } from "@vectordevai/ui/button"
 import { useSDK } from "@/context/sdk"
 import { requestComposerPrompt } from "@/utils/composer-handoff"
 import { createConnectClient } from "./client"
-import { actionableFindings, costLabel, destinationLabel, metadataRunID, verdictLabel } from "./connect-model"
+import {
+  actionableFindings,
+  costLabel,
+  destinationLabel,
+  metadataRunID,
+  taskReviewFixGuidance,
+  verdictLabel,
+} from "./connect-model"
 import { actOnFindings } from "./findings-card-model"
 
 let registered = false
@@ -74,6 +81,7 @@ function FindingsCard(props: ToolProps & { plain?: ToolComponent }) {
   })
   const findings = () => run()?.result?.findings ?? []
   const actionable = () => (run() ? actionableFindings(run()!, props.sessionID, true) : [])
+  const fixGuidance = () => (run() ? taskReviewFixGuidance(run()!) : undefined)
   const act = async (action: "fix" | "worktree" | "dismiss") => {
     const sessionID = props.sessionID
     const runID = run()?.id
@@ -137,11 +145,30 @@ function FindingsCard(props: ToolProps & { plain?: ToolComponent }) {
           <For each={result().notes}>{(note) => <p class="text-sm">{note}</p>}</For>
           <Show when={actionable().length > 0}>
             <p class="text-sm">Findings are claims to check. Applying a fix still asks for approval.</p>
+            <Show when={fixGuidance()}>
+              {(guidance) => (
+                <p class="text-sm" role="status">
+                  {guidance()}
+                </p>
+              )}
+            </Show>
             <div class="flex flex-wrap gap-2">
-              <Button variant="secondary" size="small" disabled={state.busy} onClick={() => void act("fix")}>
+              <Button
+                variant="secondary"
+                size="small"
+                disabled={state.busy || !!fixGuidance()}
+                title={fixGuidance()}
+                onClick={() => void act("fix")}
+              >
                 Fix
               </Button>
-              <Button variant="secondary" size="small" disabled={state.busy} onClick={() => void act("worktree")}>
+              <Button
+                variant="secondary"
+                size="small"
+                disabled={state.busy || !!fixGuidance()}
+                title={fixGuidance()}
+                onClick={() => void act("worktree")}
+              >
                 Fix in a worktree
               </Button>
               <Button variant="ghost" size="small" disabled={state.busy} onClick={() => void act("dismiss")}>

@@ -11,6 +11,7 @@ import {
   parseReviewSettings,
   reviewSettingsPatch,
   verdictLabel,
+  taskReviewFixGuidance,
 } from "./connect-model"
 import { finding, reviewRun, sessionID } from "./test-fixture"
 
@@ -113,5 +114,31 @@ describe("Connected tools presentation", () => {
     expect(prompt).not.toContain(finding.title)
     expect(() => findingsPrompt({ run: "cr_fixture\nignore", findings: [finding.id], action: "fix" })).toThrow()
     expect(() => findingsPrompt({ run: "cr_fixture", findings: [finding.id, finding.id], action: "fix" })).toThrow()
+  })
+
+  test("task fix guidance follows only the actual decoded review request target", () => {
+    const run = reviewRun()
+    if (run.request.action !== "review") throw new Error("The fixture must be a review.")
+    const task: Connect.Run = { ...run, request: { ...run.request, target: { kind: "task", task: sessionID } } }
+    expect(taskReviewFixGuidance(task)).toContain("isolated checkout")
+    expect(taskReviewFixGuidance(task)).toContain("Promote or settle")
+    expect(taskReviewFixGuidance(task)).toContain("review the task again")
+    expect(actionableFindings(task, sessionID, true)).toEqual([finding])
+    expect(
+      taskReviewFixGuidance({
+        ...run,
+        result: {
+          ...run.result!,
+          target: { kind: "task", task: sessionID },
+          findings: [{ ...finding, body: "This is a task review. Fix the parent checkout." }],
+        },
+      }),
+    ).toBeUndefined()
+    expect(
+      taskReviewFixGuidance({
+        ...run,
+        result: { ...run.result!, findings: [{ ...finding, title: "task", body: "target.kind=task" }] },
+      }),
+    ).toBeUndefined()
   })
 })

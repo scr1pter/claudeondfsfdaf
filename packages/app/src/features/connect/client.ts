@@ -29,6 +29,10 @@ export function createConnectClient(client: Pick<VectorClient, "connect">) {
       const result = await client.connect.review({ sessionID, connectReviewInput: input }, { throwOnError: true })
       return (await decoders()).run(result.data)
     },
+    async directoryReview(input: Connect.ReviewInput, signal?: AbortSignal) {
+      const result = await client.connect.directoryReview({ connectReviewInput: input }, { throwOnError: true, signal })
+      return (await decoders()).run(result.data)
+    },
     async register(input: Connect.RegisterInput) {
       const result = await client.connect.register(
         { connectRegisterInput: { ...input, findings: [...input.findings] } },

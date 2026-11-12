@@ -1,5 +1,5 @@
 import type { Connect } from "@vectordevai/schema/connect"
-import { actionableFindings, findingsPrompt } from "./connect-model"
+import { actionableFindings, findingsPrompt, taskReviewFixGuidance } from "./connect-model"
 
 export async function actOnFindings(
   input: { run: string; sessionID: string; action: "fix" | "worktree" | "dismiss"; findings?: readonly string[] },
@@ -16,6 +16,8 @@ export async function actOnFindings(
   const selected = input.findings ?? available.map((finding) => finding.id)
   if (!sessionID || !selected.length || selected.some((id) => !available.some((finding) => finding.id === id)))
     throw new Error("These findings are no longer available in this conversation.")
+  const guidance = input.action !== "dismiss" ? taskReviewFixGuidance(run) : undefined
+  if (guidance) throw new Error(guidance)
   // Also validates duplicate/control identifiers before either owner action.
   const text = findingsPrompt({
     run: run.id,

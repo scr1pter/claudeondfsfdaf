@@ -90,3 +90,28 @@ test("stale, cross-session and forged selections cause no owner operation", asyn
   ).rejects.toThrow("once")
   expect(operations).toBe(0)
 })
+
+test("a fresh task review refuses both generic fixes before composer send, while owner dismissal remains available", async () => {
+  const run = reviewRun()
+  if (run.request.action !== "review") throw new Error("The fixture must be a review.")
+  const task = { ...run, request: { ...run.request, target: { kind: "task" as const, task: sessionID } } }
+  const sent: string[] = []
+  const dismissed: string[] = []
+  const ports = {
+    load: async () => task,
+    send: (text: string) => {
+      sent.push(text)
+      return true
+    },
+    dismiss: async (id: string) => {
+      dismissed.push(id)
+      return task
+    },
+  }
+  for (const action of ["fix", "worktree"] as const)
+    await expect(actOnFindings({ run: task.id, sessionID, action }, ports)).rejects.toThrow("isolated checkout")
+  expect(sent).toEqual([])
+  expect(dismissed).toEqual([])
+  await actOnFindings({ run: task.id, sessionID, action: "dismiss" }, ports)
+  expect(dismissed).toEqual([task.id])
+})

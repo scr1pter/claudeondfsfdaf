@@ -1,5 +1,5 @@
 import type { Connect } from "@vectordevai/schema/connect"
-import { actionableFindings, findingsPrompt } from "./connect-model"
+import { actionableFindings, findingsPrompt, taskReviewFixGuidance } from "./connect-model"
 
 export async function handoffFindings(
   input: Connect.RegisterInput & { selected: readonly string[]; mode: Connect.FixMode; owner: boolean },
@@ -17,6 +17,8 @@ export async function handoffFindings(
   const run = await ports.register({ sessionID: input.sessionID, target: input.target, findings: input.findings })
   const allowed = new Set(actionableFindings(run, input.sessionID, true).map((finding) => finding.id))
   if (input.selected.some((id) => !allowed.has(id))) throw new Error("The registered findings are no longer available.")
+  const guidance = taskReviewFixGuidance(run)
+  if (guidance) throw new Error(guidance)
   await ports.send({
     sessionID: input.sessionID,
     text: findingsPrompt({ run: run.id, findings: input.selected, action: "fix", mode: input.mode }),

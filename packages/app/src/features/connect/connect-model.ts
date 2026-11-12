@@ -78,7 +78,13 @@ export function memberRows(members: readonly Connect.Member[], desktop: readonly
   return [...merged.values()].map((member) => ({
     ...member,
     placeLabel: placeLabel(member.place),
-    stateLabel: { ready: "Ready", busy: "Busy", unavailable: "Unavailable", off: "Off", "not-installed": "Not installed" }[member.state],
+    stateLabel: {
+      ready: "Ready",
+      busy: "Busy",
+      unavailable: "Unavailable",
+      off: "Off",
+      "not-installed": "Not installed",
+    }[member.state],
     destinationLabel: destinationLabel(member.sendsTo),
     reason: member.reason ?? (member.state === "ready" ? undefined : "This member is not ready."),
   }))
@@ -109,6 +115,12 @@ export function actionableFindings(run: Connect.Run, sessionID: string | undefin
   if (!owner || !sessionID || run.request.requester.sessionID !== sessionID || run.status !== "done") return []
   if (!run.result || !["completed", "partial"].includes(run.result.state)) return []
   return run.result.findings.filter((finding) => !["fixed", "dismissed", "fixing"].includes(finding.status))
+}
+
+/** Call only with the decoded owner result; finding text, event metadata and result hints never choose placement. */
+export function taskReviewFixGuidance(run: Connect.Run) {
+  if (run.request.action !== "review" || run.request.target?.kind !== "task") return undefined
+  return "Continue work in this task's isolated checkout. Promote or settle the task through its task controls, then review the task again."
 }
 
 export function findingsPrompt(input: {

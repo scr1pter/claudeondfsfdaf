@@ -79,3 +79,38 @@ test("run responses are decoded before surfaces can treat them as reviews", asyn
   const invalid = { ...original, result: { ...original.result!, verdict: "clean" } }
   await expect(make(invalid).get("cr_fixture", sessionID)).rejects.toBeDefined()
 })
+
+test("directory review preserves the captured authenticated checkout and decodes a sessionless queued run", async () => {
+  const fixture = reviewRun()
+  const run = {
+    ...fixture,
+    request: {
+      ...fixture.request,
+      requester: { kind: "user" },
+      target: { kind: "branch", base: "a".repeat(40) },
+      background: true,
+    },
+    status: "queued",
+    result: undefined,
+  }
+  const calls: Request[] = []
+  const client = createConnectClient(
+    createVectorClient({
+      baseUrl: "http://engine.test",
+      directory: fixture.request.directory,
+      headers: { Authorization: "Bearer fixture-only" },
+      fetch: async (request) => {
+        calls.push(request)
+        return Response.json(run)
+      },
+    }),
+  )
+  expect(
+    (await client.directoryReview({ target: { kind: "branch", base: "a".repeat(40) }, background: true })).request
+      .requester.sessionID,
+  ).toBeUndefined()
+  expect(new URL(calls[0]!.url).pathname).toBe("/experimental/connect/review")
+  expect(new URL(calls[0]!.url).searchParams.get("directory")).toBe(fixture.request.directory)
+  expect(calls[0]!.headers.get("authorization")).toBe("Bearer fixture-only")
+  expect(await calls[0]!.json()).toEqual({ target: { kind: "branch", base: "a".repeat(40) }, background: true })
+})
