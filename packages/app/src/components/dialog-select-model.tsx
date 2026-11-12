@@ -508,6 +508,8 @@ export function ModelSelectorPopoverV2(props: {
   triggerProps?: ModelSelectorTriggerProps
   /** Place a host dialog's popup above its layer, below a subsequently pushed dialog. */
   overlayZIndex?: number
+  /** Keep a dialog-hosted popup inside that dialog's focus and accessibility boundary. */
+  portalMount?: HTMLElement
   onClose?: () => void
   /** The list is the host's own, such as the models an external agent's CLI accepts, not Vector's providers: it
       keeps its order, every section stays open, and there is nothing to connect or refresh. */
@@ -641,7 +643,7 @@ export function ModelSelectorPopoverV2(props: {
       <MenuV2.Trigger as={props.triggerAs ?? "div"} {...props.triggerProps}>
         {props.children}
       </MenuV2.Trigger>
-      <MenuV2.Portal>
+      <MenuV2.Portal mount={props.portalMount}>
         <MenuV2.Content
           ref={(el: HTMLDivElement) => (contentRef = el)}
           style={props.overlayZIndex === undefined ? undefined : { "z-index": props.overlayZIndex }}
