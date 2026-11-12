@@ -332,3 +332,37 @@ checkpoint. App runner/session wiring waits for the recorded post-`8152d3f51`
 production measurement, keeps the default-off gate and must prove legacy request
 parity when unset. Real reconnect/cancel/browser replay and per-surface payload
 checks remain acceptance work, not a claim made by this admission foundation.
+
+## VS-10 durable local lifecycle foundation
+
+`ReviewLocalRun.make` now coordinates the existing shared service through the
+native BackgroundJob registry and durable leases. A hidden, read-denied session
+holds a bounded, versioned result artifact and terminal status. An exact retry
+key joins the same run, including after HEAD advances; a different request under
+that key conflicts. Closing the requesting client scope leaves the job running.
+Get/stop verify the exact parent and run identity. Stop first signals the shared
+runner so completed structured findings and usage can be saved, then joins its
+work; a bounded fallback force-stops a reviewer that does not drain.
+
+Reconnection loads saved output without another selection or provider attempt.
+A missing process-local job does not establish interruption. Reconciliation
+uses the persisted lease and claims only a dead or already-interrupted row;
+live, unknown and missing owners remain unmodified and cannot be stopped by the
+new engine. Claimed interruptions are marked reported for normal retention.
+Nothing automatically resumes a provider. Result byte limits, JSON syntax and
+digest checks refuse corrupt/oversized artifacts instead of recomputing work.
+
+Batch 051 passes all five real Git/DB/registry lifecycle cases (9.35 seconds) and
+engine types (38.69 seconds); Schema types passed the preceding checkpoint. The
+first fixture attempt exposed an incorrectly nested function, which is repaired.
+The foreign lease fixture now uses the native nonlegacy lease format so its
+live/unknown assertions exercise the actual liveness checks. Tests retain
+duplicate/conflict, cross-parent denial, disconnect, partial-result stop,
+force-stop, reload, lease recovery and corruption/size assertions.
+
+The reviewer callback is an injected pipeline seam in these lifecycle cases.
+An actual fake-HTTP-provider wrapper case, a complete typed presentation decoder,
+owner/guest public routes and generated clients remain unfinished. The exact
+serialized artifact is not yet a public presentation contract. Browser settings
+runtime repairs and post-change navigation measurement are also still pending;
+no whole-VS-10, release, performance or privacy claim follows this checkpoint.

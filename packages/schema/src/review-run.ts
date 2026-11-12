@@ -1,7 +1,8 @@
 export * as ReviewRun from "./review-run"
 
 import { Schema } from "effect"
-import { optional } from "./schema"
+import { NonNegativeInt, optional } from "./schema"
+import { SessionID } from "./session-id"
 
 // Public local requests select work to review, never the helper's authority,
 // placement, instructions, model options, or publication policy. Remote PR
@@ -15,3 +16,39 @@ export const Start = Schema.Struct({
   maxCost: optional(Schema.Finite.check(Schema.isGreaterThan(0))),
 }).annotate({ identifier: "ReviewRun.Start" })
 export interface Start extends Schema.Schema.Type<typeof Start> {}
+
+export const RESULT_BYTES = 8 * 1024 * 1024
+
+// The shared runner's exact serialized result, not another selection pass. The
+// desktop must verify and decode this versioned artifact before presentation;
+// no field in it grants execution, posting, or continuation authority.
+export const Artifact = Schema.Struct({
+  version: Schema.Literal(1),
+  json: Schema.String.check(Schema.isMaxLength(RESULT_BYTES)),
+  bytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(RESULT_BYTES)),
+  sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+}).annotate({ identifier: "ReviewRun.Artifact" })
+export interface Artifact extends Schema.Schema.Type<typeof Artifact> {}
+
+export const Status = Schema.Literals([
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "unknown",
+]).annotate({ identifier: "ReviewRun.Status" })
+export type Status = typeof Status.Type
+
+export const Info = Schema.Struct({
+  runID: SessionID,
+  parentID: SessionID,
+  request: Start,
+  status: Status,
+  canStop: Schema.Boolean,
+  startedAt: NonNegativeInt,
+  completedAt: optional(NonNegativeInt),
+  artifact: optional(Artifact),
+  error: optional(Schema.String.check(Schema.isMaxLength(2048))),
+}).annotate({ identifier: "ReviewRun.Info" })
+export interface Info extends Schema.Schema.Type<typeof Info> {}
