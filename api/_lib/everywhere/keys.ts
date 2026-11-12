@@ -29,6 +29,8 @@ export const KEEP_MS = {
   linkCode: 10 * MINUTE,
   connectCode: 10 * MINUTE,
   state: 10 * MINUTE,
+  /** VE-04: failed link code attempts by one platform user are counted for an hour. */
+  linkTries: HOUR,
   job: 30 * DAY,
   jobBody: TIMING.bodyTtlMs,
   ready: DAY,
@@ -134,9 +136,18 @@ export const everywhereKeys = {
     key("link", installation(installationKey), user(installationKey, userId)),
   links: (accountId: string) => key("links", account(accountId)),
   linkCode: (codeHash: string) => key("linkcode", matching(codeHash, SHA256_HEX)),
+  /** VE-04: the hash of the account's one live link code, so a newer code (or erasing the account) ends older ones. */
+  linkCodes: (accountId: string) => key("linkcodes", account(accountId)),
+  /** VE-04: failed link code attempts by one platform user in the last hour. */
+  linkTries: (installationKey: string, userId: string) =>
+    key("linktries", installation(installationKey), user(installationKey, userId)),
   connectCode: (codeHash: string) => key("connectcode", matching(codeHash, SHA256_HEX)),
   state: (id: string) => key("state", matching(id, STATE_ID)),
   repo: (installationKey: string, place: string) => key("repo", installation(installationKey), matching(place, PLACE)),
+  /** VE-04: the user ids linked on an installation, so erasing it finds every link without scanning (E13). */
+  linked: (installationKey: string) => key("linked", installation(installationKey)),
+  /** VE-04: the places of an installation that have a repository mapping, for the same reason. */
+  repos: (installationKey: string) => key("repos", installation(installationKey)),
   job: (jobId: string) => key("job", jid(jobId)),
   jobBody: (jobId: string) => key("job", jid(jobId), "body"),
   jobs: (sponsor: string) => key("jobs", account(sponsor)),

@@ -1,12 +1,14 @@
 import { RedisClient } from "bun"
 import { AUDIT_APPEND_SCRIPT } from "../../../../api/_lib/everywhere/audit"
+import { LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
 import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
+import { SWAP_SCRIPT } from "../../../../api/_lib/everywhere/store"
 
 /*
  * Store fakes for Vector everywhere tests (contract section 9).
  *
  * `FakeStore` is enough of Redis for the server foundation: strings with NX, XX and PX, counters, expiry on a fake
- * clock, sorted sets, and the everywhere Lua scripts, each recognised by its exact text and run as TypeScript. A
+ * clock, sets and sorted sets, and the everywhere Lua scripts, each recognised by its exact text and run as TypeScript. A
  * script it does not know is an error, so a new one cannot slip through untested. Its `fetch` speaks the Redis REST
  * API that `persistentStore` calls, at a `.invalid` address that no real request can reach.
  *
@@ -25,7 +27,10 @@ export class FakeClock {
   }
 }
 
-type Value = { kind: "string"; value: string } | { kind: "zset"; value: Map<string, number> }
+type Value =
+  | { kind: "string"; value: string }
+  | { kind: "set"; value: Set<string> }
+  | { kind: "zset"; value: Map<string, number> }
 type Script = (keys: string[], argv: string[]) => unknown
 
 class ScriptError extends Error {}
@@ -39,6 +44,8 @@ export class FakeStore {
   private readonly scripts = new Map<string, Script>([
     [AUDIT_APPEND_SCRIPT, (keys, argv) => this.auditAppend(keys, argv)],
     [COUNT_JOB_SCRIPT, (keys, argv) => this.countJob(keys, argv)],
+    [SWAP_SCRIPT, (keys, argv) => this.swap(keys, argv)],
+    [LINK_TRIES_SCRIPT, (keys, argv) => this.tries(keys, argv)],
   ])
 
   constructor(readonly clock = new FakeClock()) {}
@@ -72,8 +79,35 @@ export class FakeStore {
         if (value && value.kind !== "string") throw new ScriptError("WRONGTYPE")
         return value?.value ?? null
       }
+      case "GETDEL": {
+        const value = this.read(args[0]!)
+        if (value && value.kind !== "string") throw new ScriptError("WRONGTYPE")
+        if (value) this.remove(args[0]!)
+        return value?.value ?? null
+      }
       case "SET":
         return this.set(args)
+      case "SADD": {
+        const set = this.setOf(args[0]!, true)!
+        let added = 0
+        for (const member of args.slice(1)) {
+          if (!set.has(member)) added++
+          set.add(member)
+        }
+        return added
+      }
+      case "SREM": {
+        const set = this.setOf(args[0]!)
+        if (!set) return 0
+        let removed = 0
+        for (const member of args.slice(1)) if (set.delete(member)) removed++
+        if (!set.size) this.remove(args[0]!)
+        return removed
+      }
+      case "SMEMBERS":
+        return [...(this.setOf(args[0]!) ?? [])]
+      case "SISMEMBER":
+        return this.setOf(args[0]!)?.has(args[1]!) ? 1 : 0
       case "DEL":
         return args.filter((key) => this.remove(key)).length
       case "EXISTS":
@@ -178,6 +212,17 @@ export class FakeStore {
     return at === undefined ? -1 : at - this.clock.now
   }
 
+  /** A set's members. */
+  private setOf(key: string, create = false) {
+    const value = this.read(key)
+    if (value && value.kind !== "set") throw new ScriptError("WRONGTYPE")
+    if (value) return value.value
+    if (!create) return undefined
+    const fresh = new Set<string>()
+    this.data.set(key, { kind: "set", value: fresh })
+    return fresh
+  }
+
   private zset(key: string, create = false) {
     const value = this.read(key)
     if (value && value.kind !== "zset") throw new ScriptError("WRONGTYPE")
@@ -236,6 +281,22 @@ export class FakeStore {
     if (extra > 0) this.run("ZREMRANGEBYRANK", [key, "0", String(extra - 1)])
     this.run("PEXPIRE", [key, keep])
     return this.zset(key)?.size ?? 0
+  }
+
+  private swap(keys: string[], argv: string[]) {
+    const [key] = keys as [string]
+    const [expected, next] = argv as [string, string]
+    const current = this.run("GET", [key]) as string | null
+    if (!((current === null && expected === "") || current === expected)) return 0
+    if (next === "") this.run("DEL", [key])
+    else this.run("SET", [key, next])
+    return 1
+  }
+
+  private tries(keys: string[], argv: string[]) {
+    const count = this.incr(keys[0]!)
+    if (count === 1) this.run("PEXPIRE", [keys[0]!, argv[0]!])
+    return count
   }
 
   private countJob(keys: string[], argv: string[]) {
