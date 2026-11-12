@@ -422,6 +422,9 @@ test("connect public identifiers are unique and namespaced", () => {
     Connect.Target,
     Connect.FixMode,
     Connect.ReviewRequest,
+    Connect.ReviewInput,
+    Connect.DirectoryRequestKey,
+    Connect.DirectoryReviewInput,
     Connect.FixRequest,
     Connect.Request,
     Connect.Severity,
@@ -448,4 +451,25 @@ test("connect public identifiers are unique and namespaced", () => {
   )
   expect(new Set(identifiers).size).toBe(contracts.length)
   expect(Connect.ConnectFinding).toBe(Connect.Finding)
+})
+
+test("directory starts require a bounded stable UUID while conversation starts retain their existing input", () => {
+  const input = {
+    requestKey: "0196aa50-50d0-4f17-9c1d-85eff018e829",
+    target: { kind: "branch", base: "0123456789abcdef0123456789abcdef01234567" },
+    background: true,
+    budget: { maxCostUsd: 0.25 },
+  }
+  roundTrip(Connect.DirectoryReviewInput, input)
+  roundTrip(Connect.DirectoryReviewInput, { ...input, requestKey: input.requestKey.toUpperCase() })
+  refuses(Connect.DirectoryReviewInput, without(input, "requestKey"))
+  for (const requestKey of [
+    "",
+    "../request",
+    "a".repeat(1_000),
+    "0196aa50-50d0-1f17-9c1d-85eff018e829",
+    "0196aa50-50d0-4f17-0c1d-85eff018e829",
+  ])
+    refuses(Connect.DirectoryReviewInput, { ...input, requestKey })
+  roundTrip(Connect.ReviewInput, { target: input.target, background: true })
 })

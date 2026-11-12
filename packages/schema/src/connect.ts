@@ -254,6 +254,20 @@ export const ReviewInput = Schema.Struct({
 }).annotate({ identifier: "Connect.ReviewInput" })
 export interface ReviewInput extends Schema.Schema.Type<typeof ReviewInput> {}
 
+/** Stable identity of one explicit directory-review click, retained across an uncertain POST response. */
+export const DirectoryRequestKey = Schema.String.annotate({ identifier: "Connect.DirectoryRequestKey" }).check(
+  Schema.isLengthBetween(36, 36),
+  Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+)
+export type DirectoryRequestKey = typeof DirectoryRequestKey.Type
+
+/** A directory start always supplies its durable retry identity; the conversation route is unchanged. */
+export const DirectoryReviewInput = Schema.Struct({
+  ...ReviewInput.fields,
+  requestKey: DirectoryRequestKey,
+}).annotate({ identifier: "Connect.DirectoryReviewInput" })
+export interface DirectoryReviewInput extends Schema.Schema.Type<typeof DirectoryReviewInput> {}
+
 export const FixRequest = Schema.Struct({
   ...RequestFields,
   action: Schema.Literal("fix"),
