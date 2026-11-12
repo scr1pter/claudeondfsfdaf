@@ -155,6 +155,7 @@ export const everywhereKeys = {
   /** Terminal transitions enqueue fixed replies atomically; the sweep retries failed platform posts. */
   jobsPosts: () => key("jobs", "posts"),
   jobPostLock: (jobId: string) => key("job", jid(jobId), "posting"),
+  jobStatusLock: (jobId: string) => key("job", jid(jobId), "status"),
   /** VE-05: the live jobs on an installation, so erasing it finds them without scanning (E13). */
   installationJobs: (installationKey: string) => key("livejobs", installation(installationKey)),
   /** VE-05: every job an account sponsored in the last 30 days, for its job list and for account erase. */

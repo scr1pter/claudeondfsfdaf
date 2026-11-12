@@ -544,6 +544,16 @@ describe("decodeInboundTrigger", () => {
       shared: false,
     }
     expect(decoded(decodeInboundTrigger(github))).toEqual(github as never)
+    const verified = { ...github, github: { ...github.github, actorId: 583231, event: "issue_comment", bodySha256: "a".repeat(64) } }
+    expect(decoded(decodeInboundTrigger(verified))).toEqual(verified as never)
+    for (const reference of [
+      { ...verified.github, actorId: Number.MAX_SAFE_INTEGER + 1 },
+      { ...verified.github, event: "workflow_dispatch" },
+      { ...verified.github, event: "issues" },
+      { ...verified.github, event: "pull_request_review_comment" },
+      { ...verified.github, bodySha256: "not-a-digest" },
+      { ...verified.github, actorId: undefined },
+    ]) expect(decodeInboundTrigger({ ...github, github: reference }).ok).toBe(false)
     expect(refused(decodeInboundTrigger({ ...github, task: "Fix it" }))).toBe("task: not allowed")
     expect(refused(decodeInboundTrigger({ ...github, context: [{ from: "teammate", text: "x" }] }))).toBe(
       "context: not allowed",

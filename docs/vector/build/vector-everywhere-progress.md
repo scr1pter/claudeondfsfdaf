@@ -116,3 +116,29 @@ Root's final scoped receipts (Bun 1.3.14, files run separately, local fakes/fetc
 API typecheck passes with the existing engine-directory `bun typecheck --project ../../tsconfig.json` command. Desktop typecheck passes after the final compatibility correction. The final git process took 0.69 seconds; these receipts prove no owner-computer operation. Dedupe's four local skips comprise two Redis cases and two setup/teardown hooks; jobs' seven skips comprise five Redis cases and two hooks. The new delivery-admission concurrency case has not run on actual Redis here.
 
 No platform, relay, shell or safe-worktree integration was activated. P1c is ready for the coordinating agent's normal branch push and exact-head hosted lane plus general checks; that hosted qualification is still owed. P2 package builds remain paused until the dedicated lane qualifies. Later activation still needs the safe worktree, R-M2/R-M3, real relay/platform integration, signing keys and owner registration. Dedicated runner tests for all server stop/lost/404/409 responses, five minutes without successful heartbeat acknowledgement and question rejection remain coverage gaps; the existing user Stop/toggle/deadline/recovery/permission cases do not stand in for them.
+
+## P1c push and P2 continuation checkpoint
+
+The coordinating agent normally fast-forwarded `vector-everywhere` to `8a6d7b4ef` and reported exact-head CI queued: dedicated `43159108255`, general test `43159143957`, typecheck `43159147822`. No new hosted success or Redis qualification is inferred here. The coordinator then authorized local P2 source work while those runs proceed, with no P2 push before the P1c Redis lane qualifies. This supersedes the earlier local-build pause; it does not relax registration, integration, PR or main gates.
+
+## P2: VE-10 GitHub (scoped local validation passed)
+
+Built against injected, currently absent production verifier/current-binding/App ports. The deployed handoff answers 501 without those verification prerequisites. Its bounded body accepts references only, refuses non-binders/reruns/dispatch/schedule, dedupes run ids, and offers only to the verified binder. A claim is provisional for GitHub: the desktop verifies the actual trigger before its first `started` report, and the offer timeout atomically refuses only work that has not started. A started report that wins that race remains handled; a timed-out or changed trigger cannot later admit a model run through that lease.
+
+The desktop reads repository/thread/trigger objects through the existing owner-authenticated GitHub API helper, checks immutable author id and unedited timestamps or exact body digest, and labels bounded comments by actual collaborator grants. Review comments use their distinct API. GitHub text and tokens stay on the computer. Optional status delivery stores comment ids in sealed job replies, recovers a lost reference via the App's own marker, limits updates to thirty seconds, and prevents stale progress from overwriting a terminal result. No real App adapter is registered.
+
+New local fixtures cover reference metadata, binder/attempt/event/replay checks, provisional-claim timeout, acceptance races, no GitHub text admission, status persistence/retry/throttling, actual loopback desktop API reads, changed triggers, context bounds and runner ordering. Root's batch 025 ran five files separately with the fetch guard:
+
+| File | Passed | Skipped locally | Assertions |
+| --- | ---: | ---: | ---: |
+| schema/everywhere.test.ts | 53 | 0 | 401 |
+| web/everywhere-github.test.ts | 8 | 0 | 74 |
+| web/everywhere-jobs.test.ts | 43 | 7 | 334 |
+| desktop/everywhere-github.test.ts | 4 | 0 | 55 |
+| desktop/everywhere-runner.test.ts | 14 | 0 | 65 |
+
+API, schema and desktop typechecks pass. The jobs skips are five Redis cases and two setup/teardown hooks. These local results do not qualify live OIDC, App permissions, physical laptop placement, workflow generation or the uncertain-response activation gate. The feature agent ran no Bun or platform operation; VE-10 has not been pushed. Whole-P2 independent review follows VE-13.
+
+## P1c hosted Redis receipt (exact head `8a6d7b4ef`)
+
+The coordinating agent verified [dedicated run 43159108255](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43159108255), test job `130987536311`, as successful and read its official decoded log. It shows healthy pinned Valkey 7.2.14 and passing actual EVAL concurrency cases: atomic delivery-to-jid admission, claim versus dispatch, twelve claimants/one winner, sponsor slots, lease/body erasure and requester slots. This closes the previously missing P1c Redis proof at that exact source. The whole nine-job lane and general workflows are still unverified here; it is not proof about VE-10's newer handoff races. The coordinator requires full old-head lane qualification before pushing P2, while local VE-11 work may proceed.

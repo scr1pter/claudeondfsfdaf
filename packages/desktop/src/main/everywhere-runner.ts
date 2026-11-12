@@ -5,7 +5,7 @@ import { unattendedRules, type RunnerEngine } from "./everywhere-engine"
 import type { RunnerGit } from "./everywhere-git"
 import type { JobLedger } from "./everywhere-ledger"
 import { checkedSummary, mayPushDiff } from "./everywhere-scan"
-import type { FrameOptions } from "@vectordevai/core/everywhere/frame"
+import { frameTask, type FrameOptions } from "@vectordevai/core/everywhere/frame"
 
 export type RunnerSettings = {
   readonly enabled: boolean
@@ -142,6 +142,19 @@ export function createEverywhereRunner(deps: RunnerDeps) {
         settled = true
         return
       }
+      let frame: FrameOptions | undefined
+      if (job.platform === "github") {
+        try {
+          frame = await deps.githubThread?.(job)
+          if (!frame?.thread) throw new Error("The Github trigger is unavailable")
+          frameTask(job, frame)
+        } catch {
+          await deps.jobs.decline(jid, "trigger-changed", job.lease.id)
+          settled = true
+          return
+        }
+      }
+      if (controller.signal.aborted) throw new Error("Everywhere job stopped")
       const deadline = Math.min(job.limits.deadline, now() + Math.min(job.limits.minutes, settings.minutes) * 60_000)
       let acknowledgedAt = now()
       let lastReport = 0
@@ -226,8 +239,6 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       void cancelled.catch(() => undefined)
       await Promise.race([subscribed, idle, cancelled])
       if (controller.signal.aborted) throw new Error("Everywhere job stopped")
-      const frame = job.platform === "github" ? await deps.githubThread?.(job) : undefined
-      if (job.platform === "github" && !frame?.thread) throw new Error("The GitHub trigger is unavailable")
       await engine.prompt(session, job, Math.min(job.limits.maxUsd, settings.maxUsd), settings.model, frame)
       await Promise.race([idle, cancelled])
       if (controller.signal.aborted) throw new Error("Everywhere job stopped")

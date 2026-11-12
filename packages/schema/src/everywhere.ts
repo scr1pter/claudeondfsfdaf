@@ -409,6 +409,17 @@ export type UntrustedItem = {
   readonly text: string // ≤ 4,000 chars each
 }
 
+export const GITHUB_EVENTS = ["issue_comment", "issues", "pull_request_review_comment"] as const
+export type GithubReference = {
+  readonly kind: "issue" | "pr"
+  readonly number: number
+  readonly commentId?: number
+  /** Verified immutable binder identity and event family; no GitHub text crosses the server. */
+  readonly actorId?: number
+  readonly event?: (typeof GITHUB_EVENTS)[number]
+  readonly bodySha256?: string
+}
+
 /** What an adapter hands the intake after verify, filter and parse. */
 export type InboundTrigger = {
   readonly platform: PlatformId
@@ -425,7 +436,7 @@ export type InboundTrigger = {
   readonly task: string // ≤ 8,000 chars
   readonly context: readonly UntrustedItem[] // ≤ 30 items, ≤ 24,000 chars in all
   readonly repository?: { readonly fullName?: string; readonly id?: number }
-  readonly github?: { readonly kind: "issue" | "pr"; readonly number: number; readonly commentId?: number }
+  readonly github?: GithubReference
   readonly issue?: { readonly key: string } // Linear identifier or Jira key, for branch and PR title
   readonly shared: boolean // the destination is a shared place (1)
 }
@@ -651,13 +662,22 @@ function githubReference(value: unknown, path: string, platform: PlatformId): In
     return undefined
   }
   if (value === undefined) refuse(path, "required")
-  const fields = object(value, path, ["kind", "number", "commentId"])
+  const fields = object(value, path, ["kind", "number", "commentId", "actorId", "event", "bodySha256"])
   const kind = member(field(fields, "kind"), `${path}.kind`, ["issue", "pr"] as const)
   const number = integer(field(fields, "number"), `${path}.number`, 1)
   const commentId = field(fields, "commentId")
-  return commentId === undefined
-    ? { kind, number }
-    : { kind, number, commentId: integer(commentId, `${path}.commentId`, 1) }
+  const reference = { kind, number, ...(commentId === undefined ? {} : { commentId: integer(commentId, `${path}.commentId`, 1) }) }
+  if (field(fields, "actorId") === undefined && field(fields, "event") === undefined && field(fields, "bodySha256") === undefined) return reference
+  const actorId = integer(field(fields, "actorId"), `${path}.actorId`, 1)
+  const event = member(field(fields, "event"), `${path}.event`, GITHUB_EVENTS)
+  if (event === "issues" ? commentId !== undefined || kind !== "issue" : commentId === undefined || (event === "pull_request_review_comment" && kind !== "pr")) refuse(path, "event does not match reference")
+  const bodySha256 = field(fields, "bodySha256")
+  return { ...reference, actorId, event, ...(bodySha256 === undefined ? {} : { bodySha256: matching(bodySha256, `${path}.bodySha256`, /^[0-9a-f]{64}$/) }) }
+}
+
+/** Validate known fields while retaining unknown stored fields in the server's original record. */
+export function decodeGithubReference(input: unknown): Decoded<GithubReference> {
+  return run(() => githubReference(input, "github", "github")!)
 }
 
 function repositoryName(value: unknown, path: string): string {

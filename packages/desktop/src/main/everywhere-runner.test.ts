@@ -121,6 +121,27 @@ test("a stale project declaration cannot authorize a different repository in tha
   expect(f.calls.some((call) => ["create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
 })
 
+test("a changed Github trigger declines its exact lease before started, worktree or engine admission", async () => {
+  const f = fixture()
+  Object.assign(f.job, { platform: "github", task: "", context: [], reply: { format: "markdown", maxChars: 1500 },
+    github: { kind: "issue", number: 7, commentId: 99, actorId: 42, event: "issue_comment" } })
+  await createEverywhereRunner({ ...f.deps, githubThread: async () => { throw new Error("Fixture trigger changed") } }).offer("fixture-offer")
+  expect(f.calls.find((call) => call.kind === "decline")?.value).toEqual({ reason: "trigger-changed", lease: f.job.lease.id })
+  expect(f.calls.some((call) => ["report", "create", "prompt", "commit", "push"].includes(call.kind))).toBe(false)
+})
+
+test("Github thread proof precedes the first accepted started report", async () => {
+  const f = fixture()
+  Object.assign(f.job, { platform: "github", task: "", context: [], reply: { format: "markdown", maxChars: 1500 },
+    github: { kind: "issue", number: 7, commentId: 99, actorId: 42, event: "issue_comment" } })
+  await createEverywhereRunner({ ...f.deps, githubThread: async () => {
+    f.calls.push({ kind: "thread-proof" })
+    return { thread: { task: "Fix retry handling", context: [{ from: "untrusted", text: "Issue context" }] } }
+  } }).offer("fixture-offer")
+  expect(f.calls.findIndex((call) => call.kind === "thread-proof")).toBeLessThan(f.calls.findIndex((call) => call.kind === "report"))
+  expect(f.results[0]?.outcome).toBe("changes")
+})
+
 test("absence of the safe worktree capability never calls an unsafe engine endpoint", async () => {
   const f = fixture()
   await createEverywhereRunner({ ...f.deps, safeWorktree: undefined }).offer("fixture-offer")

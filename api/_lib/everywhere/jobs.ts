@@ -22,6 +22,7 @@ import {
   TIMING,
   createJobId,
   decodeJob,
+  decodeGithubReference,
   installationPlatform,
   isIssueKey,
   isRepositoryName,
@@ -29,6 +30,7 @@ import {
   sanitizeLabel,
   type DeclineCode,
   type EverywhereJob,
+  type GithubReference,
   type JobState,
   type Milestone,
   type Outcome,
@@ -133,7 +135,7 @@ export type JobRecord = {
   /** `shared`: a public repository. */
   readonly repository: { readonly id: number; readonly fullName: string; readonly shared: boolean }
   readonly issue?: { readonly key: string }
-  readonly github?: { readonly kind: "issue" | "pr"; readonly number: number; readonly commentId?: number }
+  readonly github?: GithubReference
   /** The reply goes to a shared place (1). */
   readonly shared: boolean
   readonly receivedAt: number
@@ -310,11 +312,7 @@ export function decodeJobRecord(value: unknown): JobRecord | undefined {
       github,
       (reference) =>
         isObject(reference) &&
-        (reference.kind === "issue" || reference.kind === "pr") &&
-        typeof reference.number === "number" &&
-        Number.isSafeInteger(reference.number) &&
-        reference.number > 0 &&
-        optional(reference.commentId, (id) => typeof id === "number" && Number.isSafeInteger(id) && id > 0),
+        decodeGithubReference(Object.fromEntries(["kind", "number", "commentId", "actorId", "event", "bodySha256"].filter((key) => reference[key] !== undefined).map((key) => [key, reference[key]]))).ok,
     ) &&
     typeof value.shared === "boolean" &&
     isTime(value.receivedAt) &&
@@ -673,7 +671,7 @@ export type NewJob = {
   readonly sponsor: string
   readonly repository: { readonly id: number; readonly fullName: string; readonly shared: boolean }
   readonly issue?: { readonly key: string }
-  readonly github?: { readonly kind: "issue" | "pr"; readonly number: number; readonly commentId?: number }
+  readonly github?: GithubReference
   readonly shared: boolean
   readonly task: string
   readonly context: readonly UntrustedItem[]
@@ -949,6 +947,30 @@ export async function cancelJob(ctx: JobsContext, jid: string): Promise<Moved> {
   return moved
 }
 
+/** Github hand-back races only pre-start work. A verified started report wins permanently, including after settle. */
+export async function finishGithubOffer(ctx: JobsContext, jid: string): Promise<boolean> {
+  const result = await change<{ handled: boolean; refused?: JobRecord }>(ctx, jid, (job) => {
+    if (job.platform !== "github") return { answer: { handled: false } }
+    if (job.startedAt !== undefined) return { answer: { handled: true } }
+    if (TERMINAL_STATES.has(job.state)) return { answer: { handled: false } }
+    if (!["received", "offered", "claimed"].includes(job.state)) return { answer: { handled: false } }
+    return { next: ended(job, "refused", ctx.now, { code: "no-place" }), done: (refused) => ({ handled: false, refused }) }
+  }, () => ({ handled: false }))
+  if (result.refused) await audit(ctx, result.refused, { event: "job-refused", code: "no-place" })
+  return result.handled
+}
+
+/** Server-owned platform ids only; no model text. Kept sealed across independent route/report/sweep invocations. */
+export async function updateJobReply(ctx: JobsContext, jid: string, patch: Readonly<Record<string, string | number | boolean | null>>): Promise<boolean> {
+  if (Object.keys(patch).length > 40 || Object.entries(patch).some(([key, value]) => !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) ||
+    (value !== null && !["string", "number", "boolean"].includes(typeof value)) || (typeof value === "number" && !Number.isFinite(value))) || JSON.stringify(patch).length > 8_000) return false
+  return change<boolean>(ctx, jid, (job) => {
+    const reply = { ...openReply(ctx, job), ...patch }
+    if (JSON.stringify(reply).length > 16_000) return { answer: false }
+    return { next: next(job, { replyEnc: sealJson(ctx.keys, reply, replyContext(jid)) }), done: () => true }
+  }, () => false)
+}
+
 /** Erases a posted summary from an ended job's record (3.2: erased once posted). */
 export async function clearSummary(ctx: JobsContext, jid: string): Promise<boolean> {
   return change<boolean>(
@@ -1127,6 +1149,8 @@ export async function reportJob(
       if (job.state === "cancelled") return { answer: { ok: true, action: "stop" } }
       if (job.state !== "claimed" && job.state !== "running")
         return { answer: { ok: false, status: 409, code: "JOB_ENDED" } }
+      if (job.platform === "github" && job.state === "claimed" && report.milestone !== "started")
+        return { answer: { ok: true, action: "stop" } }
       if (job.limits && ctx.now >= job.limits.deadline) return { answer: { ok: true, action: "stop" } }
       const newer = report.seq > (job.seq ?? -1)
       const lease = { id: report.lease, expiresAt: ctx.now + TIMING.leaseMs }
