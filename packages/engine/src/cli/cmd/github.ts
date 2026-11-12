@@ -11,10 +11,24 @@ export { extractResponseText, formatPromptTooLargeError, parseGitHubRemote } fro
 export const GithubInstallCommand = effectCmd({
   command: "install",
   describe: "install the GitHub agent",
-  handler: () =>
+  builder: (yargs) =>
+    yargs
+      .option("own-key", { type: "boolean", describe: "Use your own model key" })
+      .option("codium", { type: "boolean", hidden: true })
+      .conflicts("own-key", "codium")
+      .option("schedule", {
+        type: "array",
+        string: true,
+        describe: 'Repeat with a JSON schedule: {"id":"daily","cron":"17 9 * * *","prompt":"Maintain this repository"}',
+      }),
+  handler: (args) =>
     Effect.gen(function* () {
       const { githubInstall } = yield* Effect.promise(() => import("./github.handler"))
-      return yield* githubInstall()
+      return yield* githubInstall({
+        ownKey: args["own-key"],
+        codium: args.codium,
+        schedule: args.schedule?.map(String),
+      })
     }),
 })
 

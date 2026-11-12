@@ -1,7 +1,6 @@
 import path from "path"
 import { Filesystem } from "@/util/filesystem"
 import * as prompts from "@clack/prompts"
-import { filter, map, pipe, sortBy, values } from "remeda"
 import { Octokit } from "@octokit/rest"
 import { graphql } from "@octokit/graphql"
 import * as core from "@actions/core"
@@ -36,22 +35,22 @@ import { githubFetch } from "./github.shared"
 import { GithubRunHelpers } from "./github.run-helpers"
 import { sameLogin } from "./github.review-api"
 import { TASK_MENTIONS, mentionsFrom, routeGithubEvent, type GithubRoute } from "./github.route"
-import { WORKFLOW_FILE, buildWorkflowYaml } from "@vectordevai/core/review/workflow"
+import { WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
 import { resolveGithubAuth, type GithubAuth } from "./github.auth"
 import { prepareGithubGit } from "./github.git"
-import { appRequested, githubAppInstallation, verifyAppPullRequest } from "./github.app"
+import { appRequested, githubAppInstallation, githubListedPerks, verifyAppPullRequest } from "./github.app"
 import { withGithubCallbacks, withGithubSignals } from "./github.lifecycle"
 import { SessionPosting } from "@/session/posting"
 import { LLMRequestPrep } from "@/session/llm/request"
 import { githubSystemInstructions } from "./github.policy"
+import { installWorkflow, type InstallFlags } from "./github.install"
 
 // Reactions and commits made with GITHUB_TOKEN show up as this login.
 const ACTIONS_BOT = "github-actions[bot]"
 const ACTIONS_BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 const AGENT_REACTION = "eyes"
-const VECTOR_SITE = "https://vectordev.ai"
 
 // Event categories for routing
 // USER_EVENTS: triggered by user actions, have actor/issueId, support reactions/comments
@@ -63,222 +62,69 @@ const SUPPORTED_EVENTS = [...USER_EVENTS, ...REPO_EVENTS] as const
 type UserEvent = (typeof USER_EVENTS)[number]
 type RepoEvent = (typeof REPO_EVENTS)[number]
 
-export const githubInstall = Effect.fn("Cli.github.install")(function* () {
-  const maybeCtx = yield* InstanceRef
-  if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
-  const ctx = maybeCtx
+export const githubInstall = Effect.fn("Cli.github.install")(function* (flags: InstallFlags = {}) {
+  const ctx = yield* InstanceRef
+  if (!ctx) return yield* Effect.die("InstanceRef not provided")
   const modelCatalog = yield* ModelCatalog.Service
-  const gitSvc = yield* Git.Service
+  const git = yield* Git.Service
+  if (ctx.project.vcs !== "git") return yield* Effect.die("Run GitHub setup from a Git repository.")
+  const remote = yield* git.run(["remote", "get-url", "origin"], { cwd: ctx.worktree })
+  const repository = parseGitHubRemote(remote.text().trim())
+  if (!repository) return yield* Effect.die("Run GitHub setup from a GitHub repository.")
   yield* Effect.promise(async () => {
-    {
-      UI.empty()
-      prompts.intro("Install GitHub agent")
-      const app = await getAppInfo()
-      const installation = await githubAppInstallation()
-      const authentication = installation.available
-        ? await prompts.select({
-            message: "Choose GitHub authentication",
-            initialValue: "github",
-            options: [
-              {
-                value: "github" as const,
-                label: "Repository GITHUB_TOKEN",
-                hint: "default; uses your existing Actions permissions",
-              },
-              {
-                value: "auto" as const,
-                label: "Vector GitHub App with repository-token fallback",
-                hint: "opt in to branded commits and automatic PR CI",
-              },
-            ],
+    UI.empty()
+    prompts.intro("Install GitHub agent")
+    const file = path.join(ctx.worktree, WORKFLOW_FILE)
+    await installWorkflow(
+      { flags, version: InstallationVersion, repository: `${repository.owner}/${repository.repo}` },
+      {
+        choose: async (message, options) => {
+          const choice = await prompts.select({ message, options, maxItems: 8 })
+          if (prompts.isCancel(choice)) throw new UI.CancelledError()
+          return choice
+        },
+        confirm: async (message, initialValue) => {
+          const choice = await prompts.confirm({ message, initialValue })
+          if (prompts.isCancel(choice)) throw new UI.CancelledError()
+          return choice
+        },
+        text: async (message, defaultValue) => {
+          const choice = await prompts.text({
+            message,
+            defaultValue,
+            validate: (text) =>
+              text && !/^\d+(?:\.\d+)?$/.test(text.trim()) ? "Enter a nonnegative number, such as 50" : undefined,
           })
-        : "github"
-      if (prompts.isCancel(authentication)) throw new UI.CancelledError()
-      const auth = authentication === "auto" ? "auto" : "github"
-      if (auth === "auto" && installation.available) {
-        prompts.log.info(`Install the Vector GitHub App for ${app.owner}/${app.repo}: ${installation.installUrl}`)
-        const { default: open } = await import("open")
-        await open(installation.installUrl).catch(() => undefined)
-        prompts.log.info(
-          "The first authenticated Actions run verifies repository installation. Local setup does not claim installation completion.",
-        )
-      }
-      const providers = await Effect.runPromise(modelCatalog.get()).then((p) => {
-        // TODO: add guide for copilot, for now just hide it
-        delete p["github-copilot"]
-        return p
-      })
-
-      const provider = await promptProvider()
-      const model = await promptModel()
-      //const key = await promptKey()
-      const autoReview = await promptAutoReview()
-      const share = await promptShare()
-      const monthlyUsd = await promptMonthlyLimit()
-      prompts.log.info(reviewCostLine({ model: `${provider}/${model}`, monthlyUsd }))
-
-      await addWorkflowFiles()
-      printNextSteps()
-
-      function printNextSteps() {
-        const keys = provider === "amazon-bedrock" ? [] : providers[provider].env
-        const providerStep =
-          provider === "amazon-bedrock"
-            ? [
-                "    3. Configure OIDC in AWS - https://docs.github.com/en/actions/how-tos/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services",
-              ]
-            : keys.length
-              ? [
-                  `    3. Add the provider secret${keys.length > 1 ? "s" : ""} for ${provider}/${model}:`,
-                  ...keys.map((e) => `       - ${e}`),
-                ]
-              : []
-
-        prompts.outro(
-          [
-            "Next steps:",
-            "",
-            `    1. Commit \`${WORKFLOW_FILE}\` and push`,
-            `    2. Add the repository secret VECTOR_CLI_TOKEN (${app.owner}/${app.repo} → Settings → Secrets and variables → Actions)`,
-            `       Create the token at ${VECTOR_SITE}/auth/cli`,
-            ...providerStep,
-            `    ${providerStep.length ? 4 : 3}. Let Actions open pull requests: Settings → Actions → General → Workflow permissions →`,
-            `       tick "Allow GitHub Actions to create and approve pull requests" (GitHub leaves it off by default)`,
-            "",
-            autoReview
-              ? "    Then open a pull request: Vectorscope reviews it, and again on every push. Comment `/vectorscope review` to ask again."
-              : "    Then comment `/vectorscope review` on a pull request to have Vectorscope review it.",
-            "    Comment `/vector <task>` on an issue to get a pull request back.",
-            `    Tune reviews with .vector/review.md (rules) and .vector/review.json (limits): ${VECTOR_SITE}/docs/vectorscope#pull-requests`,
-          ].join("\n"),
-        )
-      }
-
-      async function getAppInfo() {
-        const project = ctx.project
-        if (project.vcs !== "git") {
-          prompts.log.error(`Could not find git repository. Please run this command from a git repository.`)
-          throw new UI.CancelledError()
-        }
-
-        // Get repo info
-        const info = await Effect.runPromise(gitSvc.run(["remote", "get-url", "origin"], { cwd: ctx.worktree })).then(
-          (x) => x.text().trim(),
-        )
-        const parsed = parseGitHubRemote(info)
-        if (!parsed) {
-          prompts.log.error(`Could not find git repository. Please run this command from a git repository.`)
-          throw new UI.CancelledError()
-        }
-        return { owner: parsed.owner, repo: parsed.repo, root: ctx.worktree }
-      }
-
-      async function promptProvider() {
-        const priority: Record<string, number> = {
-          anthropic: 1,
-          openai: 2,
-          google: 3,
-        }
-        let provider = await prompts.select({
-          message: "Select provider",
-          maxItems: 8,
-          options: pipe(
-            providers,
-            values(),
-            sortBy(
-              (x) => priority[x.id] ?? 99,
-              (x) => x.name ?? x.id,
-            ),
-            map((x) => ({
-              label: x.name,
-              value: x.id,
-              hint: priority[x.id] === 0 ? "recommended" : undefined,
-            })),
-          ),
-        })
-
-        if (prompts.isCancel(provider)) throw new UI.CancelledError()
-
-        return provider
-      }
-
-      async function promptModel() {
-        const providerData = providers[provider]!
-        const model = await prompts.select({
-          message: "Select model",
-          maxItems: 8,
-          options: pipe(
-            providerData.models,
-            values(),
-            filter((x) => x.status !== "deprecated"),
-            map((x) => ({ label: x.name ?? x.id, value: x.id })),
-            sortBy((x) => x.label),
-          ),
-        })
-
-        if (prompts.isCancel(model)) throw new UI.CancelledError()
-        return model
-      }
-
-      async function promptAutoReview() {
-        const choice = await prompts.select({
-          message: "Review pull requests automatically?",
-          options: [
-            {
-              label: "Yes, review every pull request",
-              value: true,
-              hint: "recommended; runs when a PR opens and on every push",
-            },
-            { label: "Only when someone comments /vector review", value: false },
-          ],
-        })
-        if (prompts.isCancel(choice)) throw new UI.CancelledError()
-        return choice
-      }
-
-      async function promptShare() {
-        const value = await prompts.confirm({
-          message:
-            "Publish task conversations, code, and tool output publicly on vectordev.ai, including future updates?",
-          initialValue: false,
-        })
-        if (prompts.isCancel(value)) throw new UI.CancelledError()
-        return value
-      }
-
-      async function promptMonthlyLimit() {
-        const value = await prompts.text({
-          message: "Monthly limit for review spending in USD (0 for no limit)",
-          placeholder: "50",
-          defaultValue: "50",
-          validate: (text) =>
-            text && !/^\d+(\.\d+)?$/.test(text.trim()) ? "Enter a number of dollars, such as 50" : undefined,
-        })
-        if (prompts.isCancel(value)) throw new UI.CancelledError()
-        return Number(value.trim() || "50")
-      }
-
-      async function addWorkflowFiles() {
-        const keys = provider === "amazon-bedrock" ? [] : providers[provider].env
-        // No composite action: the published CLI is installed from npm and run directly, on the repo's
-        // GITHUB_TOKEN. The route, review and task jobs are in @vectordevai/core/review/workflow.
-        await Filesystem.write(
-          path.join(app.root, WORKFLOW_FILE),
-          buildWorkflowYaml({
-            provider,
-            model,
-            keys,
-            autoReview,
-            share,
-            ...(monthlyUsd !== undefined ? { monthlyUsd } : {}),
-            version: InstallationVersion,
-            auth,
-          }),
-        )
-
-        prompts.log.success(`Added workflow file: "${WORKFLOW_FILE}"`)
-      }
-    }
+          if (prompts.isCancel(choice)) throw new UI.CancelledError()
+          return choice.trim() || defaultValue
+        },
+        info: prompts.log.info,
+        done: prompts.outro,
+        read: async () => ((await Filesystem.exists(file)) ? Filesystem.readText(file) : undefined),
+        write: (content) => Filesystem.write(file, content),
+        listed: githubListedPerks,
+        installation: githubAppInstallation,
+        providers: async () => {
+          const catalog = await Effect.runPromise(modelCatalog.get())
+          const priority: Record<string, number> = { anthropic: 1, openai: 2, google: 3 }
+          return Object.values(catalog)
+            .filter((provider) => provider.id !== "github-copilot")
+            .sort(
+              (a, b) =>
+                (priority[a.id] ?? 99) - (priority[b.id] ?? 99) || (a.name ?? a.id).localeCompare(b.name ?? b.id),
+            )
+            .map((provider) => ({
+              id: provider.id,
+              name: provider.name ?? provider.id,
+              env: provider.env,
+              models: Object.values(provider.models)
+                .filter((model) => model.status !== "deprecated")
+                .map((model) => ({ id: model.id, name: model.name ?? model.id }))
+                .sort((a, b) => a.name.localeCompare(b.name)),
+            }))
+        },
+      },
+    )
   })
 })
 
