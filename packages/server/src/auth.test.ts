@@ -122,6 +122,22 @@ describe("server authentication", () => {
     expect(ServerAuth.isOwnerOnlyRoute("POST", "/experimental/session/:sessionID/tasks/stop")).toBe(false)
   })
 
+  test("every connected-tool route requires the owner for every method", () => {
+    for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
+      for (const route of [
+        "/experimental/connect",
+        "/experimental/connect/runs",
+        "/experimental/connect/runs/cr_123",
+        "/experimental/connect/runs/cr_123/cancel",
+        "/experimental/connect/findings",
+        "/experimental/connect/review",
+        "/experimental/session/ses_123/connect",
+      ])
+        expect(ServerAuth.isOwnerOnlyRoute(method, route)).toBe(true)
+    }
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/connected")).toBe(false)
+  })
+
   test("host commands and permission answers require the server owner", () => {
     expect(ServerAuth.isOwnerOnlyRoute("POST", "/pty")).toBe(true)
     expect(ServerAuth.isOwnerOnlyRoute("GET", "/pty/:ptyID/connect-token")).toBe(true)

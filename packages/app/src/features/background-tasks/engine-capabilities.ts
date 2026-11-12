@@ -19,6 +19,7 @@ export const FLAGS = [
   "taskIsolation",
   "workflows",
   "backgroundShells",
+  "connections",
 ] as const
 
 export type EngineFlag = (typeof FLAGS)[number]

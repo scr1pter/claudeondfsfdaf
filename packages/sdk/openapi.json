@@ -13073,6 +13073,1453 @@
         ]
       }
     },
+    "/experimental/connect": {
+      "get": {
+        "tags": ["connect"],
+        "operationId": "connect.list",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "kind": {
+                        "$ref": "#/components/schemas/ConnectKind"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      "summary": {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      "owner": {
+                        "$ref": "#/components/schemas/ConnectOwner"
+                      },
+                      "place": {
+                        "$ref": "#/components/schemas/ConnectPlace"
+                      },
+                      "sendsTo": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": ["this-computer", "vector-codium"]
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^model-server:[\\s\\S]*?$"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^provider:[\\s\\S]*?$"
+                          }
+                        ]
+                      },
+                      "state": {
+                        "$ref": "#/components/schemas/ConnectState"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "reach": {
+                        "$ref": "#/components/schemas/ConnectReach"
+                      },
+                      "actions": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/ConnectAction"
+                        },
+                        "maxItems": 20
+                      },
+                      "activity": {
+                        "$ref": "#/components/schemas/ConnectActivity"
+                      }
+                    },
+                    "required": ["id", "kind", "title", "summary", "owner", "place", "state", "reach"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List connected tools",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs": {
+      "get": {
+        "tags": ["connect"],
+        "operationId": "connect.runs",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^cr_",
+                        "minLength": 4,
+                        "maxLength": 64
+                      },
+                      "request": {
+                        "$ref": "#/components/schemas/ConnectRequest"
+                      },
+                      "status": {
+                        "$ref": "#/components/schemas/ConnectRunStatus"
+                      },
+                      "progress": {
+                        "$ref": "#/components/schemas/ConnectProgress"
+                      },
+                      "result": {
+                        "type": "object",
+                        "properties": {
+                          "state": {
+                            "$ref": "#/components/schemas/ConnectResultState"
+                          },
+                          "verdict": {
+                            "$ref": "#/components/schemas/ConnectVerdict"
+                          },
+                          "summary": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "findings": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/ConnectFinding"
+                            },
+                            "maxItems": 200
+                          },
+                          "sendsTo": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["this-computer", "vector-codium"]
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^model-server:[\\s\\S]*?$"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^provider:[\\s\\S]*?$"
+                              }
+                            ]
+                          },
+                          "cached": {
+                            "type": "boolean"
+                          },
+                          "cost": {
+                            "$ref": "#/components/schemas/ConnectCost"
+                          },
+                          "sessions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^ses"
+                            },
+                            "maxItems": 200
+                          },
+                          "notes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 1000
+                            },
+                            "maxItems": 100
+                          },
+                          "refusal": {
+                            "$ref": "#/components/schemas/ConnectRefusalCode"
+                          },
+                          "target": {
+                            "$ref": "#/components/schemas/ConnectTarget"
+                          },
+                          "head": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "base": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": ["state", "summary", "findings", "sessions", "notes"],
+                        "additionalProperties": false
+                      },
+                      "time": {
+                        "type": "object",
+                        "properties": {
+                          "created": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "started": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "ended": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        },
+                        "required": ["created"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["id", "request", "status", "time"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List connected tool runs",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.runs({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs/{runID}": {
+      "get": {
+        "tags": ["connect"],
+        "operationId": "connect.get",
+        "parameters": [
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^cr_",
+              "minLength": 4,
+              "maxLength": 64
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a connected tool run",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/connect": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.review",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Review changes in a conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectReviewInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.review({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/review": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.directoryReview",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Review the selected directory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectReviewInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.directoryReview({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs/{runID}/cancel": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.cancel",
+        "parameters": [
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^cr_",
+              "minLength": 4,
+              "maxLength": 64
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "sessionID",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancel a connected tool run",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.cancel({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/findings": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.register",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Bring desktop findings into a conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectRegisterInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.register({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/connect/runs/{runID}/dismiss": {
+      "post": {
+        "tags": ["connect"],
+        "operationId": "connect.dismiss",
+        "parameters": [
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^cr_",
+              "minLength": 4,
+              "maxLength": 64
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^cr_",
+                      "minLength": 4,
+                      "maxLength": 64
+                    },
+                    "request": {
+                      "$ref": "#/components/schemas/ConnectRequest"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/ConnectRunStatus"
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/ConnectProgress"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "$ref": "#/components/schemas/ConnectResultState"
+                        },
+                        "verdict": {
+                          "$ref": "#/components/schemas/ConnectVerdict"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectFinding"
+                          },
+                          "maxItems": 200
+                        },
+                        "sendsTo": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["this-computer", "vector-codium"]
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^model-server:[\\s\\S]*?$"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^provider:[\\s\\S]*?$"
+                            }
+                          ]
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "cost": {
+                          "$ref": "#/components/schemas/ConnectCost"
+                        },
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          "maxItems": 200
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "maxItems": 100
+                        },
+                        "refusal": {
+                          "$ref": "#/components/schemas/ConnectRefusalCode"
+                        },
+                        "target": {
+                          "$ref": "#/components/schemas/ConnectTarget"
+                        },
+                        "head": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "base": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["state", "summary", "findings", "sessions", "notes"],
+                      "additionalProperties": false
+                    },
+                    "time": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "started": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ended": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": ["created"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["id", "request", "status", "time"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConnectApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConnectApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Dismiss findings from an owner action",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectDismissInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.connect.dismiss({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/project": {
       "get": {
         "tags": ["project"],
@@ -27639,6 +29086,9 @@
             "$ref": "#/components/schemas/EventMemoryLearned"
           },
           {
+            "$ref": "#/components/schemas/EventConnectRunUpdated"
+          },
+          {
             "$ref": "#/components/schemas/EventVcsBranchUpdated"
           },
           {
@@ -33285,6 +34735,152 @@
                   },
                   "type": {
                     "type": "string",
+                    "enum": ["connect.run.updated"]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "sessionID": {
+                        "type": "string",
+                        "pattern": "^ses"
+                      },
+                      "run": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^cr_",
+                            "minLength": 4,
+                            "maxLength": 64
+                          },
+                          "request": {
+                            "$ref": "#/components/schemas/ConnectRequest"
+                          },
+                          "status": {
+                            "$ref": "#/components/schemas/ConnectRunStatus"
+                          },
+                          "progress": {
+                            "$ref": "#/components/schemas/ConnectProgress"
+                          },
+                          "result": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "$ref": "#/components/schemas/ConnectResultState"
+                              },
+                              "verdict": {
+                                "$ref": "#/components/schemas/ConnectVerdict"
+                              },
+                              "summary": {
+                                "type": "string",
+                                "maxLength": 2000
+                              },
+                              "findings": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/ConnectFinding"
+                                },
+                                "maxItems": 200
+                              },
+                              "sendsTo": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": ["this-computer", "vector-codium"]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^model-server:[\\s\\S]*?$"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^provider:[\\s\\S]*?$"
+                                  }
+                                ]
+                              },
+                              "cached": {
+                                "type": "boolean"
+                              },
+                              "cost": {
+                                "$ref": "#/components/schemas/ConnectCost"
+                              },
+                              "sessions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "pattern": "^ses"
+                                },
+                                "maxItems": 200
+                              },
+                              "notes": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1000
+                                },
+                                "maxItems": 100
+                              },
+                              "refusal": {
+                                "$ref": "#/components/schemas/ConnectRefusalCode"
+                              },
+                              "target": {
+                                "$ref": "#/components/schemas/ConnectTarget"
+                              },
+                              "head": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "base": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              }
+                            },
+                            "required": ["state", "summary", "findings", "sessions", "notes"],
+                            "additionalProperties": false
+                          },
+                          "time": {
+                            "type": "object",
+                            "properties": {
+                              "created": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "started": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "ended": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": ["created"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["id", "request", "status", "time"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["run"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "type", "properties"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
                     "enum": ["vcs.branch.updated"]
                   },
                   "properties": {
@@ -34464,6 +36060,38 @@
         },
         "additionalProperties": false
       },
+      "ConnectReviewConfig": {
+        "type": "object",
+        "properties": {
+          "after_run": {
+            "type": "string",
+            "enum": ["off", "report", "repair"]
+          },
+          "before_commit": {
+            "type": "string",
+            "enum": ["off", "offer", "run"]
+          },
+          "max_rounds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "max_cost_usd": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectConfig": {
+        "type": "object",
+        "properties": {
+          "review": {
+            "$ref": "#/components/schemas/ConnectReviewConfig"
+          }
+        },
+        "additionalProperties": false
+      },
       "ConfigWithLocks": {
         "type": "object",
         "properties": {
@@ -35047,6 +36675,9 @@
           },
           "research": {
             "$ref": "#/components/schemas/ResearchConfig"
+          },
+          "connect": {
+            "$ref": "#/components/schemas/ConnectConfig"
           },
           "experimental": {
             "type": "object",
@@ -35677,6 +37308,9 @@
           "research": {
             "$ref": "#/components/schemas/ResearchConfig"
           },
+          "connect": {
+            "$ref": "#/components/schemas/ConnectConfig"
+          },
           "experimental": {
             "type": "object",
             "properties": {
@@ -36240,6 +37874,9 @@
             "type": "boolean"
           },
           "backgroundShells": {
+            "type": "boolean"
+          },
+          "connections": {
             "type": "boolean"
           }
         },
@@ -41501,6 +43138,20 @@
         "required": ["source", "chunks", "private"],
         "additionalProperties": false
       },
+      "ConnectApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": ["disabled", "forbidden", "not_found", "invalid"]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "additionalProperties": false
+      },
       "Project": {
         "type": "object",
         "properties": {
@@ -44989,6 +46640,9 @@
             "$ref": "#/components/schemas/MemoryLearned"
           },
           {
+            "$ref": "#/components/schemas/ConnectRunUpdated"
+          },
+          {
             "$ref": "#/components/schemas/VcsBranchUpdated"
           },
           {
@@ -46326,6 +47980,382 @@
         },
         "required": ["created", "updated"],
         "additionalProperties": false
+      },
+      "ConnectBudget": {
+        "type": "object",
+        "properties": {
+          "maxCostUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "timeoutMinutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectTarget": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["uncommitted"]
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["staged"]
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["branch"]
+              },
+              "base": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^(?!-)[^\\s\\u0000-\\u001f\\u007f]+$"
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ConnectReviewRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["agent", "user", "workflow"]
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          }
+        },
+        "required": ["id", "to", "requester", "requestID", "directory", "background", "action", "target"],
+        "additionalProperties": false
+      },
+      "ConnectFixMode": {
+        "type": "string",
+        "enum": ["here", "worktree"]
+      },
+      "ConnectFixRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["agent", "user", "workflow"]
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["fix"]
+          },
+          "run": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ConnectFixMode"
+          }
+        },
+        "required": [
+          "id",
+          "to",
+          "requester",
+          "requestID",
+          "directory",
+          "background",
+          "action",
+          "run",
+          "findings",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "ConnectRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ConnectReviewRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ConnectFixRequest"
+          }
+        ]
+      },
+      "ConnectRunStatus": {
+        "type": "string",
+        "enum": ["queued", "running", "done"]
+      },
+      "ConnectProgress": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["message", "at"],
+        "additionalProperties": false
+      },
+      "ConnectResultState": {
+        "type": "string",
+        "enum": ["completed", "partial", "refused", "failed", "cancelled"]
+      },
+      "ConnectVerdict": {
+        "type": "string",
+        "enum": ["clean", "findings", "blocking", "incomplete", "not-reviewed"]
+      },
+      "ConnectSeverity": {
+        "type": "string",
+        "enum": ["blocking", "concern", "nit"]
+      },
+      "ConnectCategory": {
+        "type": "string",
+        "enum": ["bug", "security", "reliability", "performance", "tests", "maintainability", "style", "docs"]
+      },
+      "ConnectSide": {
+        "type": "string",
+        "enum": ["RIGHT", "LEFT"]
+      },
+      "ConnectBucket": {
+        "type": "string",
+        "enum": ["inline", "overflow", "outside-diff", "elsewhere", "nit", "still-open"]
+      },
+      "ConnectFindingStatus": {
+        "type": "string",
+        "enum": ["open", "fixing", "fixed", "still-open", "new", "dismissed"]
+      },
+      "ConnectFinding": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ConnectSeverity"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ConnectCategory"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "line": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "side": {
+            "$ref": "#/components/schemas/ConnectSide"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "source": {
+            "type": "string",
+            "enum": ["review", "security"]
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "suggestion": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "bucket": {
+            "$ref": "#/components/schemas/ConnectBucket"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectFindingStatus"
+          }
+        },
+        "required": ["id", "severity", "category", "path", "side", "title", "body", "source", "bucket", "status"],
+        "additionalProperties": false
+      },
+      "ConnectCostKind": {
+        "type": "string",
+        "enum": ["free", "priced", "plan", "local", "unknown"]
+      },
+      "ConnectCost": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConnectCostKind"
+          },
+          "usd": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ConnectRefusalCode": {
+        "type": "string",
+        "enum": [
+          "unknown",
+          "effect",
+          "permission",
+          "denied",
+          "read-rule",
+          "limit",
+          "budget",
+          "unavailable",
+          "input",
+          "not-allowed",
+          "escalate"
+        ]
       },
       "EventServerInstanceDisposed": {
         "type": "object",
@@ -50465,6 +52495,168 @@
           }
         },
         "required": ["metric", "value", "unit"],
+        "additionalProperties": false
+      },
+      "ConnectKind": {
+        "type": "string",
+        "enum": ["agent", "helper", "tool", "runtime", "service", "mcp", "workflow", "skill"]
+      },
+      "ConnectOwner": {
+        "type": "string",
+        "enum": ["main", "vectorscope", "hands", "vector-at-mention", "codium", "cloud-workspaces", "plugin", "user"]
+      },
+      "ConnectPlace": {
+        "type": "string",
+        "enum": ["local", "your-cloud", "vector-cloud"]
+      },
+      "ConnectState": {
+        "type": "string",
+        "enum": ["ready", "busy", "unavailable", "off", "not-installed"]
+      },
+      "ConnectReach": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": ["connect", "ui", "none"]
+          },
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          }
+        ]
+      },
+      "ConnectActionID": {
+        "type": "string",
+        "enum": ["review", "fix"]
+      },
+      "ConnectEffect": {
+        "type": "string",
+        "enum": ["read", "write"]
+      },
+      "ConnectResultKind": {
+        "type": "string",
+        "enum": ["review", "fix"]
+      },
+      "ConnectAction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ConnectActionID"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectEffect"
+            },
+            "minItems": 1
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ConnectResultKind"
+          }
+        },
+        "required": ["id", "title", "effects", "background", "result"],
+        "additionalProperties": false
+      },
+      "ConnectActivity": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastRunAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["running"],
+        "additionalProperties": false
+      },
+      "ConnectReviewInput": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectRegisterInput": {
+        "type": "object",
+        "properties": {
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectFinding"
+            },
+            "maxItems": 200
+          }
+        },
+        "required": ["sessionID", "target", "findings"],
+        "additionalProperties": false
+      },
+      "ConnectDismissInput": {
+        "type": "object",
+        "properties": {
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 400
+          }
+        },
+        "required": ["sessionID", "findings"],
         "additionalProperties": false
       },
       "ProjectDirectories": {
@@ -57210,6 +59402,326 @@
         "required": ["id", "type", "data"],
         "additionalProperties": false
       },
+      "ConnectRequester": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["agent", "user", "workflow"]
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ConnectReviewRequest1": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/ConnectRequester"
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          }
+        },
+        "required": ["id", "to", "requester", "requestID", "directory", "background", "action", "target"],
+        "additionalProperties": false
+      },
+      "ConnectFixRequest1": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/ConnectRequester"
+          },
+          "requestID": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ConnectBudget"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["fix"]
+          },
+          "run": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ConnectFixMode"
+          }
+        },
+        "required": [
+          "id",
+          "to",
+          "requester",
+          "requestID",
+          "directory",
+          "background",
+          "action",
+          "run",
+          "findings",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "ConnectResult": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/ConnectResultState"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/ConnectVerdict"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectFinding"
+            }
+          },
+          "sendsTo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["this-computer", "vector-codium"]
+              },
+              {
+                "type": "string",
+                "pattern": "^model-server:[\\s\\S]*?$"
+              },
+              {
+                "type": "string",
+                "pattern": "^provider:[\\s\\S]*?$"
+              }
+            ]
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/ConnectCost"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "maxItems": 200
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "maxItems": 100
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/ConnectRefusalCode"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ConnectTarget"
+          },
+          "head": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "base": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": ["state", "summary", "findings", "sessions", "notes"],
+        "additionalProperties": false
+      },
+      "ConnectRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^cr_",
+            "minLength": 4,
+            "maxLength": 64
+          },
+          "request": {
+            "$ref": "#/components/schemas/ConnectRequest"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectRunStatus"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ConnectProgress"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ConnectResult"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "started": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ended": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["created"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "request", "status", "time"],
+        "additionalProperties": false
+      },
+      "ConnectRunUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["connect.run.updated"]
+          },
+          "durable": {
+            "type": "object",
+            "properties": {
+              "aggregateID": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": ["aggregateID", "seq", "version"],
+            "additionalProperties": false
+          },
+          "location": {
+            "$ref": "#/components/schemas/LocationRef"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "run": {
+                "$ref": "#/components/schemas/ConnectRun"
+              }
+            },
+            "required": ["run"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "data"],
+        "additionalProperties": false
+      },
       "VcsBranchUpdated": {
         "type": "object",
         "properties": {
@@ -60941,6 +63453,152 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
+      "EventConnectRunUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["connect.run.updated"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "run": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^cr_",
+                    "minLength": 4,
+                    "maxLength": 64
+                  },
+                  "request": {
+                    "$ref": "#/components/schemas/ConnectRequest"
+                  },
+                  "status": {
+                    "$ref": "#/components/schemas/ConnectRunStatus"
+                  },
+                  "progress": {
+                    "$ref": "#/components/schemas/ConnectProgress"
+                  },
+                  "result": {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "$ref": "#/components/schemas/ConnectResultState"
+                      },
+                      "verdict": {
+                        "$ref": "#/components/schemas/ConnectVerdict"
+                      },
+                      "summary": {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      "findings": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/ConnectFinding"
+                        },
+                        "maxItems": 200
+                      },
+                      "sendsTo": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": ["this-computer", "vector-codium"]
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^model-server:[\\s\\S]*?$"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^provider:[\\s\\S]*?$"
+                          }
+                        ]
+                      },
+                      "cached": {
+                        "type": "boolean"
+                      },
+                      "cost": {
+                        "$ref": "#/components/schemas/ConnectCost"
+                      },
+                      "sessions": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^ses"
+                        },
+                        "maxItems": 200
+                      },
+                      "notes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        },
+                        "maxItems": 100
+                      },
+                      "refusal": {
+                        "$ref": "#/components/schemas/ConnectRefusalCode"
+                      },
+                      "target": {
+                        "$ref": "#/components/schemas/ConnectTarget"
+                      },
+                      "head": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "base": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    },
+                    "required": ["state", "summary", "findings", "sessions", "notes"],
+                    "additionalProperties": false
+                  },
+                  "time": {
+                    "type": "object",
+                    "properties": {
+                      "created": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "started": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "ended": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": ["created"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "request", "status", "time"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["run"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
       "EventVcsBranchUpdated": {
         "type": "object",
         "properties": {
@@ -61295,6 +63953,9 @@
     {
       "name": "memory",
       "description": "Vector's memory: rules, saved preferences and what Vector learned, kept on this computer."
+    },
+    {
+      "name": "connect"
     },
     {
       "name": "project",

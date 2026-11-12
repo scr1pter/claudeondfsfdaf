@@ -516,6 +516,30 @@ describe("lifecycle", () => {
     }),
   )
 
+  it.instance("the caller AbortSignal withdraws a pending connect approval before the adapter starts", () =>
+    Effect.gen(function* () {
+      const { directory, hub, requester } = yield* setup([{ permission: "connect", pattern: "*", action: "ask" }])
+      const permissions = yield* Permission.Service
+      const controller = new AbortController()
+      const fiber = yield* hub
+        .run({ request: review(requester.id, directory), call: { abort: controller.signal } })
+        .pipe(Effect.forkChild)
+      yield* pollWithTimeout(
+        permissions
+          .list()
+          .pipe(Effect.map((pending) => (pending.some((entry) => entry.permission === "connect") ? true : undefined))),
+        "The connect approval was never pending.",
+      )
+      controller.abort()
+      const run = yield* Fiber.join(fiber)
+      expect(run.status).toBe("done")
+      expect(run.result?.state).toBe("cancelled")
+      expect(run.result?.verdict).toBe("not-reviewed")
+      expect(yield* permissions.list()).toEqual([])
+      expect(seen).toEqual([])
+    }),
+  )
+
   it.instance("a result the schema refuses, or a defect, fails the run and is never clean", () =>
     Effect.gen(function* () {
       const { directory, hub, requester } = yield* setup()

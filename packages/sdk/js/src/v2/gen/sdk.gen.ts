@@ -40,6 +40,25 @@ import type {
   ConfigTrustGetResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  ConnectCancelErrors,
+  ConnectCancelResponses,
+  ConnectDirectoryReviewErrors,
+  ConnectDirectoryReviewResponses,
+  ConnectDismissErrors,
+  ConnectDismissInput,
+  ConnectDismissResponses,
+  ConnectGetErrors,
+  ConnectGetResponses,
+  ConnectListErrors,
+  ConnectListResponses,
+  ConnectRegisterErrors,
+  ConnectRegisterInput,
+  ConnectRegisterResponses,
+  ConnectReviewErrors,
+  ConnectReviewInput,
+  ConnectReviewResponses,
+  ConnectRunsErrors,
+  ConnectRunsResponses,
   EgressEvent,
   EventSubscribeErrors,
   EventSubscribeResponses,
@@ -6789,6 +6808,280 @@ export class Memory extends HeyApiClient {
   }
 }
 
+export class Connect extends HeyApiClient {
+  /**
+   * List connected tools
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ConnectListResponses, ConnectListErrors, ThrowOnError>({
+      url: "/experimental/connect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List connected tool runs
+   */
+  public runs<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ConnectRunsResponses, ConnectRunsErrors, ThrowOnError>({
+      url: "/experimental/connect/runs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get a connected tool run
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ConnectGetResponses, ConnectGetErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Review changes in a conversation
+   */
+  public review<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      connectReviewInput?: ConnectReviewInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectReviewInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectReviewResponses, ConnectReviewErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/connect",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Review the selected directory
+   */
+  public directoryReview<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      connectReviewInput?: ConnectReviewInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectReviewInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ConnectDirectoryReviewResponses,
+      ConnectDirectoryReviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/connect/review",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel a connected tool run
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectCancelResponses, ConnectCancelErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Bring desktop findings into a conversation
+   */
+  public register<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      connectRegisterInput?: ConnectRegisterInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectRegisterInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectRegisterResponses, ConnectRegisterErrors, ThrowOnError>({
+      url: "/experimental/connect/findings",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Dismiss findings from an owner action
+   */
+  public dismiss<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      connectDismissInput?: ConnectDismissInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectDismissInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectDismissResponses, ConnectDismissErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/dismiss",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Project extends HeyApiClient {
   /**
    * List all projects
@@ -10510,7 +10803,7 @@ export class Provider2 extends HeyApiClient {
   }
 }
 
-export class Connect extends HeyApiClient {
+export class Connect2 extends HeyApiClient {
   /**
    * Connect with key
    *
@@ -10784,9 +11077,9 @@ export class Integration extends HeyApiClient {
     })
   }
 
-  private _connect?: Connect
-  get connect(): Connect {
-    return (this._connect ??= new Connect({ client: this.client }))
+  private _connect?: Connect2
+  get connect(): Connect2 {
+    return (this._connect ??= new Connect2({ client: this.client }))
   }
 
   private _attempt?: Attempt
@@ -11869,6 +12162,11 @@ export class VectorClient extends HeyApiClient {
   private _memory?: Memory
   get memory(): Memory {
     return (this._memory ??= new Memory({ client: this.client }))
+  }
+
+  private _connect?: Connect
+  get connect(): Connect {
+    return (this._connect ??= new Connect({ client: this.client }))
   }
 
   private _project?: Project

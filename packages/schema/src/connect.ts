@@ -242,6 +242,17 @@ export const ReviewRequest = Schema.Struct({
 }).annotate({ identifier: "Connect.ReviewRequest" })
 export interface ReviewRequest extends Schema.Schema.Type<typeof ReviewRequest> {}
 
+/** Owner-facing review input. Identity, directory and request IDs come from the server boundary. */
+export const ReviewInput = Schema.Struct({
+  to: optional(MemberID),
+  target: optional(Target),
+  security: optional(Schema.Boolean),
+  background: optional(Schema.Boolean),
+  budget: optional(Budget),
+  since: optional(RunID),
+}).annotate({ identifier: "Connect.ReviewInput" })
+export interface ReviewInput extends Schema.Schema.Type<typeof ReviewInput> {}
+
 export const FixRequest = Schema.Struct({
   ...RequestFields,
   action: Schema.Literal("fix"),
@@ -315,6 +326,21 @@ export const Finding = Schema.Struct({
   status: FindingStatus,
 }).annotate({ identifier: "Connect.Finding" })
 export interface Finding extends Schema.Schema.Type<typeof Finding> {}
+
+/** A person registers desktop findings as data; no client-supplied clean verdict or helper lineage is trusted. */
+export const RegisterInput = Schema.Struct({
+  sessionID: SessionID,
+  target: Target,
+  findings: Schema.Array(Finding).check(Schema.isMaxLength(MAX_FINDINGS)),
+}).annotate({ identifier: "Connect.RegisterInput" })
+export interface RegisterInput extends Schema.Schema.Type<typeof RegisterInput> {}
+
+export const DismissInput = Schema.Struct({
+  sessionID: SessionID,
+  findings: Schema.Array(FindingID).check(Schema.isLengthBetween(1, MAX_FINDINGS)),
+  reason: optional(Text(400)),
+}).annotate({ identifier: "Connect.DismissInput" })
+export interface DismissInput extends Schema.Schema.Type<typeof DismissInput> {}
 /** The contract calls it ConnectFinding. */
 export const ConnectFinding = Finding
 export type ConnectFinding = Finding

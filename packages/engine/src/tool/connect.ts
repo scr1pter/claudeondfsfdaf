@@ -17,6 +17,7 @@ import { TaskTool, type TaskPromptOps } from "./task"
 import { TaskStructured } from "./task-structured"
 import { Tool } from "./tool"
 import DESCRIPTION from "./connect.txt"
+import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
 
 // connect: the build agent's way to hand work to a connected tool. Through Phase C the only member that takes
 // hand-offs is VectorScope, so the model sees no member list, only this tool, whose description names VectorScope.
@@ -368,6 +369,21 @@ export const ConnectTool = Tool.define(
     } satisfies Tool.DefWithoutID<typeof Parameters>
   }),
 )
+
+/** Applied when the instance offers its tools; constructing the process-wide definition never reads instance config. */
+export function beforeCommitDescription(description: string, config?: ConfigConnectV1.Info) {
+  const setting = ConfigConnectV1.review(config).before_commit
+  const offer =
+    "Before you commit, push or open a pull request, offer the user a review of your changes with this tool."
+  return description.replace(
+    offer,
+    setting === "run"
+      ? "Before you commit, push or open a pull request, run a review of your changes with this tool, under its normal approvals and limits."
+      : setting === "off"
+        ? "Automatic review offers before commits, pushes and pull requests are turned off. Review when the user asks."
+        : offer,
+  )
+}
 
 /** What a fix on a request the engine did not size gets. */
 export const UNSIZED_FIX =

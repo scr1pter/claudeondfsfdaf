@@ -32,6 +32,7 @@ import { LocationMiddleware } from "@vectordevai/server/location"
 import { SessionLocationMiddleware } from "@vectordevai/server/middleware/session-location"
 import { GlobalApi } from "./groups/global"
 import { TeamsApi } from "./groups/teams"
+import { ConnectApi } from "./groups/connect"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
 
@@ -70,6 +71,7 @@ export const InstanceHttpApi = HttpApi.make("vector-instance")
   .addHttpApi(LocalApi)
   .addHttpApi(McpApi)
   .addHttpApi(MemoryApi)
+  .addHttpApi(ConnectApi)
   .addHttpApi(ProjectApi)
   .addHttpApi(ProjectCopyApi)
   .addHttpApi(PtyApi)

@@ -86,7 +86,7 @@ import { ResearchNoteTool } from "./research-note"
 import { ResearchReportTool } from "./research-report"
 import { ResearchBrowserTool } from "./research-browser"
 import { ResearchTool } from "./research"
-import { ConnectTool } from "./connect"
+import { ConnectTool, beforeCommitDescription } from "./connect"
 import { ConnectHub } from "@/connect/hub"
 
 // Which research tool each research agent is offered (section 5.3). The agents' permissions say the same; offering
@@ -401,6 +401,7 @@ const layer = Layer.effect(
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const builtin = yield* InstanceState.get(state)
       const researchSetting = (yield* config.get()).research?.tool
+      const connectSetting = (yield* config.get()).connect
       // A research agent is offered its own tools and nothing else, whatever a session's or the user's rules allow:
       // no edit, shell, plugin or custom tool reaches Deep research (RC1).
       const own = Agent.researchTools(input.agent.name)
@@ -431,7 +432,10 @@ const layer = Layer.effect(
           // from in-place plugin edits without mutating the cached builtin schema.
           const initialSchema = tool === builtin.task ? structuredClone(tool.jsonSchema) : tool.jsonSchema
           const output = {
-            description: tool.description,
+            description:
+              tool.id === ConnectTool.id && flags.experimentalConnect
+                ? beforeCommitDescription(tool.description, connectSetting)
+                : tool.description,
             parameters: tool.parameters,
             jsonSchema: initialSchema,
           }

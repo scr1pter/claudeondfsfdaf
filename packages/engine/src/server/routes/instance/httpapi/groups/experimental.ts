@@ -116,6 +116,7 @@ const CapabilitiesResponse = Schema.Struct({
   taskIsolation: Schema.optional(Schema.Boolean),
   workflows: Schema.optional(Schema.Boolean),
   backgroundShells: Schema.optional(Schema.Boolean),
+  connections: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "ExperimentalCapabilities" })
 
 const ToolIDs = Schema.Array(Schema.String).annotate({ identifier: "ToolIDs" })

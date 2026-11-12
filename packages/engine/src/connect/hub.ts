@@ -38,6 +38,7 @@ import type { ConnectAdapter } from "./adapter"
 import { ADAPTERS, DEPS as ADAPTER_DEPS } from "./adapters"
 import { ConnectMembers } from "./members"
 import { ConnectNote } from "./note"
+import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
 
 // Connected tools' hub: one place where every hand-off starts, is checked, asks, runs, is recorded and ends.
 //
@@ -792,7 +793,19 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const state = yield* InstanceState.get(ledger)
         const requester = decoded.value.requester
         const saved = requester.sessionID ? yield* recorded(requester.sessionID) : undefined
-        const request: Connect.Request = { ...decoded.value, requestID: saved?.requestID ?? id }
+        const configured = ConfigConnectV1.review((yield* config.get()).connect).max_cost_usd
+        const request: Connect.Request = {
+          ...decoded.value,
+          requestID: saved?.requestID ?? id,
+          ...(decoded.value.action === "review"
+            ? {
+                budget: {
+                  ...decoded.value.budget,
+                  maxCostUsd: Math.min(configured, decoded.value.budget?.maxCostUsd ?? configured),
+                },
+              }
+            : {}),
+        }
         const entry: Entry = {
           run: { id, request, status: "queued", time: { created } },
           adapter: byID.get(request.to),
