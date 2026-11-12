@@ -49,6 +49,51 @@ function directoryState() {
 }
 
 describe("bootstrapDirectory", () => {
+  test("directory overlays cannot mutate the owner-global policy or share its nested config objects", async () => {
+    const [globalConfig] = createStore<Config>({
+      experimental: { disable_paste_summary: false },
+      agent: { vectorscope: { model: "global/reviewer", disable: true } },
+    })
+    const client = heldClient({
+      experimental: { disable_paste_summary: true },
+      agent: { vectorscope: { model: "repository/reviewer", disable: false } },
+    })
+    const [store, setStore] = directoryState()
+    const queryClient = new QueryClient()
+    await bootstrapDirectory({
+      directory: "/project",
+      scope: ServerScope.local,
+      mcp: false,
+      global: {
+        config: globalConfig,
+        path: { state: "", config: "", worktree: "/project", directory: "/project", home: "/home" },
+        project: [{ id: "project", worktree: "/project" } as Project],
+        provider,
+      },
+      sdk: client.sdk,
+      store,
+      setStore,
+      vcsCache: { setStore() {} } as unknown as VcsCache,
+      loadSessions() {},
+      translate: (key) => key,
+      queryClient,
+    })
+    // This identity check also catches the alias in Solid's non-proxy server
+    // store; the real browser test then exercises nested reconciliation.
+    expect(store.config.experimental).not.toBe(globalConfig.experimental)
+    expect(store.config.agent?.vectorscope).not.toBe(globalConfig.agent?.vectorscope)
+    await client.started
+    client.agents[0]!.resolve({ data: [{ name: "build", mode: "primary" }] })
+    client.providers[0]!.resolve(PROVIDERS)
+    await until(() => store.status === "complete")
+    expect(store.status).toBe("complete")
+    expect(store.config.experimental?.disable_paste_summary).toBe(true)
+    expect(store.config.agent?.vectorscope).toEqual({ model: "repository/reviewer", disable: false })
+    expect(globalConfig.experimental?.disable_paste_summary).toBe(false)
+    expect(globalConfig.agent?.vectorscope).toEqual({ model: "global/reviewer", disable: true })
+    queryClient.clear()
+  })
+
   test("marks a loading directory partial during bootstrap and complete after success", async () => {
     const mcpReads: string[] = []
     const [store, setStore] = directoryState()
@@ -164,7 +209,7 @@ describe("bootstrapDirectory", () => {
 
 // A directory client whose agent and provider lists the test answers by hand, one call at a time. `started` resolves
 // once the reload has started every fetch, after its wait for a paint.
-function heldClient() {
+function heldClient(config: Config = {}) {
   const agents: PromiseWithResolvers<unknown>[] = []
   const providers: PromiseWithResolvers<unknown>[] = []
   const started = Promise.withResolvers<void>()
@@ -175,7 +220,7 @@ function heldClient() {
   }
   const sdk = {
     app: { agents: held(agents) },
-    config: { get: async () => ({ data: {} }) },
+    config: { get: async () => ({ data: config }) },
     session: { status: async () => ({ data: {} }) },
     vcs: { get: async () => ({ data: undefined }) },
     command: { list: async () => ({ data: [] }) },
