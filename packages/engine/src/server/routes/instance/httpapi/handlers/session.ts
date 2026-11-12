@@ -274,9 +274,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       const sharing = yield* ShareNext.Service
       const links = yield* sharing.publicLinks(ctx.params.sessionID)
-      yield* session
-        .remove(ctx.params.sessionID, ctx.query)
-        .pipe(Effect.catchTag("NotFoundError", (error) => Effect.fail(notFound(error.message))))
+      yield* session.remove(ctx.params.sessionID, ctx.query).pipe(
+        Effect.catchTag("NotFoundError", (error) => Effect.fail(notFound(error.message))),
+        Effect.catchTag("SessionBusyError", (error) => SessionError.mapBusy(Effect.fail(error))),
+      )
       if (links.length) return { deleted: true as const, warnings: [publicShareWarning(links).message], links }
       return true
     })

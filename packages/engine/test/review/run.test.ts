@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "path"
-import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
 import { Database } from "@vectordevai/core/database/database"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
@@ -69,12 +69,15 @@ import { Truncate } from "@/tool/truncate"
 import { Format } from "../../src/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
 import { Review } from "../../src/review/run"
 import { ReviewService } from "../../src/review/service"
 import { ReviewLocalRun } from "../../src/review/local-run"
+import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
+import { ReviewLifecycle } from "../../src/review/lifecycle"
 import { SessionID } from "../../src/session/schema"
 import { TestInstance, trustWorkspace, reloadInstance } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
@@ -161,6 +164,8 @@ const root = LayerNode.group([
   FSUtil.node,
   BackgroundJob.node,
   BackgroundJobStore.node,
+  ReviewRequestStore.node,
+  ReviewLifecycle.node,
   SessionStatus.node,
   SessionRunState.node,
   Database.node,
@@ -320,6 +325,53 @@ const useServer = (
   })
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null
+
+const localOwnerFixture = Effect.gen(function* () {
+  const { llm, directory } = yield* useServer()
+  yield* ownerSettings({ agent: { vectorscope: { model: "lmstudio/test-model" } } })
+  const files = yield* FSUtil.Service
+  const git = yield* Git.Service
+  const runGit = (args: string[]) =>
+    git.run(args, { cwd: directory }).pipe(
+      Effect.map((result) => {
+        expect(result.exitCode).toBe(0)
+        return result.text().trim()
+      }),
+    )
+  yield* files.writeWithDirs(
+    path.join(directory, ".vector/review.json"),
+    JSON.stringify({ security: "off", verify: "off" }),
+  )
+  yield* files.writeWithDirs(
+    path.join(directory, "src/list.ts"),
+    "export function last(items: number[]) {\n  return items[items.length - 1]\n}\n",
+  )
+  yield* runGit(["add", "."])
+  yield* runGit(["commit", "-m", "local review deletion base"])
+  const head = yield* runGit(["rev-parse", "HEAD"])
+  yield* files.writeWithDirs(path.join(directory, "src/list.ts"), LIST_SOURCE)
+  const settings = yield* Config.Service
+  yield* settings.approve()
+  yield* reloadInstance({ directory })
+  expect((yield* settings.trust()).trusted).toBe(true)
+  expect((yield* (yield* Provider.Service).getModel(ref.providerID, ref.modelID).pipe(Effect.orDie)).id).toBe(
+    ref.modelID,
+  )
+  const sessions = yield* Session.Service
+  const parent = yield* sessions.create({ title: "Deletion race owner" }, "owner")
+  return {
+    llm,
+    sessions,
+    parent,
+    source: {
+      sessionID: parent.id,
+      directory,
+      worktree: directory,
+      permission: [{ permission: "*", pattern: "*", action: "allow" as const }],
+    },
+    request: { requestID: "actual_provider_deletion", target: { kind: "working-tree" as const, head } },
+  }
+})
 
 function lastUserText(body: Record<string, unknown>) {
   const messages: unknown[] = Array.isArray(body.messages) ? body.messages : []
@@ -1443,6 +1495,137 @@ describe("Review.run", () => {
         expect(yield* modelRequests(llm)).toHaveLength(1)
         expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
         expect((yield* runs.get(parent.id, started.runID)).artifact).toEqual(finished.artifact)
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  it.instance(
+    "completed deletion between attach and registration prevents late actual provider admission",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* localOwnerFixture
+        const lifecycle = yield* ReviewLifecycle.Service
+        const entered = yield* Deferred.make<SessionID>()
+        const release = yield* Deferred.make<void>()
+        let held = false
+        const paused: ReviewLifecycle.Interface = {
+          ...lifecycle,
+          within: (parentID, runID) => (effect) =>
+            Effect.gen(function* () {
+              if (runID && !held) {
+                held = true
+                yield* Deferred.succeed(entered, runID)
+                yield* Deferred.await(release)
+              }
+              return yield* lifecycle.within(parentID, runID)(effect)
+            }),
+        }
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+        const runs = yield* ReviewLocalRun.make({ runReview: Review.run, resolveModel: resolveReviewModel }).pipe(
+          Effect.provideService(ReviewLifecycle.Service, paused),
+        )
+        const starting = yield* runs.start(f.request, f.source).pipe(Effect.result, Effect.forkChild)
+        yield* awaitWithTimeout(Deferred.await(entered), "Review did not attach before the deletion probe")
+        yield* f.sessions.remove(f.parent.id)
+        expect(Exit.isFailure(yield* f.sessions.get(f.parent.id).pipe(Effect.exit))).toBe(true)
+        expect(yield* modelRequests(f.llm)).toHaveLength(0)
+        yield* Deferred.succeed(release, undefined)
+        const result = yield* awaitWithTimeout(Fiber.join(starting), "Late admission did not refuse the deleted parent")
+        expect(Result.isFailure(result)).toBe(true)
+        expect(yield* modelRequests(f.llm)).toHaveLength(0)
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  it.instance(
+    "deletion cancels a registered dormant review before its latch can admit an actual provider",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* localOwnerFixture
+        const lifecycle = yield* ReviewLifecycle.Service
+        const jobs = yield* BackgroundJob.Service
+        const entered = yield* Deferred.make<SessionID>()
+        const release = yield* Deferred.make<void>()
+        let sections = 0
+        const paused: ReviewLifecycle.Interface = {
+          ...lifecycle,
+          within: (parentID, runID) => (effect) =>
+            Effect.gen(function* () {
+              if (runID && ++sections === 2) {
+                yield* Deferred.succeed(entered, runID)
+                yield* Deferred.await(release)
+              }
+              return yield* lifecycle.within(parentID, runID)(effect)
+            }),
+        }
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+        const runs = yield* ReviewLocalRun.make({ runReview: Review.run, resolveModel: resolveReviewModel }).pipe(
+          Effect.provideService(ReviewLifecycle.Service, paused),
+        )
+        const starting = yield* runs.start(f.request, f.source).pipe(Effect.result, Effect.forkChild)
+        const runID = yield* awaitWithTimeout(Deferred.await(entered), "Dormant job was not registered")
+        expect((yield* jobs.get(runID))?.status).toBe("running")
+        yield* f.sessions.remove(f.parent.id)
+        expect((yield* jobs.get(runID))?.status).toBe("cancelled")
+        expect(Exit.isFailure(yield* f.sessions.get(f.parent.id).pipe(Effect.exit))).toBe(true)
+        yield* Deferred.succeed(release, undefined)
+        expect(Result.isFailure(yield* awaitWithTimeout(Fiber.join(starting), "Cancelled latch did not drain"))).toBe(
+          true,
+        )
+        expect(yield* modelRequests(f.llm)).toHaveLength(0)
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  it.instance(
+    "deletion without instance context joins the actual provider and refuses reentrant review finalizer deletion",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* localOwnerFixture
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        let deleted = false
+        let finalizerBusy = false
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+        const runs = yield* ReviewLocalRun.make({
+          resolveModel: resolveReviewModel,
+          runReview: (input) =>
+            Review.run(input).pipe(
+              Effect.ensuring(
+                Effect.gen(function* () {
+                  const nested = yield* f.sessions.remove(f.parent.id).pipe(Effect.result)
+                  finalizerBusy = Result.isFailure(nested) && nested.failure._tag === "SessionBusyError"
+                  yield* Deferred.succeed(entered, undefined)
+                  yield* Deferred.await(release)
+                }),
+              ),
+            ),
+        })
+        yield* f.llm.pushMatch(REVIEW, reply().hang())
+        const started = yield* runs.start(f.request, f.source)
+        yield* f.llm.wait(1)
+        const removing = yield* f.sessions.remove(f.parent.id).pipe(
+          Effect.provideService(InstanceRef, undefined),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              deleted = true
+            }),
+          ),
+          Effect.forkChild,
+        )
+        yield* awaitWithTimeout(Deferred.await(entered), "Provider cancellation finalizer did not run")
+        expect(finalizerBusy).toBe(true)
+        expect(deleted).toBe(false)
+        yield* Deferred.succeed(release, undefined)
+        yield* awaitWithTimeout(Fiber.join(removing), "Deletion did not join the provider's finalizer")
+        expect(deleted).toBe(true)
+        expect((yield* (yield* BackgroundJob.Service).get(started.runID))?.status).toBe("cancelled")
+        expect(Exit.isFailure(yield* f.sessions.get(f.parent.id).pipe(Effect.exit))).toBe(true)
+        expect(yield* modelRequests(f.llm)).toHaveLength(1)
+        expect((yield* f.llm.hits).filter(FINALIZE)).toHaveLength(0)
       }),
     { git: true },
     TIMEOUT,

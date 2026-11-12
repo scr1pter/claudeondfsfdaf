@@ -1,11 +1,13 @@
 import { $ } from "bun"
+import { randomUUID } from "node:crypto"
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Deferred, Effect, Exit, Option, Schema, Scope } from "effect"
+import { Deferred, Effect, Exit, Option, Result, Schema, Scope } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
+import { Database } from "@vectordevai/core/database/database"
 import { BackgroundJob as CoreBackgroundJob } from "@vectordevai/core/background-job"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -14,6 +16,8 @@ import { SessionProjector } from "@vectordevai/core/session/projector"
 import { selectFindings } from "@vectordevai/core/review/select"
 import type { Finding, ReviewOutcome } from "@vectordevai/core/review/types"
 import { ReviewRun } from "@vectordevai/schema/review-run"
+import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
+import { ReviewLifecycle } from "@/review/lifecycle"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -33,6 +37,9 @@ const it = testEffect(
       EventV2Bridge.node,
       BackgroundJob.node,
       BackgroundJobStore.node,
+      Database.node,
+      ReviewRequestStore.node,
+      ReviewLifecycle.node,
       Git.node,
       CrossSpawnSpawner.node,
     ]),
@@ -242,6 +249,88 @@ describe("durable server-owned local review runs", () => {
         yield* Deferred.succeed(release, undefined)
         yield* jobs.wait({ id: second.runID })
         expect((yield* runs.get(repo.parent.id, second.runID)).status).toBe("completed")
+      }),
+    options,
+  )
+
+  it.instance(
+    "two coordinators arbitrate one request durably and a crashed pending reservation never starts paid work",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* fixture
+        const store = yield* ReviewRequestStore.Service
+        const jobs = yield* BackgroundJob.Service
+        const lifecycle = yield* ReviewLifecycle.Service
+        const both = yield* Deferred.make<void>()
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        let arrivals = 0
+        let calls = 0
+        const coordinated: ReviewLifecycle.Interface = {
+          ...lifecycle,
+          within: (parentID, runID) => (effect) =>
+            Effect.gen(function* () {
+              if (!runID) {
+                if (++arrivals === 2) yield* Deferred.succeed(both, undefined)
+                yield* Deferred.await(both)
+              }
+              return yield* lifecycle.within(parentID, runID)(effect)
+            }),
+        }
+        const pipeline = {
+          resolveModel,
+          runReview: (input: RunInput) =>
+            Effect.gen(function* () {
+              calls++
+              yield* Deferred.succeed(entered, undefined)
+              yield* Deferred.await(release)
+              return outcome(input)
+            }),
+        }
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+        const first = yield* ReviewLocalRun.make(pipeline).pipe(
+          Effect.provideService(ReviewLifecycle.Service, coordinated),
+        )
+        const second = yield* ReviewLocalRun.make(pipeline).pipe(
+          Effect.provideService(ReviewLifecycle.Service, coordinated),
+        )
+        const starts = yield* Effect.all(
+          [
+            first.start(repo.request, repo.source).pipe(Effect.result),
+            second.start(repo.request, repo.source).pipe(Effect.result),
+          ],
+          { concurrency: "unbounded" },
+        )
+        const accepted = starts.flatMap((result) => (Result.isSuccess(result) ? [result.success] : []))
+        expect(accepted.length).toBeGreaterThanOrEqual(1)
+        expect(new Set(accepted.map((run) => run.runID)).size).toBe(1)
+        for (const result of starts) if (Result.isFailure(result)) expect(result.failure.code).toBe("unavailable")
+        yield* awaitWithTimeout(Deferred.await(entered), "The single admitted review did not start")
+        expect(calls).toBe(1)
+        const joined = yield* second.start(repo.request, repo.source)
+        expect(joined.runID).toBe(accepted[0]!.runID)
+        const crashed = { ...repo.request, requestID: "request_crashed_reservation" }
+        expect(
+          (yield* store.reserve({
+            parentID: repo.parent.id,
+            request: crashed,
+            ownerNonce: randomUUID(),
+            owner: (yield* jobs.lease())!,
+          })).claimed,
+        ).toBe(true)
+        const refused = yield* first.start(crashed, repo.source).pipe(Effect.result)
+        expect(Result.isFailure(refused) && refused.failure.code).toBe("unavailable")
+        const conflict = yield* second.start({ ...crashed, maxCost: 0.5 }, repo.source).pipe(Effect.result)
+        expect(Result.isFailure(conflict) && conflict.failure.code).toBe("conflict")
+        expect(calls).toBe(1)
+        expect(
+          (yield* (yield* Session.Service).children(repo.parent.id)).filter(
+            (child) => child.internal === ReviewLocalRun.MARKER,
+          ),
+        ).toHaveLength(1)
+        yield* Deferred.succeed(release, undefined)
+        yield* jobs.wait({ id: joined.runID })
+        expect((yield* first.get(repo.parent.id, joined.runID)).status).toBe("completed")
       }),
     options,
   )

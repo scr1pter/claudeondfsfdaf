@@ -246,7 +246,13 @@ export const SessionApi = HttpApi.make("session")
             SessionDeleteResult,
             "Deleted local session; warnings identify public copies that may remain online",
           ),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, PublicShareRemovalError, PublicSession.Error],
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            PublicShareRemovalError,
+            PublicSession.Error,
+            SessionBusyError,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.delete",

@@ -13,6 +13,7 @@ import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { TaskManager } from "@/task/manager"
 import { WorkflowOwner } from "@/orchestration/owner"
+import { ReviewOwner } from "@/review/owner"
 import { TaskNotify } from "@/task/notify"
 import { TaskLimits } from "@/task/limits"
 import { TaskRecovery } from "@/task/recovery"
@@ -108,6 +109,7 @@ import { configHandlers } from "./handlers/config"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
+import { reviewHandlers } from "./handlers/review"
 import { teamsHandlers } from "./handlers/teams"
 import { Teams } from "@vectordevai/core/teams"
 import { VectorTeams } from "@/teams"
@@ -186,6 +188,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
     configHandlers,
     experimentalHandlers,
+    reviewHandlers,
     fileHandlers,
     instanceHandlers,
     localHandlers,
@@ -287,6 +290,7 @@ const app = LayerNode.group([
   BackgroundJob.node,
   TaskManager.node,
   WorkflowOwner.node,
+  ReviewOwner.node,
   TaskNotify.node,
   TaskLimits.node,
   TaskRecovery.node,

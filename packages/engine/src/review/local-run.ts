@@ -1,16 +1,23 @@
-import { createHash } from "node:crypto"
-import { Effect, Option, Result, Schema, Semaphore } from "effect"
+import { createHash, randomUUID } from "node:crypto"
+import { and, eq, sql } from "drizzle-orm"
+import { Deferred, Effect, Exit, Option, Result, Schema, Semaphore } from "effect"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
+import { Database } from "@vectordevai/core/database/database"
+import { SessionTable } from "@vectordevai/core/session/sql"
+import { decodeLocalResult } from "@vectordevai/core/review/local-result"
+import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { NonNegativeInt, optional } from "@vectordevai/schema/schema"
 import { BackgroundJob } from "@/background/job"
+import { EffectBridge } from "@/effect/bridge"
 import type { LocalReviewDeps } from "@/cli/cmd/review"
 import { Git } from "@/git"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { ReviewLocalAdmission } from "./local-admission"
 import { ReviewService } from "./service"
+import { ReviewLifecycle } from "./lifecycle"
 
 export const MARKER = `${PINNED_SESSION_PREFIX}run`
 export const FIELD = "vectorscopeLocalRun"
@@ -34,6 +41,11 @@ const Stored = Schema.Struct({
 })
 type Stored = typeof Stored.Type
 
+export function readRecord(input: unknown) {
+  const decoded = Schema.decodeUnknownOption(Stored, { onExcessProperty: "error" })(input)
+  return Option.isSome(decoded) ? decoded.value : undefined
+}
+
 export interface Interface<R = never> {
   /** Called after the HTTP boundary establishes owner identity and session control. */
   readonly start: (
@@ -52,6 +64,9 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
     const sessions = yield* Session.Service
     const jobs = yield* BackgroundJob.Service
     const store = yield* BackgroundJobStore.Service
+    const database = yield* Database.Service
+    const requests = yield* ReviewRequestStore.Service
+    const lifecycle = yield* ReviewLifecycle.Service
     const lock = yield* Semaphore.make(1)
     const active = new Map<SessionID, { abort: AbortController; finished: boolean }>()
 
@@ -66,6 +81,11 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
         return yield* new Error({ code: "corrupt", message: "The saved local review record is invalid." })
       if (decoded.value.artifact && !validArtifact(decoded.value.artifact))
         return yield* new Error({ code: "corrupt", message: "The saved local review result is invalid." })
+      if (decoded.value.artifact) {
+        const value = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(decoded.value.artifact.json)
+        if (Option.isNone(value) || !decodeLocalResult(value.value, decoded.value.request.target))
+          return yield* new Error({ code: "corrupt", message: "The saved local review outcome is invalid." })
+      }
       return { run, record: decoded.value }
     })
     const save = Effect.fn("ReviewLocalRun.save")(function* (runID: SessionID, record: Stored) {
@@ -163,11 +183,25 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
       const admission = yield* ReviewLocalAdmission.prepare(request, requester).pipe(Effect.result)
       if (Result.isFailure(admission) && admission.failure.code !== "stale") return yield* admission.failure
       const parentID = SessionID.make(requester.sessionID)
-      const children = (yield* sessions.children(parentID)).filter((child) => child.internal === MARKER)
-      if (children.length >= 1000)
-        return yield* new Error({ code: "unavailable", message: "This conversation has too many local reviews." })
-      const records = yield* Effect.forEach(children, (child) => load(parentID, child.id))
-      const matching = records.filter((entry) => entry.record.request.requestID === request.requestID)
+      // Query identifiers first: an exact retry must not hydrate every earlier
+      // review's potentially large result JSON into the request's memory.
+      const children = yield* database.db
+        .select({ id: SessionTable.id })
+        .from(SessionTable)
+        .where(
+          and(
+            eq(SessionTable.parent_id, parentID),
+            eq(SessionTable.internal, MARKER),
+            eq(
+              sql<string>`json_extract(${SessionTable.metadata}, '$.vectorscopeLocalRun.request.requestID')`,
+              request.requestID,
+            ),
+          ),
+        )
+        .limit(2)
+        .all()
+        .pipe(Effect.orDie)
+      const matching = yield* Effect.forEach(children, (child) => load(parentID, SessionID.make(child.id)))
       if (matching.length > 1)
         return yield* new Error({ code: "corrupt", message: "The review retry key names more than one run." })
       const existing = matching[0]
@@ -180,14 +214,31 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
         return yield* get(parentID, existing.run.id)
       }
       if (Result.isFailure(admission)) return yield* admission.failure
-      if (!(yield* jobs.lease()))
+      const total = yield* database.db
+        .select({ count: sql<number>`count(*)` })
+        .from(SessionTable)
+        .where(and(eq(SessionTable.parent_id, parentID), eq(SessionTable.internal, MARKER)))
+        .get()
+        .pipe(Effect.orDie)
+      if ((total?.count ?? 0) >= 1000)
+        return yield* new Error({ code: "unavailable", message: "This conversation has too many local reviews." })
+      const lease = yield* jobs.lease()
+      if (!lease)
         return yield* new Error({
           code: "unavailable",
           message: "Durable local reviews are unavailable in this engine.",
         })
+      const ownerNonce = randomUUID()
       // Once reserved, disconnect cannot leave an unstarted run artifact. The
       // worker explicitly remains interruptible in its own BackgroundJob scope.
       return yield* Effect.gen(function* () {
+        const current: { abort: AbortController; finished: boolean; runID?: SessionID } = {
+          abort: new AbortController(),
+          finished: false,
+        }
+        const bridge = yield* EffectBridge.make()
+        let unregister = () => {}
+        const context = yield* Effect.context<RunR | ModelR | Git.Service>()
         const record: Stored = {
           version: 1,
           parentID,
@@ -196,74 +247,174 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
           status: "running",
           startedAt: Date.now(),
         }
-        const context = yield* Effect.context<RunR | ModelR | Git.Service>()
-        const run = yield* sessions.create(
-          {
-            parentID,
-            internal: MARKER,
-            agent: VECTORSCOPE_AGENT,
-            title: `VectorScope · ${request.target.head.slice(0, 7)}`,
-            permission: [{ permission: "*", pattern: "*", action: "deny" }],
-            metadata: { [FIELD]: record },
-          },
-          "owner",
-        )
-        const current = { abort: new AbortController(), finished: false }
-        active.set(run.id, current)
-        const completed: { artifact?: ReviewRun.Artifact } = {}
-        const work = Effect.gen(function* () {
-          const result = yield* ReviewService.execute(
-            { ...admission.success.invocation, parentID: run.id, stopSignal: current.abort.signal },
-            {
-              ...pipeline,
-              confirm: async () => false,
-              stdout: async () => {},
-              stderr: () => {},
-              posting: async () => {
-                throw new Error({ code: "invalid", message: "A local review cannot publish." })
-              },
-            },
-          )
-          current.finished = true
-          const artifact = encodeArtifact(result)
-          if (!artifact)
-            return yield* new Error({ code: "invalid", message: "The review result exceeds its saved output limit." })
-          completed.artifact = artifact
-          yield* save(run.id, { ...record, artifact })
-          if (current.abort.signal.aborted) return yield* Effect.interrupt
-          if (result.error)
-            return yield* new BackgroundJob.RunFailed({
-              message: result.error.slice(0, 2048),
-              output: "Local review failed.",
-            })
-          return "Local review finished."
-        }).pipe(
-          Effect.provide(context),
-          Effect.onInterrupt(() => Effect.sync(() => current.abort.abort())),
-        )
-        yield* jobs.start({
-          id: run.id,
-          type: JOB,
-          title: run.title,
-          metadata: { parentSessionId: parentID, sessionId: run.id, background: true },
-          durable: { parentSessionID: parentID, sessionID: run.id, directory: record.directory },
-          promotable: false,
-          run: Effect.interruptible(work),
-          onComplete: (job) =>
+        const setup = Effect.gen(function* () {
+          const prepared = yield* lifecycle.within(parentID)(
             Effect.gen(function* () {
-              active.delete(run.id)
-              const status = job.status === "error" ? "failed" : job.status === "running" ? "interrupted" : job.status
-              yield* save(run.id, {
-                ...record,
-                status,
-                completedAt: job.completed_at ?? Date.now(),
-                ...(completed.artifact ? { artifact: completed.artifact } : {}),
-                ...(job.error ? { error: job.error.slice(0, 2048) } : {}),
+              const reservation = yield* requests.reserve({ parentID, request, ownerNonce, owner: lease })
+              if (!reservation.claimed) {
+                if (reservation.row.runID) return { existing: yield* get(parentID, reservation.row.runID) }
+                return yield* new Error({
+                  code: "unavailable",
+                  message:
+                    "This review request is starting or was interrupted before admission. It will not restart automatically.",
+                })
+              }
+              unregister = ReviewLifecycle.register(ownerNonce, () =>
+                Effect.gen(function* () {
+                  current.abort.abort()
+                  if (current.runID) yield* bridge.run(jobs.cancel(current.runID))
+                }),
+              )
+              const run = yield* sessions.create(
+                {
+                  parentID,
+                  internal: MARKER,
+                  agent: VECTORSCOPE_AGENT,
+                  title: `VectorScope · ${request.target.head.slice(0, 7)}`,
+                  permission: [{ permission: "*", pattern: "*", action: "deny" }],
+                  metadata: { [FIELD]: record },
+                },
+                "owner",
+              )
+              current.runID = run.id
+              // A process losing this reservation may never start a job. A crash
+              // before this one-time attachment can leave only an unpaid hidden
+              // session; a later retry never takes over its admission authority.
+              if (
+                current.abort.signal.aborted ||
+                !(yield* lifecycle.within(run.id)(
+                  requests.attach({ parentID, requestID: request.requestID, ownerNonce, runID: run.id }),
+                ))
+              )
+                return yield* new Error({
+                  code: "unavailable",
+                  message: "The local review reservation changed before execution.",
+                })
+              return { run }
+            }),
+          )
+          if ("existing" in prepared) {
+            if (!prepared.existing)
+              return yield* new Error({
+                code: "unavailable",
+                message: "The retained review became unavailable during admission.",
               })
-            }).pipe(Effect.asVoid),
+            return prepared.existing
+          }
+          const { run } = prepared
+          active.set(run.id, current)
+          const go = yield* Deferred.make<void>()
+          const completed: { artifact?: ReviewRun.Artifact } = {}
+          const work = Effect.gen(function* () {
+            yield* Deferred.await(go)
+            if (current.abort.signal.aborted) return yield* Effect.interrupt
+            const result = yield* ReviewService.execute(
+              { ...admission.success.invocation, parentID: run.id, stopSignal: current.abort.signal },
+              {
+                ...pipeline,
+                confirm: async () => false,
+                stdout: async () => {},
+                stderr: () => {},
+                posting: async () => {
+                  throw new Error({ code: "invalid", message: "A local review cannot publish." })
+                },
+              },
+            )
+            current.finished = true
+            const artifact = encodeArtifact(result)
+            if (!artifact)
+              return yield* new Error({ code: "invalid", message: "The review result exceeds its saved output limit." })
+            completed.artifact = artifact
+            yield* save(run.id, { ...record, artifact })
+            if (current.abort.signal.aborted) return yield* Effect.interrupt
+            if (result.error)
+              return yield* new BackgroundJob.RunFailed({
+                message: result.error.slice(0, 2048),
+                output: "Local review failed.",
+              })
+            return "Local review finished."
+          }).pipe(
+            Effect.provideService(ReviewLifecycle.Current, ownerNonce),
+            Effect.provide(context),
+            Effect.onInterrupt(() => Effect.sync(() => current.abort.abort())),
+          )
+          const identity = { parentID, requestID: request.requestID, ownerNonce, runID: run.id }
+          yield* lifecycle.within(
+            parentID,
+            run.id,
+          )(
+            Effect.gen(function* () {
+              if (current.abort.signal.aborted || !(yield* requests.ready(identity)))
+                return yield* new Error({
+                  code: "unavailable",
+                  message: "The review conversation closed before launch registration.",
+                })
+              yield* jobs.start({
+                id: run.id,
+                type: JOB,
+                title: run.title,
+                metadata: { parentSessionId: parentID, sessionId: run.id, background: true },
+                durable: { parentSessionID: parentID, sessionID: run.id, directory: record.directory },
+                promotable: false,
+                run: Effect.interruptible(work),
+                onComplete: (job) =>
+                  Effect.gen(function* () {
+                    const status =
+                      job.status === "error" ? "failed" : job.status === "running" ? "interrupted" : job.status
+                    yield* save(run.id, {
+                      ...record,
+                      status,
+                      completedAt: job.completed_at ?? Date.now(),
+                      ...(completed.artifact ? { artifact: completed.artifact } : {}),
+                      ...(job.error ? { error: job.error.slice(0, 2048) } : {}),
+                    })
+                  }).pipe(
+                    Effect.asVoid,
+                    Effect.ensuring(
+                      Effect.gen(function* () {
+                        yield* requests.finish(identity)
+                        active.delete(run.id)
+                        unregister()
+                      }),
+                    ),
+                    Effect.provideService(ReviewLifecycle.Current, ownerNonce),
+                  ),
+              })
+            }),
+          )
+          const admitted = yield* lifecycle.within(
+            parentID,
+            run.id,
+          )(current.abort.signal.aborted ? Effect.succeed(false) : requests.begin(identity))
+          if (!admitted)
+            return yield* new Error({
+              code: "unavailable",
+              message: "The review conversation closed before provider admission.",
+            })
+          // The native job is visible and cancellable before the latch opens.
+          // No lifecycle lock is held while its work or finalizers execute.
+          yield* Deferred.succeed(go, undefined)
+          return yield* get(parentID, run.id)
         })
-        return yield* get(parentID, run.id)
-      }).pipe(Effect.uninterruptible)
+        return yield* setup.pipe(
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : Effect.gen(function* () {
+                  current.abort.abort()
+                  if (current.runID) yield* jobs.cancel(current.runID)
+                  yield* requests.finish({ parentID, requestID: request.requestID, ownerNonce })
+                  if (current.runID) active.delete(current.runID)
+                  unregister()
+                }),
+          ),
+        )
+      }).pipe(
+        Effect.uninterruptible,
+        Effect.catchTag("ReviewRequestStore.Refused", (error) =>
+          Effect.fail(new Error({ code: error.code === "busy" ? "unavailable" : error.code, message: error.message })),
+        ),
+      )
     }, lock.withPermits(1))
 
     const stop: Interface["stop"] = Effect.fn("ReviewLocalRun.stop")(function* (parentID, runID) {

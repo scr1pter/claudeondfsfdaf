@@ -366,3 +366,122 @@ owner/guest public routes and generated clients remain unfinished. The exact
 serialized artifact is not yet a public presentation contract. Browser settings
 runtime repairs and post-change navigation measurement are also still pending;
 no whole-VS-10, release, performance or privacy claim follows this checkpoint.
+
+## Retained-result and actual-provider checkpoints
+
+`bcc636d73` adds the browser-safe versioned retained-result decoder. It validates
+the exact parent/request/run identity, UTF-8 byte count, SHA-256, target/head,
+full outcome shape and canonical coverage verdict before presentation. Failed,
+cancelled and interrupted outer lifecycle states cannot promote an outcome to
+clean. Numeric usage survives deserialization; serialized token-attribution
+proof does not. The seven focused cases and Core typecheck pass in coordinator
+batches 054–055. No renderer adapter was activated by that commit.
+
+`2434b8ef8` exercises the durable coordinator with the actual shared review
+runner and a loopback HTTP provider. It checks real configured-model resolution,
+retained placed findings and usage, hidden factory placement, and cancellation
+without another finalizer. The complete owned fixture is explicitly approved
+after its review settings change; model refusal is not replaced with a fake
+resolver or fallback. The focused runtime and Engine types pass in batches
+055–056. These are provider-free fixtures, not a live-provider certification.
+
+The post-change navigation measurement at `8152d3f51` is actually recorded:
+run `43179368976`, job `131051334827`, nine of nine cases with zero retries,
+blank samples and unknown samples. The decoded receipt is retained at
+`/tmp/vector-build-validation/scope-ui-post.json`. CPU/artifact ZIP verification
+remains unavailable, so this is no speed claim. It releases the implementation
+gate for the following App adapter work; it does not qualify future App edits.
+
+`98503a9b5` places VectorScope model/variant popups above the actual Settings
+dialog. The following `65cd0f697` tried a native section click handler; later CI
+did not establish it as a fix. The separate focused diagnostic branch restores
+the ordinary click handler and traces state propagation. Its latest nine-case
+run passes eight cases: the real click updates the section state and storage,
+but the mounted header remains collapsed. The final picker fix and nine-case
+browser acceptance remain open. Pointer, ARIA, save and confirmation assertions
+are unchanged.
+
+## Owner local review API, atomic admission and deletion checkpoint
+
+The owner API derives project placement and read restrictions from an existing
+main conversation. Starts accept only a retry key, exact local target and an
+optional tighter cost ceiling. Strict decode rejects caller-provided directory,
+model, permissions, settings, instructions, consent, execution and posting
+authority. Starts require the owner's global opt-in; a repository cannot enable
+it. Owner-only target discovery reads the actual verified Git head. A GitHub
+connection, GitHub login or Vector account is not a local prerequisite.
+
+Run listing is bounded to fifty status summaries per page and strips artifact
+JSON inside SQLite. Exact-result reads validate retained output separately.
+Turning new reviews off still permits owned stop/result access. A missing or
+defective parent is rejected before workspace planning, project bootstrap or
+forwarding; a caller cannot choose another workspace for the review. Existing
+parent placement overrides arbitrary directory headers.
+
+Independent review found the per-coordinator semaphore insufficient to arbitrate
+simultaneous starts through separate engines. The implementation adds a durable
+`review_request` composite key, immutable exact Start and owner nonce. Only the
+atomic insert winner creates a normal fresh hidden session, then attaches its
+ID by a one-time compare-and-set before any job/provider start. Pending or
+crashed reservations never authorize automatic takeover. A crash before
+attachment can leave an unpaid hidden session. Pending reservations count
+toward the bounded per-parent request namespace; deleting a result cannot erase
+the retry tombstone.
+
+Review also found that deleting a conversation after attachment but before job
+launch could allow work to start after deletion completed. A shared-database
+admission phase and durable closing fence now arbitrate that boundary. Existing
+EffectFlock locks use the canonical database/session identity and cover only
+short admission transitions. A registered dormant native job waits for the final
+authority transition; deletion either wins first or cancels and joins locally
+registered work before removing the conversation. Cancellation and finalizers
+run outside those locks. The closing fence prevents new admission while they
+drain. Live or unknown foreign leases refuse deletion before destructive work;
+worker/finalizer reentrant deletion refuses instead of waiting on itself.
+
+Session deletion exposes the existing controlled busy response through HTTP,
+CLI and workspace removal. No session-constructor, prompt or spend-guard behavior
+is widened. Old reservation rows gain a settled phase rather than execution
+authority. Both migrations and their four derived artifacts were generated by
+the repository's normal migration command and reviewed for additive-only scope.
+
+The coordinator records the following actual checks in
+`/tmp/vector-build-validation/results.jsonl`:
+
+- Batches 070/080: five Core store cases, including two child processes sharing
+  SQLite, exact immutable attachment, input conflict, pending limits, deletion
+  fences and genuine live/unknown foreign leases. The final five-case run passes
+  in 2.37 seconds.
+- Batches 076/085: six Engine lifecycle cases pass; the final run takes 9.38
+  seconds. Independent coordinators race through one request key and admit one
+  execution; a crashed pending reservation never retries work.
+- Batch 076: three tests through the actual loopback-provider/shared review
+  pipeline pass in 5.98 seconds. They cover attach/delete/release with zero
+  provider calls, registered launch cancellation/drain, and recursive deletion
+  from the review finalizer without a deadlock.
+- Batch 083: all nine genuine owner/guest HTTP cases pass in 47.19 seconds.
+  The missing-parent case observes zero unrelated bootstrap/provider calls and
+  includes an ordinary-route bootstrap positive control. The foreign lease case
+  uses a real shared file database and another process, refuses deletion with
+  HTTP 409, then proves the late launch cannot begin after settled deletion.
+- Batch 083: full HTTP coverage, all five review-route authentication/effect
+  scenarios and Core types pass. Batch 085: Engine types, the six lifecycle
+  cases and the exact source pin pass. Client and SDK/OpenAPI regeneration pass
+  through their normal commands. Schema/Server contracts and the retained-result
+  decoder were already qualified at the earlier unchanged checkpoints.
+
+Current backend source pin: `e4132a31ce04d75d`. Independent rereview closes the
+missing-parent routing, duplicate admission and late-provider deletion findings
+in this checkpoint. The public result decoder still validates the exact owned
+run and fails closed on malformed or mismatched artifacts. The App adapter is a
+separate work package under construction; these backend receipts do not qualify
+its activation or browser behavior.
+
+Production readiness remains held on the separately identified live Git
+collection boundary. Actual TaskIsolation review probing showed repository
+filters can execute during ordinary Git reads. Admission checks alone do not
+close that issue: working-tree diff/status and review context callbacks must use
+the qualified private command-free Git read port before activation. That repair
+is owned by the native supervisor and has not been integrated or qualified here.
+Whole VS-10 acceptance, the picker browser fix, final App measurements, paid
+quality evaluation, public parity and release/default rollout remain open.

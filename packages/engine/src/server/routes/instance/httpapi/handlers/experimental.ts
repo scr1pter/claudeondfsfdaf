@@ -348,6 +348,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         taskIsolation: true,
         backgroundShells: true,
         vectorscopeSettings: true,
+        vectorscopeRuns: true,
       }
     })
 

@@ -3,6 +3,17 @@ import { Option, Redacted } from "effect"
 import { ServerAuth } from "./auth"
 
 describe("server authentication", () => {
+  test("local review starts, discovery, results and stop are owner-only", () => {
+    for (const [method, route] of [
+      ["POST", "/experimental/session/:sessionID/review"],
+      ["GET", "/experimental/session/:sessionID/review"],
+      ["GET", "/experimental/session/:sessionID/review/target"],
+      ["GET", "/experimental/session/:sessionID/review/:runID"],
+      ["POST", "/experimental/session/:sessionID/review/:runID/stop"],
+    ])
+      expect(ServerAuth.isOwnerOnlyRoute(method!, route!)).toBe(true)
+    expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/session/ses_review/review/ses_run")).toBe(true)
+  })
   test("an empty owner password cannot bypass guest authentication", () => {
     const config = {
       password: Option.some(""),
