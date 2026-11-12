@@ -38,6 +38,7 @@ import {
 } from "./jobs.js"
 import { everywhereStore, type Store } from "./store.js"
 import { admits, codiumSwitches, readEverywhereSwitch, type CodiumSwitches } from "./switch.js"
+import { productionJobEvents } from "./runtime.js"
 
 /*
  * The jobs routes a computer calls with its desktop token (contract 3.4, 3.5, E4, E8, E10, E18):
@@ -319,4 +320,4 @@ export function createJobsApi(deps: JobsApiDeps = {}) {
 }
 
 /** The production routes: environment, store and switches as deployed. */
-export const everywhereJobsApi = createJobsApi()
+export const everywhereJobsApi = createJobsApi({ events: productionJobEvents })

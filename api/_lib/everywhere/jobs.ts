@@ -547,6 +547,7 @@ export const TRANSITION_SCRIPT = [
   "if ARGV[5] == '' then redis.call('ZREM', KEYS[3], ARGV[8]) else redis.call('ZADD', KEYS[3], ARGV[5], ARGV[8]) end",
   "if ARGV[6] == '0' then redis.call('ZREM', KEYS[4], ARGV[8]) redis.call('ZREM', KEYS[5], ARGV[8]) end",
   "if ARGV[7] == 'delete' then redis.call('DEL', KEYS[2]) end",
+  "if ARGV[9] ~= '' then redis.call('ZADD', KEYS[6], ARGV[9], ARGV[8]) end",
   "return 1",
 ].join(" ")
 
@@ -593,6 +594,7 @@ async function change<T>(
           everywhereKeys.jobsDue(),
           everywhereKeys.jobs(job.sponsor),
           everywhereKeys.installationJobs(job.installation),
+          everywhereKeys.jobsPosts(),
         ],
         [
           job.version,
@@ -603,6 +605,7 @@ async function change<T>(
           terminal ? "0" : "1",
           body,
           jid,
+          terminal && !TERMINAL_STATES.has(job.state) ? ctx.now : "",
         ],
       ),
     )
@@ -1272,6 +1275,7 @@ async function sweepOne(
   if (gone) {
     for (const key of indexes) await ctx.store(["ZREM", key, jid])
     await deleteKeys(ctx.store, everywhereKeys.jobBody(jid))
+    await ctx.store(["ZREM", everywhereKeys.jobsPosts(), jid])
     return undefined
   }
   if (!swept?.ended) return undefined
@@ -1511,6 +1515,7 @@ export async function eraseAccountJobs(ctx: JobsContext, account: string): Promi
     if (job && job.sponsor !== owner) continue
     await deleteKeys(ctx.store, everywhereKeys.job(jid), everywhereKeys.jobBody(jid))
     await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
+    await ctx.store(["ZREM", everywhereKeys.jobsPosts(), jid])
   }
   const seen = await readSoft(ctx.store, everywhereKeys.seen(owner), decodeSeen)
   if (seen) await deleteKeys(ctx.store, everywhereKeys.ready(owner, seen.device))

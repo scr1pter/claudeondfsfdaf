@@ -365,8 +365,9 @@ export class FakeStore {
 
   /** TRANSITION_SCRIPT, step for step: the same fixed pattern reads the version and state. */
   private transition(keys: string[], argv: string[]) {
-    const [job, body, due, live, installationLive] = keys as [string, string, string, string, string]
-    const [version, state, record, ttl, dueScore, stayLive, bodyMode, jid] = argv as [
+    const [job, body, due, live, installationLive, posts] = keys as [string, string, string, string, string, string]
+    const [version, state, record, ttl, dueScore, stayLive, bodyMode, jid, postAt] = argv as [
+      string,
       string,
       string,
       string,
@@ -389,6 +390,7 @@ export class FakeStore {
       this.run("ZREM", [installationLive, jid])
     }
     if (bodyMode === "delete") this.run("DEL", [body])
+    if (postAt !== "") this.run("ZADD", [posts, postAt, jid])
     return 1
   }
 
