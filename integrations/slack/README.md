@@ -1,0 +1,13 @@
+# Vector Slack manifest
+
+The manifest is source for an unregistered HTTP Events API app. No app, credentials, distribution setting or Marketplace submission was created by this build. Importing it and enabling public distribution remain owner steps after the final integration review and live acceptance.
+
+The seven bot scopes match the spec. `channels:history` and `groups:history` serve only one `conversations.replies` GET per workspace per minute, with a maximum of fifteen messages and no pagination. All channel replies use the shared-place policy because these scopes cannot establish that a channel is private. Only direct messages may receive a detailed result in the thread. Other summaries are ephemeral to the verified requester. No search, email, slash-command, reaction or streaming scopes are requested.
+
+The OAuth callback does not exchange a code. It redirects to the fixed `/everywhere` fragment; the signed-in landing page must finish through the existing bearer-authenticated account route with the original single-use state. That landing surface belongs to the later surface phase. Unexpected token rotation is refused; user tokens and refresh tokens are never stored.
+
+First message creation has no documented Web API idempotency key. Before posting, the job seals an attempt receipt; after success it seals the returned message id and subsequent invocations edit that message. An ambiguous first-post response is held for reconciliation rather than retried as a new message. Its encrypted summary remains in the terminal outbox. Automatic reconciliation and its live acceptance are still a release gate: there is no additional history read, undocumented `client_msg_id` guarantee or false delivery confirmation. Ephemeral summaries follow the same conservative rule. A definitive refusal permits retry; `Retry-After` is shared across invocations for the affected installation and API method.
+
+Native processing is refreshed on milestones and heartbeats; stop affects only the linked requester who sponsored the matching thread's job. Feedback buttons never approve tools or spend runs. Uninstall and matching bot-token revocation erase installation identity and live job bodies.
+
+Registration, real workspace/Enterprise Grid and Slack Connect qualification, first-message reconciliation, prerequisite laptop/cloud ports, the signed-in landing surface, privacy/support pages and live acceptance remain open. Listed-agent zero-storage requirements require owner review of the spec's transient encrypted job bodies before any Marketplace submission. Current Marketplace prerequisites include twenty monthly active users and ten active workspaces; do not infer listing approval from this source or the loopback tests.

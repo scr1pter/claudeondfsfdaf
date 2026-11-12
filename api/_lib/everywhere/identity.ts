@@ -13,7 +13,7 @@ import type { EverywhereConfig } from "./config.js"
 import { open, openJson, seal, sealJson, type DataKey } from "./crypto.js"
 import { platformFetch, readPlatformJson } from "./fetch.js"
 import { KEEP_MS, USER_ID_PATTERNS, everywhereKeys, userIdValid } from "./keys.js"
-import { hmacSha256Hex } from "./signature.js"
+import { hmacSha256Hex, sha256Hex } from "./signature.js"
 import {
   addMembers,
   deleteKeys,
@@ -195,6 +195,8 @@ function decodeLink(value: unknown): LinkRecord | undefined {
 /** `install:<installation>` (3.13). `tokenEnc` is sealed to this key; Jira sites keep no token. */
 export type InstallRecord = {
   readonly connector: string
+  /** Fresh on every authoritative install/connect, including a tokenless same-millisecond reinstall. */
+  readonly revision?: string
   readonly tokenEnc?: string
   readonly scopes: readonly string[]
   readonly botUserId?: string
@@ -210,10 +212,11 @@ const TOKEN = /^[\x21-\x7e]{1,8192}$/
 
 function decodeInstall(platform: PlatformId) {
   return (value: unknown): InstallRecord | undefined => {
-    if (!isRecord(value, ["connector", "tokenEnc", "scopes", "botUserId", "installedAt", "forgeInstallationId"]))
+    if (!isRecord(value, ["connector", "revision", "tokenEnc", "scopes", "botUserId", "installedAt", "forgeInstallationId"]))
       return undefined
-    const { connector, tokenEnc, scopes, botUserId, installedAt, forgeInstallationId } = value
+    const { connector, revision, tokenEnc, scopes, botUserId, installedAt, forgeInstallationId } = value
     if (!isAccount(connector) || !isTime(installedAt)) return undefined
+    if (revision !== undefined && (typeof revision !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(revision))) return undefined
     if (tokenEnc !== undefined && typeof tokenEnc !== "string") return undefined
     if (
       !Array.isArray(scopes) ||
@@ -230,6 +233,7 @@ function decodeInstall(platform: PlatformId) {
       return undefined
     return {
       connector: connector.toLowerCase(),
+      ...(revision !== undefined ? { revision } : {}),
       ...(tokenEnc !== undefined ? { tokenEnc } : {}),
       scopes: [...scopes] as string[],
       ...(botUserId !== undefined ? { botUserId } : {}),
@@ -916,6 +920,7 @@ export async function recordInstall(
     }
     const record: InstallRecord = {
       connector: account,
+      revision: randomBytes(16).toString("base64url"),
       ...(input.grant.token !== undefined ? { tokenEnc: seal(ctx.keys, input.grant.token, key) } : {}),
       scopes: [...input.grant.scopes],
       ...(input.grant.botUserId !== undefined ? { botUserId: input.grant.botUserId } : {}),
@@ -966,8 +971,20 @@ async function dropInstallIndex(store: Store, installation: string, account: str
 
 /** An installation's record, or undefined when nobody connected it. A record that does not decode reads as none. */
 export async function readInstall(store: Store, installation: string): Promise<InstallRecord | undefined> {
+  return (await readInstallSnapshot(store, installation))?.record
+}
+
+/** Native admission keeps the exact server-read value across slow platform lookups; never supplied by a webhook. */
+export async function readInstallSnapshot(store: Store, installation: string): Promise<{ record: InstallRecord; raw: string } | undefined> {
   const platform = platformOf(installation)
-  return decodeInstall(platform)(parseStored(await getValue(store, everywhereKeys.install(installation))))
+  const raw = await getValue(store, everywhereKeys.install(installation))
+  const record = decodeInstall(platform)(parseStored(raw))
+  return raw !== undefined && record ? { record, raw } : undefined
+}
+
+/** Opaque authorization identity, never an access token. Safe credential refresh preserves an existing revision. */
+export function installationAuthority(snapshot: { readonly record: InstallRecord; readonly raw: string }): string {
+  return snapshot.record.revision ?? sha256Hex(snapshot.raw)
 }
 
 /** An installation's record; a record that does not decode means the store is unwell (fails closed). */

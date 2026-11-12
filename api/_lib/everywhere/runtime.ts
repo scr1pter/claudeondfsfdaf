@@ -1,19 +1,23 @@
 import { readConfig } from "./config.js"
 import { createJobEvents } from "./events.js"
 import type { JobsContext } from "./jobs.js"
-import type { PlatformAdapter, Platforms } from "./platform.js"
-import type { PlatformId } from "../../../packages/schema/src/everywhere.js"
+import type { Platforms } from "./platform.js"
+import { safePorts } from "./ports.js"
+import { createSlackAdapter, type SlackDeps } from "./slack/adapter.js"
+import { createSlackRoutes } from "./slack/routes.js"
 import { everywhereStore } from "./store.js"
 
-const adapters: Partial<Record<PlatformId, PlatformAdapter>> = {}
+export function productionSlackDeps() {
+  return { config: readConfig, context: productionContext, ports: safePorts() }
+}
 
-/** Platform route modules register their configured adapter; the dormant runtime has no platform credentials. */
-export function registerPlatform(adapter: PlatformAdapter): void {
-  adapters[adapter.id] = adapter
+export function configuredPlatforms(deps: SlackDeps): Platforms {
+  const config = deps.config()
+  return { ...(config.enabled && config.platforms.has("slack") && config.slack ? { slack: createSlackAdapter(deps) } : {}) }
 }
 
 export function productionPlatforms(): Platforms {
-  return adapters
+  return configuredPlatforms(productionSlackDeps())
 }
 
 export function productionContext(): JobsContext {
@@ -23,3 +27,5 @@ export function productionContext(): JobsContext {
 
 /** Production jobs routes and the cron share exactly the same posting hooks. */
 export const productionJobEvents = createJobEvents(productionContext, productionPlatforms)
+
+export const productionSlackRoutes = createSlackRoutes(productionSlackDeps())

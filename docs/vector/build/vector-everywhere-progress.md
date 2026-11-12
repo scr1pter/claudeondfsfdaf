@@ -141,4 +141,49 @@ API, schema and desktop typechecks pass. The jobs skips are five Redis cases and
 
 ## P1c hosted Redis receipt (exact head `8a6d7b4ef`)
 
-The coordinating agent verified [dedicated run 43159108255](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43159108255), test job `130987536311`, as successful and read its official decoded log. It shows healthy pinned Valkey 7.2.14 and passing actual EVAL concurrency cases: atomic delivery-to-jid admission, claim versus dispatch, twelve claimants/one winner, sponsor slots, lease/body erasure and requester slots. This closes the previously missing P1c Redis proof at that exact source. The whole nine-job lane and general workflows are still unverified here; it is not proof about VE-10's newer handoff races. The coordinator requires full old-head lane qualification before pushing P2, while local VE-11 work may proceed.
+The coordinating agent verified [dedicated run 43159108255](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43159108255), test job `130987536311`, as successful and read its official decoded log. It shows healthy pinned Valkey 7.2.14 and passing actual EVAL concurrency cases: atomic delivery-to-jid admission, claim versus dispatch, twelve claimants/one winner, sponsor slots, lease/body erasure and requester slots. This closes the previously missing P1c Redis proof at that exact source. The coordinator subsequently confirmed all nine dedicated jobs successful at `8a6d7b4ef`. General CI reported two real failures, repaired locally in `565c03ea8`: the desktop user-facing workspace wording and the Localmode fake child-stream concurrency setup. Its targeted local checks pass; fresh general hosted confirmation remains owed. None of these older-head receipts qualifies VE-10 or newer P2 sources.
+
+
+## VE-11 first validation freeze (2026-11-12)
+
+VE-10 was committed as `ffd6ced0b115f347baf3ad6fe76f9109ed09f25f` after batch025 passed all five focused files and API/schema/desktop types. The coordinating agent committed the narrowly scoped general-CI repair as `565c03ea8`; this package does not duplicate it.
+
+The unvalidated Slack candidate adds the signed raw-body HTTP events/interactivity boundaries, deterministic shared runtime adapter factory, native bot OAuth exchange and safe callback, exact-scope manifest, verified requester membership/Enterprise Grid handling, private link/help/status/repository controls, scoped stop, erasure, bounded GET thread reads, native processing/plan/result/feedback messages and persistent message references. Native first-post uncertainty is held with a durable attempt receipt; it is not reported as delivered or blindly reposted. Retry-After survives separate invocations. All channels use shared-place rendering because the minimum scopes cannot prove channel privacy.
+
+Root has the freeze queue: five separate `everywhere-slack-{verify,events,oauth,render,manifest}.test.ts` files, intake/install-API/sweep/keys regressions, API typecheck through the documented engine package command, and web types if needed. The child has run no Bun, test, typecheck, app, external platform call, registration or deployment. No result is claimed before receipts. Native/live acceptance and uncertain-post reconciliation remain explicit release gates.
+
+
+### VE-11 initial checks and review delta
+
+Root batch028 passed the five separate native Slack files: verify 1 case / 13 assertions, events 9 / 62, OAuth 4 / 26, render 5 / 27 and manifest 1 / 10. The intake/install-API/sweep/keys regressions and API/web typechecks also passed. These receipts describe the initial candidate only.
+
+A self-review then found and repaired gaps before commit: Connect must use signed installation-home context and authorization rather than the event's foreign workspace; absent membership flags must not imply a human member; processing and terminal status must share a fence; shared session titles must not expose a private repository name. The updated fixtures cover an owner request and external actor in Connect, mismatched bot authorization, explicit org-wide installation, real route-to-job/offer, separate report-factory instances and a terminal/status race. Retry-After now takes an atomic maximum with Redis ZADD GT so concurrent shorter responses cannot reopen early; the new focused cooldown file includes a CI-only real Redis race. No existing Lua changed. This second candidate is frozen pending root checks; the first receipt does not qualify these changes.
+
+A further integration concern is explicitly open: a slow native prepare can outlive installation erase and its late pass. The existing create script does not fence the installation record when admitting a job. An exact installation-admission fence and regression are requested from the coordinator before native activation. Default-off configuration and unbound prerequisite runner/dispatch ports remain gates; no production readiness is claimed.
+
+
+### VE-11 second checks and installation-admission transaction
+
+Root batch029 passed the updated render and cooldown files, common jobs/sweep/intake regressions and API types. Events passed eleven cases and failed its new positive offer test: the native fixture omitted its generated signing key, so the real offer primitive correctly queued the job. The fixture now supplies that generated key; its real claim assertion was retained. This repair is pending validation.
+
+The coordinator authorized the concrete installation race repair. Identity now exposes the decoded installation and exact server-read serialized value together. Generic intake retains that snapshot before native preparation. Its optional create-job path compares the current installation inside the atomic script before any writes; the same transaction checks/increments the existing quota keys and creates the job/indexes. The previous separate generic counter charge is removed. A missing or changed installation returns a private internal verdict, without admitting a job, reserving quota or making a native post. Legacy direct/GitHub callers keep their existing path.
+
+New deterministic intake cases cover real erase, reconnect and credential replacement during a stalled prepare, plus exactly one quota charge on success. Two hosted-only Redis cases cover erase/replacement immediately before EVAL and concurrent verified native admissions yielding exactly three live jobs and three quota charges. The updated fake mirrors the script. These sources are frozen for root's third focused check; new Lua qualification still requires fresh P2 hosted CI. No old-head Redis receipt is counted as coverage for this change.
+
+
+### VE-11 admission checks passed; queued-reply authority freeze
+
+Root batch030 passed all six focused files (Slack events, intake, jobs, identity, install-API and erase) and API types. This includes deterministic slow preparation across erase, reconnect, credential replacement and same-millisecond tokenless reinstall, plus no quota increment on refusal. A fresh random installation revision prevents equal serialized records after a tokenless reconnect; older records remain readable. The hosted-only create/cooldown races still require fresh P2 CI.
+
+The coordinator then authorized the corresponding queued-reply boundary. Generic intake seals its server-derived authorization revision in reply metadata, overwriting any parsed value; older installations use a fingerprint of the server snapshot. Slack checks current authority before each admitted-job native effect, under its existing status lock, and opens the current token for each call. Reconnect holds old replies; a credential refresh preserving the authorization revision remains eligible. Legacy jobs without proof hold for reconciliation. The latest render/intake/events files and API types are frozen for root checks; no validation is claimed for this final delta yet.
+
+
+## VE-11 package qualification and commit boundary (2026-11-12)
+
+The final authority delta passed root batch031: Slack render **10 cases / 51 assertions**, intake **8 / 68**, Slack events **12 / 94**, and API types. Root batch030 had already passed identity **39 / 243**, install-API **15 / 116**, erase **10 / 129**, jobs **43 / 334**, intake/events and API types. Earlier unchanged focused files passed: OAuth **4 / 26**, signature **1 / 13**, manifest **1 / 10**; cooldown **1 / 4** after its atomic-maximum repair. The initial web package typecheck passed; fresh whole-P2 package types remain part of hosted qualification. All native HTTP fixtures used generated credentials and loopback fakes under the fetch guard. No real app, workspace, owner computer or model was exercised.
+
+Local skips are intentional and scoped: jobs skips seven real-Redis cases plus two hooks; identity skips two real-Redis cases plus two hooks; cooldown skips its real-Redis race plus two hooks. In particular, the new native-installation/quota create path and concurrent cooldown maximum have **not** been proved against actual Redis locally. Fresh exact-P2-head hosted qualification must run them. The previously green P1c run at `8a6d7b4ef` remains evidence for that older source only.
+
+The package now includes exact raw installation admission before quotas/job/index writes; a fresh opaque revision for every authoritative install/connect, including tokenless same-clock reinstall; server-owned sealed reply authority; and current-authority checks before each native effect, using a refreshed token only when its authorization revision is preserved. It holds ambiguous first Slack posts and legacy unproved/changed-authority replies instead of inventing delivery or replay guarantees.
+
+Software gates still open: first-post reconciliation/live acceptance, current prerequisite laptop/cloud bridge ports and owner surfaces, real Slack/Grid/Connect qualification, owner app registration and privacy/listing review. No PR, push, release, main merge, credential/settings change or paid inference is part of this commit. VE-12 and VE-13 follow as separate packages; whole-P2 independent review precedes the branch push and fresh CI.

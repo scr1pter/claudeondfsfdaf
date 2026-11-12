@@ -23,11 +23,17 @@ export type ParsedTrigger = { readonly trigger: InboundTrigger; readonly reply: 
 export interface PlatformAdapter {
   readonly id: PlatformId
   readonly ackMs: number
+  /** Native processing sessions need a refresh while long-running jobs report only heartbeats. */
+  readonly heartbeats?: boolean
   verify(raw: Uint8Array, headers: Headers, now: number): Promise<
     { readonly ok: true; readonly body: unknown } | { readonly ok: false; readonly status: number }
   >
   parse(body: unknown, installation?: InstallRecord): ParsedTrigger | { readonly ignore: string }
-  acknowledge(job: JobView): Promise<void>
+  acknowledge(job: JobView): Promise<ReplyReference | void>
+  /** Optional native membership/context lookup, after the first signal and before job admission. */
+  prepare?(parsed: ParsedTrigger, installation: InstallRecord): Promise<ParsedTrigger | { readonly ignore: string }>
+  /** Native account-link/help controls may run before an identity has linked. True means handled without a job. */
+  control?(parsed: ParsedTrigger, installation: InstallRecord): Promise<boolean>
   progress(job: JobView, milestone: Milestone | RouteNote): Promise<void>
   finish(job: JobView, result: ResultView | RenderedResult): Promise<void>
   linkPrompt(trigger: InboundTrigger): Promise<void>

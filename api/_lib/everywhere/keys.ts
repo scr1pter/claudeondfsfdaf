@@ -156,6 +156,9 @@ export const everywhereKeys = {
   jobsPosts: () => key("jobs", "posts"),
   jobPostLock: (jobId: string) => key("job", jid(jobId), "posting"),
   jobStatusLock: (jobId: string) => key("job", jid(jobId), "status"),
+  /** Slack's conservative one-thread-read-per-workspace-per-minute budget, shared by all functions. */
+  slackThreadRead: (team: string) => key("slack", "thread", matching(team, /^T[A-Z0-9]{1,31}$/)),
+  slackRetry: (installationKey: string, method: string) => key("slack", "retry", installation(installationKey), matching(method, /^[a-zA-Z.]{1,64}$/)),
   /** VE-05: the live jobs on an installation, so erasing it finds them without scanning (E13). */
   installationJobs: (installationKey: string) => key("livejobs", installation(installationKey)),
   /** VE-05: every job an account sponsored in the last 30 days, for its job list and for account erase. */

@@ -139,11 +139,13 @@ export class FakeStore {
         return this.pttl(args[0]!)
       case "ZADD": {
         const onlyExisting = args[1]?.toUpperCase() === "XX"
+        const onlyGreater = args[1]?.toUpperCase() === "GT"
         const set = this.zset(args[0]!, !onlyExisting)
         if (!set) return 0
         let added = 0
-        for (let index = onlyExisting ? 2 : 1; index < args.length; index += 2) {
+        for (let index = onlyExisting || onlyGreater ? 2 : 1; index < args.length; index += 2) {
           if (onlyExisting && !set.has(args[index + 1]!)) continue
+          if (onlyGreater && set.has(args[index + 1]!) && set.get(args[index + 1]!)! >= Number(args[index])) continue
           if (!set.has(args[index + 1]!)) added++
           set.set(args[index + 1]!, Number(args[index]))
         }
@@ -362,8 +364,16 @@ export class FakeStore {
       string,
     ]
     if (keys[6] && this.run("GET", [keys[6]]) !== argv[11]) return -4
+    if (keys[7] && this.run("GET", [keys[7]]) !== argv[12]) return -5
     if (this.read(job)) return 0
     if ((this.zset(live)?.size ?? 0) >= Number(liveCap)) return -3
+    if (keys[8]) {
+      for (let index = 8; index < 11; index++) if (Number(this.run("GET", [keys[index]!]) ?? 0) >= Number(argv[index + 5])) return -3
+      for (let index = 8; index < 11; index++) {
+        this.run("INCR", [keys[index]!])
+        if (this.pttl(keys[index]!) < 0) this.run("PEXPIRE", [keys[index]!, argv[index + 8]!])
+      }
+    }
     if (keys[6]) this.run("SET", [keys[6], `job:${jid}`, "PX", argv[10]!])
     this.run("SET", [job, record, "PX", recordTtl])
     this.run("SET", [body, sealed, "PX", bodyTtl])

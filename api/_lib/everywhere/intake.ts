@@ -5,10 +5,10 @@ import { after } from "./after.js"
 import { platformOn, readConfig, type EverywhereConfig } from "./config.js"
 import { claimDelivery, finishDelivery } from "./dedupe.js"
 import { createJobEvents } from "./events.js"
-import { findLink, findMapping, readInstall } from "./identity.js"
+import { findLink, findMapping, installationAuthority, readInstallSnapshot } from "./identity.js"
 import { cancelJob, createJob, openReply, readJob, sweepAccount, type JobsContext } from "./jobs.js"
 import { everywhereKeys } from "./keys.js"
-import { countJob, readCounts } from "./limits.js"
+import { readCounts } from "./limits.js"
 import type { JobView, ParsedTrigger, PlatformAdapter, Platforms } from "./platform.js"
 import { safePorts, type Ports, type Repository } from "./ports.js"
 import { routeFacts, routeJob } from "./router.js"
@@ -50,13 +50,38 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
     return resolved
   }
 
-  async function process(parsed: ParsedTrigger, initial: JobView) {
-    const trigger = parsed.trigger
+  async function process(original: ParsedTrigger, initial: JobView) {
+    let parsed = original
+    let trigger = parsed.trigger
+    let view = initial
     const claim = await claimDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
     if (claim === "seen") return
-    await adapter.acknowledge(initial)
-    const installation = await readInstall(store, trigger.installation)
+    const acknowledged = await adapter.acknowledge(view)
+    if (acknowledged) view = { ...view, reply: { ...view.reply, ...acknowledged } }
+    const snapshot = await readInstallSnapshot(store, trigger.installation)
+    const installation = snapshot?.record
     if (!installation || trigger.actor.bot || trigger.actor.external || trigger.actor.guest || trigger.actor.userId === installation.botUserId) {
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
+      return
+    }
+    if (adapter.prepare) {
+      const prepared = await adapter.prepare(parsed, installation)
+      if ("ignore" in prepared) { await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid); return }
+      const decoded = decodeInboundTrigger(prepared.trigger)
+      if (!decoded.ok || prepared.trigger.platform !== trigger.platform || prepared.trigger.installation !== trigger.installation ||
+        prepared.trigger.deliveryId !== trigger.deliveryId || prepared.trigger.actor.userId !== trigger.actor.userId ||
+        prepared.trigger.thread.ref !== trigger.thread.ref || prepared.place !== parsed.place || (trigger.shared && !prepared.trigger.shared))
+        throw new ApiError(400, "TRIGGER_INVALID", "The native trigger could not be verified.")
+      parsed = prepared
+      trigger = prepared.trigger
+      view = { ...view, shared: trigger.shared, reply: { ...view.reply, ...prepared.reply } }
+      if (trigger.actor.bot || trigger.actor.external || trigger.actor.guest) {
+        await adapter.refuse(trigger, trigger.actor.bot ? "bot" : trigger.actor.external ? "external" : "guest")
+        await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
+        return
+      }
+    }
+    if (await adapter.control?.(parsed, installation)) {
       await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
@@ -109,26 +134,27 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
       await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
-    if (!(await countJob(store, subject, now())).admitted) {
-      await adapter.refuse(trigger, "over-limit")
-      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
-      return
-    }
+    // Always server-derived: a webhook, native payload or laptop cannot choose the authority for later posts.
+    view = { ...view, reply: { ...view.reply, installRevision: installationAuthority(snapshot!) } }
     const created = await createJob(context(), {
       platform: trigger.platform, installation: trigger.installation, kind: trigger.kind,
       requester: { userId: trigger.actor.userId, account: linked.account }, sponsor,
       repository: resolved, shared: trigger.shared, issue: trigger.issue, github: trigger.github,
-      task: trigger.task, context: trigger.context, reply: parsed.reply,
-    }, { jid: initial.jid, deliveryId: trigger.deliveryId })
+      task: trigger.task, context: trigger.context, reply: view.reply,
+    }, { jid: initial.jid, deliveryId: trigger.deliveryId, installationRecord: snapshot!.raw })
     if (!created.ok) {
       if (created.code === "duplicate") return
+      if (created.code === "installation-changed") {
+        await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
+        return
+      }
       await adapter.refuse(trigger, created.code === "over-limit" ? "over-limit" : "unsupported")
       await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     // Dedupe is durable before the 20-second offer window. A platform retry must not create another accepted job.
     await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
-    return routeJob({ context, ports, adapter, now, sleep, view: (job) => ({ ...initial, job }) }, created.job, facts)
+    return routeJob({ context, ports, adapter, now, sleep, view: (job) => ({ ...view, job }) }, created.job, facts)
   }
 
   return {

@@ -21,10 +21,13 @@ import {
   setMapping,
   unlink,
   type IdentityContext,
+  type InstallRecord,
   type Notifier,
   type OAuthExchanges,
 } from "./identity.js"
 import { jobEraser } from "./jobs.js"
+import { platformExchanges } from "./oauth-exchanges.js"
+import { revokeSlack } from "./slack/install.js"
 import { everywhereStore, type Store } from "./store.js"
 
 /*
@@ -242,7 +245,10 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
             store: session.ctx.store,
             now: session.ctx.now,
             jobs: deps.jobs ?? jobEraser(session.ctx.store, () => session.ctx.now),
-            ...(deps.revoke ? { revoke: deps.revoke } : {}),
+            // A caller replacing the native exchanges also owns that transport's revocation port.
+            ...(deps.revoke ? { revoke: deps.revoke } : deps.exchanges === undefined ? {
+              revoke: (installation: string, record: InstallRecord) => revokeSlack(installation, record, session.config.dataKeys, deps.fetcher),
+            } : {}),
           },
           installation,
           "disconnected",
@@ -308,7 +314,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
           email: session.email,
           code: input.code,
           state: input.state,
-          exchanges: deps.exchanges ?? {},
+          exchanges: deps.exchanges ?? platformExchanges(session.config, deps.fetcher),
           platformOn: (platform) => platformOn(session.config, platform),
         })
         json(response, 200, result)

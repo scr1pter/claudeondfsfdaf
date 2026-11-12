@@ -48,6 +48,7 @@ import { openJson, sealJson, type DataKey } from "./crypto.js"
 import { deliveryKey } from "./dedupe.js"
 import type { JobEraser } from "./erase.js"
 import { KEEP_MS, everywhereKeys, userIdValid } from "./keys.js"
+import { capKeys } from "./limits.js"
 import { signOffer, type SignedOffer } from "./offer.js"
 import {
   deleteKeys,
@@ -515,11 +516,16 @@ export function claimedJob(record: JobRecord, body: JobBody, lease: JobLease, li
  * TTL, due score, jid, received score, live cap, history cutoff, history TTL. Answers 1, 0 (the id exists) or -3 (the
  * live cap is full). Optional key 7 is the delivery admission: only ARGV[12]'s exact `pending:<jid>` fence may
  * create a job, and that same transaction replaces it with `job:<jid>` for ARGV[11] milliseconds. -4 means lost admission.
+ * Native intake also supplies key 8 and ARGV[13], its exact installation snapshot. A mismatch is -5 before writes.
+ * Keys 9–11 and ARGV[14–19] admit its day/hour quotas in this same transaction, after every fence/cap check.
  */
 export const CREATE_JOB_SCRIPT = [
   "if KEYS[7] and redis.call('GET', KEYS[7]) ~= ARGV[12] then return -4 end",
+  "if KEYS[8] and redis.call('GET', KEYS[8]) ~= ARGV[13] then return -5 end",
   "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end",
   "if redis.call('ZCARD', KEYS[4]) >= tonumber(ARGV[8]) then return -3 end",
+  "if KEYS[9] then for i = 9, 11 do if tonumber(redis.call('GET', KEYS[i]) or '0') >= tonumber(ARGV[i + 5]) then return -3 end end end",
+  "if KEYS[9] then for i = 9, 11 do redis.call('INCR', KEYS[i]) if redis.call('PTTL', KEYS[i]) < 0 then redis.call('PEXPIRE', KEYS[i], ARGV[i + 8]) end end end",
   "if KEYS[7] then redis.call('SET', KEYS[7], 'job:' .. ARGV[6], 'PX', ARGV[11]) end",
   "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])",
   "redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[4])",
@@ -683,6 +689,7 @@ export type CreateVerdict =
   | { readonly ok: true; readonly job: JobRecord }
   | { readonly ok: false; readonly code: "over-limit" }
   | { readonly ok: false; readonly code: "duplicate" }
+  | { readonly ok: false; readonly code: "installation-changed" }
   | { readonly ok: false; readonly code: "invalid"; readonly error: string }
 
 /**
@@ -691,7 +698,12 @@ export type CreateVerdict =
  * task (except GitHub, whose thread the computer reads itself), text on a GitHub job, too much context, a malformed
  * repository or issue key. Refused `over-limit` while the sponsor has 3 live jobs.
  */
-export async function createJob(ctx: JobsContext, input: NewJob, options: { readonly jid?: string; readonly deliveryId?: string } = {}) {
+export async function createJob(ctx: JobsContext, input: NewJob, options: {
+  readonly jid?: string
+  readonly deliveryId?: string
+  /** Exact trusted store value captured before native preparation; enables atomic installation and quota admission. */
+  readonly installationRecord?: string
+} = {}) {
   const jid = options.jid ?? createJobId(ctx.now)
   const invalid = (error: string): CreateVerdict => ({ ok: false, code: "invalid", error })
   if (!JOB_ID_PATTERN.test(jid)) return invalid("jid: malformed")
@@ -701,6 +713,8 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: { read
   if (!ACCOUNT_ID_PATTERN.test(input.requester.account)) return invalid("requester.account: malformed")
   if (!ACCOUNT_ID_PATTERN.test(input.sponsor)) return invalid("sponsor: malformed")
   if (!ctx.keys.length) return invalid("data key: missing")
+  if (options.installationRecord !== undefined && (options.deliveryId === undefined || !options.installationRecord || options.installationRecord.length > 32_000))
+    return invalid("installation snapshot: malformed")
 
   const record: JobRecord = {
     version: 1,
@@ -732,6 +746,8 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: { read
   )
   if (!check.ok) return invalid(check.error)
   if (!decodeJobRecord(JSON.parse(encodeJobRecord(record)))) return invalid("record: malformed")
+  const caps = options.installationRecord === undefined ? undefined : capKeys({ sponsor: record.sponsor,
+    installation: record.installation, userId: record.requester.userId }, ctx.now)
 
   const result = storeInteger(
     await runScript(
@@ -745,6 +761,7 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: { read
         everywhereKeys.installationJobs(record.installation),
         everywhereKeys.jobHistory(record.sponsor),
         ...(options.deliveryId === undefined ? [] : [deliveryKey(input.platform, options.deliveryId)]),
+        ...(caps ? [everywhereKeys.install(record.installation), caps.sponsorToday.key, caps.requesterHour.key, caps.installationToday.key] : []),
       ],
       [
         encodeJobRecord(record),
@@ -758,11 +775,14 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: { read
         ctx.now - KEEP_MS.job,
         KEEP_MS.job,
         ...(options.deliveryId === undefined ? [] : [KEEP_MS.deliveryDone, `pending:${jid}`]),
+        ...(caps ? [options.installationRecord!, SERVER_CAPS.sponsorPerDay, SERVER_CAPS.requesterPerHour, SERVER_CAPS.installationPerDay,
+          caps.sponsorToday.ttlMs, caps.requesterHour.ttlMs, caps.installationToday.ttlMs] : []),
       ],
     ),
   )
   if (result === -3) return { ok: false, code: "over-limit" } satisfies CreateVerdict
   if (result === -4) return { ok: false, code: "duplicate" } satisfies CreateVerdict
+  if (result === -5) return { ok: false, code: "installation-changed" } satisfies CreateVerdict
   if (result === 0) return invalid("jid: exists")
   if (result !== 1) throw storeUnavailable()
   await audit(ctx, record, { event: "job-accepted" })

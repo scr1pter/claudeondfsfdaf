@@ -7,6 +7,7 @@ import { claimDelivery, finishDelivery } from "../../../api/_lib/everywhere/dedu
 import { eraseEverywhereAccount } from "../../../api/_lib/everywhere/erase"
 import {
   ACTIONS_OVERDUE_MS,
+  CREATE_JOB_SCRIPT,
   RECEIVED_STALE_MS,
   TRANSITION_SCRIPT,
   cancelJob,
@@ -41,6 +42,7 @@ import {
   type Readiness,
 } from "../../../api/_lib/everywhere/jobs"
 import { KEEP_MS, everywhereKeys } from "../../../api/_lib/everywhere/keys"
+import { readCounts } from "../../../api/_lib/everywhere/limits"
 import { ownOfferKeys, verifyOffer } from "../../../api/_lib/everywhere/offer"
 import {
   everywhereStore,
@@ -1152,6 +1154,61 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
     await finishDelivery(ctx.store, "slack", deliveryId, jid)
     expect(await ctx.store(["GET", everywhereKeys.delivery("slack", deliveryId)])).toBe(`job:${jid}`)
     expect(await claimDelivery(ctx.store, "slack", deliveryId)).toBe("seen")
+  })
+
+  test("native admission fences an erased or replaced installation before quotas, jobs or indexes", async () => {
+    for (const replacement of [false, true]) {
+      const sponsor = randomUUID()
+      const ctx = realCtx()
+      const installation = `slack:T${randomBytes(10).toString("hex").toUpperCase()}`
+      const key = everywhereKeys.install(installation)
+      const raw = JSON.stringify({ connector: sponsor, scopes: [], installedAt: ctx.now })
+      await ctx.store(["SET", key, raw])
+      const deliveryId = randomUUID()
+      const jid = createJobId(ctx.now)
+      expect(await claimDelivery(ctx.store, "slack", deliveryId, jid)).toBe("new")
+      let enter!: () => void
+      let release!: () => void
+      const entered = new Promise<void>((resolve) => { enter = resolve })
+      const blocked = new Promise<void>((resolve) => { release = resolve })
+      const pending = createJob({ ...ctx, store: async (command) => {
+        if (command[0] === "EVAL" && command[1] === CREATE_JOB_SCRIPT) { enter(); await blocked }
+        return ctx.store(command)
+      } }, slackJob({ installation, sponsor, requester: { userId: "U0ALICE01", account: sponsor } }), { jid, deliveryId, installationRecord: raw })
+      await entered
+      if (replacement) await ctx.store(["SET", key, JSON.stringify({ connector: sponsor, scopes: ["changed"], installedAt: ctx.now + 1 })])
+      else await ctx.store(["DEL", key])
+      release()
+      expect(await pending).toEqual({ ok: false, code: "installation-changed" })
+      expect(await readJob(ctx.store, jid)).toBeUndefined()
+      expect(await readJobBody(ctx, jid)).toBeUndefined()
+      expect(await ctx.store(["ZSCORE", everywhereKeys.jobsDue(), jid])).toBeNull()
+      expect(await ctx.store(["ZRANGE", everywhereKeys.jobHistory(sponsor), 0, -1])).toEqual([])
+      expect(await readCounts(ctx.store, { sponsor, installation, userId: "U0ALICE01" }, ctx.now)).toEqual({
+        sponsorToday: 0, requesterHour: 0, installationToday: 0, sponsorLive: 0,
+      })
+      expect(await ctx.store(["GET", everywhereKeys.delivery("slack", deliveryId)])).toBe(`pending:${jid}`)
+    }
+  })
+
+  test("twelve verified native admissions atomically count only the three accepted live jobs", async () => {
+    const sponsor = randomUUID()
+    const ctx = realCtx()
+    const installation = `slack:T${randomBytes(10).toString("hex").toUpperCase()}`
+    const raw = JSON.stringify({ connector: sponsor, scopes: [], installedAt: ctx.now })
+    await ctx.store(["SET", everywhereKeys.install(installation), raw])
+    const answers = await Promise.all(Array.from({ length: 12 }, async () => {
+      const jid = createJobId(ctx.now)
+      const deliveryId = randomUUID()
+      expect(await claimDelivery(ctx.store, "slack", deliveryId, jid)).toBe("new")
+      return createJob(ctx, slackJob({ installation, sponsor, requester: { userId: "U0ALICE01", account: sponsor } }),
+        { jid, deliveryId, installationRecord: raw })
+    }))
+    expect(answers.filter((answer) => answer.ok)).toHaveLength(3)
+    expect(answers.filter((answer) => !answer.ok && answer.code === "over-limit")).toHaveLength(9)
+    expect(await readCounts(ctx.store, { sponsor, installation, userId: "U0ALICE01" }, ctx.now)).toEqual({
+      sponsorToday: 3, requesterHour: 3, installationToday: 3, sponsorLive: 3,
+    })
   })
 
   test("a claim racing a dispatch leaves exactly one winner", async () => {

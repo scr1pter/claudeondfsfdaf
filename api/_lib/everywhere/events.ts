@@ -43,7 +43,8 @@ export function createJobEvents(context: () => JobsContext, platforms: Platforms
   return {
     claimed: async (job) => { await adapters()[job.platform]?.progress(jobView(context(), job), "laptop") },
     reported: async (job) => {
-      if (job.milestone !== "heartbeat") await adapters()[job.platform]?.progress(jobView(context(), job), job.milestone ?? "started")
+      const adapter = adapters()[job.platform]
+      if (job.milestone !== "heartbeat" || adapter?.heartbeats) await adapter?.progress(jobView(context(), job), job.milestone ?? "started")
     },
     settled: finish,
     declined: async (job) => { if (job.state === "refused") await finish(job) },
