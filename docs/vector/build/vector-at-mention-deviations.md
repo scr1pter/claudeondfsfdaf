@@ -555,3 +555,8 @@ The progress file records passing focused tests and typechecks, the independent 
 
 1. The Codium-only lifecycle is a separate `github.review-codium.ts` module so the existing review job can retain its own-key entry path. The private file reader and starting account heartbeat were already wired before command dispatch by V15; V20 consumes that authorized holder instead of reading or authorizing the token twice.
 2. The read-only review runner gains an optional generic abort signal, with admission checks and scoped cancellation of its own sessions. This changes no default reviewer policy or core outcome vocabulary. Public error prose uses the closed stop table and an output-only P6 filter; it does not mutate raw session data.
+
+## 2026-11-12 V13 integration (prepare before Everywhere route commitment)
+
+1. Everywhere must atomically win its laptop/Actions routing claim before dispatch. Returning a ticket hash only after `startCloudRun` has dispatched allows the laptop to claim concurrently. The additive `prepareCloudRun` port creates the existing private ticket first and retains raw ticket/prompt only in server memory; it exposes a hash, a single-operation dispatch closure and a pre-dispatch cancellation closure. The existing function keeps its public result shape by composing both steps. No reserved source is enabled.
+2. Dispatch repeats current authorization after preparation rather than treating preparation as continuing authority. Its read-only store script fences revocation, binding generation/suspension and exact ticket contents. Mint continues to repeat the existing checks before granting model authority. Persistent errors fail closed and grant no fallback route.

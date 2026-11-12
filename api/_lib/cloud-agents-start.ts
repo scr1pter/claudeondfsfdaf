@@ -47,8 +47,26 @@ export type StartCloudRunResult =
         | Extract<CloudAgentAllowance, { active: false }>["reason"]
     }
 
+export type PreparedCloudRun = {
+  ok: true
+  /** The opaque ticket's SHA-256; the raw ticket stays in this server-side closure. */
+  ticketHash: string
+  dispatch: () => Promise<StartCloudRunResult>
+  /** Cancel only before dispatch starts, for example after losing an atomic laptop/Actions routing claim. */
+  cancel: () => Promise<boolean>
+}
+
 /** Internal user-tap entry point. It stores no prompt or requester identity, and never runs inference itself. */
 export async function startCloudRun(trigger: RunTrigger, deps: StartDeps = {}): Promise<StartCloudRunResult> {
+  const prepared = await prepareCloudRun(trigger, deps)
+  return prepared.ok ? prepared.dispatch() : prepared
+}
+
+/** Issue a ticket without dispatching. A router must commit its own exclusive route before calling dispatch. */
+export async function prepareCloudRun(
+  trigger: RunTrigger,
+  deps: StartDeps = {},
+): Promise<PreparedCloudRun | Extract<StartCloudRunResult, { ok: false }>> {
   const store = deps.store ?? persistentStore
   const app = deps.app ?? githubApp
   const now = deps.now ?? Date.now
@@ -86,6 +104,7 @@ export async function startCloudRun(trigger: RunTrigger, deps: StartDeps = {}): 
   }
   if (!Schema.is(Ticket)(record)) throw invalidRequest()
   const key = ticketKey(ticket)
+  const prompt = trigger.prompt
   const issued = await command(
     [
       "EVAL",
@@ -104,23 +123,90 @@ export async function startCloudRun(trigger: RunTrigger, deps: StartDeps = {}): 
   )
   if (issued === "stale") return { ok: false, reason: "not-bound" }
   if (issued !== "OK") throw unavailable()
-  try {
-    await app.dispatch(binding.repositoryId, {
-      ref: binding.defaultRef,
-      prompt: trigger.prompt,
-      ticket,
-      ownerId: binding.ownerId,
-      installationId: binding.installationId,
-    })
-  } catch (error) {
+  let cancelled = false
+  let operation: Promise<StartCloudRunResult> | undefined
+  const remove = async () => {
     const removed = await command(["DEL", key], store)
     if (removed !== 0 && removed !== 1) throw unavailable()
-    return {
-      ok: false,
-      reason: error instanceof ApiError && error.code === "APP_NOT_INSTALLED" ? "app-required" : "dispatch-failed",
-    }
   }
-  return { ok: true, dispatchedAt: now() }
+  const dispatch = async (): Promise<StartCloudRunResult> => {
+    if (cancelled || now() >= record.exp || !ENABLED_SOURCES.has(record.source)) {
+      await remove()
+      return { ok: false, reason: "not-bound" }
+    }
+    // Preparing is not continuing authority. Rebinding, erasure, suspension and allowance changes before the
+    // router commits must all refuse here; mint repeats these checks before granting any model authority.
+    const current = await bindingFor(binding.repositoryId, store)
+    if (
+      !current ||
+      current.suspended ||
+      current.account !== record.account ||
+      current.generation !== record.generation
+    ) {
+      await remove()
+      return { ok: false, reason: "not-bound" }
+    }
+    if (!current.installationId || !app.configuration().available) {
+      await remove()
+      return { ok: false, reason: "app-required" }
+    }
+    const allowance = await (deps.entitlement ?? cloudAgentEntitlement)(
+      record.account,
+      { source: record.source, now: now() },
+      deps.fetcher ?? fetch,
+    )
+    if (!allowance.active) {
+      await remove()
+      return { ok: false, reason: allowance.reason }
+    }
+    const ready = await command(
+      [
+        "EVAL",
+        READY,
+        "4",
+        key,
+        `vector:cli-revoked:${record.account}`,
+        bindingKey(binding.repositoryId),
+        generationKey(binding.repositoryId),
+        JSON.stringify(record),
+        record.account,
+        record.generation,
+      ],
+      store,
+    )
+    if (ready === "stale") {
+      await remove()
+      return { ok: false, reason: "not-bound" }
+    }
+    if (ready !== "OK") throw unavailable()
+    try {
+      await app.dispatch(current.repositoryId, {
+        ref: current.defaultRef,
+        prompt,
+        ticket,
+        ownerId: current.ownerId,
+        installationId: current.installationId,
+      })
+    } catch (error) {
+      await remove()
+      return {
+        ok: false,
+        reason: error instanceof ApiError && error.code === "APP_NOT_INSTALLED" ? "app-required" : "dispatch-failed",
+      }
+    }
+    return { ok: true, dispatchedAt: now() }
+  }
+  return {
+    ok: true,
+    ticketHash: createHash("sha256").update(ticket).digest("hex"),
+    dispatch: () => (operation ??= dispatch()),
+    cancel: async () => {
+      if (operation) return false
+      cancelled = true
+      await remove()
+      return true
+    },
+  }
 }
 
 /** A read-only peek: only bound reservation may consume a valid ticket. Missing/mismatched tokens grant nothing. */
@@ -184,4 +270,15 @@ if redis.call('EXISTS', KEYS[2]) == 1 or redis.call('HGET', KEYS[3], 'account') 
   or redis.call('HGET', KEYS[3], 'generation') ~= ARGV[3] or redis.call('GET', KEYS[4]) ~= ARGV[3]
   or redis.call('HEXISTS', KEYS[3], 'suspended') == 1 then return 'stale' end
 return redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[4])
+`
+
+const READY = `
+for i, expected in ipairs({'string', 'string', 'hash', 'string'}) do
+  local kind = redis.call('TYPE', KEYS[i]).ok
+  if kind ~= 'none' and kind ~= expected then return 'corrupt' end
+end
+if redis.call('GET', KEYS[1]) ~= ARGV[1] or redis.call('EXISTS', KEYS[2]) == 1
+  or redis.call('HGET', KEYS[3], 'account') ~= ARGV[2] or redis.call('HGET', KEYS[3], 'generation') ~= ARGV[3]
+  or redis.call('GET', KEYS[4]) ~= ARGV[3] or redis.call('HEXISTS', KEYS[3], 'suspended') == 1 then return 'stale' end
+return 'OK'
 `

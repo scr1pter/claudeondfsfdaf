@@ -7,7 +7,7 @@ import type { CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitle
 import { liveKey, liveRun } from "../../../api/_lib/cloud-agents-ledger"
 import { readRunToken } from "../../../api/_lib/cloud-agents-run-token"
 import { eraseCloudAgentsAccount, listCloudRuns } from "../../../api/_lib/cloud-agents-runs"
-import { peekRunTicket, startCloudRun } from "../../../api/_lib/cloud-agents-start"
+import { peekRunTicket, prepareCloudRun, startCloudRun } from "../../../api/_lib/cloud-agents-start"
 import type { RunTrigger } from "../../../api/_lib/cloud-agents-entitlement"
 import { persistentStore } from "../../../api/_lib/persistent-store"
 import { githubAppFixture } from "./github-app-fixture"
@@ -316,6 +316,54 @@ function integrationTests() {
       expect(Number(await persistentStore(["TTL", created[0]!]))).toBeLessThanOrEqual(900)
     } finally {
       await f.close()
+    }
+  })
+
+  test("a prepared run sends nothing before its route commits, can cancel, and dispatches at most once", async () => {
+    const f = await fixture()
+    try {
+      const lost = await prepareCloudRun(f.trigger, f.deps)
+      expect(lost.ok).toBe(true)
+      if (!lost.ok) throw new Error("Fixture could not prepare")
+      expect(lost.ticketHash).toMatch(/^[0-9a-f]{64}$/)
+      expect(f.github.state.dispatches).toEqual([])
+      expect(await persistentStore(["EXISTS", `vector:cloud-agents:ticket:${lost.ticketHash}`])).toBe(1)
+      expect(await lost.cancel()).toBe(true)
+      expect(await lost.dispatch()).toEqual({ ok: false, reason: "not-bound" })
+      expect(f.github.state.dispatches).toEqual([])
+      expect(await persistentStore(["EXISTS", `vector:cloud-agents:ticket:${lost.ticketHash}`])).toBe(0)
+
+      const won = await prepareCloudRun(f.trigger, f.deps)
+      if (!won.ok) throw new Error("Fixture could not prepare")
+      expect(f.github.state.dispatches).toEqual([])
+      const results = await Promise.all([won.dispatch(), won.dispatch(), won.dispatch()])
+      expect(results).toEqual(Array.from({ length: 3 }, () => ({ ok: true, dispatchedAt: f.policy.now })))
+      expect(f.github.state.dispatches).toHaveLength(1)
+      expect(await won.cancel()).toBe(false)
+      expect(await persistentStore(["EXISTS", `vector:cloud-agents:ticket:${won.ticketHash}`])).toBe(1)
+    } finally {
+      await f.close()
+    }
+  })
+
+  test("prepared dispatch rechecks expiry, revocation and allowance without sending an Actions request", async () => {
+    for (const change of ["expired", "revoked", "allowance"] as const) {
+      const f = await fixture()
+      try {
+        const prepared = await prepareCloudRun(f.trigger, f.deps)
+        if (!prepared.ok) throw new Error("Fixture could not prepare")
+        if (change === "expired") f.policy.now += 900_000
+        if (change === "revoked") await f.revoke()
+        if (change === "allowance") f.policy.allowance = { active: false, reason: "service-off" }
+        expect(await prepared.dispatch()).toEqual({
+          ok: false,
+          reason: change === "allowance" ? "service-off" : "not-bound",
+        })
+        expect(f.github.state.dispatches).toEqual([])
+        expect(await persistentStore(["EXISTS", `vector:cloud-agents:ticket:${prepared.ticketHash}`])).toBe(0)
+      } finally {
+        await f.close()
+      }
     }
   })
 
