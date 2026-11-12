@@ -432,7 +432,7 @@ describe("native Windows job containment (hosted Windows only)", () => {
       `[IO.File]::WriteAllText(${literal(marker)},[string]$PID)`,
     )
     const text =
-      '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::Write($env:USER_VALUE); [Console]::Write("|"); [Console]::Write([string]($null -eq $env:VECTOR_CLOUD_TOKEN)); [Console]::Write("|"); [Console]::Write($env:NODE_OPTIONS); [Console]::Write("|"); [Console]::Write([string]($env:PSModulePath -eq ' +
+      '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::Write($env:USER_VALUE); [Console]::Write("|"); [Console]::Write([string]($null -eq $env:VECTOR_CLOUD_TOKEN)); [Console]::Write("|"); [Console]::Write($env:NODE_OPTIONS); [Console]::Write("|"); [Console]::Write([string](($env:PSModulePath -split \';\') -contains ' +
       literal(dir.path) +
       "))"
     const handle = await WindowsProcess.start(
