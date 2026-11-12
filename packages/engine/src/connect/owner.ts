@@ -18,6 +18,8 @@ import { ConnectHub } from "./hub"
 import { FileLock } from "@/tool/file-lock"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
+import { WorkflowMarkers } from "@/orchestration/constants"
+import { WorkflowOwnerHandoffFailure } from "@/orchestration/owner-failure"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectOwner.Error", {
   code: Schema.Literals(["disabled", "forbidden", "not_found", "invalid"]),
@@ -38,12 +40,6 @@ export interface Interface {
   readonly dismiss: (runID: string, input: Connect.DismissInput) => Effect.Effect<Connect.Run, Error>
 }
 export class Service extends Context.Service<Service, Interface>()("@vector/ConnectOwner") {}
-
-class HandoffFailure extends globalThis.Error {
-  constructor(readonly original: unknown) {
-    super("The connected owner action did not complete.")
-  }
-}
 
 const layer = Layer.effect(
   Service,
@@ -100,7 +96,9 @@ const layer = Layer.effect(
             return completed.message
           }),
           Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause) ? Effect.failCause(cause) : Effect.die(new HandoffFailure(Cause.squash(cause))),
+            Cause.hasInterrupts(cause)
+              ? Effect.failCause(cause)
+              : Effect.die(new WorkflowOwnerHandoffFailure(Cause.squash(cause))),
           ),
           Effect.orDie,
         )
@@ -108,7 +106,7 @@ const layer = Layer.effect(
           Effect.catchCause((cause) => {
             if (Cause.hasInterrupts(cause)) return Effect.interrupt
             const failed = Cause.squash(cause)
-            const error = failed instanceof HandoffFailure ? failed.original : failed
+            const error = failed instanceof WorkflowOwnerHandoffFailure ? failed.original : failed
             if (error instanceof Error) return Effect.fail(error)
             return Effect.fail(
               new Error({
@@ -132,13 +130,15 @@ const layer = Layer.effect(
       text: string,
       input: Record<string, unknown>,
     ) {
+      // Reserve the explicit owner action before model/config resolution can let a newer human message arrive.
+      const userID = MessageID.ascending()
+      const assistantID = MessageID.ascending()
       const session = yield* requireSession(sessionID)
       const agent = yield* agents.get(session.agent ?? "build")
       if (!agent) return yield* new Error({ code: "invalid", message: "The conversation's agent is unavailable." })
       const model = yield* prompts.currentModel(sessionID, agent.model)
       const context = yield* InstanceState.context
       const now = yield* Clock.currentTimeMillis
-      const userID = MessageID.ascending()
       yield* sessions.updateMessage({
         id: userID,
         sessionID,
@@ -149,7 +149,7 @@ const layer = Layer.effect(
       })
       yield* sessions.updatePart({ id: PartID.ascending(), sessionID, messageID: userID, type: "text", text })
       const assistant: SessionV1.Assistant = yield* sessions.updateMessage({
-        id: MessageID.ascending(),
+        id: assistantID,
         sessionID,
         role: "assistant",
         parentID: userID,
@@ -169,7 +169,12 @@ const layer = Layer.effect(
         type: "tool",
         tool: "connect",
         callID: `connect_owner_${randomUUID()}`,
-        state: { status: "running", input, metadata: { ownerStart: true }, time: { start: now } },
+        state: {
+          status: "running",
+          input,
+          metadata: { ownerStart: true, [WorkflowMarkers.OWNER_START]: true },
+          time: { start: now },
+        },
       })
       let closed = false
       const update = (run: Connect.Run) =>
@@ -183,7 +188,7 @@ const layer = Layer.effect(
                     status: "running",
                     input,
                     title: "VectorScope review",
-                    metadata: { ownerStart: true, ...ConnectHub.metadata(run) },
+                    metadata: { ownerStart: true, [WorkflowMarkers.OWNER_START]: true, ...ConnectHub.metadata(run) },
                     time: { start: now },
                   },
                 })
@@ -201,7 +206,7 @@ const layer = Layer.effect(
               output: run.result
                 ? ConnectFrame.frame(run.result, { run: run.id })
                 : "Review running in the background.",
-              metadata: { ownerStart: true, ...ConnectHub.metadata(run) },
+              metadata: { ownerStart: true, [WorkflowMarkers.OWNER_START]: true, ...ConnectHub.metadata(run) },
               time: { start: now, end },
             },
           })
@@ -231,7 +236,11 @@ const layer = Layer.effect(
                 status: "error",
                 input,
                 error: message,
-                metadata: { ...("metadata" in current.state ? current.state.metadata : {}), ownerStart: true },
+                metadata: {
+                  ...("metadata" in current.state ? current.state.metadata : {}),
+                  ownerStart: true,
+                  [WorkflowMarkers.OWNER_START]: true,
+                },
                 time: { start: now, end },
               },
             })
