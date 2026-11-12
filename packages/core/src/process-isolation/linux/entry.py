@@ -1,0 +1,1129 @@
+"""ABI1 immutable Linux namespace entry asset. Not installed or activated by this source package.
+
+Only prepare/broker/cleanup run as root. Broker authority is exactly three
+secret-free namespace descriptors; it never executes a client command. Generic
+commands execute behind a per-command PID1 ownership barrier, never in the
+credential holder's namespace. Runtime and cancellation qualification are CI-only.
+"""
+
+import array
+import ctypes
+import errno
+import fcntl
+import hashlib
+import json
+import os
+import pathlib
+import pwd
+import resource
+import select
+import signal
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import time
+
+ROOT = "/usr/libexec/vector-sandbox/v1"
+SELF = ROOT + "/entry.py"
+SPEC = ROOT + "/run.json"
+PRIVATE = ROOT + "/private/state.json"
+CONTAINERS = ("/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox")
+KINDS = {"user": 0x10000000, "mnt": 0x00020000, "pid": 0x20000000}
+KEYS = {"v", "container", "uid", "gid", "stage", "scratch", "directory", "socket", "nonce", "namespaces",
+        "devices", "keeper", "broker", "socketIdentity"}
+BASE_KEYS = {"v", "container", "uid", "gid", "stage", "scratch", "directory", "socket", "nonce"}
+SIGNALS = {signal.SIGTERM, signal.SIGINT, signal.SIGHUP}
+NS_GET_USERNS = 0xB701
+NS_GET_NSTYPE = 0xB703
+NS_GET_OWNER_UID = 0xB704
+LIBC = ctypes.CDLL(None, use_errno=True)
+LIBC.close_range.argtypes = (ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
+LIBC.close_range.restype = ctypes.c_int
+LIBC.prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong)
+LIBC.prctl.restype = ctypes.c_int
+LIBC.renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+LIBC.renameat2.restype = ctypes.c_int
+
+
+def require(condition, message="The fixed Linux isolation contract was refused"):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def integer(value):
+    return type(value) is int and 0 < value <= 9007199254740991
+
+
+def exact(value, keys):
+    require(type(value) is dict and set(value) == set(keys))
+
+
+def canonical(value):
+    require(type(value) is str and len(value.encode("utf-8", "strict")) <= 4096 and value.startswith("/") and
+            os.path.normpath(value) == value and not any(ord(char) < 32 or ord(char) == 127 for char in value))
+    return value
+
+
+def validate_spec(value, partial=False):
+    require(type(value) is dict and BASE_KEYS <= set(value) <= KEYS)
+    if not partial:
+        exact(value, KEYS)
+    require(type(value["v"]) is int and value["v"] == 1 and value["container"] in CONTAINERS and
+            integer(value["uid"]) and integer(value["gid"]))
+    for key in ("stage", "scratch", "directory", "socket"):
+        canonical(value[key])
+    require(value["stage"] == value["container"] + "/checkout" and
+            value["scratch"] == value["container"] + "/tool-scratch" and
+            value["directory"] == value["container"] + "/tool-namespaces" and
+            value["socket"] == value["directory"] + "/broker.sock")
+    require(type(value["nonce"]) is str and len(value["nonce"]) == 32 and
+            all(char in "0123456789abcdef" for char in value["nonce"]))
+    for key in ("namespaces", "devices"):
+        if key in value:
+            exact(value[key], KINDS)
+            require(all(integer(item) for item in value[key].values()))
+    for key in ("keeper", "broker"):
+        if key not in value:
+            continue
+        exact(value[key], ("pid", "start", "uid", "gid") if key == "broker" else ("pid", "start"))
+        require(integer(value[key]["pid"]) and value[key]["pid"] > 1 and type(value[key]["start"]) is str and
+                1 <= len(value[key]["start"]) <= 32 and value[key]["start"].isascii() and
+                value[key]["start"].isdigit() and not value[key]["start"].startswith("0"))
+        if key == "broker":
+            require(type(value[key]["uid"]) is int and type(value[key]["gid"]) is int and
+                    value[key]["uid"] == value[key]["gid"] == 0)
+    if "keeper" in value and "broker" in value:
+        require(value["keeper"]["pid"] != value["broker"]["pid"])
+    if "socketIdentity" in value:
+        exact(value["socketIdentity"], ("device", "inode"))
+        require(all(integer(item) for item in value["socketIdentity"].values()))
+    return value
+
+
+def secure_chain(name):
+    resolved = pathlib.Path(name).resolve(strict=True)
+    for part in (resolved, *resolved.parents):
+        info = part.stat()
+        require(info.st_uid == 0 and not info.st_mode & 0o022, "An immutable runtime path is writable")
+    return str(resolved)
+
+
+def read_json(name, owner=0):
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == owner and
+                not info.st_mode & 0o022 and info.st_size <= 65536)
+        data = os.read(fd, 65537)
+        require(len(data) == info.st_size and len(data) <= 65536)
+        return json.loads(data.decode("utf-8", "strict"))
+    finally:
+        os.close(fd)
+
+
+def write_json(name, value, mode, replace=False):
+    temporary = name + "." + os.urandom(12).hex() + ".tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+    try:
+        os.fchmod(fd, mode)
+        data = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        require(len(data) <= 65536)
+        with os.fdopen(fd, "wb", closefd=False) as opened:
+            opened.write(data)
+            opened.flush()
+            os.fsync(fd)
+        if replace:
+            os.replace(temporary, name)
+        else:
+            # RENAME_NOREPLACE is the exclusive publication point, including between competing prepare writers.
+            # No check-then-replace or link/unlink window may overwrite an existing owner or expose nlink=2.
+            require(LIBC.renameat2(-100, os.fsencode(temporary), -100, os.fsencode(name), 1) == 0,
+                    "An exclusive isolation record could not be published")
+    finally:
+        os.close(fd)
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+
+
+def read_state():
+    directory = os.lstat(ROOT + "/private")
+    require(stat.S_ISDIR(directory.st_mode) and directory.st_uid == directory.st_gid == 0 and
+            stat.S_IMODE(directory.st_mode) == 0o700 and os.path.realpath(ROOT + "/private") == ROOT + "/private")
+    require(stat.S_IMODE(os.lstat(PRIVATE).st_mode) == 0o600)
+    value = read_json(PRIVATE)
+    exact(value, ("v", "public", "phase", "brokerPending", "runtimeImages"))
+    require(type(value["v"]) is int and value["v"] == 1 and type(value["brokerPending"]) is bool and value["phase"] in
+            ("recorded", "keeper-ready", "broker-pending", "adopted", "quiesced", "uid-stopped", "broker-stopped"))
+    validate_spec(value["public"], partial=True)
+    require(type(value["runtimeImages"]) is dict and len(value["runtimeImages"]) <= 128)
+    for name, digest in value["runtimeImages"].items():
+        canonical(name)
+        require(type(digest) is str and len(digest) == 64 and all(char in "0123456789abcdef" for char in digest))
+    return value
+
+
+def save_state(value):
+    write_json(PRIVATE, value, 0o600, replace=True)
+
+
+def identity(pid, expected=None):
+    text = pathlib.Path(f"/proc/{pid}/stat").read_text()
+    fields = text[text.rindex(")") + 2:].split()
+    status = pathlib.Path(f"/proc/{pid}/status").read_text()
+    users = next(line for line in status.splitlines() if line.startswith("Uid:")).split()[1:]
+    require(len(users) == 4 and fields[19].isdigit())
+    users = [int(item) for item in users]
+    if expected is not None and expected not in users:
+        return None
+    require(len(set(users)) == 1, "A scoped process has mixed user credentials")
+    return {"pid": pid, "start": fields[19], "uid": users[0], "state": fields[0]}
+
+
+def arm_parent(parent):
+    require(LIBC.prctl(1, signal.SIGKILL, 0, 0, 0) == 0 and os.getppid() == parent,
+            "A trusted startup parent disappeared")
+
+
+def parent_death_armed():
+    value = ctypes.c_int()
+    require(LIBC.prctl(2, ctypes.addressof(value), 0, 0, 0) == 0 and value.value == signal.SIGKILL,
+            "The parent-death binding was cleared")
+
+
+def check_engine_parent(parent, descriptor=None):
+    require(os.getppid() == parent, "The trusted Engine parent disappeared")
+    parent_death_armed()
+    if descriptor is not None:
+        poll = select.poll()
+        poll.register(descriptor, select.POLLIN)
+        require(not poll.poll(0), "The pinned Engine parent exited")
+
+
+def bind_engine_parent(parent):
+    # This identity is supplied by the trusted planner, not guessed from a process already reparented to an init.
+    require(integer(parent) and parent > 1)
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+    require(not previous.intersection(SIGNALS), "Inherited stop-signal masking is unsupported")
+    descriptor = os.pidfd_open(parent, 0)
+    try:
+        arm_parent(parent)
+        check_engine_parent(parent, descriptor)
+        require(not signal.sigpending().intersection(SIGNALS), "Cancellation preceded Engine-parent binding")
+        return previous, descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def cancellation(cancelled):
+    if cancelled["signal"]:
+        return cancelled["signal"]
+    pending = signal.sigpending()
+    return next((number for number in sorted(SIGNALS) if number in pending), 0)
+
+
+def close_extra():
+    require(LIBC.close_range(3, 0xFFFFFFFF, 0) == 0, "All inherited descriptors could not be closed")
+
+
+def drop_capabilities():
+    for capability in range(64):
+        if LIBC.prctl(24, capability, 0, 0, 0) != 0:
+            require(ctypes.get_errno() == errno.EINVAL)
+    require(LIBC.prctl(47, 4, 0, 0, 0) == 0)
+
+    class Header(ctypes.Structure):
+        _fields_ = [("version", ctypes.c_uint32), ("pid", ctypes.c_int)]
+
+    class Data(ctypes.Structure):
+        _fields_ = [("effective", ctypes.c_uint32), ("permitted", ctypes.c_uint32), ("inheritable", ctypes.c_uint32)]
+
+    header = Header(0x20080522, 0)
+    values = (Data * 2)()
+    require(LIBC.capset(ctypes.byref(header), ctypes.byref(values)) == 0 and
+            LIBC.capget(ctypes.byref(header), ctypes.byref(values)) == 0 and
+            all(item.effective == item.permitted == item.inheritable == 0 for item in values))
+    require(all(LIBC.prctl(23, capability, 0, 0, 0) == 0 for capability in range(41)))
+    require(LIBC.prctl(39, 0, 0, 0, 0) == 1)
+
+
+def assert_capabilities_dropped():
+    values = dict(line.split(":", 1) for line in pathlib.Path("/proc/self/status").read_text().splitlines() if ":" in line)
+    require(all(int(values[name].strip(), 16) == 0 for name in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")))
+    require(values["NoNewPrivs"].strip() == "1")
+
+
+def validate_descriptors(value, descriptors):
+    require(set(descriptors) == set(KINDS) and len(set(descriptors.values())) == 3)
+    for kind, fd in descriptors.items():
+        require(fcntl.ioctl(fd, NS_GET_NSTYPE) == KINDS[kind])
+        info = os.fstat(fd)
+        require(info.st_dev == value["devices"][kind] and info.st_ino == value["namespaces"][kind])
+    owner = array.array("I", [0])
+    fcntl.ioctl(descriptors["user"], NS_GET_OWNER_UID, owner, True)
+    require(owner[0] == value["uid"])
+    for kind in ("mnt", "pid"):
+        owner_fd = fcntl.ioctl(descriptors[kind], NS_GET_USERNS)
+        try:
+            require(os.fstat(owner_fd).st_ino == value["namespaces"]["user"])
+        finally:
+            os.close(owner_fd)
+
+
+def request_bytes(value):
+    return b"vector.ns.v1 " + value["nonce"].encode("ascii") + b"\n"
+
+
+def receive_namespaces(value):
+    received = []
+    try:
+        before = os.lstat(value["socket"])
+        require(stat.S_ISSOCK(before.st_mode) and before.st_uid == 0 and before.st_gid == value["gid"] and
+                stat.S_IMODE(before.st_mode) == 0o660 and before.st_dev == value["socketIdentity"]["device"] and
+                before.st_ino == value["socketIdentity"]["inode"])
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC) as transport:
+            transport.settimeout(1)
+            transport.connect(value["socket"])
+            peer = struct.unpack("3i", transport.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            require(peer == (value["broker"]["pid"], 0, 0))
+            request = request_bytes(value)
+            transport.sendall(request)
+            message, ancillary, flags, _ = transport.recvmsg(64, socket.CMSG_SPACE(3 * array.array("i").itemsize),
+                                                            socket.MSG_CMSG_CLOEXEC)
+            for level, kind, data in ancillary:
+                if (level, kind) == (socket.SOL_SOCKET, socket.SCM_RIGHTS):
+                    numbers = array.array("i")
+                    numbers.frombytes(data[:len(data) - len(data) % numbers.itemsize])
+                    received.extend(numbers)
+            require(not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) and message == request and
+                    len(ancillary) == 1 and ancillary[0][0:2] == (socket.SOL_SOCKET, socket.SCM_RIGHTS) and
+                    len(ancillary[0][2]) == 3 * array.array("i").itemsize and len(received) == 3 and
+                    all(not os.get_inheritable(fd) for fd in received))
+        descriptors = dict(zip(KINDS, received, strict=True))
+        validate_descriptors(value, descriptors)
+        return descriptors
+    except BaseException:
+        for fd in received:
+            os.close(fd)
+        raise
+
+
+def broker(parent, listener_fd, descriptors):
+    require(os.getuid() == os.geteuid() == os.getgid() == 0 and parent > 1)
+    arm_parent(parent)
+    state = read_state()
+    value = validate_spec(state["public"], partial=True)
+    validate_descriptors(value, descriptors)
+    require(3 <= listener_fd < 128 and all(3 <= fd < 128 for fd in descriptors.values()) and
+            len({listener_fd, *descriptors.values()}) == 4)
+    for fd in (listener_fd, *descriptors.values()):
+        os.set_inheritable(fd, False)
+    listener = socket.socket(fileno=listener_fd)
+    require(listener.family == socket.AF_UNIX and listener.type == socket.SOCK_SEQPACKET and
+            listener.getsockname() == value["socket"] and listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 0)
+    for name in os.listdir("/proc/self/fd"):
+        fd = int(name)
+        if fd < 3 or fd in {listener_fd, *descriptors.values()}:
+            continue
+        try:
+            os.fstat(fd)
+        except OSError as error:
+            require(error.errno == errno.EBADF)
+            continue
+        raise RuntimeError("An unexpected descriptor reached the broker")
+    require(set(os.environ) <= {"PATH", "LC_ALL", "LC_CTYPE"})
+    stopping = {"closed": False, "stop": False}
+
+    def quiesce(number, frame):
+        stopping["closed"] = True
+
+    def stop(number, frame):
+        stopping["closed"] = stopping["stop"] = True
+
+    signal.signal(signal.SIGUSR1, quiesce)
+    for number in SIGNALS:
+        signal.signal(number, stop)
+    os.setgroups([])
+    os.chdir("/")
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
+    require(LIBC.prctl(38, 1, 0, 0, 0) == 0)
+    drop_capabilities()
+    assert_capabilities_dropped()
+    listener.listen(16)
+    listener.settimeout(0.1)
+    ready = {"v": 1, "pid": os.getpid(), "nonce": value["nonce"]}
+    write_json(value["directory"] + "/broker-ready.json", ready, 0o600)
+    deadline = time.monotonic() + 5
+    while not os.path.exists(value["directory"] + "/broker-adopt.json"):
+        require(time.monotonic() < deadline)
+        time.sleep(0.01)
+    require(read_json(value["directory"] + "/broker-adopt.json") == {"v": 1, "nonce": value["nonce"]})
+    recorded = read_state()["public"]["broker"]
+    current = identity(os.getpid(), 0)
+    require(recorded["pid"] == current["pid"] and recorded["start"] == current["start"])
+    require(LIBC.prctl(1, 0, 0, 0, 0) == 0)
+    write_json(value["directory"] + "/broker-adopted.json", ready, 0o600)
+    requests = 0
+    acknowledged = False
+    try:
+        while not stopping["stop"]:
+            if stopping["closed"] and not acknowledged:
+                write_json(value["directory"] + "/broker-closed.json", ready, 0o600)
+                acknowledged = True
+            try:
+                connection, _ = listener.accept()
+            except TimeoutError:
+                continue
+            requests += 1
+            if requests > 256:
+                stopping["closed"] = True
+            with connection:
+                connection.settimeout(0.2)
+                if stopping["closed"]:
+                    continue
+                try:
+                    peer = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                    if peer[0] <= 1 or peer[1:] != (value["uid"], value["gid"]):
+                        continue
+                    before = identity(peer[0], value["uid"])
+                    keeper = identity(value["keeper"]["pid"], value["uid"])
+                    if not before or before["state"] == "Z":
+                        continue
+                    if not keeper or keeper["state"] == "Z" or keeper["start"] != value["keeper"]["start"]:
+                        stopping["closed"] = True
+                        continue
+                    message, ancillary, flags, _ = connection.recvmsg(64, 0, socket.MSG_CMSG_CLOEXEC)
+                    after = identity(peer[0], value["uid"])
+                    if message != request_bytes(value) or ancillary or flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or \
+                            stopping["closed"] or not after or after["start"] != before["start"]:
+                        continue
+                    sent = connection.sendmsg([message], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                                          array.array("i", [descriptors[kind] for kind in KINDS]))])
+                    require(sent == len(message))
+                except (OSError, RuntimeError, ValueError, StopIteration):
+                    continue
+    finally:
+        listener.close()
+        for fd in descriptors.values():
+            os.close(fd)
+
+
+def payload_arguments(cwd, argv):
+    canonical(cwd)
+    require(not any(cwd == prefix or cwd.startswith(prefix + "/") for prefix in ("/proc", "/sys", "/dev")))
+    require(1 <= len(argv) <= 513 and argv[0])
+    require(all(type(item) is str and "\0" not in item and len(item.encode("utf-8", "strict")) <= 65536 for item in argv))
+    require(sum(len(item.encode("utf-8")) + 1 for item in argv) <= 262144)
+    size = 0
+    for name, item in os.environ.items():
+        require(not name.startswith(("LD_", "DYLD_")) and name not in
+                ("GCONV_PATH", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "LIBPATH", "SHLIB_PATH"))
+        size += len(name.encode("utf-8", "strict")) + len(item.encode("utf-8", "strict")) + 2
+    require(size <= 262144)
+
+
+def command_init(control_fd, scratch, cwd, argv):
+    # This immutable helper is PID1, not the model program. Exiting it kills every PID in this command namespace.
+    require(os.getpid() == 1 and os.getuid() == os.getgid() == 1000 and os.getgroups() == [])
+    require(pathlib.Path("/proc/self/uid_map").read_text().split() == ["1000", "0", "1"] and
+            pathlib.Path("/proc/self/gid_map").read_text().split() == ["1000", "0", "1"])
+    require(LIBC.prctl(38, 1, 0, 0, 0) == 0)
+    assert_capabilities_dropped()
+    payload_arguments(cwd, argv)
+    canonical(scratch)
+    require(control_fd >= 3 and os.path.isdir(scratch) and os.path.realpath(scratch) == scratch)
+    require(os.path.isdir(cwd) and os.path.realpath(cwd) == cwd)
+    control = socket.socket(fileno=control_fd)
+    require(control.family == socket.AF_UNIX and control.type == socket.SOCK_SEQPACKET)
+    os.set_inheritable(control_fd, False)
+    for name in os.listdir("/proc/self/fd"):
+        fd = int(name)
+        if fd < 3 or fd == control_fd:
+            continue
+        try:
+            os.fstat(fd)
+        except OSError as error:
+            require(error.errno == errno.EBADF)
+            continue
+        raise RuntimeError("An undeclared descriptor reached the command init")
+    cancelled = {"signal": 0}
+
+    def stop(number, frame):
+        cancelled["signal"] = number
+
+    for number in SIGNALS:
+        signal.signal(number, stop)
+    signal.pthread_sigmask(signal.SIG_SETMASK, [])
+    control.settimeout(5)
+    control.sendall(b"vector.init.v1 ready\n")
+    require(control.recv(64) == b"vector.init.v1 exec\n", "The command init was not released by its live owner")
+    # No model command exists before the owner has pinned this exact init. Preserve the barrier on fork failure.
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+    try:
+        # The cancellation decision/fork is one masked linearization section. Pending signals count as cancellation.
+        require(not cancellation(cancelled), "Cancellation preceded the model-child fork decision")
+        child = os.fork()
+        if child == 0:
+            arm_parent(1)
+            # Never unblock with inherited handlers that merely set the parent's now-unused cancellation dictionary.
+            for number in SIGNALS:
+                signal.signal(number, signal.SIG_DFL)
+            require(not signal.sigpending().intersection(SIGNALS) and os.getppid() == 1)
+            parent_death_armed()
+            environment = dict(os.environ)
+            environment.update({"HOME": scratch, "TMPDIR": scratch, "TMP": scratch, "TEMP": scratch,
+                                "RUNNER_TEMP": scratch})
+            os.chdir(cwd)
+            close_extra()
+            require(not signal.sigpending().intersection(SIGNALS) and os.getppid() == 1)
+            parent_death_armed()
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            os.execvpe(argv[0], argv, environment)
+        pending = cancellation(cancelled)
+        if pending:
+            return 128 + pending  # PID1 exit also stops a child created after the fork decision.
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+    control.setblocking(False)
+    try:
+        while True:
+            if cancelled["signal"]:
+                return 128 + cancelled["signal"]
+            reaped, status = os.waitpid(child, os.WNOHANG)
+            if reaped:
+                return os.waitstatus_to_exitcode(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status)
+            if select.select([control], [], [], 0.05)[0]:
+                message = control.recv(64)
+                if not message or message == b"vector.init.v1 cancel\n":
+                    return 143
+                raise RuntimeError("Unexpected command lifetime message")
+    finally:
+        control.close()
+        # PID1 returns only to os._exit below: the kernel tears down setsid/daemon descendants too.
+
+
+def signal_owned(fd, number):
+    try:
+        signal.pidfd_send_signal(fd, number)
+    except ProcessLookupError:
+        pass
+
+
+def command_message(channel):
+    message, ancillary, flags, _ = channel.recvmsg(64, 0, socket.MSG_CMSG_CLOEXEC)
+    require(not ancillary and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC),
+            "A private command lifetime message was malformed")
+    return message
+
+
+def command_guardian(value, cwd, argv, owner):
+    require(os.getuid() == os.getgid() == 0 and os.getgroups() == [])
+    scratch = value["scratch"] + "/command-" + os.urandom(16).hex()
+    os.mkdir(scratch, 0o700)
+    control, inside = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+    info_read, info_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+    cancelled = {"signal": 0}
+    init_fd = None
+    closing = {"value": False}
+
+    def stop(number, frame):
+        cancelled["signal"] = number
+        if init_fd is not None and not closing["value"]:
+            signal_owned(init_fd, number)
+
+    for number in SIGNALS:
+        signal.signal(number, stop)
+    signal.pthread_sigmask(signal.SIG_SETMASK, [])
+    owner.setblocking(False)
+    deadline = time.monotonic() + 5
+    parent = os.getpid()
+    process = None
+    process_fd = None
+    try:
+        # A fork is not an ownership handoff. The outer shim must pin this child and install cancellation
+        # forwarding before it can let the guardian start a command namespace, which still cannot execute yet.
+        while True:
+            require(not cancelled["signal"] and time.monotonic() < deadline)
+            if select.select([owner], [], [], 0.05)[0]:
+                require(command_message(owner) == b"vector.owner.v1 owned\n",
+                        "The guardian did not receive its live outer ownership handoff")
+                break
+        parent_death_armed()
+        # --sync-fd is intentionally retained by --as-pid-1. Only immutable init sees this secret-free control FD.
+        arguments = [
+            "/usr/bin/bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+            "--uid", "1000", "--gid", "1000", "--as-pid-1", "--sync-fd", str(inside.fileno()),
+            "--info-fd", str(info_write), "--ro-bind", "/", "/", "--bind", value["stage"], value["stage"],
+            "--bind", scratch, scratch, "--dev", "/dev", "--proc", "/proc", "--cap-drop", "ALL", "--chdir", cwd,
+            "--", "/usr/bin/python3", "-I", "-S", SELF, "command-init", str(inside.fileno()), scratch, cwd, "--", *argv,
+        ]
+        process = subprocess.Popen(arguments, close_fds=True, pass_fds=(inside.fileno(), info_write),
+                                   preexec_fn=lambda: arm_parent(parent), env=dict(os.environ))
+        process_fd = os.pidfd_open(process.pid, 0)
+        inside.close()
+        os.close(info_write)
+        info_write = None
+        drop_capabilities()
+        information = b""
+        ready = False
+        control.setblocking(False)
+        while init_fd is None or not ready:
+            require(not cancelled["signal"] and time.monotonic() < deadline and process.poll() is None,
+                    "The command init was not owned before execution")
+            waiting = [control, owner] + ([info_read] if info_read is not None else [])
+            reads, _, _ = select.select(waiting, [], [], 0.05)
+            if owner in reads:
+                # There is no legal second message until init-ready. EOF also refuses startup.
+                command_message(owner)
+                raise RuntimeError("The outer lifetime ended before the command init was owned")
+            if info_read is not None and info_read in reads:
+                block = os.read(info_read, 4097 - len(information))
+                require(block and len(information) + len(block) <= 4096)
+                information += block
+                try:
+                    details = json.loads(information.decode("utf-8", "strict"))
+                except (json.JSONDecodeError, UnicodeError):
+                    details = None
+                if details is not None:
+                    require(type(details) is dict and integer(details.get("child-pid")))
+                    init = identity(details["child-pid"], 0)
+                    require(init and init["state"] != "Z")
+                    init_fd = os.pidfd_open(init["pid"], 0)
+                    after = identity(init["pid"], 0)
+                    require(after and after["start"] == init["start"])
+                    os.close(info_read)
+                    info_read = None
+            if control in reads:
+                require(control.recv(64) == b"vector.init.v1 ready\n")
+                ready = True
+        target = f"/proc/{init['pid']}"
+        status = pathlib.Path(target + "/status").read_text()
+        groups = next(line for line in status.splitlines() if line.startswith("Gid:")).split()[1:]
+        nested = next(line for line in status.splitlines() if line.startswith("NSpid:")).split()[1:]
+        require(len(groups) == 4 and all(item == "0" for item in groups) and nested[-1] == "1")
+        require(os.stat(target + "/ns/user").st_ino != value["namespaces"]["user"] and
+                os.stat(target + "/ns/pid").st_ino != value["namespaces"]["pid"] and
+                pathlib.Path(target + "/uid_map").read_text().split() == ["1000", "0", "1"] and
+                pathlib.Path(target + "/gid_map").read_text().split() == ["1000", "0", "1"])
+        observed = identity(init["pid"], 0)
+        require(observed and observed["start"] == init["start"] and observed["state"] != "Z")
+        # Only the outer shim observes Engine-directed pending cancellation. It makes the composed release
+        # decision AFTER this init has been pinned and verified; the guardian may never decide in its place.
+        owner.settimeout(1)
+        owner.sendall(b"vector.owner.v1 init-ready\n")
+        owner.setblocking(False)
+        while True:
+            require(not cancelled["signal"] and time.monotonic() < deadline and process.poll() is None)
+            if select.select([owner], [], [], 0.05)[0]:
+                require(command_message(owner) == b"vector.owner.v1 exec-authorized\n",
+                        "The live outer owner did not authorize command execution")
+                break
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+        try:
+            # The received authorization records the OUTER decision, not a new independent release authority.
+            # Local cancellation/outer EOF can still prevent dispatch. An arrival after authorization is
+            # cancellation of an already-owned namespace and must stop/reap even if model execution races it.
+            require(not cancellation(cancelled), "The guardian was cancelled before init dispatch")
+            require(not select.select([owner], [], [], 0)[0], "The outer owner disappeared before init dispatch")
+            parent_death_armed()
+            live = select.poll()
+            live.register(init_fd, select.POLLIN)
+            require(not live.poll(0), "The owned init exited before dispatch")
+            control.settimeout(1)
+            control.sendall(b"vector.init.v1 exec\n")
+            pending = cancellation(cancelled)
+            if pending:
+                signal_owned(init_fd, pending)
+        finally:
+            # Do not leave later cancellation masked if a release or pending-signal check failed.
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        poll = select.poll()
+        poll.register(init_fd, select.POLLIN)
+        stopping = None
+        while process.poll() is None:
+            if select.select([owner], [], [], 0)[0]:
+                message = command_message(owner)
+                require(not message, "An unexpected outer lifetime message followed authorization")
+                cancelled["signal"] = cancelled["signal"] or signal.SIGTERM
+            if cancelled["signal"] and stopping is None:
+                stopping = time.monotonic()
+                try:
+                    control.sendall(b"vector.init.v1 cancel\n")
+                except (OSError, TimeoutError):
+                    pass
+                signal_owned(init_fd, cancelled["signal"])
+            if stopping is not None and time.monotonic() - stopping >= 1:
+                signal_owned(init_fd, signal.SIGKILL)
+            if stopping is not None:
+                require(time.monotonic() - stopping < 2, "The owned command namespace did not stop")
+            time.sleep(0.01)
+        require(poll.poll(1000), "The command returned without reaping its namespace init")
+        return process.returncode if process.returncode >= 0 else 128 - process.returncode
+    finally:
+        closing["value"] = True
+        owner.close()
+        # EOF also tells immutable PID1 to exit when this guardian is killed before or after release.
+        control.close()
+        inside.close()
+        cleanup_error = None
+        if init_fd is not None:
+            try:
+                signal_owned(init_fd, signal.SIGKILL)
+                stopped = select.poll()
+                stopped.register(init_fd, select.POLLIN)
+                require(stopped.poll(1000), "The command init survived failed-start cleanup")
+            except BaseException as error:
+                cleanup_error = error
+            finally:
+                os.close(init_fd)
+        if process_fd is not None:
+            try:
+                signal_owned(process_fd, signal.SIGKILL)
+                if process is not None:
+                    process.wait(timeout=1)
+            except BaseException as error:
+                cleanup_error = error
+            finally:
+                os.close(process_fd)
+        for fd in (info_read, info_write):
+            if fd is not None:
+                os.close(fd)
+        # This directory is model-writable. Do not follow a replaced entry or recursively reclaim it in the guardian.
+        try:
+            os.rmdir(scratch)
+        except OSError:
+            pass
+        if cleanup_error is not None:
+            raise cleanup_error
+
+
+def execute(parent, previous, parent_fd, cwd, argv):
+    check_engine_parent(parent, parent_fd)
+    payload_arguments(cwd, argv)
+    require(os.getgroups() == [] and LIBC.prctl(39, 0, 0, 0, 0) == 1)
+    require(os.path.isdir("/proc") and not os.listdir("/proc"), "The holder proc is not empty")
+    require(stat.S_IMODE(os.lstat(SPEC).st_mode) == 0o444)
+    value = validate_spec(read_json(SPEC))
+    require(os.getuid() == value["uid"] and os.getgid() == value["gid"])
+    secure_chain(value["directory"])
+    check_engine_parent(parent, parent_fd)
+    close_extra()
+    # The pidfd is an Engine descriptor: it must not survive broker entry, even as a CLOEXEC descriptor.
+    check_engine_parent(parent)
+    descriptors = receive_namespaces(value)
+    try:
+        for kind in KINDS:
+            check_engine_parent(parent)
+            os.setns(descriptors[kind], KINDS[kind])
+            # A credential/namespace change must not silently clear the Engine-death edge.
+            check_engine_parent(parent)
+    finally:
+        for fd in descriptors.values():
+            os.close(fd)
+    require(os.getuid() == os.getgid() == 0 and os.getgroups() == [])
+    os.chdir("/")
+    check_engine_parent(parent)
+    require(not signal.sigpending().intersection(SIGNALS), "Cancellation preceded guardian creation")
+    owner, guardian = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+    deadline = time.monotonic() + 5
+    child = os.fork()
+    if child == 0:
+        owner.close()
+        # After setns(PID), this child's parent is outside its visible PID namespace: getppid() is zero.
+        require(LIBC.prctl(1, signal.SIGKILL, 0, 0, 0) == 0)
+        # A parent lost before this arm cannot be mistaken for a live one: the socket must deliver an ownership
+        # token before namespace creation, and a separate final authorization before any init exec release.
+        os._exit(command_guardian(value, cwd, argv, guardian))
+    guardian.close()
+    child_fd = None
+    reaped = False
+    cancelled = {"signal": 0}
+    closing = {"value": False}
+
+    def forward(number, frame):
+        cancelled["signal"] = number
+        if child_fd is not None and not closing["value"]:
+            signal_owned(child_fd, number)
+
+    try:
+        child_fd = os.pidfd_open(child, 0)
+        drop_capabilities()
+        check_engine_parent(parent)
+        for number in SIGNALS:
+            signal.signal(number, forward)
+        # Stop signals remain blocked since trusted Engine-parent binding. The child has no authority yet.
+        require(not cancellation(cancelled), "Cancellation preceded guardian ownership")
+        owner.settimeout(1)
+        owner.sendall(b"vector.owner.v1 owned\n")
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        owner.setblocking(False)
+        live = select.poll()
+        live.register(child_fd, select.POLLIN)
+        while True:
+            check_engine_parent(parent)
+            require(not cancelled["signal"] and time.monotonic() < deadline and not live.poll(0),
+                    "The guardian did not produce a live owned init before execution")
+            if select.select([owner], [], [], 0.05)[0]:
+                require(command_message(owner) == b"vector.owner.v1 init-ready\n",
+                        "The guardian did not attest its actual owned init")
+                break
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+        try:
+            check_engine_parent(parent)
+            require(not live.poll(0), "The owned guardian exited before the release decision")
+            # This final check is the ONE composed exec decision. Cancellation recorded or kernel-pending in
+            # the outer shim before it cannot authorize the guardian, even if the child ran immediately at fork.
+            require(not cancellation(cancelled), "Cancellation preceded the outer exec-authorization decision")
+            owner.settimeout(1)
+            owner.sendall(b"vector.owner.v1 exec-authorized\n")
+            pending = cancellation(cancelled)
+            if pending:
+                signal_owned(child_fd, pending)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        _, result = os.waitpid(child, 0)
+        reaped = True
+        return os.waitstatus_to_exitcode(result) if os.WIFEXITED(result) else 128 + os.WTERMSIG(result)
+    finally:
+        closing["value"] = True
+        # EOF closes the guardian's lifetime as well as SIGKILL/PDEATH; the channel is never passed to bwrap/init.
+        owner.close()
+        try:
+            if not reaped:
+                if child_fd is None:
+                    # This is our own unreaped fork child, which has received NO ownership token. Its PID cannot
+                    # have been recycled before waitpid, even when opening its first pidfd failed.
+                    try:
+                        os.kill(child, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    # Give the owned guardian one bounded graceful interval to close/kill and prove init teardown.
+                    # Killing it immediately on startup cancellation would skip its namespace cleanup proof.
+                    signal_owned(child_fd, cancelled["signal"] or signal.SIGTERM)
+                started = time.monotonic()
+                while True:
+                    observed, _ = os.waitpid(child, os.WNOHANG)
+                    if observed:
+                        break
+                    elapsed = time.monotonic() - started
+                    if child_fd is not None and elapsed >= 1:
+                        signal_owned(child_fd, signal.SIGKILL)
+                    require(elapsed < 2, "The owned command guardian was not reaped")
+                    time.sleep(0.01)
+        finally:
+            if child_fd is not None:
+                os.close(child_fd)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def fixed(argv, **options):
+    return subprocess.run(argv, check=True, timeout=5, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, **options)
+
+
+def keeper(scratch):
+    require(os.getuid() == os.getgid() == 0 and os.getgroups() == [])
+    assert_capabilities_dropped()
+    require(set(os.environ) <= {"PATH", "HOME", "LC_ALL", "LC_CTYPE"})
+    write_json(scratch + "/keeper-ready.json", {
+        "v": 1, "pid": os.getpid(), "uid": os.getuid(), "gid": os.getgid(),
+        "namespaces": {kind: os.stat("/proc/self/ns/" + kind).st_ino for kind in KINDS},
+    }, 0o600)
+    while True:
+        signal.pause()
+
+
+def wait_json(name, owner, process=None, seconds=5):
+    deadline = time.monotonic() + seconds
+    while not os.path.lexists(name):
+        require(time.monotonic() < deadline and (process is None or process.poll() is None))
+        time.sleep(0.01)
+    return read_json(name, owner)
+
+
+def image_digest(name):
+    info = os.stat(name)
+    require(stat.S_ISREG(info.st_mode) and info.st_size <= 67108864)
+    digest = hashlib.sha256()
+    size = 0
+    with open(name, "rb") as source:
+        while True:
+            block = source.read(1048576)
+            if not block:
+                break
+            size += len(block)
+            require(size <= 67108864)
+            digest.update(block)
+    require(size == info.st_size)
+    return digest.hexdigest()
+
+
+def runtime_images():
+    secure_chain(SELF)
+    secure_chain(sys.executable)
+    for module in tuple(sys.modules.values()):
+        source = getattr(module, "__file__", None)
+        if source:
+            secure_chain(source)
+    images = {secure_chain(SELF): image_digest(SELF)}
+    for line in pathlib.Path("/proc/self/maps").read_text().splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) < 6 or not fields[5].startswith("/"):
+            continue
+        require(not fields[5].endswith(" (deleted)"))
+        name = secure_chain(fields[5])
+        images[name] = image_digest(name)
+    require(len(images) <= 128 and any("ld-linux" in name for name in images) and
+            any("libc.so" in name for name in images) and any("libffi.so" in name for name in images))
+    return images
+
+
+def prepare(uid, gid, container):
+    require(os.geteuid() == 0 and sys.version_info >= (3, 12) and container in CONTAINERS)
+    account = pwd.getpwnam("vector-agent")
+    require(integer(uid) and integer(gid) and account.pw_uid == uid and account.pw_gid == gid)
+    require(not os.path.lexists(PRIVATE) and not os.path.lexists(SPEC))
+    secure_chain(ROOT)
+    secure_chain(ROOT + "/private")
+    private = os.lstat(ROOT + "/private")
+    require(os.path.realpath(ROOT + "/private") == ROOT + "/private" and private.st_uid == private.st_gid == 0 and
+            stat.S_IMODE(private.st_mode) == 0o700)
+    secure_chain(container)
+    for executable in ("/usr/bin/aa-exec", "/usr/bin/prlimit", "/usr/bin/setpriv", "/usr/bin/env", "/usr/bin/bwrap",
+                       "/usr/bin/nsenter", "/usr/bin/mount", "/usr/bin/chmod"):
+        secure_chain(executable)
+    require(os.path.realpath(container) == container and stat.S_IMODE(os.stat(container).st_mode) == 0o755)
+    stage = container + "/checkout"
+    info = os.lstat(stage)
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == uid and info.st_gid == gid and os.path.realpath(stage) == stage)
+    value = {"v": 1, "container": container, "uid": uid, "gid": gid, "stage": stage,
+             "scratch": container + "/tool-scratch", "directory": container + "/tool-namespaces",
+             "socket": container + "/tool-namespaces/broker.sock", "nonce": os.urandom(16).hex()}
+    state = {"v": 1, "public": value, "phase": "recorded", "brokerPending": False, "runtimeImages": runtime_images()}
+    # The durable process-crash record precedes directory/child ownership. No power-loss claim is made.
+    write_json(PRIVATE, state, 0o600)
+    os.mkdir(value["directory"], 0o755)
+    os.chmod(value["directory"], 0o755)
+    os.mkdir(value["scratch"], 0o700)
+    os.chown(value["scratch"], uid, gid)
+    info_path = value["directory"] + "/keeper-info.json"
+    info_fd = os.open(info_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    log_fd = os.open(value["directory"] + "/keeper.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    arguments = [
+        "/usr/bin/aa-exec", "--profile=vector-sandbox-v1", "--", "/usr/bin/prlimit", "--core=0:0", "--",
+        "/usr/bin/setpriv", f"--reuid={uid}", f"--regid={gid}", "--clear-groups", "--no-new-privs", "--",
+        "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "/usr/bin/bwrap", "--info-fd", str(info_fd),
+        "--unshare-user", "--uid", "0", "--gid", "0", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+        "--ro-bind", "/", "/", "--bind", stage, stage, "--bind", value["scratch"], value["scratch"],
+        "--dev", "/dev", "--proc", "/proc", "--cap-drop", "ALL", "--chdir", value["scratch"],
+        "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", value["scratch"],
+        "--", "/usr/bin/python3", "-I", "-S", SELF, "keeper", value["scratch"],
+    ]
+    try:
+        process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=log_fd, stderr=log_fd,
+                                   close_fds=True, pass_fds=(info_fd,), start_new_session=True,
+                                   env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    finally:
+        os.close(info_fd)
+        os.close(log_fd)
+    ready = wait_json(value["scratch"] + "/keeper-ready.json", uid, process)
+    details = read_json(info_path)
+    require(type(details) is dict and integer(details.get("child-pid")))
+    observed = identity(details["child-pid"], uid)
+    require(observed and observed["state"] != "Z")
+    pid = observed["pid"]
+    require(pathlib.Path(f"/proc/{pid}/uid_map").read_text().split() == ["0", str(uid), "1"] and
+            pathlib.Path(f"/proc/{pid}/gid_map").read_text().split() == ["0", str(gid), "1"])
+    require(ready["uid"] == ready["gid"] == 0)
+    value["namespaces"] = {kind: os.stat(f"/proc/{pid}/ns/{kind}").st_ino for kind in KINDS}
+    value["devices"] = {kind: os.stat(f"/proc/{pid}/ns/{kind}").st_dev for kind in KINDS}
+    require(value["namespaces"] == ready["namespaces"] and all(
+        value["namespaces"][kind] != os.stat("/proc/self/ns/" + kind).st_ino for kind in KINDS))
+    value["keeper"] = {"pid": pid, "start": observed["start"]}
+    state["phase"] = "keeper-ready"
+    save_state(state)
+    descriptors = {kind: os.open(f"/proc/{pid}/ns/{kind}", os.O_RDONLY | os.O_CLOEXEC) for kind in KINDS}
+    listener = None
+    try:
+        validate_descriptors(value, descriptors)
+        enter = ["/usr/bin/nsenter", f"--mount=/proc/self/fd/{descriptors['mnt']}",
+                 f"--pid=/proc/self/fd/{descriptors['pid']}", "--"]
+        fixed([*enter, "/usr/bin/mount", "--make-rprivate", "/"],
+              pass_fds=(descriptors["mnt"], descriptors["pid"]), stdout=subprocess.DEVNULL)
+        mounts = pathlib.Path(f"/proc/{pid}/mountinfo").read_text().splitlines()
+        require(all(not any(field.startswith(("shared:", "master:", "propagate_from:"))
+                            for field in line.split()[6:line.split().index("-")]) for line in mounts))
+        require("ro" in next(line.split()[5] for line in mounts if line.split()[4] == "/").split(","))
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+        listener.bind(value["socket"])
+        os.chown(value["socket"], 0, gid)
+        os.chmod(value["socket"], 0o660)
+        endpoint = os.lstat(value["socket"])
+        value["socketIdentity"] = {"device": endpoint.st_dev, "inode": endpoint.st_ino}
+        state["phase"] = "broker-pending"
+        state["brokerPending"] = True
+        save_state(state)
+        log_fd = os.open(value["directory"] + "/broker.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        parent = os.getpid()
+        try:
+            service = subprocess.Popen([
+                "/usr/bin/python3", "-I", "-S", SELF, "broker", str(parent), str(listener.fileno()),
+                *(str(descriptors[kind]) for kind in KINDS),
+            ], stdin=subprocess.DEVNULL, stdout=log_fd, stderr=log_fd, close_fds=True,
+                pass_fds=(listener.fileno(), *descriptors.values()), start_new_session=True,
+                preexec_fn=lambda: arm_parent(parent), env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        finally:
+            os.close(log_fd)
+        observed = identity(service.pid, 0)
+        require(observed and observed["state"] != "Z")
+        value["broker"] = {"pid": service.pid, "start": observed["start"], "uid": 0, "gid": 0}
+        state["brokerPending"] = False
+        save_state(state)
+        expected = {"v": 1, "pid": service.pid, "nonce": value["nonce"]}
+        require(wait_json(value["directory"] + "/broker-ready.json", 0, service) == expected)
+        write_json(value["directory"] + "/broker-adopt.json", {"v": 1, "nonce": value["nonce"]}, 0o600)
+        require(wait_json(value["directory"] + "/broker-adopted.json", 0, service) == expected)
+        state["phase"] = "adopted"
+        save_state(state)
+        write_json(SPEC, validate_spec(value), 0o444)
+    finally:
+        if listener is not None:
+            listener.close()
+        for fd in descriptors.values():
+            os.close(fd)
+
+
+def cleanup():
+    require(os.geteuid() == 0)
+    state = read_state()
+    value = state["public"]
+    account = pwd.getpwnam("vector-agent")
+    require(account.pw_uid == value["uid"] and account.pw_gid == value["gid"])
+    secure_chain(value["container"])
+    fixed(["/usr/bin/chmod", "0700", "--", value["container"]], stdout=subprocess.DEVNULL)
+    if os.path.isdir(value["directory"]):
+        secure_chain(value["directory"])
+        fixed(["/usr/bin/chmod", "0700", "--", value["directory"]], stdout=subprocess.DEVNULL)
+    broker_fd = None
+    failed = state["brokerPending"] or state["phase"] not in ("adopted", "quiesced", "uid-stopped", "broker-stopped")
+    if not os.path.lexists(SPEC):
+        failed = True
+    else:
+        require(validate_spec(read_json(SPEC)) == validate_spec(value))
+    if "broker" in value:
+        try:
+            broker_fd = os.pidfd_open(value["broker"]["pid"], 0)
+            current = identity(value["broker"]["pid"], 0)
+            require(current and current["start"] == value["broker"]["start"] and current["state"] != "Z")
+            signal_owned(broker_fd, signal.SIGUSR1)
+            closed = wait_json(value["directory"] + "/broker-closed.json", 0, seconds=1)
+            require(closed == {"v": 1, "pid": value["broker"]["pid"], "nonce": value["nonce"]})
+            state["phase"] = "quiesced"
+            save_state(state)
+        except (OSError, RuntimeError, ValueError, StopIteration):
+            failed = True
+    elif state["phase"] not in ("recorded", "keeper-ready"):
+        failed = True
+    deadline = time.monotonic() + 2
+    while True:
+        living = False
+        for name in pathlib.Path("/proc").iterdir():
+            if not name.name.isdigit():
+                continue
+            fd = None
+            try:
+                fd = os.pidfd_open(int(name.name), 0)
+                current = identity(int(name.name), value["uid"])
+                if current and current["state"] != "Z":
+                    living = True
+                    signal_owned(fd, signal.SIGKILL)
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        if not living:
+            break
+        require(time.monotonic() < deadline, "Disposable UID cleanup is unproved; broker ownership is retained")
+        time.sleep(0.01)
+    state["phase"] = "uid-stopped"
+    save_state(state)
+    if broker_fd is not None:
+        try:
+            current = identity(value["broker"]["pid"], 0)
+            require(current and current["start"] == value["broker"]["start"])
+            poll = select.poll()
+            poll.register(broker_fd, select.POLLIN)
+            signal_owned(broker_fd, signal.SIGTERM)
+            if not poll.poll(1000):
+                signal_owned(broker_fd, signal.SIGKILL)
+                require(poll.poll(1000))
+        finally:
+            os.close(broker_fd)
+    if os.path.lexists(value["socket"]):
+        info = os.lstat(value["socket"])
+        expected = value.get("socketIdentity")
+        require(expected and stat.S_ISSOCK(info.st_mode) and info.st_uid == 0 and
+                info.st_dev == expected["device"] and info.st_ino == expected["inode"])
+        os.unlink(value["socket"])
+    for name, digest in state["runtimeImages"].items():
+        secure_chain(name)
+        require(image_digest(name) == digest)
+    require(not failed, "Broker adoption/identity/admission stop was not proved; artifacts are refused")
+    state["phase"] = "broker-stopped"
+    save_state(state)
+    # The Engine adapter owns artifacts and final removal. Keep this receipt/state until its independent gate accepts.
+    if os.path.lexists(SPEC):
+        require(validate_spec(read_json(SPEC)) == validate_spec(value))
+        os.unlink(SPEC)
+    print(json.dumps({"v": 1, "event": "isolation-stopped", "uidStoppedBeforeBroker": True,
+                      "brokerStopped": True, "nonce": value["nonce"]}, separators=(",", ":")), flush=True)
+
+
+def trusted_entry():
+    secure_chain(SELF)
+    secure_chain(sys.executable)
+    asset = os.lstat(SELF)
+    require(os.path.realpath(ROOT) == ROOT and os.path.realpath(SELF) == SELF and stat.S_ISREG(asset.st_mode) and
+            asset.st_uid == asset.st_gid == 0 and asset.st_nlink == 1 and stat.S_IMODE(asset.st_mode) == 0o444)
+
+
+def main():
+    require(sys.platform == "linux" and sys.version_info >= (3, 12))
+    require(hasattr(os, "setns") and hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"))
+    if len(sys.argv) >= 2 and sys.argv[1] == "command-init":
+        require(len(sys.argv) >= 7 and sys.argv[5] == "--")
+        # Arguments: command-init CONTROL SCRATCH CWD -- PROGRAM [ARG...]. No metadata/credential FD is accepted.
+        os._exit(command_init(int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[6:]))
+    if len(sys.argv) == 3 and sys.argv[1] == "keeper":
+        # Host-root asset ownership is unmapped here; prepare attests it before constructing this secret-free base.
+        keeper(canonical(sys.argv[2]))
+        return
+    if len(sys.argv) >= 8 and sys.argv[1:3] == ["exec", "--parent"] and sys.argv[4] == "--cwd" and sys.argv[6] == "--":
+        parent = int(sys.argv[3])
+        previous, parent_fd = bind_engine_parent(parent)
+        trusted_entry()
+        os._exit(execute(parent, previous, parent_fd, sys.argv[5], sys.argv[7:]))
+    trusted_entry()
+    if len(sys.argv) == 5 and sys.argv[1] == "prepare":
+        prepare(int(sys.argv[2]), int(sys.argv[3]), sys.argv[4])
+        return
+    if len(sys.argv) == 7 and sys.argv[1] == "broker":
+        broker(int(sys.argv[2]), int(sys.argv[3]), dict(zip(KINDS, map(int, sys.argv[4:]), strict=True)))
+        return
+    if sys.argv[1:] == ["cleanup"]:
+        cleanup()
+        return
+    raise RuntimeError("Unsupported fixed Linux isolation operation")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BaseException:
+        # Do not print model argv, environment, metadata or credential-bearing parent diagnostics.
+        os.write(2, b"The fixed Linux isolation boundary refused this operation.\n")
+        os._exit(125)
