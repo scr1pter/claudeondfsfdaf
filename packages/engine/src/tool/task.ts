@@ -47,6 +47,7 @@ import { isFreeModelRef } from "@vectordevai/schema/free-model"
 import { SessionMemory } from "../session/memory"
 import { ResearchRun } from "./research-run"
 import { SecondOpinion } from "../session/second-opinion"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { FileLock } from "./file-lock"
 import { TaskNotify } from "@/task/notify"
 import { TaskClaims } from "@/task/claims"
@@ -1101,12 +1102,19 @@ export const TaskTool = Tool.define(
       // The model and effort the child runs with (5.E.1), worked out before the ask and admission, so a refused one asks
       // nothing and takes no slot. The parent's free route holds even if its model became unavailable after the call.
       const freeRoute = isFreeModelRef(msg.info)
-      // Preserve A35's trusted judge launch while the per-brief integration is completed in B05. A configured judge
-      // or a free parent still wins, and an ordinary task cannot select this internal override.
-      const secondOpinion =
-        !forking && subagentType === "judge" && invoked && !next.model && !freeRoute
-          ? SecondOpinion.fromExtra(ctx.extra)
-          : undefined
+      // The judge uses the same brief resolver and allowed() checks as any other child. Only Vector's own judge
+      // launch may add the exact currently listed cross-lab model the owner explicitly opted into.
+      const opinionUser = !forking && subagentType === "judge" && invoked && params.model && !next.model && !freeRoute
+        ? yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: msg.info.parentID }).pipe(
+            Effect.provideService(Database.Service, database), Effect.orDie,
+          ) : undefined
+      const secondOpinion = opinionUser?.info.role === "user" ? SecondOpinion.fromBrief({
+        model: params.model,
+        worker: { providerID: msg.info.providerID, modelID: msg.info.modelID },
+        on: opinionUser.info.secondOpinion === true,
+        configured: false,
+        models: (yield* provider.list())[ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID)]?.models,
+      }) : undefined
       const resumedModel =
         resumed && params.effort === undefined
           ? yield* provider
@@ -1118,6 +1126,7 @@ export const TaskTool = Tool.define(
       // A resumed fork runs as its first own message asked, whatever this step runs on (5.E.3).
       const shape = resumed?.fork && Option.isSome(forks) ? yield* forks.value.userFields(resumed) : undefined
       const keptEffort = resumed?.effort === "default" || resumed?.effort === "high" ? resumed.effort : undefined
+      const roleModels = ctx.extra?.[WorkflowMarkers.PLAYBOOK_MODELS]
       const choice = yield* SubagentModel.choose({
         parent: {
           model: shape?.model ?? { providerID: msg.info.providerID, modelID: msg.info.modelID },
@@ -1128,16 +1137,7 @@ export const TaskTool = Tool.define(
           learnedSmall: msg.info.workflow?.subagentModel === "small",
           guest: yield* guests.marked(root.id),
         },
-        next: secondOpinion
-          ? {
-              ...next,
-              model: {
-                providerID: ProviderV2.ID.make(secondOpinion.providerID),
-                modelID: ModelV2.ID.make(secondOpinion.modelID),
-              },
-              variant: undefined,
-            }
-          : next,
+        next,
         ask: {
           model: params.model,
           effort: params.effort,
@@ -1146,7 +1146,12 @@ export const TaskTool = Tool.define(
             ? { resume: { record: resumed, warm: SubagentModel.warm(resumed, resumedModel) } }
             : {}),
         },
-        allow: cfg.sizing?.subagents?.models,
+        allow: [...(cfg.sizing?.subagents?.models ?? []),
+          ...(secondOpinion ? [`${secondOpinion.providerID}/${secondOpinion.modelID}`] : []),
+          ...(workflowAgent && Array.isArray(roleModels) ? roleModels.filter(
+              (ref: unknown): ref is string => typeof ref === "string" && ref.startsWith(`${ModelPlanStatus.PROVIDER_ID}/`),
+            ) : []),
+        ],
         local: Config.local().enabled,
       }).pipe(
         Effect.provideService(Provider.Service, provider),

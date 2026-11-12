@@ -923,7 +923,7 @@ const layer = Layer.effect(
       message: SessionV1.Assistant
       parent: Agent.Info
       judge: Agent.Info
-      args: { prompt: string; description: string; subagent_type: string; background: false }
+      args: { prompt: string; description: string; subagent_type: string; background: false; model?: string; effort?: "default" }
       metadata: Record<string, unknown>
       finished: (output: string) => Record<string, unknown>
       failed: string
@@ -1103,6 +1103,7 @@ const layer = Layer.effect(
           description: round === 1 ? "Check the finished work" : `Check the repairs (round ${round})`,
           subagent_type: "judge",
           background: false,
+          ...(opinion ? { model: `${opinion.providerID}/${opinion.modelID}`, effort: "default" as const } : {}),
         },
         // The size of the work judged: a FAIL raises the request it repairs to it (see SessionTaskSize.size).
         metadata: { judge: { round, size: work.tier } },
@@ -1111,7 +1112,6 @@ const layer = Layer.effect(
           return { judge: { round, size: work.tier, ...(verdict ? { verdict } : {}) } }
         },
         failed: "The judge could not run",
-        ...(opinion ? { extra: { [SecondOpinion.EXTRA]: opinion } } : {}),
       }).pipe(
         Effect.onInterrupt(() =>
           Effect.gen(function* () {
@@ -1576,6 +1576,7 @@ const layer = Layer.effect(
       return yield* provider.codiumAuto({
         tier: input.tier,
         contextTokens: SessionCodiumAuto.contextTokens(visible, input.added),
+        learned: workflowSession.autoModels ? yield* workflowSession.autoModels(input.sessionID, input.tier) : [],
       })
     })
 

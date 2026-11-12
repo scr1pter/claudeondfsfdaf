@@ -11,9 +11,6 @@ import type { SessionV1 } from "@vectordevai/core/v1/session"
 // from a lab other than the worker's. A judge from another lab spends several times what the worker's own step would,
 // so nothing turns it on by itself. The gateway still decides whether the plan may use the judge's model.
 
-/** Where the judge gate hands the task tool the judge's model. */
-export const EXTRA = "judgeModel"
-
 type Ref = { providerID: string; modelID: string }
 
 /** What a listed Codium entry says about itself, as the provider lists it (ModelV2.Codium). */
@@ -52,11 +49,8 @@ export function judgeModel(input: {
   return { providerID: ModelPlanStatus.PROVIDER_ID, modelID: judge.id }
 }
 
-/** The judge model the gate handed the task tool, when the launch is the gate's own judge. */
-export function fromExtra(extra: Record<string, unknown> | undefined): Ref | undefined {
-  const value = extra?.[EXTRA]
-  if (!value || typeof value !== "object") return
-  const { providerID, modelID } = value as Record<string, unknown>
-  if (providerID !== ModelPlanStatus.PROVIDER_ID || typeof modelID !== "string" || !modelID.trim()) return
-  return { providerID, modelID }
+/** The ordinary brief must name the exact judge the current catalog and explicit setting authorize. */
+export function fromBrief(input: Parameters<typeof judgeModel>[0] & { model?: string }) {
+  const judge = judgeModel(input)
+  return judge && (input.model === judge.modelID || input.model === `${judge.providerID}/${judge.modelID}`) ? judge : undefined
 }

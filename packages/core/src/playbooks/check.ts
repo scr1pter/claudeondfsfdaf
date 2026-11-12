@@ -4,6 +4,7 @@ import { Playbooks } from "@vectordevai/schema/playbooks"
 import { SECRET_FILE } from "../brain/document/sniff"
 import { BrainScan } from "../brain/scan"
 import { allowed } from "./commands"
+import { WorkflowSpec } from "../orchestration/spec"
 
 // The check every playbook passes before it is published (WP A36, `script/playbooks-publish.ts`). A playbook is a saved
 // workflow: its stages are prompts the agent reads, so the commands it names are the code spans in its text. Every one
@@ -120,6 +121,11 @@ export function validate(input: {
     }
   }
   walk(document, "", 0)
+  if (issues.length) return { ok: false, issues }
+  const workflow = WorkflowSpec.parse(document, { source: "saved" })
+  if (!workflow.ok) issues.push(...workflow.issues)
+  else if (workflow.spec.stages.some((stage) => "workflow" in stage && !Playbooks.validName(stage.workflow)))
+    issues.push({ path: "/stages", message: "A Vector Playbook may nest only other personal Vector Playbooks." })
   if (issues.length) return { ok: false, issues }
   return { ok: true, name: input.name, commands: [...commands].sort(), files: [...files].sort() }
 }

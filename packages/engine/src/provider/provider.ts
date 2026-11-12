@@ -1453,7 +1453,13 @@ export interface Interface {
   readonly codiumAuto: (input: {
     tier: TaskSize.Tier
     contextTokens: number
+    learned?: readonly CodiumAuto.Suggestion[]
   }) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, ModelNotFoundError>
+  readonly codiumUnits?: (steps: readonly CodiumAuto.Usage[]) => Effect.Effect<number | undefined>
+  readonly codiumEstimate?: (modelID: ModelV2.ID, promptTokens: number) => Effect.Effect<string, ModelNotFoundError>
+  readonly playbookModel?: (role: CodiumAuto.Role, promptTokens: number) => Effect.Effect<{
+    readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID; readonly estimate?: string
+  }, ModelNotFoundError>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, DefaultModelError>
   /** The model a saved choice names today: renamed providers map to their new ID, retired ones give undefined. */
   readonly savedModel: (model: {
@@ -2987,9 +2993,33 @@ const layer = Layer.effect(
       return undefined
     })
 
+    const codiumEstimate = Effect.fn("Provider.codiumEstimate")(function* (modelID: ModelV2.ID, promptTokens: number) {
+      const token = yield* freeCredentials.get("vector")
+      const current = yield* modelPlans.catalog(token, { wait: true })
+      const chosen = current.models.find((model) => model.id === modelID && !model.locked && !model.auto)
+      if (!chosen || !token || !current.enabled || !current.plan)
+        return yield* new ModelNotFoundError({ providerID: planID, modelID, codium: "unavailable" })
+      yield* getModel(planID, modelID)
+      return yield* Effect.tryPromise({
+        try: async () => {
+          const response = await ModelPlans.plansCatalog(`${ModelPlans.API_URL}/estimate`, {
+            method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+            headers: { ...ModelPlans.clientHeaders(), Authorization: `Bearer ${token}`, "content-type": "application/json" },
+            body: JSON.stringify({ model: chosen.id, inputTokens: promptTokens, outputTokens: Math.min(chosen.maxOutputTokens, 8192), requests: 1 }),
+          })
+          const value = response.ok ? await response.json() as { share?: unknown } : undefined
+          if (!value || typeof value.share !== "string" || !["under 1%", "1–2%", "2–5%", "5–10%", "10–20%", "20–40%", "over 40%", "more than your month"].includes(value.share))
+            throw new Error("The model's usage estimate is unavailable.")
+          return value.share
+        },
+        catch: () => new ModelNotFoundError({ providerID: planID, modelID, codium: "unavailable" }),
+      })
+    })
+
     const codiumAuto = Effect.fn("Provider.codiumAuto")(function* (input: {
       tier: TaskSize.Tier
       contextTokens: number
+      learned?: readonly CodiumAuto.Suggestion[]
     }) {
       const auto = ModelV2.ID.make(ModelPlans.AUTO_ID)
       // Signed out, Codium off for the account or Vector Local on: the same notice a chosen Codium model gets.
@@ -2999,6 +3029,7 @@ const layer = Layer.effect(
         catalog: yield* modelPlans.catalog(yield* freeCredentials.get("vector"), { wait: true }),
         tier: input.tier,
         contextTokens: input.contextTokens,
+        learned: input.learned,
       })
       if (chosen && listed.models[chosen.id]) return { providerID: planID, modelID: ModelV2.ID.make(chosen.id) }
       // An older gateway, or a plan whose Auto models are not all usable, offers no Auto: say so rather than pick one.
@@ -3101,6 +3132,20 @@ const layer = Layer.effect(
       getSmallModel,
       getBrainModel,
       codiumAuto,
+      codiumEstimate,
+      codiumUnits: (steps) => Effect.gen(function* () {
+        if (steps.some((step) => step.providerID !== planID)) return undefined
+        return CodiumAuto.units(yield* modelPlans.catalog(yield* freeCredentials.get("vector")), steps)
+      }),
+      playbookModel: (role, promptTokens) => Effect.gen(function* () {
+        const token = yield* freeCredentials.get("vector")
+        const current = yield* modelPlans.catalog(token, { wait: true })
+        const chosen = CodiumAuto.role(current, role)
+        if (!chosen) return yield* new ModelNotFoundError({ providerID: planID, modelID: ModelV2.ID.make(role), codium: "unavailable" })
+        yield* getModel(planID, ModelV2.ID.make(chosen.id))
+        const estimate = role === "ceiling" ? yield* codiumEstimate(ModelV2.ID.make(chosen.id), promptTokens) : undefined
+        return { providerID: planID, modelID: ModelV2.ID.make(chosen.id), ...(estimate ? { estimate } : {}) }
+      }),
       defaultModel,
       savedModel,
       freeSignIn,

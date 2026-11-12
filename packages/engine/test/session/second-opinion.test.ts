@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
@@ -30,6 +30,7 @@ import { Provider } from "@/provider/provider"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { ProviderTest } from "../fake/provider"
 
 // WP A35: Second opinion. The judge gate's pure choice of the judge's model, and the task tool running the gate's own
 // judge launch on it.
@@ -144,16 +145,15 @@ describe("SecondOpinion.enabled", () => {
   })
 })
 
-describe("SecondOpinion.fromExtra", () => {
-  test("only a Codium model the gate handed over is taken", () => {
-    expect(SecondOpinion.fromExtra({ [SecondOpinion.EXTRA]: { providerID: PLAN, modelID: SOL } })).toEqual({
-      providerID: PLAN,
-      modelID: SOL,
-    })
-    expect(SecondOpinion.fromExtra(undefined)).toBeUndefined()
-    expect(SecondOpinion.fromExtra({ [SecondOpinion.EXTRA]: { providerID: "openai", modelID: SOL } })).toBeUndefined()
-    expect(SecondOpinion.fromExtra({ [SecondOpinion.EXTRA]: { providerID: PLAN, modelID: " " } })).toBeUndefined()
-    expect(SecondOpinion.fromExtra({ [SecondOpinion.EXTRA]: "vector-plan/openai/gpt-6.1-sol" })).toBeUndefined()
+describe("SecondOpinion.fromBrief", () => {
+  test("only the exact currently eligible cross-lab brief model receives consent", () => {
+    const input = { worker: worker(DEEPSEEK), models, configured: false, on: true }
+    expect(SecondOpinion.fromBrief({ ...input, model: `${PLAN}/${SOL}` })).toEqual({ providerID: PLAN, modelID: SOL })
+    expect(SecondOpinion.fromBrief({ ...input, model: SOL })).toEqual({ providerID: PLAN, modelID: SOL })
+    expect(SecondOpinion.fromBrief({ ...input, model: LUNA })).toBeUndefined()
+    expect(SecondOpinion.fromBrief({ ...input, model: SOL, on: false })).toBeUndefined()
+    expect(SecondOpinion.fromBrief({ ...input, model: SOL, configured: true })).toBeUndefined()
+    expect(SecondOpinion.fromBrief({ ...input, model: SOL, models: { ...models, [SOL]: { id: SOL, codium: { locked: true } } } })).toBeUndefined()
   })
 })
 
@@ -254,15 +254,32 @@ const launch = (input: {
   seen: SessionPrompt.PromptInput[]
   subagent?: string
   extra?: Record<string, unknown>
+  model?: string
 }) =>
   Effect.gen(function* () {
-    const def = yield* (yield* TaskTool).init()
+    const current = yield* Provider.Service
+    const entries = Object.fromEntries(Object.values(models).map((entry) => {
+      const { review, ...codium } = Schema.decodeUnknownSync(ModelV2.Codium)(entry.codium)
+      return [entry.id, ProviderTest.model({
+      id: ModelV2.ID.make(entry.id), providerID: ProviderV2.ID.make(PLAN),
+      codium: { ...codium, ...(review ? { review: [...review] } : {}) },
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 }, unpriced: true },
+    })]
+    }))
+    const provider = Provider.Service.of({ ...current,
+      list: () => current.list().pipe(Effect.map((all) => ({ ...all, [PLAN]: ProviderTest.info({ id: ProviderV2.ID.make(PLAN), models: entries }) }))),
+      getModel: (providerID, modelID) => providerID === PLAN && entries[modelID] ? Effect.succeed(entries[modelID]!) : current.getModel(providerID, modelID),
+      getSmallModel: (providerID, modelID) => providerID === PLAN ? Effect.succeed(undefined) : current.getSmallModel(providerID, modelID),
+    })
+    const tool = yield* TaskTool.pipe(Effect.provideService(Provider.Service, provider))
+    const def = yield* tool.init()
     return yield* def.execute(
       {
         description: "Check the finished work",
         prompt: "Check the work against the request.",
         subagent_type: input.subagent ?? "judge",
         background: false,
+        ...(input.model ? { model: input.model, effort: "default" as const } : {}),
       },
       {
         sessionID: input.chat.id,
@@ -277,7 +294,7 @@ const launch = (input: {
     )
   })
 
-const gate = { invokedAgents: ["judge"], [SecondOpinion.EXTRA]: { providerID: PLAN, modelID: SOL } }
+const gate = { invokedAgents: ["judge"] }
 // Model references as the task tool records them.
 const ref = (providerID: string, modelID: string) => ({
   providerID: ProviderV2.ID.make(providerID),
@@ -285,11 +302,25 @@ const ref = (providerID: string, modelID: string) => ({
 })
 
 describe("the task tool and Second opinion", () => {
+  it.instance("a brief cannot spend on the cross-lab judge after the owner withdraws consent", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const sessions = yield* Session.Service
+      const user = (yield* sessions.messages({ sessionID: chat.id })).find((message) => message.info.role === "user")?.info
+      if (!user || user.role !== "user") throw new Error("Missing user fixture")
+      yield* sessions.updateMessage({ ...user, secondOpinion: false })
+      const seen: SessionPrompt.PromptInput[] = []
+      const result = yield* launch({ chat, assistant, seen, extra: gate, model: `${PLAN}/${SOL}` }).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      expect(seen).toEqual([])
+      expect(yield* sessions.children(chat.id)).toEqual([])
+    }),
+  )
   it.instance("the gate's judge runs on the Second opinion judge at its entry's own effort", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()
       const seen: SessionPrompt.PromptInput[] = []
-      const result = yield* launch({ chat, assistant, seen, extra: gate })
+      const result = yield* launch({ chat, assistant, seen, extra: gate, model: `${PLAN}/${SOL}` })
       expect(seen).toHaveLength(1)
       expect(seen[0]?.agent).toBe("judge")
       expect(seen[0]?.model).toEqual(ref(PLAN, SOL))
@@ -306,7 +337,7 @@ describe("the task tool and Second opinion", () => {
       const { chat, assistant } = yield* seed()
       const seen: SessionPrompt.PromptInput[] = []
       // A model's own task call: no invokedAgents, so the handed-over model is ignored.
-      yield* launch({ chat, assistant, seen, extra: { [SecondOpinion.EXTRA]: gate[SecondOpinion.EXTRA] } })
+      yield* launch({ chat, assistant, seen, extra: { judgeModel: { providerID: PLAN, modelID: SOL } } })
       // Another subagent the gate never launches as a judge.
       yield* launch({ chat, assistant, seen, subagent: "review", extra: { ...gate, invokedAgents: ["review"] } })
       expect(seen.map((input) => input.model)).toEqual([ref(PLAN, DEEPSEEK), ref(PLAN, DEEPSEEK)])

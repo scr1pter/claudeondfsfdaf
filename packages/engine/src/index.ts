@@ -31,6 +31,7 @@ import { ReviewCommand } from "./cli/cmd/review"
 import { SessionCommand } from "./cli/cmd/session"
 import { TasksCommand } from "./cli/cmd/tasks"
 import { WorkflowCommand } from "./cli/cmd/workflow"
+import { PlaybooksCommand } from "./cli/cmd/playbooks"
 import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
@@ -163,6 +164,7 @@ const cli = yargs(args)
   .command(SessionCommand)
   .command(TasksCommand)
   .command(WorkflowCommand)
+  .command(PlaybooksCommand)
   .command(PluginCommand)
   .command(DbCommand)
   .command(TrustCommand)
