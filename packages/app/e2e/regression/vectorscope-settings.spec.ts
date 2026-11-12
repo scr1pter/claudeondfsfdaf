@@ -93,6 +93,22 @@ test("the owner saves a separate model, variant and disable setting only after c
   page,
 }, info) => {
   const app = await setup(page, engine({ status: { [rootID]: { type: "busy" } } }))
+  let pageErrors = 0
+  let consoleErrors = 0
+  const errors: { type: string; message: string; stack?: string }[] = []
+  const seenErrors = new Set<string>()
+  const recordError = (type: string, message: string, stack?: string) => {
+    const key = `${type}:${message}`
+    if (seenErrors.has(key) || errors.filter((record) => record.type === type).length >= 4) return
+    seenErrors.add(key)
+    const record = { type, message: message.slice(0, 1_000), ...(stack ? { stack: stack.slice(0, 3_500) } : {}) }
+    errors.push(record)
+    console.log("SCOPE_PICKER_BROWSER_ERROR", JSON.stringify(record))
+  }
+  page.on("pageerror", (error) => {
+    pageErrors++
+    recordError("pageerror", error.message, error.stack)
+  })
   const pendingRequests = new Map<Request, { method: string; url: string; status?: number; eventStream?: boolean }>()
   page.on("request", (request) => {
     const url = new URL(request.url())
@@ -108,6 +124,10 @@ test("the owner saves a separate model, variant and disable setting only after c
   page.on("requestfailed", (request) => pendingRequests.delete(request))
   page.on("console", (message) => {
     if (message.text().startsWith("SCOPE_PICKER_REACTIVITY")) console.log(message.text())
+    if (message.type() === "error") {
+      consoleErrors++
+      recordError("consoleerror", message.text())
+    }
   })
   await catalog(page)
   await app.open()
@@ -190,6 +210,7 @@ test("the owner saves a separate model, variant and disable setting only after c
         ),
         requests: [...pendingRequests.values()].slice(0, 30),
       })
+      console.log("SCOPE_PICKER_BROWSER_ERRORS", JSON.stringify({ pageErrors, consoleErrors, errors }))
     })
   const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
   await expect(chosen).toContainText("Maker Text")

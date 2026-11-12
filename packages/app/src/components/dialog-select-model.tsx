@@ -119,7 +119,14 @@ function createModelSections(input: {
   // Keep the public accessor for event/test snapshots only; reading it in a computation would add an observer.
   diagnostic.pending = useTransition()[0]
   const instance = ++diagnostic.instances
+  const phases = new Map<string, number>()
+  const inputs: { phase: string; value: unknown }[] = []
   const trace = (phase: string, value: unknown) => {
+    phases.set(phase, (phases.get(phase) ?? 0) + 1)
+    if (phase === "models" || phase === "sections" || phase === "views") {
+      inputs.push({ phase, value })
+      if (inputs.length > 24) inputs.shift()
+    }
     const category = phase.endsWith("-cleanup")
       ? "cleanup"
       : phase === "popover-for-each"
@@ -175,7 +182,11 @@ function createModelSections(input: {
     })
   }
   diagnostic.snapshots ??= new Map()
-  diagnostic.snapshots.set(instance, () => lifetimes.map((record) => ({ ...record })))
+  diagnostic.snapshots.set(instance, () => ({
+    phases: Object.fromEntries(phases),
+    inputs: inputs.map((record) => ({ ...record })),
+    lifetimes: lifetimes.map((record) => ({ ...record })),
+  }))
   if (diagnostic.snapshots.size > 8) {
     const first = diagnostic.snapshots.keys().next().value
     if (first !== undefined) diagnostic.snapshots.delete(first)
@@ -191,36 +202,62 @@ function createModelSections(input: {
   })
   const models = createMemo(() => {
     const provider = input.provider()
-    return input.model
-      .list()
+    const list = input.model.list()
+    const next = list
       .filter((item) => input.model.visible({ modelID: item.id, providerID: item.provider.id }))
       .filter((item) => (provider ? item.provider.id === provider : true))
+    trace("models", { list: ownerID(list), provider, count: next.length })
+    return next
   })
   const current = () => {
     const value = input.model.current()
     return value ? pickerModelKey(value) : undefined
   }
-  const sections = createMemo(() =>
-    buildModelSections({
-      models: models(),
-      term: input.search(),
-      currentKey: current(),
-      recentKeys: input.model.recent?.().flatMap((item) => (item ? [pickerModelKey(item)] : [])),
-      now: input.now(),
+  const sections = createMemo(() => {
+    const list = models()
+    const term = input.search()
+    const currentKey = current()
+    const recent = input.model.recent?.()
+    const recentKeys = recent?.flatMap((item) => (item ? [pickerModelKey(item)] : []))
+    const now = input.now()
+    const next = buildModelSections({
+      models: list,
+      term,
+      currentKey,
+      recentKeys,
+      now,
       popular: popularProviders,
       fixed: input.fixed,
-    }),
-  )
+    })
+    trace("sections", {
+      models: ownerID(list),
+      term,
+      currentKey,
+      recent: recent ? ownerID(recent) : null,
+      now,
+      count: next.length,
+    })
+    return next
+  })
   const [open, setOpenSections] = createSignal(readOpenSections())
   const views = createMemo(() => {
     lifetime("views-evaluation")
     const owner = ownerID(getOwner())
     onCleanup(() => trace("views-owner-cleanup", { owner }))
     const expanded = open()
-    const next = pickerSectionViews(sections(), expanded, input.search()).map((view) =>
+    const grouped = sections()
+    const term = input.search()
+    const next = pickerSectionViews(grouped, expanded, term).map((view) =>
       input.fixed ? { ...view, toggle: false, open: true } : view,
     )
-    trace("views", { owner, open: [...expanded], sections: next.map((view) => [view.section.id, view.open]) })
+    trace("views", {
+      owner,
+      inputSections: ownerID(grouped),
+      inputOpen: ownerID(expanded),
+      term,
+      open: [...expanded],
+      sections: next.map((view) => [view.section.id, view.open]),
+    })
     return next
   })
   // Navigation order is render order: every visible header and row, then Connect provider.
