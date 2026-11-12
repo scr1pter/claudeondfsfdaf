@@ -7,6 +7,7 @@ import type { TaskSize } from "../task-size"
 import type { BrainCode } from "./code"
 import type { BrainSchema } from "./schema"
 import type { BrainWorkflow } from "./workflow"
+import type { ReviewMemory } from "./review-memory"
 
 // brain.db, a SQLite file of its own beside vector.db: erasing all memory deletes one folder, session repair, export
 // and sharing never touch it, and secure_delete costs the session database nothing. `repository_id` is "" for the
@@ -130,6 +131,42 @@ export const BrainSourceTable = sqliteTable("brain_source", {
 
 // One row per repository and one for the personal scope (""). `revision` changes on every write, so an engine process
 // can tell from one row whether what it cached is still current.
+// Review memory has its own tables: no current or older generic memory query can recall these as personal habits.
+export const BrainReviewMemoryTable = sqliteTable(
+  "brain_review_memory",
+  {
+    id: text().primaryKey(),
+    repository_id: text().notNull(),
+    kind: text().$type<ReviewMemory.Kind>().notNull(),
+    status: text().$type<"proposed" | "active">().notNull(),
+    visibility: text().$type<"private" | "repository">().notNull(),
+    body: text().notNull(),
+    paths: text({ mode: "json" }).$type<string[]>().notNull(),
+    citations: text({ mode: "json" }).$type<ReviewMemory.Citation[]>().notNull(),
+    reason: text().notNull(),
+    parent_session_id: text(),
+    review_session_id: text(),
+    source_head: text(),
+    origin: text().$type<"owner" | "review">().notNull(),
+    approved_by: text(),
+    approved_at: integer(),
+    created_at: integer().notNull(),
+    updated_at: integer().notNull(),
+  },
+  (table) => [
+    index("brain_review_memory_repository_idx").on(table.repository_id, table.status),
+    index("brain_review_memory_parent_idx").on(table.repository_id, table.parent_session_id),
+    index("brain_review_memory_session_idx").on(table.repository_id, table.review_session_id),
+  ],
+)
+
+// Content-free generations survive erasure and are never reset; absence means disabled, never implicit consent.
+export const BrainReviewMemoryStateTable = sqliteTable("brain_review_memory_state", {
+  repository_id: text().primaryKey(),
+  enabled: integer({ mode: "boolean" }).notNull().default(false),
+  generation: integer().notNull().default(0),
+})
+
 export const BrainStateTable = sqliteTable("brain_state", {
   repository_id: text().primaryKey(),
   revision: integer().notNull().default(0),
