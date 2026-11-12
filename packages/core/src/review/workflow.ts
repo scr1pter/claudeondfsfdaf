@@ -657,6 +657,11 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
     ...(codium ? [{ id: "mint", run: "vector github mint --purpose task", env: mintEnv }] : []),
     checkout(0, codium),
     {
+      name: "Install tool process isolation",
+      if: `runner.environment == 'github-hosted'${codium ? " && steps.mint.outputs.status == 'ok'" : ""}`,
+      run: "sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq && sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap",
+    },
+    {
       id: "sandbox",
       run: "vector github sandbox prepare",
       if: `runner.environment == 'github-hosted'${codium ? " && steps.mint.outputs.status == 'ok'" : ""}`,

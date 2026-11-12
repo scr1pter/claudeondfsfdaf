@@ -18,17 +18,26 @@ if (process.argv[2] === "--observe") {
     )
   )
     throw new Error("Missing trusted staged checkout")
-  await fs.writeFile(
-    path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", "stage.json"),
-    JSON.stringify({ container: state.container, workspace: state.workspace, uid: state.uid }),
-    { mode: 0o600, flag: "wx" },
-  )
   const text = await promisify(execFile)(
     "sudo",
     ["-n", "/usr/bin/cat", "--", path.join(state.container, "checkout", "vector-out", "summary.json")],
     { maxBuffer: 262_144 },
   )
   const report = JSON.parse(text.stdout)
+  const status = await fs.readFile(`/proc/${report.detached.pid}/status`, "utf8")
+  const stat = await fs.readFile(`/proc/${report.detached.pid}/stat`, "utf8")
+  const detached = {
+    pid: report.detached.pid,
+    uid: Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]),
+    start: stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[19],
+  }
+  if (detached.uid !== state.uid || detached.uid !== report.detached.uid || /^State:\s+Z/m.test(status))
+    throw new Error("The detached process is not the live disposable agent child")
+  await fs.writeFile(
+    path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", "stage.json"),
+    JSON.stringify({ container: state.container, workspace: state.workspace, uid: state.uid, detached }),
+    { mode: 0o600, flag: "wx" },
+  )
   await fs.writeFile(
     path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", "observed.json"),
     JSON.stringify(report),

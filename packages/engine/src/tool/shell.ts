@@ -34,6 +34,7 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { LocalCommand } from "@vectordevai/core/local-mode/command"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 
 export { Parameters } from "./shell/prompt"
 
@@ -1231,7 +1232,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     })
   }
 
-  if (Sandbox.sandboxEnabled()) {
+  if (Sandbox.sandboxEnabled() && !ProcessIsolation.required()) {
     const wrapped = Sandbox.wrapCommand({ shell, command, cwd, env, workspaceRoot })
     yield* Effect.logInfo("shell tool sandbox", {
       sandboxed: wrapped.sandboxed,
@@ -1261,7 +1262,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
     })
   }
 
-  yield* Effect.logWarning("shell tool sandbox disabled", { workspaceRoot, cwd })
+  if (!ProcessIsolation.required()) yield* Effect.logWarning("shell tool sandbox disabled", { workspaceRoot, cwd })
 
   if (process.platform === "win32" && Shell.ps(shell)) {
     return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {

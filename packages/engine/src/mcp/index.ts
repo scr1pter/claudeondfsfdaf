@@ -37,6 +37,7 @@ import { McpCatalog } from "./catalog"
 import { McpEvent } from "@vectordevai/schema/mcp-event"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { TaskPlace } from "@/task/place"
+import { localTransport } from "./stdio"
 
 const DEFAULT_TIMEOUT = 30_000
 // Longest single stderr chunk that is written to the log.
@@ -476,14 +477,14 @@ const layer = Layer.effect(
           )
         : undefined
       const bridge = yield* EffectBridge.make()
-      const sdk = yield* loadSdk
-      const transport = new sdk.StdioClientTransport({
-        stderr: "pipe",
-        command: cmd,
-        args,
-        cwd,
-        env: untrustedChildEnvironment(process.env, cmd === "vector" ? { BUN_BE_BUN: "1" } : undefined, environment),
-      })
+      const transport = yield* Effect.promise(() =>
+        localTransport({
+          command: cmd,
+          args,
+          cwd,
+          env: untrustedChildEnvironment(process.env, cmd === "vector" ? { BUN_BE_BUN: "1" } : undefined, environment),
+        }),
+      )
       drainStderr(transport.stderr, (output) =>
         bridge.fork(Effect.logWarning("MCP server stderr", { server: key, output }).pipe(Effect.ignore)),
       )

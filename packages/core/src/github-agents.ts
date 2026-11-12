@@ -117,6 +117,10 @@ export function sessionArtifact(thread: string) {
 }
 
 export const SANDBOX_USER = "vector-agent"
+// Set only by the trusted sandbox launcher after verifying the required kernel boundary.
+export const TOOL_PID_NAMESPACE_ENV = "VECTOR_GITHUB_TOOL_PID_NAMESPACE"
+// FD3 is opened by the trusted hosted runner after sudo and is never inherited by tools.
+export const SESSION_PROOF_ENV = "VECTOR_GITHUB_SESSION_PROOF"
 // The only names the engine starts with in the sandbox. The sandbox sets HOME and RUNNER_TEMP to the agent user's own
 // directories, and GITHUB_EVENT_PATH to a copy the agent user can read.
 export const SANDBOX_ENV_ALLOW = [
@@ -155,6 +159,8 @@ export const SANDBOX_ENV_ALLOW = [
   "VECTOR_RUN_ID",
   "VECTOR_BUNDLE_DIR",
   "VECTOR_SECRET_CHANNEL",
+  TOOL_PID_NAMESPACE_ENV,
+  SESSION_PROOF_ENV,
   "HOME",
   "RUNNER_TEMP",
 ] as const

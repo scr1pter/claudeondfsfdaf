@@ -1,3 +1,4 @@
+import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
 import type { VectorAccountPlatform } from "@vectordevai/app/vector-account"
 import type { DesktopMenuAction } from "@vectordevai/app/desktop-menu"
 import type { WslServersPlatform } from "@vectordevai/app/wsl/types"
@@ -877,6 +878,7 @@ export type BackgroundTaskRecord = {
 }
 
 export type ElectronAPI = {
+  githubAgents: GithubAgentsAPI
   killSidecar: () => Promise<void>
   awaitInitialization: () => Promise<ServerReadyData>
   wslServers: WslServersAPI

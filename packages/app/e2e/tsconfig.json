@@ -21,6 +21,7 @@
     "./regression/race.spec.ts",
     "./regression/playbooks-settings.spec.ts",
     "./regression/hosted-result-note.spec.ts",
+    "./regression/github-agents.spec.ts",
     "./regression/agent-launcher.spec.ts",
     "./regression/external-agent-chat.spec.ts",
     "./regression/free-models.spec.ts",

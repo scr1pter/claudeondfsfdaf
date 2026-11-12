@@ -9,6 +9,7 @@ on:
     branches:
       - vector-at-mention
       - build-integrate
+      - build-github-ui
   pull_request:
     # No other workflow runs the web GitHub tests, and they load shared api/_lib modules (http, abuse, persistent-store)
     # and jose, so any hosted API change, the lockfile and the Bun version in package.json start the lane. api/** takes
@@ -22,9 +23,25 @@ on:
       - package.json
       - packages/core/src/review/**
       - packages/core/src/github-agents.ts
+      - packages/core/src/process-isolation.ts
+      - packages/core/src/cross-spawn-spawner.ts
+      - packages/core/src/child-environment.ts
+      - packages/core/src/untrusted-git.ts
+      - packages/core/src/pty.ts
+      - packages/core/src/brain/document/ocr.ts
       - packages/core/src/free-models.ts
       - packages/core/src/share/transport.ts
       - packages/engine/src/cli/cmd/github*.ts
+      - packages/engine/src/index.ts
+      - packages/engine/src/tool/shell.ts
+      - packages/engine/src/tool/external-directory.ts
+      - packages/engine/src/tool/read.ts
+      - packages/engine/src/tool/glob.ts
+      - packages/engine/src/tool/grep.ts
+      - packages/engine/src/util/process.ts
+      - packages/engine/src/mcp/**
+      - packages/engine/src/lsp/launch.ts
+      - packages/engine/script/stage-sandbox-probe.ts
       - packages/engine/src/provider/provider.ts
       - packages/engine/src/session/llm/request.ts
       - packages/engine/src/session/posting.ts
@@ -38,9 +55,11 @@ on:
       - packages/engine/test/cli/github*.ts
       - packages/engine/test/lib/research.ts
       - packages/engine/test/fixture/sandbox-*.ts
+      - packages/engine/test/fixture/sandbox-loader-probe.c
       - packages/engine/test/tool/registry*.ts
       - packages/engine/test/session/retry.test.ts
       - packages/core/test/github-agents.test.ts
+      - packages/core/test/process-isolation.test.ts
       - packages/core/test/review/**
       - packages/core/test/child-environment.test.ts
       - packages/core/test/free-model-route.test.ts
@@ -173,7 +192,7 @@ jobs:
       - name: Run core GitHub tests
         if: ${{ !cancelled() }}
         working-directory: packages/core
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-agents.test.ts test/review/*.test.ts test/child-environment.test.ts test/free-model-route.test.ts test/public-session-share.test.ts
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-agents.test.ts test/process-isolation.test.ts test/review/*.test.ts test/child-environment.test.ts test/free-model-route.test.ts test/public-session-share.test.ts
 
   # The desktop runs the engine's Node bundle in Electron's utility process, while every engine test runs on Bun, so a
   # stray Bun API passes them all and still fails every desktop message. This boots the bundle under Node and sends
@@ -215,7 +234,7 @@ jobs:
         run: node script/smoke-node-bundle.ts
 
   sandbox-probe:
-    name: sandbox (${{ matrix.mode }}, ${{ matrix.scenario }})
+    name: sandbox (${{ matrix.mode }}, ${{ matrix.scenario }}, ${{ matrix.runtime || 'node' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -232,6 +251,11 @@ jobs:
             scenario: cancelled
           - mode: codium
             scenario: seal-refusal
+          - mode: codium
+            scenario: session-replaced
+          - mode: codium
+            scenario: success
+            runtime: bun
     env:
       VECTOR_MODE: ${{ matrix.mode }}
       VECTOR_SECRET_ENV_NAMES: DEEPSEEK_KEY
@@ -240,6 +264,7 @@ jobs:
       DEEPSEEK_KEY: probe-provider-private-44de
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: probe-oidc-private-73af
       PROBE_SCENARIO: ${{ matrix.scenario }}
+      PROBE_RUNTIME: ${{ matrix.runtime || 'node' }}
     defaults:
       run:
         shell: bash
@@ -261,6 +286,8 @@ jobs:
 
       - name: Install probe build dependencies
         run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap
           bun install --frozen-lockfile --ignore-scripts
           bun run script/prepare-gitlab.ts
           bun run --cwd packages/core fix-node-pty
@@ -274,8 +301,17 @@ jobs:
           grep -q 'run' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           grep -q 'finish' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
-          bun build --target=node packages/engine/test/fixture/sandbox-probe.ts --outfile "$RUNNER_TEMP/vector-probe-tools/probe.mjs"
+          bun packages/engine/script/stage-sandbox-probe.ts
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
+          sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
+          cc -shared -fPIC -O2 packages/engine/test/fixture/sandbox-loader-probe.c -o "$RUNNER_TEMP/vector-probe-tools/loader-probe.so"
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/loader-probe.so" /opt/vector-probe-loader.so
+          if [ -d "$RUNNER_TEMP/vector-probe-tools/assets" ]; then
+            sudo -n mkdir -p /opt/assets
+            sudo -n cp -R "$RUNNER_TEMP/vector-probe-tools/assets/." /opt/assets/
+            sudo -n chmod -R a+rX,go-w /opt/assets
+          fi
           node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --install
 
       - name: Prepare the agent sandbox
@@ -287,6 +323,10 @@ jobs:
         run: |
           if [ "$PROBE_SCENARIO" = bundle-refusal ]; then
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --bundle-refusal
+          elif [ "$PROBE_SCENARIO" = session-replaced ]; then
+            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --session-replaced
+          elif [ "$PROBE_RUNTIME" = bun ]; then
+            vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe.mjs
           else
             vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
           fi

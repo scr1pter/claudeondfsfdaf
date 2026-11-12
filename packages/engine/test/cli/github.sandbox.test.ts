@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
+import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
 import {
   copyBundleFile,
   prepare,
@@ -102,6 +103,105 @@ test("the sandbox environment excludes every credential and runner file command 
       expect(Object.values(clean)).not.toContain(value)
     }
   }
+})
+
+test("tool PID isolation is derived from the trusted launcher, never an inherited environment override", async () => {
+  await using f = await fixture()
+  const locations = {
+    node: path.join(f.directory, "node"),
+    home: f.directory,
+    temporary: f.directory,
+    event: path.join(f.directory, "event"),
+  }
+  const inherited = { ...f.env, [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "pid", [GithubAgents.SESSION_PROOF_ENV]: "fd3" }
+  expect(sandboxEnvironment(inherited, locations)[GithubAgents.TOOL_PID_NAMESPACE_ENV]).toBeUndefined()
+  expect(sandboxEnvironment(inherited, locations)[GithubAgents.SESSION_PROOF_ENV]).toBeUndefined()
+  expect(
+    sandboxEnvironment(
+      { ...inherited, [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "off" },
+      { ...locations, toolIsolation: "pid" },
+    )[GithubAgents.TOOL_PID_NAMESPACE_ENV],
+  ).toBe("pid")
+})
+
+test("session copying refuses an unproven or changed artifact even if it is a bounded regular file", async () => {
+  await using f = await fixture()
+  const bytes = Buffer.from("fixture ciphertext bytes")
+  await fs.writeFile(path.join(f.source, GithubAgents.SESSION_FILE), bytes)
+  await expect(copyBundleFile(f.source, f.destination, GithubAgents.SESSION_FILE)).rejects.toThrow()
+  await expect(fs.stat(path.join(f.destination, GithubAgents.SESSION_FILE))).rejects.toThrow()
+  const proof = GithubSessionProof.digest(bytes)
+  await fs.writeFile(path.join(f.source, GithubAgents.SESSION_FILE), "model-planted plaintext")
+  await expect(copyBundleFile(f.source, f.destination, GithubAgents.SESSION_FILE, proof)).rejects.toThrow()
+  await expect(fs.stat(path.join(f.destination, GithubAgents.SESSION_FILE))).rejects.toThrow()
+  await fs.writeFile(path.join(f.source, GithubAgents.SESSION_FILE), bytes)
+  if (process.platform === "win32") return
+  await copyBundleFile(f.source, f.destination, GithubAgents.SESSION_FILE, proof)
+  expect(await fs.readFile(path.join(f.destination, GithubAgents.SESSION_FILE))).toEqual(bytes)
+})
+
+test("private session provenance has one fixed bounded record and no path-selected authority", () => {
+  const proof = GithubSessionProof.digest(Buffer.from("fixture ciphertext"))
+  expect(GithubSessionProof.parse(Buffer.from(JSON.stringify(proof) + "\n"))).toEqual(proof)
+  for (const value of [
+    JSON.stringify(proof),
+    JSON.stringify(proof) + "\n\n",
+    JSON.stringify({ ...proof, path: "/tmp/model" }) + "\n",
+    "x".repeat(257),
+  ])
+    expect(() => GithubSessionProof.parse(Buffer.from(value))).toThrow()
+  expect(GithubSessionProof.attestSessionArtifact(Buffer.from("untrusted process"))).toBe(false)
+})
+
+test("private credential holders keep the captured process boundary after environment changes", async () => {
+  const env: Record<string, string | undefined> = {
+    GITHUB_ACTIONS: "true",
+    VECTOR_MODE: "own-key",
+    VECTOR_SECRET_CHANNEL: "stdin",
+    [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "pid",
+  }
+  const holder = GithubSecrets.createGithubSecrets()
+  expect(holder.isolatedTools()).toBe(false)
+  await holder.load(
+    env,
+    (async function* () {
+      yield JSON.stringify({ v: 1, githubToken: "fixture-github", cliToken: "vct_fixture.signature", keys: {} }) + "\n"
+    })(),
+  )
+  env[GithubAgents.TOOL_PID_NAMESPACE_ENV] = "off"
+  env.GITHUB_ACTIONS = "false"
+  expect(holder.isolatedTools()).toBe(true)
+})
+
+test("Codium never downgrades the tool process boundary to a legacy unset marker", async () => {
+  const holder = GithubSecrets.createGithubSecrets()
+  await holder.load(
+    { GITHUB_ACTIONS: "true", VECTOR_MODE: "codium", VECTOR_SECRET_CHANNEL: "stdin" },
+    (async function* () {
+      yield JSON.stringify({ v: 1, githubToken: "fixture-github", runToken: "vrt_fixture.signature", keys: {} }) + "\n"
+    })(),
+  )
+  expect(holder.isolatedTools()).toBe(true)
+})
+
+test("own-key self-hosted and explicit sudo contexts do not claim a verified PID boundary", async () => {
+  const holder = GithubSecrets.createGithubSecrets()
+  await holder.load(
+    { GITHUB_ACTIONS: "true", VECTOR_MODE: "own-key", VECTOR_SECRET_CHANNEL: "stdin" },
+    (async function* () {
+      yield JSON.stringify({ v: 1, githubToken: "fixture-github", cliToken: "vct_fixture.signature", keys: {} }) + "\n"
+    })(),
+  )
+  expect(holder.isolatedTools()).toBe(false)
+})
+
+test("debugger transports are refused without confusing the Node signal-disable option with inspection", () => {
+  for (const argument of ["--inspect", "--inspect=0", "--inspect-brk=127.0.0.1:9229", "--inspect-wait", "--debug"])
+    expect(GithubSecrets.debuggerRequested([argument], {})).toBe(true)
+  expect(GithubSecrets.debuggerRequested(["--disable-sigusr1", "--user-agent=vector/preview"], {})).toBe(false)
+  expect(GithubSecrets.debuggerRequested([], { NODE_OPTIONS: '--trace-warnings "--inspect=0"' })).toBe(true)
+  expect(GithubSecrets.debuggerRequested([], { BUN_OPTIONS: "--inspect-brk" })).toBe(true)
+  expect(GithubSecrets.debuggerRequested([], { BUN_INSPECT: "127.0.0.1:9229" })).toBe(true)
 })
 
 test.skipIf(process.platform === "win32")(

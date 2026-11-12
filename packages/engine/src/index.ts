@@ -114,6 +114,13 @@ const cli = yargs(args)
   })
   .middleware(async (opts) => {
     assertSecurityEnvironment()
+    if (
+      process.env.GITHUB_ACTIONS === "true" &&
+      opts._?.[0] === "github" &&
+      ["run", "review"].includes(String(opts._?.[1] ?? ""))
+    ) {
+      await GithubSecrets.assertNoDebugger()
+    }
     if (opts.printLogs) process.env.VECTOR_PRINT_LOGS = "1"
     if (opts.logLevel) process.env.VECTOR_LOG_LEVEL = opts.logLevel
     if (opts.pure) {

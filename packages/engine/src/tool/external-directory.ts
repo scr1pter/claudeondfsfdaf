@@ -4,6 +4,7 @@ import { InstanceState } from "@/effect/instance-state"
 import type * as Tool from "./tool"
 import { containsPath } from "../project/instance-context"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 
 type Kind = "file" | "directory"
 
@@ -18,6 +19,8 @@ export const assertExternalDirectoryEffect = Effect.fn("Tool.assertExternalDirec
   options?: Options,
 ) {
   if (!target) return false
+
+  ProcessIsolation.assertToolPath(target)
 
   if (options?.bypass) return false
 

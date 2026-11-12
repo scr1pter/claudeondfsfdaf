@@ -4,6 +4,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"
 
@@ -27,6 +28,7 @@ export const GlobTool = Tool.define(
           const ins = yield* InstanceState.context
           let search = params.path ?? ins.directory
           search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
+          ProcessIsolation.assertToolPath(search)
           // A guest family may not list a private task folder or a folder holding one, nor learn through a stat or an
           // ask whether one exists.
           if (ctx.assertReadable) yield* ctx.assertReadable({ files: [search], recursive: true })

@@ -268,6 +268,8 @@ describe("credentials", () => {
         "VECTOR_RUN_ID",
         "VECTOR_BUNDLE_DIR",
         "VECTOR_SECRET_CHANNEL",
+        "VECTOR_GITHUB_TOOL_PID_NAMESPACE",
+        "VECTOR_GITHUB_SESSION_PROOF",
         "HOME",
         "RUNNER_TEMP",
       ].sort(),

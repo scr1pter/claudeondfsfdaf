@@ -9,6 +9,8 @@ const PRIVATE_RUNTIME_ENVIRONMENT = new Set([
   "VECTOR_CREDENTIAL_KEY",
   "VECTOR_MCP_AUTH_KEY",
   "VECTOR_REQUIRE_SECURE_CREDENTIAL_STORE",
+  GithubAgents.SESSION_PROOF_ENV,
+  GithubAgents.TOOL_PID_NAMESPACE_ENV,
 ])
 
 // The credentials INV-S5 names on GitHub Actions. SECRET_NAME_PATTERN also covers the _TOKEN ones; the bind code and the

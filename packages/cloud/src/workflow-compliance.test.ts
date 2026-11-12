@@ -184,7 +184,9 @@ describe("@vector CI lane", () => {
     const workflow = await lane()
     expect(Object.keys(workflow.on).sort()).toEqual(["pull_request", "push", "workflow_dispatch"])
     // A path filter or an ignore list here would leave a package's commit with no CI at all.
-    expect(workflow.on.push).toEqual({ branches: ["vector-at-mention", "build-integrate"] })
+    expect(workflow.on.push).toEqual({
+      branches: ["vector-at-mention", "build-integrate", "build-github-ui"],
+    })
     // No other workflow runs the web GitHub tests, so every hosted API module they load (http, abuse, persistent-store
     // as well as github-*), the lockfile that pins jose and the Bun version in package.json start the lane on a pull
     // request. api/** takes in the contract's four api/ entries.
@@ -353,6 +355,8 @@ describe("@vector CI lane", () => {
       { mode: "codium", scenario: "bundle-refusal" },
       { mode: "codium", scenario: "cancelled" },
       { mode: "codium", scenario: "seal-refusal" },
+      { mode: "codium", scenario: "session-replaced" },
+      { mode: "codium", scenario: "success", runtime: "bun" },
     ])
     const steps = job?.steps ?? []
     expect(steps.some((step) => step.uses?.startsWith("./"))).toBe(false)
