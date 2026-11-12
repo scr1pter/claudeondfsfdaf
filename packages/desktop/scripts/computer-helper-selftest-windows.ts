@@ -53,6 +53,7 @@ export const WINDOWS_NATIVE_CHECKS = {
     "input-detection-probe",
     "hardware-user-input-pauses",
     "isolated-target-cleanup",
+    "capture-isolated-window-worker",
   ],
   targetControl: ["windows-test-target-control-schema"],
   eof: ["caller-eof"],

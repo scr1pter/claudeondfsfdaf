@@ -12,7 +12,8 @@
 namespace vector::computer {
 inline constexpr uint64_t input_guardian_held_limit_ms=10'000;
 // Smoke-only observation of existing receipt refusal paths. No ticket, event, tag or native value.
-enum class InputGuardianPhase : uint8_t { none, request_invalid, lock_expired, budget_expired, inactive, write_refused, read_refused, reply_invalid, setup_failed, reply_negative, confirmed, reply_negative_zero_budget, reply_negative_short_budget, reply_negative_full_budget };
+enum class InputGuardianPhase : uint8_t { none, request_invalid, lock_expired, budget_expired, inactive, write_refused, read_refused, reply_invalid, setup_failed, reply_negative, confirmed, reply_negative_zero_budget, reply_negative_short_budget, reply_negative_full_budget,
+  reply_negative_no_callback_pump_stalled, reply_negative_no_callback_pump_progressed, reply_negative_own_move_only, reply_negative_own_down_refused, reply_negative_own_up_only };
 struct InputGuardianDiagnostic { std::atomic<InputGuardianPhase> phase{InputGuardianPhase::none}; };
 static_assert(std::atomic<InputGuardianPhase>::is_always_lock_free);
 struct InputGuardianTicket {
@@ -27,6 +28,15 @@ struct InputGuardianEvent {
   bool down = false;
   uint64_t observed_at_ms = 0;
 };
+// Private smoke metadata only. "No callback" means no matching own-tag injected callback
+// (or own mouse MOVE) recorded for this reservation, never absence of global/hardware input.
+enum class InputGuardianReceiptDiagnostic : uint8_t {
+  none, opt_in, no_callback_pump_stalled, no_callback_pump_progressed, own_move_only, own_down_refused, own_up_only,
+};
+struct InputGuardianReceiptEvidence {
+  bool enabled = false, own_move = false, own_down_refused = false, own_up = false;
+};
+InputGuardianReceiptDiagnostic input_guardian_receipt_diagnostic(const InputGuardianReceiptEvidence&, uint64_t pump_before, uint64_t pump_after) noexcept;
 
 struct InputIoDeadlineSnapshot {
   uint64_t generation = 0, deadline = 0;
@@ -56,9 +66,11 @@ class InputIoDeadlineFence final {
 class InputGuardianLedger final {
  public:
   explicit InputGuardianLedger(uint64_t tag);
-  std::optional<InputGuardianTicket> reserve(const InputRelease&);
+  std::optional<InputGuardianTicket> reserve(const InputRelease&, bool diagnostic = false);
   bool observe(const InputGuardianEvent&) noexcept;
-  bool observed(const InputGuardianTicket&, bool down) const noexcept;
+  bool observed(const InputGuardianTicket&, bool down, InputGuardianReceiptDiagnostic* diagnostic = nullptr, uint64_t pump_before = 0, uint64_t pump_after = 0) const noexcept;
+  bool diagnostics_enabled() const noexcept;
+  void observe_move(uint64_t tag, bool injected) noexcept;
   // Unobserved/held retirement quarantines that descriptor; it cannot be reused by a successor.
   // A late matching own down remains release-only. An observed own up frees a retired slot.
   // Trusted no-call/one-event SendInput0 proof may free only an unobserved reservation, never emit an up.
@@ -73,6 +85,7 @@ class InputGuardianLedger final {
     uint64_t down_order = 0;
     uint64_t down_at_ms = 0;
     bool down = false, up = false, retired = false;
+    InputGuardianReceiptEvidence diagnostic;
   };
   mutable std::mutex mutex_;
   uint64_t tag_ = 0, sequence_ = 0, order_ = 0, released_ = 0;
@@ -80,6 +93,8 @@ class InputGuardianLedger final {
   std::array<Entry, 136> entries_{};
   std::array<InputGuardianTicket,136> completed_{};
   size_t completed_cursor_ = 0;
+  std::atomic<uint32_t> diagnostic_entries_{0};
+  void erase(Entry&) noexcept;
 };
 
 class InputGuardian {

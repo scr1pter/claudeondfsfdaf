@@ -6,35 +6,60 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
-**Latest native observation, 11 November 2026.** At `b19bcf67`, Windows
-manual diagnostic [43091454762](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091454762),
-job `130772485755`, passed native build/unit/version/probes, staging and the
-required protocol/lifecycle checks (30 passed, zero failed, one skipped). Its
-isolated report was 35 passed, zero failed, 11 skipped; cold capture succeeded
-once on the unchanged capture path. This does not establish capture stability or
-validate the new isolated worker. Stop still failed `input_post_failed` /
-`guardian-observe-reply-negative`: a valid guardian reply reported no matching
-DOWN receipt. Transport completed; the source of the missing receipt remains
-unproven. Insertion alone is not a passing Stop.
+**Latest native observation.** At `51e8f63d`, Windows diagnostic
+[43146189453](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146189453),
+job `130944827745`, built and linked successfully using the existing
+WindowsApp import library. Native units/version/probes and required
+protocol/lifecycle passed (30 passed, zero failed, one skipped); isolated
+checks were 35 passed, zero failed, 11 skipped. The verified JSON report in
+artifact `13912267619` confirms capture-color-patch and affinity-exclusion
+passes at this source revision. The successful report does not carry
+CaptureReadRoute; color capture may have used the ordinary screen route.
+Actual forced isolated-worker runtime proof remains pending. Registered worker
+protocol units passed; they do not prove process capture. The artifact archive
+SHA-256 is `39d9973742bdb64d7d1f2a105a4a002691da485e1675c9ba93655c2c822f20cb`.
+Stale-capture-refusal remained skipped for `input_detection_unavailable`, and
+the hardware-input scenario remained skipped. These are scoped native results,
+not proof of broad capture stability or those skipped input behaviors.
 
-**Current source work.** The owner explicitly answered “Implement the isolated
-capture redesign” to the proposal to allow isolated cold capture setup within
-the original 750 ms total acquisition deadline. Input, UIA and StartCapture
-retain their 50 ms checks. The worker candidate starts one inherited QPC
-deadline before launch/authentication and accepts no late pixels after cleanup
-and parent postflight; the public 10 s operation/encode deadline is unchanged.
-There is no retry, cache, warm-up or fallback capture route. Worker native source
-tests and the new zero/short/full-budget negative guardian-reply categories
-still require hosted execution. These are source changes, not native passes.
+Stop still failed `input_post_failed` /
+`guardian-observe-reply-negative-full-budget`: valid private transport returned
+a negative matching-DOWN result with the full child observation budget. It is
+not a transport failure or evidence authorizing an environment skip. The next
+private, opt-in diagnostic is implemented to distinguish own-tag MOVE,
+UP, refused DOWN and hook-pump progress for a full-budget negative reply. Only
+closed values use private VIG2; the external helper protocol, input authority,
+receipt requirement and budgets remain unchanged. This candidate is not a fix
+or an executed diagnostic result.
 
-**Latest unsigned preview.** Exact `b19bcf67` preview
-[43091462774](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091462774)
-passed its app tests and typechecks. Artifact upload/download attempts returned
-HTML instead of the expected JSON after retries, preventing a completed
-preview. ARM64 native core checks passed (30 passed, zero failed, one skipped),
-but that job failed its report upload. No packaged, signing or publication
-success is claimed. The [dated record](./evidence/hands-windows-validation-2026-11-11.json)
-retains failures, exact source/run scope and remaining gates.
+The candidate also appends `capture-isolated-window-worker` to the native
+fixture catalog. It explicitly calls the production isolated backend on the
+validated synthetic patch, checks returned BGRA pixels and repeats target and
+capture-policy checks. Existing cleanup remains at index 14; the new check is
+index 15. It has no screen fallback or input-readiness gate and still needs its
+own hosted result. Local report/source/selftest checks passed 43/19/48 tests,
+with desktop typechecking and touched TypeScript formatting also passing.
+
+**Integrated regression.** Ordinary full PR run
+[43146183368](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146183368)
+at `51e8f63d` passed all 16 engine shards, Linux/Windows unit and E2E jobs,
+the Node bundle, Linux overlay/Electron journey and macOS build. Windows Stop
+failed; ARM64 and the separate macOS matrix were skipped. Passed jobs do not
+make this a successful full native run.
+
+**Capture design and packaging scope.** The owner explicitly answered
+“Implement the isolated capture redesign” to the proposal to allow isolated
+cold setup within the original 750 ms total acquisition deadline. That raw
+deadline starts before launch/authentication; input, UIA and StartCapture keep
+their 50 ms checks, and the public 10 s capture/encode deadline is unchanged.
+There is no retry, cache, warm-up or fallback capture route. First worker run
+`43144573475` at `39d36ca3` compiled C++ but failed `LNK1181` on unavailable
+`kernelbase.lib`; `51e8f63d` removes only that import in favor of the already
+linked WindowsApp library. Superseded queued preview `43145208543` at
+`a6006691` was cancelled after the known linkage failure. No final packaged,
+signing or release success is claimed. The
+[dated record](./evidence/hands-windows-validation-2026-11-11.json) retains
+exact source/run scope, failures, artifact evidence and remaining gates.
 
 **Earlier continuation observations** below retain their original source/run
 scope; statements about a next candidate are historical.

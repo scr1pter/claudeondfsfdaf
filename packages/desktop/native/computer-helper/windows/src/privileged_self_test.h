@@ -14,12 +14,13 @@ struct CaptureReceipt;
 struct WindowsRect;
 enum class WindowsInventoryDiagnostic;
 enum class CaptureReadPhase;
-inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
+inline constexpr std::array<std::wstring_view, 16> windows_privileged_checks{
   L"privileged-isolated-target", L"apps-running-target", L"apps-installed-target",
   L"capture-color-patch", L"capture-affinity-exclusion", L"uia-counter-increment",
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
-  L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
+  L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup",
+  L"capture-isolated-window-worker"};
 inline constexpr std::array<std::wstring_view, 154> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",

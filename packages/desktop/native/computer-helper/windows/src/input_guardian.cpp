@@ -26,8 +26,15 @@ bool InputIoDeadlineFence::retire(const InputIoDeadlineSnapshot& observed) noexc
   std::lock_guard lock(mutex_); if (!active_ || *active_ != observed) return false; active_.reset(); return true;
 }
 
+InputGuardianReceiptDiagnostic input_guardian_receipt_diagnostic(const InputGuardianReceiptEvidence& evidence, uint64_t pump_before, uint64_t pump_after) noexcept {
+  if (!evidence.enabled) return InputGuardianReceiptDiagnostic::none;
+  if (evidence.own_down_refused) return InputGuardianReceiptDiagnostic::own_down_refused;
+  if (evidence.own_up) return InputGuardianReceiptDiagnostic::own_up_only;
+  if (evidence.own_move) return InputGuardianReceiptDiagnostic::own_move_only;
+  return pump_after > pump_before ? InputGuardianReceiptDiagnostic::no_callback_pump_progressed : InputGuardianReceiptDiagnostic::no_callback_pump_stalled;
+}
 InputGuardianLedger::InputGuardianLedger(uint64_t tag) : tag_(tag) {}
-std::optional<InputGuardianTicket> InputGuardianLedger::reserve(const InputRelease& release) {
+std::optional<InputGuardianTicket> InputGuardianLedger::reserve(const InputRelease& release, bool diagnostic) {
   if (!valid_input_release(release)) return {};
   std::lock_guard lock(mutex_);
   if (closed_ || tag_ == 0 || sequence_ == std::numeric_limits<uint64_t>::max()) return {};
@@ -38,7 +45,9 @@ std::optional<InputGuardianTicket> InputGuardianLedger::reserve(const InputRelea
     if (entry.ticket.release.kind == InputReleaseKind::mouse_button) ++buttons; else ++keys;
   }
   if (!empty || (release.kind == InputReleaseKind::mouse_button ? buttons >= 8 : keys >= 128)) return {};
-  empty->ticket = {++sequence_, release}; return empty->ticket;
+  empty->ticket = {++sequence_, release}; empty->diagnostic.enabled = diagnostic;
+  if (diagnostic) diagnostic_entries_.fetch_add(1);
+  return empty->ticket;
 }
 bool InputGuardianLedger::observe(const InputGuardianEvent& event) noexcept {
   if (!event.injected || event.tag != tag_ || !valid_input_release(event.release)) return false;
@@ -46,27 +55,46 @@ bool InputGuardianLedger::observe(const InputGuardianEvent& event) noexcept {
   for (auto& entry : entries_) {
     if (entry.ticket.id == 0 || entry.ticket.release != event.release) continue;
     if (event.down) {
-      if (entry.up || entry.down || order_ == std::numeric_limits<uint64_t>::max()) return false;
+      if (entry.up || entry.down || order_ == std::numeric_limits<uint64_t>::max()) {
+        if (entry.diagnostic.enabled) entry.diagnostic.own_down_refused = true;
+        return false;
+      }
       entry.down = true; entry.down_order = ++order_; entry.down_at_ms=event.observed_at_ms; return true;
     }
+    if (entry.diagnostic.enabled) entry.diagnostic.own_up = true;
     if (!entry.down || entry.up) return false;
     entry.up = true; if (released_ != std::numeric_limits<uint64_t>::max()) ++released_;
-    if (entry.retired) { completed_[completed_cursor_]=entry.ticket; completed_cursor_=(completed_cursor_+1)%completed_.size(); entry = {}; }
+    if (entry.retired) { completed_[completed_cursor_]=entry.ticket; completed_cursor_=(completed_cursor_+1)%completed_.size(); erase(entry); }
     return true;
   }
   return false;
 }
-bool InputGuardianLedger::observed(const InputGuardianTicket& ticket, bool down) const noexcept {
+bool InputGuardianLedger::observed(const InputGuardianTicket& ticket, bool down, InputGuardianReceiptDiagnostic* diagnostic, uint64_t pump_before, uint64_t pump_after) const noexcept {
   std::lock_guard lock(mutex_);
-  for (const auto& entry : entries_) if (entry.ticket == ticket && ticket.id != 0) return down ? entry.down : entry.up;
+  if (diagnostic) *diagnostic = InputGuardianReceiptDiagnostic::none;
+  for (const auto& entry : entries_) if (entry.ticket == ticket && ticket.id != 0) {
+    const bool result = down ? entry.down : entry.up;
+    if (diagnostic && down && !result) *diagnostic = input_guardian_receipt_diagnostic(entry.diagnostic, pump_before, pump_after);
+    return result;
+  }
   for (const auto& completed : completed_) if (completed==ticket && ticket.id!=0) return true;
   return false;
+}
+bool InputGuardianLedger::diagnostics_enabled() const noexcept { return diagnostic_entries_.load() != 0; }
+void InputGuardianLedger::observe_move(uint64_t tag, bool injected) noexcept {
+  if (!injected || tag != tag_ || !diagnostics_enabled()) return;
+  std::lock_guard lock(mutex_);
+  for (auto& entry : entries_) if (entry.ticket.id && entry.diagnostic.enabled && entry.ticket.release.kind == InputReleaseKind::mouse_button) entry.diagnostic.own_move = true;
+}
+void InputGuardianLedger::erase(Entry& entry) noexcept {
+  if (entry.diagnostic.enabled) diagnostic_entries_.fetch_sub(1);
+  entry = {};
 }
 void InputGuardianLedger::retire(const InputGuardianTicket& ticket,bool definitely_not_posted) noexcept {
   std::lock_guard lock(mutex_);
   for (auto& entry : entries_) if (entry.ticket == ticket && ticket.id != 0) {
-    if (entry.up) { completed_[completed_cursor_]=entry.ticket; completed_cursor_=(completed_cursor_+1)%completed_.size(); entry={}; }
-    else if (definitely_not_posted && !entry.down) entry = {}; else entry.retired = true;
+    if (entry.up) { completed_[completed_cursor_]=entry.ticket; completed_cursor_=(completed_cursor_+1)%completed_.size(); erase(entry); }
+    else if (definitely_not_posted && !entry.down) erase(entry); else entry.retired = true;
     return;
   }
 }
@@ -103,35 +131,45 @@ struct Packet {
   uint64_t sequence = 0, ticket = 0, tag = 0;
   uint32_t budget = 0, count = 0;
   InputRelease release;
+  InputGuardianReceiptDiagnostic diagnostic = InputGuardianReceiptDiagnostic::none;
   std::array<uint8_t,32> nonce{};
 };
+bool valid_diagnostic_shape(const Packet& packet) noexcept {
+  if (packet.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
+  if (!packet.response) return packet.op==Op::reserve && !packet.ok && !packet.down && packet.diagnostic==InputGuardianReceiptDiagnostic::opt_in;
+  return packet.op==Op::observed && !packet.ok && packet.down &&
+    packet.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && packet.diagnostic<=InputGuardianReceiptDiagnostic::own_up_only;
+}
 constexpr size_t packet_size = 80;
 using Bytes = std::array<uint8_t,packet_size>;
 void put(Bytes& bytes, size_t start, uint64_t value, size_t count) { for (size_t index = 0; index < count; ++index) bytes[start + index] = static_cast<uint8_t>(value >> (index * 8)); }
 uint64_t get(const Bytes& bytes,size_t start,size_t count) { uint64_t value = 0; for (size_t index = 0; index < count; ++index) value |= static_cast<uint64_t>(bytes[start + index]) << (index * 8); return value; }
 Bytes encode(const Packet& packet) {
-  Bytes bytes{}; bytes[0]='V'; bytes[1]='I'; bytes[2]='G'; bytes[3]='1'; bytes[4]=static_cast<uint8_t>(packet.op);
+  Bytes bytes{}; bytes[0]='V'; bytes[1]='I'; bytes[2]='G'; bytes[3]='2'; bytes[4]=static_cast<uint8_t>(packet.op);
   bytes[5]=static_cast<uint8_t>(packet.response); bytes[6]=static_cast<uint8_t>(packet.ok); bytes[7]=static_cast<uint8_t>(packet.down);
   put(bytes,8,packet.sequence,8); put(bytes,16,packet.ticket,8); put(bytes,24,packet.tag,8);
   put(bytes,32,packet.budget,4); put(bytes,36,packet.count,4);
   bytes[40]=static_cast<uint8_t>(packet.release.kind); bytes[41]=static_cast<uint8_t>(packet.release.extended); bytes[42]=packet.release.button;
+  bytes[43]=static_cast<uint8_t>(packet.diagnostic);
   put(bytes,44,packet.release.virtual_key,2); put(bytes,46,packet.release.scan,2);
   std::copy(packet.nonce.begin(),packet.nonce.end(),bytes.begin()+48); return bytes;
 }
 std::optional<Packet> decode(const Bytes& bytes) {
-  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='1' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]!=0) return {};
+  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='2' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]>static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_up_only)) return {};
   Packet packet; packet.op=static_cast<Op>(bytes[4]); packet.response=bytes[5]!=0; packet.ok=bytes[6]!=0; packet.down=bytes[7]!=0;
   packet.sequence=get(bytes,8,8); packet.ticket=get(bytes,16,8); packet.tag=get(bytes,24,8);
   packet.budget=static_cast<uint32_t>(get(bytes,32,4)); packet.count=static_cast<uint32_t>(get(bytes,36,4));
   packet.release={static_cast<InputReleaseKind>(bytes[40]),static_cast<WORD>(get(bytes,44,2)),static_cast<WORD>(get(bytes,46,2)),bytes[41]!=0,bytes[42]};
-  std::copy(bytes.begin()+48,bytes.end(),packet.nonce.begin()); return packet;
+  packet.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(bytes[43]);
+  std::copy(bytes.begin()+48,bytes.end(),packet.nonce.begin()); return valid_diagnostic_shape(packet) ? std::optional{packet} : std::nullopt;
 }
 std::array<uint8_t,32> nonce_bytes(std::wstring_view text) {
   std::array<uint8_t,32> result{}; for (size_t index=0; index<result.size(); ++index) result[index]=static_cast<uint8_t>((nibble(text[index*2])<<4)|nibble(text[index*2+1])); return result;
 }
 bool valid_request(const Packet& packet,const InputGuardianCommand& command,uint64_t previous) {
   if (packet.response || packet.ok || packet.op==Op::ready || packet.sequence==0 || packet.sequence<=previous ||
-      packet.tag!=command.tag || packet.nonce!=nonce_bytes(command.nonce) || packet.count!=0) return false;
+      packet.tag!=command.tag || packet.nonce!=nonce_bytes(command.nonce) || packet.count!=0 ||
+      (packet.diagnostic!=InputGuardianReceiptDiagnostic::none && !(packet.op==Op::reserve && packet.diagnostic==InputGuardianReceiptDiagnostic::opt_in))) return false;
   switch (packet.op) {
     case Op::reserve: return packet.ticket==0 && packet.budget==0 && !packet.down && valid_input_release(packet.release);
     case Op::observed: return packet.ticket!=0 && packet.budget<=50 && valid_input_release(packet.release);
@@ -140,6 +178,15 @@ bool valid_request(const Packet& packet,const InputGuardianCommand& command,uint
     case Op::ready: return false;
   }
   return false;
+}
+bool valid_reply(const Packet& reply, const Packet& request, bool diagnostic) {
+  if (!valid_diagnostic_shape(reply) || (!diagnostic && request.diagnostic!=InputGuardianReceiptDiagnostic::none) ||
+      !reply.response || reply.op!=request.op || reply.sequence!=request.sequence || reply.tag!=request.tag || reply.nonce!=request.nonce ||
+      reply.release!=request.release || (request.op!=Op::reserve && reply.ticket!=request.ticket) || reply.down!=request.down || reply.budget!=request.budget || reply.count>136 ||
+      ((request.op!=Op::drain && request.op!=Op::close) && reply.count!=0)) return false;
+  if (reply.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
+  return diagnostic && request.op==Op::observed && request.down && !reply.ok &&
+    reply.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && reply.diagnostic<=InputGuardianReceiptDiagnostic::own_up_only;
 }
 // Anonymous pipes are synchronous. The independent watcher repeats cancellation after the absolute
 // deadline, covering cancellation-before-ReadFile races without holding an authority/journal lock.
@@ -273,16 +320,18 @@ struct ChildState final : std::enable_shared_from_this<ChildState> {
       Bytes bytes{}; if (!io.transfer(input,bytes,false,0)) { stop(); return; }
       auto request=decode(bytes);
       if (!request || !valid_request(*request,command,last_sequence)) { stop(); return; }
-      last_sequence=request->sequence; Packet reply=*request; reply.response=true; reply.ok=false;
+      last_sequence=request->sequence; Packet reply=*request; reply.response=true; reply.ok=false; reply.diagnostic=InputGuardianReceiptDiagnostic::none;
       const InputGuardianTicket ticket{request->ticket,request->release};
       if (request->op==Op::reserve) {
         if (request->ticket!=0 || request->budget!=0 || request->down || !valid_input_release(request->release)) { stop(); return; }
-        if (const auto reserved=ledger.reserve(request->release)) { reply.ticket=reserved->id; reply.ok=true; }
+        if (const auto reserved=ledger.reserve(request->release,request->diagnostic==InputGuardianReceiptDiagnostic::opt_in)) { reply.ticket=reserved->id; reply.ok=true; }
       } else if (request->op==Op::observed) {
         if (request->ticket==0 || request->budget>50 || !valid_input_release(request->release)) { stop(); return; }
+        const bool diagnose=request->down && ledger.diagnostics_enabled();
+        const auto pump_before=diagnose ? now_ms.load() : 0;
         const auto deadline=GetTickCount64()+request->budget;
         do {
-          if (ledger.observed(ticket,request->down)) { reply.ok=true; break; }
+          if (ledger.observed(ticket,request->down,diagnose ? &reply.diagnostic : nullptr,pump_before,diagnose ? now_ms.load() : 0)) { reply.ok=true; break; }
           if (stopping.load() || GetTickCount64()>=deadline) break;
           std::unique_lock wait(changed_mutex); changed.wait_for(wait,std::chrono::milliseconds(1));
         } while (true);
@@ -332,6 +381,10 @@ LRESULT CALLBACK mouse_hook(int code,WPARAM message,LPARAM data) {
       case WM_MBUTTONDOWN:button=uint8_t{2};down=true;break; case WM_MBUTTONUP:button=uint8_t{2};break;
       default:break;
     }
+    if (message==WM_MOUSEMOVE && hook_state->ledger.diagnostics_enabled()) {
+      const auto& actual=*reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
+      hook_state->ledger.observe_move(static_cast<uint64_t>(actual.dwExtraInfo),(actual.flags&LLMHF_INJECTED)!=0);
+    }
     if (button) {
       const auto& actual=*reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
       if (hook_state->ledger.observe({InputRelease{InputReleaseKind::mouse_button,0,0,false,*button},static_cast<uint64_t>(actual.dwExtraInfo),(actual.flags&LLMHF_INJECTED)!=0,down,hook_state->now_ms.load()})) hook_state->changed.notify_all();
@@ -380,6 +433,7 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
     std::unique_lock lock(mutex_,std::defer_lock); if (!lock.try_lock_for(std::chrono::milliseconds(50))) return {};
     flush_retired_locked(deadline);
     Packet packet; packet.op=Op::reserve; packet.release=release;
+    if (diagnostic_) packet.diagnostic=InputGuardianReceiptDiagnostic::opt_in;
     const auto reply=exchange_locked(packet,deadline); if (!reply || !reply->ok || reply->ticket==0) return {};
     return InputGuardianTicket{reply->ticket,release};
   }
@@ -395,6 +449,16 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
     if (reply) phase=reply->ok ? InputGuardianPhase::confirmed :
       reply->budget==0 ? InputGuardianPhase::reply_negative_zero_budget :
       reply->budget<packet.budget ? InputGuardianPhase::reply_negative_short_budget : InputGuardianPhase::reply_negative_full_budget;
+    if (reply && !reply->ok && reply->budget>0 && reply->budget==packet.budget && diagnostic_) {
+      switch (reply->diagnostic) {
+        case InputGuardianReceiptDiagnostic::no_callback_pump_stalled: phase=InputGuardianPhase::reply_negative_no_callback_pump_stalled; break;
+        case InputGuardianReceiptDiagnostic::no_callback_pump_progressed: phase=InputGuardianPhase::reply_negative_no_callback_pump_progressed; break;
+        case InputGuardianReceiptDiagnostic::own_move_only: phase=InputGuardianPhase::reply_negative_own_move_only; break;
+        case InputGuardianReceiptDiagnostic::own_down_refused: phase=InputGuardianPhase::reply_negative_own_down_refused; break;
+        case InputGuardianReceiptDiagnostic::own_up_only: phase=InputGuardianPhase::reply_negative_own_up_only; break;
+        default: break;
+      }
+    }
     // Smoke observations are sequential. Only this returning caller publishes; cancellation,
     // hook, control and retirement workers never retain or write this caller-local phase.
     if (diagnostic_) diagnostic_->phase.store(phase,std::memory_order_relaxed);
@@ -505,9 +569,7 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
       if (!io.transfer(output_.get(),bytes,false,deadline)) { failed_=true; input_.close(); return {}; }
       if (phase) *phase=InputGuardianPhase::reply_invalid;
       const auto reply=decode(bytes);
-      if (!reply || !reply->response || reply->op!=packet.op || reply->sequence!=packet.sequence || reply->tag!=tag_ || reply->nonce!=packet.nonce ||
-          reply->release!=packet.release || (packet.op!=Op::reserve && reply->ticket!=packet.ticket) || reply->down!=packet.down || reply->budget!=packet.budget || reply->count>136 ||
-          ((packet.op!=Op::drain && packet.op!=Op::close) && reply->count!=0)) { failed_=true; input_.close(); return {}; }
+      if (!reply || !valid_reply(*reply,packet,static_cast<bool>(diagnostic_))) { failed_=true; input_.close(); return {}; }
       return reply;
     } catch (...) { failed_=true; input_.close(); return {}; }
   }
@@ -549,7 +611,7 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
     IoWatch io(&closed_signal_,&io_cancellation_); Bytes bytes{};
     if (!io.transfer(output_.get(),bytes,false,GetTickCount64()+10'000)) throw std::runtime_error("Guardian did not become ready.");
     const auto reply=decode(bytes);
-    if (!reply || reply->op!=Op::ready || !reply->response || !reply->ok || reply->sequence!=0 || reply->ticket!=0 || reply->tag!=tag_ || reply->nonce!=nonce_bytes(nonce_) || reply->release!=InputRelease{} || reply->count || reply->budget || reply->down) throw std::runtime_error("Guardian readiness did not verify.");
+    if (!reply || reply->op!=Op::ready || !reply->response || !reply->ok || reply->sequence!=0 || reply->ticket!=0 || reply->tag!=tag_ || reply->nonce!=nonce_bytes(nonce_) || reply->release!=InputRelease{} || reply->count || reply->budget || reply->down || reply->diagnostic!=InputGuardianReceiptDiagnostic::none) throw std::runtime_error("Guardian readiness did not verify.");
     armed_.store(true);
   }
 };
@@ -573,7 +635,8 @@ bool input_guardian_protocol_self_test() {
   Packet packet; packet.op=Op::reserve; packet.sequence=1; packet.tag=command.tag; packet.nonce=nonce_bytes(command.nonce);
   packet.release={InputReleaseKind::scan_key,static_cast<WORD>('A'),0x1e,false,0};
   const auto bytes=encode(packet); const auto parsed=decode(bytes);
-  if (!parsed || !valid_request(*parsed,command,0) || valid_request(*parsed,command,1) || bytes[4]!=1 || bytes[8]!=1 || bytes[24]!=8 || bytes[31]!=1 || bytes[44]!='A' || bytes[46]!=0x1e || bytes[48]!=0xaa || bytes[79]!=0xaa) return false;
+  if (!parsed || !valid_request(*parsed,command,0) || valid_request(*parsed,command,1) || bytes[3]!='2' || bytes[4]!=1 || bytes[8]!=1 || bytes[24]!=8 || bytes[31]!=1 || bytes[43]!=0 || bytes[44]!='A' || bytes[46]!=0x1e || bytes[48]!=0xaa || bytes[79]!=0xaa) return false;
+  auto obsolete=bytes; obsolete[3]='1'; if (decode(obsolete)) return false;
   for (const auto position:{size_t(0),size_t(4),size_t(5),size_t(6),size_t(7),size_t(40),size_t(41),size_t(43)}) {
     auto malformed=bytes; malformed[position]=0xff; if (decode(malformed)) return false;
   }
@@ -595,6 +658,49 @@ bool input_guardian_protocol_self_test() {
   packet.op=Op::drain; packet.ticket=0; packet.down=false; packet.release={}; packet.budget=300;
   if (!valid_request(packet,command,0)) return false;
   packet.budget=301; if (valid_request(packet,command,0)) return false;
+  packet=*parsed; packet.diagnostic=InputGuardianReceiptDiagnostic::opt_in;
+  const auto opted=decode(encode(packet));
+  if (!opted || !valid_request(*opted,command,0) || encode(packet)[43]!=1) return false;
+  Packet reserve_reply=packet; reserve_reply.response=true; reserve_reply.ok=true; reserve_reply.ticket=1; reserve_reply.diagnostic=InputGuardianReceiptDiagnostic::none;
+  if (!valid_reply(reserve_reply,packet,true) || valid_reply(reserve_reply,packet,false)) return false;
+  packet.op=Op::observed; packet.ticket=1; packet.down=true; packet.budget=40;
+  if (valid_request(packet,command,0) || decode(encode(packet))) return false;
+  packet.diagnostic=InputGuardianReceiptDiagnostic::none;
+  Packet reply=packet; reply.response=true;
+  if (!valid_reply(reply,packet,false)) return false;
+  for (uint8_t code=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::no_callback_pump_stalled);
+       code<=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_up_only); ++code) {
+    reply.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
+    const auto received=decode(encode(reply));
+    if (!received || !valid_reply(*received,packet,true) || valid_reply(*received,packet,false)) return false;
+    auto request=packet; request.diagnostic=reply.diagnostic;
+    if (valid_request(request,command,0) || decode(encode(request))) return false;
+    for (int field=0; field<7; ++field) {
+      auto malformed=reply;
+      if (field==0) malformed.response=false;
+      if (field==1) malformed.ok=true;
+      if (field==2) malformed.down=false;
+      if (field==3) malformed.op=Op::reserve;
+      if (field==4) malformed.op=Op::retire;
+      if (field==5) malformed.diagnostic=InputGuardianReceiptDiagnostic::opt_in;
+      if (field==6) malformed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(255);
+      if (decode(encode(malformed)) || valid_reply(malformed,packet,true)) return false;
+    }
+    for (int field=0; field<8; ++field) {
+      auto malformed=reply;
+      if (field==0) ++malformed.sequence;
+      if (field==1) ++malformed.tag;
+      if (field==2) malformed.nonce[0]^=1U;
+      if (field==3) ++malformed.ticket;
+      if (field==4) ++malformed.release.scan;
+      if (field==5) ++malformed.budget;
+      if (field==6) malformed.count=1;
+      if (field==7) malformed.count=137;
+      if (valid_reply(malformed,packet,true)) return false;
+    }
+  }
+  reply.diagnostic=InputGuardianReceiptDiagnostic::none; reply.ok=true;
+  if (!valid_reply(reply,packet,false)) return false;
   return true;
 }
 std::shared_ptr<InputGuardian> InputGuardian::native(std::shared_ptr<InputGuardianDiagnostic> diagnostic) { const auto guardian=std::make_shared<NativeGuardian>(std::move(diagnostic)); guardian->start_retirement_worker(); return guardian; }

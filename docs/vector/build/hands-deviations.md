@@ -1086,3 +1086,60 @@ evidence without calling the failed job successful. There is no final packaged,
 signing, notarization or publication success from this preview. The new worker
 and negative-budget diagnostic changes still need their own exact-source
 native results; final packaging and owner-device/release gates remain open.
+
+## Isolated worker hosted validation — `51e8f63d`
+
+The first worker-native run
+[43144573475](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43144573475),
+job `130941181412`, at `39d36ca3` compiled the new worker and protocol C++
+but failed linking with `LNK1181`: `kernelbase.lib` was unavailable. No native
+runtime tests ran in that attempt. The minimal `51e8f63d` follow-up removes
+that added import library and uses the existing WindowsApp umbrella library.
+It retains actual CompareObjectHandles equality and all parent authentication
+checks; there is no replacement identity predicate or new dependency. Queued
+unsigned preview `43145208543` at `a6006691` was cancelled because it had
+the same known linkage defect. That preview supplies no packaging or release
+evidence.
+
+At exact `51e8f63dfda2bc8616e4a94f730649cd168aca5a`, diagnostic
+[43146189453](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146189453),
+job `130944827745`, built and linked successfully. Native units, version and
+probes passed. Required protocol/lifecycle was 30 passed, zero failed, one
+skipped; isolated scenarios were 35 passed, zero failed, 11 skipped. The
+verified JSON report artifact `13912267619`, archive digest
+`sha256:39d9973742bdb64d7d1f2a105a4a002691da485e1675c9ba93655c2c822f20cb`,
+confirms actual capture-color-patch and affinity-exclusion passes at this
+source revision. The successful color report carries no CaptureReadRoute and
+may have used the ordinary screen route; it does not prove isolated-worker
+execution. Registered worker protocol unit tests passed, but forced worker
+process/capture proof remains pending. Stale-capture-refusal was skipped for
+`input_detection_unavailable`, and the hardware-input scenario was skipped.
+These specific passes do not establish broad capture stability, hardware
+takeover or the skipped stale-capture behavior. Earlier pending-native
+statements above retain their earlier source scope.
+
+Staged Stop still failed `input_post_failed` /
+`guardian-observe-reply-negative-full-budget`. The authenticated transport
+completed with a negative matching-DOWN reply and the full child observation
+budget. This narrows the earlier b19 result, but establishes neither its cause
+nor a passing Stop. The isolated scenarios' `input_detection_unavailable`
+uses a separate Raw Input readiness gate; it is not authoritative evidence
+that this guardian's low-level hook cannot operate. The Stop failure remains
+a failure, not an environment skip.
+
+The next private, opt-in diagnostic is currently being implemented. Its scope
+is closed own-tag MOVE, UP and refused-DOWN categories plus a hook-pump stamp
+for a full-budget negative reply. Diagnostic values use private VIG2, not the
+external helper protocol. No raw tag, event content, observed identifier or
+user data is emitted. The existing matching receipt remains the sole DOWN
+proof, with no new authority, input splitting, budget, retry or cleanup
+relaxation. Source implementation is not an executed result or a proven fix.
+
+Ordinary full PR
+[43146183368](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146183368)
+at `51e8f63d` passed all 16 engine shards, Linux/Windows units and E2E, the
+actual Node bundle, Linux overlay/Electron journey and macOS build. Windows
+Stop failed; ARM64 and the separate macOS matrix were skipped. A macOS build
+pass is not matrix or granted-OS evidence, and these passed jobs do not turn
+the full run green. Final x64/ARM64 packaged pins/self-tests, signing,
+notarization, owner-device checks and publication remain separate open gates.

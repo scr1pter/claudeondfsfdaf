@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "hands-windows-validation-continuation",
-  "observedAtUtc": "2026-11-12T02:52:45.022380+00:00",
+  "observedAtUtc": "2026-11-12T04:15:06.958610+00:00",
   "repository": "scr1pter/claudeondfsfdaf",
   "branch": "hands",
   "parentRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
@@ -468,5 +468,113 @@
     "repair": "Remove newly added unavailable Kernelbase import library. Existing WindowsApp.lib umbrella covers documented Windows10 handle API; actual CompareObjectHandles equality/authentication requirement unchanged.",
     "reference": "https://learn.microsoft.com/en-us/uwp/win32-and-com/win32-apis",
     "qualification": "New exact-source native linker/runtime result required."
-  }
+  },
+  "workerLinkedNativeOutcome": {
+    "headRevision": "51e8f63dfda2bc8616e4a94f730649cd168aca5a",
+    "run": 43146189453,
+    "job": 130944827745,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146189453/job/130944827745",
+    "conclusion": "failure",
+    "x64BuildLinkNativeUnitsVersionProbes": "passed",
+    "toolchain": {
+      "MSVC": "14.51.36231",
+      "WindowsSDK": "10.0.26100.0",
+      "Node": "24.22.2"
+    },
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 35,
+      "failed": 0,
+      "skipped": 11
+    },
+    "verifiedIsolatedReport": {
+      "artifact": 13912267619,
+      "archiveDigest": "sha256:39d9973742bdb64d7d1f2a105a4a002691da485e1675c9ba93655c2c822f20cb",
+      "archiveDigestMatchedAPI": true,
+      "capture-color-patch": "passed",
+      "capture-affinity-exclusion": "passed",
+      "stale-capture-refusal": "skipped:input_detection_unavailable"
+    },
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative-full-budget",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "All registered native unit tests passed on this hosted run; capture color/affinity passed. Passing capture reports omit the read route, so actual forced isolated-worker execution is not yet proven. Insertion plus full-budget authenticated negative reply still does not establish matching DOWN. RawInput readiness skips are a distinct mechanism and cannot turn Stop into a skip.",
+    "verifiedOverlayArchive": {
+      "artifact": 13911949699,
+      "archiveDigest": "sha256:299e636d052feba9b035c7ae6a9382d3d6fe8ace189a1b5c1f9ebf06b58b3ef3",
+      "archiveDigestMatchedAPI": true,
+      "overlaySourceDigest": "a626f965202f511129f7dbfc4cc25f7f3ae3ceba574db5972d52c73a2cea8b61",
+      "helperVersion": "1.0.15"
+    }
+  },
+  "workerFullPRScope": {
+    "headRevision": "51e8f63dfda2bc8616e4a94f730649cd168aca5a",
+    "run": 43146183368,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146183368",
+    "conclusion": "failure",
+    "ordinary": "All16 engine shards, Linux/Windows units and E2E, actual Node desktop engine bundle passed (API job conclusions).",
+    "helper": "Linux overlay/controller, desktop Electron journey and Mac build passed. Windows native Stop failed; native ARM64 runtime and separate Mac matrix skipped.",
+    "qualification": "Job metadata inspected; not yet a local raw-archive audit of the fullPR, and overall run is failed."
+  },
+  "supersededWorkerPreview": {
+    "run": 43145208543,
+    "revision": "a6006691d0f6f61dd6f19529972ddb0ba397fa69",
+    "disposition": "Cancelled our own queued artifacts-only preview after39d build proved the same native inputs had an unavailable Kernelbase import. No package or release credit."
+  },
+  "guardianHookDiagnosticCandidate": {
+    "parentRevision": "51e8f63dfda2bc8616e4a94f730649cd168aca5a",
+    "scope": "Optional smoke diagnostics only. Private VIG2 fixed80byte packet uses byte43 for strict closed opt-in/result metadata; external helper protocol unchanged.",
+    "evidence": "Per opted-in ticket, matching own-tag injected MOVE/UP/refusedDOWN only, plus existing hook pump timestamp progress during negative DOWN wait. No physical/foreign events or raw tag/key/coordinate/flag content. No callback means no matching own injected callback recorded, not global absence.",
+    "boundaries": "Same observed() queries, input RPC count, receipt bool, nonce/tag/sequence/release matching, absolute budgets and cleanup. New phases only classify full>0 original-budget negative replies; zero/short stages preserved.",
+    "tests": "8 additional pure native groups and expanded actual private codec/request/reply self-test; no local native execution. Independent read-only review found no concrete blocker."
+  },
+  "forcedWorkerRuntimeCandidate": {
+    "nativeCheck": "capture-isolated-window-worker",
+    "catalogIndex": 15,
+    "cleanupIndex": 14,
+    "proof": "Fresh validated synthetic target/window, actual capture/session policy, production CaptureBackend.read with isolate_window=true, original currentness/deadline, actual BGRA patch validation and fresh postflight. No screen fallback, warmup, retry or input-detector gate.",
+    "qualification": "New exact-source hosted runtime proof required; existing color checks alone do not prove worker execution."
+  },
+  "latestLocalCandidateChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+      "passed": 43,
+      "failed": 0,
+      "assertions": 27535,
+      "seconds": 0.308,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-helper-selftest.test.ts",
+      "passed": 48,
+      "failed": 0,
+      "assertions": 1021,
+      "seconds": 0.722,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 1.209,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
+      "exitCode": 0
+    },
+    {
+      "command": "prettier --check touched TypeScript catalogs",
+      "exitCode": 0
+    }
+  ]
 }
