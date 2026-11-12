@@ -240,10 +240,15 @@ describe("vercel.json: one origin for the phone app", () => {
     const { buildCommand } = await vercel()
     const steps = buildCommand.split("&&").map((step) => step.trim())
     expect(steps).toEqual([
-      "bun --cwd packages/app run build:phone",
+      "bun run --cwd packages/app build:phone",
       "bun --cwd packages/web build",
       "node script/prune-vector-site.mjs",
     ])
+    // `bun --cwd <dir> run <script>` prints Bun's usage and exits 0 without running the script, so a deploy written that
+    // way skips the phone build and then fails in the copy. `run` has to come straight after `bun`.
+    for (const step of steps.filter((item) => /^bun\b.*\srun\s/.test(item))) expect(step).toMatch(/^bun run\s/)
+    const app = JSON.parse(await readFile(path.join(ROOT, "packages", "app", "package.json"), "utf8"))
+    expect(app.scripts["build:phone"]).toBe("vite build --mode phone")
     const astro = await readFile(path.join(ROOT, "packages", "web", "astro.config.mjs"), "utf8")
     expect(astro).toContain("phoneApp({")
     expect(astro).toContain('"../app/dist-phone/"')

@@ -11,7 +11,7 @@
       "includeFiles": "design-lab/**"
     }
   },
-  "buildCommand": "bun --cwd packages/app run build:phone && bun --cwd packages/web build && node script/prune-vector-site.mjs",
+  "buildCommand": "bun run --cwd packages/app build:phone && bun --cwd packages/web build && node script/prune-vector-site.mjs",
   "outputDirectory": "packages/web/dist",
   "redirects": [
     {
