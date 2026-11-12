@@ -199,6 +199,28 @@ const report = () =>
     })
     .usage({ input: 100, output: 20 })
 
+const unsupportedGit = (f: Effect.Success<ReturnType<typeof fixture>>) =>
+  Effect.gen(function* () {
+    const input = reviewInput({ security: false })
+    const queued = yield* f.owner.directoryReview(input)
+    const done = yield* f.ended(queued.id)
+    expect(done.result?.state).toBe("refused")
+    expect(done.result?.refusal).toBe("unavailable")
+    expect(done.result?.verdict).toBe("not-reviewed")
+    expect(done.result?.summary).toContain("Git reads cannot be inspected safely")
+    expect(done.result?.sessions).toEqual([])
+    expect(yield* f.permission.list()).toEqual([])
+    expect(yield* f.llm.inputs).toHaveLength(0)
+    expect(yield* f.sessions.list()).toEqual([])
+    expect(
+      (yield* f.sessions.list({ internal: true })).filter(
+        (session) => session.internal?.startsWith("vectorscope.") && session.internal !== "vectorscope.directory",
+      ),
+    ).toEqual([])
+    expect(yield* f.owner.directoryReview(input)).toEqual(done)
+    expect(yield* f.llm.inputs).toHaveLength(0)
+  })
+
 const retarget = Effect.fn("ConnectDirectoryLiveTest.retarget")(function* (directory: string, other: string) {
   const saved = `${directory}.directory-original`
   const state = { moved: false, linked: false }
@@ -227,6 +249,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       const input = reviewInput({ security: false, background: true })
       yield* f.llm.push(report())
       const original = yield* f.owner.directoryReview(input)
@@ -254,6 +277,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       yield* f.llm.push(reply().tool("read", { filePath: "probe.txt" }).usage({ input: 100, output: 20 }))
       yield* f.llm.push(report())
       const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
@@ -301,6 +325,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       expect(yield* f.llm.inputs).toHaveLength(0)
@@ -319,6 +344,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       yield* f.llm.hang
       const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
@@ -351,6 +377,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       const other = yield* tmpdirScoped()
       yield* write(other, "probe.txt", "NEVER_SEND_RETARGETED_WORKSPACE_CANARY\n")
       yield* f.llm.push(report())
@@ -374,6 +401,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       const other = yield* tmpdirScoped()
       yield* write(other, "probe.txt", "NEVER_SEND_MID_REVIEW_CANARY\n")
       const release = Promise.withResolvers<void>()
@@ -409,6 +437,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture({ "*": "allow", "private/*": "deny" })
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       const queued = yield* f.owner.directoryReview(reviewInput({ security: false }))
       const ask = yield* f.pending(queued.id)
       yield* write(f.current.directory, "private/new.txt", "NEVER_SEND_THIS_DIRECTORY_SECRET\n")

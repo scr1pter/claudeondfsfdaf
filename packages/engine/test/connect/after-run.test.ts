@@ -561,15 +561,19 @@ cliIt.live(
           },
         })
         .pipe(Effect.forkChild)
-      yield* Effect.raceFirst(
-        llm.wait(4),
-        Fiber.join(result).pipe(
-          Effect.flatMap((early) =>
-            Effect.fail(new Error(`CLI exited before its review: ${early.exitCode}; ${early.stderr}; ${early.stdout}`)),
+      if (process.platform === "linux") {
+        yield* Effect.raceFirst(
+          llm.wait(4),
+          Fiber.join(result).pipe(
+            Effect.flatMap((early) =>
+              Effect.fail(
+                new Error(`CLI exited before its review: ${early.exitCode}; ${early.stderr}; ${early.stdout}`),
+              ),
+            ),
           ),
-        ),
-      )
-      release.resolve()
+        )
+        release.resolve()
+      }
       const ended = yield* Fiber.join(result)
       vector.expectExit(ended, 0)
       expect(ended.timedOut).toBe(false)
@@ -584,6 +588,22 @@ cliIt.live(
         const run = Schema.decodeUnknownOption(Connect.Run)(part.value.state.metadata?.connect)
         return run._tag === "Some" ? [run.value] : []
       })
+      if (process.platform !== "linux") {
+        const done = runs.filter((run) => run.status === "done")
+        expect(done.length).toBeGreaterThan(0)
+        for (const run of done) {
+          expect(run.id).toStartWith("cr_")
+          expect(run.request.background).toBe(true)
+          expect(run.result?.state).toBe("refused")
+          expect(run.result?.refusal).toBe("unavailable")
+          expect(run.result?.verdict).toBe("not-reviewed")
+          expect(run.result?.summary).toContain("Git reads cannot be inspected safely")
+          expect(run.result?.sessions).toEqual([])
+        }
+        // The real coding read/write/completion still runs; the fourth (reviewer) provider call must not start.
+        expect(yield* llm.inputs).toHaveLength(3)
+        return
+      }
       expect(
         runs.some(
           (run) =>

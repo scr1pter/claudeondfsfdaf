@@ -308,7 +308,7 @@ const findings = () =>
 const ALL = ["f1", "f2", "f3", "f4", "f5", "f6"]
 
 // A repository with three files committed, then uncommitted changes to two of them and to a CI workflow.
-const setup = Effect.gen(function* () {
+const fixture = Effect.gen(function* () {
   delete script.outcome
   const test = yield* TestInstance
   const directory = test.directory
@@ -331,11 +331,57 @@ const setup = Effect.gen(function* () {
   const session = yield* sessions.create({ title: "Requester" })
   yield* say(session.id, "review my changes")
   script.outcome = findings
+  return { directory, sessions, hub, session }
+})
+
+const setup = Effect.gen(function* () {
+  const { directory, sessions, hub, session } = yield* fixture
   const reviewed = yield* hub.run({ request: review(session.id, directory), call: { ...asker(), promptOps: ops } })
   expect(reviewed.result?.findings.map((item) => item.id)).toEqual(["f1", "f2", "f3", "f5", "f6", "f4"])
   yield* say(session.id, "fix them")
   const status = yield* git(directory, "status", "--porcelain")
   return { directory, sessions, hub, session, reviewed, status }
+})
+
+const unsupportedGit = Effect.gen(function* () {
+  const { directory, sessions, hub, session } = yield* fixture
+  const effects = { reviews: 0, prompts: 0, launches: 0 }
+  script.outcome = () => {
+    effects.reviews++
+    return findings()
+  }
+  const { asks, ask } = asker()
+  const before = yield* sessions.messages({ sessionID: session.id })
+  const status = yield* git(directory, "status", "--porcelain")
+  const run = yield* hub.run({
+    request: review(session.id, directory),
+    call: {
+      ask,
+      promptOps: {
+        ...ops,
+        prompt: (input) =>
+          Effect.sync(() => {
+            effects.prompts++
+            return promptReply(input)
+          }),
+      },
+      launch: () =>
+        Effect.sync(() => {
+          effects.launches++
+          return { state: "completed" as const, output: "" }
+        }),
+    },
+  })
+  expect(run.result?.state).toBe("refused")
+  expect(run.result?.refusal).toBe("unavailable")
+  expect(run.result?.verdict).toBe("not-reviewed")
+  expect(run.result?.summary).toContain("Git reads cannot be inspected safely")
+  expect(run.result?.sessions).toEqual([])
+  expect(effects).toEqual({ reviews: 0, prompts: 0, launches: 0 })
+  expect(asks.filter((ask) => ask.permission !== "connect")).toEqual([])
+  expect(yield* sessions.children(session.id)).toEqual([])
+  expect(yield* sessions.messages({ sessionID: session.id })).toEqual(before)
+  expect(yield* git(directory, "status", "--porcelain")).toBe(status)
 })
 
 describe("the question a fix asks", () => {
@@ -390,6 +436,7 @@ describe("a fix through connect", () => {
     "here: one connect_write question for the batch, naming the findings and the owned files; nothing changes",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, session, reviewed, status } = yield* setup
         const { asks, ask } = asker()
         const run = yield* hub.run({ request: fix(session.id, directory, reviewed.id, ALL, "here"), call: { ask } })
@@ -425,6 +472,7 @@ describe("a fix through connect", () => {
     "a no changes nothing and starts nothing",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, session, reviewed, status } = yield* setup
         const launches: ConnectAdapter.FixLaunch[] = []
         const { asks, ask } = asker((request) => (request.permission === "connect_write" ? "no" : "yes"))
@@ -454,6 +502,7 @@ describe("a fix through connect", () => {
     "a requester whose rules deny editing an owned file cannot fix, and nothing is asked",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, sessions, reviewed } = yield* setup
         const denied = yield* sessions.create({
           title: "No edits",
@@ -476,6 +525,7 @@ describe("a fix through connect", () => {
     "worktree: asked once, then the child starts with only the owned files, the schema and the findings as data",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, sessions, session, reviewed, status } = yield* setup
         const child = yield* sessions.create({ title: "Fix child", parentID: session.id })
         const launches: ConnectAdapter.FixLaunch[] = []
@@ -554,6 +604,7 @@ describe("a fix through connect", () => {
     "nothing fixable, or a worktree fix with nothing to start the child, is refused before anything is asked",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, session, reviewed } = yield* setup
         const { asks, ask } = asker()
         const none = yield* hub.run({
@@ -578,6 +629,7 @@ describe("re-reviews", () => {
     "since compares only reviews of the same target kind",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, session, reviewed } = yield* setup
         for (const target of [{ kind: "staged" }, { kind: "branch", base: "HEAD" }] as const) {
           const run = yield* hub.run({
@@ -601,6 +653,7 @@ describe("re-reviews", () => {
     "re-reviews stop at the per-request cap even when every review returns new findings",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, session } = yield* setup
         let round = 0
         const words = ["Off by one", "Unchecked null", "Leaked handle", "Wrong unit", "Race on write", "Stale cache"]

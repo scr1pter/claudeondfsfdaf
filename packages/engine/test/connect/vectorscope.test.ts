@@ -347,6 +347,29 @@ const setup = (committed: Record<string, string> = {}) =>
     return { directory, sessions, hub, requester }
   })
 
+// These adapter cases retain their full success assertions on Linux. Elsewhere the real private-Git boundary
+// refuses before the fake reviewer, helper handle or priced-model consent can be reached.
+const unsupportedGit = Effect.gen(function* () {
+  const { directory, sessions, hub, requester } = yield* setup()
+  script.kinds["lmstudio/test-model"] = "priced"
+  const { ops, prompts } = recorder()
+  const { asks, ask } = asker()
+  const before = yield* sessions.messages({ sessionID: requester.id })
+  const run = yield* hub.run({ request: review(requester.id, directory), call: { ask, promptOps: ops } })
+  expect(run.result?.state).toBe("refused")
+  expect(run.result?.refusal).toBe("unavailable")
+  expect(run.result?.verdict).toBe("not-reviewed")
+  expect(run.result?.summary).toContain("Git reads cannot be inspected safely")
+  expect(run.result?.sessions).toEqual([])
+  expect(calls).toEqual([])
+  expect(outcomes).toEqual([])
+  expect(required).toEqual([])
+  expect(prompts).toEqual([])
+  expect(asks.filter((ask) => ask.permission !== "connect")).toEqual([])
+  expect(yield* sessions.children(requester.id)).toEqual([])
+  expect(yield* sessions.messages({ sessionID: requester.id })).toEqual(before)
+})
+
 // Vector Local on, as the owner turns it on in their own config, for the length of `body`.
 const withLocal = <A, E, R>(body: Effect.Effect<A, E, R>) => {
   const file = path.join(Global.Path.config, "vector.json")
@@ -508,6 +531,7 @@ describe("a review through connect", () => {
     "runs with the requester as every helper session's parent, through the helper handle, and says where the diff went",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester, sessions } = yield* setup()
         const { ops, prompts } = recorder()
         const { asks, ask } = asker()
@@ -566,6 +590,7 @@ describe("a review through connect", () => {
     "reviewed changes that edit VectorScope's settings give incomplete, and no model runs",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester, sessions } = yield* setup({ "config/vector/notes.md": "x\n" })
         const { ops } = recorder()
         const cases: { name: string; prepare: Effect.Effect<unknown>; target?: Connect.Target }[] = [
@@ -645,6 +670,7 @@ describe("a review through connect", () => {
     "a review.json model other than the user's asks connect_model, and a denial refuses",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup({
           ".vector/review.json": '{"model":"lmstudio/other-model"}\n',
         })
@@ -691,6 +717,7 @@ describe("a review through connect", () => {
     "a priced model asks once per request and a local one asks nothing",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         script.kinds["lmstudio/test-model"] = "priced"
@@ -726,6 +753,7 @@ describe("a review through connect", () => {
     "the dollar cap: max_cost 0 is refused, a repository's 0 is still capped, and after the run a review is capped",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup({ ".vector/review.json": '{"maxCostUsd":0}\n' })
         const guard = yield* SpendGuard.Service
         const { ops } = recorder()
@@ -767,6 +795,7 @@ describe("a review through connect", () => {
     "outside a live run the cap is what the ended run had left, and a run stopped on its budget refuses another review",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const guard = yield* SpendGuard.Service
         const { ops } = recorder()
@@ -806,6 +835,7 @@ describe("a review through connect", () => {
     "personal documents go to the reviewer only when the diff stays on this computer or a model server",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         yield* hub.run({ request: review(requester.id, directory), call: { ...asker(), promptOps: ops } })
@@ -821,6 +851,7 @@ describe("a review through connect", () => {
     "every finding in every bucket arrives, in VectorScope's order, and counts toward the verdict",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         script.outcome = () => ({
@@ -878,6 +909,7 @@ describe("a review through connect", () => {
     "a skip for size, or a pass that stopped, is never clean",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         script.outcome = () => ({ skipped: [{ path: "src/huge.ts", reason: "size-limit" }] })
@@ -912,6 +944,7 @@ describe("a review through connect", () => {
     "a branch already reviewed at its head comes back marked cached, with no second review",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         const base = yield* git(directory, "rev-parse", "HEAD")
@@ -951,6 +984,7 @@ describe("a review through connect", () => {
     "a branch state file connect did not see VectorScope write is not trusted, so the branch is reviewed in full",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         const base = yield* git(directory, "rev-parse", "HEAD")
@@ -995,6 +1029,7 @@ describe("a review through connect", () => {
     "settings edited while connect waits on its question stop the review before any model runs",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         script.kinds["lmstudio/test-model"] = "priced"
@@ -1022,6 +1057,7 @@ describe("a review through connect", () => {
     "settings edited while the review runs make it incomplete, keeping what it made and where the diff went",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         script.outcome = () => {
@@ -1046,6 +1082,7 @@ describe("a review through connect", () => {
     "an edit git is told not to see still stops the review, and a checkout's line endings do not",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup({ ".vector/review.md": "Flag every bug.\n" })
         const { ops } = recorder()
         const rules = path.join(directory, ".vector/review.md")
@@ -1163,6 +1200,7 @@ describe("a review through connect", () => {
     "nothing to review comes back not reviewed, with no model run",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         yield* git(directory, "checkout", "-q", "--", ".")
@@ -1181,6 +1219,7 @@ describe("a review through connect", () => {
     "a model that changes between connect's check and the review stops it",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         // describe() resolves once when the hub admits the run, and check 2 once more; the review's own is the third.
@@ -1201,6 +1240,7 @@ describe("a review through connect", () => {
     "a review that reaches for more of the prompt loop than prompt and cancel fails",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         script.run = () =>
@@ -1289,6 +1329,7 @@ describe("the same review from the CLI and from connect", () => {
     "reviews the same fixture with the same fake model and options to the same outcome, apart from session ids",
     () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux") return yield* unsupportedGit
         const { directory, hub, requester } = yield* setup()
         const { ops } = recorder()
         // A Review.run stand-in that anchors and selects what the model found, as the real one does.
@@ -1504,6 +1545,17 @@ describe("in process", () => {
         }
         const { asks, ask } = asker()
         const run = yield* hub.run({ request: review(requester.id, directory), call: { ask, promptOps: ops } })
+        if (process.platform !== "linux") {
+          expect(run.result?.state).toBe("refused")
+          expect(run.result?.refusal).toBe("unavailable")
+          expect(run.result?.verdict).toBe("not-reviewed")
+          expect(run.result?.summary).toContain("Git reads cannot be inspected safely")
+          expect(run.result?.sessions).toEqual([])
+          expect(yield* llm.inputs).toHaveLength(0)
+          expect(asks.filter((ask) => ask.permission !== "connect")).toEqual([])
+          expect(yield* sessions.children(requester.id)).toEqual([])
+          return
+        }
         expect(run.result?.summary).toContain("VectorScope reviewed uncommitted changes")
         expect(run.result?.state).toBe("completed")
         expect(run.result?.verdict).toBe("findings")

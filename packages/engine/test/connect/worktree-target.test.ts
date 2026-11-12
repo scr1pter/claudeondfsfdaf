@@ -241,11 +241,33 @@ const report = () =>
     })
     .usage({ input: 100, output: 20 })
 
+// Unsupported hosts still exercise the real task admission boundary; they must never reach consent or a reviewer.
+const unsupportedGit = (f: Effect.Success<ReturnType<typeof fixture>>) =>
+  Effect.gen(function* () {
+    yield* f.settle()
+    const children = yield* f.sessions.children(f.parent.id)
+    const run = yield* f.run()
+    expect(run.result?.state).toBe("refused")
+    expect(run.result?.refusal).toBe("input")
+    expect(run.result?.verdict).toBe("not-reviewed")
+    expect(run.result?.summary).toContain("Git metadata cannot be inspected safely")
+    expect(run.result?.sessions).toEqual([])
+    expect(f.asks).toEqual([])
+    expect(yield* f.llm.inputs).toHaveLength(0)
+    expect((yield* f.sessions.children(f.parent.id)).map((session) => session.id)).toEqual(
+      children.map((session) => session.id),
+    )
+    expect((yield* f.store.loaded()).some((ctx) => FileLock.key(ctx.directory) === FileLock.key(f.workPath))).toBe(
+      false,
+    )
+  })
+
 live.instance(
   "the actual reviewer reads the task copy, retains the requester lineage and spends from its live run",
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       const saved = yield* f.settle()
       expect(saved.state).toBe("changed")
       const guard = yield* SpendGuard.Service
@@ -471,6 +493,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       yield* f.settle()
       const flagged = () =>
         reply().tool("StructuredOutput", {
@@ -552,6 +575,7 @@ for (const action of ["deny", "ask"] as const) {
     () =>
       Effect.gen(function* () {
         const f = yield* fixture()
+        if (process.platform !== "linux") return yield* unsupportedGit(f)
         yield* write(f.workPath, "private/new.txt", "TASK_PRIVATE_CONTENT\n")
         yield* f.settle()
         yield* f.sessions.setPermission({
@@ -580,6 +604,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       yield* f.settle()
       yield* f.sessions.setPermission({
         sessionID: f.parent.id,
@@ -645,6 +670,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       yield* f.settle()
       const entered = yield* Deferred.make<void>()
       const caller = new AbortController()
@@ -676,6 +702,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       yield* f.settle()
       yield* f.llm.hang
       const caller = new AbortController()
@@ -713,6 +740,7 @@ live.instance(
   () =>
     Effect.gen(function* () {
       const f = yield* fixture()
+      if (process.platform !== "linux") return yield* unsupportedGit(f)
       yield* f.settle()
       const release = Promise.withResolvers<void>()
       yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()))

@@ -16,6 +16,7 @@ import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
+import type { Connect } from "@vectordevai/schema/connect"
 import { ConnectHub } from "@/connect/hub"
 import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -208,6 +209,31 @@ const connectCalls = (sessionID: SessionID) =>
       )
   })
 
+const unsupportedGit = (run: Connect.Run | undefined, sessionID: SessionID, completion: string) =>
+  Effect.gen(function* () {
+    const llm = yield* TestLLMServer
+    const sessions = yield* Session.Service
+    const permissions = yield* Permission.Service
+    expect(run?.result?.state).toBe("refused")
+    expect(run?.result?.refusal).toBe("unavailable")
+    expect(run?.result?.verdict).toBe("not-reviewed")
+    expect(run?.result?.summary).toContain("Git reads cannot be inspected safely")
+    expect(run?.result?.sessions).toEqual([])
+    // The two existing build responses may run; no reviewer or fix child may reach the provider.
+    const hits = yield* llm.hits
+    expect(hits).toHaveLength(2)
+    expect(hits.filter(REVIEW)).toHaveLength(0)
+    expect(hits.filter(FIX_CHILD)).toHaveLength(0)
+    expect(yield* permissions.list()).toEqual([])
+    expect(yield* sessions.children(sessionID)).toEqual([])
+    const assistant = (yield* sessions.messages({ sessionID })).findLast((message) => message.info.role === "assistant")
+    if (!assistant || assistant.info.role !== "assistant") throw new Error("The actual parent turn did not complete")
+    expect(assistant.info.finish).toBe("stop")
+    expect(assistant.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")).toContain(
+      completion,
+    )
+  })
+
 // Runs a turn, answering yes once to each question of `permission`, and returns the questions it answered.
 const answering = <A, E, R>(turn: Effect.Effect<A, E, R>, permission: string) =>
   Effect.gen(function* () {
@@ -289,6 +315,8 @@ live.instance(
       })
       const [first] = yield* connectCalls(requester.id)
       const reviewed = first?.run
+      if (process.platform !== "linux")
+        return yield* unsupportedGit(reviewed, requester.id, "VectorScope found two problems.")
       expect(reviewed?.result?.state).toBe("completed")
       expect(reviewed?.result?.verdict).toBe("findings")
       const found = reviewed!.result!.findings
@@ -613,6 +641,7 @@ isolated.instance(
       yield* llm.pushMatch(PARENT, reply().text("Two problems.").stop())
       yield* send("Review my changes.")
       const reviewed = (yield* connectCalls(requester.id))[0]?.run
+      if (process.platform !== "linux") return yield* unsupportedGit(reviewed, requester.id, "Two problems.")
       const listFinding = reviewed?.result?.findings.find((item) => item.path === "src/list.ts")
       expect(listFinding).toBeDefined()
 

@@ -992,6 +992,23 @@ describe("the VectorScope adapter in the background", () => {
           request: review(requester.id, directory),
           call: { ask, promptOps: ops, part: { messageID: call.id, callID: "call_first" } },
         })
+        if (process.platform !== "linux") {
+          const done = yield* pollWithTimeout(
+            hub.get(first.id).pipe(Effect.map((run) => (run?.status === "done" ? run : undefined))),
+            "The unsupported private-Git review did not settle",
+          )
+          expect(done.result?.state).toBe("refused")
+          expect(done.result?.refusal).toBe("unavailable")
+          expect(done.result?.verdict).toBe("not-reviewed")
+          expect(done.result?.summary).toContain("Git reads cannot be inspected safely")
+          expect(done.result?.sessions).toEqual([])
+          expect(reviewed).toEqual([])
+          expect(asks.filter((ask) => ask.permission !== "connect")).toEqual([])
+          expect(yield* sessions.children(requester.id)).toEqual([])
+          delete reviewGate.wait
+          yield* guard.end(requester.id)
+          return
+        }
         // The connect_model question for the priced model was asked before the caller stopped waiting.
         expect(asks.filter((item) => item.permission === "connect_model")).toHaveLength(1)
         expect(asks.find((item) => item.permission === "connect_model")?.metadata?.maxCostUsd).toBe(0.5)

@@ -146,10 +146,29 @@ it.instance(
       expect(settled.state).toBe("changed")
       if (!settled.tip) throw new Error("The settled fixture has no saved commit")
       // Prove the genuine settled port is admissible before the only attacker-controlled delta is installed.
-      const baseline = yield* isolation.review({ taskID: child.id, parentSessionID: parent.id }, () =>
-        Effect.succeed("baseline-admitted"),
-      )
-      expect(baseline).toBe("baseline-admitted")
+      const admission = { entered: false }
+      const baseline = yield* isolation
+        .review({ taskID: child.id, parentSessionID: parent.id }, () =>
+          Effect.sync(() => {
+            admission.entered = true
+            return "baseline-admitted"
+          }),
+        )
+        .pipe(Effect.exit)
+      if (process.platform !== "linux") {
+        const cause = Exit.isFailure(baseline) ? Cause.squash(baseline.cause) : undefined
+        expect(cause).toBeInstanceOf(TaskIsolation.IsolationError)
+        if (!(cause instanceof TaskIsolation.IsolationError)) throw new Error("No actual task-review refusal")
+        expect(cause.code).toBe("review_target")
+        expect(cause.message).toContain("Git metadata cannot be inspected safely")
+        expect(admission.entered).toBe(false)
+        expect(yield* calls(counter)).toBe(0)
+        expect(yield* sessions.children(child.id)).toEqual([])
+        return
+      }
+      if (Exit.isFailure(baseline)) return yield* Effect.failCause(baseline.cause)
+      expect(baseline.value).toBe("baseline-admitted")
+      expect(admission.entered).toBe(true)
       // The dangerous configuration is installed only after worktree creation/settlement, so neither step can execute it.
       yield* git(home.directory, [
         "config",
