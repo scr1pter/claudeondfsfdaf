@@ -14,6 +14,18 @@ const result = await Bun.build({
   naming: { entry: "probe.mjs", asset: "assets/[name]-[hash].[ext]" },
   tsconfig: path.join(engine, "tsconfig.json"),
   format: "esm",
+  plugins: [
+    {
+      name: "installed-jsonc-esm",
+      setup(build) {
+        // jsonc-parser's UMD factory passes require as an argument, hiding its relative imports from the bundler.
+        // Resolve the same installed package's equivalent ESM entry, preserving its actual parser implementation.
+        build.onResolve({ filter: /^jsonc-parser$/ }, (args) => ({
+          path: Bun.resolveSync("jsonc-parser/lib/esm/main.js", args.resolveDir || engine),
+        }))
+      },
+    },
+  ],
   files: {
     // Brain is not part of this tool-process test; requesting its omitted worker must not start inference.
     "brain-worker.gen.ts": "export default undefined",

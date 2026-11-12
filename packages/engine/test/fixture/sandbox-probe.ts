@@ -147,7 +147,10 @@ async function scan(parent: number) {
   }
 }
 
-if (process.argv[2] === "--crash-controls") {
+if (process.argv[2] === "--module-load-check") {
+  // Packaging smoke only: imports initialize, but no filesystem/process probe or credential channel is entered.
+  console.log("Sandbox probe modules loaded")
+} else if (process.argv[2] === "--crash-controls") {
   const limits = await fs.readFile("/proc/self/limits", "utf8")
   const status = await fs.readFile("/proc/self/status", "utf8")
   if (!/Max core file size\s+0\s+0\s+bytes/.test(limits)) throw new Error("Missing inherited hard zero core limit")
