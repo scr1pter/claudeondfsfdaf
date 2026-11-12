@@ -531,6 +531,21 @@ import type {
   QuestionReplyData,
   QuestionReplyErrors,
   QuestionReplyResponses,
+  ReviewGetData,
+  ReviewGetErrors,
+  ReviewGetResponses,
+  ReviewListData,
+  ReviewListErrors,
+  ReviewListResponses,
+  ReviewStartData,
+  ReviewStartErrors,
+  ReviewStartResponses,
+  ReviewStopData,
+  ReviewStopErrors,
+  ReviewStopResponses,
+  ReviewTargetData,
+  ReviewTargetErrors,
+  ReviewTargetResponses,
   ServerSessionSessionImportArchiveData,
   ServerSessionSessionImportArchiveErrors,
   ServerSessionSessionImportArchiveResponses,
@@ -3765,6 +3780,72 @@ export class Question extends HeyApiClient {
   }
 }
 
+export class Review2 extends HeyApiClient {
+  /**
+   * Read the local review target
+   *
+   * Read the existing conversation's exact Git head without starting model work. Owner only.
+   */
+  public target<ThrowOnError extends boolean = false>(options: Options<ReviewTargetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewTargetResponses, ReviewTargetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/target",
+      ...options,
+    })
+  }
+
+  /**
+   * Find local review runs
+   *
+   * Owner-only bounded status summaries for reconnection. No result JSON or code is included.
+   */
+  public list<ThrowOnError extends boolean = false>(options: Options<ReviewListData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewListResponses, ReviewListErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+    })
+  }
+
+  /**
+   * Start an owner local review
+   *
+   * Opt-in owner-only review of local changes. Placement and read authority come from the existing conversation. No GitHub connection is required; no checks, posting or automatic restart occur.
+   */
+  public start<ThrowOnError extends boolean = false>(options: Options<ReviewStartData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewStartResponses, ReviewStartErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Read an owned local review
+   *
+   * Read the exact retained result without starting or retrying model work.
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<ReviewGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewGetResponses, ReviewGetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Stop an owned local review
+   *
+   * Signal and join this engine's exact owned run, retaining completed partial output.
+   */
+  public stop<ThrowOnError extends boolean = false>(options: Options<ReviewStopData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewStopResponses, ReviewStopErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}/stop",
+      ...options,
+    })
+  }
+}
+
 export class Permission extends HeyApiClient {
   /**
    * List pending permissions
@@ -5832,6 +5913,11 @@ export class VectorClient extends HeyApiClient {
   private _question?: Question
   get question(): Question {
     return (this._question ??= new Question({ client: this.client }))
+  }
+
+  private _review?: Review2
+  get review(): Review2 {
+    return (this._review ??= new Review2({ client: this.client }))
   }
 
   private _permission?: Permission

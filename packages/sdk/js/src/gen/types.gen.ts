@@ -2833,6 +2833,7 @@ export type ExperimentalCapabilities = {
   workflows?: boolean
   backgroundShells?: boolean
   vectorscopeSettings?: boolean
+  vectorscopeRuns?: boolean
 }
 
 export type ToolListItem = {
@@ -4590,6 +4591,20 @@ export type QuestionRequest = {
 export type QuestionNotFoundError = {
   _tag: "QuestionNotFoundError"
   requestID: string
+  message: string
+}
+
+export type ReviewApiError = {
+  code:
+    | "disabled"
+    | "placement"
+    | "invalid"
+    | "not_found"
+    | "conflict"
+    | "unavailable"
+    | "corrupt"
+    | "permissions"
+    | "stale"
   message: string
 }
 
@@ -7443,6 +7458,55 @@ export type ProjectDirectories = Array<{
 export type PtyTicketConnectToken = {
   ticket: string
   expires_in: number
+}
+
+export type ReviewRunTarget = {
+  kind: "working-tree" | "staged"
+  head: string
+}
+
+export type ReviewRunStart = {
+  requestID: string
+  target: ReviewRunTarget
+  maxCost?: number
+}
+
+export type ReviewRunStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted" | "unknown"
+
+export type ReviewRunArtifact = {
+  version: 1
+  json: string
+  bytes: number
+  sha256: string
+}
+
+export type ReviewRunInfo = {
+  runID: string
+  parentID: string
+  request: ReviewRunStart
+  status: ReviewRunStatus
+  canStop: boolean
+  startedAt: number
+  completedAt?: number
+  artifact?: ReviewRunArtifact
+  error?: string
+}
+
+export type ReviewRunSummary = {
+  runID: string
+  parentID: string
+  request: ReviewRunStart
+  status: ReviewRunStatus
+  canStop: boolean
+  startedAt: number
+  completedAt?: number
+  error?: string
+  hasResult: boolean
+}
+
+export type ReviewRunList = {
+  runs: Array<ReviewRunSummary>
+  next?: string
 }
 
 export type PublicSessionConsent = {
@@ -17118,6 +17182,180 @@ export type QuestionRejectResponses = {
 
 export type QuestionRejectResponse = QuestionRejectResponses[keyof QuestionRejectResponses]
 
+export type ReviewTargetData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/target"
+}
+
+export type ReviewTargetErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewTargetError = ReviewTargetErrors[keyof ReviewTargetErrors]
+
+export type ReviewTargetResponses = {
+  /**
+   * ReviewRun.Target
+   */
+  200: ReviewRunTarget
+}
+
+export type ReviewTargetResponse = ReviewTargetResponses[keyof ReviewTargetResponses]
+
+export type ReviewListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: string
+  }
+  url: "/experimental/session/{sessionID}/review"
+}
+
+export type ReviewListErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewListError = ReviewListErrors[keyof ReviewListErrors]
+
+export type ReviewListResponses = {
+  /**
+   * ReviewRun.List
+   */
+  200: ReviewRunList
+}
+
+export type ReviewListResponse = ReviewListResponses[keyof ReviewListResponses]
+
+export type ReviewStartData = {
+  body?: ReviewRunStart
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review"
+}
+
+export type ReviewStartErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewStartError = ReviewStartErrors[keyof ReviewStartErrors]
+
+export type ReviewStartResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewStartResponse = ReviewStartResponses[keyof ReviewStartResponses]
+
+export type ReviewGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/{runID}"
+}
+
+export type ReviewGetErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewGetError = ReviewGetErrors[keyof ReviewGetErrors]
+
+export type ReviewGetResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewGetResponse = ReviewGetResponses[keyof ReviewGetResponses]
+
+export type ReviewStopData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/{runID}/stop"
+}
+
+export type ReviewStopErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewStopError = ReviewStopErrors[keyof ReviewStopErrors]
+
+export type ReviewStopResponses = {
+  /**
+   * ReviewRun.Info
+   */
+  200: ReviewRunInfo
+}
+
+export type ReviewStopResponse = ReviewStopResponses[keyof ReviewStopResponses]
+
 export type PermissionListData = {
   body?: never
   path?: never
@@ -17565,9 +17803,9 @@ export type SessionDeleteErrors = {
    */
   404: NotFoundError
   /**
-   * PublicShareRemovalError
+   * PublicShareRemovalError | SessionBusyError
    */
-  409: PublicShareRemovalError
+  409: PublicShareRemovalError | SessionBusyError
 }
 
 export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
@@ -19511,9 +19749,9 @@ export type ExperimentalWorkspaceRemoveErrors = {
    */
   403: ForbiddenError
   /**
-   * PublicShareRemovalError
+   * PublicShareRemovalError | SessionBusyError
    */
-  409: PublicShareRemovalError
+  409: PublicShareRemovalError | SessionBusyError
 }
 
 export type ExperimentalWorkspaceRemoveError =

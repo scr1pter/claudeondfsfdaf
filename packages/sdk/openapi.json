@@ -14439,6 +14439,448 @@
         ]
       }
     },
+    "/experimental/session/{sessionID}/review/target": {
+      "get": {
+        "tags": ["review"],
+        "operationId": "review.target",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunTarget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read the existing conversation's exact Git head without starting model work. Owner only.",
+        "summary": "Read the local review target",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.target({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review": {
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.start",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Opt-in owner-only review of local changes. Placement and read authority come from the existing conversation. No GitHub connection is required; no checks, posting or automatic restart occur.",
+        "summary": "Start an owner local review",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRunStart"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.start({\n  ...\n})"
+          }
+        ]
+      },
+      "get": {
+        "tags": ["review"],
+        "operationId": "review.list",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.List",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only bounded status summaries for reconnection. No result JSON or code is included.",
+        "summary": "Find local review runs",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review/{runID}": {
+      "get": {
+        "tags": ["review"],
+        "operationId": "review.get",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read the exact retained result without starting or retrying model work.",
+        "summary": "Read an owned local review",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review/{runID}/stop": {
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.stop",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewRun.Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Signal and join this engine's exact owned run, retaining completed partial output.",
+        "summary": "Stop an owned local review",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.stop({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/permission": {
       "get": {
         "tags": ["permission"],
@@ -15689,11 +16131,18 @@
             }
           },
           "409": {
-            "description": "PublicShareRemovalError",
+            "description": "PublicShareRemovalError | SessionBusyError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PublicShareRemovalError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PublicShareRemovalError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionBusyError"
+                    }
+                  ]
                 }
               }
             }
@@ -20501,11 +20950,18 @@
             }
           },
           "409": {
-            "description": "PublicShareRemovalError",
+            "description": "PublicShareRemovalError | SessionBusyError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PublicShareRemovalError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PublicShareRemovalError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionBusyError"
+                    }
+                  ]
                 }
               }
             }
@@ -36250,6 +36706,9 @@
           },
           "vectorscopeSettings": {
             "type": "boolean"
+          },
+          "vectorscopeRuns": {
+            "type": "boolean"
           }
         },
         "required": ["backgroundSubagents"],
@@ -41632,6 +42091,30 @@
           }
         },
         "required": ["_tag", "requestID", "message"],
+        "additionalProperties": false
+      },
+      "ReviewApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "placement",
+              "invalid",
+              "not_found",
+              "conflict",
+              "unavailable",
+              "corrupt",
+              "permissions",
+              "stale"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
         "additionalProperties": false
       },
       "PermissionRequest": {
@@ -50504,6 +50987,163 @@
           }
         },
         "required": ["ticket", "expires_in"],
+        "additionalProperties": false
+      },
+      "ReviewRunTarget": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["working-tree", "staged"]
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          }
+        },
+        "required": ["kind", "head"],
+        "additionalProperties": false
+      },
+      "ReviewRunStart": {
+        "type": "object",
+        "properties": {
+          "requestID": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{8,128}$"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ReviewRunTarget"
+          },
+          "maxCost": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": ["requestID", "target"],
+        "additionalProperties": false
+      },
+      "ReviewRunStatus": {
+        "type": "string",
+        "enum": ["running", "completed", "failed", "cancelled", "interrupted", "unknown"]
+      },
+      "ReviewRunArtifact": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [1]
+          },
+          "json": {
+            "type": "string",
+            "maxLength": 8388608
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": ["version", "json", "bytes", "sha256"],
+        "additionalProperties": false
+      },
+      "ReviewRunInfo": {
+        "type": "object",
+        "properties": {
+          "runID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "parentID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ReviewRunStart"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReviewRunStatus"
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "artifact": {
+            "$ref": "#/components/schemas/ReviewRunArtifact"
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "required": ["runID", "parentID", "request", "status", "canStop", "startedAt"],
+        "additionalProperties": false
+      },
+      "ReviewRunSummary": {
+        "type": "object",
+        "properties": {
+          "runID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "parentID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ReviewRunStart"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReviewRunStatus"
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "hasResult": {
+            "type": "boolean"
+          }
+        },
+        "required": ["runID", "parentID", "request", "status", "canStop", "startedAt", "hasResult"],
+        "additionalProperties": false
+      },
+      "ReviewRunList": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewRunSummary"
+            },
+            "maxItems": 50
+          },
+          "next": {
+            "type": "string",
+            "pattern": "^ses"
+          }
+        },
+        "required": ["runs"],
         "additionalProperties": false
       },
       "PublicSessionConsent": {
@@ -61320,6 +61960,9 @@
     {
       "name": "question",
       "description": "Question routes."
+    },
+    {
+      "name": "review"
     },
     {
       "name": "permission",
