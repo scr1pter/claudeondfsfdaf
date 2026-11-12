@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - vector-at-mention
+      - build-github-ui
   pull_request:
     # No other workflow runs the web GitHub tests, and they load shared api/_lib modules (http, abuse, persistent-store)
     # and jose, so any hosted API change, the lockfile and the Bun version in package.json start the lane. api/** takes
@@ -229,7 +230,7 @@ jobs:
         run: node script/smoke-node-bundle.ts
 
   sandbox-probe:
-    name: sandbox (${{ matrix.mode }}, ${{ matrix.scenario }})
+    name: sandbox (${{ matrix.mode }}, ${{ matrix.scenario }}, ${{ matrix.runtime || 'node' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
