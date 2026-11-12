@@ -135,9 +135,13 @@ jobs:
 
   computer-helper-windows-units:
     needs: validate-dispatch
-    name: Windows x64 native and staged diagnostics (no release evidence)
+    name: Windows x64 native and staged diagnostics (${{ matrix.diagnostic }}, no release evidence)
     if: github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'windows-units' && !inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        diagnostic: [baseline, move-probe]
     # Includes the separate source-bound stage build; each native/runtime deadline stays unchanged.
     timeout-minutes: 45
     permissions:
@@ -224,7 +228,7 @@ jobs:
           bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
           if ($LASTEXITCODE -ne 0) { throw "Required Windows conformance failed." }
       - name: Run explicitly isolated Windows scenarios
-        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        if: ${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'baseline' }}
         timeout-minutes: 5
         continue-on-error: true
         env:
@@ -285,7 +289,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          name: computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
           path: ${{ runner.temp }}/computer-win32-core.json
           if-no-files-found: ignore
           overwrite: false
@@ -294,7 +298,7 @@ jobs:
         if: ${{ always() && steps.required_protocol.outcome == 'failure' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: computer-helper-win32-direct-node-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          name: computer-helper-win32-direct-node-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
           path: ${{ runner.temp }}/computer-win32-direct-node.json
           if-no-files-found: ignore
           overwrite: false
@@ -303,7 +307,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          name: computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
           path: ${{ runner.temp }}/computer-win32-privileged.json
           if-no-files-found: ignore
           overwrite: false
@@ -322,7 +326,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "The x64 native overlay diagnostic stage failed to build." }
       - name: Run the actual medium-token staged overlay diagnostic
         id: staged_native
-        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        if: ${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'baseline' }}
         timeout-minutes: 3
         env:
           VECTOR_COMPUTER_TEST_ISOLATED: "1"
@@ -336,24 +340,24 @@ jobs:
           } elseif ($status -ne 0) {
             throw "The actual medium-token staged overlay diagnostic failed."
           }
-      - name: Diagnose the failed Stop with a separate movement probe (no release evidence)
-        if: ${{ failure() && steps.staged_native.outcome == 'failure' }}
-        continue-on-error: true
+      - name: Run the movement probe first on its fresh VM (no release evidence)
+        id: staged_move_probe
+        if: ${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'move-probe' }}
         timeout-minutes: 3
         env:
           VECTOR_COMPUTER_TEST_ISOLATED: "1"
           VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "1"
         run: |
-          "DIAGNOSTIC ONLY: movement-probe-assisted results never replace the failed baseline Stop." >> $env:GITHUB_STEP_SUMMARY
+          "DIAGNOSTIC ONLY: fresh-VM movement-probe-assisted results never replace the independent unchanged baseline Stop." >> $env:GITHUB_STEP_SUMMARY
           bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 2>&1 | ForEach-Object { "MOVE-PROBE-ONLY $_" } | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-move-probe-diagnostic.log"
           $status = $LASTEXITCODE
           "Movement probe exit code: $status (no release evidence)." >> $env:GITHUB_STEP_SUMMARY
-          if ($status -ne 0) { throw "The separate movement probe did not pass; baseline remains failed." }
+          if ($status -ne 0) { throw "The separate fresh-VM movement probe did not pass; baseline remains independent." }
       - name: Preserve the bounded staged overlay diagnostic evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          name: computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
           path: |
             ${{ runner.temp }}/computer-win32-staged-diagnostic.log
             ${{ runner.temp }}/computer-win32-move-probe-diagnostic.log

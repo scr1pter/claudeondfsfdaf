@@ -6,17 +6,20 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
-**Latest native observation.** At `9ec38ce4`, Windows diagnostic
-[43158104253](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43158104253),
-job `130982781017`, passed build, native units/version/probes and required
-protocol/lifecycle (30 passed, zero failed, one skipped). Its verified isolated
-report was 36 passed, zero failed, 11 skipped, including successful forced
-worker capture and wrapper cleanup. Artifact `13916978195` has archive SHA-256
-`f54c39d190b4f1afe062c280a517999370cde4a75b5c92a99960e1708d81203c`.
-This is one actual worker execution, not a stability guarantee. Stop still
-failed with the matching-callback/pump-progressed result described below.
-The next candidate separates a diagnostic-only MOVE from the mandatory
-unchanged Stop, and requires three fresh worker acquisitions rather than one.
+**Latest native observation.** At `8570aedb`, Windows diagnostic
+[43162088502](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43162088502),
+job `130996325266`, passed build, native units/version/probes and required
+protocol/lifecycle (30 passed, zero failed, one skipped). Verified isolated
+artifact `13918588958` is 822 bytes, with archive SHA-256
+`d37c779f22e59ee7b7629799748cd37b6ab1dd2648194c65313bd3d769f2af56`.
+Its 36 passed, zero failed, 11 skipped include the forced-worker case requiring
+all three independent fresh acquisitions. This is actual repeated worker
+execution evidence, not a stability guarantee or proof of skipped input behavior.
+Baseline Stop still failed with the authenticated matching-callback/pump-progressed
+result. The separate `MOVE-PROBE-ONLY` invocation skipped for `physical_input`
+with exit 77; it establishes no callback cause or release credit. The next
+diagnostic candidate separates baseline/probe VMs and skips the preceding
+isolated input self-test only in the diagnostic probe VM to avoid contamination.
 
 **Earlier failed native observation.** At `655ac0e6`, Windows diagnostic
 [43154307054](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154307054),
@@ -44,14 +47,13 @@ a matching DOWN receipt nor grounds to call the failure an environment skip.
 Private VIG2 diagnostics remain failure-only; external protocol, input
 authority, receipt requirements, success conditions and budgets are unchanged.
 
-**Candidate work in progress.** A closed, failure-only atomic capture
-checkpoint will preserve parent-unwind location around worker wait/exit.
-It will not participate in pixel acceptance. The next private guardian
-diagnostic will distinguish a callback carrying this guardian's full 64-bit
-own marker but lacking the injected flag, without recording hardware input,
-other tags or raw event data and without creating input or cleanup authority.
-Neither candidate is an executed result or an established fix; exact-source
-hosted verification remains pending.
+**Executed diagnostics and next candidate.** The failure-only atomic capture
+checkpoint and exact-full-own-tag/missing-injected-flag metadata compiled and
+ran at `9ec38ce4` and `8570aedb`. They do not participate in pixel acceptance or
+input/cleanup authority. The missing-injected-flag category was not observed;
+neither extension establishes the cause of the baseline Stop failure. The next
+independent-VM baseline/probe comparison is source work, not an executed result.
+It retains the original receipt predicates and authority/timing limits.
 
 **Previous scoped passes.** At `51e8f63d`, diagnostic
 [43146189453](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146189453),
@@ -68,7 +70,8 @@ source scope; they do not override the later failures or prove stability.
 
 **Current unsigned preview.** The exact `655ac0e6` preview
 [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544)
-is queued or in progress at this checkpoint. No completed packaging, signing
+has Windows/macOS final installers in progress and Linux installers queued at
+the last audit. It predates `8570aedb`; no completed final packaging, signing
 or release credit is available from it.
 
 **Integrated regression.** Ordinary full PR run
@@ -1557,3 +1560,15 @@ The same candidate strengthens the forced-worker case to require three independe
 Local checks reported for the candidate are: smoke report 45 passed / 28,050 assertions; smoke source 19 passed / 174 assertions; desktop typecheck passed. The full workflow-contract file reported 27 passed / three failed because this host's WSL Bash could not find `/bin/bash`; a second attempt selecting the expected Git Bash path also failed because Git Bash is not installed. Those three cases remain failed local executions, not passes. The focused new movement-probe workflow case passed once, with 29 cases filtered and 20 assertions; that focused pass does not replace the full file's result.
 
 Unsigned artifacts-only preview [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544) at `655ac0e6` remains pending at this documentation checkpoint. No final package success is claimed. Native Stop, repeatable capture, exact-source x64/ARM64 packaged pins/self-tests, signing/notarization, owner-device checks and publication remain separate open gates. Historical entries retain their original run and source scope; no release credit is granted here.
+
+## Three required worker acquisitions and separate probe outcome — `8570aedb`
+
+Diagnostic [43162088502](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43162088502), job `130996325266`, ran exact `8570aedbc84944fd9d03e77d721217edd8610615`. Build/native units and required core checks passed (30 passed, zero failed, one skipped). Root verified the isolated report and logs: artifact `13918588958`, 822 bytes, archive SHA-256 `d37c779f22e59ee7b7629799748cd37b6ab1dd2648194c65313bd3d769f2af56`. Isolated totals are 36 passed, zero failed and 11 skipped. The passed forced-worker case now requires all three independent fresh reads, failing on the first error without a retry. This is stronger actual process/pixel/deadline evidence than the preceding one-read pass, while still providing no stability guarantee or skipped-input proof. Earlier failures remain in the chronology.
+
+The mandatory baseline Stop failed `input_post_failed` / `guardian-observe-reply-negative-no-callback-pump-progressed`, `driver_failure`, exit 1. The separate `MOVE-PROBE-ONLY` invocation was skipped `physical_input`, exit 77. That skip neither proves any own callback was delivered nor identifies the baseline failure's cause. It cannot replace baseline status or supply release evidence.
+
+The next candidate moves baseline and probe to independent matrix VMs. Only the probe VM skips its preceding isolated input self-test, to avoid contaminating the later diagnostic. The mandatory baseline retains its checks; the probe remains diagnostic only, with the same receipt, authority, freshness, timing and cleanup rules. No result from that new layout is claimed here.
+
+Local source validation for that matrix layout passed three focused workflow tests (530 assertions; 27 filtered), desktop typechecking and formatting of the changed workflow/test files. Earlier full-file Bash failures remain recorded; these focused checks do not establish hosted or native success.
+
+The older `655ac0e6` preview `43154306544` still had Windows/macOS installers in progress and Linux installers queued at the last audit. Its successful helper builds, matrices and ordinary checks do not establish final installer success or validate the newer `8570aedb` package. Final exact-source packaging, native Stop, owner-device checks, signing/notarization and publication remain open.

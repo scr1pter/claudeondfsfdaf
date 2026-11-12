@@ -48,7 +48,13 @@ function expression(
   event = "workflow_dispatch",
   ref = "refs/heads/hands",
   needs: Record<string, unknown> = {},
-  status: { cancelled?: boolean; success?: boolean; failure?: boolean; steps?: Record<string, unknown> } = {},
+  status: {
+    cancelled?: boolean
+    success?: boolean
+    failure?: boolean
+    steps?: Record<string, unknown>
+    matrix?: Record<string, unknown>
+  } = {},
   definition = helper,
 ) {
   // GitHub permits hyphens in dotted property names; translate those accesses outside string literals.
@@ -67,6 +73,7 @@ function expression(
       success: () => status.success ?? true,
       failure: () => status.failure ?? false,
       steps: status.steps ?? {},
+      matrix: status.matrix ?? {},
       github: {
         workflow: "test",
         ref,
@@ -858,6 +865,8 @@ test("Windows unit and diagnostic lanes exercise the packed Main pin reader befo
 test("x64 diagnostics reuse bounded native checks and isolated scenarios without release evidence", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
   expect(diagnostic["runs-on"]).toBe("windows-2025")
+  expect(diagnostic.strategy).toEqual({ "fail-fast": false, matrix: { diagnostic: ["baseline", "move-probe"] } })
+  expect(diagnostic.name).toContain("${{ matrix.diagnostic }}")
   expect(diagnostic.permissions).toEqual({ contents: "read" })
   for (const key of ["outputs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
   const current = steps(diagnostic)
@@ -870,7 +879,7 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   // Only these labelled manual diagnostics enter the finite native stage; no stage archive is restored.
   const staged = current.find((step) => step.name === "Run the actual medium-token staged overlay diagnostic")!
   const probe = current.find(
-    (step) => step.name === "Diagnose the failed Stop with a separate movement probe (no release evidence)",
+    (step) => step.name === "Run the movement probe first on its fresh VM (no release evidence)",
   )!
   for (const step of current.filter((step) => step !== staged && step !== probe))
     expect(JSON.stringify(step), String(step.name)).not.toContain("--native-stage")
@@ -880,7 +889,7 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   expect(uploads).toHaveLength(4)
   expect(uploads[0]!.if).toBe("${{ always() }}")
   expect(uploads[0]!.with).toEqual({
-    name: "computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    name: "computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}",
     path: "${{ runner.temp }}/computer-win32-core.json",
     "if-no-files-found": "ignore",
     overwrite: false,
@@ -925,7 +934,7 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   )
   expect(uploads[1]!.if).toBe("${{ always() && steps.required_protocol.outcome == 'failure' }}")
   expect(uploads[1]!.with).toEqual({
-    name: "computer-helper-win32-direct-node-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    name: "computer-helper-win32-direct-node-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}",
     path: "${{ runner.temp }}/computer-win32-direct-node.json",
     "if-no-files-found": "ignore",
     overwrite: false,
@@ -941,24 +950,26 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   expect(isolated["continue-on-error"]).toBe(true)
   expect(isolated.env).toEqual({ PRIVILEGED_REQUIRED: "false", VECTOR_COMPUTER_TEST_ISOLATED: "1" })
   expect(current.indexOf(isolated)).toBeGreaterThan(current.indexOf(protocol))
-  for (const successful of [false, true])
-    for (const outcome of ["success", "failure", "skipped", "cancelled"])
-      expect(
-        expression(
-          String(isolated.if),
-          {},
-          "workflow_dispatch",
-          "refs/heads/hands",
-          {},
-          {
-            success: successful,
-            steps: { required_protocol: { outcome } },
-          },
-        ),
-      ).toBe(successful && outcome === "success")
+  for (const mode of ["baseline", "move-probe", "unknown"])
+    for (const successful of [false, true])
+      for (const outcome of ["success", "failure", "skipped", "cancelled"])
+        expect(
+          expression(
+            String(isolated.if),
+            {},
+            "workflow_dispatch",
+            "refs/heads/hands",
+            {},
+            {
+              success: successful,
+              steps: { required_protocol: { outcome } },
+              matrix: { diagnostic: mode },
+            },
+          ),
+        ).toBe(successful && outcome === "success" && mode === "baseline")
   expect(uploads[2]!.if).toBe("${{ always() }}")
   expect(uploads[2]!.with).toEqual({
-    name: "computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    name: "computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}",
     path: "${{ runner.temp }}/computer-win32-privileged.json",
     "if-no-files-found": "ignore",
     overwrite: false,
@@ -995,21 +1006,26 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     "}",
   ])
   for (const step of [electron, stage, staged]) {
-    expect(step.if, String(step.name)).toBe("${{ success() && steps.required_protocol.outcome == 'success' }}")
+    expect(step.if, String(step.name)).toBe(
+      step === staged
+        ? "${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'baseline' }}"
+        : "${{ success() && steps.required_protocol.outcome == 'success' }}",
+    )
     expect(step["continue-on-error"], String(step.name)).toBeUndefined()
     expect(step.shell, String(step.name)).toBeUndefined()
-    for (const successful of [false, true])
-      for (const outcome of ["success", "failure", "skipped", "cancelled"])
-        expect(
-          expression(
-            String(step.if),
-            {},
-            "workflow_dispatch",
-            "refs/heads/hands",
-            {},
-            { success: successful, steps: { required_protocol: { outcome } } },
-          ),
-        ).toBe(successful && outcome === "success")
+    for (const mode of ["baseline", "move-probe", "unknown"])
+      for (const successful of [false, true])
+        for (const outcome of ["success", "failure", "skipped", "cancelled"])
+          expect(
+            expression(
+              String(step.if),
+              {},
+              "workflow_dispatch",
+              "refs/heads/hands",
+              {},
+              { success: successful, steps: { required_protocol: { outcome } }, matrix: { diagnostic: mode } },
+            ),
+          ).toBe(successful && outcome === "success" && (step !== staged || mode === "baseline"))
   }
   expect(current.indexOf(electron)).toBeGreaterThan(current.indexOf(uploads[2]!))
   expect(current.indexOf(stage)).toBeGreaterThan(current.indexOf(electron))
@@ -1018,7 +1034,7 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
   // The staged evidence is the bounded log and stage manifest only, never the stage itself.
   expect(uploads[3]!.if).toBe("${{ always() }}")
   expect(uploads[3]!.with).toEqual({
-    name: "computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    name: "computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}",
     path: expect.any(String),
     "if-no-files-found": "ignore",
     overwrite: false,
@@ -1036,17 +1052,24 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
 })
 
-test("a movement probe is a separate failure-only diagnostic that cannot waive baseline Stop", () => {
-  const current = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
+test("a fresh-VM movement probe cannot contaminate or waive the independent unchanged baseline Stop", () => {
+  const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
+  const current = steps(diagnostic)
+  expect(diagnostic.strategy).toEqual({ "fail-fast": false, matrix: { diagnostic: ["baseline", "move-probe"] } })
+  expect(diagnostic["runs-on"]).toBe("windows-2025")
+  expect(diagnostic["continue-on-error"]).toBeUndefined()
+  expect(diagnostic.outputs).toBeUndefined()
+  expect(current.some((step) => String(step.uses).includes("download-artifact"))).toBe(false)
   const baseline = current.find((step) => step.id === "staged_native")!
-  const probe = current.find(
-    (step) => step.name === "Diagnose the failed Stop with a separate movement probe (no release evidence)",
-  )!
+  const probe = current.find((step) => step.id === "staged_move_probe")!
+  const isolated = current.find((step) => step.name === "Run explicitly isolated Windows scenarios")!
   const upload = current.find((step) => step.name === "Preserve the bounded staged overlay diagnostic evidence")!
   expect(baseline["continue-on-error"]).toBeUndefined()
   expect(record(baseline.env).VECTOR_COMPUTER_SMOKE_MOVE_PROBE).toBe("0")
-  expect(probe.if).toBe("${{ failure() && steps.staged_native.outcome == 'failure' }}")
-  expect(probe["continue-on-error"]).toBe(true)
+  expect(probe.if).toBe(
+    "${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'move-probe' }}",
+  )
+  expect(probe["continue-on-error"]).toBeUndefined()
   expect(probe["timeout-minutes"]).toBe(3)
   expect(probe.env).toEqual({ VECTOR_COMPUTER_TEST_ISOLATED: "1", VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "1" })
   expect(String(probe.run).match(/--native-stage/g)).toHaveLength(1)
@@ -1054,23 +1077,36 @@ test("a movement probe is a separate failure-only diagnostic that cannot waive b
   expect(String(probe.run)).toContain('ForEach-Object { "MOVE-PROBE-ONLY $_" }')
   expect(String(probe.run)).toContain("computer-win32-move-probe-diagnostic.log")
   expect(String(probe.run)).not.toContain('FilePath "$env:RUNNER_TEMP/computer-win32-staged-diagnostic.log"')
+  expect(String(probe.run)).toContain("$status = $LASTEXITCODE")
+  expect(String(probe.run)).toContain("if ($status -ne 0) { throw")
+  expect(String(probe.run)).not.toMatch(/exit 0|--no-sandbox|Remove-Item|SendInput|Clear/)
   expect(current.indexOf(probe)).toBeGreaterThan(current.indexOf(baseline))
   expect(current.indexOf(upload)).toBeGreaterThan(current.indexOf(probe))
-  for (const failure of [false, true])
-    for (const outcome of ["success", "failure", "skipped", "cancelled"])
-      expect(
-        expression(
-          String(probe.if),
-          {},
-          "workflow_dispatch",
-          "refs/heads/hands",
-          {},
-          {
-            failure,
-            steps: { staged_native: { outcome } },
-          },
-        ),
-      ).toBe(failure && outcome === "failure")
+  for (const step of current.filter((step) => String(step.uses).includes("upload-artifact")))
+    expect(String(record(step.with).name)).toEndWith("-${{ matrix.diagnostic }}")
+  // The probe VM performs no prior isolated desktop scenario or baseline DOWN. Conversely,
+  // the baseline VM never runs the probe, and its result cannot be replaced by the other leg.
+  for (const mode of ["baseline", "move-probe", "unknown"])
+    for (const successful of [false, true])
+      for (const outcome of ["success", "failure", "skipped", "cancelled"])
+        for (const previous of ["success", "failure", "skipped", "cancelled"])
+          for (const step of [isolated, baseline, probe])
+            expect(
+              expression(
+                String(step.if),
+                {},
+                "workflow_dispatch",
+                "refs/heads/hands",
+                {},
+                {
+                  success: successful,
+                  failure: !successful,
+                  steps: { required_protocol: { outcome }, staged_native: { outcome: previous } },
+                  matrix: { diagnostic: mode },
+                },
+              ),
+              `${String(step.name)}: ${mode}/${successful}/${outcome}/${previous}`,
+            ).toBe(successful && outcome === "success" && mode === (step === probe ? "move-probe" : "baseline"))
 })
 
 test("the x64 diagnostic logs closed failed stages and codes without exposing native payloads", () => {

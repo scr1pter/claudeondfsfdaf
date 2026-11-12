@@ -1,26 +1,36 @@
 # Vector Hands build: deviations from the contract
 
-The separate movement-probe job step also prefixes every output line with
-`MOVE-PROBE-ONLY` and writes a distinct log. It cannot replace the mandatory
-baseline failure or supply release outputs. Its final focused routing check
-passed one test with 21 assertions; the earlier 20-assertion result below is
-retained at its earlier source scope.
+Current continuation: exact `8570aedb` diagnostic
+[43162088502](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43162088502),
+job `130996325266`, passed native build/units and core 30/0/1. Verified isolated
+artifact `13918588958` (822 bytes; SHA-256
+`d37c779f22e59ee7b7629799748cd37b6ab1dd2648194c65313bd3d769f2af56`)
+reports 36 passed, zero failed, 11 skipped, including all three independently
+required fresh worker acquisitions. This is execution evidence, not a stability
+guarantee. Baseline Stop still failed; the separate `MOVE-PROBE-ONLY` call skipped
+for `physical_input` with exit 77 and supplies no callback cause or release credit.
+The next source candidate uses independent baseline/probe VMs, with the preceding
+isolated input self-test skipped only in the diagnostic probe VM. No receipt or
+authority relaxation is proposed.
 
-The current cleanup candidate gives only Node's removal of the owned verified
+The movement-probe log prefixes every output line with `MOVE-PROBE-ONLY` and
+cannot replace baseline failure or supply release outputs. Its earlier final
+focused routing check passed one test with 21 assertions; the 20-assertion
+result below is retained at its earlier source scope.
+
+The cleanup change gives only Node's removal of the owned verified
 synthetic fixture directory five transient filesystem retries with 100 ms linear
 backoff. Windows may still be releasing a terminated worker's image after the
 acquisition ticket expires. Watcher timers join, but this does not prove the
 specific lock behind `655ac0e6`'s wrapper cleanup failure. Persistent removal
 errors still fail. No capture, input, native acceptance deadline or test run is
-retried or extended. Final local checks passed: report 44/27,704 assertions,
-selftest 48/1,025, source 19/174, and desktop typechecking. Native proof remains
-pending for the checkpoint and unflagged-marker candidates.
-
-Current continuation: exact `655ac0e6` native validation still fails capture
-and staged Stop. The [latest scoped record](#isolated-worker-and-guardian-diagnostic-observation--655ac0e6)
-distinguishes the observed failure phases from unproven causes and retains the
-earlier `51e8f63d` passes below. Pending diagnostic source and an unfinished
-unsigned preview supply no packaging, signing or release credit.
+retried or extended. Its local checks passed: report 44/27,704 assertions,
+selftest 48/1,025, source 19/174, and desktop typechecking. Checkpoint and
+unflagged-marker source subsequently compiled and executed at `9ec38ce4` and
+`8570aedb`; the unflagged category was not observed. Earlier `655ac0e6` capture
+and wrapper failures remain recorded below rather than being rewritten.
+The older `655ac0e6` unsigned preview still had Windows/macOS final installers
+in progress and Linux queued at the last audit; final success is not claimed.
 
 ## 2026-10-28 E0 (shared schema files)
 
@@ -1233,3 +1243,11 @@ The next candidate introduces a never-shipped opt-in movement diagnostic, not a 
 Source/local validation for this candidate is recorded separately from native proof: smoke report 45 passed / 28,050 assertions; smoke source 19 passed / 174 assertions; desktop typecheck passed. Full workflow-contract execution was 27 passed / three failed when WSL Bash lacked `/bin/bash`; an attempted Git Bash selection also failed because Git Bash is absent. The focused new probe workflow case was one passed / 29 filtered / 20 assertions. These facts do not promote the three failed local cases or any pending hosted/native execution to passed.
 
 Preview [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544) at `655ac0e6` is still pending at this checkpoint and supplies no completed final packaging claim. The 750 ms native acquisition/postflight, 50 ms input/UIA/StartCapture and public publication limits remain unchanged. Native Stop, repeated worker reliability, final exact-source x64/ARM64 packaged checks, signing/notarization, owner-device proof and publication remain open. No release credit.
+
+## Executed three-read worker check and next independent-VM comparison — `8570aedb`
+
+At exact `8570aedbc84944fd9d03e77d721217edd8610615`, run [43162088502](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43162088502), job `130996325266`, passed build/native units and core 30 passed / zero failed / one skipped. Root verified isolated artifact `13918588958`, 822 bytes, archive SHA-256 `d37c779f22e59ee7b7629799748cd37b6ab1dd2648194c65313bd3d769f2af56`, and its logs. Isolated totals were 36 passed, zero failed and 11 skipped. The forced-worker case passed all three independently required fresh acquisitions. That result supersedes pending-execution language only for this exact candidate; it does not prove stable timing, skipped input behavior or the cause of prior failures.
+
+Baseline Stop remained failed: `input_post_failed`, `guardian-observe-reply-negative-no-callback-pump-progressed`, `driver_failure`, exit 1. The separate diagnostic MOVE call skipped `physical_input` with exit 77. Neither that skip nor the missing callback evidence justifies an environment-wide cause, an input-authority change, release credit or a passing baseline Stop.
+
+The next source candidate separates baseline and probe onto independent matrix VMs. Only the diagnostic probe omits its preceding isolated input self-test to avoid contamination. Baseline checks remain mandatory; diagnostic output remains separately labelled and cannot satisfy release proof. Original DOWN matching, freshness, timing and cleanup authority remain unchanged. This next matrix layout is unexecuted at this checkpoint. The older `655ac0e6` preview has no completed final installer result at the last audit, and final exact-source packaging and owner/release gates remain open.
