@@ -37,7 +37,9 @@ export async function linuxIsolationDefines(ci = false) {
 
 export async function linuxIsolationBuildPlugin(ci = false): Promise<BunPlugin> {
   const literal = await linuxIsolationDefines(ci)
+  const sha256: string = JSON.parse(literal.VECTOR_LINUX_ISOLATION_ASSET).sha256
   const module = fileURLToPath(new URL("../packages/engine/src/cli/cmd/github.isolation-build.ts", import.meta.url))
+  const core = fileURLToPath(new URL("../packages/core/src/process-isolation/build.ts", import.meta.url))
   return {
     name: "vector-linux-isolation-asset",
     setup(build) {
@@ -48,6 +50,17 @@ export async function linuxIsolationBuildPlugin(ci = false): Promise<BunPlugin> 
             `export const enabled = ${literal.VECTOR_LINUX_ISOLATION_CI}`,
             `export const asset = Object.freeze(${literal.VECTOR_LINUX_ISOLATION_ASSET})`,
             'export * as GithubIsolationBuild from "./github.isolation-build"',
+          ].join("\n"),
+          loader: "ts",
+        }
+      })
+      build.onLoad({ filter: /[/\\]process-isolation[/\\]build\.ts$/ }, (args) => {
+        if (args.path !== core) return
+        return {
+          contents: [
+            `export const enabled = ${literal.VECTOR_LINUX_ISOLATION_CI}`,
+            `export const entrySHA = ${JSON.stringify(sha256)}`,
+            'export * as LinuxIsolationBuild from "./build"',
           ].join("\n"),
           loader: "ts",
         }

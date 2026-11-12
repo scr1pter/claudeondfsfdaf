@@ -58,7 +58,7 @@ const createEmbeddedWebUIBundle = async () => {
 
 const embeddedFileMap = skipEmbedWebUi ? null : await createEmbeddedWebUIBundle()
 // The brain's background reader, which carries this build's version and channel (bundleBrainWorker).
-const brainWorkerModule = `export default ${JSON.stringify(await bundleBrainWorker({ version: Script.version, channel: Script.channel }))}`
+const brainWorkerModule = `export default ${JSON.stringify(await bundleBrainWorker({ version: Script.version, channel: Script.channel }, isolation))}`
 
 const allTargets: {
   os: string

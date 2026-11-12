@@ -3,6 +3,7 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
+import { LinuxIsolationBuild } from "@vectordevai/core/process-isolation/build"
 import { GithubIsolationBuild } from "./github.isolation-build"
 
 // Only Root's exact-module build plugin replaces the inactive source stub. No ambient global/env lookup exists.
@@ -391,7 +392,24 @@ try:
 finally: os.close(lock)
 `
 
+/** Check both directions before a launcher selects its pre-capture implementation. */
+export function assertBuildCoherence(
+  core: { readonly enabled: boolean; readonly entrySHA: string | undefined },
+  engine: { readonly enabled: boolean; readonly asset: Asset | undefined },
+) {
+  if (core.enabled !== engine.enabled) refused()
+  if (!core.enabled && core.entrySHA === undefined && engine.asset === undefined) return
+  if (
+    !engine.asset ||
+    !/^[a-f0-9]{64}$/.test(core.entrySHA ?? "") ||
+    core.entrySHA !== engine.asset.sha256 ||
+    engine.asset.sha256 !== digest(engine.asset.entry)
+  )
+    refused()
+}
+
 export function enabled() {
+  assertBuildCoherence(LinuxIsolationBuild, GithubIsolationBuild)
   return GithubIsolationBuild.enabled
 }
 

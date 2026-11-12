@@ -21,8 +21,8 @@ const generated = await import("./generate.ts")
 await prepareGitLab()
 
 // Keep the worker build identity and the base64 transport used by Electron.
-const brainWorker = await bundleBrainWorker({ version: Script.version, channel: Script.channel })
 const isolation = await linuxIsolationBuildPlugin(linuxIsolationCIMode(process.argv, process.env.GITHUB_ACTIONS))
+const brainWorker = await bundleBrainWorker({ version: Script.version, channel: Script.channel }, isolation)
 
 const result = await Bun.build({
   target: "node",

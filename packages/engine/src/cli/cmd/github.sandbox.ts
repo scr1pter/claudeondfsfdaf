@@ -431,9 +431,10 @@ export async function copyBundleFile(
 
 export async function prepare(env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
+  const native = GithubIsolation.enabled()
   const selected = mode(env)
   if (env.RUNNER_ENVIRONMENT !== "github-hosted") throw refused()
-  if (env.VECTOR_AGENT_SUDO !== "1" && GithubIsolation.enabled()) LinuxIsolation.hostedTemporary(env.RUNNER_TEMP)
+  if (env.VECTOR_AGENT_SUDO !== "1" && native) LinuxIsolation.hostedTemporary(env.RUNNER_TEMP)
   const workspace = await checkout(env)
   if ((await command("/usr/bin/id", ["-u", USER], [0, 1])).code === 0) throw refused()
   if (
@@ -454,7 +455,7 @@ export async function prepare(env: Env = process.env) {
     mode: selected,
     sudo: env.VECTOR_AGENT_SUDO === "1",
     prepared: false,
-    ...(env.VECTOR_AGENT_SUDO !== "1" && GithubIsolation.enabled() ? { nativeRequired: true as const } : {}),
+    ...(env.VECTOR_AGENT_SUDO !== "1" && native ? { nativeRequired: true as const } : {}),
   }
   // Record cleanup authority before creating the container or moving the checkout.
   await writeState(env, state, true)
@@ -549,7 +550,7 @@ export async function prepare(env: Env = process.env) {
   if (groups !== String(state.gid)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/sudo", "-n", "true"], [0, 1])).code !== (state.sudo ? 0 : 1)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
-  if (!state.sudo && GithubIsolation.enabled()) {
+  if (!state.sudo && native) {
     // Compile-time CI only. Persist intent before any root installation or native child exists.
     const adapter = GithubIsolation.fromBuild(env.RUNNER_TEMP)
     if (state.uid === undefined || state.gid === undefined) throw refused()
@@ -654,6 +655,7 @@ async function executable(name: string, env: Env) {
 
 export async function run(args: readonly string[], env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
+  const native = GithubIsolation.enabled()
   mode(env)
   if (!args.length || args.some((value) => value.includes("\0"))) throw refused()
   const workspace = await checkout(env)
@@ -672,7 +674,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
       state.mode !== env.VECTOR_MODE)
   )
     throw refused()
-  if (hosted && !state!.sudo && (state!.nativeRequired || state!.native || GithubIsolation.enabled())) {
+  if (hosted && !state!.sudo && (state!.nativeRequired || state!.native || native)) {
     // A native intent can never select a legacy launch on missing bytes, changed receipts or another build.
     await GithubIsolation.fromBuild(env.RUNNER_TEMP).validate(nativeState(state!))
     LinuxIsolation.assertUnmaskedRuntime(node)
@@ -832,8 +834,9 @@ export async function run(args: readonly string[], env: Env = process.env) {
 
 export async function finish(env: Env = process.env) {
   if (process.platform !== "linux") throw refused()
+  const native = GithubIsolation.enabled()
   mode(env)
-  if (env.RUNNER_ENVIRONMENT === "github-hosted" && env.VECTOR_AGENT_SUDO !== "1" && GithubIsolation.enabled())
+  if (env.RUNNER_ENVIRONMENT === "github-hosted" && env.VECTOR_AGENT_SUDO !== "1" && native)
     LinuxIsolation.hostedTemporary(env.RUNNER_TEMP)
   let cancelled = false
   const interrupt = () => {
@@ -867,9 +870,7 @@ export async function finish(env: Env = process.env) {
     const nativeReceipt = state?.native
       ? await GithubIsolation.fromBuild(env.RUNNER_TEMP).cleanup(nativeState(state))
       : undefined
-    const nativeMissing = Boolean(
-      state && !state.sudo && (state.nativeRequired || GithubIsolation.enabled()) && !state.native,
-    )
+    const nativeMissing = Boolean(state && !state.sudo && (state.nativeRequired || native) && !state.native)
     let isolationError: unknown = nativeMissing || nativeReceipt?.artifactsAllowed === false ? refused() : undefined
     try {
       if (nativeMissing) throw refused()

@@ -71,23 +71,32 @@ test("ambient globals cannot activate the source module or supply native bytes",
   }
 })
 
-test("the exact module replacement embeds the identical asset in actual Node and Bun bundles", async () => {
-  const entrypoint = fileURLToPath(new URL("../packages/engine/src/cli/cmd/github.isolation-build.ts", import.meta.url))
+test("exact Core and Engine modules share the compiled mode and asset hash in actual Node and Bun bundles", async () => {
+  const entrypoints = [
+    "../packages/engine/src/cli/cmd/github.isolation-build.ts",
+    "../packages/core/src/process-isolation/build.ts",
+  ].map((relative) => fileURLToPath(new URL(relative, import.meta.url)))
   const source = await readFile(new URL("../packages/core/src/process-isolation/linux/entry.py", import.meta.url))
   const sha256 = createHash("sha256").update(source).digest("hex")
   for (const target of ["node", "bun"] as const) {
-    const bundle = await Bun.build({
-      entrypoints: [entrypoint],
-      target,
-      plugins: [await linuxIsolationBuildPlugin(true)],
-      write: false,
-      format: "esm",
-    })
-    expect(bundle.success).toBe(true)
-    expect(bundle.outputs).toHaveLength(1)
-    const output = await bundle.outputs[0]!.text()
-    expect(output).toContain(sha256)
-    expect(output).toContain("var enabled = true")
-    // Inspect output only; neither the bundle nor its Python string is executed.
+    for (const ci of [false, true]) {
+      const isolation = await linuxIsolationBuildPlugin(ci)
+      // Reuse the captured decision/bytes just as the main build and its separately bundled worker do.
+      for (const entrypoint of entrypoints) {
+        const bundle = await Bun.build({
+          entrypoints: [entrypoint],
+          target,
+          plugins: [isolation],
+          write: false,
+          format: "esm",
+        })
+        expect(bundle.success).toBe(true)
+        expect(bundle.outputs).toHaveLength(1)
+        const output = await bundle.outputs[0]!.text()
+        expect(output).toContain(sha256)
+        expect(output).toContain(`var enabled = ${ci}`)
+        // Inspect output only; neither the bundle nor its Python string is executed.
+      }
+    }
   }
 })
