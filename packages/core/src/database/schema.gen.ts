@@ -49,6 +49,29 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`review_request\` (
+          \`parent_session_id\` text NOT NULL,
+          \`request_id\` text NOT NULL,
+          \`owner_nonce\` text NOT NULL,
+          \`owner\` text,
+          \`phase\` text DEFAULT 'settled' NOT NULL,
+          \`run_id\` text,
+          \`request\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`review_request_pk\` PRIMARY KEY(\`parent_session_id\`, \`request_id\`),
+          CONSTRAINT \`fk_review_request_parent_session_id_session_id_fk\` FOREIGN KEY (\`parent_session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`review_session_fence\` (
+          \`session_id\` text PRIMARY KEY,
+          \`owner_nonce\` text NOT NULL,
+          \`owner\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_review_session_fence_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_audience\` (
           \`session_id\` text PRIMARY KEY,
           \`owner_only\` integer DEFAULT false NOT NULL,
@@ -337,6 +360,7 @@ export default {
         `CREATE INDEX \`background_job_status_directory_idx\` ON \`background_job\` (\`status\`,\`directory\`);`,
       )
       yield* tx.run(`CREATE INDEX \`background_job_parent_idx\` ON \`background_job\` (\`parent_session_id\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`review_request_run_id_unique\` ON \`review_request\` (\`run_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_lineage_parent_idx\` ON \`session_lineage\` (\`parent_id\`);`)
       yield* tx.run(
         `CREATE INDEX \`session_private_directory_session_idx\` ON \`session_private_directory\` (\`session_id\`);`,

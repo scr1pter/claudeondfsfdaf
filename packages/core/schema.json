@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "d3291447-ae22-4c11-ba89-94887ee18a08",
+  "id": "146d5c74-9159-496c-9a18-f67500e03017",
   "prevIds": [
-    "f985c9de-b5cb-45b9-9ee2-cf84b2b1344c"
+    "7827100c-a2cb-4e60-b147-e75fbdce05bc"
   ],
   "ddl": [
     {
@@ -16,6 +16,14 @@
     },
     {
       "name": "data_migration",
+      "entityType": "tables"
+    },
+    {
+      "name": "review_request",
+      "entityType": "tables"
+    },
+    {
+      "name": "review_session_fence",
       "entityType": "tables"
     },
     {
@@ -409,6 +417,126 @@
       "name": "time_completed",
       "entityType": "columns",
       "table": "data_migration"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_session_id",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_nonce",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'settled'",
+      "generated": null,
+      "name": "phase",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "review_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "review_session_fence"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_nonce",
+      "entityType": "columns",
+      "table": "review_session_fence"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner",
+      "entityType": "columns",
+      "table": "review_session_fence"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "review_session_fence"
     },
     {
       "type": "text",
@@ -2192,6 +2320,36 @@
     },
     {
       "columns": [
+        "parent_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_review_request_parent_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "review_request"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_review_session_fence_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "review_session_fence"
+    },
+    {
+      "columns": [
         "session_id"
       ],
       "tableTo": "session",
@@ -2402,6 +2560,16 @@
     },
     {
       "columns": [
+        "parent_session_id",
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "review_request_pk",
+      "entityType": "pks",
+      "table": "review_request"
+    },
+    {
+      "columns": [
         "session_id",
         "parent_id"
       ],
@@ -2465,6 +2633,15 @@
       "nameExplicit": false,
       "name": "data_migration_pk",
       "table": "data_migration",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "review_session_fence_pk",
+      "table": "review_session_fence",
       "entityType": "pks"
     },
     {
@@ -2669,6 +2846,20 @@
       "name": "background_job_parent_idx",
       "entityType": "indexes",
       "table": "background_job"
+    },
+    {
+      "columns": [
+        {
+          "value": "run_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "review_request_run_id_unique",
+      "entityType": "indexes",
+      "table": "review_request"
     },
     {
       "columns": [
