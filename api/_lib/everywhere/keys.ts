@@ -131,6 +131,13 @@ function user(installationKey: string, userId: string) {
 
 export const everywhereKeys = {
   install: (installationKey: string) => key("install", installation(installationKey)),
+  readyDevices: (accountId: string) => key("readydevices", account(accountId)),
+  accountClosed: (accountId: string) => key("closed", account(accountId)),
+  accountStates: (accountId: string) => key("states", account(accountId)),
+  closingInstalls: () => key("installs", "closing"),
+  installEpoch: (installationKey: string) => key("epoch", installation(installationKey)),
+  installHold: (installationKey: string, authority: string) => key("hold", installation(installationKey), freePart(authority)),
+  controlReceipt: (platformId: string, installationKey: string, event: string) => key("control", platform(platformId), installation(installationKey), freePart(event)),
   installs: (accountId: string) => key("installs", account(accountId)),
   link: (installationKey: string, userId: string) =>
     key("link", installation(installationKey), user(installationKey, userId)),

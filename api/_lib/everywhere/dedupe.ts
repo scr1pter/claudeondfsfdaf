@@ -1,3 +1,4 @@
+import { luaKeyTypes } from "./lua.js"
 import { JOB_ID_PATTERN, LIMITS, type PlatformId } from "../../../packages/schema/src/everywhere.js"
 import { ApiError } from "../http.js"
 import { KEEP_MS, everywhereKeys } from "./keys.js"
@@ -40,7 +41,7 @@ export async function claimDelivery(store: Store, platform: PlatformId, delivery
 }
 
 /** Marks a claimed delivery done, so retries in the next 7 days are answered at once. */
-export const FINISH_DELIVERY_SCRIPT = [
+export const FINISH_DELIVERY_SCRIPT = luaKeyTypes(["string"]) + [
   "local current = redis.call('GET', KEYS[1])",
   "if current and string.sub(current, 1, 4) == 'job:' then return 0 end",
   "if ARGV[2] ~= '' and current ~= ARGV[2] then return 0 end",

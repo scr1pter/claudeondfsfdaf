@@ -2,6 +2,7 @@ import type { PlatformId } from "../../../packages/schema/src/everywhere.js"
 import type { SwitchState } from "../../../packages/schema/src/everywhere-policy.js"
 import { readConfig, sponsorListed, type EverywhereConfig } from "./config.js"
 import { readEverywhereSwitch, readRemoteSwitch } from "./switch.js"
+import { missingAccountAuthority, type AccountAuthorityPort } from "./authority.js"
 
 export type Repository = { readonly id: number; readonly fullName: string; readonly shared: boolean }
 
@@ -13,6 +14,7 @@ export type PreparedDispatch = {
 }
 
 export type Ports = {
+  readonly accountAuthority?: AccountAuthorityPort
   readonly presence: (account: string) => Promise<{
     readonly online: boolean
     readonly computers: number
@@ -53,6 +55,7 @@ export type Ports = {
 /** Every missing integration is unavailable; an account allowlist grants only the Everywhere pilot perk. */
 export function safePorts(config: EverywhereConfig = readConfig()): Ports {
   return {
+    accountAuthority: missingAccountAuthority,
     presence: async () => ({ online: false, computers: 0, reason: "not-configured" }),
     offer: async () => "unavailable",
     binding: async () => undefined,

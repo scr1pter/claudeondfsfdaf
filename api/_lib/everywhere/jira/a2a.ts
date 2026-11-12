@@ -3,6 +3,7 @@ import { LIMITS, TERMINAL_STATES, createJobId, decodeInboundTrigger, isIssueKey,
 import { renderEnd } from "../../../../packages/schema/src/everywhere-policy.js"
 import { ApiError, json, readRawBody, requireMethod, type ApiRequest, type ApiResponse } from "../../http.js"
 import { after } from "../after.js"
+import { checkAccount } from "../authority.js"
 import { platformOn } from "../config.js"
 import { seal } from "../crypto.js"
 import { eraseInstallation } from "../erase.js"
@@ -42,6 +43,8 @@ export function createJiraRoutes(deps: JiraDeps) {
     if (!task || task.record.installation !== installation(invocation) || task.record.forgeInstallationId !== invocation.installationId ||
       task.record.userId !== invocation.principal || (current ? task.record.authority !== installationAuthority(current) ||
         current.record.forgeInstallationId !== invocation.installationId : task.record.authority !== "unconnected")) return undefined
+    if (current) await checkAccount(ctx(), current.record.connector)
+    if (task.record.account) await checkAccount(ctx(), task.record.account)
     if (task.record.account && (await readLinkSnapshot(ctx().store, task.record.installation, task.record.userId))?.record.account !== task.record.account) return undefined
     return task
   }
@@ -269,7 +272,7 @@ export function createJiraRoutes(deps: JiraDeps) {
       await consume(invocation)
       const record = await readInstallSnapshot(ctx().store, installation(invocation))
       if (!record || record.record.forgeInstallationId !== invocation.installationId) return json(response, 200, { erased: false })
-      await eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation(invocation), "uninstalled")
+      await eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation(invocation), "uninstalled", { expected: record })
       return json(response, 200, { erased: true })
     } catch { return json(response, 401, { error: { code: "JIRA_INVOCATION_INVALID" } }) }
   }

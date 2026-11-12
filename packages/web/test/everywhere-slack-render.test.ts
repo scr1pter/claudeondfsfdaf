@@ -10,6 +10,7 @@ import { slackPlan, slackResult } from "../../../api/_lib/everywhere/slack/rende
 import type { JobView } from "../../../api/_lib/everywhere/platform"
 import { configuredPlatforms } from "../../../api/_lib/everywhere/runtime"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
+import { seedJobAuthority } from "./lib/everywhere-job-authority"
 import { FakeSlack, slackFixture } from "./lib/everywhere-slack"
 
 installFetchGuard()
@@ -22,6 +23,7 @@ async function fixture() {
   native.answer = undefined
   const f = await slackFixture()
   const reply = { ...f.parsed.reply, user: f.trigger.actor.userId, installRevision: f.record.revision! }
+  await seedJobAuthority(f.context(), { platform: "slack", installation: f.installation, sponsor: f.account, requester: { userId: f.trigger.actor.userId, account: f.account } })
   const created = await createJob(f.context(), { platform: "slack", installation: f.installation, kind: "mention", sponsor: f.account,
     requester: { userId: f.trigger.actor.userId, account: f.account }, repository: { id: 101, fullName: "acme/app", shared: false },
     shared: true, task: "Fix login <@UATTACK>", context: [], reply })
@@ -143,10 +145,10 @@ test("reconnect during delayed progress stops later effects, and terminal retrie
   await recordInstall(f.context(), { account: f.account, event: "install", grant: { installation: f.installation, token: f.token,
     botUserId: f.record.botUserId, scopes: f.record.scopes, installer: { admin: true, userId: f.trigger.actor.userId } } })
   release()
-  await expect(progress).rejects.toMatchObject({ code: "SLACK_AUTHORITY_CHANGED" })
+  await expect(progress).rejects.toMatchObject({ code: "EVERYWHERE_AUTHORITY_CHANGED" })
   const before = native.calls.length
   native.answer = undefined
-  await expect(createSlackAdapter(f.deps).finish(f.view, { text: "Old result", privateText: "Old private summary" })).rejects.toMatchObject({ code: "SLACK_AUTHORITY_CHANGED" })
+  await expect(createSlackAdapter(f.deps).finish(f.view, { text: "Old result", privateText: "Old private summary" })).rejects.toMatchObject({ code: "EVERYWHERE_AUTHORITY_CHANGED" })
   expect(native.calls).toHaveLength(before)
   expect(native.calls.map((call) => call.method)).toEqual(["agents.sessions.setStatus"])
 })

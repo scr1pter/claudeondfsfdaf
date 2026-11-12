@@ -45,7 +45,6 @@ import { KEEP_MS, everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { readCounts } from "../../../api/_lib/everywhere/limits"
 import { ownOfferKeys, verifyOffer } from "../../../api/_lib/everywhere/offer"
 import {
-  everywhereStore,
   runScript,
   storeUnavailable,
   type Store,
@@ -54,7 +53,8 @@ import {
 import { TIMING, createJobId, decodeJob, type Settle } from "../../../packages/schema/src/everywhere"
 import { everywhereEnv } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
+import { seedJobAuthority } from "./lib/everywhere-job-authority"
+import { FakeStore, realRedis, useKv, type RealRedis, testEverywhereStore, testAccountAuthority } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -90,11 +90,11 @@ let fake: FakeStore
 let store: Store
 beforeEach(() => {
   fake = new FakeStore()
-  store = everywhereStore(fake.fetch)
+  store = testEverywhereStore(fake.fetch)
 })
 
 function ctx(extra: Partial<JobsContext> = {}): JobsContext {
-  return { store, keys: KEYS, now: fake.clock.now, offer: OFFER, ...extra }
+  return { store, keys: KEYS, now: fake.clock.now, offer: OFFER, accountAuthority: testAccountAuthority, ...extra }
 }
 
 function slackJob(extra: Partial<NewJob> = {}): NewJob {
@@ -114,6 +114,7 @@ function slackJob(extra: Partial<NewJob> = {}): NewJob {
 }
 
 async function created(input: NewJob = slackJob(), extra: Partial<JobsContext> = {}) {
+  await seedJobAuthority(ctx(), input)
   const verdict = await createJob(ctx(extra), input)
   if (!verdict.ok) throw new Error(`createJob refused: ${verdict.code}`)
   return verdict.job
@@ -185,7 +186,9 @@ describe("creating a job", () => {
       context: slackJob().context,
       label: "Alice U0ALICE01",
     })
-    expect(openReply(ctx(), job)).toEqual({ channel: "C0123", thread: "1731335400.000100" })
+    const authority = await seedJobAuthority(ctx(), slackJob())
+    expect(openReply(ctx(), job)).toEqual({ channel: "C0123", thread: "1731335400.000100",
+      installRevision: authority!.installRevision, linkRevision: authority!.linkRevision })
     for (const key of [
       everywhereKeys.jobs(ALICE),
       everywhereKeys.installationJobs(SLACK),
@@ -197,6 +200,9 @@ describe("creating a job", () => {
   })
 
   test("a job a computer would refuse is never made", async () => {
+    await seedJobAuthority(ctx(), slackJob())
+    const before = structuredClone(fake.data)
+    const expiry = structuredClone(fake.expires)
     const refused = [
       slackJob({ task: "   " }),
       slackJob({ context: Array.from({ length: 31 }, () => ({ from: "teammate" as const, text: "x" })) }),
@@ -211,7 +217,8 @@ describe("creating a job", () => {
       const verdict = await createJob(ctx(), input)
       expect(verdict.ok).toBe(false)
     }
-    expect(fake.data.size).toBe(0)
+    expect(fake.data).toEqual(before)
+    expect(fake.expires).toEqual(expiry)
   })
 
   test("a GitHub job carries a reference only, and a Linear job its issue key", async () => {
@@ -244,8 +251,10 @@ describe("creating a job", () => {
     expect((await cancelJob(ctx(), jobs[0]!.jid)).ok).toBe(true)
     expect((await createJob(ctx(), slackJob())).ok).toBe(true)
     // Another sponsor has room of its own.
+    const bob = slackJob({ installation: SLACK_OTHER, sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } })
+    await seedJobAuthority(ctx(), bob)
     expect(
-      (await createJob(ctx(), slackJob({ sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))).ok,
+      (await createJob(ctx(), bob)).ok,
     ).toBe(true)
   })
 })
@@ -807,7 +816,7 @@ describe("timeouts", () => {
 
   test("the account sweep touches only that account's jobs; the global sweep finds every due job", async () => {
     const alice = await created()
-    const bob = await created(slackJob({ sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))
+    const bob = await created(slackJob({ installation: SLACK_OTHER, sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))
     fake.clock.advance(RECEIVED_STALE_MS)
     expect((await sweepAccount(ctx(), ALICE)).map((entry) => entry.job.jid)).toEqual([alice.jid])
     expect(await state(bob.jid)).toBe("received")
@@ -824,7 +833,7 @@ describe("timeouts", () => {
 })
 
 describe("one bad record or one failed step", () => {
-  const auditAppend = (command: StoreCommand) => command[0] === "EVAL" && command[1] === AUDIT_APPEND_SCRIPT
+  const auditAppend = (command: StoreCommand) => command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(AUDIT_APPEND_SCRIPT)
 
   /** Captures console.error while `work` runs. */
   async function logs(work: () => Promise<void>) {
@@ -902,7 +911,7 @@ describe("one bad record or one failed step", () => {
   test("the ticket is written before the dispatch, so a dispatch that went through is always found", async () => {
     const job = await created()
     const ticketWrite = (command: StoreCommand) =>
-      command[0] === "SET" && command[1] === everywhereKeys.ticket("ticket-hash-first-001")
+      command[0] === "EVAL" && command.some((part) => typeof part === "string" && part.includes(everywhereKeys.ticket("ticket-hash-first-001")))
     await expect(
       dispatchJob(ctx({ store: failing(store, ticketWrite) }), job.jid, { ticketHash: "ticket-hash-first-001" }),
     ).rejects.toMatchObject({ statusCode: 503 })
@@ -961,7 +970,7 @@ describe("one bad record or one failed step", () => {
     expect((await createJob(ctx(), slackJob())).ok).toBe(true)
 
     // The global sweep drops its own entry the same way.
-    const lone = await created(slackJob({ sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))
+    const lone = await created(slackJob({ installation: SLACK_OTHER, sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))
     fake.send(["DEL", everywhereKeys.job(lone.jid)])
     fake.clock.advance(RECEIVED_STALE_MS)
     await sweepDue(ctx())
@@ -1085,7 +1094,7 @@ describe("erasing", () => {
       capsRoom: true,
       projects: true,
     })
-    const bob = await created(slackJob({ sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))
+    const bob = await created(slackJob({ installation: SLACK_OTHER, sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))
     await eraseEverywhereAccount({ store, now: fake.clock.now, jobs: jobEraser(store, () => fake.clock.now) }, ALICE)
     for (const jid of [live.jid, done.jid]) {
       expect(fake.read(everywhereKeys.job(jid))).toBeUndefined()
@@ -1106,6 +1115,7 @@ describe("erasing", () => {
 
 describe("delivery admission", () => {
   test("an expired intake worker cannot create or finish over a newer delivery lease", async () => {
+    await seedJobAuthority(ctx(), slackJob())
     const deliveryId = randomUUID()
     const stale = createJobId(fake.clock.now)
     expect(await claimDelivery(store, "slack", deliveryId, stale)).toBe("new")
@@ -1138,7 +1148,12 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
   })
 
   function realCtx(): JobsContext {
-    return { store: everywhereStore(redis.fetch), keys: KEYS, now: Date.now(), offer: OFFER }
+    return { store: testEverywhereStore(redis.fetch), keys: KEYS, now: Date.now(), offer: OFFER, accountAuthority: testAccountAuthority }
+  }
+
+  function isolatedSlackJob(sponsor: string): NewJob {
+    return slackJob({ installation: `slack:T${randomBytes(10).toString("hex").toUpperCase()}`,
+      sponsor, requester: { userId: "U0ALICE01", account: sponsor } })
   }
 
   test("one delivery atomically admits one jid even when create responses race", async () => {
@@ -1146,9 +1161,10 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
     const deliveryId = randomUUID()
     const jid = createJobId(Date.now())
     const ctx = realCtx()
+    const input = isolatedSlackJob(sponsor)
+    await seedJobAuthority(ctx, input)
     expect(await claimDelivery(ctx.store, "slack", deliveryId, jid)).toBe("new")
-    const results = await Promise.all(Array.from({ length: 12 }, () => createJob(ctx,
-      slackJob({ sponsor, requester: { userId: "U0ALICE01", account: sponsor } }), { jid, deliveryId })))
+    const results = await Promise.all(Array.from({ length: 12 }, () => createJob(ctx, input, { jid, deliveryId })))
     expect(results.filter((result) => result.ok)).toHaveLength(1)
     expect(results.filter((result) => !result.ok && result.code === "duplicate")).toHaveLength(11)
     await finishDelivery(ctx.store, "slack", deliveryId, jid)
@@ -1162,8 +1178,9 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
       const ctx = realCtx()
       const installation = `slack:T${randomBytes(10).toString("hex").toUpperCase()}`
       const key = everywhereKeys.install(installation)
-      const raw = JSON.stringify({ connector: sponsor, scopes: [], installedAt: ctx.now })
-      await ctx.store(["SET", key, raw])
+      const input = slackJob({ installation, sponsor, requester: { userId: "U0ALICE01", account: sponsor } })
+      const authority = (await seedJobAuthority(ctx, input))!
+      const raw = authority.installationRecord
       const deliveryId = randomUUID()
       const jid = createJobId(ctx.now)
       expect(await claimDelivery(ctx.store, "slack", deliveryId, jid)).toBe("new")
@@ -1172,9 +1189,9 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
       const entered = new Promise<void>((resolve) => { enter = resolve })
       const blocked = new Promise<void>((resolve) => { release = resolve })
       const pending = createJob({ ...ctx, store: async (command) => {
-        if (command[0] === "EVAL" && command[1] === CREATE_JOB_SCRIPT) { enter(); await blocked }
+        if (command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(CREATE_JOB_SCRIPT)) { enter(); await blocked }
         return ctx.store(command)
-      } }, slackJob({ installation, sponsor, requester: { userId: "U0ALICE01", account: sponsor } }), { jid, deliveryId, installationRecord: raw })
+      } }, input, { jid, deliveryId, installationRecord: raw, linkRecord: authority.linkRecord })
       await entered
       if (replacement) await ctx.store(["SET", key, JSON.stringify({ connector: sponsor, scopes: ["changed"], installedAt: ctx.now + 1 })])
       else await ctx.store(["DEL", key])
@@ -1195,14 +1212,14 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
     const sponsor = randomUUID()
     const ctx = realCtx()
     const installation = `slack:T${randomBytes(10).toString("hex").toUpperCase()}`
-    const raw = JSON.stringify({ connector: sponsor, scopes: [], installedAt: ctx.now })
-    await ctx.store(["SET", everywhereKeys.install(installation), raw])
+    const input = slackJob({ installation, sponsor, requester: { userId: "U0ALICE01", account: sponsor } })
+    const authority = (await seedJobAuthority(ctx, input))!
     const answers = await Promise.all(Array.from({ length: 12 }, async () => {
       const jid = createJobId(ctx.now)
       const deliveryId = randomUUID()
       expect(await claimDelivery(ctx.store, "slack", deliveryId, jid)).toBe("new")
-      return createJob(ctx, slackJob({ installation, sponsor, requester: { userId: "U0ALICE01", account: sponsor } }),
-        { jid, deliveryId, installationRecord: raw })
+      return createJob(ctx, input, { jid, deliveryId, installationRecord: authority.installationRecord,
+        linkRecord: authority.linkRecord })
     }))
     expect(answers.filter((answer) => answer.ok)).toHaveLength(3)
     expect(answers.filter((answer) => !answer.ok && answer.code === "over-limit")).toHaveLength(9)
@@ -1214,14 +1231,14 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
   test("a claim racing a dispatch leaves exactly one winner", async () => {
     for (let round = 0; round < 5; round++) {
       const sponsor = randomUUID()
-      const verdict = await createJob(
-        realCtx(),
-        slackJob({ sponsor, requester: { userId: "U0ALICE01", account: sponsor } }),
-      )
+      const context = realCtx()
+      const input = isolatedSlackJob(sponsor)
+      await seedJobAuthority(context, input)
+      const verdict = await createJob(context, input)
       if (!verdict.ok) throw new Error("not created")
       const jid = verdict.job.jid
       expect((await offerJob(realCtx(), jid)).ok).toBe(true)
-      const real = everywhereStore(redis.fetch)
+      const real = testEverywhereStore(redis.fetch)
       const gate = barrier(real, everywhereKeys.job(jid), 2)
       const [claim, dispatch] = await Promise.all([
         claimJob({ ...realCtx(), store: gate() }, { account: sponsor, jid, device: device() }),
@@ -1234,14 +1251,14 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
 
   test("twelve computers claiming at once leave exactly one winner", async () => {
     const sponsor = randomUUID()
-    const verdict = await createJob(
-      realCtx(),
-      slackJob({ sponsor, requester: { userId: "U0ALICE01", account: sponsor } }),
-    )
+    const context = realCtx()
+    const input = isolatedSlackJob(sponsor)
+    await seedJobAuthority(context, input)
+    const verdict = await createJob(context, input)
     if (!verdict.ok) throw new Error("not created")
     const jid = verdict.job.jid
     await offerJob(realCtx(), jid)
-    const gate = barrier(everywhereStore(redis.fetch), everywhereKeys.job(jid), 12)
+    const gate = barrier(testEverywhereStore(redis.fetch), everywhereKeys.job(jid), 12)
     const results = await Promise.all(
       Array.from({ length: 12 }, () =>
         claimJob({ ...realCtx(), store: gate() }, { account: sponsor, jid, device: device() }),
@@ -1252,9 +1269,12 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
 
   test("six jobs created at once for one sponsor admit exactly three", async () => {
     const sponsor = randomUUID()
+    const context = realCtx()
+    const input = isolatedSlackJob(sponsor)
+    await seedJobAuthority(context, input)
     const results = await Promise.all(
       Array.from({ length: 6 }, () =>
-        createJob(realCtx(), slackJob({ sponsor, requester: { userId: "U0ALICE01", account: sponsor } })),
+        createJob(context, input),
       ),
     )
     expect(results.filter((result) => result.ok)).toHaveLength(3)
@@ -1263,10 +1283,10 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
 
   test("the lease timeout and the body erase hold on Redis", async () => {
     const sponsor = randomUUID()
-    const verdict = await createJob(
-      realCtx(),
-      slackJob({ sponsor, requester: { userId: "U0ALICE01", account: sponsor } }),
-    )
+    const context = realCtx()
+    const input = isolatedSlackJob(sponsor)
+    await seedJobAuthority(context, input)
+    const verdict = await createJob(context, input)
     if (!verdict.ok) throw new Error("not created")
     const jid = verdict.job.jid
     await offerJob(realCtx(), jid)

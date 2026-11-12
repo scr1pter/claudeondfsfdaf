@@ -59,8 +59,8 @@ test("same-clock reconnect and unlink hold old native progress and result writes
     if (mode === "reconnect") await recordInstall(f.context(), { account: f.account, event: "connect", grant: { installation: f.installation,
       scopes: JIRA_SCOPES, forgeInstallationId: native.forgeInstallation, installer: { admin: true, userId: native.user } } })
     else await unlink(f.context(), { account: f.account, installation: f.installation, userId: native.user })
-    await expect(f.adapter.adapter.progress(active.view, "editing")).rejects.toMatchObject({ code: mode === "reconnect" ? "JIRA_AUTHORITY_CHANGED" : "JIRA_LINK_CHANGED" })
-    await expect(f.adapter.adapter.finish(active.view, { text: "Old outcome" })).rejects.toMatchObject({ code: mode === "reconnect" ? "JIRA_AUTHORITY_CHANGED" : "JIRA_LINK_CHANGED" })
+    await expect(f.adapter.adapter.progress(active.view, "editing")).rejects.toMatchObject({ code: mode === "reconnect" ? "JIRA_AUTHORITY_CHANGED" : "EVERYWHERE_AUTHORITY_CHANGED" })
+    await expect(f.adapter.adapter.finish(active.view, { text: "Old outcome" })).rejects.toMatchObject({ code: mode === "reconnect" ? "JIRA_AUTHORITY_CHANGED" : "EVERYWHERE_AUTHORITY_CHANGED" })
     expect((await readJiraTask(f.store, active.record.id))?.raw).toBe(previous.raw)
   }
 })

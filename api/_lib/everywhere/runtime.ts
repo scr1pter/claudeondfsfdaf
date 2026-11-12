@@ -28,7 +28,7 @@ export function productionPlatforms(): Platforms {
 
 export function productionContext(): JobsContext {
   const config = readConfig()
-  return { store: everywhereStore(), keys: config.dataKeys, offer: config.offer, now: Date.now() }
+  return { store: everywhereStore(), keys: config.dataKeys, offer: config.offer, now: Date.now(), accountAuthority: safePorts().accountAuthority }
 }
 
 /** Production jobs routes and the cron share exactly the same posting hooks. */

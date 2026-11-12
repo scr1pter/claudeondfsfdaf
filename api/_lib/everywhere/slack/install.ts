@@ -34,10 +34,15 @@ export function slackExchange(config: SlackConfig, fetcher?: typeof fetch): OAut
   } }
 }
 
-export async function revokeSlack(installation: string, record: InstallRecord, keys: readonly DataKey[], fetcher?: typeof fetch) {
-  if (!installation.startsWith("slack:")) return
+export async function revokeSlack(installation: string, record: InstallRecord, keys: readonly DataKey[], fetcher?: typeof fetch, beforeRequest?: () => Promise<void>): Promise<"confirmed" | "uncertain"> {
+  if (!installation.startsWith("slack:")) return "uncertain"
+  if (!beforeRequest) return "uncertain"
   const token = installToken(keys, installation, record)
-  if (token) await createSlackClient({ token, fetcher })("auth.revoke", {})
+  if (!token) return "uncertain"
+  try {
+    const result = await createSlackClient({ token, fetcher, beforeRequest })("auth.revoke", {})
+    return result.revoked === true ? "confirmed" : "uncertain"
+  } catch { return "uncertain" }
 }
 
 /** The callback carries no account authority. Exchange only after a signed-in bearer POST with the original state. */

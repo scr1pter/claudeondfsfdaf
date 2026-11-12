@@ -2,7 +2,7 @@ import { ApiError } from "../../http.js"
 import { PLATFORM_HOSTS, platformFetch, readPlatformJson } from "../fetch.js"
 import { slackObject } from "./verify.js"
 
-const METHODS = ["users.info", "conversations.replies", "agents.sessions.setStatus", "agents.sessions.rename", "chat.postMessage", "chat.update", "chat.postEphemeral", "oauth.v2.access", "auth.revoke"] as const
+const METHODS = ["auth.test", "users.info", "conversations.replies", "agents.sessions.setStatus", "agents.sessions.rename", "chat.postMessage", "chat.update", "chat.postEphemeral", "oauth.v2.access", "auth.revoke"] as const
 export type SlackMethod = (typeof METHODS)[number]
 
 /** Only definitive platform refusals may clear a first-post attempt receipt. */
@@ -16,6 +16,7 @@ export function createSlackClient(input: {
   readonly token?: string
   readonly fetcher?: typeof fetch
   readonly revoked?: () => Promise<void>
+  readonly beforeRequest?: () => Promise<void>
   readonly now?: () => number
   readonly cooldown?: { read(method: SlackMethod): Promise<number>; write(method: SlackMethod, at: number, ttlMs: number): Promise<void> }
 }) {
@@ -29,6 +30,7 @@ export function createSlackClient(input: {
     const get = method === "conversations.replies"
     const form = method === "oauth.v2.access"
     if (get) for (const [name, value] of Object.entries(body)) url.searchParams.set(name, String(value))
+    await input.beforeRequest?.()
     let response: Response
     try {
       response = await platformFetch("slack", url, { method: get ? "GET" : "POST",
@@ -47,7 +49,7 @@ export function createSlackClient(input: {
     }
     if (response.status === 401) {
       await response.body?.cancel().catch(() => undefined)
-      await input.revoked?.()
+      // An HTTP status alone is not a documented definitive unusable-token error.
       throw new SlackFailure(false)
     }
     if (response.status >= 500) { await response.body?.cancel().catch(() => undefined); throw new SlackFailure(true) }

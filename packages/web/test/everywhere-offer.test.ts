@@ -11,11 +11,10 @@ import {
   verifyOffer,
   type OfferCheck,
 } from "../../../api/_lib/everywhere/offer"
-import { everywhereStore } from "../../../api/_lib/everywhere/store"
 import { OFFER_PATTERN, TIMING, createJobId, randomId } from "../../../packages/schema/src/everywhere"
 import { everywhereEnv } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeClock, FakeStore, useKv } from "./lib/everywhere-store"
+import { FakeClock, FakeStore, useKv, testEverywhereStore } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -215,7 +214,7 @@ describe("the server's jti memory", () => {
     const restore = useKv()
     try {
       const fake = new FakeStore()
-      const store = everywhereStore(fake.fetch)
+      const store = testEverywhereStore(fake.fetch)
       const useJti = offerJtiStore(store)
       const jti = randomId()
       expect(await useJti(jti)).toBe(true)

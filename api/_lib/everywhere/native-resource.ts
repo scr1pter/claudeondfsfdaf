@@ -1,8 +1,9 @@
+import { luaKeyTypes } from "./lua.js"
 import { JOB_ID_PATTERN } from "../../../packages/schema/src/everywhere.js"
 import { runScript, storeInteger, storeUnavailable, type Store } from "./store.js"
 
 /** Replace only a terminal job's observed native owner. The new pending owner and its short expiry are inseparable. */
-export const REPLACE_NATIVE_RESERVATION_SCRIPT = [
+export const REPLACE_NATIVE_RESERVATION_SCRIPT = luaKeyTypes(["string"]) + [
   "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end",
   "redis.call('SET', KEYS[1], ARGV[2], 'PX', 30000) return 1",
 ].join(" ")

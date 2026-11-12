@@ -114,7 +114,7 @@ test("a lost create response cannot admit another job after the pending lease ex
   const intake = createIntake(f.adapter, { config: { ...f.config, offer: f.context().offer }, ports: f.ports,
     now: () => f.fake.clock.now, sleep: f.routing.sleep, store: async (command) => {
       const result = await f.store(command)
-      if (crash && command[0] === "EVAL" && command[1] === CREATE_JOB_SCRIPT) {
+      if (crash && command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(CREATE_JOB_SCRIPT)) {
         crash = false
         throw new Error("Fixture lost the create response")
       }

@@ -23,6 +23,8 @@ export class FakeSlack {
       this.calls.push({ method, body, http: request.method, authorization: request.headers.get("authorization") })
       const custom = await this.answer?.(method, body)
       if (custom) return custom
+      if (method === "auth.revoke") return Response.json({ ok: true, revoked: true })
+      if (method === "auth.test") return Response.json({ ok: true, team_id: "T0123ABCD", user_id: "U0BOT0001", bot_id: "B0BOT0001" })
       if (method === "users.info") return Response.json({ ok: true, user: this.user })
       if (method === "conversations.replies") return Response.json({ ok: true, messages: this.messages })
       if (method === "oauth.v2.access") return Response.json({ ok: true, ...this.grant })

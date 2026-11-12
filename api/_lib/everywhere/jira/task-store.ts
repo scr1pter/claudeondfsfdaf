@@ -1,5 +1,8 @@
+import { luaKeyTypes } from "../lua.js"
 import { ACCOUNT_ID_PATTERN } from "../../../../packages/schema/src/everywhere.js"
 import { ApiError } from "../../http.js"
+import { accountGuards, authorizedScript, type AccountAuthorityPort } from "../authority.js"
+import { installGuards, readInstallSnapshot } from "../identity.js"
 import { open, seal, type DataKey } from "../crypto.js"
 import { everywhereKeys, USER_ID_PATTERNS } from "../keys.js"
 import { getValue, runScript, storeInteger, storeUnavailable, type Store } from "../store.js"
@@ -30,10 +33,10 @@ export type JiraTaskRecord = {
 }
 export type JiraTaskSnapshot = { readonly record: JiraTaskRecord; readonly raw: string }
 type TaskEnvelope = Pick<JiraTaskRecord, "id" | "contextId" | "messageId" | "installation" | "forgeInstallationId" | "userId" | "authority" | "account">
-export type JiraTaskContext = { readonly store: Store; readonly keys: readonly DataKey[]; readonly now: number }
+export type JiraTaskContext = { readonly store: Store; readonly keys: readonly DataKey[]; readonly now: number; readonly accountAuthority?: AccountAuthorityPort }
 
 /** Task and native context admission, optional short draft, and indexes are fenced by current install/link authority. */
-export const WRITE_JIRA_TASK_SCRIPT = [
+export const WRITE_JIRA_TASK_SCRIPT = luaKeyTypes(["string", "string", "string", "zset", "string", "string", "zset", "string"]) + [
   "local install = redis.call('GET', KEYS[2]) or '' if install ~= ARGV[2] then return -1 end",
   "local task = redis.call('GET', KEYS[1]) or '' if task ~= ARGV[1] then return -2 end",
   "if KEYS[8] and (redis.call('GET', KEYS[8]) or '') ~= ARGV[13] then return -1 end",
@@ -53,7 +56,7 @@ export const WRITE_JIRA_TASK_SCRIPT = [
 ].join(" ")
 
 /** Exact task CAS cleanup cannot delete a newer revision's task or a context that already advanced. */
-export const ERASE_JIRA_TASK_SCRIPT = [
+export const ERASE_JIRA_TASK_SCRIPT = luaKeyTypes(["string", "string", "string", "zset", "string", "zset"]) + [
   "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end",
   "redis.call('DEL', KEYS[1], KEYS[2])",
   "if redis.call('GET', KEYS[3]) == ARGV[2] then redis.call('DEL', KEYS[3]) end",
@@ -103,18 +106,28 @@ export async function writeJiraTask(ctx: JiraTaskContext, record: JiraTaskRecord
   if (ttl <= 0 || ttl > 2 * 86_400_000) throw new ApiError(409, "JIRA_TASK_EXPIRED", "The Jira task has expired.")
   const draftTtl = Math.min(2 * 60 * 60_000, record.createdAt + 50 * 60_000 - ctx.now)
   if (input.draft !== undefined && draftTtl <= 0) throw new ApiError(409, "JIRA_TASK_EXPIRED", "The Jira task has expired.")
-  const result = storeInteger(await runScript(ctx.store, WRITE_JIRA_TASK_SCRIPT, [
+  const installation = await readInstallSnapshot(ctx.store, record.installation)
+  // An unconnected control task carries no account and proves the install is still absent.
+  if (input.installationRaw !== undefined && installation?.raw !== input.installationRaw || record.account && !installation) return "authority-changed"
+  const guards = installation ? await installGuards(ctx, record.installation, installation) : [{ key: everywhereKeys.install(record.installation) }]
+  if (record.account) guards.push(...await accountGuards(ctx, record.account))
+  let result: number
+  try { result = storeInteger(await authorizedScript(ctx.store, guards, WRITE_JIRA_TASK_SCRIPT, [
     everywhereKeys.jiraTask(record.id), everywhereKeys.install(record.installation), everywhereKeys.jiraContext(record.installation, record.userId, record.contextId),
     everywhereKeys.jiraTasks(record.installation), everywhereKeys.jiraTaskDraft(record.id), everywhereKeys.jiraMessage(record.installation, record.userId, record.messageId),
     ...(record.account ? [everywhereKeys.jiraAccountTasks(record.account), everywhereKeys.link(record.installation, record.userId)] : []),
   ], [input.expected?.raw ?? "", input.installationRaw ?? "", JSON.stringify(record), ttl, record.id, record.createdAt, ctx.now - 2 * 86_400_000,
     input.expected ? "update" : "create", input.contextExpected ?? "", input.draft !== undefined ? "write" : input.clearDraft ? "delete" : "keep",
-    input.draft === undefined ? "" : seal(ctx.keys, JSON.stringify(input.draft), everywhereKeys.jiraTaskDraft(record.id)), Math.max(1, draftTtl), input.linkRaw ?? ""]))
+    input.draft === undefined ? "" : seal(ctx.keys, JSON.stringify(input.draft), everywhereKeys.jiraTaskDraft(record.id)), Math.max(1, draftTtl), input.linkRaw ?? ""])) } catch (error) {
+    if (error instanceof ApiError && error.code === "EVERYWHERE_AUTHORITY_CHANGED") return "authority-changed"
+    throw error
+  }
   const verdicts: Readonly<Record<number, "written" | "authority-changed" | "changed" | "duplicate" | "busy" | "limit">> = {
     1: "written", [-1]: "authority-changed", [-2]: "changed", [-3]: "duplicate", [-4]: "busy", [-5]: "limit",
   }
-  if (!verdicts[result]) throw storeUnavailable()
-  return verdicts[result]
+  const verdict = verdicts[result]
+  if (!verdict) throw storeUnavailable()
+  return verdict
 }
 
 export async function readJiraDraft(ctx: JiraTaskContext, record: JiraTaskRecord): Promise<unknown> {

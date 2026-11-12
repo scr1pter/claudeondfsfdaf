@@ -1,6 +1,9 @@
+import { luaKeyTypes } from "./lua.js"
 import { ApiError } from "../http.js"
+import type { AccountAuthorityPort } from "./authority.js"
 import { persistentStore } from "../persistent-store.js"
 import { isEverywhereKey } from "./keys.js"
+import { ACCOUNT_TOMBSTONE_KEY, AUTHORITY_MARKER } from "./authority-format.js"
 
 /*
  * The store Vector everywhere talks to: `persistentStore` (the Redis REST API, failing closed) with a guard that lets
@@ -11,7 +14,7 @@ import { isEverywhereKey } from "./keys.js"
 
 export type StoreCommand = readonly (string | number)[]
 /** Sends one command and answers its result. Throws an ApiError (503) when the store cannot answer. */
-export type Store = (command: StoreCommand) => Promise<unknown>
+export type Store = ((command: StoreCommand) => Promise<unknown>) & { readonly accountAuthority?: AccountAuthorityPort }
 
 /** Where each command's keys are: their positions, or "all" after the command name, or "eval". */
 const KEY_POSITIONS: Readonly<Record<string, readonly number[] | "all" | "eval">> = {
@@ -60,12 +63,23 @@ function refused(): never {
 }
 
 /** The store, over `persistentStore`. Every command must name only Vector everywhere keys. */
-export function everywhereStore(fetcher: typeof fetch = fetch): Store {
-  return (command) => {
+export function everywhereStore(fetcher: typeof fetch = fetch, accountAuthority?: AccountAuthorityPort): Store {
+  return Object.assign((command: StoreCommand) => {
     const keys = commandKeys(command)
-    if (!keys || !keys.length || !keys.every(isEverywhereKey)) refused()
+    if (!keys || !keys.length) refused()
+    if (!keys.every((key): boolean => isEverywhereKey(key))) {
+      // The sibling key is read-only and is never exposed to a base mutation program or HTTP caller.
+      const read = command[0] === "GET" && keys.length === 1 && ACCOUNT_TOMBSTONE_KEY.test(keys[0]!)
+      const args = command.slice(3 + Number(command[2]))
+      const kc = Number(args.at(-3)), ac = Number(args.at(-2)), gc = Number(args.at(-1))
+      const guarded = command[0] === "EVAL" && typeof command[1] === "string" && command[1].startsWith(AUTHORITY_MARKER) &&
+        Number.isSafeInteger(kc) && Number.isSafeInteger(ac) && Number.isSafeInteger(gc) && gc > 0 && gc <= 24 && kc >= 0 && ac >= 0 &&
+        keys.length === kc + gc && args.length === ac + gc * 2 + 3 && keys.slice(0, kc).every((key) => isEverywhereKey(key)) &&
+        keys.slice(kc).every((key, index) => isEverywhereKey(key) || ACCOUNT_TOMBSTONE_KEY.test(key) && args[ac + index * 2] === "missing")
+      if (!read && !guarded) refused()
+    }
     return persistentStore(command, fetcher)
-  }
+  }, { accountAuthority })
 }
 
 export function storeUnavailable() {
@@ -174,7 +188,7 @@ export async function setMembers(store: Store, key: string): Promise<string[]> {
  * this is used for are kept until changed (3.13), so the value is written with no expiry. KEYS: the key. ARGV:
  * expected, next. Answers 1 or 0.
  */
-export const SWAP_SCRIPT = [
+export const SWAP_SCRIPT = luaKeyTypes(["string"]) + [
   "local current = redis.call('GET', KEYS[1])",
   "if (current == false and ARGV[1] == '') or current == ARGV[1] then",
   "if ARGV[2] == '' then redis.call('DEL', KEYS[1]) else redis.call('SET', KEYS[1], ARGV[2]) end return 1 end",

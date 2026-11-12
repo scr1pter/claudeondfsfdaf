@@ -169,7 +169,7 @@ test("a status post whose reference write failed is found by its own marker on r
   const comment = status.port.comment
   status.port.comment = async (...args) => { const value = await comment(...args); fail = true; return value }
   const context = (): JobsContext => ({ ...f.context(), store: async (command) => {
-    if (fail && command[0] === "EVAL" && command[1] === TRANSITION_SCRIPT) { fail = false; throw new Error("Fixture lost reference write") }
+    if (fail && command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(TRANSITION_SCRIPT)) { fail = false; throw new Error("Fixture lost reference write") }
     return f.store(command)
   } })
   const view = { jid: job.jid, platform: "github" as const, installation: "github:77", shared: false, reply: {} }

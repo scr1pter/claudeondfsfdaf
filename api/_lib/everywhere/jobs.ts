@@ -1,3 +1,4 @@
+import { luaKeyTypes } from "./lua.js"
 import {
   ACCOUNT_ID_PATTERN,
   BRANCH_PATTERN,
@@ -43,12 +44,15 @@ import {
 import { ENDINGS, queueDeadline, type Ending } from "../../../packages/schema/src/everywhere-policy.js"
 import { ApiError } from "../http.js"
 import { appendAudit, type AuditInput } from "./audit.js"
+import { accountGuards, authorizedCommands, authorizedScript, authorityChanged, type AuthorityGuard } from "./authority.js"
+import { installationAuthority, installGuards, readInstallSnapshot, readLinkSnapshot } from "./identity.js"
 import type { OfferKey } from "./config.js"
 import { openJson, sealJson, type DataKey } from "./crypto.js"
 import { deliveryKey } from "./dedupe.js"
 import type { JobEraser } from "./erase.js"
 import { KEEP_MS, everywhereKeys, userIdValid } from "./keys.js"
 import { capKeys } from "./limits.js"
+import { sha256Hex } from "./signature.js"
 import { signOffer, type SignedOffer } from "./offer.js"
 import {
   deleteKeys,
@@ -431,6 +435,9 @@ function replyContext(jid: string) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 export type JobsContext = {
+  readonly accountAuthority?: import("./authority.js").AccountAuthorityPort
+  /** Internal cleanup only; ordinary HTTP contexts never set this. */
+  readonly erasing?: boolean
   readonly store: Store
   /** The data key ring (`readConfig().dataKeys`): bodies, summaries and reply references are sealed under it. */
   readonly keys: readonly DataKey[]
@@ -521,7 +528,7 @@ export function claimedJob(record: JobRecord, body: JobBody, lease: JobLease, li
  * Optional key 12 fences a native session reservation against ARGV[20] before writes (-6 on mismatch); admission
  * extends that exact owner with ARGV[21] TTL atomically, so stalled requests cannot overwrite a newer native task.
  */
-export const CREATE_JOB_SCRIPT = [
+export const CREATE_JOB_SCRIPT = luaKeyTypes(["string", "string", "zset", "zset", "zset", "zset", "string", "string", "counter", "counter", "counter", "string"]) + [
   "if KEYS[7] and redis.call('GET', KEYS[7]) ~= ARGV[12] then return -4 end",
   "if KEYS[8] and redis.call('GET', KEYS[8]) ~= ARGV[13] then return -5 end",
   "if KEYS[12] and redis.call('GET', KEYS[12]) ~= ARGV[20] then return -6 end",
@@ -549,7 +556,7 @@ export const CREATE_JOB_SCRIPT = [
  * live sets, the body ('keep', 'delete', or 'require': only while the body still exists), jid. Answers 1, 0 (no
  * record), -1 (someone changed it first) or -2 (the body is gone).
  */
-export const TRANSITION_SCRIPT = [
+export const TRANSITION_SCRIPT = luaKeyTypes(["string", "string", "zset", "zset", "zset", "zset"]) + [
   "local raw = redis.call('GET', KEYS[1])",
   "if not raw then return 0 end",
   'local version, state = string.match(raw, \'^{"version":(%d+),"state":"([a-z]+)"\')',
@@ -586,10 +593,12 @@ async function change<T>(
   jid: string,
   step: (job: JobRecord) => Promise<Decision<T>> | Decision<T>,
   missing: () => T,
+  actor?: string,
 ): Promise<T> {
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const job = await readJob(ctx.store, jid)
-    if (!job) return missing()
+    if (!job || actor !== undefined && job.sponsor !== actor.toLowerCase()) return missing()
+    const guards = ctx.erasing ? [] : await jobGuards(ctx, job)
     const decision = await step(job)
     if ("answer" in decision) return decision.answer
     const terminal = TERMINAL_STATES.has(decision.next.state)
@@ -597,7 +606,9 @@ async function change<T>(
     const written = { ...decision.next, version: job.version + 1, ...(due === undefined ? {} : { due }) } as JobRecord
     const body: BodyMode = terminal ? "delete" : (decision.body ?? "keep")
     const result = storeInteger(
-      await runScript(
+      await (guards.length ? authorizedScript(ctx.store, guards, TRANSITION_SCRIPT,
+        [everywhereKeys.job(jid), everywhereKeys.jobBody(jid), everywhereKeys.jobsDue(), everywhereKeys.jobs(job.sponsor), everywhereKeys.installationJobs(job.installation), everywhereKeys.jobsPosts()],
+        [job.version, job.state, encodeJobRecord(written), recordTtl(job, ctx.now), due === undefined ? "" : due, terminal ? "0" : "1", body, jid, terminal && !TERMINAL_STATES.has(job.state) ? ctx.now : ""]) : runScript(
         ctx.store,
         TRANSITION_SCRIPT,
         [
@@ -619,13 +630,31 @@ async function change<T>(
           jid,
           terminal && !TERMINAL_STATES.has(job.state) ? ctx.now : "",
         ],
-      ),
+      )),
     )
     if (result === 1) return decision.done(written)
     if (result === 0) return missing()
     if (result !== -1 && result !== -2) throw storeUnavailable()
   }
   throw new Busy()
+}
+
+export async function jobGuards(ctx: JobsContext, job: JobRecord): Promise<AuthorityGuard[]> {
+  const guards = [...await accountGuards(ctx, job.sponsor)]
+  const reply = openReply(ctx, job)
+  if (job.platform !== "github") {
+    if (typeof reply?.installRevision !== "string") throw authorityChanged()
+    const install = await readInstallSnapshot(ctx.store, job.installation)
+    const link = await readLinkSnapshot(ctx.store, job.installation, job.requester.userId)
+    if (!install || installationAuthority(install) !== reply.installRevision || !link || link.record.account !== job.sponsor ||
+      typeof reply.linkRevision !== "string" || (link.record.revision ?? sha256Hex(link.raw)) !== reply.linkRevision) throw authorityChanged()
+    guards.push(...await installGuards(ctx, job.installation, install), { key: everywhereKeys.link(job.installation, job.requester.userId), value: link.raw })
+  }
+  return guards
+}
+
+export async function checkJobAuthority(ctx: JobsContext, job: JobRecord) {
+  for (const guard of await jobGuards(ctx, job)) if (await getValue(ctx.store, guard.key) !== guard.value) throw authorityChanged()
 }
 
 /** The next record of a job that ends now. Its device and lease stay, so its computer still hears how it ended. */
@@ -652,12 +681,13 @@ function withoutKeys<T extends object>(value: T, ...keys: readonly (keyof T)[]):
  * be posted, and a sweep's ending would never be announced.
  */
 async function audit(ctx: JobsContext, job: JobRecord, entry: Omit<AuditInput, "platform" | "installation" | "jid">) {
+  if (ctx.erasing) return
   try {
     await appendAudit(
       ctx.store,
       job.sponsor,
       { platform: job.platform, installation: job.installation, jid: job.jid, ...entry },
-      ctx.now,
+      ctx.now, ctx.accountAuthority,
     )
   } catch (error) {
     report(`audit-${entry.event}`, error, job.jid)
@@ -708,6 +738,8 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
   readonly deliveryId?: string
   /** Exact trusted store value captured before native preparation; enables atomic installation and quota admission. */
   readonly installationRecord?: string
+  readonly linkRecord?: string
+  readonly mapping?: { readonly key: string; readonly raw: string }
   readonly reservation?: { readonly resource: string; readonly owner: string }
 } = {}) {
   const jid = options.jid ?? createJobId(ctx.now)
@@ -723,6 +755,14 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
     return invalid("installation snapshot: malformed")
   if (options.reservation && (options.installationRecord === undefined || options.reservation.owner !== jid || !options.reservation.resource || options.reservation.resource.length > LIMITS.threadRefChars))
     return invalid("native reservation: malformed")
+
+  const nativeInstall = input.platform === "github" ? undefined : await readInstallSnapshot(ctx.store, input.installation)
+  const nativeLink = input.platform === "github" ? undefined : await readLinkSnapshot(ctx.store, input.installation, input.requester.userId)
+  if (input.platform !== "github" && (!nativeInstall || !nativeLink || nativeLink.record.account !== input.sponsor.toLowerCase() ||
+    options.installationRecord !== undefined && options.installationRecord !== nativeInstall.raw || options.linkRecord !== undefined && options.linkRecord !== nativeLink.raw))
+    return { ok: false, code: "installation-changed" } satisfies CreateVerdict
+  const reply = nativeInstall && nativeLink ? { ...input.reply, installRevision: installationAuthority(nativeInstall),
+    linkRevision: nativeLink.record.revision ?? sha256Hex(nativeLink.raw) } : input.reply
 
   const record: JobRecord = {
     version: 1,
@@ -740,7 +780,7 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
     receivedAt: ctx.now,
     bodyExpiresAt: ctx.now + KEEP_MS.jobBody,
     due: ctx.now + RECEIVED_STALE_MS,
-    ...(input.reply ? { replyEnc: sealJson(ctx.keys, input.reply, replyContext(jid)) } : {}),
+    ...(reply ? { replyEnc: sealJson(ctx.keys, reply, replyContext(jid)) } : {}),
   }
   const body: JobBody = { task: input.task, context: input.context, label: sanitizeLabel(input.requester.label ?? "") }
   // The same checks a computer runs, on a stand-in lease: a job a computer would refuse is never created.
@@ -754,12 +794,19 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
   )
   if (!check.ok) return invalid(check.error)
   if (!decodeJobRecord(JSON.parse(encodeJobRecord(record)))) return invalid("record: malformed")
+  const guards = [...await accountGuards(ctx, record.sponsor)]
+  if (nativeInstall && nativeLink) {
+    guards.push(...await installGuards(ctx, record.installation, nativeInstall),
+      { key: everywhereKeys.link(record.installation, record.requester.userId), value: nativeLink.raw })
+    if (options.mapping) guards.push({ key: options.mapping.key, value: options.mapping.raw })
+  }
   const caps = options.installationRecord === undefined ? undefined : capKeys({ sponsor: record.sponsor,
     installation: record.installation, userId: record.requester.userId }, ctx.now)
 
-  const result = storeInteger(
-    await runScript(
-      ctx.store,
+  let result: number
+  try { result = storeInteger(
+    await authorizedScript(
+      ctx.store, guards,
       CREATE_JOB_SCRIPT,
       [
         everywhereKeys.job(jid),
@@ -789,7 +836,10 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
         ...(options.reservation ? [options.reservation.owner, KEEP_MS.jobBody + 5 * 60_000] : []),
       ],
     ),
-  )
+  ) } catch (error) {
+    if (error instanceof ApiError && error.code === "EVERYWHERE_AUTHORITY_CHANGED") return { ok: false, code: "installation-changed" } satisfies CreateVerdict
+    throw error
+  }
   if (result === -3) return { ok: false, code: "over-limit" } satisfies CreateVerdict
   if (result === -4) return { ok: false, code: "duplicate" } satisfies CreateVerdict
   if (result === -5) return { ok: false, code: "installation-changed" } satisfies CreateVerdict
@@ -904,9 +954,9 @@ export async function dispatchJob(
 ): Promise<Moved> {
   if (!TICKET_HASH_PATTERN.test(input.ticketHash)) return { ok: false, code: "wrong-state" }
   if (!JOB_ID_PATTERN.test(jid)) return notFound()
-  // The ticket goes first, so a dispatch that went through can always be found by the start hook. It is harmless when
-  // the dispatch below loses: `startDispatched` also requires the job to be `dispatched` with this very ticket.
-  await setValue(ctx.store, everywhereKeys.ticket(input.ticketHash), jid, { ttlMs: KEEP_MS.ticket })
+  const candidate = await readJob(ctx.store, jid)
+  if (!candidate) return notFound()
+  await authorizedCommands(ctx.store, await jobGuards(ctx, candidate), [["SET", everywhereKeys.ticket(input.ticketHash), jid, "PX", KEEP_MS.ticket]])
   const moved = await change<Moved>(
     ctx,
     jid,
@@ -1094,6 +1144,7 @@ export async function claimJob(
       }
     },
     () => NOT_FOUND,
+    input.account,
   )
   if ("gone" in verdict) {
     await audit(ctx, verdict.gone, { event: "settle", code: "expired" })
@@ -1145,6 +1196,7 @@ export async function declineJob(
       }
     },
     () => NOT_FOUND,
+    input.account,
   )
   if (verdict.ok && verdict.recorded && verdict.job) {
     await audit(ctx, verdict.job, { event: "decline", device: input.device, code: input.reason })
@@ -1199,6 +1251,7 @@ export async function reportJob(
       }
     },
     () => NOT_FOUND,
+    input.account,
   )
 }
 
@@ -1249,6 +1302,7 @@ export async function settleJob(
       }
     },
     () => NOT_FOUND,
+    input.account,
   )
   if (verdict.ok && verdict.fresh)
     await audit(ctx, verdict.job, { event: "settle", device: input.device, code: settle.outcome })
@@ -1325,11 +1379,25 @@ async function sweepOne(
   stop: boolean,
   indexes: readonly string[],
 ): Promise<EndedJob | undefined> {
+  let authorityEnded = false
+  const observed = await readJob(ctx.store, jid)
+  if (observed) {
+    try { await jobGuards(ctx, observed) } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== "EVERYWHERE_AUTHORITY_CHANGED") throw error
+      authorityEnded = true
+    }
+  }
   let gone = false
   const swept = await change<Swept | undefined>(
-    ctx,
+    authorityEnded ? { ...ctx, erasing: true } : ctx,
     jid,
-    (job) => timeout(job, ctx.now, stop) ?? { answer: undefined },
+    (job) => {
+      const decision = timeout(job, ctx.now, stop)
+      // A lost authorization may retire an already due job, never restart/requeue it or alter a live body's lifetime.
+      if (authorityEnded && decision && "next" in decision && !TERMINAL_STATES.has(decision.next.state))
+        return timeout(job, ctx.now, true) ?? { answer: undefined }
+      return decision ?? { answer: undefined }
+    },
     () => {
       gone = true
       return undefined
@@ -1467,20 +1535,30 @@ function decodeReady(value: unknown): Ready | undefined {
   return value as Ready
 }
 
-/** Records that one of the account's computers called (`seen:<account>`, 30 days), and its readiness when it sent it. */
+/** At most64 live readiness records per account; the index and value are inseparable under account authority. */
+export const RECORD_SEEN_SCRIPT = luaKeyTypes(["string", "string", "zset"]) + [
+  "if ARGV[4] ~= '' then",
+  "redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[7])",
+  "if not redis.call('ZSCORE', KEYS[3], ARGV[6]) and redis.call('ZCARD', KEYS[3]) >= 64 then return 0 end end",
+  "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])",
+  "if ARGV[4] ~= '' then redis.call('SET', KEYS[2], ARGV[4], 'PX', ARGV[5])",
+  "redis.call('ZADD', KEYS[3], ARGV[3], ARGV[6]) redis.call('PEXPIRE', KEYS[3], ARGV[5]) end return 1",
+].join(" ")
+
+/** Records the account's computer, and indexes every readiness record so deletion does not retain earlier devices. */
 export async function recordSeen(
-  ctx: Pick<JobsContext, "store" | "now">,
+  ctx: Pick<JobsContext, "store" | "now" | "accountAuthority">,
   account: string,
   device: string,
   readiness?: Readiness,
 ): Promise<void> {
   if (!DEVICE_ID_PATTERN.test(device)) throw new RangeError("A device id.")
   const owner = account.toLowerCase()
-  await setJson(ctx.store, everywhereKeys.seen(owner), { at: ctx.now, device }, { ttlMs: KEEP_MS.seen })
-  if (readiness) {
-    const ready: Ready = { account: owner, at: ctx.now, ...pickReadiness(readiness) }
-    await setJson(ctx.store, everywhereKeys.ready(owner, device), ready, { ttlMs: KEEP_MS.ready })
-  }
+  const ready: Ready | undefined = readiness ? { account: owner, at: ctx.now, ...pickReadiness(readiness) } : undefined
+  const result = storeInteger(await authorizedScript(ctx.store, await accountGuards(ctx, owner), RECORD_SEEN_SCRIPT,
+    [everywhereKeys.seen(owner), everywhereKeys.ready(owner, device), everywhereKeys.readyDevices(owner)],
+    [JSON.stringify({ at: ctx.now, device }), KEEP_MS.seen, ctx.now, ready ? JSON.stringify(ready) : "", KEEP_MS.ready, device, ctx.now - KEEP_MS.ready]))
+  if (result !== 1) throw storeUnavailable()
 }
 
 function pickReadiness(readiness: Readiness): Readiness {
@@ -1538,6 +1616,7 @@ export async function offerWaiting(ctx: JobsContext, account: string): Promise<{
 
 /** Cancels every live job on an installation and erases their bodies. */
 export async function eraseInstallationJobs(ctx: JobsContext, installation: string): Promise<number> {
+  ctx = { ...ctx, erasing: true }
   const key = everywhereKeys.installationJobs(installation)
   let cancelled = 0
   for (const jid of members(await ctx.store(["ZRANGE", key, 0, -1]))) {
@@ -1563,6 +1642,7 @@ export async function eraseInstallationJobs(ctx: JobsContext, installation: stri
  * record and body of its last 30 days, its history and the readiness its last computer sent.
  */
 export async function eraseAccountJobs(ctx: JobsContext, account: string): Promise<void> {
+  ctx = { ...ctx, erasing: true }
   const owner = account.toLowerCase()
   for (const jid of members(await ctx.store(["ZRANGE", everywhereKeys.jobs(owner), 0, -1]))) {
     try {
@@ -1580,17 +1660,25 @@ export async function eraseAccountJobs(ctx: JobsContext, account: string): Promi
     await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
     await ctx.store(["ZREM", everywhereKeys.jobsPosts(), jid])
   }
+  const devices = membersOfDevices(await ctx.store(["ZRANGE", everywhereKeys.readyDevices(owner), 0, 63]))
+  for (const device of devices) await deleteKeys(ctx.store, everywhereKeys.ready(owner, device))
+  await deleteKeys(ctx.store, everywhereKeys.readyDevices(owner))
   const seen = await readSoft(ctx.store, everywhereKeys.seen(owner), decodeSeen)
   if (seen) await deleteKeys(ctx.store, everywhereKeys.ready(owner, seen.device))
   await deleteKeys(ctx.store, history, everywhereKeys.jobs(owner))
 }
 
+function membersOfDevices(value: unknown): string[] {
+  if (!Array.isArray(value)) throw storeUnavailable()
+  return value.filter((device): device is string => typeof device === "string" && DEVICE_ID_PATTERN.test(device))
+}
+
 /** The `JobEraser` erase.ts and the account routes take (VE-04), over a store and a clock. */
 export function jobEraser(store: Store, now: () => number = Date.now): JobEraser {
   return {
-    installation: async (installation) => {
-      await eraseInstallationJobs({ store, keys: [], now: now() }, installation)
+    installation: async (installation, scopedStore = store) => {
+      await eraseInstallationJobs({ store: scopedStore, keys: [], now: now(), erasing: true }, installation)
     },
-    account: (account) => eraseAccountJobs({ store, keys: [], now: now() }, account),
+    account: (account) => eraseAccountJobs({ store, keys: [], now: now(), erasing: true }, account),
   }
 }

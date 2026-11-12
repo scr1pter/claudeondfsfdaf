@@ -13,7 +13,6 @@ import {
 import {
   commandKeys,
   deleteKeys,
-  everywhereStore,
   getJson,
   getValue,
   runScript,
@@ -22,7 +21,7 @@ import {
 } from "../../../api/_lib/everywhere/store"
 import { ApiError } from "../../../api/_lib/http"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, useKv } from "./lib/everywhere-store"
+import { FakeStore, useKv, testEverywhereStore } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -168,7 +167,7 @@ describe("the store", () => {
 
   test("a command that would touch another feature's key, or no key, is refused before the store sees it", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     for (const command of [
       ["GET", "vector:codium:live:switch:remote"],
       ["DEL", everywhereKeys.job(jid), "vector:codium:live:account:1"],
@@ -190,7 +189,7 @@ describe("the store", () => {
 
   test("values, NX, XX and expiry", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const key = everywhereKeys.state("abcdefghijklmnop")
     expect(await getValue(store, key)).toBeUndefined()
     expect(await setValue(store, key, "one", { ttlMs: KEEP_MS.state, onlyNew: true })).toBe(true)
@@ -206,7 +205,7 @@ describe("the store", () => {
 
   test("JSON values decode, and a stored value of the wrong shape is a store fault, not data", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const key = everywhereKeys.install(slack)
     const decode = (value: unknown) =>
       typeof value === "object" && value !== null && "connector" in value ? (value as { connector: string }) : undefined
@@ -221,7 +220,7 @@ describe("the store", () => {
 
   test("deleteKeys answers how many existed", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     await setValue(store, everywhereKeys.job(jid), "x", { ttlMs: 1_000 })
     expect(await deleteKeys(store, everywhereKeys.job(jid), everywhereKeys.jobBody(jid))).toBe(1)
     expect(await deleteKeys(store)).toBe(0)
@@ -229,7 +228,7 @@ describe("the store", () => {
 
   test("an outage, an unknown script or a bad answer fails closed with 503", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     fake.down = true
     await expect(getValue(store, everywhereKeys.job(jid))).rejects.toMatchObject({ statusCode: 503 })
     fake.down = false
@@ -237,7 +236,7 @@ describe("the store", () => {
   })
 
   test("TTLs must be whole positive milliseconds", async () => {
-    const store = everywhereStore(new FakeStore().fetch)
+    const store = testEverywhereStore(new FakeStore().fetch)
     for (const ttlMs of [0, -1, 1.5, Number.NaN])
       await expect(setValue(store, everywhereKeys.job(jid), "x", { ttlMs })).rejects.toThrow(RangeError)
   })

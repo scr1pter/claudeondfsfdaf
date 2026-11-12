@@ -20,12 +20,13 @@ import {
 } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { ownOfferKeys, verifyOffer } from "../../../api/_lib/everywhere/offer"
-import { everywhereStore, storeUnavailable } from "../../../api/_lib/everywhere/store"
+import { storeUnavailable } from "../../../api/_lib/everywhere/store"
 import type { SwitchState } from "../../../api/_lib/everywhere/switch"
-import { LIMITS, TIMING, decodeJob } from "../../../packages/schema/src/everywhere"
+import { LIMITS, TIMING, createJobId, decodeJob } from "../../../packages/schema/src/everywhere"
 import { RouteHarness, everywhereEnv } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, useKv } from "./lib/everywhere-store"
+import { seedJobAuthority } from "./lib/everywhere-job-authority"
+import { FakeStore, useKv, testEverywhereStore, testAccountAuthority } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -87,7 +88,8 @@ function deps(extra: Partial<JobsApiDeps> = {}): JobsApiDeps {
   }
   return {
     env,
-    store: everywhereStore(fake.fetch),
+    store: testEverywhereStore(fake.fetch),
+    accountAuthority: testAccountAuthority,
     fetcher: fake.fetch,
     now: () => fake.clock.now,
     switches: async (name) => (name === "everywhere" ? everywhere : undefined),
@@ -123,7 +125,7 @@ function token(user = ALICE, client: "desktop" | "cli" = "desktop") {
 
 function ctx(): JobsContext {
   const config = readConfig(env)
-  return { store: everywhereStore(fake.fetch), keys: config.dataKeys, now: fake.clock.now, offer: config.offer }
+  return { store: testEverywhereStore(fake.fetch), keys: config.dataKeys, now: fake.clock.now, offer: config.offer, accountAuthority: testAccountAuthority }
 }
 
 function slackJob(sponsor = ALICE.id): NewJob {
@@ -142,6 +144,7 @@ function slackJob(sponsor = ALICE.id): NewJob {
 }
 
 async function offered(input = slackJob()) {
+  await seedJobAuthority(ctx(), input)
   const verdict = await createJob(ctx(), input)
   if (!verdict.ok) throw new Error("not created")
   expect((await offerJob(ctx(), verdict.job.jid)).ok).toBe(true)
@@ -175,6 +178,47 @@ describe("who may call", () => {
     expect(pasted.body.error.code).toBe("DESKTOP_SIGN_IN_REQUIRED")
     fake.send(["SET", `vector:cli-revoked:${ALICE.id}`, "1"])
     expect((await post("claim", body)).status).toBe(401)
+  })
+
+  test("foreign closed, unverifiable and missing jobs have the same404 without target authority reads", async () => {
+    const jid = await offered()
+    const missing = createJobId(fake.clock.now + 1)
+    const otherDevice = device()
+    const targetKeys = [everywhereKeys.job(jid), everywhereKeys.jobBody(jid), everywhereKeys.install(SLACK),
+      everywhereKeys.link(SLACK, "U0ALICE01"), everywhereKeys.jobHistory(ALICE.id), everywhereKeys.jobs(ALICE.id), everywhereKeys.audit(ALICE.id)]
+    const snapshot = () => JSON.stringify(targetKeys.map((key) => {
+      const value = fake.read(key)
+      return [key, value?.kind === "string" || value === undefined ? value : { kind: value.kind, value: [...value.value].sort() }]
+    }))
+    for (const mode of ["closed", "unverifiable"] as const) {
+      if (mode === "closed") fake.send(["SET", everywhereKeys.accountClosed(ALICE.id), "closed"])
+      else fake.send(["DEL", everywhereKeys.accountClosed(ALICE.id)])
+      const queried: string[] = []
+      mount({ accountAuthority: async (account) => {
+        queried.push(account)
+        return mode === "unverifiable" && account === ALICE.id ? undefined : testAccountAuthority(account)
+      } })
+      const requests = [
+        { path: "claim", input: (id: string) => ({ jid: id, device: otherDevice }) },
+        { path: "decline", input: (id: string) => ({ jid: id, device: otherDevice, reason: "busy" }) },
+        { path: "report", input: (id: string) => ({ jid: id, lease: "1".repeat(26), seq: 0, milestone: "heartbeat" }) },
+        { path: "settle", input: (id: string) => ({ jid: id, lease: "1".repeat(26), outcome: "cancelled" }) },
+      ]
+      for (const request of requests) {
+        const before = snapshot(), at = fake.commands.length
+        const foreign = await post(request.path, request.input(jid), { token: token(BOB), device: otherDevice })
+        const absent = await post(request.path, request.input(missing), { token: token(BOB), device: otherDevice })
+        expect(foreign.status).toBe(404)
+        expect(absent.status).toBe(404)
+        expect(foreign.body).toEqual(absent.body)
+        expect(foreign.body).toMatchObject({ error: { code: "NOT_FOUND" } })
+        expect(foreign.body.job).toBeUndefined()
+        expect(snapshot()).toBe(before)
+        expect(fake.commands.slice(at).some((command) => command[0] === "GET" &&
+          [everywhereKeys.accountClosed(ALICE.id), `vector:codium:test:tombstone:${ALICE.id}`].includes(command[1]!))).toBe(false)
+      }
+      expect(queried.every((account) => account === BOB.id)).toBe(true)
+    }
   })
 
   test("a GET on a POST route and a POST on pending are refused", async () => {
@@ -294,6 +338,7 @@ describe("claim", () => {
 describe("another account's job", () => {
   test("is 404 on every route, and pending offers nothing of it", async () => {
     const job = await claimed()
+    await seedJobAuthority(ctx(), slackJob())
     const waiting = await createJob(ctx(), slackJob())
     if (!waiting.ok) throw new Error("not created")
     await queueJob(ctx(), waiting.job.jid, fake.clock.now + 60 * 60_000)
@@ -444,7 +489,7 @@ describe("settle", () => {
     const job = await claimed()
     const record = (await readJob(ctx().store, job.jid))!
     let failures = 1
-    const inner = everywhereStore(fake.fetch)
+    const inner = testEverywhereStore(fake.fetch)
     const logged: unknown[][] = []
     const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
       logged.push(args)
@@ -452,7 +497,7 @@ describe("settle", () => {
     try {
       mount({
         store: async (command) => {
-          if (failures > 0 && command[0] === "EVAL" && command[1] === AUDIT_APPEND_SCRIPT) {
+          if (failures > 0 && command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(AUDIT_APPEND_SCRIPT)) {
             failures--
             throw storeUnavailable()
           }
@@ -523,6 +568,7 @@ describe("pending", () => {
   }
 
   test("records the computer's readiness and offers each waiting job again, only when it takes jobs", async () => {
+    await seedJobAuthority(ctx(), slackJob())
     const verdict = await createJob(ctx(), slackJob())
     if (!verdict.ok) throw new Error("not created")
     const jid = verdict.job.jid

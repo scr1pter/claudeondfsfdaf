@@ -104,6 +104,21 @@ test("independent refreshers perform only one renewal and cannot overwrite recon
   }
 })
 
+test("connector deletion during OAuth refresh prevents the later viewer probe and credential commit", async () => {
+  const f = await expired()
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>((resolve) => { enter = resolve }), wait = new Promise<void>((resolve) => { release = resolve })
+  native.answer = async (operation) => { if (operation === "refresh") { enter(); await wait }; return undefined }
+  const pending = f.access()
+  await entered
+  await f.store(["SET", everywhereKeys.accountClosed(f.account), "closed"])
+  const before = await f.store(["GET", everywhereKeys.install(f.installation)])
+  release()
+  await expect(pending).rejects.toMatchObject({ code: "EVERYWHERE_AUTHORITY_CHANGED" })
+  expect(native.calls.map((call) => call.operation)).toEqual(["refresh"])
+  expect(await f.store(["GET", everywhereKeys.install(f.installation)])).toBe(before)
+})
+
 test("callback has a fixed fragment destination and cannot exchange a code as an account", async () => {
   const f = await linearFixture(native)
   harness.mount({ "/oauth": linearOAuthCallback(() => f.config) })

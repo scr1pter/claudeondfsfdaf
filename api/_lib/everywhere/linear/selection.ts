@@ -12,7 +12,7 @@ function optionPrefix(authority: string, team: string, repository: RepoRef) {
 }
 
 export function linearOptions(authority: string, team: string, repositories: readonly RepoRef[], nonce: string = randomUUID()) {
-  return repositories.slice(0, 20).map((repository) => ({ label: repository.fullName, value: `${optionPrefix(authority, team, repository)}${nonce}` }))
+  return repositories.filter((repository) => Number.isSafeInteger(repository.id) && repository.id! > 0).slice(0, 20).map((repository) => ({ label: repository.fullName, value: `${optionPrefix(authority, team, repository)}${nonce}` }))
 }
 
 /** Reconstruct only an exact opaque selection from our own immutable elicitation and the creator's preceding prompt. */
@@ -46,7 +46,7 @@ export async function restoreLinearSelection(input: {
   const options = (Array.isArray(metadata.options) ? metadata.options.slice(0, 100) : []).map(linearObject)
   const option = options.find((entry) => entry.value === chosen)
   if (!option) return fail()
-  const repository = input.repositories.find((entry) => option.label === entry.fullName && chosen.startsWith(optionPrefix(input.authority, String(reply.team), entry)) &&
+  const repository = input.repositories.find((entry) => Number.isSafeInteger(entry.id) && entry.id! > 0 && option.label === entry.fullName && chosen.startsWith(optionPrefix(input.authority, String(reply.team), entry)) &&
     linearId(chosen.slice(optionPrefix(input.authority, String(reply.team), entry).length)))
   if (!repository) return fail()
   // The immediately preceding human prompt must be the same creator. Other authors never become their task.

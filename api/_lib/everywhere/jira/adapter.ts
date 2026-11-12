@@ -4,13 +4,14 @@ import { ApiError } from "../../http.js"
 import type { EverywhereConfig } from "../config.js"
 import { seal } from "../crypto.js"
 import { eraseInstallation } from "../erase.js"
-import { findMapping, installationAuthority, readInstallSnapshot, readLinkSnapshot, type RepoRef } from "../identity.js"
-import { jobEraser, openReply, readJob, type JobsContext } from "../jobs.js"
+import { checkInstallAuthority, findMapping, installGuards, installationAuthority, readInstallSnapshot, readLinkSnapshot, type RepoRef } from "../identity.js"
+import { checkJobAuthority, jobEraser, openReply, readJob, type JobsContext } from "../jobs.js"
 import { everywhereKeys } from "../keys.js"
 import { replaceNativeReservation } from "../native-resource.js"
 import type { JobView, PlatformAdapter } from "../platform.js"
 import type { Ports } from "../ports.js"
 import { sha256Hex } from "../signature.js"
+import { checkAccount, fencedStore } from "../authority.js"
 import { getValue, setValue } from "../store.js"
 import { JiraFailure } from "./client.js"
 import { JIRA_UUID } from "./fit.js"
@@ -42,10 +43,13 @@ export function createJiraAdapter(deps: JiraDeps) {
       task.record.contextId !== view.reply.ref || task.record.forgeInstallationId !== snapshot.record.forgeInstallationId ||
       task.record.authority !== installationAuthority(snapshot) || view.reply.installRevision !== task.record.authority)
       throw new ApiError(409, "JIRA_AUTHORITY_CHANGED", "The Jira connection changed. This result is held for review.")
+    await checkInstallAuthority(ctx(), view.installation, snapshot)
+    if (view.job) await checkJobAuthority(ctx(), view.job)
     if (view.job && (view.job.requester.userId !== task.record.userId || view.job.installation !== task.record.installation ||
       (task.record.jid !== undefined ? task.record.jid !== view.jid : await getValue(ctx().store, everywhereKeys.nativeResource("jira", view.installation, task.record.contextId)) !== view.jid)))
       throw new ApiError(409, "JIRA_TASK_CHANGED", "The Jira task has moved to another request.")
     const account = view.job?.sponsor ?? task.record.account
+    if (account) await checkAccount(ctx(), account)
     const linked = account ? await readLinkSnapshot(ctx().store, task.record.installation, task.record.userId) : undefined
     if (account && linked?.record.account !== account) throw new ApiError(409, "JIRA_LINK_CHANGED", "The Jira account link changed.")
     return { task, snapshot, account, linkRaw: linked?.raw }
@@ -77,12 +81,13 @@ export function createJiraAdapter(deps: JiraDeps) {
     reserve: async (parsed, view) => {
       const checked = await assertTask(view)
       if (JIRA_TERMINAL.has(checked.task.record.state)) return undefined
+      const scoped = fencedStore(ctx().store, await installGuards(ctx(), view.installation, checked.snapshot))
       const key = everywhereKeys.nativeResource("jira", view.installation, parsed.trigger.thread.ref)
       const previous = await getValue(ctx().store, key)
       if (previous) {
         const job = await readJob(ctx().store, previous)
-        if (!job || !TERMINAL_STATES.has(job.state) || !await replaceNativeReservation(ctx().store, key, previous, view.jid)) return undefined
-      } else if (!await setValue(ctx().store, key, view.jid, { ttlMs: 30_000, onlyNew: true })) return undefined
+        if (!job || !TERMINAL_STATES.has(job.state) || !await replaceNativeReservation(scoped, key, previous, view.jid)) return undefined
+      } else if (!await setValue(scoped, key, view.jid, { ttlMs: 30_000, onlyNew: true })) return undefined
       return { resource: parsed.trigger.thread.ref, owner: view.jid }
     },
     progress: async (view) => {
@@ -112,7 +117,7 @@ export function createJiraAdapter(deps: JiraDeps) {
       if (!view || typeof view.reply.place !== "string") throw new JiraFailure()
       const checked = await assertTask(view)
       const mapping = await findMapping(ctx().store, trigger.installation, view.reply.place)
-      const options = (mapping?.repositories ?? []).slice(0, 20).map((repository) => ({ repository,
+      const options = (mapping?.repositories ?? []).filter((repository) => Number.isSafeInteger(repository.id) && repository.id! > 0).slice(0, 20).map((repository) => ({ repository,
         value: jiraChoice(checked.task.record.authority, checked.task.record.id, String(view.reply.place), repository) }))
       const text = options.length ? `Reply with one exact repository option:\n${options.map((option) => `${option.value} — ${option.repository.fullName}`).join("\n")}` :
         "Ask the site connector to map this Jira project to a repository, then send your task again."

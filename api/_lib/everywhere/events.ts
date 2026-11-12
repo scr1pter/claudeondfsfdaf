@@ -1,6 +1,6 @@
 import { renderEnd, renderRefusal, renderResult } from "../../../packages/schema/src/everywhere-policy.js"
 import type { JobEvents } from "./jobs-api.js"
-import { clearSummary, openReply, openSummary, readJob, type EndedJob, type JobRecord, type JobsContext } from "./jobs.js"
+import { checkJobAuthority, clearSummary, openReply, openSummary, readJob, type EndedJob, type JobRecord, type JobsContext } from "./jobs.js"
 import { everywhereKeys } from "./keys.js"
 import type { JobView, Platforms } from "./platform.js"
 import { setValue } from "./store.js"
@@ -17,6 +17,7 @@ export function createJobEvents(context: () => JobsContext, platforms: Platforms
     const adapter = adapters()[job.platform]
     if (!adapter) return
     const ctx = context()
+    await checkJobAuthority(ctx, job)
     const queued = await ctx.store(["ZSCORE", everywhereKeys.jobsPosts(), job.jid])
     if (queued === null || queued === undefined) return
     // Platform requests are bounded below this lock's lifetime. Adapters edit their job-marked result on retries.

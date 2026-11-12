@@ -9,11 +9,11 @@ import { readCounts } from "../../../api/_lib/everywhere/limits"
 import { createJiraRoutes } from "../../../api/_lib/everywhere/jira/a2a"
 import { JIRA_SCOPES } from "../../../api/_lib/everywhere/jira/client"
 import { ERASE_JIRA_TASK_SCRIPT, eraseJiraTaskInstallation, readJiraDraft, readJiraTask, WRITE_JIRA_TASK_SCRIPT, writeJiraTask } from "../../../api/_lib/everywhere/jira/task-store"
-import { everywhereStore, type Store } from "../../../api/_lib/everywhere/store"
+import { type Store } from "../../../api/_lib/everywhere/store"
 import { RouteHarness } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { jiraFixture, NativeJira } from "./lib/everywhere-jira"
-import { realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
+import { realRedis, useKv, type RealRedis, testEverywhereStore } from "./lib/everywhere-store"
 
 installFetchGuard()
 const native = new NativeJira()
@@ -131,6 +131,20 @@ test("AUTOMATION and initial coding chat are rejected without native context rea
     expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([])
     expect((await readCounts(f.store, { sponsor: f.account, installation: f.installation, userId: native.user }, f.fake.clock.now)).sponsorToday).toBe(0)
   }
+})
+
+test("legacy name-only mapping holds with remap guidance and displays no unusable option", async () => {
+  const f = await ready({ mapped: false })
+  await f.store(["SET", everywhereKeys.repo(f.installation, "PROJ"), JSON.stringify({ repositoryIds: [null], fullNames: ["acme/reused-name"],
+    setBy: f.account, private: false, setAt: f.fake.clock.now })])
+  const answer = await f.send(native.message("ISSUE_COMMENT_MENTION"))
+  await drainAfter()
+  const result = (await f.poll(answer.body.result.task.id)).body.result
+  expect(result.status.state).toBe("TASK_STATE_INPUT_REQUIRED")
+  expect(JSON.stringify(result)).toContain("map this Jira project")
+  expect(JSON.stringify(result)).not.toContain("vej1:")
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([])
+  expect((await readCounts(f.store, { sponsor: f.account, installation: f.installation, userId: native.user }, f.fake.clock.now)).sponsorToday).toBe(0)
 })
 
 test("native guest, application, inactive, missing membership and user-token identity mismatch all refuse before spend", async () => {
@@ -324,7 +338,7 @@ test("account erasure on someone else's still-connected site fences a stalled ac
   let release!: () => void
   const entered = new Promise<void>((resolve) => { enter = resolve })
   const blocked = new Promise<void>((resolve) => { release = resolve })
-  const pending = writeJiraTask({ ...f.context(), store: async (command) => { if (command[0] === "EVAL" && command[1] === WRITE_JIRA_TASK_SCRIPT) { enter(); await blocked }; return f.store(command) } }, next,
+  const pending = writeJiraTask({ ...f.context(), store: async (command) => { if (command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(WRITE_JIRA_TASK_SCRIPT)) { enter(); await blocked }; return f.store(command) } }, next,
     { installationRaw: install.raw, linkRaw: linked.raw, draft: { task: "Late account text" } })
   await entered
   await eraseEverywhereAccount(f.context(), f.account)
@@ -347,7 +361,7 @@ async function draftFence(store: Store, mode: "erase" | "reconnect" | "unlink") 
   let release!: () => void
   const entered = new Promise<void>((resolve) => { enter = resolve })
   const blocked = new Promise<void>((resolve) => { release = resolve })
-  const pending = writeJiraTask({ ...f.context(), store: async (command) => { if (command[0] === "EVAL" && command[1] === WRITE_JIRA_TASK_SCRIPT) { enter(); await blocked }; return store(command) } }, record,
+  const pending = writeJiraTask({ ...f.context(), store: async (command) => { if (command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(WRITE_JIRA_TASK_SCRIPT)) { enter(); await blocked }; return store(command) } }, record,
     { installationRaw: snapshot.raw, linkRaw: linked.raw, draft: { task: "Private original request" } })
   await entered
   if (mode === "erase") await store(["DEL", everywhereKeys.install(f.installation)])
@@ -380,7 +394,7 @@ async function draftFence(store: Store, mode: "erase" | "reconnect" | "unlink") 
   }
   let raced = false
   await eraseJiraTaskInstallation(async (command) => {
-    if (!raced && command[0] === "EVAL" && command[1] === ERASE_JIRA_TASK_SCRIPT) {
+    if (!raced && command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(ERASE_JIRA_TASK_SCRIPT)) {
       raced = true
       const before = (await readJiraTask(store, record.id))!
       expect(await writeJiraTask({ ...f.context(), store }, { ...before.record, state: "WORKING" }, { expected: before, installationRaw: current.raw, linkRaw: linked.raw })).toBe("written")
@@ -407,6 +421,6 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("actual Redis native Jira dr
   beforeAll(async () => { redis = (await realRedis())! })
   afterAll(async () => { await redis?.close() })
   test("installation, revision and person-link changes refuse before atomic task, draft or index writes", async () => {
-    for (const mode of ["erase", "reconnect", "unlink"] as const) await draftFence(everywhereStore(redis.fetch), mode)
+    for (const mode of ["erase", "reconnect", "unlink"] as const) await draftFence(testEverywhereStore(redis.fetch), mode)
   })
 })

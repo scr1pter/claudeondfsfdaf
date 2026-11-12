@@ -2,6 +2,7 @@ import { isPlatform, type PlatformId } from "../../../packages/schema/src/everyw
 import { requireTrustedJsonRequest } from "../abuse.js"
 import { requireAccountUser } from "../account.js"
 import { ApiError, handleApiError, json, queryValue, readJson, type ApiRequest, type ApiResponse } from "../http.js"
+import { checkAccount } from "./authority.js"
 import { platformOn, readConfig, type Env, type EverywhereConfig } from "./config.js"
 import { eraseInstallation, type InstallRevoker, type JobEraser } from "./erase.js"
 import {
@@ -15,7 +16,7 @@ import {
   listLinks,
   listMappings,
   oauthUrl,
-  readInstall,
+  readInstall, readInstallState,
   redeemConnectCode,
   removeMapping,
   setMapping,
@@ -41,6 +42,7 @@ import { everywhereStore, type Store } from "./store.js"
  */
 
 export type AccountApiDeps = {
+  readonly accountAuthority?: import("./authority.js").AccountAuthorityPort
   readonly env?: Env
   readonly store?: Store
   /** For `requireAccountUser`'s call to the account service. */
@@ -74,11 +76,12 @@ async function begin(request: ApiRequest, deps: AccountApiDeps): Promise<Session
   const user = await requireAccountUser(request, deps.fetcher ?? fetch)
   const store = deps.store ?? everywhereStore()
   const now = (deps.now ?? Date.now)()
+  await checkAccount({ store, accountAuthority: deps.accountAuthority }, user.id)
   return {
     config,
     account: user.id.toLowerCase(),
     email: user.email,
-    ctx: { store, keys: config.dataKeys, now, notify: deps.notify ?? emailNotifier(deps.env ?? process.env) },
+    ctx: { store, keys: config.dataKeys, now, accountAuthority: deps.accountAuthority, notify: deps.notify ?? emailNotifier(deps.env ?? process.env) },
   }
 }
 
@@ -239,23 +242,25 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
         const session = await begin(request, deps)
         const input = await body(request)
         const installation = text(input.installation, "installation")
-        const record = await readInstall(session.ctx.store, installation)
-        if (record?.connector !== session.account) throw notFound()
+        const snapshot = await readInstallState(session.ctx.store, installation)
+        if (snapshot?.record.connector !== session.account) throw notFound()
         const erased = await eraseInstallation(
           {
             store: session.ctx.store,
+            accountAuthority: session.ctx.accountAuthority,
             now: session.ctx.now,
             jobs: deps.jobs ?? jobEraser(session.ctx.store, () => session.ctx.now),
             // A caller replacing the native exchanges also owns that transport's revocation port.
             ...(deps.revoke ? { revoke: deps.revoke } : deps.exchanges === undefined ? {
-              revoke: (installation: string, record: InstallRecord) => installation.startsWith("linear:")
-                ? revokeLinear(installation, record, session.config.dataKeys, deps.fetcher) : revokeSlack(installation, record, session.config.dataKeys, deps.fetcher),
+              revoke: (installation: string, record: InstallRecord, beforeRequest: () => Promise<void>) => installation.startsWith("linear:")
+                ? revokeLinear(installation, record, session.config.dataKeys, deps.fetcher, beforeRequest) : revokeSlack(installation, record, session.config.dataKeys, deps.fetcher, beforeRequest),
             } : {}),
           },
           installation,
-          "disconnected",
+          "disconnected", { expected: snapshot },
         )
-        json(response, 200, { erased: true, links: erased.links, mappings: erased.mappings })
+        json(response, erased.nativePending ? 202 : 200, { erased: !erased.nativePending, links: erased.links, mappings: erased.mappings,
+          ...(erased.nativePending ? { closing: true, nextAction: "review-native-revocation" } : {}) })
       },
     }),
   )
@@ -269,9 +274,12 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
       GET: async () => {
         const session = await begin(request, deps)
         const installation = text(queryValue(request, "installation"), "installation")
-        const record = await readInstall(session.ctx.store, installation)
-        if (record?.connector !== session.account) throw notFound()
-        json(response, 200, { installation, mappings: await listMappings(session.ctx.store, installation) })
+        const snapshot = await readInstallState(session.ctx.store, installation)
+        if (snapshot?.record.connector !== session.account) throw notFound()
+        const mappings = await listMappings(session.ctx.store, installation)
+        await checkAccount(session.ctx, session.account)
+        if ((await readInstallState(session.ctx.store, installation))?.raw !== snapshot.raw) throw notFound()
+        json(response, 200, { installation, mappings })
       },
       PUT: async () => {
         const session = await begin(request, deps)

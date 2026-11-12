@@ -4,11 +4,12 @@ import { renderRefusal } from "../../../../packages/schema/src/everywhere-policy
 import { ApiError } from "../../http.js"
 import type { EverywhereConfig } from "../config.js"
 import { eraseInstallation } from "../erase.js"
-import { findLink, installationAuthority, installToken, readInstall, readInstallSnapshot, redeemLinkCode, setMappingByWord, unlink, type InstallRecord } from "../identity.js"
-import { jobEraser, openReply, readComputer, readJob, readJobBody, updateJobReply, type JobsContext } from "../jobs.js"
+import { checkInstallAuthority, findLink, installationAuthority, installGuards, installToken, readInstall, readInstallSnapshot, redeemLinkCode, setMappingByWord, unlink, type InstallRecord } from "../identity.js"
+import { checkJobAuthority, jobEraser, openReply, readComputer, readJob, readJobBody, updateJobReply, type JobsContext } from "../jobs.js"
 import { everywhereKeys } from "../keys.js"
 import type { JobView, ParsedTrigger, PlatformAdapter, ReplyReference } from "../platform.js"
 import type { Ports } from "../ports.js"
+import { fencedStore } from "../authority.js"
 import { setValue, swapValue } from "../store.js"
 import { createSlackClient, SlackFailure, type SlackClient } from "./client.js"
 import { slackCooldown } from "./cooldown.js"
@@ -39,29 +40,45 @@ function triggerView(trigger: InboundTrigger): JobView {
 /** No registry side effects: routes, reports and sweeps construct the same adapter with current configuration. */
 export function createSlackAdapter(deps: SlackDeps): PlatformAdapter {
   const ctx = deps.context
-  const erase = (installation: string) => eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation, "tokens-revoked").then(() => undefined)
-  const client = async (installation: string, record?: InstallRecord, view?: JobView): Promise<SlackClient> => {
+  const erase = async (installation: string) => {
+    const snapshot = await readInstallSnapshot(ctx().store, installation)
+    if (snapshot) await eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation, "revoked", { expected: snapshot })
+  }
+  const client = async (installation: string, record?: InstallRecord, view?: JobView, terminal = false): Promise<SlackClient> => {
     const current = async () => {
-      const snapshot = view?.job ? await readInstallSnapshot(ctx().store, installation) : undefined
+      const snapshot = await readInstallSnapshot(ctx().store, installation)
+      if (!snapshot || record?.revision !== undefined && snapshot.record.revision !== record.revision) throw new ApiError(409, "SLACK_AUTHORITY_CHANGED", "The Slack connection changed.")
+      await checkInstallAuthority(ctx(), installation, snapshot)
+      if (view?.job) await checkJobAuthority(ctx(), view.job)
       if (view?.job && (!snapshot || typeof view.reply.installRevision !== "string" || installationAuthority(snapshot) !== view.reply.installRevision))
         throw new ApiError(409, "SLACK_AUTHORITY_CHANGED", "The Slack connection changed. This result is held for review.")
       const installed = snapshot?.record ?? record ?? await readInstall(ctx().store, installation)
       const token = installed && installToken(ctx().keys, installation, installed)
       if (!token) throw new ApiError(503, "SLACK_UNAVAILABLE", "The Slack installation is unavailable.")
-      return createSlackClient({ token, fetcher: deps.fetcher, now: () => ctx().now, revoked: () => erase(installation),
-        cooldown: slackCooldown(ctx().store, installation) })
+      return createSlackClient({ token, fetcher: deps.fetcher, now: () => ctx().now, revoked: () => eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation, "tokens-revoked", { expected: snapshot }).then(() => undefined),
+        cooldown: slackCooldown(fencedStore(ctx().store, await installGuards(ctx(), installation, snapshot)), installation),
+        beforeRequest: async () => {
+          await checkInstallAuthority(ctx(), installation, snapshot)
+          if (view?.job) {
+            await checkJobAuthority(ctx(), view.job)
+            const latest = await readJob(ctx().store, view.jid)
+            if (!latest || !terminal && ended(latest.state))
+              throw new ApiError(409, "SLACK_AUTHORITY_CHANGED", "The Slack task changed.")
+          }
+          if ((await readInstallSnapshot(ctx().store, installation))?.raw !== snapshot.raw)
+            throw new ApiError(409, "SLACK_AUTHORITY_CHANGED", "The Slack connection changed.")
+        } })
     }
-    const first = await current()
-    // Re-read before every effect, including a later rename, plan, private summary or terminal status in this call.
-    return view?.job ? async (method, body) => (await current())(method, body) : first
+    // Re-read before every effect, including control replies and later rename/private/status effects.
+    return async (method, body) => (await current())(method, body)
   }
   const ephemeral = async (view: JobView, text: string) => {
     const ref = reference(view.reply)
     await (await client(view.installation, undefined, view))("chat.postEphemeral", { ...ref, text, unfurl_links: false, unfurl_media: false, parse: "none" })
   }
-  const status = async (view: JobView, value: "processing" | "active" | "closed") => {
+  const status = async (view: JobView, value: "processing" | "active" | "closed", terminal = false) => {
     const ref = reference(view.reply)
-    await (await client(view.installation, undefined, view))("agents.sessions.setStatus", { channel_id: ref.channel, thread_ts: ref.thread_ts, status: value })
+    await (await client(view.installation, undefined, view, terminal))("agents.sessions.setStatus", { channel_id: ref.channel, thread_ts: ref.thread_ts, status: value })
   }
   const answer = async (trigger: InboundTrigger, text: string) => {
     const view = triggerView(trigger)
@@ -198,13 +215,13 @@ export function createSlackAdapter(deps: SlackDeps): PlatformAdapter {
     },
     finish: async (view, result) => {
       await locked(view, true, async () => {
-        const call = await client(view.installation, undefined, view)
+        const call = await client(view.installation, undefined, view, true)
         const ref = reference(view.reply)
         await post(view, call, "result", { channel: ref.channel, thread_ts: ref.thread_ts, text: result.text,
           blocks: [slackPlan("pushing", true), ...slackResult(result.text)], unfurl_links: false, unfurl_media: false, parse: "none" })
         if (result.privateText) await post(view, call, "private", { ...ref, text: result.privateText, unfurl_links: false, unfurl_media: false, parse: "none" })
         const latest = await readJob(ctx().store, view.jid)
-        await status(view, latest?.state === "cancelled" ? "closed" : "active")
+        await status(view, latest?.state === "cancelled" ? "closed" : "active", true)
       })
     },
     linkPrompt: (trigger) => answer(trigger, "Link your own Vector account first: open Vector Everywhere settings, generate a Slack link code, then send link <code> to this bot in a direct message. Never post a code in a channel."),

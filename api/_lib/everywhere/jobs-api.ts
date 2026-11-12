@@ -20,6 +20,7 @@ import {
 } from "../http.js"
 import { requireUnrevokedCliToken } from "../revocation.js"
 import { after } from "./after.js"
+import { checkAccount, type AccountAuthorityPort } from "./authority.js"
 import { readConfig, type Env, type EverywhereConfig } from "./config.js"
 import {
   claimJob,
@@ -85,6 +86,7 @@ export type JobEvents = {
 }
 
 export type JobsApiDeps = {
+  readonly accountAuthority?: AccountAuthorityPort
   readonly env?: Env
   readonly store?: Store
   /** For the revocation check's store calls. */
@@ -139,10 +141,12 @@ async function session(started: Started & { readonly off: false }, deps: JobsApi
   const account = claims.id.toLowerCase()
   const ctx: JobsContext = {
     store: started.store,
+    accountAuthority: deps.accountAuthority,
     keys: started.config.dataKeys,
     now: started.now,
     ...(started.config.offer ? { offer: started.config.offer } : {}),
   }
+  await checkAccount(ctx, account)
   const state = await readEverywhereSwitch(started.config, deps.switches ?? codiumSwitches(deps.fetcher ?? fetch))
   const stopped = !admits(state, "running")
   const ended = await sweepAccount(ctx, account, { stop: stopped })

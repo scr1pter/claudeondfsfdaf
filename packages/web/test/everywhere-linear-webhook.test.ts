@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import { drainAfter } from "../../../api/_lib/everywhere/after"
 import { claimDelivery } from "../../../api/_lib/everywhere/dedupe"
-import { findLink, installationAuthority, setMapping } from "../../../api/_lib/everywhere/identity"
+import { findLink, readInstallState, installationAuthority, setMapping } from "../../../api/_lib/everywhere/identity"
 import { CREATE_JOB_SCRIPT, cancelJob, createJob, claimJob, readJob, readJobBody, recordSeen } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { readCounts } from "../../../api/_lib/everywhere/limits"
@@ -10,12 +10,13 @@ import { REPLACE_NATIVE_RESERVATION_SCRIPT, replaceNativeReservation } from "../
 import { createLinearAdapter } from "../../../api/_lib/everywhere/linear/adapter"
 import { createLinearWebhook } from "../../../api/_lib/everywhere/linear/routes"
 import { parseLinear } from "../../../api/_lib/everywhere/linear/parse"
-import { everywhereStore, type Store } from "../../../api/_lib/everywhere/store"
+import { type Store } from "../../../api/_lib/everywhere/store"
 import { createJobId } from "../../../packages/schema/src/everywhere"
 import { RouteHarness } from "./lib/everywhere-account"
+import { seedJobAuthority } from "./lib/everywhere-job-authority"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { FakeLinear, linearFixture } from "./lib/everywhere-linear"
-import { realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
+import { realRedis, useKv, type RealRedis, testEverywhereStore } from "./lib/everywhere-store"
 
 installFetchGuard()
 const native = new FakeLinear()
@@ -156,7 +157,7 @@ test("a cap race after reservation releases only the rejected request's pending 
   const f = await ready(true)
   let race = true
   const store: Store = async (command) => {
-    if (race && command[0] === "EVAL" && command[1] === CREATE_JOB_SCRIPT) {
+    if (race && command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(CREATE_JOB_SCRIPT)) {
       race = false
       for (let index = 0; index < 3; index++) expect((await createJob(f.context(), {
         platform: "linear", installation: f.installation, kind: "mention", sponsor: f.account, requester: { userId: native.user, account: f.account },
@@ -198,29 +199,30 @@ test("native stop cancels only its sponsor and does not make further context, pl
   expect(native.calls).toHaveLength(before)
 })
 
-test("revocation and definite team-access removal erase links and live bodies", async () => {
+test("ambiguous historical revocation and team removal hold the current generation without deleting it", async () => {
   for (const permission of [false, true]) {
     const f = await ready(true)
     const active = await f.job()
     const body = { type: permission ? "PermissionChange" : "OAuthApp", action: permission ? "teamAccessChanged" : "revoked",
-      oauthClientId: f.config.linear!.clientId, organizationId: native.organization, appUserId: native.bot, webhookTimestamp: f.fake.clock.now,
+      oauthClientId: f.config.linear!.clientId, organizationId: native.organization, appUserId: native.bot, webhookTimestamp: f.fake.clock.now, createdAt: new Date(f.fake.clock.now).toISOString(),
       ...(permission ? { removedTeamIds: [native.team], addedTeamIds: [], canAccessAllPublicTeams: false } : {}) }
     expect((await f.send(body, randomUUID(), body.type)).status).toBe(200)
     await drainAfter()
-    expect(await f.store(["GET", everywhereKeys.install(f.installation)])).toBeNull()
-    expect(await f.store(["GET", everywhereKeys.jobBody(active.view.jid)])).toBeNull()
-    expect(await findLink(f.store, f.installation, native.user)).toBeUndefined()
+    expect((await readInstallState(f.store, f.installation))?.record.connector).toBe(f.account)
+    expect(await f.store(["GET", everywhereKeys.jobBody(active.view.jid)])).not.toBeNull()
+    expect((await findLink(f.store, f.installation, native.user))?.account).toBe(f.account)
+    await expect(f.adapter.progress(active.view, "reading")).rejects.toMatchObject({ code: "EVERYWHERE_AUTHORITY_CHANGED" })
   }
 })
 
-test("a native authentication failure erases the current installation before any task can be admitted", async () => {
+test("a renewable native authentication failure preserves authorization and admits no task", async () => {
   const f = await ready(true)
   native.answer = (operation) => operation === "user" ? new Response(null, { status: 401 }) : undefined
   expect((await f.send(f.envelope("Do the task", { action: "prompted" }))).status).toBe(200)
   await drainAfter()
-  expect(await f.store(["GET", everywhereKeys.install(f.installation)])).toBeNull()
+  expect((await readInstallState(f.store, f.installation))?.record.connector).toBe(f.account)
   expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([])
-  expect(await findLink(f.store, f.installation, native.user)).toBeUndefined()
+  expect((await findLink(f.store, f.installation, native.user))?.account).toBe(f.account)
 })
 
 async function reservationFence(store: Store) {
@@ -229,6 +231,7 @@ async function reservationFence(store: Store) {
   const installation = `linear:${randomUUID()}`
   const raw = JSON.stringify({ connector: f.account, installedAt: context.now, scopes: [] })
   await store(["SET", everywhereKeys.install(installation), raw])
+  await seedJobAuthority(context, { platform: "linear", installation, sponsor: f.account, requester: { userId: native.user, account: f.account } })
   const resource = randomUUID()
   const old = createJobId(context.now)
   const winner = createJobId(context.now + 1)
@@ -239,7 +242,7 @@ async function reservationFence(store: Store) {
   let release!: () => void
   const entered = new Promise<void>((resolve) => { enter = resolve })
   const blocked = new Promise<void>((resolve) => { release = resolve })
-  const pending = createJob({ ...context, store: async (command) => { if (command[0] === "EVAL" && command[1] === CREATE_JOB_SCRIPT) { enter(); await blocked }; return store(command) } }, {
+  const pending = createJob({ ...context, store: async (command) => { if (command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(CREATE_JOB_SCRIPT)) { enter(); await blocked }; return store(command) } }, {
     platform: "linear", installation, kind: "followup", sponsor: f.account, requester: { userId: native.user, account: f.account },
     repository: { id: 101, fullName: "acme/app", shared: false }, issue: { key: "ENG-123" }, task: "Original request", context: [], shared: true,
   }, { jid: old, deliveryId, installationRecord: raw, reservation: { resource, owner: old } })
@@ -274,7 +277,7 @@ test("a lost terminal-reservation replacement response cannot leave an unexpirin
   const key = everywhereKeys.nativeResource("linear", f.installation, native.session)
   const adapter = createLinearAdapter({ ...f.deps, context: () => ({ ...f.context(), store: async (command) => {
     const result = await f.store(command)
-    if (command[0] === "EVAL" && command[1] === REPLACE_NATIVE_RESERVATION_SCRIPT) throw new Error("Generated lost reservation response")
+    if (command[0] === "EVAL" && typeof command[1] === "string" && command[1].endsWith(REPLACE_NATIVE_RESERVATION_SCRIPT)) throw new Error("Generated lost reservation response")
     return result
   } }) })
   const view = { ...active.view, job: undefined, jid: owner }
@@ -312,9 +315,9 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("actual Redis native resourc
   beforeAll(async () => { redis = (await realRedis())! })
   afterAll(async () => { await redis?.close() })
   test("key12 ownership change before EVAL refuses the stale native job before quota writes", async () => {
-    await reservationFence(everywhereStore(redis.fetch))
+    await reservationFence(testEverywhereStore(redis.fetch))
   })
   test("terminal native reservation replacement races leave one short-lived owner", async () => {
-    await reservationReplacement(everywhereStore(redis.fetch))
+    await reservationReplacement(testEverywhereStore(redis.fetch))
   })
 })

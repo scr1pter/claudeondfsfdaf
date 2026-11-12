@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { PLATFORM_HOSTS } from "../../../../api/_lib/everywhere/fetch"
-import { installationAuthority, linkBySignIn, OAUTH, readInstallSnapshot, recordInstall } from "../../../../api/_lib/everywhere/identity"
+import { installationAuthority, linkBySignIn, OAUTH, readInstallSnapshot, readLinkSnapshot, recordInstall } from "../../../../api/_lib/everywhere/identity"
 import { claimJob, createJob, offerJob, readJob, reportJob } from "../../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../../api/_lib/everywhere/keys"
 import { hmacSha256Hex } from "../../../../api/_lib/everywhere/signature"
@@ -133,10 +133,12 @@ export async function linearFixture(native: FakeLinear) {
   const sign = (body: string, delivery = randomUUID(), event = "AgentSessionEvent") => ({ "linear-delivery": delivery, "linear-event": event,
     "linear-signature": hmacSha256Hex(config.linear!.webhookSecret, body) })
   const job = async () => {
+    if (!(await link()).ok) throw new Error("Fixture native link failed")
     const body = envelope()
     const parsed = parseLinear(body, `${native.organization}:created:${native.session}`, snapshot.record)
     if ("ignore" in parsed) throw new Error(parsed.ignore)
-    const reply = { ...parsed.reply, installRevision: installationAuthority(snapshot) }
+    const linked = (await readLinkSnapshot(f.store, installation, native.user))!
+    const reply = { ...parsed.reply, installRevision: installationAuthority(snapshot), linkRevision: linked.record.revision! }
     const created = await createJob(f.context(), { platform: "linear", installation, kind: "mention", sponsor: f.account,
       requester: { userId: native.user, account: f.account }, repository: { id: 101, fullName: "acme/app", shared: false }, issue: { key: "ENG-123" },
       shared: true, task: parsed.trigger.task, context: parsed.trigger.context, reply })

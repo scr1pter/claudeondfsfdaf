@@ -35,10 +35,10 @@ import {
 } from "../../../api/_lib/everywhere/identity"
 import { readConfig } from "../../../api/_lib/everywhere/config"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
-import { everywhereStore, type Store } from "../../../api/_lib/everywhere/store"
+import { type Store } from "../../../api/_lib/everywhere/store"
 import { everywhereEnv, FakeJira } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
+import { FakeStore, realRedis, useKv, type RealRedis, testEverywhereStore, testAccountAuthority } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -75,11 +75,12 @@ const person: LinkActor = { bot: false, external: false, guest: false }
 
 class World {
   readonly fake = new FakeStore()
-  readonly store: Store = everywhereStore(this.fake.fetch)
+  readonly store: Store = testEverywhereStore(this.fake.fetch)
   readonly notices: LinkNotice[] = []
   ctx(): IdentityContext {
     return {
       store: this.store,
+      accountAuthority: testAccountAuthority,
       keys,
       now: this.fake.clock.now,
       notify: async (notice) => {
@@ -274,7 +275,7 @@ describe("links", () => {
     const world = new World()
     await world.install(SLACK, B.id)
     await redeemLinkCode(world.ctx(), dm(await codeFor(world, A)))
-    expect(await findLink(world.store, SLACK, U1)).toEqual({ account: A.id, linkedAt: world.fake.clock.now })
+    expect(await findLink(world.store, SLACK, U1)).toEqual({ account: A.id, linkedAt: world.fake.clock.now, revision: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/) })
     expect(await listLinks(world.store, A.id)).toEqual([
       { installation: SLACK, platform: "slack", userId: U1, linkedAt: world.fake.clock.now },
     ])
@@ -591,7 +592,7 @@ describe("Jira site connect codes", () => {
 })
 
 describe("repository mappings", () => {
-  const repo = (fullName: string, id?: number) => (id === undefined ? { fullName } : { fullName, id })
+  const repo = (fullName: string, id = fullName === "acme/api" ? 7 : fullName === "acme/web" ? 8 : 9) => ({ fullName, id })
 
   test("only the connector sets a place's repositories", async () => {
     const world = new World()
@@ -616,6 +617,7 @@ describe("repository mappings", () => {
     })
     expect(set.ok).toBe(true)
     expect(await findMapping(world.store, SLACK, "C0123")).toEqual({
+      revision: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
       place: "C0123",
       repositories: [repo("acme/api", 7), repo("acme/web")],
       setBy: A.id,
@@ -869,7 +871,7 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
   })
 
   test("twelve people sending one code at once: exactly one is linked", async () => {
-    const store = everywhereStore(redis.fetch)
+    const store = testEverywhereStore(redis.fetch)
     const ctx: IdentityContext = { store, keys, now: Date.now() }
     const installation = `slack:T${randomBytes(5).toString("hex").toUpperCase()}`
     const account = randomUUID()
@@ -888,7 +890,7 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
   })
 
   test("two accounts installing one place at once: exactly one becomes its connector", async () => {
-    const store = everywhereStore(redis.fetch)
+    const store = testEverywhereStore(redis.fetch)
     const ctx: IdentityContext = { store, keys, now: Date.now() }
     const installation = `slack:T${randomBytes(5).toString("hex").toUpperCase()}`
     const accounts = [randomUUID(), randomUUID()]

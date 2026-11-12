@@ -4,9 +4,8 @@ import { SERVER_CAPS, createJobId } from "../../../packages/schema/src/everywher
 import { overLimit } from "../../../packages/schema/src/everywhere-policy"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { capKeys, countJob, dayWindow, hourWindow, readCounts, type CapSubject } from "../../../api/_lib/everywhere/limits"
-import { everywhereStore } from "../../../api/_lib/everywhere/store"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
+import { FakeStore, realRedis, useKv, type RealRedis, testEverywhereStore } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -46,13 +45,13 @@ describe("windows", () => {
 
 describe("counting", () => {
   test("an account with no jobs reads all zeros", async () => {
-    const store = everywhereStore(new FakeStore().fetch)
+    const store = testEverywhereStore(new FakeStore().fetch)
     expect(await readCounts(store, subject())).toEqual({ sponsorToday: 0, sponsorLive: 0, requesterHour: 0, installationToday: 0 })
   })
 
   test("countJob counts the job in every window and sets each counter's expiry", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const who = subject()
     const result = await countJob(store, who, fake.clock.now)
     expect(result).toEqual({ admitted: true, counts: { sponsorToday: 1, requesterHour: 1, installationToday: 1, sponsorLive: 0 } })
@@ -64,7 +63,7 @@ describe("counting", () => {
 
   test("the 7th job in an hour from one requester is refused and counts nothing", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const who = subject()
     for (let index = 0; index < SERVER_CAPS.requesterPerHour; index++)
       expect((await countJob(store, who, fake.clock.now)).admitted).toBe(true)
@@ -80,7 +79,7 @@ describe("counting", () => {
 
   test("a sponsor with 3 live jobs is refused", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const who = subject()
     for (let index = 0; index < SERVER_CAPS.sponsorLive; index++)
       fake.send(["ZADD", everywhereKeys.jobs(who.sponsor), fake.clock.now, createJobId(fake.clock.now + index)])
@@ -91,7 +90,7 @@ describe("counting", () => {
 
   test("a sponsor's 31st job of the day is refused, across requesters and installations", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const sponsor = randomUUID()
     for (let index = 0; index < SERVER_CAPS.sponsorPerDay; index++) {
       const who = subject({ sponsor, installation: index % 2 ? "slack:T0123ABCD" : `linear:${randomUUID()}`, userId: index % 2 ? `U${index}AB` : randomUUID() })
@@ -102,7 +101,7 @@ describe("counting", () => {
 
   test("an installation's 201st job of the day is refused", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const installation = "slack:T0999ZZZZ"
     fake.send(["SET", capKeys(subject({ installation }), fake.clock.now).installationToday.key, String(SERVER_CAPS.installationPerDay)])
     expect((await countJob(store, subject({ installation }), fake.clock.now)).admitted).toBe(false)
@@ -111,7 +110,7 @@ describe("counting", () => {
 
   test("readCounts agrees with overLimit at each edge", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const who = subject()
     for (let index = 0; index < SERVER_CAPS.requesterPerHour - 1; index++) await countJob(store, who, fake.clock.now)
     expect(overLimit(await readCounts(store, who, fake.clock.now))).toBe(false)
@@ -121,7 +120,7 @@ describe("counting", () => {
 
   test("a counter holding something other than a number is a store fault", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const who = subject()
     fake.send(["SET", capKeys(who, fake.clock.now).sponsorToday.key, "lots"])
     await expect(readCounts(store, who, fake.clock.now)).rejects.toMatchObject({ statusCode: 503 })
@@ -129,7 +128,7 @@ describe("counting", () => {
   })
 
   test("malformed subjects are refused", async () => {
-    const store = everywhereStore(new FakeStore().fetch)
+    const store = testEverywhereStore(new FakeStore().fetch)
     for (const bad of [subject({ sponsor: "nobody" }), subject({ installation: "slack:nope" }), subject({ userId: "has space" })])
       await expect(countJob(store, bad)).rejects.toMatchObject({ code: "EVERYWHERE_INVALID_ID" })
   })
@@ -145,7 +144,7 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
   })
 
   test("twelve jobs at once from one requester: exactly six are admitted", async () => {
-    const store = everywhereStore(redis.fetch)
+    const store = testEverywhereStore(redis.fetch)
     const who = subject({ installation: `linear:${randomUUID()}`, userId: randomUUID() })
     const results = await Promise.all(Array.from({ length: 12 }, () => countJob(store, who)))
     expect(results.filter((result) => result.admitted)).toHaveLength(SERVER_CAPS.requesterPerHour)

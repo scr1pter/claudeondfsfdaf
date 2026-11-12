@@ -264,3 +264,36 @@ Root batch056 passed the final test-only Jira A2A follow-up: **19 cases / 245 as
 This qualifies the scoped Jira package for an ordinary commit, not a phase push or activation. An independent whole-P2 review is now reading the frozen source. It has confirmed additional cross-package authority gaps requiring a coherent repair before any P2 push: exact authorized installation snapshots must reach erasure; an active-to-closing CAS must precede cleanup and block every late admission; record/index writes must be atomic and preserve a newer grant; generic job admission must fence the exact person link and account closing state; destructive native control events need replay/generation protection; and name-only Linear mapping/selection cannot authorize a reused repository name. Durable account metadata writers, including audit, link-code/OAuth state and readiness, must respect account deletion. This branch does not contain the Codium tombstone implementation, so no existing global closing integration is claimed.
 
 Known findings remain open even though the local component checks passed. The coordinating agent explicitly holds the P2 push until complete authority-race closure and new exact-head hosted Lua/general checks. Owner app registration, actual grants, native payload/identity proof, private surfaces, runner prerequisites, deployment and release gates remain unchanged. No main push, PR, paid inference, production operation or owner-computer action occurred.
+
+
+## P2 whole-phase authority repair: final local qualification
+
+The final repair supersedes the earlier unqualified candidates. An installation closes atomically before cleanup, with a permanent opaque epoch preventing absence ABA. Record/index writes and all fixed Lua mutations preflight their Redis key types; counters require canonical unsigned integer encoding, including rejecting `00` and `01` before any quota increment. Intake resolves and admits from one exact mapping snapshot and one exact person link. Account closure/tombstones are checked in the same mutation transaction. Native legacy jobs missing sealed authority hold; due-only terminal cleanup can retire them without requeue, body recreation or native effects. Foreign actor requests return the same 404 as missing jobs before target-account authority is read.
+
+Native replies recheck the captured token, account, link, installation and task after cooldown/refresh waits immediately before transport. Slack and Linear controls use durable signed semantic receipts pinned to a generation. Slack current-token proof preserves a valid reconnect; ambiguous controls hold without deletion. Linear renewable authentication failures and un-attributable permission controls never imply revocation. Positive immutable repository IDs are required for native choices.
+
+Native disconnect revocation records pending/confirmed/uncertain closing phases. Only the initial closer invokes the captured transport. Concurrent local cleanup can purge credentials/content but cannot reopen that generation. A confirmed response can complete only the same closing nonce/authority/connector; stale proof cannot affect a replacement. Unknown outcomes keep a token-free barrier and owner HTTP202/GET `review-native-revocation`; retries neither reissue blindly nor trust a caller's `nativeConfirmed`. After confirmed transport, interrupted cleanup is visible through owner GET and retries without a second revoke. Default installation cleanup always cancels every indexed live job, including foreign-sponsored bodies, through the exact closing facade even when no jobs port or active-account adapter is supplied.
+
+Root ran each affected file separately under Bun 1.3.14, with generated data, loopback fakes and the fetch guard. Final source checks passed API types in batch078 and web types in batch079 (249 files, zero errors, zero warnings). The table records final affected-file receipts. Earlier common/native checks passed batch075; later source changes were covered by the targeted078/079 checks. Those earlier receipts do not represent an all-files rerun of the final head.
+
+| File | Root batch | Passed | Skipped | Assertions |
+| --- | --- | ---: | ---: | ---: |
+| everywhere-authority.test.ts | 078 | 20 | 7 | 225 |
+| everywhere-control.test.ts | 078 | 13 | 0 | 123 |
+| everywhere-jobs.test.ts | 078 | 43 | 9 | 329 |
+| everywhere-jobs-api.test.ts | 078 | 22 | 0 | 226 |
+| everywhere-limits.test.ts | 078 | 11 | 3 | 77 |
+| everywhere-erase.test.ts | 079 | 10 | 0 | 146 |
+| everywhere-install-api.test.ts | 078 | 17 | 0 | 139 |
+| everywhere-slack-render.test.ts | 079 | 10 | 0 | 51 |
+| everywhere-linear-webhook.test.ts | 078 | 15 | 4 | 146 |
+| everywhere-linear-render.test.ts | 078 | 11 | 0 | 74 |
+| everywhere-jira-render.test.ts | 078 | 6 | 0 | 48 |
+
+Earlier candidates exposed actual source/type/fixture issues, all repaired before the final receipts. In particular the erase tests now assert exactly the retained epoch/account marker keys, values and permanent TTL semantics. The default erase-part test proves a real foreign-sponsored cancellation uses the deletion clock while an unverified teammate's audit remains unchanged. Native tests assert the earlier shared authority error and preserve zero-later-effect/full-replacement checks. The final two fixture corrections passed batch079 (erase10/146, Slack render10/51) without a production change.
+
+The final production boundary received two read-only reviews. The storage/deletion reviewer closed mapping snapshots, all-key/canonical-counter preflight, newest-code consumption, default foreign-sponsored erasure and per-loop actor ownership; prior test-helper/core-fixture authorship was disclosed. The separate native reviewer closed captured-token preflight, pending revocation serialization, exact same-generation confirmation, uncertain owner recovery and local account erasure without active authority. Neither reviewer ran tests or contacted a platform.
+
+These are scoped local software receipts, not native or hosted qualification. Skips include the new actual-Redis admission/link/tombstone, readiness bounds, wrong-type/canonical-counter and revocation-concurrency cases plus their setup/teardown hooks. Root must normally push the reviewed phase to `vector-everywhere` and obtain fresh exact-head dedicated Redis/types and general CI. No local Redis was started. No paid inference, real native workspace, owner computer, registration, deployment, PR or main change was used.
+
+P3, P4, Surfaces and go-live remain held for their specified merges and owner actions. The real mode-separated Codium tombstone port is missing here and fails closed; tests inject it explicitly. Native uncertainty/process-death reconciliation is not automatic. Minimal closing/account/epoch security metadata may remain after private data is purged; external provider work already delivered and out-of-band reinstalls cannot be canceled by a final preflight. Those native acceptance/retention/reconciliation questions remain actual live gates, not passing software evidence.

@@ -113,7 +113,7 @@ test("a concurrent same-authorization token rotation cannot send an obsolete tok
       await setJson(f.store, key, next)
       return new Response(null, { status: 401 })
     }
-    await expect(adapter.progress(active.view, "editing")).rejects.toMatchObject({ code: "LINEAR_UNAVAILABLE" })
+    await expect(adapter.progress(active.view, "editing")).rejects.toMatchObject({ code: moment === "before-call" ? "EVERYWHERE_AUTHORITY_CHANGED" : "LINEAR_UNAVAILABLE" })
     expect(native.calls).toHaveLength(moment === "before-call" ? 0 : 1)
     expect(await f.store(["GET", key])).toBe(JSON.stringify(next))
     native.answer = undefined

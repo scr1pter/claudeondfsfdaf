@@ -3,7 +3,10 @@ import { ApiError, json, readRawBody, requireMethod, type ApiRequest, type ApiRe
 import { after } from "../after.js"
 import { platformOn } from "../config.js"
 import { eraseInstallation } from "../erase.js"
-import { readInstall } from "../identity.js"
+import { captureControl } from "../control.js"
+import { sha256Hex } from "../signature.js"
+import { installGuards, readInstall, readInstallSnapshot, readInstallState } from "../identity.js"
+import { fencedStore } from "../authority.js"
 import { createIntake } from "../intake.js"
 import { jobEraser } from "../jobs.js"
 import { everywhereKeys } from "../keys.js"
@@ -29,19 +32,23 @@ export function createLinearWebhook(deps: LinearDeps) {
         return json(response, 400, { error: { code: "LINEAR_EVENT_INVALID" } })
       after("linear-event", async () => {
         const installation = `linear:${body.organizationId}`
+        if (body.type === "OAuthApp" && body.action === "revoked" || body.type === "PermissionChange" && body.action === "teamAccessChanged") {
+          // HMAC authenticates the semantic body, not Linear-Delivery or the send timestamp. No native grant id is
+          // supplied, and a renewable access-token failure cannot prove terminal revocation of the current grant.
+          if (typeof body.createdAt !== "string" || !Number.isFinite(Date.parse(body.createdAt))) return
+          const permission = body.type === "PermissionChange"
+          if (permission && (!linearId(body.appUserId) || !Array.isArray(body.addedTeamIds) || !body.addedTeamIds.every(linearId) ||
+            !Array.isArray(body.removedTeamIds) || !body.removedTeamIds.every(linearId) || typeof body.canAccessAllPublicTeams !== "boolean")) return
+          if (permission && (await readInstallState(deps.context().store, installation))?.record.botUserId !== body.appUserId) return
+          const semantic = sha256Hex(JSON.stringify({ organization: body.organizationId, client: body.oauthClientId, type: body.type, action: body.action,
+            createdAt: body.createdAt, ...(permission ? { appUserId: body.appUserId, canAccessAllPublicTeams: body.canAccessAllPublicTeams,
+              added: [...body.addedTeamIds as string[]].sort(), removed: [...body.removedTeamIds as string[]].sort() } : {}) }))
+          await captureControl(deps.context(), installation, semantic)
+          // Retain a non-destructive generation hold until reconnect/native permission revalidation is qualified.
+          return
+        }
         const record = await readInstall(deps.context().store, installation)
         if (!record) return
-        if (body.type === "OAuthApp" && body.action === "revoked") {
-          await eraseInstallation({ ...deps.context(), jobs: jobEraser(deps.context().store) }, installation, "revoked")
-          return
-        }
-        if (body.type === "PermissionChange" && body.action === "teamAccessChanged") {
-          if (body.appUserId !== record.botUserId) return
-          // Definite scope removal invalidates the whole installation conservatively, including live job bodies.
-          if (Array.isArray(body.removedTeamIds) && body.removedTeamIds.some(linearId))
-            await eraseInstallation({ ...deps.context(), jobs: jobEraser(deps.context().store) }, installation, "revoked")
-          return
-        }
         const session = linearObject(body.agentSession)
         const activity = linearObject(body.agentActivity)
         const eventId = body.action === "created" ? session.id : activity.id
@@ -55,7 +62,9 @@ export function createLinearWebhook(deps: LinearDeps) {
           now: () => deps.context().now, sleep: deps.sleep }).process(parsed, {
           jid: createJobId(deps.context().now), platform: "linear", installation, shared: true, reply: parsed.reply,
         })
-        await setValue(deps.context().store, everywhereKeys.linearHeader(installation, delivery), semantic, { ttlMs: 7 * 86_400_000, onlyNew: true })
+        const current = await readInstallSnapshot(deps.context().store, installation)
+        if (!current || current.record.revision !== record.revision) return
+        await setValue(fencedStore(deps.context().store, await installGuards(deps.context(), installation, current)), everywhereKeys.linearHeader(installation, delivery), semantic, { ttlMs: 7 * 86_400_000, onlyNew: true })
       })
       return json(response, 200, { received: true })
     } catch (error) {

@@ -12,10 +12,9 @@ import {
   type LinkNotice,
   type OAuthExchanges,
 } from "../../../api/_lib/everywhere/identity"
-import { everywhereStore } from "../../../api/_lib/everywhere/store"
 import { everywhereEnv, FakeAccounts, RouteHarness, testAccount } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, useKv } from "./lib/everywhere-store"
+import { FakeStore, useKv, testEverywhereStore, testAccountAuthority } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -56,7 +55,8 @@ let exchanged: string[]
 function deps(extra: Partial<AccountApiDeps> = {}): AccountApiDeps {
   return {
     env,
-    store: everywhereStore(fake.fetch),
+    store: testEverywhereStore(fake.fetch),
+    accountAuthority: testAccountAuthority,
     now: () => fake.clock.now,
     notify: async (notice) => {
       notices.push(notice)
@@ -66,7 +66,7 @@ function deps(extra: Partial<AccountApiDeps> = {}): AccountApiDeps {
 }
 
 function ctx(): IdentityContext {
-  return { store: everywhereStore(fake.fetch), keys: readConfig(env).dataKeys, now: fake.clock.now }
+  return { store: testEverywhereStore(fake.fetch), keys: readConfig(env).dataKeys, now: fake.clock.now, accountAuthority: testAccountAuthority }
 }
 
 async function install(installation: string, account: string) {

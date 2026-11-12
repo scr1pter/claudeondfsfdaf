@@ -27,6 +27,7 @@ export function linearApi(input: {
   readonly fetcher?: typeof fetch
   readonly now?: () => number
   readonly revoked?: () => Promise<void>
+  readonly beforeRequest?: () => Promise<void>
   readonly cooldown?: LinearCooldown
   readonly deadline?: number
 }) {
@@ -37,6 +38,7 @@ export function linearApi(input: {
     if (until > now) throw new LinearFailure(false, until - now)
     const remaining = input.deadline === undefined ? 10_000 : Math.min(10_000, input.deadline - (input.now ?? Date.now)())
     if (remaining <= 0) throw new LinearFailure(false)
+    await input.beforeRequest?.()
     let response: Response
     try {
       response = await platformFetch("linear", new URL("/graphql", `https://${PLATFORM_HOSTS.linear[0]!.host}`), {
@@ -46,7 +48,7 @@ export function linearApi(input: {
     } catch { throw new LinearFailure(true) }
     if (response.status === 401) {
       await response.body?.cancel().catch(() => undefined)
-      await input.revoked?.()
+      // A renewable access-token failure must not erase the authorization.
       throw new LinearFailure(false)
     }
     const limits = ["x-ratelimit-requests", "x-ratelimit-endpoint-requests", "x-ratelimit-complexity"]

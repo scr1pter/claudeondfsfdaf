@@ -4,12 +4,13 @@ import { EVERYWHERE_PAGE, renderRefusal } from "../../../../packages/schema/src/
 import { ApiError } from "../../http.js"
 import type { EverywhereConfig } from "../config.js"
 import { eraseInstallation } from "../erase.js"
-import { findLink, findMapping, installationAuthority, readInstallSnapshot } from "../identity.js"
-import { jobEraser, openReply, readJob, updateJobReply, type JobsContext } from "../jobs.js"
+import { checkInstallAuthority, findLink, findMapping, installGuards, installationAuthority, readInstallSnapshot } from "../identity.js"
+import { checkJobAuthority, jobEraser, openReply, readJob, updateJobReply, type JobsContext } from "../jobs.js"
 import { everywhereKeys } from "../keys.js"
 import { replaceNativeReservation } from "../native-resource.js"
 import type { JobView, NativeReservation, PlatformAdapter, ReplyReference } from "../platform.js"
 import type { Ports } from "../ports.js"
+import { fencedStore } from "../authority.js"
 import { getValue, setValue, swapValue } from "../store.js"
 import { linearApi, LinearFailure, type LinearApi } from "./client.js"
 import { linearAccess } from "./credentials.js"
@@ -39,12 +40,17 @@ function triggerView(trigger: InboundTrigger): JobView {
 
 export function createLinearAdapter(deps: LinearDeps): PlatformAdapter {
   const ctx = deps.context
-  const erase = (installation: string) => eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation, "revoked").then(() => undefined)
+  const erase = async (installation: string) => {
+    const snapshot = await readInstallSnapshot(ctx().store, installation)
+    if (snapshot) await eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation, "revoked", { expected: snapshot })
+  }
   const assertAuthority = async (view: JobView) => {
     const current = await readInstallSnapshot(ctx().store, view.installation)
     if (!current || (view.reply.appUser !== undefined && view.reply.appUser !== current.record.botUserId) || ((view.job || view.reply.installRevision !== undefined) &&
       (typeof view.reply.installRevision !== "string" || installationAuthority(current) !== view.reply.installRevision)))
       throw new ApiError(409, "LINEAR_AUTHORITY_CHANGED", "The Linear connection changed. This result is held for review.")
+    await checkInstallAuthority(ctx(), view.installation, current)
+    if (view.job) await checkJobAuthority(ctx(), view.job)
     if (view.job && await getValue(ctx().store, everywhereKeys.nativeResource("linear", view.installation, reference(view.reply).session)) !== view.jid)
       throw new ApiError(409, "LINEAR_SESSION_CHANGED", "This Linear session has moved to another task.")
     return current
@@ -63,8 +69,18 @@ export function createLinearAdapter(deps: LinearDeps): PlatformAdapter {
     // A concurrent refresh can preserve the authorization revision while rotating credentials. Hold rather than
     // send the obsolete token and mistake its 401 for revocation of the newer valid pair.
     if (current.record.tokenEnc !== access.record.tokenEnc) throw new LinearFailure(false)
+    const scoped = fencedStore(ctx().store, await installGuards(ctx(), view.installation, current))
     return linearApi({ token: access.token, fetcher: deps.fetcher, now: () => ctx().now, deadline,
-      revoked: async () => { if ((await readInstallSnapshot(ctx().store, view.installation))?.raw === current.raw) await erase(view.installation) },
+      beforeRequest: async () => {
+        const latest = await assertAuthority(view)
+        if (latest.raw !== current.raw || latest.record.tokenEnc !== access.record.tokenEnc) throw new LinearFailure(false)
+        if (view.job) {
+          const job = await readJob(ctx().store, view.jid)
+          if (!job || (!final && TERMINAL_STATES.has(job.state)) || (job.state === "cancelled" && !["create", "activity"].includes(operation)))
+            throw new ApiError(409, "LINEAR_STOPPED", "This Linear task has ended.")
+        }
+      },
+      // Access-token auth failures are renewable or ambiguous; they never prove grant revocation.
       cooldown: {
         read: async () => {
           const score = await ctx().store(["ZSCORE", everywhereKeys.linearRetry(view.installation), "until"])
@@ -72,7 +88,7 @@ export function createLinearAdapter(deps: LinearDeps): PlatformAdapter {
           if (typeof score !== "string" || !/^[0-9]{1,16}$/.test(score)) throw new LinearFailure(false)
           return Number(score)
         },
-        write: async (at) => { await ctx().store(["ZADD", everywhereKeys.linearRetry(view.installation), "GT", Math.ceil(at), "until"]); await ctx().store(["PEXPIRE", everywhereKeys.linearRetry(view.installation), 86_400_000]) },
+        write: async (at) => { await scoped(["ZADD", everywhereKeys.linearRetry(view.installation), "GT", Math.ceil(at), "until"]); await scoped(["PEXPIRE", everywhereKeys.linearRetry(view.installation), 86_400_000]) },
       },
     })(operation, variables)
   }
@@ -97,7 +113,8 @@ export function createLinearAdapter(deps: LinearDeps): PlatformAdapter {
       return id
     }
     const key = everywhereKeys.linearReceipt(view.installation, `${view.reply.delivery ?? view.reply.session}:${kind}`)
-    await setValue(ctx().store, key, randomUUID(), { ttlMs: 7 * 86_400_000, onlyNew: true })
+    const snapshot = await assertAuthority(view)
+    await setValue(fencedStore(ctx().store, await installGuards(ctx(), view.installation, snapshot)), key, randomUUID(), { ttlMs: 7 * 86_400_000, onlyNew: true })
     const id = await getValue(ctx().store, key)
     if (!linearId(id)) throw new LinearFailure(true)
     return id
@@ -168,15 +185,16 @@ export function createLinearAdapter(deps: LinearDeps): PlatformAdapter {
       return true
     },
     reserve: async (parsed, view): Promise<NativeReservation | undefined> => locked(view, false, async () => {
-      await assertAuthority(view)
+      const snapshot = await assertAuthority(view)
+      const scoped = fencedStore(ctx().store, await installGuards(ctx(), view.installation, snapshot))
       const key = everywhereKeys.nativeResource("linear", view.installation, parsed.trigger.thread.ref)
       const previous = await getValue(ctx().store, key)
       if (previous) {
         const job = await readJob(ctx().store, previous)
         // A fresh pending pointer has no job yet. Its 30 s lease must expire; never race that worker into a second job.
         if (!job || !TERMINAL_STATES.has(job.state)) return undefined
-        if (!await replaceNativeReservation(ctx().store, key, previous, view.jid)) return undefined
-      } else if (!await setValue(ctx().store, key, view.jid, { ttlMs: 30_000, onlyNew: true })) return undefined
+        if (!await replaceNativeReservation(scoped, key, previous, view.jid)) return undefined
+      } else if (!await setValue(scoped, key, view.jid, { ttlMs: 30_000, onlyNew: true })) return undefined
       return { resource: parsed.trigger.thread.ref, owner: view.jid }
     }),
     progress: async (view, milestone) => {

@@ -114,7 +114,8 @@ export async function jiraFixture(native: NativeJira, options: { installed?: boo
   }
   const job = async () => {
     const record = await task()
-    const reply = { task: record.id, ref: record.contextId, context: record.contextId, user: native.user, installRevision: record.authority, place: "PROJ" }
+    const linked = (await readLinkSnapshot(f.store, installation, native.user))!
+    const reply = { linkRevision: linked.record.revision!, task: record.id, ref: record.contextId, context: record.contextId, user: native.user, installRevision: record.authority, place: "PROJ" }
     const created = await createJob(f.context(), { platform: "jira", installation, kind: "assign", sponsor: f.account, requester: { userId: native.user, account: f.account },
       repository: { id: 101, fullName: "acme/app", shared: false }, issue: { key: "PROJ-123" }, shared: true, task: "Work on this work item.", context: [], reply })
     if (!created.ok) throw new Error("Fixture Jira job admission failed")

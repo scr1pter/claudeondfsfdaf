@@ -1,3 +1,4 @@
+import { luaKeyTypes } from "./lua.js"
 import {
   ACCOUNT_ID_PATTERN,
   DECLINE_CODES,
@@ -15,7 +16,9 @@ import {
 } from "../../../packages/schema/src/everywhere.js"
 import { ENDINGS } from "../../../packages/schema/src/everywhere-policy.js"
 import { AUDIT_MAX_ENTRIES, KEEP_MS, USER_ID_PATTERNS, everywhereKeys } from "./keys.js"
-import { runScript, storeInteger, storeUnavailable, type Store } from "./store.js"
+import { storeInteger, storeUnavailable, type Store } from "./store.js"
+import { ApiError } from "../http.js"
+import { accountGuards, authorizedScript, type AccountAuthorityPort } from "./authority.js"
 
 /*
  * The audit log (contract E16, 3.13). Every install, connect, connector change, link, unlink, job accepted or refused,
@@ -137,7 +140,7 @@ export function decodeAuditEntry(input: unknown): Decoded<AuditEntry> {
  * Adds an entry and trims the log in one step: entries older than 90 days go, then the oldest beyond 1,000, and the
  * log's own expiry moves to 90 days from now. ARGV: score, member, cutoff, max entries, keep ms.
  */
-export const AUDIT_APPEND_SCRIPT = [
+export const AUDIT_APPEND_SCRIPT = luaKeyTypes(["zset"]) + [
   "redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])",
   "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', '(' .. ARGV[3])",
   "local extra = redis.call('ZCARD', KEYS[1]) - tonumber(ARGV[4])",
@@ -147,18 +150,19 @@ export const AUDIT_APPEND_SCRIPT = [
 ].join(" ")
 
 /** Appends an entry to `account`'s log. Throws (a programming error) when the entry is not allowed. */
-export async function appendAudit(store: Store, account: string, input: AuditInput, now = Date.now()): Promise<AuditEntry> {
+export async function appendAudit(store: Store, account: string, input: AuditInput, now = Date.now(), accountAuthority?: AccountAuthorityPort): Promise<AuditEntry> {
   const decoded = decodeAuditEntry({ ...input, id: randomId(), at: now })
   if (!decoded.ok) throw new TypeError(`Audit entry refused: ${decoded.error}`)
   const entry = decoded.value
-  const count = storeInteger(
-    await runScript(
-      store,
-      AUDIT_APPEND_SCRIPT,
-      [everywhereKeys.audit(account)],
-      [entry.at, JSON.stringify(entry), now - KEEP_MS.audit, AUDIT_MAX_ENTRIES, KEEP_MS.audit],
-    ),
-  )
+  let count: number
+  try {
+    count = storeInteger(await authorizedScript(store, await accountGuards({ store, accountAuthority }, account), AUDIT_APPEND_SCRIPT,
+      [everywhereKeys.audit(account)], [entry.at, JSON.stringify(entry), now - KEEP_MS.audit, AUDIT_MAX_ENTRIES, KEEP_MS.audit]))
+  } catch (error) {
+    // Deletion never recreates a closed owner's audit. Unavailable upstream authority cannot authorize new data.
+    if (error instanceof ApiError && ["EVERYWHERE_AUTHORITY_CHANGED", "EVERYWHERE_ACCOUNT_UNVERIFIED"].includes(error.code)) return entry
+    throw error
+  }
   if (count < 1 || count > AUDIT_MAX_ENTRIES) throw storeUnavailable()
   return entry
 }

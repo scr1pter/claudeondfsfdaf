@@ -199,12 +199,13 @@ test("native stop cannot cancel a different requester's task or close that perso
   expect(openReply(f.context(), (await readJob(f.store, job.jid))!)).toMatchObject({ ref: f.parsed.reply.ref })
 })
 
-test("a matching bot token revocation erases the installation and live job bodies", async () => {
+test("a matching bot token revocation needs current native unusable-token proof before erasing", async () => {
   const f = await ready()
   const job = await f.create()
   expect((await f.send(f.envelope("", { type: "tokens_revoked", tokens: { bot: ["UOTHER"] } }))).status).toBe(200)
   await drainAfter()
   expect(await f.store(["GET", everywhereKeys.install(f.installation)])).not.toBeNull()
+  native.answer = (method) => method === "auth.test" ? Response.json({ ok: false, error: "token_revoked" }) : undefined
   expect((await f.send(f.envelope("", { type: "tokens_revoked", tokens: { bot: ["U0BOT0001"] } }))).status).toBe(200)
   await drainAfter()
   expect(await f.store(["GET", everywhereKeys.install(f.installation)])).toBeNull()

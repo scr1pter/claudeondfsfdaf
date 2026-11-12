@@ -3,8 +3,9 @@ import { ApiError } from "../../http.js"
 import type { LinearConfig } from "../config.js"
 import { seal } from "../crypto.js"
 import { PLATFORM_HOSTS, platformFetch, readPlatformJson } from "../fetch.js"
-import { installToken, readInstallSnapshot, type IdentityContext, type InstallRecord } from "../identity.js"
+import { checkInstallAuthority, installGuards, installToken, readInstallSnapshot, type IdentityContext, type InstallRecord } from "../identity.js"
 import { everywhereKeys } from "../keys.js"
+import { authorizedCommands } from "../authority.js"
 import { setValue, swapValue } from "../store.js"
 import { linearApi } from "./client.js"
 import { linearId, linearObject } from "./verify.js"
@@ -53,6 +54,7 @@ export async function linearAccess(input: {
     const snapshot = await readInstallSnapshot(ctx().store, input.installation)
     const credentials = snapshot && parseLinearCredentials(installToken(ctx().keys, input.installation, snapshot.record))
     if (!snapshot || !credentials) throw new ApiError(503, "LINEAR_RECONNECT_REQUIRED", "Reconnect Linear to continue.")
+    await checkInstallAuthority(ctx(), input.installation, snapshot)
     return { ...snapshot, credentials }
   }
   const initial = await read()
@@ -70,14 +72,20 @@ export async function linearAccess(input: {
     // A delayed refresh can outlive erasure or reconnect. Never make another native call under that old authority.
     if ((await readInstallSnapshot(ctx().store, input.installation))?.raw !== current.raw)
       throw new ApiError(409, "LINEAR_AUTH_CHANGED", "The Linear authorization changed. Reconnect to continue.")
-    const me = await linearApi({ token: renewed.access, fetcher: input.fetcher, now: () => ctx().now, deadline: input.deadline })("viewer")
+    await checkInstallAuthority(ctx(), input.installation, current)
+    const me = await linearApi({ token: renewed.access, fetcher: input.fetcher, now: () => ctx().now, deadline: input.deadline,
+      beforeRequest: async () => {
+        await checkInstallAuthority(ctx(), input.installation, current)
+        if ((await readInstallSnapshot(ctx().store, input.installation))?.raw !== current.raw)
+          throw new ApiError(409, "LINEAR_AUTH_CHANGED", "The Linear authorization changed. Reconnect to continue.")
+      },
+    })("viewer")
     const viewer = linearObject(me.viewer)
     if (!linearId(viewer.id) || viewer.id !== current.record.botUserId || viewer.app !== true || viewer.active !== true ||
       linearObject(viewer.organization).id !== input.installation.slice("linear:".length) || linearObject(me.organization).id !== linearObject(viewer.organization).id)
       throw new ApiError(503, "LINEAR_AUTH_CHANGED", "The Linear authorization changed. Reconnect to continue.")
     const next = { ...current.record, tokenEnc: seal(ctx().keys, JSON.stringify(renewed), everywhereKeys.install(input.installation)) }
-    if (!await swapValue(ctx().store, everywhereKeys.install(input.installation), current.raw, JSON.stringify(next)))
-      throw new ApiError(409, "LINEAR_AUTH_CHANGED", "The Linear authorization changed. Reconnect to continue.")
+    await authorizedCommands(ctx().store, await installGuards(ctx(), input.installation, current), [["SET", everywhereKeys.install(input.installation), JSON.stringify(next)]])
     return { token: renewed.access, record: next }
   } finally { await swapValue(ctx().store, lock, owner, undefined) }
 }

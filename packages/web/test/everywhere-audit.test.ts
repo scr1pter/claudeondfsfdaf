@@ -10,9 +10,8 @@ import {
   type AuditInput,
 } from "../../../api/_lib/everywhere/audit"
 import { AUDIT_MAX_ENTRIES, KEEP_MS, everywhereKeys } from "../../../api/_lib/everywhere/keys"
-import { everywhereStore } from "../../../api/_lib/everywhere/store"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
+import { FakeStore, realRedis, useKv, type RealRedis, testEverywhereStore } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -34,7 +33,7 @@ afterAll(() => restore())
 describe("entries", () => {
   test("an entry is stored with its time, platform, installation, job id and code, and read back newest first", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const account = randomUUID()
     const jid = createJobId(fake.clock.now)
     await appendAudit(store, account, { event: "job-accepted", installation: slack, jid }, fake.clock.now)
@@ -63,7 +62,7 @@ describe("entries", () => {
   })
 
   test("audit entries carry no text field: a field that could hold text is refused", async () => {
-    const store = everywhereStore(new FakeStore().fetch)
+    const store = testEverywhereStore(new FakeStore().fetch)
     const account = randomUUID()
     for (const extra of [
       { text: "Fix the login bug" },
@@ -81,7 +80,7 @@ describe("entries", () => {
   })
 
   test("codes are fixed words only; free text in a code is refused", async () => {
-    const store = everywhereStore(new FakeStore().fetch)
+    const store = testEverywhereStore(new FakeStore().fetch)
     const account = randomUUID()
     for (const code of ["fix the login bug", "Fix", "not-mapped ", "over limit", "x".repeat(41), "", 7])
       await expect(appendAudit(store, account, { event: "job-refused", code } as unknown as AuditInput)).rejects.toThrow(TypeError)
@@ -89,7 +88,7 @@ describe("entries", () => {
   })
 
   test("ids that could carry text are checked against their shape", async () => {
-    const store = everywhereStore(new FakeStore().fetch)
+    const store = testEverywhereStore(new FakeStore().fetch)
     const account = randomUUID()
     const bad: AuditInput[] = [
       { event: "link", installation: slack, userId: "U01 please run rm" },
@@ -106,7 +105,7 @@ describe("entries", () => {
 
   test("what is stored holds only the allowed fields", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const account = randomUUID()
     await appendAudit(store, account, {
       event: "link",
@@ -132,7 +131,7 @@ describe("entries", () => {
 describe("retention", () => {
   test("the log keeps at most 1,000 entries, dropping the oldest", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const account = randomUUID()
     const start = fake.clock.now
     for (let index = 0; index < AUDIT_MAX_ENTRIES + 5; index++)
@@ -146,7 +145,7 @@ describe("retention", () => {
 
   test("entries older than 90 days go, and the log expires 90 days after its last entry", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const account = randomUUID()
     const first = fake.clock.now
     await appendAudit(store, account, { event: "install", installation: slack }, first)
@@ -161,7 +160,7 @@ describe("retention", () => {
 
   test("entries that no longer decode are left out when reading", async () => {
     const fake = new FakeStore()
-    const store = everywhereStore(fake.fetch)
+    const store = testEverywhereStore(fake.fetch)
     const account = randomUUID()
     await appendAudit(store, account, { event: "install", installation: slack }, fake.clock.now)
     fake.send(["ZADD", everywhereKeys.audit(account), fake.clock.now + 1, JSON.stringify({ event: "install", id: "b".repeat(26), at: 2, text: "smuggled" })])
@@ -170,7 +169,7 @@ describe("retention", () => {
   })
 
   test("readAudit takes a limit between 1 and 1,000", async () => {
-    const store = everywhereStore(new FakeStore().fetch)
+    const store = testEverywhereStore(new FakeStore().fetch)
     for (const limit of [0, 1_001, 1.5]) await expect(readAudit(store, randomUUID(), limit)).rejects.toThrow(RangeError)
   })
 })
@@ -185,7 +184,7 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
   })
 
   test("the append script stores, orders, trims old entries and sets the expiry", async () => {
-    const store = everywhereStore(redis.fetch)
+    const store = testEverywhereStore(redis.fetch)
     const account = randomUUID()
     const now = Date.now()
     await appendAudit(store, account, { event: "install", installation: slack }, now - KEEP_MS.audit - 10)

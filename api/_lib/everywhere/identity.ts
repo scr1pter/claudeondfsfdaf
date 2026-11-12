@@ -1,3 +1,4 @@
+import { luaKeyTypes } from "./lua.js"
 import { randomBytes } from "node:crypto"
 import {
   ACCOUNT_ID_PATTERN,
@@ -9,6 +10,7 @@ import {
 import { EVERYWHERE_PAGE, PLATFORM_NAMES } from "../../../packages/schema/src/everywhere-policy.js"
 import { ApiError } from "../http.js"
 import { appendAudit } from "./audit.js"
+import { accountGuards, authorizedCommands, authorizedScript, authorityChanged, checkAccount, type AuthorityGuard } from "./authority.js"
 import type { EverywhereConfig } from "./config.js"
 import { open, openJson, seal, sealJson, type DataKey } from "./crypto.js"
 import { platformFetch, readPlatformJson } from "./fetch.js"
@@ -58,6 +60,7 @@ import {
 
 export type IdentityContext = {
   readonly store: Store
+  readonly accountAuthority?: import("./authority.js").AccountAuthorityPort
   /** The data key ring (`readConfig().dataKeys`): codes are hashed with it, tokens and notices sealed under it. */
   readonly keys: readonly DataKey[]
   readonly now: number
@@ -184,12 +187,13 @@ function codeHash(keys: readonly DataKey[], kind: "link" | "connect", code: stri
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** `link:<installation>:<userId>` (3.13). */
-export type LinkRecord = { readonly account: string; readonly linkedAt: number }
+export type LinkRecord = { readonly account: string; readonly linkedAt: number; readonly revision?: string }
 
 function decodeLink(value: unknown): LinkRecord | undefined {
-  if (!isRecord(value, ["account", "linkedAt"])) return undefined
+  if (!isRecord(value, ["account", "linkedAt", "revision"])) return undefined
   if (!isAccount(value.account) || !isTime(value.linkedAt)) return undefined
-  return { account: value.account.toLowerCase(), linkedAt: value.linkedAt }
+  if (value.revision !== undefined && (typeof value.revision !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(value.revision))) return undefined
+  return { account: value.account.toLowerCase(), linkedAt: value.linkedAt, ...(value.revision ? { revision: value.revision as string } : {}) }
 }
 
 /** `install:<installation>` (3.13). `tokenEnc` is sealed to this key; Jira sites keep no token. */
@@ -203,6 +207,8 @@ export type InstallRecord = {
   readonly installedAt: number
   /** Jira: the Forge app installation id the site's invocation tokens carry (4.4). */
   readonly forgeInstallationId?: string
+  /** Durable erasure generation. Normal readers and every admission treat it as disconnected. */
+  readonly closing?: { readonly id: string; readonly at: number; readonly reason: string; readonly authority: string; readonly revocation?: "pending" | "confirmed" | "uncertain" }
 }
 
 const SCOPE = /^[A-Za-z0-9:._-]{1,64}$/
@@ -212,11 +218,16 @@ const TOKEN = /^[\x21-\x7e]{1,8192}$/
 
 function decodeInstall(platform: PlatformId) {
   return (value: unknown): InstallRecord | undefined => {
-    if (!isRecord(value, ["connector", "revision", "tokenEnc", "scopes", "botUserId", "installedAt", "forgeInstallationId"]))
+    if (!isRecord(value, ["connector", "revision", "tokenEnc", "scopes", "botUserId", "installedAt", "forgeInstallationId", "closing"]))
       return undefined
-    const { connector, revision, tokenEnc, scopes, botUserId, installedAt, forgeInstallationId } = value
+    const { connector, revision, tokenEnc, scopes, botUserId, installedAt, forgeInstallationId, closing } = value
     if (!isAccount(connector) || !isTime(installedAt)) return undefined
     if (revision !== undefined && (typeof revision !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(revision))) return undefined
+    if (closing !== undefined && (!isRecord(closing, ["id", "at", "reason", "authority", "revocation"]) || typeof closing.id !== "string" ||
+      !/^[A-Za-z0-9_-]{22}$/.test(closing.id) || !isTime(closing.at) || typeof closing.reason !== "string" ||
+      !["uninstalled", "tokens-revoked", "revoked", "disconnected", "account-deleted"].includes(closing.reason) ||
+      typeof closing.authority !== "string" || !/^[A-Za-z0-9_-]{22}$|^[0-9a-f]{64}$/.test(closing.authority) ||
+      closing.revocation !== undefined && !["pending", "confirmed", "uncertain"].includes(String(closing.revocation)))) return undefined
     if (tokenEnc !== undefined && typeof tokenEnc !== "string") return undefined
     if (
       !Array.isArray(scopes) ||
@@ -239,6 +250,7 @@ function decodeInstall(platform: PlatformId) {
       ...(botUserId !== undefined ? { botUserId } : {}),
       installedAt,
       ...(forgeInstallationId !== undefined ? { forgeInstallationId } : {}),
+      ...(closing !== undefined ? { closing: closing as InstallRecord["closing"] } : {}),
     }
   }
 }
@@ -328,6 +340,7 @@ export type RepoRef = { readonly fullName: string; readonly id?: number }
 
 /** A place's mapping, as the rest of the server reads it. */
 export type RepoMapping = {
+  readonly revision?: string
   readonly place: string
   readonly repositories: readonly RepoRef[]
   /** The Vector account that set it. */
@@ -345,12 +358,13 @@ export const MAX_MAPPED_REPOSITORIES = 20
 /** `repo:<installation>:<place>` as stored: 3.13's fields, with `null` for a repository id not known yet. */
 function decodeMapping(place: string) {
   return (value: unknown): RepoMapping | undefined => {
-    if (!isRecord(value, ["repositoryIds", "fullNames", "setBy", "private", "setAt"])) return undefined
+    if (!isRecord(value, ["repositoryIds", "fullNames", "setBy", "private", "setAt", "revision"])) return undefined
     const { repositoryIds, fullNames, setBy, setAt } = value
     if (!Array.isArray(repositoryIds) || !Array.isArray(fullNames) || repositoryIds.length !== fullNames.length)
       return undefined
     if (fullNames.length > MAX_MAPPED_REPOSITORIES || !isAccount(setBy) || !isTime(setAt)) return undefined
     if (typeof value.private !== "boolean") return undefined
+    if (value.revision !== undefined && (typeof value.revision !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(value.revision))) return undefined
     const repositories: RepoRef[] = []
     for (let index = 0; index < fullNames.length; index++) {
       const fullName = fullNames[index]
@@ -359,7 +373,7 @@ function decodeMapping(place: string) {
       if (id !== null && !(typeof id === "number" && Number.isSafeInteger(id) && id > 0)) return undefined
       repositories.push(id === null ? { fullName } : { fullName, id })
     }
-    return { place, repositories, setBy: setBy.toLowerCase(), private: value.private, setAt }
+    return { place, repositories, setBy: setBy.toLowerCase(), private: value.private, setAt, ...(value.revision ? { revision: value.revision as string } : {}) }
   }
 }
 
@@ -370,6 +384,7 @@ function encodeMapping(mapping: Omit<RepoMapping, "place">) {
     setBy: mapping.setBy,
     private: mapping.private,
     setAt: mapping.setAt,
+    ...(mapping.revision ? { revision: mapping.revision } : {}),
   }
 }
 
@@ -491,7 +506,7 @@ function actorRefusal(actor: LinkActor): "bot" | "automation" | "external" | "gu
 export const LINK_TRIES_MAX = 10
 
 /** Counts a failed attempt; the counter's hour starts at the first. KEYS: the counter. ARGV: its lifetime. */
-export const LINK_TRIES_SCRIPT =
+export const LINK_TRIES_SCRIPT = luaKeyTypes(["counter"]) +
   "local count = redis.call('INCR', KEYS[1]) if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end return count"
 
 async function triesLeft(store: Store, installation: string, userId: string) {
@@ -524,6 +539,7 @@ export async function issueLinkCode(
     throw new ApiError(400, "EVERYWHERE_UNSUPPORTED", "Links on this platform are made by signing in, not with a code.")
   if (input.installation !== undefined && installationPlatform(input.installation) !== input.platform) invalid()
   const pointer = everywhereKeys.linkCodes(account)
+  const guards = await accountGuards(ctx, account)
   for (let attempt = 0; attempt < 4; attempt++) {
     const code = randomCode(LINK_CODE_CHARS)
     const hash = codeHash(ctx.keys, "link", code)
@@ -535,12 +551,17 @@ export async function issueLinkCode(
       issuedAt: ctx.now,
       ...(input.email ? { noticeEnc: sealJson(ctx.keys, { email: input.email }, key) } : {}),
     }
-    if (!(await setJson(ctx.store, key, record, { ttlMs: KEEP_MS.linkCode, onlyNew: true }))) continue
     const previous = await getValue(ctx.store, pointer)
-    await setValue(ctx.store, pointer, hash, { ttlMs: KEEP_MS.linkCode })
-    if (previous !== undefined && previous !== hash && /^[0-9a-f]{64}$/.test(previous))
-      await deleteKeys(ctx.store, everywhereKeys.linkCode(previous))
-    return { code: formatCode(code), expiresAt: ctx.now + KEEP_MS.linkCode }
+    try {
+      await authorizedCommands(ctx.store, [...guards, { key, value: undefined }, { key: pointer, value: previous }], [
+        ["SET", key, JSON.stringify(record), "PX", KEEP_MS.linkCode], ["SET", pointer, hash, "PX", KEEP_MS.linkCode],
+        ...(previous !== undefined && previous !== hash && /^[0-9a-f]{64}$/.test(previous) ? [["DEL", everywhereKeys.linkCode(previous)]] : []),
+      ])
+      return { code: formatCode(code), expiresAt: ctx.now + KEEP_MS.linkCode }
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== "EVERYWHERE_AUTHORITY_CHANGED") throw error
+      await checkAccount(ctx, account)
+    }
   }
   throw storeUnavailable()
 }
@@ -586,7 +607,7 @@ export async function redeemLinkCode(
   if (!found) return failed()
   const pointer = everywhereKeys.linkCodes(found.account)
   if ((await getValue(ctx.store, pointer)) !== hash) return failed()
-  await swapValue(ctx.store, pointer, hash, undefined)
+  if (!await swapValue(ctx.store, pointer, hash, undefined)) return failed()
   if (found.platform !== platform || (found.installation !== undefined && found.installation !== input.installation))
     return failed()
   const refusal = actorRefusal(input.actor)
@@ -641,28 +662,43 @@ async function writeLink(
   const key = everywhereKeys.link(installation, userId)
   const member = linkMember(installation, userId)
   const hint = maskEmail(input.email)
-  // The indexes first: a record is never written without the entries that let erase find it.
-  await addMembers(ctx.store, everywhereKeys.links(account), member)
-  await addMembers(ctx.store, everywhereKeys.linked(installation), userId)
-  const next = JSON.stringify({ account, linkedAt: ctx.now } satisfies LinkRecord)
+  const install = await readInstallSnapshot(ctx.store, installation)
+  if (!install) return { ok: false, code: "not-connected" }
+  const guards = await accountGuards(ctx, account)
+  const next = JSON.stringify({ account, linkedAt: ctx.now, revision: randomBytes(16).toString("base64url") } satisfies LinkRecord)
   let previous: LinkRecord | undefined
   for (let attempt = 0; ; attempt++) {
     if (attempt === 5) throw storeUnavailable()
     const raw = await getValue(ctx.store, key)
     previous = decodeLink(parseStored(raw))
-    if (previous?.account === account) return { ok: true, account, already: true, ...(hint ? { hint } : {}) }
-    if (await swapValue(ctx.store, key, raw, next)) break
+    if (raw !== undefined && !previous) throw storeUnavailable()
+    if (previous?.account === account) {
+      await checkAccount(ctx, account)
+      if ((await readInstallSnapshot(ctx.store, installation))?.raw !== install.raw) return { ok: false, code: "not-connected" }
+      return { ok: true, account, already: true, ...(hint ? { hint } : {}) }
+    }
+    try {
+      await authorizedCommands(ctx.store, [...guards, ...await installGuards(ctx, installation, install), { key, value: raw }], [
+        ["SET", key, next], ["SADD", everywhereKeys.links(account), member], ["SADD", everywhereKeys.linked(installation), userId],
+        ...(previous ? [["SREM", everywhereKeys.links(previous.account), member]] : []),
+      ])
+      break
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== "EVERYWHERE_AUTHORITY_CHANGED") throw error
+      await checkAccount(ctx, account)
+      if ((await readInstallSnapshot(ctx.store, installation))?.raw !== install.raw) return { ok: false, code: "not-connected" }
+      throw authorityChanged()
+    }
   }
   if (previous) {
-    await dropLinkIndexes(ctx.store, installation, userId, previous.account, { linked: false })
     await appendAudit(
       ctx.store,
       previous.account,
       { event: "unlink", platform, installation, userId, code: "unlinked" },
-      ctx.now,
+      ctx.now, ctx.accountAuthority,
     )
   }
-  await appendAudit(ctx.store, account, { event: "link", platform, installation, userId }, ctx.now)
+  await appendAudit(ctx.store, account, { event: "link", platform, installation, userId }, ctx.now, ctx.accountAuthority)
   if (ctx.notify) {
     await ctx
       .notify({ account, ...(input.email ? { email: input.email } : {}), platform, installation, userId })
@@ -675,25 +711,6 @@ async function writeLink(
     ...(hint ? { hint } : {}),
     ...(previous ? { previous: previous.account } : {}),
   }
-}
-
-/**
- * Removes a link's index entries for `account`, then puts back any that a link written in the meantime still needs,
- * so an index never loses an entry for a live record.
- */
-async function dropLinkIndexes(
-  store: Store,
-  installation: string,
-  userId: string,
-  account: string,
-  options: { readonly linked: boolean },
-) {
-  await removeMembers(store, everywhereKeys.links(account), linkMember(installation, userId))
-  if (options.linked) await removeMembers(store, everywhereKeys.linked(installation), userId)
-  const now = decodeLink(parseStored(await getValue(store, everywhereKeys.link(installation, userId))))
-  if (!now) return
-  if (now.account === account) await addMembers(store, everywhereKeys.links(account), linkMember(installation, userId))
-  if (options.linked) await addMembers(store, everywhereKeys.linked(installation), userId)
 }
 
 /** The Vector account a platform user linked on an installation, or undefined when there is no link. */
@@ -751,21 +768,23 @@ export async function unlink(
   const userId = checkUser(input.installation, input.userId)
   const owner = input.account === undefined ? undefined : accountId(input.account)
   const key = everywhereKeys.link(input.installation, userId)
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const raw = await getValue(ctx.store, key)
-    const record = decodeLink(parseStored(raw))
-    if (!record || (owner !== undefined && record.account !== owner)) return { ok: false }
-    if (!(await swapValue(ctx.store, key, raw, undefined))) continue
-    await dropLinkIndexes(ctx.store, input.installation, userId, record.account, { linked: true })
-    await appendAudit(
-      ctx.store,
-      record.account,
-      { event: "unlink", platform, installation: input.installation, userId, code: "unlinked" },
-      ctx.now,
-    )
-    return { ok: true, account: record.account }
+  const install = await readInstallSnapshot(ctx.store, input.installation)
+  if (!install) return { ok: false }
+  const raw = await getValue(ctx.store, key)
+  const record = decodeLink(parseStored(raw))
+  if (!record || (owner !== undefined && record.account !== owner)) return { ok: false }
+  try {
+    await authorizedCommands(ctx.store, [...await accountGuards(ctx, record.account),
+      ...await installGuards(ctx, input.installation, install), { key, value: raw }], [
+      ["DEL", key], ["SREM", everywhereKeys.links(record.account), linkMember(input.installation, userId)],
+      ["SREM", everywhereKeys.linked(input.installation), userId],
+    ])
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "EVERYWHERE_AUTHORITY_CHANGED") return { ok: false }
+    throw error
   }
-  throw storeUnavailable()
+  await appendAudit(ctx.store, record.account, { event: "unlink", platform, installation: input.installation, userId, code: "unlinked" }, ctx.now, ctx.accountAuthority)
+  return { ok: true, account: record.account }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -773,10 +792,16 @@ export async function unlink(
 // ---------------------------------------------------------------------------------------------------------------------
 
 const STATE_ID = /^[A-Za-z0-9_-]{16,128}$/
+export const CREATE_STATE_SCRIPT = luaKeyTypes(["string", "zset"]) + [
+  "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end",
+  "redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', tonumber(ARGV[3]) - tonumber(ARGV[2]))",
+  "if redis.call('ZCARD', KEYS[2]) >= 32 then return -2 end",
+  "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) redis.call('ZADD', KEYS[2], ARGV[3], ARGV[4]) redis.call('PEXPIRE', KEYS[2], ARGV[2]) return 1",
+].join(" ")
 
 /** A random OAuth state for the signed-in account, kept 10 minutes (3.8). */
 export async function createState(
-  ctx: Pick<IdentityContext, "store" | "now">,
+  ctx: Pick<IdentityContext, "store" | "now" | "accountAuthority">,
   input: {
     readonly account: string
     readonly platform: PlatformId
@@ -793,18 +818,29 @@ export async function createState(
     ...(input.installation !== undefined ? { installation: input.installation } : {}),
     issuedAt: ctx.now,
   }
+  const guards = await accountGuards(ctx, account)
   for (let attempt = 0; attempt < 4; attempt++) {
     const state = randomBytes(24).toString("base64url")
-    if (await setJson(ctx.store, everywhereKeys.state(state), record, { ttlMs: KEEP_MS.state, onlyNew: true }))
-      return { state, expiresAt: ctx.now + KEEP_MS.state }
+    const result = storeInteger(await authorizedScript(ctx.store, guards, CREATE_STATE_SCRIPT,
+      [everywhereKeys.state(state), everywhereKeys.accountStates(account)], [JSON.stringify(record), KEEP_MS.state, ctx.now, state]))
+    if (result === -2) throw new ApiError(429, "EVERYWHERE_STATE_LIMIT", "Too many sign-in attempts. Try again later.")
+    if (result === 1) return { state, expiresAt: ctx.now + KEEP_MS.state }
+    if (result !== 0) throw storeUnavailable()
   }
   throw storeUnavailable()
 }
 
 /** Reads and deletes a state in one step: it works once, and an unknown or expired one answers undefined. */
-export async function takeState(store: Store, state: unknown): Promise<OAuthState | undefined> {
+export async function takeState(store: Store, state: unknown, accountAuthority?: import("./authority.js").AccountAuthorityPort): Promise<OAuthState | undefined> {
   if (typeof state !== "string" || !STATE_ID.test(state)) return undefined
-  return takeJson(store, everywhereKeys.state(state), decodeState)
+  const key = everywhereKeys.state(state)
+  const raw = await getValue(store, key)
+  const record = decodeState(parseStored(raw))
+  if (!record || raw === undefined) return undefined
+  await authorizedCommands(store, [...await accountGuards({ store, accountAuthority }, record.account), { key, value: raw }], [
+    ["DEL", key], ["ZREM", everywhereKeys.accountStates(record.account), state],
+  ])
+  return record
 }
 
 /** Where each platform's OAuth starts and returns (4.2, 4.3), and the scopes each purpose asks for. */
@@ -918,14 +954,18 @@ export async function recordInstall(
   const platform = checkGrant(input.grant)
   const { installation } = input.grant
   const key = everywhereKeys.install(installation)
-  await addMembers(ctx.store, everywhereKeys.installs(account), installation)
+  const guards = await accountGuards(ctx, account)
   let current: InstallRecord | undefined
   for (let attempt = 0; ; attempt++) {
     if (attempt === 5) throw storeUnavailable()
-    const raw = await getValue(ctx.store, key)
+    const values = await ctx.store(["MGET", key, everywhereKeys.installEpoch(installation)])
+    if (!Array.isArray(values) || values.length !== 2 || values.some((value) => value !== null && value !== undefined && typeof value !== "string")) throw storeUnavailable()
+    const raw: string | undefined = values[0] ?? undefined
+    const epoch: string | undefined = values[1] ?? undefined
     current = decodeInstall(platform)(parseStored(raw))
+    if (raw !== undefined && !current) throw storeUnavailable()
+    if (current?.closing) throw new ApiError(409, "EVERYWHERE_INSTALLATION_CLOSING", "This connection is being removed. Try again after it finishes.")
     if (current && current.connector !== account && !input.grant.installer.admin) {
-      await dropInstallIndex(ctx.store, installation, account)
       return { ok: false, code: "installed-elsewhere" }
     }
     const record: InstallRecord = {
@@ -939,11 +979,23 @@ export async function recordInstall(
         ? { forgeInstallationId: input.grant.forgeInstallationId }
         : {}),
     }
-    if (await swapValue(ctx.store, key, raw, JSON.stringify(record))) break
+    try {
+      await authorizedCommands(ctx.store, [...guards, { key, value: raw }, { key: everywhereKeys.installEpoch(installation), value: epoch }], [
+        ["SET", key, JSON.stringify(record)], ["SET", everywhereKeys.installEpoch(installation), record.revision!], ["SADD", everywhereKeys.installs(account), installation],
+        ...(current && raw ? [["DEL", everywhereKeys.installHold(installation, installationAuthority({ record: current, raw }))]] : []),
+        ...(current && current.connector !== account ? [["SREM", everywhereKeys.installs(current.connector), installation]] : []),
+      ])
+      break
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== "EVERYWHERE_AUTHORITY_CHANGED") throw error
+      await checkAccount(ctx, account)
+      const latest = await readInstallState(ctx.store, installation)
+      if (latest && latest.record.connector !== account && !input.grant.installer.admin) return { ok: false, code: "installed-elsewhere" }
+      throw authorityChanged()
+    }
   }
   const change = !current ? "new" : current.connector === account ? "renewed" : "connector-change"
   if (change === "connector-change" && current) {
-    await dropInstallIndex(ctx.store, installation, current.connector)
     await appendAudit(
       ctx.store,
       current.connector,
@@ -955,14 +1007,14 @@ export async function recordInstall(
         code: "admin",
         ...(input.grant.installer.userId !== undefined ? { userId: input.grant.installer.userId } : {}),
       },
-      ctx.now,
+      ctx.now, ctx.accountAuthority,
     )
   }
   await appendAudit(
     ctx.store,
     account,
     { event: input.event, platform, installation, ...(change === "connector-change" ? { code: "admin" } : {}) },
-    ctx.now,
+    ctx.now, ctx.accountAuthority,
   )
   return {
     ok: true,
@@ -972,13 +1024,6 @@ export async function recordInstall(
   }
 }
 
-/** Removes an installation from an account's index unless the account is (again) its connector. */
-async function dropInstallIndex(store: Store, installation: string, account: string) {
-  await removeMembers(store, everywhereKeys.installs(account), installation)
-  const now = await readInstall(store, installation)
-  if (now?.connector === account) await addMembers(store, everywhereKeys.installs(account), installation)
-}
-
 /** An installation's record, or undefined when nobody connected it. A record that does not decode reads as none. */
 export async function readInstall(store: Store, installation: string): Promise<InstallRecord | undefined> {
   return (await readInstallSnapshot(store, installation))?.record
@@ -986,6 +1031,24 @@ export async function readInstall(store: Store, installation: string): Promise<I
 
 /** Native admission keeps the exact server-read value across slow platform lookups; never supplied by a webhook. */
 export async function readInstallSnapshot(store: Store, installation: string): Promise<{ record: InstallRecord; raw: string } | undefined> {
+  const snapshot = await readInstallState(store, installation)
+  return !snapshot || snapshot.record.closing || await getValue(store, everywhereKeys.installHold(installation, installationAuthority(snapshot))) !== undefined ? undefined : snapshot
+}
+
+/** Proof for a native write/effect. Hold and closure never silently become permission for an old callback. */
+export async function installGuards(ctx: Pick<IdentityContext, "store" | "accountAuthority">, installation: string, snapshot: { readonly record: InstallRecord; readonly raw: string }): Promise<AuthorityGuard[]> {
+  if (snapshot.record.closing) throw authorityChanged()
+  return [...await accountGuards(ctx, snapshot.record.connector),
+    { key: everywhereKeys.install(installation), value: snapshot.raw },
+    { key: everywhereKeys.installHold(installation, installationAuthority(snapshot)) }]
+}
+export async function checkInstallAuthority(ctx: Pick<IdentityContext, "store" | "accountAuthority">, installation: string, snapshot: { readonly record: InstallRecord; readonly raw: string }) {
+  for (const guard of await installGuards(ctx, installation, snapshot))
+    if (await getValue(ctx.store, guard.key) !== guard.value) throw authorityChanged()
+}
+
+/** Erasure/owner retry only: retains the exact closing generation instead of recapturing a new active grant. */
+export async function readInstallState(store: Store, installation: string): Promise<{ record: InstallRecord; raw: string } | undefined> {
   const platform = platformOf(installation)
   const raw = await getValue(store, everywhereKeys.install(installation))
   const record = decodeInstall(platform)(parseStored(raw))
@@ -994,12 +1057,13 @@ export async function readInstallSnapshot(store: Store, installation: string): P
 
 /** Opaque authorization identity, never an access token. Safe credential refresh preserves an existing revision. */
 export function installationAuthority(snapshot: { readonly record: InstallRecord; readonly raw: string }): string {
-  return snapshot.record.revision ?? sha256Hex(snapshot.raw)
+  return snapshot.record.closing?.authority ?? snapshot.record.revision ?? sha256Hex(snapshot.raw)
 }
 
 /** An installation's record; a record that does not decode means the store is unwell (fails closed). */
 export async function findInstall(store: Store, installation: string): Promise<InstallRecord | undefined> {
-  return getJson(store, everywhereKeys.install(installation), decodeInstall(platformOf(installation)))
+  const record = await getJson(store, everywhereKeys.install(installation), decodeInstall(platformOf(installation)))
+  return record?.closing ? undefined : record
 }
 
 /** The platform token of an installation, opened only where it is used. Never logged, never sent to a computer. */
@@ -1014,6 +1078,8 @@ export function installToken(
 }
 
 export type InstallView = {
+  readonly status?: "closing"
+  readonly nextAction?: "retry-disconnect" | "review-native-revocation"
   readonly installation: string
   readonly platform: PlatformId
   readonly installedAt: number
@@ -1028,12 +1094,13 @@ export async function listInstalls(store: Store, account: string): Promise<Insta
   for (const installation of await setMembers(store, everywhereKeys.installs(owner))) {
     const platform = installationPlatform(installation)
     if (!platform) continue
-    const record = await readInstall(store, installation)
+    const record = (await readInstallState(store, installation))?.record
     if (record?.connector !== owner) continue
     out.push({
       installation,
       platform,
       installedAt: record.installedAt,
+      ...(record.closing ? { status: "closing" as const, nextAction: record.closing.revocation === "pending" || record.closing.revocation === "uncertain" ? "review-native-revocation" as const : "retry-disconnect" as const } : {}),
       scopes: record.scopes,
       ...(record.botUserId !== undefined ? { botUserId: record.botUserId } : {}),
     })
@@ -1173,9 +1240,14 @@ function checkPlace(place: unknown): string {
   return place
 }
 
-async function writeMapping(store: Store, installation: string, mapping: RepoMapping) {
-  await addMembers(store, everywhereKeys.repos(installation), mapping.place)
-  await setJson(store, everywhereKeys.repo(installation, mapping.place), encodeMapping(mapping))
+async function writeMapping(ctx: IdentityContext, installation: string, mapping: RepoMapping, installRaw: string, previous: string | undefined, extra: readonly AuthorityGuard[] = []) {
+  const snapshot = await readInstallSnapshot(ctx.store, installation)
+  if (!snapshot || snapshot.raw !== installRaw) throw authorityChanged()
+  await authorizedCommands(ctx.store, [...await accountGuards(ctx, mapping.setBy), ...await installGuards(ctx, installation, snapshot),
+    { key: everywhereKeys.repo(installation, mapping.place), value: previous }, ...extra], [
+    ["SET", everywhereKeys.repo(installation, mapping.place), JSON.stringify(encodeMapping(mapping))],
+    ["SADD", everywhereKeys.repos(installation), mapping.place],
+  ])
 }
 
 /** A place's mapping, or undefined when it has none. */
@@ -1183,6 +1255,16 @@ export async function findMapping(store: Store, installation: string, place: str
   platformOf(installation)
   const where = checkPlace(place)
   return getJson(store, everywhereKeys.repo(installation, where), decodeMapping(where))
+}
+
+export async function readMappingSnapshot(store: Store, installation: string, place: string) {
+  platformOf(installation)
+  const where = checkPlace(place)
+  const raw = await getValue(store, everywhereKeys.repo(installation, where))
+  if (raw === undefined) return undefined
+  const record = decodeMapping(where)(parseStored(raw))
+  if (!record) throw storeUnavailable()
+  return { record, raw }
 }
 
 /** Every mapped place of an installation, by place. */
@@ -1215,19 +1297,22 @@ export async function setMapping(
   platformOf(input.installation)
   const place = checkPlace(input.place)
   const repositories = checkRepositories(input.repositories)
-  if (!repositories) invalid("Name at most 20 repositories as owner/name, each once.")
-  const install = await findInstall(ctx.store, input.installation)
+  if (!repositories || repositories.some((repository) => repository.id === undefined)) invalid("Choose at most 20 repositories with their verified ids, each once.")
+  const install = await readInstallSnapshot(ctx.store, input.installation)
   if (!install) return { ok: false, code: "not-connected" }
-  if (install.connector !== account) return { ok: false, code: "not-connector" }
-  const existing = await findMapping(ctx.store, input.installation, place)
+  if (install.record.connector !== account) return { ok: false, code: "not-connector" }
+  const previous = await getValue(ctx.store, everywhereKeys.repo(input.installation, place))
+  const existing = decodeMapping(place)(parseStored(previous))
+  if (previous !== undefined && !existing) throw storeUnavailable()
   const mapping: RepoMapping = {
+    revision: randomBytes(16).toString("base64url"),
     place,
     repositories,
     setBy: account,
     private: input.private ?? existing?.private ?? false,
     setAt: ctx.now,
   }
-  await writeMapping(ctx.store, input.installation, mapping)
+  await writeMapping(ctx, input.installation, mapping, install.raw, previous)
   return { ok: true, mapping }
 }
 
@@ -1256,25 +1341,28 @@ export async function setMappingByWord(
   const place = checkPlace(input.place)
   const userId = checkUser(input.installation, input.userId)
   const repositories = checkRepositories([input.repository])
-  if (!repositories) invalid("Name the repository as owner/name.")
+  if (!repositories || repositories.some((repository) => repository.id === undefined)) return { ok: false, code: "not-allowed" }
   const refusal = actorRefusal(input.actor)
   if (refusal) return { ok: false, code: refusal }
-  const install = await findInstall(ctx.store, input.installation)
+  const install = await readInstallSnapshot(ctx.store, input.installation)
   if (!install) return { ok: false, code: "not-connected" }
-  const link = await findLink(ctx.store, input.installation, userId)
+  const link = await readLinkSnapshot(ctx.store, input.installation, userId)
   if (!link) return { ok: false, code: "not-linked" }
-  if ((await input.maySponsor(link.account)) !== true) return { ok: false, code: "not-allowed" }
-  const existing = await findMapping(ctx.store, input.installation, place)
-  if (existing && existing.setBy === install.connector && link.account !== install.connector)
+  const previous = await getValue(ctx.store, everywhereKeys.repo(input.installation, place))
+  const existing = decodeMapping(place)(parseStored(previous))
+  if (previous !== undefined && !existing) throw storeUnavailable()
+  if ((await input.maySponsor(link.record.account)) !== true) return { ok: false, code: "not-allowed" }
+  if (existing && existing.setBy === install.record.connector && link.record.account !== install.record.connector)
     return { ok: false, code: "not-connector" }
   const mapping: RepoMapping = {
+    revision: randomBytes(16).toString("base64url"),
     place,
     repositories,
-    setBy: link.account,
+    setBy: link.record.account,
     private: existing?.private ?? false,
     setAt: ctx.now,
   }
-  await writeMapping(ctx.store, input.installation, mapping)
+  await writeMapping(ctx, input.installation, mapping, install.raw, previous, [{ key: everywhereKeys.link(input.installation, userId), value: link.raw }])
   return { ok: true, mapping }
 }
 
@@ -1289,15 +1377,15 @@ export async function removeMapping(
   const account = accountId(input.account)
   platformOf(input.installation)
   const place = checkPlace(input.place)
-  const install = await findInstall(ctx.store, input.installation)
+  const install = await readInstallSnapshot(ctx.store, input.installation)
   if (!install) return { ok: false, code: "not-connected" }
-  if (install.connector !== account) return { ok: false, code: "not-connector" }
-  const removed = (await deleteKeys(ctx.store, everywhereKeys.repo(input.installation, place))) > 0
-  await removeMembers(ctx.store, everywhereKeys.repos(input.installation), place)
-  // A mapping written in the meantime keeps its index entry.
-  if (await getValue(ctx.store, everywhereKeys.repo(input.installation, place)))
-    await addMembers(ctx.store, everywhereKeys.repos(input.installation), place)
-  return { ok: true, removed }
+  if (install.record.connector !== account) return { ok: false, code: "not-connector" }
+  const key = everywhereKeys.repo(input.installation, place)
+  const raw = await getValue(ctx.store, key)
+  await authorizedCommands(ctx.store, [...await installGuards(ctx, input.installation, install), { key, value: raw }], [
+    ["DEL", key], ["SREM", everywhereKeys.repos(input.installation), place],
+  ])
+  return { ok: true, removed: raw !== undefined }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1355,7 +1443,7 @@ export async function finishOAuth(
 ): Promise<OAuthFinish> {
   const account = accountId(input.account)
   if (typeof input.code !== "string" || !OAUTH_CODE.test(input.code)) invalid()
-  const state = await takeState(ctx.store, input.state)
+  const state = await takeState(ctx.store, input.state, ctx.accountAuthority)
   if (!state)
     throw new ApiError(400, "EVERYWHERE_STATE_INVALID", "This sign-in has expired or was already used. Start again.")
   if (state.account !== account)

@@ -2,17 +2,19 @@ import { createJobId, decodeInboundTrigger, isRepositoryName } from "../../../pa
 import { decideRoute, mayTrigger } from "../../../packages/schema/src/everywhere-policy.js"
 import { ApiError, json, readRawBody, requireMethod, type ApiRequest, type ApiResponse } from "../http.js"
 import { after } from "./after.js"
+import { checkAccount } from "./authority.js"
+import { sha256Hex } from "./signature.js"
 import { platformOn, readConfig, type EverywhereConfig } from "./config.js"
 import { claimDelivery, finishDelivery } from "./dedupe.js"
 import { createJobEvents } from "./events.js"
-import { findLink, findMapping, installationAuthority, readInstallSnapshot } from "./identity.js"
+import { findMapping, readMappingSnapshot, readLinkSnapshot, installationAuthority, readInstallSnapshot } from "./identity.js"
 import { cancelJob, createJob, openReply, readJob, sweepAccount, type JobsContext } from "./jobs.js"
 import { everywhereKeys } from "./keys.js"
 import { readCounts } from "./limits.js"
 import type { JobView, ParsedTrigger, PlatformAdapter, Platforms } from "./platform.js"
 import { safePorts, type Ports, type Repository } from "./ports.js"
 import { routeFacts, routeJob } from "./router.js"
-import { everywhereStore, swapValue, type Store } from "./store.js"
+import { everywhereStore, getValue, swapValue, type Store } from "./store.js"
 
 export type IntakeDeps = {
   readonly config?: EverywhereConfig
@@ -33,16 +35,16 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
   const store = deps.store ?? everywhereStore()
   const ports = deps.ports ?? safePorts(config())
   const platforms = { ...deps.platforms, [adapter.id]: adapter }
-  const context = (): JobsContext => ({ store, now: now(), keys: config().dataKeys, offer: config().offer })
+  const context = (): JobsContext => ({ store, now: now(), keys: config().dataKeys, offer: config().offer, accountAuthority: ports.accountAuthority })
   const events = createJobEvents(context, platforms)
 
-  async function repository(parsed: ParsedTrigger): Promise<Repository | undefined> {
-    const mapping = await findMapping(store, parsed.trigger.installation, parsed.place)
+  async function repository(parsed: ParsedTrigger, mapping: Awaited<ReturnType<typeof readMappingSnapshot>>): Promise<Repository | undefined> {
+    const repositories = mapping?.record.repositories
     const named = parsed.trigger.repository?.fullName
     const selected = named
-      ? mapping?.repositories.find((item) => item.fullName.toLowerCase() === named.toLowerCase())
-      : mapping?.repositories.length === 1 ? mapping.repositories[0] : undefined
-    if (!selected || !isRepositoryName(selected.fullName)) return undefined
+      ? repositories?.find((item) => item.fullName.toLowerCase() === named.toLowerCase())
+      : repositories?.length === 1 ? repositories[0] : undefined
+    if (!selected || !Number.isSafeInteger(selected.id) || selected.id! <= 0 || !isRepositoryName(selected.fullName)) return undefined
     const resolved = await ports.repository?.(selected.fullName)
     // An id or visibility copied from a webhook cannot widen the mapped repository's authority.
     if (!resolved || resolved.fullName.toLowerCase() !== selected.fullName.toLowerCase()) return undefined
@@ -85,13 +87,16 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
       await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
-    const linked = await findLink(store, trigger.installation, trigger.actor.userId)
+    const linkSnapshot = await readLinkSnapshot(store, trigger.installation, trigger.actor.userId)
+    const linked = linkSnapshot?.record
     if (!linked) {
       await adapter.linkPrompt(trigger)
       await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     const sponsor = linked.account
+    await checkAccount(context(), sponsor)
+    await checkAccount(context(), installation.connector)
     const verdict = mayTrigger({ route: "laptop", sponsor, requester: { ...trigger.actor, account: linked.account } })
     if (!verdict.ok) {
       await adapter.refuse(trigger, verdict.code)
@@ -120,7 +125,9 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
     for (const ended of await sweepAccount(context(), sponsor, { stop: await ports.switch("everywhere") === "stop" })) await events.ended?.(ended)
     const subject = { sponsor, installation: trigger.installation, userId: trigger.actor.userId }
     const counts = await readCounts(store, subject, now())
-    const resolved = await repository(parsed)
+    const mappingKey = everywhereKeys.repo(trigger.installation, parsed.place)
+    const mapping = await readMappingSnapshot(store, trigger.installation, parsed.place)
+    const resolved = await repository(parsed, mapping)
     const facts = await routeFacts({ ctx: context(), ports, trigger, sponsor, repository: resolved, counts, receivedAt: now() })
     const decision = decideRoute(facts)
     if (decision.action === "refuse" || decision.action === "hand-back") {
@@ -130,12 +137,12 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
     }
     if (decision.action === "ask-repository" || !resolved) {
       const mapping = await findMapping(store, trigger.installation, parsed.place)
-      await adapter.repositoryPrompt(trigger, mapping?.repositories ?? [], { ...view, reply: { ...view.reply, installRevision: installationAuthority(snapshot!) } })
+      await adapter.repositoryPrompt(trigger, mapping?.repositories ?? [], { ...view, reply: { ...view.reply, installRevision: installationAuthority(snapshot!), linkRevision: linkSnapshot!.record.revision ?? sha256Hex(linkSnapshot!.raw) } })
       await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     // Always server-derived: a webhook, native payload or laptop cannot choose the authority for later posts.
-    view = { ...view, reply: { ...view.reply, installRevision: installationAuthority(snapshot!) } }
+    view = { ...view, reply: { ...view.reply, installRevision: installationAuthority(snapshot!), linkRevision: linkSnapshot!.record.revision ?? sha256Hex(linkSnapshot!.raw) } }
     const reservation = await adapter.reserve?.(parsed, view)
     if (adapter.reserve && !reservation) { await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid); return }
     if (reservation && (reservation.resource !== trigger.thread.ref || reservation.owner !== initial.jid))
@@ -145,7 +152,7 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
       requester: { userId: trigger.actor.userId, account: linked.account }, sponsor,
       repository: resolved, shared: trigger.shared, issue: trigger.issue, github: trigger.github,
       task: trigger.task, context: trigger.context, reply: view.reply,
-    }, { jid: initial.jid, deliveryId: trigger.deliveryId, installationRecord: snapshot!.raw, reservation })
+    }, { jid: initial.jid, deliveryId: trigger.deliveryId, installationRecord: snapshot!.raw, linkRecord: linkSnapshot!.raw, ...(mapping ? { mapping: { key: mappingKey, raw: mapping.raw } } : {}), reservation })
     if (!created.ok) {
       if (created.code === "duplicate") return
       if (reservation && !await readJob(store, initial.jid))

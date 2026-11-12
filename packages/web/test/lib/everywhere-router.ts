@@ -6,17 +6,18 @@ import type { Ports } from "../../../../api/_lib/everywhere/ports"
 import { routeFacts, type Routing } from "../../../../api/_lib/everywhere/router"
 import type { Store } from "../../../../api/_lib/everywhere/store"
 import type { InboundTrigger } from "../../../../packages/schema/src/everywhere"
+import { seedJobAuthority } from "./everywhere-job-authority"
 import { everywhereEnv } from "./everywhere-account"
-import { FakeStore } from "./everywhere-store"
+import { FakeStore, testAccountAuthority, withTestAccountAuthority } from "./everywhere-store"
 
 export function routerFixture() {
   const fake = new FakeStore()
-  const store: Store = async (command) => fake.send(command)
+  const store: Store = withTestAccountAuthority(async (command) => fake.send(command))
   const config = readConfig(everywhereEnv())
   const account = randomUUID()
   const computer = randomBytes(16).toString("base64url")
   const offer = { kid: "test-offer-key", key: generateKeyPairSync("ed25519").privateKey }
-  const context = (): JobsContext => ({ store, keys: config.dataKeys, now: fake.clock.now, offer })
+  const context = (): JobsContext => ({ store, keys: config.dataKeys, now: fake.clock.now, offer, accountAuthority: testAccountAuthority })
   const trigger: InboundTrigger = {
     platform: "slack", installation: "slack:T0123ABCD", deliveryId: randomUUID(),
     actor: { userId: "U0ALICE01", bot: false, guest: false, external: false }, kind: "mention",
@@ -36,6 +37,7 @@ export function routerFixture() {
     erase: async () => undefined,
   }
   const ports: { -readonly [K in keyof Ports]: Ports[K] } = {
+    accountAuthority: testAccountAuthority,
     presence: async () => ({ online: true, computers: 1 }),
     offer: async () => { calls.push({ kind: "offer" }); return "sent" },
     binding: async () => undefined, perk: async () => true, switch: async () => "on",
@@ -51,6 +53,7 @@ export function routerFixture() {
     counts: { sponsorToday: 0, sponsorLive: 0, requesterHour: 0, installationToday: 0 }, receivedAt: fake.clock.now,
   })
   const create = async (): Promise<JobRecord> => {
+    await seedJobAuthority(context(), { platform: trigger.platform, installation: trigger.installation, sponsor: account, requester: { userId: trigger.actor.userId, account } })
     const created = await createJob(context(), {
       platform: trigger.platform, installation: trigger.installation, kind: "mention",
       requester: { userId: trigger.actor.userId, account }, sponsor: account,

@@ -33,16 +33,18 @@ export function linearExchange(config: LinearConfig, fetcher?: typeof fetch, now
   }
 }
 
-export async function revokeLinear(installation: string, record: InstallRecord, keys: readonly DataKey[], fetcher?: typeof fetch) {
-  if (!installation.startsWith("linear:")) return
+export async function revokeLinear(installation: string, record: InstallRecord, keys: readonly DataKey[], fetcher?: typeof fetch, beforeRequest?: () => Promise<void>): Promise<"confirmed" | "uncertain"> {
+  if (!installation.startsWith("linear:")) return "uncertain"
+  if (!beforeRequest) return "uncertain"
   const pair = parseLinearCredentials(installToken(keys, installation, record))
-  if (!pair) return
+  if (!pair) return "uncertain"
+  await beforeRequest?.()
   const response = await platformFetch("linear", new URL("/oauth/revoke", `https://${PLATFORM_HOSTS.linear[0]!.host}`), {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ token: pair.refresh, token_type_hint: "refresh_token" }),
   }, fetcher)
   await response.body?.cancel().catch(() => undefined)
-  if (![200, 400, 401].includes(response.status)) throw new ApiError(503, "LINEAR_REVOKE_UNAVAILABLE", "Linear did not confirm revocation.")
+  return response.status === 200 ? "confirmed" : "uncertain"
 }
 
 /** No GET account authority: the original state is finished only by the bearer-authenticated account POST. */

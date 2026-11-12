@@ -1,3 +1,4 @@
+import { luaKeyTypes } from "./lua.js"
 import { SERVER_CAPS } from "../../../packages/schema/src/everywhere.js"
 import type { CapCounts } from "../../../packages/schema/src/everywhere-policy.js"
 import { capScopes, everywhereKeys } from "./keys.js"
@@ -68,6 +69,7 @@ export function capKeys(subject: CapSubject, now: number) {
 
 function count(value: unknown) {
   if (value === null || value === undefined) return 0
+  if (typeof value === "string" && !/^(?:0|[1-9][0-9]*)$/.test(value)) throw storeUnavailable()
   const number = storeInteger(value)
   if (number < 0) throw storeUnavailable()
   return number
@@ -94,7 +96,7 @@ export async function readCounts(store: Store, subject: CapSubject, now = Date.n
  * requester hour, installation day, the sponsor's live set. ARGV: the three window caps, the live cap, then the three
  * counters' lifetimes. Answers {admitted, sponsor day, requester hour, installation day, live}.
  */
-export const COUNT_JOB_SCRIPT = [
+export const COUNT_JOB_SCRIPT = luaKeyTypes(["counter", "counter", "counter", "zset"]) + [
   "local counts = {} local full = 0",
   "for i = 1, 3 do counts[i] = tonumber(redis.call('GET', KEYS[i]) or '0') if counts[i] >= tonumber(ARGV[i]) then full = 1 end end",
   "local live = redis.call('ZCARD', KEYS[4]) if live >= tonumber(ARGV[4]) then full = 1 end",

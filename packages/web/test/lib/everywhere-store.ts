@@ -1,12 +1,20 @@
+import { KEY_TYPES_MARKER, type LuaKeyType } from "../../../../api/_lib/everywhere/lua"
 import { RedisClient } from "bun"
 import { AUDIT_APPEND_SCRIPT } from "../../../../api/_lib/everywhere/audit"
+import {
+  ATOMIC_COMMANDS_SCRIPT,
+  AUTHORITY_PREFIX,
+  withAccountAuthority,
+  type AccountAuthorityPort,
+} from "../../../../api/_lib/everywhere/authority"
 import { FINISH_DELIVERY_SCRIPT } from "../../../../api/_lib/everywhere/dedupe"
-import { LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
-import { CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
+import { CREATE_STATE_SCRIPT, LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
+import { RECORD_SEEN_SCRIPT, CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
 import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
 import { REPLACE_NATIVE_RESERVATION_SCRIPT } from "../../../../api/_lib/everywhere/native-resource"
 import { ERASE_JIRA_TASK_SCRIPT, WRITE_JIRA_TASK_SCRIPT } from "../../../../api/_lib/everywhere/jira/task-store"
-import { SWAP_SCRIPT } from "../../../../api/_lib/everywhere/store"
+import { everywhereStore, SWAP_SCRIPT, type Store } from "../../../../api/_lib/everywhere/store"
+import { ACCOUNT_ID_PATTERN } from "../../../../packages/schema/src/everywhere"
 
 /*
  * Store fakes for Vector everywhere tests (contract section 9).
@@ -22,6 +30,22 @@ import { SWAP_SCRIPT } from "../../../../api/_lib/everywhere/store"
 
 export const FAKE_KV_URL = "https://kv.everywhere-fakes.invalid"
 export const FAKE_KV_TOKEN = "everywhere-fake-kv"
+
+/** An explicit fixture authority, never inferred by production code or backed by a real account service. */
+export const testAccountAuthority: AccountAuthorityPort = async (account) =>
+  ACCOUNT_ID_PATTERN.test(account)
+    ? { tombstoneKey: `vector:codium:test:tombstone:${account.toLowerCase()}` }
+    : undefined
+
+/** Keep test opt-in visible at each factory, including real-Redis bridges used only by CI. */
+export function testEverywhereStore(fetcher: typeof fetch): Store {
+  return everywhereStore(fetcher, testAccountAuthority)
+}
+
+/** Direct FakeStore.send adapters need the same explicit authority as REST-backed fixtures. */
+export function withTestAccountAuthority(store: Store): Store {
+  return withAccountAuthority(store, testAccountAuthority)
+}
 
 export class FakeClock {
   constructor(public now = Date.UTC(2026, 10, 11, 14, 30)) {}
@@ -47,6 +71,8 @@ export class FakeStore {
   down = false
   private readonly scripts = new Map<string, Script>([
     [AUDIT_APPEND_SCRIPT, (keys, argv) => this.auditAppend(keys, argv)],
+    [ATOMIC_COMMANDS_SCRIPT, (_keys, argv) => this.atomicCommands(argv)],
+    [CREATE_STATE_SCRIPT, (keys, argv) => this.createState(keys, argv)],
     [COUNT_JOB_SCRIPT, (keys, argv) => this.countJob(keys, argv)],
     [SWAP_SCRIPT, (keys, argv) => this.swap(keys, argv)],
     [REPLACE_NATIVE_RESERVATION_SCRIPT, (keys, argv) => {
@@ -89,6 +115,18 @@ export class FakeStore {
       return 1
     }],
     [LINK_TRIES_SCRIPT, (keys, argv) => this.tries(keys, argv)],
+    [RECORD_SEEN_SCRIPT, (keys, argv) => {
+      if (argv[3] !== "") {
+        this.run("ZREMRANGEBYSCORE", [keys[2]!, "-inf", argv[6]!])
+        if (this.run("ZSCORE", [keys[2]!, argv[5]!]) === null && Number(this.run("ZCARD", [keys[2]!])) >= 64) return 0
+      }
+      this.run("SET", [keys[0]!, argv[0]!, "PX", argv[1]!])
+      if (argv[3] !== "") {
+        this.run("SET", [keys[1]!, argv[3]!, "PX", argv[4]!])
+        this.run("ZADD", [keys[2]!, argv[2]!, argv[5]!]); this.run("PEXPIRE", [keys[2]!, argv[4]!])
+      }
+      return 1
+    }],
     [CREATE_JOB_SCRIPT, (keys, argv) => this.createJob(keys, argv)],
     [TRANSITION_SCRIPT, (keys, argv) => this.transition(keys, argv)],
     [FINISH_DELIVERY_SCRIPT, (keys, argv) => {
@@ -219,14 +257,82 @@ export class FakeStore {
       case "ZREMRANGEBYRANK":
         return this.zremByRank(args[0]!, Number(args[1]), Number(args[2]))
       case "EVAL": {
-        const script = this.scripts.get(args[0]!)
-        if (!script) throw new ScriptError("The fake store does not know this script.")
         const count = Number(args[1])
-        return script(args.slice(2, 2 + count), args.slice(2 + count))
+        if (!Number.isSafeInteger(count) || count < 0 || args.length < count + 2)
+          throw new ScriptError("Invalid EVAL keys.")
+        return this.evaluate(args[0]!, args.slice(2, 2 + count), args.slice(2 + count))
       }
       default:
         throw new ScriptError(`The fake store does not know ${name}.`)
     }
+  }
+
+  private evaluate(program: string, keys: string[], argv: string[]): unknown {
+    if (program.startsWith(AUTHORITY_PREFIX)) {
+      const kc = Number(argv.at(-3))
+      const ac = Number(argv.at(-2))
+      const gc = Number(argv.at(-1))
+      if (
+        !Number.isSafeInteger(kc) || kc < 0 ||
+        !Number.isSafeInteger(ac) || ac < 0 ||
+        !Number.isSafeInteger(gc) || gc < 1 || gc > 24 ||
+        keys.length !== kc + gc || argv.length !== ac + gc * 2 + 3
+      ) throw new ScriptError("Invalid authority proof.")
+      for (let index = 0; index < gc; index++) {
+        const mode = argv[ac + index * 2]
+        if (mode !== "missing" && mode !== "exact") throw new ScriptError("Invalid authority guard.")
+        const current = this.run("GET", [keys[kc + index]!])
+        if (mode === "missing" ? current !== null : current !== argv[ac + index * 2 + 1])
+          return ["ve:authority-changed", index + 1]
+      }
+      // The original program sees only its own keys/arguments, exactly as in the
+      // Lua wrapper; an account guard cannot accidentally become an optional base key.
+      return this.evaluate(program.slice(AUTHORITY_PREFIX.length), keys.slice(0, kc), argv.slice(0, ac))
+    }
+    const script = this.scripts.get(program)
+    if (!script) throw new ScriptError("The fake store does not know this script.")
+    if (program.startsWith(KEY_TYPES_MARKER)) {
+      const kinds: unknown = JSON.parse(program.slice(KEY_TYPES_MARKER.length, program.indexOf("\n")))
+      if (!Array.isArray(kinds) || kinds.some((kind) => !["string", "counter", "set", "zset"].includes(kind))) throw new ScriptError("Invalid key types")
+      kinds.forEach((kind: LuaKeyType, index) => { if (keys[index]) this.preflightType(keys[index]!, kind) })
+    }
+    return script(keys, argv)
+  }
+
+  private preflightType(key: string, kind: LuaKeyType) {
+    const current = this.read(key)
+    if (current && current.kind !== (kind === "counter" ? "string" : kind)) throw new ScriptError("WRONGTYPE everywhere preflight")
+    if (kind === "counter" && current?.kind === "string" && !/^(?:0|[1-9][0-9]*)$/.test(current.value)) throw new ScriptError("Invalid everywhere counter")
+  }
+
+  private atomicCommands(argv: string[]) {
+    const operations: unknown = JSON.parse(argv[0]!)
+    if (!Array.isArray(operations)) throw new ScriptError("Invalid atomic commands.")
+    const commands = operations.map((operation: unknown) => {
+      if (
+        !Array.isArray(operation) || operation.length < 2 ||
+        !operation.every((value) => typeof value === "string" || typeof value === "number") ||
+        typeof operation[0] !== "string" ||
+        !["SET", "DEL", "SADD", "SREM", "ZADD", "ZREM", "PEXPIRE"].includes(operation[0])
+      ) throw new ScriptError("Invalid atomic command.")
+      return operation as (string | number)[]
+    })
+    const kinds: Readonly<Record<string, LuaKeyType>> = { SET: "string", SADD: "set", SREM: "set", ZADD: "zset", ZREM: "zset" }
+    for (const operation of commands) {
+      const kind = kinds[String(operation[0])]
+      if (kind) this.preflightType(String(operation[1]), kind)
+    }
+    return commands.map((operation) => this.run(String(operation[0]), operation.slice(1).map(String)))
+  }
+
+  private createState(keys: string[], argv: string[]) {
+    if (this.run("EXISTS", [keys[0]!]) === 1) return 0
+    this.run("ZREMRANGEBYSCORE", [keys[1]!, "-inf", String(Number(argv[2]) - Number(argv[1]))])
+    if (Number(this.run("ZCARD", [keys[1]!])) >= 32) return -2
+    this.run("SET", [keys[0]!, argv[0]!, "PX", argv[1]!])
+    this.run("ZADD", [keys[1]!, argv[2]!, argv[3]!])
+    this.run("PEXPIRE", [keys[1]!, argv[1]!])
+    return 1
   }
 
   private live(key: string) {

@@ -6,7 +6,7 @@ import { readConfig } from "../../../api/_lib/everywhere/config"
 import type { JobEraser } from "../../../api/_lib/everywhere/erase"
 import {
   findInstall,
-  findLink,
+  findLink, readInstallState, recordInstall,
   installToken,
   issueConnectCode,
   redeemLinkCode,
@@ -15,10 +15,10 @@ import {
   type OAuthExchanges,
 } from "../../../api/_lib/everywhere/identity"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
-import { everywhereStore, storeUnavailable } from "../../../api/_lib/everywhere/store"
+import { storeUnavailable } from "../../../api/_lib/everywhere/store"
 import { everywhereEnv, FakeAccounts, FakeJira, RouteHarness, testAccount } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, useKv } from "./lib/everywhere-store"
+import { FakeStore, useKv, testEverywhereStore, testAccountAuthority } from "./lib/everywhere-store"
 
 installFetchGuard()
 
@@ -84,7 +84,8 @@ const jobs: JobEraser = {
 function deps(extra: Partial<AccountApiDeps> = {}): AccountApiDeps {
   return {
     env,
-    store: everywhereStore(fake.fetch),
+    store: testEverywhereStore(fake.fetch),
+    accountAuthority: testAccountAuthority,
     now: () => fake.clock.now,
     notify: async () => {},
     exchanges: exchanges(),
@@ -94,7 +95,7 @@ function deps(extra: Partial<AccountApiDeps> = {}): AccountApiDeps {
 }
 
 function ctx(): IdentityContext {
-  return { store: everywhereStore(fake.fetch), keys: readConfig(env).dataKeys, now: fake.clock.now }
+  return { store: testEverywhereStore(fake.fetch), keys: readConfig(env).dataKeys, now: fake.clock.now, accountAuthority: testAccountAuthority }
 }
 
 async function start(account: { token: string }, body: Record<string, unknown> = { platform: "slack" }) {
@@ -241,10 +242,11 @@ describe("OAuth installs", () => {
   })
 
   test("a disconnect that failed part way can be sent again and finishes", async () => {
-    let failures = 1
+    let failures = 1, revokeCalls = 0
     harness.use(
       createAccountApi(
         deps({
+          revoke: async (_installation, _record, beforeRequest) => { await beforeRequest(); revokeCalls++; return "confirmed" },
           jobs: {
             installation: async (installation) => {
               if (failures-- > 0) throw storeUnavailable()
@@ -265,14 +267,61 @@ describe("OAuth installs", () => {
       body: { installation: SLACK },
     })
     expect(failed.status).toBe(503)
-    expect(await findInstall(ctx().store, SLACK)).toMatchObject({ connector: alice.id })
+    expect(await findInstall(ctx().store, SLACK)).toBeUndefined()
+    const beforeGet = JSON.stringify([...fake.data.entries()])
+    const owner = await harness.call("GET", "/api/everywhere/installs", { token: alice.token })
+    expect(owner.status).toBe(200)
+    expect(owner.body.installs).toContainEqual(expect.objectContaining({ installation: SLACK, status: "closing", nextAction: "retry-disconnect" }))
+    expect(JSON.stringify(owner.body)).not.toContain(grant.token)
+    expect((await harness.call("GET", "/api/everywhere/installs", { token: bob.token })).body.installs).toEqual([])
+    expect(JSON.stringify([...fake.data.entries()])).toBe(beforeGet)
     const again = await harness.call("DELETE", "/api/everywhere/installs", {
       token: alice.token,
       body: { installation: SLACK },
     })
     expect(again.status).toBe(200)
     expect(again.body).toEqual({ erased: true, links: 0, mappings: 1 })
+    expect(revokeCalls).toBe(1)
     expect(await findInstall(ctx().store, SLACK)).toBeUndefined()
+  })
+
+  test("an uncertain native revoke exposes review status, scrubs credentials and never blindly retries", async () => {
+    let calls = 0
+    harness.use(createAccountApi(deps({ revoke: async () => { calls++; return "uncertain" } })))
+    expect((await finish(alice, (await start(alice)).state)).status).toBe(200)
+    const result = await harness.call("DELETE", "/api/everywhere/installs", { token: alice.token, body: { installation: SLACK } })
+    expect(result.status).toBe(202)
+    expect(result.body).toMatchObject({ erased: false, closing: true, nextAction: "review-native-revocation" })
+    const marker = (await readInstallState(ctx().store, SLACK))!
+    expect(marker.record.tokenEnc).toBeUndefined()
+    expect(marker.record.scopes).toEqual([])
+    const listing = await harness.call("GET", "/api/everywhere/installs", { token: alice.token })
+    expect(listing.body.installs).toContainEqual(expect.objectContaining({ installation: SLACK, status: "closing", nextAction: "review-native-revocation" }))
+    const retry = await harness.call("DELETE", "/api/everywhere/installs", { token: alice.token, body: { installation: SLACK, nativeConfirmed: true } })
+    expect(retry.status).toBe(202)
+    expect(calls).toBe(1)
+    expect((await readInstallState(ctx().store, SLACK))?.raw).toBe(marker.raw)
+  })
+
+  test("a delayed authorized DELETE cannot recapture a different connector's replacement", async () => {
+    expect((await finish(alice, (await start(alice)).state)).status).toBe(200)
+    const inner = ctx().store
+    let enter!: () => void, release!: () => void, once = true
+    const entered = new Promise<void>((resolve) => { enter = resolve }), wait = new Promise<void>((resolve) => { release = resolve })
+    harness.use(createAccountApi(deps({ store: async (command) => {
+      const result = await inner(command)
+      if (once && command[0] === "GET" && command[1] === everywhereKeys.install(SLACK)) { once = false; enter(); await wait }
+      return result
+    } })))
+    const pending = harness.call("DELETE", "/api/everywhere/installs", { token: alice.token, body: { installation: SLACK } })
+    await entered
+    await recordInstall(ctx(), { account: bob.id, event: "install", grant: { ...grant, token: slackToken(), installer: { admin: true, userId: "U0BBB2222" } } })
+    const snapshot = () => JSON.stringify([...fake.data.entries()].map(([key, value]) => [key, value.kind === "string" ? value : { kind: value.kind, value: [...value.value].sort() }]))
+    const replacement = snapshot()
+    release()
+    expect((await pending).status).toBe(409)
+    expect(snapshot()).toBe(replacement)
+    expect((await findInstall(inner, SLACK))?.connector).toBe(bob.id)
   })
 
   test("a disconnect erases the workspace's links and mappings too", async () => {
@@ -390,15 +439,16 @@ describe("repository mappings", () => {
     const body = {
       installation: SLACK,
       place: "C0123",
-      repositories: [{ fullName: "acme/api", id: 7 }, { fullName: "acme/web" }],
+      repositories: [{ fullName: "acme/api", id: 7 }, { fullName: "acme/web", id: 8 }],
       private: true,
     }
     expect((await harness.call("PUT", "/api/everywhere/repos", { token: bob.token, body })).status).toBe(404)
     const set = await harness.call("PUT", "/api/everywhere/repos", { token: alice.token, body })
     expect(set.status).toBe(200)
     expect(set.body.mapping).toEqual({
+      revision: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
       place: "C0123",
-      repositories: [{ fullName: "acme/api", id: 7 }, { fullName: "acme/web" }],
+      repositories: [{ fullName: "acme/api", id: 7 }, { fullName: "acme/web", id: 8 }],
       setBy: alice.id,
       private: true,
       setAt: fake.clock.now,

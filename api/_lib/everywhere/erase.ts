@@ -1,6 +1,9 @@
 import { ACCOUNT_ID_PATTERN, installationPlatform, type PlatformId } from "../../../packages/schema/src/everywhere.js"
+import { ApiError } from "../http.js"
 import { appendAudit, type AuditEvent, type ERASE_REASONS } from "./audit.js"
-import { PLACE_PATTERN, installationAuthority, linkMember, parseLinkMember, readInstall, readInstallSnapshot, type InstallRecord } from "./identity.js"
+import { PLACE_PATTERN, installationAuthority, linkMember, parseLinkMember, readInstall, readInstallState, type InstallRecord } from "./identity.js"
+import { authorizedCommands, authorityChanged, fencedStore } from "./authority.js"
+import { randomBytes } from "node:crypto"
 import { jobEraser } from "./jobs.js"
 import { eraseJiraTaskAccount, eraseJiraTaskInstallation } from "./jira/task-store.js"
 import { everywhereKeys, userIdValid } from "./keys.js"
@@ -21,15 +24,17 @@ export type EraseReason = Exclude<(typeof ERASE_REASONS)[number], "unlinked">
 
 /** The jobs module's half of erasing (VE-05): cancel live jobs and erase their bodies. */
 export type JobEraser = {
-  readonly installation: (installation: string) => Promise<void>
+  readonly installation: (installation: string, store?: Store) => Promise<void>
   readonly account: (account: string) => Promise<void>
 }
 
 /** A platform adapter's chance to revoke the installation's token before its record goes (best effort). */
-export type InstallRevoker = (installation: string, record: InstallRecord) => Promise<void>
+export type RevocationOutcome = "confirmed" | "uncertain"
+export type InstallRevoker = (installation: string, record: InstallRecord, beforeRequest: () => Promise<void>) => Promise<RevocationOutcome>
 
 export type EraseContext = {
   readonly store: Store
+  readonly accountAuthority?: import("./authority.js").AccountAuthorityPort
   readonly now: number
   readonly jobs?: JobEraser
   readonly revoke?: InstallRevoker
@@ -40,6 +45,8 @@ export type InstallationErased = {
   readonly installed: boolean
   readonly links: number
   readonly mappings: number
+  /** Local contents are erased, but a native outcome cannot safely permit reconnect. */
+  readonly nativePending?: true
 }
 
 const EVENT: Readonly<Record<EraseReason, AuditEvent>> = {
@@ -65,29 +72,71 @@ export async function eraseInstallation(
   ctx: EraseContext,
   installation: string,
   reason: EraseReason,
-  options: { readonly deletedAccount?: string } = {},
+  options: { readonly deletedAccount?: string; readonly expected?: { readonly record: InstallRecord; readonly raw: string };
+    readonly control?: { readonly key: string; readonly ttlMs: number } } = {},
 ): Promise<InstallationErased> {
   const platform = installationPlatform(installation)
   if (!platform) throw new RangeError("Not an installation key.")
   const deleted = options.deletedAccount?.toLowerCase()
-  const snapshot = await readInstallSnapshot(ctx.store, installation)
-  const record = snapshot?.record
-  if (record && ctx.revoke) await ctx.revoke(installation, record).catch(() => report("revoke"))
-
-  const first = await eraseContents(ctx, installation, platform, reason, deleted, snapshot && installationAuthority(snapshot))
-  // The record last, with its place in the connector's index: from here on nothing new is linked, mapped or posted.
-  await deleteKeys(ctx.store, everywhereKeys.install(installation))
-  if (record) await removeMembers(ctx.store, everywhereKeys.installs(record.connector), installation)
-  // Once more without the record, for anything a call that passed its installation check just before the record went
-  // wrote while the steps above ran. It usually finds nothing.
-  const late = await eraseContents(ctx, installation, platform, reason, deleted, snapshot && installationAuthority(snapshot))
+  const snapshot = await readInstallState(ctx.store, installation)
+  if (!snapshot) return { installed: false, links: 0, mappings: 0 }
+  const expected = options.expected ?? snapshot
+  if (snapshot.raw !== expected.raw && (!snapshot.record.closing || snapshot.record.closing.authority !== installationAuthority(expected) || snapshot.record.connector !== expected.record.connector)) throw authorityChanged()
+  let record = snapshot.record
+  let closing: NonNullable<InstallRecord["closing"]> = record.closing ?? { id: randomBytes(16).toString("base64url"), at: ctx.now, reason, authority: installationAuthority(snapshot),
+    ...(ctx.revoke && record.tokenEnc ? { revocation: "pending" as const } : {}) }
+  const revocationOwner = !record.closing && closing.revocation === "pending"
+  let raw = record.closing ? snapshot.raw : JSON.stringify({ ...record, closing })
+  if (!record.closing) {
+    await authorizedCommands(ctx.store, [{ key: everywhereKeys.install(installation), value: expected.raw },
+      ...(options.control ? [{ key: options.control.key }] : [])], [
+      ["SET", everywhereKeys.install(installation), raw], ["SET", everywhereKeys.installEpoch(installation), closing.id], ["ZADD", everywhereKeys.closingInstalls(), ctx.now, installation],
+      ...(options.control ? [["SET", options.control.key, `${closing.authority}:${closing.id}`, "PX", options.control.ttlMs]] : []),
+    ])
+  } else if (options.control && !await getValue(ctx.store, options.control.key)) {
+    await authorizedCommands(ctx.store, [{ key: everywhereKeys.install(installation), value: raw }, { key: options.control.key }], [
+      ["SET", options.control.key, `${closing.authority}:${closing.id}`, "PX", options.control.ttlMs],
+    ])
+  }
+  if (revocationOwner && ctx.revoke) {
+    const capturedClosing = raw
+    let outcome: RevocationOutcome = "uncertain"
+    try {
+      outcome = await ctx.revoke(installation, record, async () => {
+        if (await getValue(ctx.store, everywhereKeys.install(installation)) !== capturedClosing) throw authorityChanged()
+      })
+    } catch { report("revoke") }
+    const current = await readInstallState(ctx.store, installation)
+    if (!current?.record.closing || current.record.closing.id !== closing.id || current.record.closing.authority !== closing.authority || current.record.connector !== record.connector) throw authorityChanged()
+    // A concurrent local scrub can retain this same closing generation; it never turns a different grant into A.
+    record = current.record
+    closing = { ...current.record.closing, revocation: outcome === "confirmed" ? "confirmed" : "uncertain" }
+    raw = JSON.stringify({ ...record, closing })
+    await authorizedCommands(ctx.store, [{ key: everywhereKeys.install(installation), value: current.raw }], [["SET", everywhereKeys.install(installation), raw]])
+  }
+  // Closing changes the captured value before the first cleanup. Every stale admission now fails its atomic proof.
+  const scoped = { ...ctx, store: fencedStore(ctx.store, [{ key: everywhereKeys.install(installation), value: raw }]) }
+  const first = await eraseContents(scoped, installation, platform, reason, deleted, closing.authority)
+  const late = await eraseContents(scoped, installation, platform, reason, deleted, closing.authority)
+  if (closing.revocation === "pending" || closing.revocation === "uncertain") {
+    // Never let a second caller finalize a grant while the first revoke may still reach the native service.
+    // Private credentials/content still go, including during account deletion without an active-account adapter.
+    closing = { ...closing, revocation: "uncertain" }
+    const marker: InstallRecord = { connector: record.connector, ...(record.revision ? { revision: record.revision } : {}), scopes: [], installedAt: record.installedAt, closing }
+    await authorizedCommands(ctx.store, [{ key: everywhereKeys.install(installation), value: raw }], [["SET", everywhereKeys.install(installation), JSON.stringify(marker)]])
+    return { installed: true, links: first.links + late.links, mappings: first.mappings + late.mappings, nativePending: true }
+  }
+  await authorizedCommands(ctx.store, [{ key: everywhereKeys.install(installation), value: raw }], [
+    ["DEL", everywhereKeys.install(installation), everywhereKeys.installHold(installation, closing.authority)], ["SREM", everywhereKeys.installs(record.connector), installation],
+    ["ZREM", everywhereKeys.closingInstalls(), installation],
+  ])
 
   if (record && record.connector !== deleted)
     await appendAudit(
       ctx.store,
       record.connector,
       { event: EVENT[reason], platform, installation, code: reason },
-      ctx.now,
+      ctx.now, ctx.accountAuthority,
     )
   return { installed: record !== undefined, links: first.links + late.links, mappings: first.mappings + late.mappings }
 }
@@ -101,7 +150,7 @@ async function eraseContents(
   deleted: string | undefined,
   authority?: string,
 ): Promise<{ links: number; mappings: number }> {
-  if (ctx.jobs) await ctx.jobs.installation(installation)
+  await (ctx.jobs ?? jobEraser(ctx.store, () => ctx.now)).installation(installation, ctx.store)
   if (platform === "jira" && authority) await eraseJiraTaskInstallation(ctx.store, installation, authority)
 
   let links = 0
@@ -116,7 +165,7 @@ async function eraseContents(
     links++
     await removeMembers(ctx.store, everywhereKeys.links(account), linkMember(installation, userId))
     if (account !== deleted)
-      await appendAudit(ctx.store, account, { event: "unlink", platform, installation, userId, code: reason }, ctx.now)
+      await appendAudit(ctx.store, account, { event: "unlink", platform, installation, userId, code: reason }, ctx.now, ctx.accountAuthority)
   }
   await deleteKeys(ctx.store, linkedKey)
 
@@ -148,12 +197,14 @@ function linkAccount(raw: string | undefined): string | undefined {
  */
 export async function eraseEverywhereAccount(ctx: EraseContext, account: string): Promise<void> {
   const owner = account.toLowerCase()
+  // Permanent local tombstone precedes every read/cleanup; late writers cannot recreate any local account data.
+  await ctx.store(["SET", everywhereKeys.accountClosed(owner), "closed"])
   const installsKey = everywhereKeys.installs(owner)
   for (const installation of await setMembers(ctx.store, installsKey)) {
     if (!installationPlatform(installation)) continue
-    const record = await readInstall(ctx.store, installation)
-    if (record?.connector === owner)
-      await eraseInstallation(ctx, installation, "account-deleted", { deletedAccount: owner })
+    const snapshot = await readInstallState(ctx.store, installation)
+    if (snapshot?.record.connector === owner)
+      await eraseInstallation(ctx, installation, "account-deleted", { deletedAccount: owner, expected: snapshot })
   }
 
   const linksKey = everywhereKeys.links(owner)
@@ -161,17 +212,24 @@ export async function eraseEverywhereAccount(ctx: EraseContext, account: string)
     const parsed = parseLinkMember(member)
     if (!parsed) continue
     const key = everywhereKeys.link(parsed.installation, parsed.userId)
-    if (linkAccount(await getValue(ctx.store, key)) !== owner) continue
-    await deleteKeys(ctx.store, key)
-    await removeMembers(ctx.store, everywhereKeys.linked(parsed.installation), parsed.userId)
+    const raw = await getValue(ctx.store, key)
+    if (linkAccount(raw) !== owner) continue
+    try {
+      await authorizedCommands(ctx.store, [{ key, value: raw }], [["DEL", key],
+        ["SREM", everywhereKeys.linked(parsed.installation), parsed.userId], ["SREM", linksKey, member]])
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== "EVERYWHERE_AUTHORITY_CHANGED") throw error
+    }
   }
 
   const pointer = everywhereKeys.linkCodes(owner)
   const code = await getValue(ctx.store, pointer)
   if (code !== undefined && /^[0-9a-f]{64}$/.test(code)) await deleteKeys(ctx.store, everywhereKeys.linkCode(code))
 
-  if (ctx.jobs) await ctx.jobs.account(owner)
+  await (ctx.jobs ?? jobEraser(ctx.store, () => ctx.now)).account(owner)
   await eraseJiraTaskAccount(ctx.store, owner)
+  const states = await ctx.store(["ZRANGE", everywhereKeys.accountStates(owner), 0, 31])
+  for (const state of Array.isArray(states) ? states : []) if (typeof state === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(state)) await deleteKeys(ctx.store, everywhereKeys.state(state))
   await deleteKeys(
     ctx.store,
     linksKey,
@@ -180,6 +238,7 @@ export async function eraseEverywhereAccount(ctx: EraseContext, account: string)
     everywhereKeys.jobs(owner),
     everywhereKeys.seen(owner),
     everywhereKeys.audit(owner),
+    everywhereKeys.accountStates(owner),
   )
 }
 

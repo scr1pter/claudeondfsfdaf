@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { randomBytes } from "node:crypto"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { slackCooldown } from "../../../api/_lib/everywhere/slack/cooldown"
-import { everywhereStore, type Store } from "../../../api/_lib/everywhere/store"
+import { type Store } from "../../../api/_lib/everywhere/store"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { FakeStore, realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
+import { FakeStore, realRedis, useKv, type RealRedis, testEverywhereStore } from "./lib/everywhere-store"
 
 installFetchGuard()
 let restore: () => void
@@ -31,6 +31,6 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("actual Redis native cooldow
   beforeAll(async () => { redis = (await realRedis())! })
   afterAll(async () => { await redis?.close() })
   test("concurrent ZADD GT keeps the longest Retry-After across independent instances", async () => {
-    await maximum(everywhereStore(redis.fetch))
+    await maximum(testEverywhereStore(redis.fetch))
   })
 })
