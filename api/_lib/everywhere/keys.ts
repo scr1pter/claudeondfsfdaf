@@ -152,6 +152,10 @@ export const everywhereKeys = {
   jobBody: (jobId: string) => key("job", jid(jobId), "body"),
   jobs: (sponsor: string) => key("jobs", account(sponsor)),
   jobsDue: () => key("jobs", "due"),
+  /** VE-05: the live jobs on an installation, so erasing it finds them without scanning (E13). */
+  installationJobs: (installationKey: string) => key("livejobs", installation(installationKey)),
+  /** VE-05: every job an account sponsored in the last 30 days, for its job list and for account erase. */
+  jobHistory: (sponsor: string) => key("history", account(sponsor)),
   ready: (device: string) => key("ready", matching(device, DEVICE_ID_PATTERN)),
   fit: (jti: string) => key("fit", freePart(jti)),
   handoff: (repositoryId: number, runId: number) => key("handoff", positive(repositoryId), positive(runId)),

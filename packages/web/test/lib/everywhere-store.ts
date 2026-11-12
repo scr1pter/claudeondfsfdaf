@@ -1,6 +1,7 @@
 import { RedisClient } from "bun"
 import { AUDIT_APPEND_SCRIPT } from "../../../../api/_lib/everywhere/audit"
 import { LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
+import { CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
 import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
 import { SWAP_SCRIPT } from "../../../../api/_lib/everywhere/store"
 
@@ -46,6 +47,8 @@ export class FakeStore {
     [COUNT_JOB_SCRIPT, (keys, argv) => this.countJob(keys, argv)],
     [SWAP_SCRIPT, (keys, argv) => this.swap(keys, argv)],
     [LINK_TRIES_SCRIPT, (keys, argv) => this.tries(keys, argv)],
+    [CREATE_JOB_SCRIPT, (keys, argv) => this.createJob(keys, argv)],
+    [TRANSITION_SCRIPT, (keys, argv) => this.transition(keys, argv)],
   ])
 
   constructor(readonly clock = new FakeClock()) {}
@@ -137,6 +140,20 @@ export class FakeStore {
       }
       case "ZCARD":
         return this.zset(args[0]!)?.size ?? 0
+      case "ZREM": {
+        const set = this.zset(args[0]!)
+        if (!set) return 0
+        let removed = 0
+        for (const member of args.slice(1)) if (set.delete(member)) removed++
+        if (!set.size) this.remove(args[0]!)
+        return removed
+      }
+      case "ZSCORE": {
+        const score = this.zset(args[0]!)?.get(args[1]!)
+        return score === undefined ? null : String(score)
+      }
+      case "ZRANGEBYSCORE":
+        return this.zrangeByScore(args[0]!, args[1]!, args[2]!, args.slice(3))
       case "ZREVRANGE": {
         const sorted = this.sorted(args[0]!).reverse()
         return slice(sorted, Number(args[1]), Number(args[2]))
@@ -240,6 +257,25 @@ export class FakeStore {
       .map(([member]) => member)
   }
 
+  private zrangeByScore(key: string, min: string, max: string, options: string[]) {
+    const low = scoreBound(min)
+    const high = scoreBound(max)
+    const set = this.zset(key)
+    let found = this.sorted(key).filter((member) => {
+      const score = set!.get(member)!
+      return (
+        (low.open ? score > low.value : score >= low.value) && (high.open ? score < high.value : score <= high.value)
+      )
+    })
+    if (options.length) {
+      if (options.length !== 3 || options[0]!.toUpperCase() !== "LIMIT") throw new ScriptError("ZRANGEBYSCORE option")
+      const offset = Number(options[1])
+      const count = Number(options[2])
+      found = found.slice(offset, count < 0 ? undefined : offset + count)
+    }
+    return found
+  }
+
   private zremByScore(key: string, min: string, max: string) {
     const set = this.zset(key)
     if (!set) return 0
@@ -299,6 +335,63 @@ export class FakeStore {
     return count
   }
 
+  /** CREATE_JOB_SCRIPT, step for step. */
+  private createJob(keys: string[], argv: string[]) {
+    const [job, body, due, live, installationLive, history] = keys as [string, string, string, string, string, string]
+    const [record, recordTtl, sealed, bodyTtl, dueScore, jid, received, liveCap, cutoff, historyTtl] = argv as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+    if (this.read(job)) return 0
+    if ((this.zset(live)?.size ?? 0) >= Number(liveCap)) return -3
+    this.run("SET", [job, record, "PX", recordTtl])
+    this.run("SET", [body, sealed, "PX", bodyTtl])
+    this.run("ZADD", [due, dueScore, jid])
+    this.run("ZADD", [live, received, jid])
+    this.run("ZADD", [installationLive, received, jid])
+    this.run("ZADD", [history, received, jid])
+    this.run("ZREMRANGEBYSCORE", [history, "-inf", `(${cutoff}`])
+    this.run("PEXPIRE", [history, historyTtl])
+    return 1
+  }
+
+  /** TRANSITION_SCRIPT, step for step: the same fixed pattern reads the version and state. */
+  private transition(keys: string[], argv: string[]) {
+    const [job, body, due, live, installationLive] = keys as [string, string, string, string, string]
+    const [version, state, record, ttl, dueScore, stayLive, bodyMode, jid] = argv as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+    const raw = this.run("GET", [job]) as string | null
+    if (raw === null) return 0
+    const match = /^\{"version":(\d+),"state":"([a-z]+)"/.exec(raw)
+    if (!match || match[1] !== version || match[2] !== state) return -1
+    if (bodyMode === "require" && !this.read(body)) return -2
+    this.run("SET", [job, record, "PX", ttl])
+    if (dueScore === "") this.run("ZREM", [due, jid])
+    else this.run("ZADD", [due, dueScore, jid])
+    if (stayLive === "0") {
+      this.run("ZREM", [live, jid])
+      this.run("ZREM", [installationLive, jid])
+    }
+    if (bodyMode === "delete") this.run("DEL", [body])
+    return 1
+  }
+
   private countJob(keys: string[], argv: string[]) {
     const counts: number[] = []
     let full = false
@@ -318,6 +411,12 @@ export class FakeStore {
       }
     return [full ? 0 : 1, counts[0], counts[1], counts[2], live]
   }
+}
+
+function scoreBound(text: string) {
+  if (text === "-inf") return { value: -Infinity, open: false }
+  if (text === "+inf") return { value: Infinity, open: false }
+  return text.startsWith("(") ? { value: Number(text.slice(1)), open: true } : { value: Number(text), open: false }
 }
 
 function slice<T>(items: T[], start: number, stop: number) {

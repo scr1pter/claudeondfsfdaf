@@ -90,6 +90,11 @@ export class RouteHarness {
     return new Promise<void>((resolve) => this.server.close(() => resolve()))
   }
 
+  /** Mounts handlers by path, for route groups other than the account routes (the jobs routes, VE-05). */
+  mount(handlers: Record<string, Handler>) {
+    this.handlers = { ...handlers }
+  }
+
   use(api: { link: Handler; links: Handler; installs: Handler; repos: Handler; oauthFinish: Handler }) {
     this.handlers = {
       "/api/everywhere/link": api.link,
@@ -103,7 +108,12 @@ export class RouteHarness {
   async call(
     method: string,
     path: string,
-    options: { readonly token?: string; readonly body?: unknown; readonly query?: Record<string, string> } = {},
+    options: {
+      readonly token?: string
+      readonly body?: unknown
+      readonly query?: Record<string, string>
+      readonly headers?: Record<string, string>
+    } = {},
   ): Promise<RouteAnswer> {
     const url = new URL(`${this.origin}${path}`)
     for (const [name, value] of Object.entries(options.query ?? {})) url.searchParams.set(name, value)
@@ -112,6 +122,7 @@ export class RouteHarness {
       headers: {
         ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
         ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
+        ...options.headers,
       },
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     })

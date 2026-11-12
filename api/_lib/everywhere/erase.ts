@@ -1,6 +1,7 @@
 import { ACCOUNT_ID_PATTERN, installationPlatform } from "../../../packages/schema/src/everywhere.js"
 import { appendAudit, type AuditEvent, type ERASE_REASONS } from "./audit.js"
 import { PLACE_PATTERN, linkMember, parseLinkMember, readInstall, type InstallRecord } from "./identity.js"
+import { jobEraser } from "./jobs.js"
 import { everywhereKeys, userIdValid } from "./keys.js"
 import { deleteKeys, everywhereStore, getValue, removeMembers, setMembers, type Store } from "./store.js"
 
@@ -9,8 +10,7 @@ import { deleteKeys, everywhereStore, getValue, removeMembers, setMembers, type 
  * vectordev.ai and account deletion remove the installation, its links, its mappings and its live job bodies.
  *
  * Every record is found through its index set (identity.ts writes the index before the record), so nothing scans the
- * store. Live jobs belong to the jobs module (VE-05), which erases them through the `jobs` seam: until it exists there
- * are no jobs to erase.
+ * store. Live jobs belong to the jobs module (VE-05, jobs.ts), which erases them through the `jobs` seam.
  *
  * R-C9: Codium's account deletion runs `EVERYWHERE_ERASE_PART` once codium-erase.ts imports this module and registers
  * it with `registerErasePart` (Codium's file, so the registration line is theirs).
@@ -161,11 +161,11 @@ export async function eraseEverywhereAccount(ctx: EraseContext, account: string)
   )
 }
 
-/**
- * The part Codium's account deletion runs (R-C9), with the production store. VE-05 passes its job eraser here once
- * the jobs module exists.
- */
+/** The part Codium's account deletion runs (R-C9), with the production store and the jobs module's eraser. */
 export const EVERYWHERE_ERASE_PART = {
   id: "everywhere",
-  erase: (account: string) => eraseEverywhereAccount({ store: everywhereStore(), now: Date.now() }, account),
+  erase: (account: string) => {
+    const store = everywhereStore()
+    return eraseEverywhereAccount({ store, now: Date.now(), jobs: jobEraser(store) }, account)
+  },
 } as const

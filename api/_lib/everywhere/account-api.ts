@@ -24,6 +24,7 @@ import {
   type Notifier,
   type OAuthExchanges,
 } from "./identity.js"
+import { jobEraser } from "./jobs.js"
 import { everywhereStore, type Store } from "./store.js"
 
 /*
@@ -44,7 +45,7 @@ export type AccountApiDeps = {
   /** The platforms' OAuth exchanges: Slack's (VE-11) and Linear's (VE-12) are added here when they exist. */
   readonly exchanges?: OAuthExchanges
   readonly notify?: Notifier
-  /** The jobs module's eraser (VE-05). */
+  /** The jobs module's eraser; the default is jobs.ts `jobEraser` over this store (VE-05). */
   readonly jobs?: JobEraser
   /** The platform adapters' token revocation on disconnect (VE-06, VE-11). */
   readonly revoke?: InstallRevoker
@@ -240,7 +241,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
           {
             store: session.ctx.store,
             now: session.ctx.now,
-            ...(deps.jobs ? { jobs: deps.jobs } : {}),
+            jobs: deps.jobs ?? jobEraser(session.ctx.store, () => session.ctx.now),
             ...(deps.revoke ? { revoke: deps.revoke } : {}),
           },
           installation,
