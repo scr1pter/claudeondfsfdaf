@@ -21,6 +21,7 @@ import {
   type SuspendReason,
 } from "../../../api/_lib/cloud-agents-binding"
 import type { GithubIdentity } from "../../../api/_lib/github-oidc"
+import { persistentStore } from "../../../api/_lib/persistent-store"
 
 // Repository bindings, bind codes and generations (vector-at-mention-spec 2.5 and 2.7, V05), against a real Redis or
 // Valkey behind an in-process fake of the store's REST endpoint. CI runs this file in one Bun process with the other
@@ -643,7 +644,7 @@ function integrationTests() {
       expect(rebound).toMatchObject({ generation: 2, boundAt: T + 20, workflowVersion: "4" })
       expect(rebound.lastUsedAt).toBeUndefined()
       expect(await expectGenerationMatches(who.repositoryId)).toStrictEqual(rebound)
-      expect(await revokeBinding(who.repositoryId, binder)).toBe(true)
+      expect(await revokeBinding(who.repositoryId, binder, rebound.generation)).toBe(true)
       expect(await generation(who.repositoryId)).toBe("3")
       expect(await redis.send("TTL", [generationKey(who.repositoryId)])).toBe(-1)
       expect(await bindingFor(who.repositoryId)).toBeUndefined()
@@ -800,7 +801,7 @@ function integrationTests() {
       expect(await bindingsForAccount(randomUUID())).toEqual([])
       expect(commands).toHaveLength(1)
 
-      await revokeBinding(oldest.repositoryId, account)
+      await revokeBinding(oldest.repositoryId, account, 1)
       await suspend(low.repositoryId, "binder-left")
       await bind(other, low, T + 30)
       expect((await bindingsForAccount(account)).map((binding) => binding.repositoryId)).toEqual([high.repositoryId])
@@ -817,19 +818,94 @@ function integrationTests() {
       const binder = randomUUID()
       const who = repository()
       const bound = await bind(binder, who, T)
-      expect(await revokeBinding(who.repositoryId, randomUUID())).toBe(false)
+      expect(await revokeBinding(who.repositoryId, randomUUID(), bound.generation)).toBe(false)
       expect(await bindingFor(who.repositoryId)).toStrictEqual(bound)
       expect(await generation(who.repositoryId)).toBe("1")
-      expect(await revokeBinding(who.repositoryId, binder)).toBe(true)
+      expect(await revokeBinding(who.repositoryId, binder, 1)).toBe(true)
       expect(await generation(who.repositoryId)).toBe("2")
       expect(await bindingFor(who.repositoryId)).toBeUndefined()
       expect(await members(binder)).toEqual([])
-      expect(await revokeBinding(who.repositoryId, binder)).toBe(false)
+      expect(await revokeBinding(who.repositoryId, binder, 1)).toBe(false)
       expect(await generation(who.repositoryId)).toBe("2")
       commands.length = 0
-      await expect(revokeBinding("0", binder)).rejects.toMatchObject(INVALID_REQUEST)
-      await expect(revokeBinding(who.repositoryId, "binder")).rejects.toMatchObject(INVALID_REQUEST)
+      await expect(revokeBinding("0", binder, 1)).rejects.toMatchObject(INVALID_REQUEST)
+      await expect(revokeBinding(who.repositoryId, "binder", 1)).rejects.toMatchObject(INVALID_REQUEST)
+      for (const generation of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])
+        await expect(revokeBinding(who.repositoryId, binder, generation)).rejects.toMatchObject(INVALID_REQUEST)
       expect(commands).toEqual([])
+    })
+
+    test("an unbind paused after consent cannot delete a same-owner rebind", async () => {
+      const binder = randomUUID()
+      const who = repository()
+      const displayed = await bind(binder, who, T)
+      const reached = Promise.withResolvers<void>()
+      const resume = Promise.withResolvers<void>()
+      const pending = revokeBinding(who.repositoryId, binder, displayed.generation, async (command, fetcher) => {
+        reached.resolve()
+        await resume.promise
+        // The actual production Lua reaches real Redis after the replacement; no mock implements the CAS.
+        return persistentStore(command, fetcher)
+      })
+      await reached.promise
+      const replacement = await bind(binder, who, T + 1)
+      expect(replacement.generation).toBe(displayed.generation + 1)
+      resume.resolve()
+      expect(await pending).toBe(false)
+      expect(await bindingFor(who.repositoryId)).toStrictEqual(replacement)
+      expect(await generation(who.repositoryId)).toBe(String(replacement.generation))
+      expect(await members(binder)).toEqual([who.repositoryId])
+      expect(await revokeBinding(who.repositoryId, binder, replacement.generation)).toBe(true)
+      expect(await bindingFor(who.repositoryId)).toBeUndefined()
+      expect(await generation(who.repositoryId)).toBe(String(replacement.generation + 1))
+      expect(await members(binder)).toEqual([])
+    })
+
+    test("a suspension requires fresh displayed-generation consent before unbind", async () => {
+      const binder = randomUUID()
+      const who = repository()
+      const displayed = await bind(binder, who, T)
+      await suspendBinding(displayed, "binder-left")
+      const suspended = (await bindingFor(who.repositoryId))!
+      expect(suspended.generation).toBe(displayed.generation + 1)
+      expect(await revokeBinding(who.repositoryId, binder, displayed.generation)).toBe(false)
+      expect(await bindingFor(who.repositoryId)).toStrictEqual(suspended)
+      expect(await revokeBinding(who.repositoryId, binder, suspended.generation)).toBe(true)
+      expect(await bindingFor(who.repositoryId)).toBeUndefined()
+    })
+
+    test("a missing, mismatched, corrupt or exhausted generation counter changes no stored state", async () => {
+      const maximum = String(Number.MAX_SAFE_INTEGER)
+      for (const input of [
+        { name: "missing", generation: "7", counter: undefined },
+        { name: "mismatched", generation: "7", counter: "9" },
+        { name: "corrupt", generation: "7", counter: "many" },
+        { name: "zero", generation: "7", counter: "0" },
+        { name: "noncanonical", generation: "7", counter: "07" },
+        { name: "exhausted", generation: maximum, counter: maximum },
+        { name: "unsafe", generation: maximum, counter: "9007199254740992" },
+      ]) {
+        const binder = randomUUID()
+        const who = repository()
+        await bind(binder, who, T)
+        await write("HSET", bindingKey(who.repositoryId), ["generation", input.generation])
+        if (input.counter === undefined) await redis.send("DEL", [generationKey(who.repositoryId)])
+        else await write("SET", generationKey(who.repositoryId), [input.counter])
+        const before = {
+          binding: await stored(who.repositoryId),
+          counter: await generation(who.repositoryId),
+          members: await members(binder),
+        }
+        await expect(revokeBinding(who.repositoryId, binder, Number(input.generation))).rejects.toMatchObject(
+          STORE_UNAVAILABLE,
+        )
+        expect({
+          name: input.name,
+          binding: await stored(who.repositoryId),
+          counter: await generation(who.repositoryId),
+          members: await members(binder),
+        }).toEqual({ name: input.name, ...before })
+      }
     })
   })
 
@@ -844,7 +920,7 @@ function integrationTests() {
       expect((await bindingFor(who.repositoryId))?.lastUsedAt).toBe(T + 5)
       await touchBinding(who.repositoryId, T + 9)
       expect(await expectGenerationMatches(who.repositoryId)).toMatchObject({ lastUsedAt: T + 9, generation: 1 })
-      await revokeBinding(who.repositoryId, binder)
+      await revokeBinding(who.repositoryId, binder, 1)
       await touchBinding(who.repositoryId, T + 20)
       expect(await redis.send("EXISTS", [bindingKey(who.repositoryId)])).toBe(0)
       expect(await bindingFor(who.repositoryId)).toBeUndefined()
@@ -891,12 +967,12 @@ function integrationTests() {
       const replacements: [string, boolean, Replace][] = [
         ["a rebind", false, (who, binder) => bind(binder, who, T + 10)],
         ["a takeover", true, (who, _, taker) => takeOver(who, taker)],
-        ["an unbind", true, (who, binder) => revokeBinding(who.repositoryId, binder)],
+        ["an unbind", true, (who, binder) => revokeBinding(who.repositoryId, binder, 1)],
         [
           "an unbind and a new bind",
           false,
           async (who, binder) => {
-            await revokeBinding(who.repositoryId, binder)
+            await revokeBinding(who.repositoryId, binder, 1)
             await bind(binder, who, T + 10)
           },
         ],
@@ -904,7 +980,7 @@ function integrationTests() {
           "an unbind and another account's bind",
           true,
           async (who, binder, taker) => {
-            await revokeBinding(who.repositoryId, binder)
+            await revokeBinding(who.repositoryId, binder, 1)
             await bind(taker, { ...who, ...hubot }, T + 10)
           },
         ],
@@ -913,7 +989,7 @@ function integrationTests() {
           true,
           async (who, _, taker) => {
             await takeOver(who, taker)
-            await revokeBinding(who.repositoryId, taker)
+            await revokeBinding(who.repositoryId, taker, 2)
           },
         ],
         [
@@ -990,7 +1066,7 @@ function integrationTests() {
       // binding, bound no later than it, holds.
       const gone = repository()
       const removed = await bind(binder, gone, T)
-      await revokeBinding(gone.repositoryId, binder)
+      await revokeBinding(gone.repositoryId, binder, removed.generation)
       for (const generation of [2, 3]) await suspendBinding({ ...removed, generation }, "binder-left")
       const taken = repository()
       await bind(binder, taken, T)
@@ -1024,7 +1100,7 @@ function integrationTests() {
 
       // Another account takes one over at once (O6), the binder unbinds one, and binds one again itself.
       await bind(taker, { ...taken, actor: "hubot", actorId: "1000001" }, T + 1)
-      expect(await revokeBinding(unbound.repositoryId, binder)).toBe(true)
+      expect(await revokeBinding(unbound.repositoryId, binder, 2)).toBe(true)
       await bind(binder, rebound, T + 2)
       expect(await bindingFor(rebound.repositoryId)).not.toHaveProperty("suspended")
       expect(await binderLeft(binder)).toEqual(ids(taken, unbound, replaced))
@@ -1091,7 +1167,7 @@ function integrationTests() {
         redeemAndBind(input),
         bindingFor(who.repositoryId),
         bindingsForAccount(account),
-        revokeBinding(who.repositoryId, account),
+        revokeBinding(who.repositoryId, account, 1),
         touchBinding(who.repositoryId, T + 3),
         suspendBinding({ repositoryId: who.repositoryId, generation: 1, account }, "binder-left"),
         renameBinding(who.repositoryId, "octo/other"),
@@ -1266,7 +1342,7 @@ function integrationTests() {
       await bind(binder, kept, T)
       await redis.send("DEL", [`${PREFIX}bindings:${binder}`])
       await write("SET", `${PREFIX}bindings:${binder}`, ["not a set"])
-      await expect(revokeBinding(kept.repositoryId, binder)).rejects.toMatchObject(STORE_UNAVAILABLE)
+      await expect(revokeBinding(kept.repositoryId, binder, 1)).rejects.toMatchObject(STORE_UNAVAILABLE)
       expect((await bindingFor(kept.repositoryId))?.account).toBe(binder)
       expect(await generation(kept.repositoryId)).toBe("1")
 
@@ -1336,7 +1412,7 @@ function integrationTests() {
       expect(await binderLeft(ownedRead.account)).toEqual([])
       const gone = repository()
       const goneRead = await bind(randomUUID(), gone, T)
-      await revokeBinding(gone.repositoryId, goneRead.account)
+      await revokeBinding(gone.repositoryId, goneRead.account, goneRead.generation)
       for (const value of ["many", "0", "02"]) {
         await write("SET", generationKey(gone.repositoryId), [value])
         await expect(suspendBinding(goneRead, "binder-left")).rejects.toMatchObject(STORE_UNAVAILABLE)

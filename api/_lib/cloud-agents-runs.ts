@@ -335,7 +335,7 @@ export async function eraseCloudAgentsAccount(account: string, store = persisten
     throw new ApiError(409, "ACCOUNT_REVOCATION_REQUIRED", "Stop this account's access before erasing its run records.")
   await eraseBrainUploads(account, store)
   for (const binding of await bindingsForAccount(account, store))
-    await revokeBinding(binding.repositoryId, account, store)
+    await revokeBinding(binding.repositoryId, account, binding.generation, store)
   // The index is intentionally capped; scan the record namespace too so trimmed records are erased.
   for (const pattern of [`${PREFIX}run:*`, `${PREFIX}bind-code:*`, `${PREFIX}ticket:*`, `${PREFIX}binder-ok:*`]) {
     await scan(pattern, store, async (key) => {

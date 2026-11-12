@@ -187,6 +187,7 @@ export function createCloudAgentsApi(
           ? {}
           : { repository: binding.repository, binder: { login: binding.binder.login } }),
         repositoryId: binding.repositoryId,
+        generation: binding.generation,
         boundAt: binding.boundAt,
         ...(binding.lastUsedAt === undefined ? {} : { lastUsedAt: binding.lastUsedAt }),
         workflowVersion: binding.workflowVersion,
@@ -200,9 +201,15 @@ export function createCloudAgentsApi(
     const user = await account(request, response, "POST")
     await readLimit(request, response, user.id)
     const body = await objectBody(request)
-    if (Object.keys(body).some((key) => key !== "repositoryId") || !Schema.is(Decimal)(body.repositoryId))
+    if (
+      Object.keys(body).some((key) => key !== "repositoryId" && key !== "expectedGeneration") ||
+      !Schema.is(Decimal)(body.repositoryId) ||
+      typeof body.expectedGeneration !== "number" ||
+      !Number.isSafeInteger(body.expectedGeneration) ||
+      body.expectedGeneration < 1
+    )
       throw invalidRequest()
-    if (!(await revokeBinding(body.repositoryId, user.id, store)))
+    if (!(await revokeBinding(body.repositoryId, user.id, body.expectedGeneration, store)))
       throw new ApiError(403, "ACTOR_NOT_ALLOWED", "Only the account that connected this repository may disconnect it.")
     json(response, 200, { ok: true })
   }

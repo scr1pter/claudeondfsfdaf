@@ -755,7 +755,7 @@ function integrationTests() {
     // An unbind removes the binding; a suspension moves the generation once.
     const unbound = await run()
     expect(await everywhere(unbound.token)).toEqual(accepted)
-    expect(await revokeBinding(unbound.who.repositoryId, unbound.account)).toBe(true)
+    expect(await revokeBinding(unbound.who.repositoryId, unbound.account, unbound.binding.generation)).toBe(true)
     expect(await everywhere(unbound.token)).toEqual(expired)
     const suspended = await run()
     expect(await everywhere(suspended.token)).toEqual(accepted)
@@ -861,7 +861,7 @@ function integrationTests() {
       }),
       // unbound
       await run().then(async (fixture) => {
-        await revokeBinding(fixture.who.repositoryId, fixture.account)
+        await revokeBinding(fixture.who.repositoryId, fixture.account, fixture.binding.generation)
         return failure(verifyRunToken(fixture.token, { now: T + MINUTE }))
       }),
       // the generation moved

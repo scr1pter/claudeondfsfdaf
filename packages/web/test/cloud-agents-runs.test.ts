@@ -388,7 +388,7 @@ function integrationTests() {
       const f = await fixture()
       const run = await f.start()
       await suspendBinding(f.binding, "binder-left")
-      if (mode === "unbound") await revokeBinding(f.identity.repositoryId, f.account)
+      if (mode === "unbound") await revokeBinding(f.identity.repositoryId, f.account, f.binding.generation + 1)
       if (mode === "takeover") await f.rebind(randomUUID())
       const row = (await listCloudRuns(f.account))[0]!
       expect(row.rid).toBe(run.rid)

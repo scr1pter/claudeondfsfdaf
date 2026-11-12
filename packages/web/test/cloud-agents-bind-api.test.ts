@@ -219,6 +219,7 @@ function integrationTests() {
       {
         repository: "fixture-owner/project",
         repositoryId: f.github.repositoryId,
+        generation: 1,
         boundAt: f.policy.now,
         lastUsedAt: f.policy.now + 1000,
         binder: { login: "fixture-person" },
@@ -228,10 +229,65 @@ function integrationTests() {
     ])
     expect(f.policy.calls).toEqual([f.user.id])
     expect(
-      (await f.send("unbind", { token: f.otherDesktop, body: { repositoryId: f.github.repositoryId } })).status,
+      (
+        await f.send("unbind", {
+          token: f.otherDesktop,
+          body: { repositoryId: f.github.repositoryId, expectedGeneration: 1 },
+        })
+      ).status,
     ).toBe(403)
-    expect((await f.send("unbind", { body: { repositoryId: f.github.repositoryId } })).body).toEqual({ ok: true })
+    expect(
+      (await f.send("unbind", { body: { repositoryId: f.github.repositoryId, expectedGeneration: 1 } })).body,
+    ).toEqual({ ok: true })
     expect(await bindingFor(f.github.repositoryId)).toBeUndefined()
+  })
+
+  test("a stale displayed generation cannot unbind a same-owner replacement", async () => {
+    await using f = await fixture()
+    expect((await f.bind((await f.code()).body.code)).status).toBe(200)
+    const displayed = (await f.send("bindings")).body.bindings[0]
+    expect(displayed.generation).toBe(1)
+    expect((await f.bind((await f.code()).body.code)).status).toBe(200)
+    const replacement = (await bindingFor(f.github.repositoryId))!
+    expect(replacement.generation).toBe(2)
+    const stale = await f.send("unbind", {
+      body: { repositoryId: displayed.repositoryId, expectedGeneration: displayed.generation },
+    })
+    expect(stale.status).toBe(403)
+    expect(stale.body.error.code).toBe("ACTOR_NOT_ALLOWED")
+    expect(await bindingFor(f.github.repositoryId)).toEqual(replacement)
+    expect((await f.send("bindings")).body.bindings[0].generation).toBe(2)
+    expect(
+      (
+        await f.send("unbind", {
+          body: { repositoryId: displayed.repositoryId, expectedGeneration: replacement.generation },
+        })
+      ).body,
+    ).toEqual({ ok: true })
+    expect(await bindingFor(f.github.repositoryId)).toBeUndefined()
+  })
+
+  test("public unbind requires an explicit positive safe integer generation and accepts no extra fields", async () => {
+    await using f = await fixture()
+    expect((await f.bind((await f.code()).body.code)).status).toBe(200)
+    const before = (await bindingFor(f.github.repositoryId))!
+    for (const condition of [
+      {},
+      ...[0, -1, 1.5, null, "1", true, Number.MAX_SAFE_INTEGER + 1].map((expectedGeneration) => ({
+        expectedGeneration,
+      })),
+    ]) {
+      expect((await f.send("unbind", { body: { repositoryId: f.github.repositoryId, ...condition } })).status).toBe(400)
+      expect(await bindingFor(f.github.repositoryId)).toEqual(before)
+    }
+    expect(
+      (
+        await f.send("unbind", {
+          body: { repositoryId: f.github.repositoryId, expectedGeneration: before.generation, account: f.user.id },
+        })
+      ).status,
+    ).toBe(400)
+    expect(await bindingFor(f.github.repositoryId)).toEqual(before)
   })
 
   test("only verified App-backed bind stores installation identity; public projections hide it and no-App rebind clears it", async () => {
@@ -403,6 +459,7 @@ function integrationTests() {
     expect(listing.body.bindings).toEqual([
       {
         repositoryId: f.github.repositoryId,
+        generation: 2,
         boundAt: f.policy.now,
         workflowVersion: "3",
         codium: "unavailable",
