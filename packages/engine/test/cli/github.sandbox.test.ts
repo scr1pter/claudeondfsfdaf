@@ -61,6 +61,7 @@ test("the sandbox environment excludes every credential and runner file command 
     GH_TOKEN: "fixture-gh-private",
     VECTOR_RUN_TOKEN: "fixture-run-private",
     NODE_OPTIONS: "--require=untrusted",
+    TMPDIR: "/tmp/inherited-host-temporary",
     UNLISTED_VALUE: "not-in-the-contract",
   }
   const clean = sandboxEnvironment(env, {
@@ -76,6 +77,8 @@ test("the sandbox environment excludes every credential and runner file command 
   expect(clean.MODEL).toBe(env.MODEL)
   expect(clean.VECTOR_SECRET_CHANNEL).toBe("stdin")
   expect(clean.HOME).toBe(f.directory)
+  expect(clean.TMPDIR).toBe(f.directory)
+  expect(Object.values(clean)).not.toContain(env.TMPDIR)
   const paths = clean.PATH!.split(path.delimiter)
   expect(paths[0]).toBe(path.join(f.directory, "node", "bin"))
   expect(paths).toContain(path.join(f.directory, "go", "bin"))

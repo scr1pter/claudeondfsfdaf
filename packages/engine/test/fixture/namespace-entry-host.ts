@@ -8,6 +8,16 @@ import { setTimeout } from "node:timers/promises"
 
 // Host observation is deliberately outside the engine's empty proc and precedes the final UID sweep.
 const execute = promisify(execFile)
+const futureFiles = [
+  {
+    name: "future-step-dependency.mjs",
+    source: "export const value = 'trusted-next-step'\n",
+  },
+  {
+    name: "future-step.mjs",
+    source: "import { value } from './future-step-dependency.mjs'; console.log(value)\n",
+  },
+]
 const containers = ["/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox"]
 type Identity = { pid: number; start: string; uid: number; group: number; state: string; namespacePids: number[] }
 type Round = {
@@ -262,6 +272,37 @@ async function main() {
     )
   }
   await brokerLive()
+  // DAC intentionally permits the agent to alter these synthetic dependencies. Only the RO mount may deny writes.
+  for (const file of futureFiles) {
+    const source = path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", file.name)
+    await fs.writeFile(source, file.source, { mode: 0o600, flag: "wx" })
+    await execute(
+      "/usr/bin/sudo",
+      [
+        "-n",
+        "/usr/bin/install",
+        "-o",
+        String(uid),
+        "-g",
+        String(gid),
+        "-m",
+        "0666",
+        "--",
+        source,
+        "/usr/libexec/vector-namespace-probe/" + file.name,
+      ],
+      { timeout: 5000, maxBuffer: 1024, env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } },
+    )
+    const installed = await fs.lstat("/usr/libexec/vector-namespace-probe/" + file.name)
+    requireValue(
+      installed.isFile() &&
+        installed.nlink === 1 &&
+        installed.uid === uid &&
+        installed.gid === gid &&
+        (installed.mode & 0o777) === 0o666,
+      "The synthetic next-step dependency is not DAC-writable by the agent",
+    )
+  }
   const directory = await fs.lstat(observer)
   requireValue(
     directory.isDirectory() && directory.uid === 0 && !(directory.mode & 0o022),
@@ -308,7 +349,10 @@ async function main() {
         "The engine repeated or forged readiness",
       )
       requireValue(
-        value.privateHolder === true && value.emptyProc === true && value.loaderRejected === true,
+        value.privateHolder === true &&
+          value.emptyProc === true &&
+          value.loaderRejected === true &&
+          value.engineReadOnlyObserved === true,
         "The engine did not prove its private-channel prerequisites",
       )
       baseline = await snapshot(uid)
@@ -438,6 +482,7 @@ async function main() {
         value.privateHolder === true &&
         value.emptyProc === true &&
         value.loaderRejected === true &&
+        value.engineReadOnlyObserved === true &&
         value.positive === true &&
         value.earlyCancellations === 4 &&
         value.readyCancellations === 4,
@@ -499,6 +544,7 @@ async function main() {
       privateHolder: true,
       emptyEngineProc: true,
       loaderRejected: true,
+      engineReadOnlyObserved: true,
       allGroupsStoppedBeforeUidSweep: true,
       normal: 1,
       earlyCancellations: 4,
@@ -516,6 +562,7 @@ async function main() {
         allGroupsStoppedBeforeUidSweep: true,
         engineReadOnlyQualified: false,
         actualToolSeamsQualified: false,
+        engineReadOnlyObserved: true,
       }),
     )
   } finally {
@@ -541,6 +588,7 @@ async function finalAssertion() {
       report.privateHolder === true &&
       report.emptyEngineProc === true &&
       report.loaderRejected === true &&
+      report.engineReadOnlyObserved === true &&
       report.allGroupsStoppedBeforeUidSweep === true &&
       report.normal === 1 &&
       report.earlyCancellations === 4 &&
@@ -591,6 +639,17 @@ async function finalAssertion() {
     !broker || broker.start !== report.broker.start || broker.state === "Z",
     "The root namespace broker survived trusted cleanup",
   )
+  for (const file of futureFiles)
+    requireValue(
+      (await fs.readFile("/usr/libexec/vector-namespace-probe/" + file.name, "utf8")) === file.source,
+      "The agent poisoned future trusted JavaScript or dependency bytes",
+    )
+  const next = await execute(process.execPath, ["/usr/libexec/vector-namespace-probe/future-step.mjs"], {
+    timeout: 5000,
+    maxBuffer: 1024,
+    env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+  })
+  requireValue(next.stdout === "trusted-next-step\n", "The trusted next-step dependency changed actual behavior")
   console.log(
     "Namespace-entry prototype passed its bounded host observations; production floor and engine read-only qualification remain pending.",
   )

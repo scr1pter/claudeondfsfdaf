@@ -231,6 +231,26 @@ async function verifyContainer(container: string, ready = false) {
     throw refused()
 }
 
+async function engineScope(state: State, cwd: string, proofFile?: string): Promise<ProcessIsolation.EngineScope> {
+  if (!state.uid || !state.gid || AGENT_HOME !== ProcessIsolation.ENGINE_HOME) throw refused()
+  await verifyContainer(state.container, true)
+  const scope = { container: state.container, cwd, ...(proofFile ? { proofFile } : {}) }
+  const directories = ProcessIsolation.engineWritableDirectories(scope)
+  const canonical = (await sudo(["/usr/bin/realpath", "-e", "--", ...directories])).stdout.trim().split("\n")
+  if (canonical.length !== directories.length || canonical.some((directory, index) => directory !== directories[index]))
+    throw refused()
+  const metadata = (await sudo(["/usr/bin/stat", "--format=%u:%g:%a:%F", "--", ...directories])).stdout
+    .trim()
+    .split("\n")
+  if (metadata.length !== directories.length) throw refused()
+  for (const [index, line] of metadata.entries()) {
+    const [uid, gid, mode, type] = line.split(":")
+    if (Number(uid) !== state.uid || Number(gid) !== state.gid || type !== "directory" || (index > 0 && mode !== "700"))
+      throw refused()
+  }
+  return scope
+}
+
 async function placeholder(workspace: string, create = false) {
   if (create)
     await fs.mkdir(workspace, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
@@ -306,6 +326,7 @@ export function sandboxEnvironment(
     ].join(path.delimiter),
     HOME: absolute(locations.home),
     RUNNER_TEMP: absolute(locations.temporary),
+    TMPDIR: absolute(locations.temporary),
     GITHUB_EVENT_PATH: absolute(locations.event),
     VECTOR_SECRET_CHANNEL: "stdin",
     ...(locations.toolIsolation === "pid" ? { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "pid" } : {}),
@@ -396,6 +417,13 @@ export async function prepare(env: Env = process.env) {
   if (env.RUNNER_ENVIRONMENT !== "github-hosted") throw refused()
   const workspace = await checkout(env)
   if ((await command("/usr/bin/id", ["-u", USER], [0, 1])).code === 0) throw refused()
+  if (
+    await fs.lstat(AGENT_HOME).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw refused()
+      return undefined
+    })
+  )
+    throw refused()
   await validateCheckoutTree(workspace)
   const container = await stagingContainer(workspace)
   const staged = path.join(container, "checkout")
@@ -450,7 +478,7 @@ export async function prepare(env: Env = process.env) {
     String(state.uid),
     "-g",
     String(state.gid),
-    `${AGENT_HOME}/tmp`,
+    ...ProcessIsolation.ENGINE_PRIVATE_DIRECTORIES,
   ])
   await sudo(["/usr/bin/chown", "-hR", `${state.uid}:${state.gid}`, "--", staged])
   await sudo(["/usr/bin/systemctl", "stop", "docker.socket", "docker.service"])
@@ -536,7 +564,11 @@ export async function prepare(env: Env = process.env) {
       [
         ...DIAGNOSTIC_PROFILE,
         ProcessIsolation.BINARY,
-        ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
+        ...ProcessIsolation.engineArguments(
+          asAgent[0]!,
+          [...asAgent.slice(1), "/bin/true"],
+          await engineScope(state, container),
+        ),
       ],
       [0, 1],
     )
@@ -643,7 +675,6 @@ export async function run(args: readonly string[], env: Env = process.env) {
     ...(hosted && state!.mode === "codium" && !state!.sudo ? { sessionProof: true as const } : {}),
   })
   clean.GITHUB_WORKSPACE = working
-  const channel = await secretChannel(env)
   const proofPath =
     hosted && state!.mode === "codium" ? path.join(stateDirectory(env), "session-proof.json") : undefined
   if (proofPath) {
@@ -652,8 +683,48 @@ export async function run(args: readonly string[], env: Env = process.env) {
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       0o600,
     )
-    await file.close()
+    try {
+      const info = await file.stat()
+      if (
+        !info.isFile() ||
+        info.uid !== process.getuid?.() ||
+        info.nlink !== 1 ||
+        (info.mode & 0o777) !== 0o600 ||
+        info.size !== 0
+      )
+        throw refused()
+    } finally {
+      await file.close()
+    }
+    await privateDirectory(stateDirectory(env))
+    for (const access of ["-r", "-w"])
+      if (
+        (
+          await sudo(
+            [
+              "/usr/bin/setpriv",
+              `--reuid=${state!.uid}`,
+              `--regid=${state!.gid}`,
+              "--clear-groups",
+              "--no-new-privs",
+              "--",
+              "/usr/bin/test",
+              access,
+              proofPath,
+            ],
+            [0, 1],
+          )
+        ).code !== 1
+      )
+        throw refused()
   }
+  const scope = hosted && !state!.sudo ? await engineScope(state!, workspace, proofPath) : undefined
+  if (scope) {
+    ProcessIsolation.assertEngineExecutable(binary, scope)
+    ProcessIsolation.assertEngineExecutable(node, scope)
+  }
+  // Capture the credential channel only after every writable exception and the private proof file is verified.
+  const channel = await secretChannel(env)
   const launcher = hosted ? "/usr/bin/sudo" : binary
   const inner = hosted
     ? [
@@ -695,7 +766,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
           : [
               ...DIAGNOSTIC_PROFILE,
               ProcessIsolation.BINARY,
-              ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), workspace),
+              ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), scope!),
             ]),
       ]
   return new Promise<number>((resolve, reject) => {

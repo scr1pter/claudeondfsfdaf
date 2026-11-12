@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import { constants, fstatSync } from "node:fs"
+import os from "node:os"
 import { spawn } from "node:child_process"
 import timers from "node:timers"
 import { setTimeout } from "node:timers/promises"
@@ -78,6 +79,10 @@ async function readSpec() {
       "The namespace broker has no root-sealed startup proof",
     )
     requireValue(typeof value.container === "string" && containers.includes(value.container), "Invalid prototype scope")
+    requireValue(
+      record(value.canary) && value.canary.path === value.container + "/trusted-namespace-canary/module.py",
+      "Invalid trusted-code canary",
+    )
     requireValue(value.observer === value.container + "/namespace-observer", "Invalid observer directory")
     requireValue(
       typeof value.uid === "number" && value.uid > 0 && typeof value.gid === "number" && value.gid > 0,
@@ -89,7 +94,7 @@ async function readSpec() {
       directory.isDirectory() && directory.uid === 0 && !(directory.mode & 0o022),
       "The observer directory is not root-owned",
     )
-    return { observer: value.observer }
+    return { observer: value.observer, checkout: value.container + "/checkout", canary: value.canary.path }
   } finally {
     await file.close()
   }
@@ -136,6 +141,54 @@ async function bounded<T>(promise: Promise<T>, message: string) {
   }
 }
 
+async function assertReadOnlyEngine(scope: { checkout: string; canary: string }) {
+  const temporary = ProcessIsolation.ENGINE_HOME + "/tmp/vector-agent"
+  requireValue(
+    process.cwd() === scope.checkout &&
+      process.env.TMPDIR === temporary &&
+      process.env.RUNNER_TEMP === temporary &&
+      os.tmpdir() === temporary,
+    "The engine writable worktree or temporary scope changed",
+  )
+  for (const directory of [scope.checkout, ...ProcessIsolation.ENGINE_PRIVATE_DIRECTORIES]) {
+    const file = `${directory}/namespace-engine-write-${process.pid}`
+    await fs.writeFile(file, "verified private engine write\n", { flag: "wx", mode: 0o600 })
+    requireValue(
+      (await fs.readFile(file, "utf8")) === "verified private engine write\n",
+      "A private engine write failed",
+    )
+    await fs.unlink(file)
+  }
+  const attempts = [
+    () => fs.writeFile(scope.canary, "poisoned Python dependency\n"),
+    () =>
+      fs.writeFile(
+        "/usr/libexec/vector-namespace-probe/future-step-dependency.mjs",
+        "export const value = 'poisoned-dependency'\n",
+      ),
+    () => fs.writeFile("/usr/libexec/vector-namespace-probe/future-step.mjs", "console.log('poisoned-next-step')\n"),
+    () => fs.writeFile(`${ProcessIsolation.ENGINE_HOME}/namespace-home-poison-${process.pid}`, "poisoned home\n"),
+    () => fs.writeFile(`/tmp/namespace-host-tmp-poison-${process.pid}`, "poisoned host temporary\n"),
+    // Never write/truncate the real runtime, even if an old boundary accidentally allows this open.
+    async () => {
+      const opened = await fs.open(process.execPath, constants.O_WRONLY)
+      await opened.close()
+    },
+  ]
+  for (const [index, attempt] of attempts.entries()) {
+    try {
+      await attempt()
+    } catch (error) {
+      requireValue(
+        error instanceof Error && "code" in error && error.code === "EROFS",
+        `Engine read-only control ${index} did not fail through the read-only mount (${error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "invalid"})`,
+      )
+      continue
+    }
+    throw new Error(`Engine read-only control ${index} mutated or opened a trusted path`)
+  }
+}
+
 async function main() {
   requireValue(process.platform === "linux", "The namespace prototype is Linux-only")
   await GithubSecrets.credentials.load()
@@ -151,6 +204,7 @@ async function main() {
   const proof = fstatSync(3, { bigint: true })
   requireValue(proof.isFile(), "The actual private proof descriptor is missing")
   const spec = await readSpec()
+  await assertReadOnlyEngine(spec)
   requireValue((await fs.readdir(spec.observer)).length === 0, "The observer directory contains stale acknowledgements")
   const environment = untrustedChildEnvironment(process.env)
   const rejected = (() => {
@@ -170,6 +224,7 @@ async function main() {
     privateHolder: true,
     emptyProc: true,
     loaderRejected: true,
+    engineReadOnlyObserved: true,
     proof: { device: String(proof.dev), inode: String(proof.ino) },
   })
   await ack(spec.observer, 0, "baseline")
@@ -344,6 +399,7 @@ async function main() {
     privateHolder: true,
     emptyProc: true,
     loaderRejected: true,
+    engineReadOnlyObserved: true,
     rounds: rounds.length,
     positive: true,
     earlyCancellations: 4,
