@@ -4,7 +4,7 @@ import { modelPlanRequireMarkedTokens, modelPlansMinClient } from "./model-plan-
 import { refuseBrowserShaped } from "./hosted-tokens.js"
 import { ApiError, type ApiRequest } from "./http.js"
 import { requireUnrevokedAccount, requireUnrevokedCliToken } from "./revocation.js"
-import { cloudAgentsRunVerifier } from "./cloud-agents-run-token.js"
+import { verifyRunToken } from "./cloud-agents-run-token.js"
 
 export type ModelPlanCaller = {
   account: { id: string }
@@ -77,7 +77,9 @@ export function registerRunVerifier(prefix: RunPrefix, verify: RunVerifier) {
   runVerifiers.register(prefix, verify)
 }
 
-registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)
+// The verifier is a hoisted function: entitlement/reconciliation imports can reach this registry while the run-token
+// module is still initializing. Reading its const adapter here would fail for that legitimate import order.
+registerRunVerifier("vrt_", verifyRunToken)
 
 /** Client hints only choose protocol compatibility. They never establish identity, tier or spending authority. */
 export function requireModelPlanClient(request: Pick<ApiRequest, "headers">) {

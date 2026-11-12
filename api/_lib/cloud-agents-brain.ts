@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto"
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -74,6 +74,25 @@ function unwrapKey(envelope: Envelope, contentKey: Uint8Array, associated: strin
     throw invalid()
   }
 }
+/** This wraps/unwraps only a fresh synthetic key. It never accepts, decrypts or stores repository payloads. */
+export function brainUploadCryptoReady(env: Readonly<Record<string, string | undefined>> = process.env) {
+  const bytes: Buffer[] = []
+  try {
+    const probe = randomBytes(32)
+    bytes.push(probe)
+    const wrapping = secret(env)
+    bytes.push(wrapping)
+    const associated = "vector-brain-upload-readiness-v1"
+    const opened = unwrapKey(encrypt(probe, wrapping, associated), wrapping, associated)
+    bytes.push(opened)
+    return opened.length === probe.length && timingSafeEqual(probe, opened)
+  } catch {
+    return false
+  } finally {
+    bytes.forEach((value) => value.fill(0))
+  }
+}
+
 const object = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value))
 

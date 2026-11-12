@@ -35,6 +35,27 @@ export function cloudBrainArtifactKey(
   }
 }
 
+/** Synthetic scopes exercise real key derivation without granting an account, run or artifact read. */
+export function artifactCryptoReady(env: Readonly<Record<string, string | undefined>> = process.env) {
+  const bytes: Buffer[] = []
+  try {
+    const scope = { sub: "00000000-0000-4000-8000-000000000001", repo: "1", gen: 1, thr: "1" }
+    const ordinary = cloudRunArtifactKey(scope, env)
+    const brain = cloudBrainArtifactKey(scope, { sha256: "0".repeat(64), publicRepository: false }, env)
+    for (const grant of [ordinary, brain]) {
+      const value = Buffer.from(grant.key, "base64url")
+      bytes.push(value)
+      if (value.length !== 32 || value.toString("base64url") !== grant.key || !/^[0-9a-f]{16}$/.test(grant.keyId))
+        return false
+    }
+    return ordinary.key !== brain.key
+  } catch {
+    return false
+  } finally {
+    bytes.forEach((value) => value.fill(0))
+  }
+}
+
 function artifactMaster(env: Readonly<Record<string, string | undefined>>) {
   const dedicated = env.VECTOR_RUN_ARTIFACT_SECRET ?? ""
   const license = env.VECTOR_LICENSE_SECRET ?? ""

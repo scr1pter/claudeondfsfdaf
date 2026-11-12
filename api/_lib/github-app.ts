@@ -651,6 +651,17 @@ export function createGithubApp(
         await revoke(credential.token)
       }
     },
+    /** Nonpaying global identity probe only; it creates no repository installation credential or grant. */
+    async readiness(): Promise<boolean> {
+      try {
+        const config = configuration()
+        if (!config) return false
+        const metadata = await api("/app", await appJwt(config))
+        return githubId(metadata?.id) === config.id && metadata?.slug === config.slug
+      } catch {
+        return false
+      }
+    },
     configuration() {
       const config = configuration()
       return config ? { available: true, installUrl: installUrl(config) } : { available: false }
