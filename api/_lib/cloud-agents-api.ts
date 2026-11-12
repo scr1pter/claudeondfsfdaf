@@ -381,6 +381,7 @@ export function createCloudAgentsApi(
           generation: binding.generation,
           jti,
           rid,
+          thread: reserved.thread,
           repository: identity.repository,
           repositoryId: identity.repositoryId,
           runId: identity.runId,

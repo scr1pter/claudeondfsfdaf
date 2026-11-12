@@ -2,6 +2,116 @@ import { expect, test } from "bun:test"
 import { createPrivateKey } from "node:crypto"
 import { createGithubApp, githubAppConfiguration, githubTokenPermissions } from "../../../api/_lib/github-app"
 import { githubAppFixture } from "./github-app-fixture"
+import type { RepoBinding } from "../../../api/_lib/cloud-agents-binding"
+
+test("desktop attachment visibility comes from current repository metadata with a metadata-only revoked credential", async () => {
+  await using fixture = await githubAppFixture()
+  const binding: RepoBinding = {
+    repositoryId: fixture.repositoryId,
+    ownerId: "456",
+    repository: "fixture-owner/project",
+    account: "11111111-1111-4111-8111-111111111111",
+    visibility: "private",
+    defaultRef: "refs/heads/main",
+    generation: 1,
+    binder: { githubId: String(fixture.state.binder.id), login: fixture.state.binder.login },
+    workflowVersion: "3",
+    boundAt: Date.now(),
+    installationId: "600",
+  }
+  expect(await fixture.app.attachmentRepository(binding)).toEqual({
+    repositoryId: fixture.repositoryId,
+    generation: 1,
+    publicRepository: true,
+  })
+  fixture.state.repository.private = true
+  expect((await fixture.app.attachmentRepository(binding)).publicRepository).toBe(false)
+  expect(fixture.state.minted.map((item) => item.body.permissions)).toEqual([
+    { metadata: "read" },
+    { metadata: "read" },
+  ])
+  expect(fixture.tokens.size).toBe(0)
+})
+
+test.each(["binder-left", "default-moved", "owner-moved"] as const)(
+  "desktop attachment metadata refuses %s and revokes its credential",
+  async (change) => {
+    await using fixture = await githubAppFixture()
+    const binding: RepoBinding = {
+      repositoryId: fixture.repositoryId,
+      ownerId: "456",
+      repository: "fixture-owner/project",
+      account: "11111111-1111-4111-8111-111111111111",
+      visibility: "private",
+      defaultRef: "refs/heads/main",
+      generation: 1,
+      binder: { githubId: String(fixture.state.binder.id), login: fixture.state.binder.login },
+      workflowVersion: "3",
+      boundAt: Date.now(),
+      installationId: "600",
+    }
+    if (change === "binder-left") fixture.state.binderPermission = "read"
+    if (change === "default-moved") fixture.state.repository.default_branch = "new-default"
+    if (change === "owner-moved") binding.ownerId = "999"
+    await expect(fixture.app.attachmentRepository(binding)).rejects.toBeDefined()
+    expect(fixture.tokens.size).toBe(0)
+  },
+)
+
+test.each(["ok", "foreign-run", "wrong-name", "expired", "foreign-repo", "too-old", "permission-lost"] as const)(
+  "completed owner artifact metadata enforces actual provenance without downloading payload: %s",
+  async (change) => {
+    await using fixture = await githubAppFixture()
+    const now = Date.now()
+    const binding: RepoBinding = {
+      repositoryId: fixture.repositoryId,
+      ownerId: "456",
+      repository: "fixture-owner/project",
+      account: "11111111-1111-4111-8111-111111111111",
+      visibility: "private",
+      defaultRef: "refs/heads/main",
+      generation: 1,
+      binder: { githubId: String(fixture.state.binder.id), login: fixture.state.binder.login },
+      workflowVersion: "3",
+      boundAt: now,
+      installationId: "600",
+    }
+    fixture.state.run.event = "workflow_dispatch"
+    fixture.state.artifact = {
+      id: 55,
+      name: "vector-session-dispatch-1000",
+      expired: false,
+      created_at: new Date(now - 5000).toISOString(),
+      expires_at: new Date(now + 86_400_000).toISOString(),
+      size_in_bytes: 500,
+      workflow_run: {
+        id: change === "foreign-run" ? 1001 : 1000,
+        repository_id: Number(fixture.repositoryId),
+        head_repository_id: change === "foreign-repo" ? 999 : Number(fixture.repositoryId),
+      },
+    }
+    if (change === "wrong-name") fixture.state.artifact.name = "vector-session-17"
+    if (change === "expired") fixture.state.artifact.expired = true
+    if (change === "too-old") fixture.state.artifact.created_at = new Date(now - 8 * 86_400_000).toISOString()
+    if (change === "permission-lost") {
+      await fixture.app.attachmentRepository(binding)
+      fixture.state.binderPermission = "read"
+    }
+    const read = fixture.app.ownerArtifact(
+      binding,
+      { runId: "1000", thread: "dispatch-1000", startedAt: now - 20_000, endedAt: now - 10_000 },
+      "55",
+    )
+    if (change === "ok")
+      expect(await read).toMatchObject({ repositoryId: fixture.repositoryId, generation: 1, publicRepository: true })
+    else await expect(read).rejects.toBeDefined()
+    expect(fixture.tokens.size).toBe(0)
+    expect(fixture.state.requests.some((route) => route.includes("/zip") || route.includes("archive_download"))).toBe(
+      false,
+    )
+    expect(fixture.state.minted.every((item) => !Object.hasOwn(item.body.permissions, "contents"))).toBe(true)
+  },
+)
 
 test.each(["task", "review", "publish"] as const)(
   "issues a real-signed App request with exactly one repository and fixed %s permissions",

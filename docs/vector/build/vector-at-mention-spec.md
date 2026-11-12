@@ -845,6 +845,8 @@ It is typed locally and structurally against Codium's `GatewayHook` (`api/_lib/m
 | `binder-left:<account>` | SET | repository ids whose binder lost access while bound to the account (2.5) | none (a member goes when the account binds that repository again; the key on erase) |
 | `bind-code:<sha256 hex of the whole code>` | STRING | JSON (below) | 600 s |
 | `ticket:<sha256>` | STRING | JSON | 900 s |
+| `brain:<uploadId>` | STRING | opaque ciphertext, wrapped content key, approved digest/size, account/repository/generation/current-prepare visibility, expiry and optional bound ticket hash | 2 hours |
+| `brain:account:<account>` | SET | at most eight outstanding opaque upload keys; every referenced key is declared explicitly to write/erase scripts | 2 hours from the latest upload |
 | `binder-ok:<repositoryId>` | STRING | JSON `{account, githubId, generation}`: the owning Vector account, verified binder and binding generation | 1 hour |
 | `default-branch:<repositoryId>` | STRING | a public repository's default branch, read without credentials | 1 hour |
 | `live:<account>` | HASH | `rid` → JSON `LiveRun` | extended at each fresh reserve to at least that reserve's `used` expiry and its deadline + 1 day; never shortened; goes with its last run |
@@ -1366,6 +1368,7 @@ eraseCloudAgentsAccount(account: string, store?): Promise<void>
 ```
 
 - Inputs are server-derived from the verified GitHub identity, stored binding, ledger reservation and optional validated ticket. `runUrl` is constructed from the verified repository and `runId`; it is never an input URL. `rid` must be the matching GitHub repository/run id. Account, generation and token id are internal fields, never listed to a client.
+- New mint-written private records also retain the ledger's exact conversation `thread`; legacy records without it grant no owner artifact key. A successful explicitly approved desktop Brain read atomically adds immutable `brainSha` and `brainPublic` metadata, fenced by the current live token id, consumed ticket hash, source, deadline/activity and binding generation. These fields select the actual artifact's key domain for owner result reads; they are omitted from public run listings and contain no code/context. The private live ledger's optional `ticketHash` is derived inside reservation Lua from the exact consumed ticket key, never supplied by a request or token claim, and survives only that run's renewals.
 - `recordRunStart` atomically checks the account is not revoked, the current binding/generation still belongs to it, and the live ledger record has its generation and token id. A stale start fails closed. A renewal retains the ledger's original start and refreshes the record's token identity; an older mint cannot overwrite the newer record. Different-account replacements leave only the new account's record visible; stale index entries never expose it to the old account.
 - `recordRunEnd` compares account, generation and token id before updating. An earlier token, a delayed settle after replacement, or a repeated settle changes nothing and returns false; the first matching settle returns true. Its `verdict` is derived by the server: `changes` → `pass`; `draft` and `failed` → `fail`; everything else → `none`. The record expires 90 days after its latest start or first matching end. Ship Desk reads this verdict from the record, never from a PR body, and still requires the repository id to match.
 - The actor's login and id live only in the separate `run:<rid>:actor` hash, expiring 90 days after start; an end does not extend that TTL. A renewal keeps the original actor/expiry when the same account, generation and start are retained. No actor is required when its key has expired.
@@ -1406,6 +1409,7 @@ This list is exactly what we store (INV-P3). V11's test compares the store's key
 | One-time bind codes, stored under the code's hash with the account, the repository name and, when given, its id, the requesting GitHub user id and the default branch, and the expiry; run tickets (hashed) | `bind-code:…`, `ticket:…` | 10 and 15 minutes |
 | Short-lived caches: the owning account, binder GitHub id and generation for verified access; a public repository name, owner id and default branch | `binder-ok:…`, `default-branch:…` | 1 hour |
 | Session artifacts | the repository's own GitHub Actions artifacts, encrypted per conversation | 7 days (GitHub's storage) |
+| Explicit desktop Brain staging: encrypted payload, wrapped content key, digest/size/approval metadata and one-ticket binding; no plaintext payload | `brain:<uploadId>`, `brain:account:<account>` | at most 2 hours; erased after account revocation during deletion |
 
 Actions logs are GitHub's and are public on public repositories.
 

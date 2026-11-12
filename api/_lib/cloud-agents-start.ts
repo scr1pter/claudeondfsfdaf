@@ -32,7 +32,11 @@ const FORMAT = /^vtk_[A-Za-z0-9_-]{43}$/
 const TTL = 900
 
 type TicketDeps = { store?: typeof persistentStore; app?: ReturnType<typeof createGithubApp>; now?: () => number }
-type StartDeps = TicketDeps & { entitlement?: typeof cloudAgentEntitlement; fetcher?: typeof fetch }
+type StartDeps = TicketDeps & {
+  entitlement?: typeof cloudAgentEntitlement
+  fetcher?: typeof fetch
+  brainUpload?: string
+}
 export type StartCloudRunResult =
   | { ok: true; dispatchedAt: number }
   | {
@@ -71,6 +75,11 @@ export async function prepareCloudRun(
   const app = deps.app ?? githubApp
   const now = deps.now ?? Date.now
   if (!ENABLED_SOURCES.has(trigger.source)) return { ok: false, reason: "source-unavailable" }
+  if (
+    deps.brainUpload !== undefined &&
+    (trigger.source !== "desktop" || !/^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/.test(deps.brainUpload))
+  )
+    throw invalidRequest()
   if (trigger.purpose === "scheduled") return { ok: false, reason: "purpose-unavailable" }
   if (
     !Schema.is(Account)(trigger.account) ||
@@ -186,6 +195,7 @@ export async function prepareCloudRun(
         ticket,
         ownerId: current.ownerId,
         installationId: current.installationId,
+        ...(deps.brainUpload === undefined ? {} : { brainUpload: deps.brainUpload }),
       })
     } catch (error) {
       await remove()

@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import { RedisClient } from "bun"
+import { createHash } from "node:crypto"
 import { createServer } from "node:http"
 import { createCloudAgentsApi } from "../../../api/_lib/cloud-agents-api"
 import { bindingFor, createBindCode, redeemAndBind } from "../../../api/_lib/cloud-agents-binding"
 import type { CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitlement"
 import { liveKey, liveRun } from "../../../api/_lib/cloud-agents-ledger"
 import { readRunToken } from "../../../api/_lib/cloud-agents-run-token"
-import { eraseCloudAgentsAccount, listCloudRuns } from "../../../api/_lib/cloud-agents-runs"
+import { eraseCloudAgentsAccount, listCloudRuns, recordRunBrainContext } from "../../../api/_lib/cloud-agents-runs"
 import { peekRunTicket, prepareCloudRun, startCloudRun } from "../../../api/_lib/cloud-agents-start"
 import type { RunTrigger } from "../../../api/_lib/cloud-agents-entitlement"
 import { persistentStore } from "../../../api/_lib/persistent-store"
@@ -472,7 +473,11 @@ function integrationTests() {
         expect(await liveRun(f.account, minted.body.runId)).toMatchObject({
           triggerSource: "ops",
           triggerPurpose: purpose,
+          ticketHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         })
+        expect((await liveRun(f.account, minted.body.runId))?.ticketHash).toBe(
+          createHash("sha256").update(f.ticket()).digest("hex"),
+        )
         expect((await listCloudRuns(f.account))[0]?.trigger).toEqual({ source: "ops", purpose })
         const live = JSON.parse(String(await persistentStore(["HGET", liveKey(f.account), minted.body.runId])))
         expect(Object.keys(live).sort()).toEqual(
@@ -489,6 +494,7 @@ function integrationTests() {
             "jti",
             "triggerSource",
             "triggerPurpose",
+            "ticketHash",
           ].sort(),
         )
         expect(
@@ -508,11 +514,53 @@ function integrationTests() {
             "jti",
             "triggerSource",
             "triggerPurpose",
+            "thread",
           ].sort(),
         )
       } finally {
         await f.close()
       }
+    }
+  })
+
+  test("Brain key provenance records immutable approved metadata only for the exact live desktop ticket", async () => {
+    const f = await fixture()
+    try {
+      expect((await f.start({ source: "desktop", purpose: "task" })).ok).toBe(true)
+      const minted = await f.mint({ ticket: f.ticket() })
+      expect(minted.status).toBe(200)
+      const claims = readRunToken(minted.body.token, f.policy.now)
+      const live = await liveRun(f.account, minted.body.runId)
+      if (!live?.ticketHash) throw new Error("Fixture has no live desktop ticket")
+      const input = {
+        account: f.account,
+        repositoryId: claims.repo,
+        generation: claims.gen,
+        rid: claims.rid,
+        jti: claims.jti,
+        thread: claims.thr,
+        ticketHash: live.ticketHash,
+        sha256: "a".repeat(64),
+        publicRepository: false,
+        now: f.policy.now,
+      }
+      await recordRunBrainContext(input)
+      await recordRunBrainContext(input)
+      expect(
+        await persistentStore(["HMGET", `vector:cloud-agents:run:${claims.rid}`, "brainSha", "brainPublic"]),
+      ).toEqual([input.sha256, "0"])
+      for (const changed of [
+        { sha256: "b".repeat(64) },
+        { publicRepository: true },
+        { ticketHash: "c".repeat(64) },
+        { jti: "x".repeat(22) },
+      ])
+        await expect(recordRunBrainContext({ ...input, ...changed })).rejects.toMatchObject({ statusCode: 503 })
+      expect(JSON.stringify(await listCloudRuns(f.account))).not.toMatch(/brainSha|brainPublic|thread/)
+      await f.revoke()
+      await expect(recordRunBrainContext(input)).rejects.toMatchObject({ statusCode: 503 })
+    } finally {
+      await f.close()
     }
   })
 

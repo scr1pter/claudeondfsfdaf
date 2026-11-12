@@ -29,6 +29,7 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     full_name: "fixture-owner/project",
     owner,
     default_branch: "main",
+    private: false,
     archived: false,
     disabled: false,
   }
@@ -65,6 +66,7 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     appSlug: config.slug,
     repository,
     run,
+    artifact: undefined as Record<string, unknown> | undefined,
     job,
     extraJobs: [] as Array<typeof job>,
     workflow: { id: 500, path: ".github/workflows/vector.yml", state: "active" },
@@ -163,15 +165,17 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
         const body = (await request.json()) as { repository_ids: number[]; permissions: Record<string, string> }
         expect(body.repository_ids).toEqual([Number(repositoryId)])
         const purpose =
-          body.permissions.actions === "read"
-            ? "validation"
-            : body.permissions.actions === "write"
-              ? body.permissions.contents
-                ? "task"
-                : "dispatch"
-              : body.permissions.contents === "write"
-                ? "publish"
-                : "review"
+          Object.keys(body.permissions).length === 1 && body.permissions.metadata === "read"
+            ? "attachment"
+            : body.permissions.actions === "read"
+              ? "validation"
+              : body.permissions.actions === "write"
+                ? body.permissions.contents
+                  ? "task"
+                  : "dispatch"
+                : body.permissions.contents === "write"
+                  ? "publish"
+                  : "review"
         state.events.push(`mint:${purpose}`)
         if (state.failFinalMint && purpose !== "validation") return new Response(null, { status: 503 })
         const token =
@@ -215,8 +219,15 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
         state.dispatches.push(await request.json())
         return new Response(null, { status: state.dispatchStatus })
       }
-      expect(token.purpose).toBe("validation")
+      expect(["validation", "attachment"]).toContain(token.purpose)
+      if (token.purpose === "attachment")
+        expect(
+          route === "/repos/fixture-owner/project" || route.startsWith("/user/") || route.includes("/collaborators/"),
+        ).toBe(true)
       if (route === "/repos/fixture-owner/project") return Response.json(state.repository)
+      if (route === "/repos/fixture-owner/project/actions/runs/1000") return Response.json(state.run)
+      if (route === "/repos/fixture-owner/project/actions/artifacts/55")
+        return state.artifact ? Response.json(state.artifact) : new Response(null, { status: 404 })
       if (route.endsWith("/attempts/1")) return Response.json(state.run)
       if (route.endsWith("/workflows/500")) return Response.json(state.workflow)
       if (route.endsWith("/jobs"))
