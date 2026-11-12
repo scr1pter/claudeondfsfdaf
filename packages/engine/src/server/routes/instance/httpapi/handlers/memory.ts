@@ -816,6 +816,7 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       if (ctx.payload.parts.reduce((sum, part) => sum + part.length, 0) > POSTING_CHARS)
         return yield* refused("Vector checks at most 2,000,000 characters at a time.", "limit")
       return yield* SessionPosting.check(ctx.payload).pipe(
+        Effect.catchTag("PostingRefused", (error) => Effect.fail(refused(error.message, "limit"))),
         Effect.provideService(Instruction.Service, instruction),
         Effect.provideService(Session.Service, sessions),
         Effect.provideService(Git.Service, git),
