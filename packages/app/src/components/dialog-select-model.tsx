@@ -13,6 +13,7 @@ import {
   onCleanup,
   onMount,
   Show,
+  useTransition,
   ValidComponent,
 } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -99,9 +100,10 @@ function createModelSections(input: {
       render: number
       each: number
       cleanup: number
+      pending?: () => boolean
     }
   }
-  const diagnostic = (host.scopePickerTrace ??= {
+  const diagnostic: NonNullable<typeof host.scopePickerTrace> = (host.scopePickerTrace ??= {
     armed: false,
     instances: 0,
     sequence: 0,
@@ -111,6 +113,8 @@ function createModelSections(input: {
     each: 0,
     cleanup: 0,
   })
+  // Keep the public accessor for event/test snapshots only; reading it in a computation would add an observer.
+  diagnostic.pending = useTransition()[0]
   const instance = ++diagnostic.instances
   const trace = (phase: string, value: unknown) => {
     const category = phase.endsWith("-cleanup")
@@ -188,9 +192,16 @@ function createModelSections(input: {
   const currentRow = () => pickerCurrentRow(navigation(), current())
   const toggle = (id: string) => {
     const next = toggleOpenSection(open(), id)
-    trace("toggle-before", { id, modelOwner, modelDisposed, before: [...open()], next: [...next] })
+    trace("toggle-before", {
+      id,
+      modelOwner,
+      modelDisposed,
+      pending: diagnostic.pending?.(),
+      before: [...open()],
+      next: [...next],
+    })
     setOpenSections(next)
-    trace("toggle-after", { id, open: [...open()] })
+    trace("toggle-after", { id, pending: diagnostic.pending?.(), open: [...open()] })
     writeOpenSections(next)
   }
   // Another picker may have opened or closed sections since this one last showed.

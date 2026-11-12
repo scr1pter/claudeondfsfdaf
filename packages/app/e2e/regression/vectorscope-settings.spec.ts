@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test"
+import { expect, test, type Locator, type Page, type Request } from "@playwright/test"
 import { reply } from "../utils/mock-server"
 import { port, provider, rootID, setup, type Setup } from "../utils/multiagent"
 
@@ -93,6 +93,19 @@ test("the owner saves a separate model, variant and disable setting only after c
   page,
 }, info) => {
   const app = await setup(page, engine({ status: { [rootID]: { type: "busy" } } }))
+  const pendingRequests = new Map<Request, { method: string; url: string; status?: number; eventStream?: boolean }>()
+  page.on("request", (request) => {
+    const url = new URL(request.url())
+    pendingRequests.set(request, { method: request.method(), url: url.origin + url.pathname })
+  })
+  page.on("response", (response) => {
+    const pending = pendingRequests.get(response.request())
+    if (!pending) return
+    pending.status = response.status()
+    pending.eventStream = response.headers()["content-type"]?.includes("text/event-stream") ?? false
+  })
+  page.on("requestfinished", (request) => pendingRequests.delete(request))
+  page.on("requestfailed", (request) => pendingRequests.delete(request))
   page.on("console", (message) => {
     if (message.text().startsWith("SCOPE_PICKER_REACTIVITY")) console.log(message.text())
   })
@@ -122,6 +135,7 @@ test("the owner saves a separate model, variant and disable setting only after c
           render: number
           each: number
           cleanup: number
+          pending?: () => boolean
         }
       }
     ).scopePickerTrace
@@ -140,7 +154,12 @@ test("the owner saves a separate model, variant and disable setting only after c
     ;(window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic = () => {
       header.removeEventListener("click", click, true)
       Storage.prototype.setItem = write
-      return { ...diagnostic, after: localStorage.getItem(key), headerConnected: header.isConnected }
+      return {
+        ...diagnostic,
+        after: localStorage.getItem(key),
+        headerConnected: header.isConnected,
+        transitionPending: trace.pending?.(),
+      }
     }
   })
   await anthropic.click()
@@ -148,7 +167,18 @@ test("the owner saves a separate model, variant and disable setting only after c
     "SCOPE_PICKER_CLICK_DIAGNOSTIC",
     await page.evaluate(() => (window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic()),
   )
-  await expect(anthropic).toHaveAttribute("aria-expanded", "true")
+  await expect(anthropic)
+    .toHaveAttribute("aria-expanded", "true")
+    .finally(async () => {
+      console.log("SCOPE_PICKER_TRANSITION_DIAGNOSTIC", {
+        pending: await page.evaluate(() =>
+          (
+            globalThis as typeof globalThis & { scopePickerTrace?: { pending?: () => boolean } }
+          ).scopePickerTrace?.pending?.(),
+        ),
+        requests: [...pendingRequests.values()].slice(0, 30),
+      })
+    })
   const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
   await expect(chosen).toContainText("Maker Text")
   await chosen.click()
