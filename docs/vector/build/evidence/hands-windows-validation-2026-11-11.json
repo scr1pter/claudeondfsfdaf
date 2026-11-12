@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "hands-windows-validation-continuation",
-  "observedAtUtc": "2026-11-12T04:15:06.958610+00:00",
+  "observedAtUtc": "2026-11-12T04:55:28.337613+00:00",
   "repository": "scr1pter/claudeondfsfdaf",
   "branch": "hands",
   "parentRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
@@ -574,6 +574,110 @@
     },
     {
       "command": "prettier --check touched TypeScript catalogs",
+      "exitCode": 0
+    }
+  ],
+  "forcedWorkerFirstRuntimeOutcome": {
+    "revision": "655ac0e69bba1b9af459b5f7a1c5791cff397218",
+    "run": 43154307054,
+    "job": 130972535343,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154307054/job/130972535343",
+    "conclusion": "failure",
+    "buildUnitsVersionProbes": "passed",
+    "core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolated": {
+      "passed": 33,
+      "failed": 5,
+      "skipped": 10
+    },
+    "report": {
+      "artifact": 13915772721,
+      "archiveDigest": "sha256:18d0e4e41d08be36d500f4c246cd6204c8f34c86d484c018fbf6f3267f1806c5",
+      "archiveDigestMatchedAPI": true
+    },
+    "failedChecks": [
+      {
+        "name": "privileged",
+        "reason": "native-check-failed"
+      },
+      {
+        "name": "privileged.capture-color-patch",
+        "reason": "native_operation_failed",
+        "stage": "capture-enumeration-deadline",
+        "nativeCode": "changed"
+      },
+      {
+        "name": "privileged.capture-affinity-exclusion",
+        "reason": "native_operation_failed",
+        "stage": "capture-window-worker-wait",
+        "nativeCode": "capture_unavailable"
+      },
+      {
+        "name": "privileged.capture-isolated-window-worker",
+        "reason": "native_operation_failed",
+        "stage": "capture-window-worker-wait",
+        "nativeCode": "capture_unavailable"
+      },
+      {
+        "name": "fixture-cleanup",
+        "reason": "cleanup-failed"
+      }
+    ],
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+      "cause": "driver_failure",
+      "exitCode": 1
+    },
+    "qualification": "Job/API continuation or step success is not equivalent to passing optional native assertions. Actual report failures control this record. Hook pump stamp progressed, but no matching own-tag injected callback was recorded; missing injected flag is not yet distinguished. Native cleanup14 did not fail; wrapper fixture removal did. No environment skip, capture stability, worker acceptance or Stop success claimed."
+  },
+  "captureFailureCheckpointCandidate": {
+    "parentRevision": "655ac0e69bba1b9af459b5f7a1c5791cff397218",
+    "scope": "Child publishes only closed checkpoint enum into aligned private outputphase word using InterlockedExchange. Parent reads only that atomic metadata on exception during original wait/exit phases while its map remains valid; strict pure whitelist rejects other phases/ranges.",
+    "unchanged": "No pixel/header acceptance, actual-exit requirement, deadline, authority, target binding, nonce, retries, warmup or inline fallback changed. Normal output replaces hint with canonical complete/failed header.",
+    "tests": "One additional pure native group; source regression verifies exception-only wiring and actual-exit/pixel fences. Independent read-only review found no blocker; native execution pending."
+  },
+  "unflaggedOwnTagCandidate": {
+    "scope": "Exact full64-bit own tag + valid matching opted-in descriptor (or ownMOVE interval) may record missing injected flag as enum7 metadata. Original injected receipt predicate, DOWN/UP/order/cleanup authority unchanged. Values8/255 rejected.",
+    "tests": "Three additional pure native groups and expanded actual private protocol codec checks; reviewed after duplicate enum correction. Native execution pending."
+  },
+  "fixtureCleanupCandidate": {
+    "sourceFinding": "ParentWatch requests termination on expiry but cannot wait past original acquisition ticket to accept work. Timers join, yet Windows process/image release is asynchronous; wrapper immediately removed its owned verified temporary root. This supports a race, not proof which lock caused the observed failure.",
+    "repair": "Node fs.rm maxRetries5/retryDelay100 in fixture close/setup-failure cleanup only; persistent errors still throw. No capture/input/test replay or native deadline extension.",
+    "reference": "Installed @types/node fs.RmOptions documents transient EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM retries and linear backoff."
+  },
+  "checkpointCandidateLocalChecks": [
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+      "passed": 44,
+      "failed": 0,
+      "assertions": 27704,
+      "seconds": 0.296,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-helper-selftest.test.ts",
+      "passed": 48,
+      "failed": 0,
+      "assertions": 1025,
+      "seconds": 0.639,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 174,
+      "seconds": 1.165,
+      "exitCode": 0
+    },
+    {
+      "command": "packages/desktop: bun --no-env-file run typecheck",
       "exitCode": 0
     }
   ]

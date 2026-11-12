@@ -289,4 +289,15 @@ bool capture_worker_parent_allowed(const CaptureWorkerParentFacts& value) noexce
       serving_token_allowed(value.parent.process.token) && serving_token_allowed(value.child.process.token) && same_token(value.parent.process.token, value.child.process.token);
   } catch (...) { return false; }
 }
+std::optional<CaptureReadPhase> capture_worker_failure_checkpoint(CaptureReadPhase parent, uint32_t checkpoint) noexcept {
+  if (parent != CaptureReadPhase::window_worker_wait && parent != CaptureReadPhase::window_worker_exit) return {};
+  if (checkpoint >= static_cast<uint32_t>(CaptureReadPhase::count)) return {};
+  switch (static_cast<CaptureReadPhase>(checkpoint)) {
+    case CaptureReadPhase::window_worker_prepare: case CaptureReadPhase::window_worker_auth:
+    case CaptureReadPhase::window_worker_target: case CaptureReadPhase::window_worker_read:
+    case CaptureReadPhase::window_worker_reply: case CaptureReadPhase::window_worker_cleanup:
+      return static_cast<CaptureReadPhase>(checkpoint);
+    default: return {};
+  }
+}
 }

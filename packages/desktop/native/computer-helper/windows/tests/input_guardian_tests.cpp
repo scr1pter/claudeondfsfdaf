@@ -246,9 +246,9 @@ size_t run_input_guardian_tests() {
   });
   test([] {
     InputGuardianReceiptEvidence evidence;
-    evidence.own_move=true; evidence.own_up=true; evidence.own_down_refused=true;
+    evidence.own_move=true; evidence.own_up=true; evidence.own_down_refused=true; evidence.own_tag_unflagged=true;
     check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::none,"guardian.diagnostic-evidence-is-inert-without-opt-in");
-    evidence={true,false,false,false};
+    evidence={true,false,false,false,false};
     check(input_guardian_receipt_diagnostic(evidence,100,100)==InputGuardianReceiptDiagnostic::no_callback_pump_stalled &&
           input_guardian_receipt_diagnostic(evidence,100,101)==InputGuardianReceiptDiagnostic::no_callback_pump_progressed &&
           input_guardian_receipt_diagnostic(evidence,100,99)==InputGuardianReceiptDiagnostic::no_callback_pump_stalled,
@@ -257,6 +257,8 @@ size_t run_input_guardian_tests() {
     check(input_guardian_receipt_diagnostic(evidence,100,100)==InputGuardianReceiptDiagnostic::own_move_only,"guardian.diagnostic-own-move-precedes-pump-only-bucket");
     evidence.own_up=true;
     check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::own_up_only,"guardian.diagnostic-own-up-is-not-misreported-as-move-only");
+    evidence.own_tag_unflagged=true;
+    check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::own_tag_unflagged,"guardian.diagnostic-unflagged-own-tag-is-not-misreported-as-injected-move-or-up");
     evidence.own_down_refused=true;
     check(input_guardian_receipt_diagnostic(evidence,100,200)==InputGuardianReceiptDiagnostic::own_down_refused,"guardian.diagnostic-refused-down-has-precedence-over-move-and-up");
   });
@@ -273,13 +275,13 @@ size_t run_input_guardian_tests() {
   test([] {
     InputGuardianLedger ledger(own_tag); const auto ticket=reserve(ledger,mouse(),true);
     InputGuardianReceiptDiagnostic diagnostic;
-    auto foreign=event(ticket.release,true); foreign.injected=false;
-    check(!ledger.observe(foreign),"guardian.diagnostic-physical-callback-still-refused");
+    auto foreign=event(ticket.release,true); foreign.injected=false; foreign.tag=own_tag+1;
+    check(!ledger.observe(foreign),"guardian.diagnostic-foreign-unflagged-callback-still-refused");
     foreign.injected=true; foreign.tag=own_tag+1;
     check(!ledger.observe(foreign),"guardian.diagnostic-foreign-tag-still-refused");
-    ledger.observe_move(own_tag,false); ledger.observe_move(own_tag+1,true);
+    ledger.observe_move(own_tag+1,false); ledger.observe_move(own_tag+1,true);
     check(!ledger.observed(ticket,true,&diagnostic,100,100) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_stalled,
-          "guardian.diagnostics-never-record-hardware-or-other-tags");
+          "guardian.diagnostics-never-record-nonmatching-tags");
     check(!ledger.observed(ticket,true,&diagnostic,100,101) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
           "guardian.no-own-callback-can-report-only-existing-pump-progress");
   });
@@ -350,6 +352,65 @@ size_t run_input_guardian_tests() {
     check(ledger.diagnostics_enabled(),"guardian-erasing-one-opt-in-keeps-other-live-ticket-enabled");
     ledger.retire(right,true);
     check(!ledger.diagnostics_enabled(),"guardian-erasing-last-opt-in-restores-zero-diagnostic-fast-path");
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); const auto left=reserve(ledger,mouse(),true), right=reserve(ledger,mouse(1),true);
+    InputGuardianReceiptDiagnostic diagnostic;
+    auto unflagged=event(mouse(2),true); unflagged.injected=false;
+    check(!ledger.observe(unflagged),"guardian.unflagged-own-tag-without-reserved-descriptor-has-no-receipt");
+    unflagged.release=right.release; unflagged.release.virtual_key=1;
+    check(!ledger.observe(unflagged),"guardian.unflagged-own-tag-invalid-descriptor-is-ignored");
+    unflagged.release=right.release; unflagged.tag=own_tag ^ (uint64_t{1} << 32);
+    check(!ledger.observe(unflagged),"guardian.unflagged-diagnostic-never-matches-only-lower32-tag-bits");
+    check(!ledger.observed(right,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+          "guardian.invalid-or-foreign-unflagged-event-records-no-metadata");
+    unflagged.tag=own_tag;
+    check(!ledger.observe(unflagged) && !ledger.observed(right,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::own_tag_unflagged,
+          "guardian.exact-own-tag-unflagged-event-is-diagnostic-only");
+    check(!ledger.observed(left,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+          "guardian.unflagged-descriptor-does-not-contaminate-another-reservation");
+    check(!ledger.pending() && ledger.releases().empty() && ledger.released_count()==0,
+          "guardian.unflagged-diagnostic-never-creates-owned-input");
+  });
+  test([] {
+    for (const auto release : {mouse(),scan(),unicode()}) {
+      InputGuardianLedger ledger(own_tag); const auto ticket=reserve(ledger,release,true);
+      InputGuardianReceiptDiagnostic diagnostic; auto unflagged=event(release,true); unflagged.injected=false;
+      check(!ledger.observe(unflagged) && !ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::own_tag_unflagged,
+            "guardian.unflagged-mouse-scan-and-unicode-down-never-becomes-receipt");
+      ledger.retire(ticket);
+      check(!ledger.pending() && ledger.releases().empty(),"guardian.unflagged-retirement-remains-release-free");
+      check(ledger.observe(event(release,true)) && ledger.pending() && ledger.releases()==std::vector{ticket},
+            "guardian.only-later-injected-own-down-creates-original-release-obligation");
+      unflagged.down=false;
+      check(!ledger.observe(unflagged) && ledger.pending() && ledger.releases()==std::vector{ticket} && ledger.released_count()==0,
+            "guardian.unflagged-up-never-clears-owned-input-or-advances-release-count");
+      check(ledger.observe(event(release,false)) && !ledger.pending() && ledger.released_count()==1 && !ledger.diagnostics_enabled(),
+            "guardian.original-matching-injected-up-alone-completes-cleanup");
+    }
+  });
+  test([] {
+    InputGuardianLedger ledger(own_tag); ledger.observe_move(own_tag,false);
+    const auto ticket=reserve(ledger,mouse(),true), ordinary=reserve(ledger,mouse(1)), key=reserve(ledger,scan(),true);
+    InputGuardianReceiptDiagnostic diagnostic;
+    check(!ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+          "guardian.pre-reservation-unflagged-move-cannot-arm-new-interval");
+    ledger.observe_move(own_tag ^ (uint64_t{1} << 32),false);
+    check(!ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+          "guardian.unflagged-move-requires-exact-full64-tag");
+    ledger.observe_move(own_tag,false);
+    check(!ledger.observed(ticket,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::own_tag_unflagged,
+          "guardian.own-unflagged-move-records-only-private-mouse-interval-metadata");
+    auto unflagged=event(ordinary.release,true); unflagged.injected=false;
+    check(!ledger.observe(unflagged) && !ledger.observed(ordinary,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::none,
+          "guardian.unflagged-move-and-button-leave-ordinary-reservation-inert");
+    check(!ledger.observed(key,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+          "guardian.unflagged-move-never-labels-key-reservation");
+    ledger.retire(ticket,true); const auto successor=reserve(ledger,mouse(),true);
+    check(!ledger.observed(successor,true,&diagnostic,100,200) && diagnostic==InputGuardianReceiptDiagnostic::no_callback_pump_progressed,
+          "guardian.erased-unflagged-interval-never-leaks-into-successor");
+    check(!ledger.pending() && ledger.releases().empty() && ledger.released_count()==0,
+          "guardian.all-unflagged-move-evidence-stays-nonauthoritative");
   });
   return groups;
 }

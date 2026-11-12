@@ -89,4 +89,6 @@ struct CaptureWorkerParentFacts {
 };
 bool capture_worker_parent_allowed(const CaptureWorkerParentFacts&) noexcept;
 size_t run_capture_worker_tests();
+// Last private checkpoint is diagnostic only; it can refine only an already-failed wait/exit.
+std::optional<CaptureReadPhase> capture_worker_failure_checkpoint(CaptureReadPhase parent, uint32_t checkpoint) noexcept;
 }

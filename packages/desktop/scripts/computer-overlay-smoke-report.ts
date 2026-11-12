@@ -475,6 +475,7 @@ export const COMPUTER_SMOKE_DRIVER_STAGES = [
   "guardian-observe-reply-negative-own-move-only",
   "guardian-observe-reply-negative-own-down-refused",
   "guardian-observe-reply-negative-own-up-only",
+  "guardian-observe-reply-negative-own-tag-unflagged",
   "uia-root-current",
   "uia-actor-admission",
   "uia-actor-queued",

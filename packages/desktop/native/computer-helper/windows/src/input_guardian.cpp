@@ -29,6 +29,7 @@ bool InputIoDeadlineFence::retire(const InputIoDeadlineSnapshot& observed) noexc
 InputGuardianReceiptDiagnostic input_guardian_receipt_diagnostic(const InputGuardianReceiptEvidence& evidence, uint64_t pump_before, uint64_t pump_after) noexcept {
   if (!evidence.enabled) return InputGuardianReceiptDiagnostic::none;
   if (evidence.own_down_refused) return InputGuardianReceiptDiagnostic::own_down_refused;
+  if (evidence.own_tag_unflagged) return InputGuardianReceiptDiagnostic::own_tag_unflagged;
   if (evidence.own_up) return InputGuardianReceiptDiagnostic::own_up_only;
   if (evidence.own_move) return InputGuardianReceiptDiagnostic::own_move_only;
   return pump_after > pump_before ? InputGuardianReceiptDiagnostic::no_callback_pump_progressed : InputGuardianReceiptDiagnostic::no_callback_pump_stalled;
@@ -50,6 +51,12 @@ std::optional<InputGuardianTicket> InputGuardianLedger::reserve(const InputRelea
   return empty->ticket;
 }
 bool InputGuardianLedger::observe(const InputGuardianEvent& event) noexcept {
+  // Only opted-in own-tag metadata precedes the unchanged injected receipt predicate.
+  if (!event.injected && event.tag == tag_ && diagnostics_enabled() && valid_input_release(event.release)) {
+    std::lock_guard lock(mutex_);
+    for (auto& entry : entries_) if (entry.ticket.id && entry.diagnostic.enabled && entry.ticket.release == event.release)
+      entry.diagnostic.own_tag_unflagged = true;
+  }
   if (!event.injected || event.tag != tag_ || !valid_input_release(event.release)) return false;
   std::lock_guard lock(mutex_);
   for (auto& entry : entries_) {
@@ -82,9 +89,12 @@ bool InputGuardianLedger::observed(const InputGuardianTicket& ticket, bool down,
 }
 bool InputGuardianLedger::diagnostics_enabled() const noexcept { return diagnostic_entries_.load() != 0; }
 void InputGuardianLedger::observe_move(uint64_t tag, bool injected) noexcept {
-  if (!injected || tag != tag_ || !diagnostics_enabled()) return;
+  if (tag != tag_ || !diagnostics_enabled()) return;
   std::lock_guard lock(mutex_);
-  for (auto& entry : entries_) if (entry.ticket.id && entry.diagnostic.enabled && entry.ticket.release.kind == InputReleaseKind::mouse_button) entry.diagnostic.own_move = true;
+  for (auto& entry : entries_) if (entry.ticket.id && entry.diagnostic.enabled && entry.ticket.release.kind == InputReleaseKind::mouse_button) {
+    if (injected) entry.diagnostic.own_move = true;
+    else entry.diagnostic.own_tag_unflagged = true;
+  }
 }
 void InputGuardianLedger::erase(Entry& entry) noexcept {
   if (entry.diagnostic.enabled) diagnostic_entries_.fetch_sub(1);
@@ -138,7 +148,7 @@ bool valid_diagnostic_shape(const Packet& packet) noexcept {
   if (packet.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
   if (!packet.response) return packet.op==Op::reserve && !packet.ok && !packet.down && packet.diagnostic==InputGuardianReceiptDiagnostic::opt_in;
   return packet.op==Op::observed && !packet.ok && packet.down &&
-    packet.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && packet.diagnostic<=InputGuardianReceiptDiagnostic::own_up_only;
+    packet.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && packet.diagnostic<=InputGuardianReceiptDiagnostic::own_tag_unflagged;
 }
 constexpr size_t packet_size = 80;
 using Bytes = std::array<uint8_t,packet_size>;
@@ -155,7 +165,7 @@ Bytes encode(const Packet& packet) {
   std::copy(packet.nonce.begin(),packet.nonce.end(),bytes.begin()+48); return bytes;
 }
 std::optional<Packet> decode(const Bytes& bytes) {
-  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='2' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]>static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_up_only)) return {};
+  if (bytes[0]!='V' || bytes[1]!='I' || bytes[2]!='G' || bytes[3]!='2' || bytes[4]>static_cast<uint8_t>(Op::close) || bytes[5]>1 || bytes[6]>1 || bytes[7]>1 || bytes[40]>static_cast<uint8_t>(InputReleaseKind::mouse_button) || bytes[41]>1 || bytes[43]>static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_tag_unflagged)) return {};
   Packet packet; packet.op=static_cast<Op>(bytes[4]); packet.response=bytes[5]!=0; packet.ok=bytes[6]!=0; packet.down=bytes[7]!=0;
   packet.sequence=get(bytes,8,8); packet.ticket=get(bytes,16,8); packet.tag=get(bytes,24,8);
   packet.budget=static_cast<uint32_t>(get(bytes,32,4)); packet.count=static_cast<uint32_t>(get(bytes,36,4));
@@ -186,7 +196,7 @@ bool valid_reply(const Packet& reply, const Packet& request, bool diagnostic) {
       ((request.op!=Op::drain && request.op!=Op::close) && reply.count!=0)) return false;
   if (reply.diagnostic==InputGuardianReceiptDiagnostic::none) return true;
   return diagnostic && request.op==Op::observed && request.down && !reply.ok &&
-    reply.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && reply.diagnostic<=InputGuardianReceiptDiagnostic::own_up_only;
+    reply.diagnostic>=InputGuardianReceiptDiagnostic::no_callback_pump_stalled && reply.diagnostic<=InputGuardianReceiptDiagnostic::own_tag_unflagged;
 }
 // Anonymous pipes are synchronous. The independent watcher repeats cancellation after the absolute
 // deadline, covering cancellation-before-ReadFile races without holding an authority/journal lock.
@@ -456,6 +466,7 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
         case InputGuardianReceiptDiagnostic::own_move_only: phase=InputGuardianPhase::reply_negative_own_move_only; break;
         case InputGuardianReceiptDiagnostic::own_down_refused: phase=InputGuardianPhase::reply_negative_own_down_refused; break;
         case InputGuardianReceiptDiagnostic::own_up_only: phase=InputGuardianPhase::reply_negative_own_up_only; break;
+        case InputGuardianReceiptDiagnostic::own_tag_unflagged: phase=InputGuardianPhase::reply_negative_own_tag_unflagged; break;
         default: break;
       }
     }
@@ -669,13 +680,13 @@ bool input_guardian_protocol_self_test() {
   Packet reply=packet; reply.response=true;
   if (!valid_reply(reply,packet,false)) return false;
   for (uint8_t code=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::no_callback_pump_stalled);
-       code<=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_up_only); ++code) {
+       code<=static_cast<uint8_t>(InputGuardianReceiptDiagnostic::own_tag_unflagged); ++code) {
     reply.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
     const auto received=decode(encode(reply));
     if (!received || !valid_reply(*received,packet,true) || valid_reply(*received,packet,false)) return false;
     auto request=packet; request.diagnostic=reply.diagnostic;
     if (valid_request(request,command,0) || decode(encode(request))) return false;
-    for (int field=0; field<7; ++field) {
+    for (int field=0; field<8; ++field) {
       auto malformed=reply;
       if (field==0) malformed.response=false;
       if (field==1) malformed.ok=true;
@@ -683,7 +694,8 @@ bool input_guardian_protocol_self_test() {
       if (field==3) malformed.op=Op::reserve;
       if (field==4) malformed.op=Op::retire;
       if (field==5) malformed.diagnostic=InputGuardianReceiptDiagnostic::opt_in;
-      if (field==6) malformed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(255);
+      if (field==6) malformed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(8);
+      if (field==7) malformed.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(255);
       if (decode(encode(malformed)) || valid_reply(malformed,packet,true)) return false;
     }
     for (int field=0; field<8; ++field) {
@@ -698,6 +710,10 @@ bool input_guardian_protocol_self_test() {
       if (field==7) malformed.count=137;
       if (valid_reply(malformed,packet,true)) return false;
     }
+  }
+  for (const auto code : {uint8_t{8},uint8_t{255}}) {
+    auto invalid=packet; invalid.diagnostic=static_cast<InputGuardianReceiptDiagnostic>(code);
+    if (valid_request(invalid,command,0) || decode(encode(invalid))) return false;
   }
   reply.diagnostic=InputGuardianReceiptDiagnostic::none; reply.ok=true;
   if (!valid_reply(reply,packet,false)) return false;

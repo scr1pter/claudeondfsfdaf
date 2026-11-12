@@ -821,6 +821,34 @@ test("isolated Windows capture validates a protected exited worker before accept
   expect(child).not.toMatch(/capture_worker_deadline\(|WriteFile\(|write_utf8|std::cout|std::cerr/)
 })
 
+test("capture checkpoint hints can refine failure metadata without accepting running-worker output", async () => {
+  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+  const worker = await readFile(path.join(native, "capture_worker.cpp"), "utf8")
+  const guard = worker.slice(
+    worker.indexOf("struct FailedCheckpoint final"),
+    worker.indexOf("winrt::handle duplicate("),
+  )
+  expect(guard).toContain("std::uncaught_exceptions() <= exceptions")
+  expect(guard).toContain(
+    "phase != CaptureReadPhase::window_worker_wait && phase != CaptureReadPhase::window_worker_exit",
+  )
+  expect(guard).toContain("InterlockedCompareExchange(checkpoint_word(view), 0, 0)")
+  expect(guard).toContain("capture_worker_failure_checkpoint(phase, value)")
+  expect(guard).not.toMatch(
+    /memcpy|bgra|decode_capture_worker_output|capture_worker_accept|deadline|WaitForSingleObject/,
+  )
+  const parent = worker.slice(
+    worker.indexOf("CaptureBitmap capture_window_isolated("),
+    worker.indexOf("int run_capture_worker("),
+  )
+  expect(parent.indexOf("FailedCheckpoint failed_checkpoint{output_view, phase}")).toBeGreaterThan(
+    parent.indexOf("output_view.map(output_map.get(), FILE_MAP_READ | FILE_MAP_WRITE, output_bytes)"),
+  )
+  expect(parent.match(/FailedCheckpoint failed_checkpoint/g)).toHaveLength(1)
+  expect(parent.indexOf("decode_capture_worker_output(")).toBeGreaterThan(parent.indexOf("GetExitCodeProcess("))
+  expect(parent.indexOf("image.bgra.assign(")).toBeGreaterThan(parent.indexOf("capture_worker_accept("))
+})
+
 describe("fixed real Electron computer smoke reports", () => {
   test("checks fixed banner title separately from delivered Working state and enabled Stop", () => {
     const view = ComputerOverlayPage.bannerView({

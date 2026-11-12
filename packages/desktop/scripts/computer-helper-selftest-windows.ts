@@ -226,6 +226,8 @@ export const WINDOWS_NATIVE_STAGES = [
   "capture-window-worker-cleanup",
   "capture-window-worker-deadline",
   "capture-window-worker-auth",
+  "capture-window-worker-target",
+  "capture-window-worker-read",
   "capture-color-location-screen",
   "capture-color-location-window",
   "capture-color-location-unknown",
@@ -576,11 +578,13 @@ export async function createWindowsVerifiedFixture(
       async close() {
         if (closed) return
         closed = true
-        await rm(temporary, { recursive: true, force: true })
+        // Windows may still be releasing an owned child's executable after termination.
+        // Retry only transient filesystem removal; capture/input are never replayed.
+        await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
       },
     }
   } catch (error) {
-    await rm(created, { recursive: true, force: true })
+    await rm(created, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     throw error
   }
 }

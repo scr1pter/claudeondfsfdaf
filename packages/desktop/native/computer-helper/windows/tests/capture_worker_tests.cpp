@@ -225,6 +225,29 @@ size_t run_capture_worker_tests() {
     unsigned_image.parent.process.image.signer_subject.clear(); unsigned_image.child.process.image.signer_subject.clear();
     check(capture_worker_parent_allowed(unsigned_image), "capture.worker-unsigned-same-actual-image-continuity-remains-supported");
   });
+  test([] {
+    for (const auto parent : {CaptureReadPhase::window_worker_wait, CaptureReadPhase::window_worker_exit}) {
+      for (const auto phase : {CaptureReadPhase::window_worker_prepare, CaptureReadPhase::window_worker_auth,
+          CaptureReadPhase::window_worker_target, CaptureReadPhase::window_worker_read, CaptureReadPhase::window_worker_reply,
+          CaptureReadPhase::window_worker_cleanup})
+        check(capture_worker_failure_checkpoint(parent, static_cast<uint32_t>(phase)) == phase, "capture.worker-failure-checkpoint-closed-metadata");
+      for (const auto phase : {CaptureReadPhase::none, CaptureReadPhase::window_worker_wait, CaptureReadPhase::window_factory,
+          CaptureReadPhase::context_after, CaptureReadPhase::count})
+        check(!capture_worker_failure_checkpoint(parent, static_cast<uint32_t>(phase)), "capture.worker-failure-checkpoint-other-phases-refused");
+      check(!capture_worker_failure_checkpoint(parent, std::numeric_limits<uint32_t>::max()), "capture.worker-failure-checkpoint-untrusted-range-refused");
+    }
+    for (uint32_t value = 0; value <= static_cast<uint32_t>(CaptureReadPhase::count); ++value) {
+      const auto parent = static_cast<CaptureReadPhase>(value);
+      if (parent == CaptureReadPhase::window_worker_wait || parent == CaptureReadPhase::window_worker_exit) continue;
+      check(!capture_worker_failure_checkpoint(parent, static_cast<uint32_t>(CaptureReadPhase::window_worker_read)),
+        "capture.worker-progress-cannot-override-success-or-specific-failure");
+    }
+    auto request = worker_request(); auto output = worker_output(request);
+    output.status = CaptureWorkerStatus::pending; output.phase = CaptureReadPhase::window_worker_read;
+    check(!capture_worker_accept(request, output, capture_worker_output_header_bytes + request.extent.bytes, false, 0, true, 200, 1000) &&
+      !capture_worker_accept(request, output, capture_worker_output_header_bytes + request.extent.bytes, true, 0, true, 200, 1000),
+      "capture.worker-checkpoint-never-substitutes-complete-exited-output");
+  });
   return groups;
 }
 }

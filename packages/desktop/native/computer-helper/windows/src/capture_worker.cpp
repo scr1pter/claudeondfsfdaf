@@ -8,6 +8,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <thread>
@@ -91,6 +92,25 @@ struct View final {
   bool close() noexcept {
     if (!data) return true;
     const bool result = UnmapViewOfFile(data) != FALSE; data = nullptr; return result;
+  }
+};
+// The private output header's aligned phase word doubles as a last-checkpoint hint
+// while pending. It is never an acceptance/authority signal or a pixel read. A
+// complete canonical header still replaces it, and only actual exit permits decoding.
+volatile LONG* checkpoint_word(const View& view) noexcept {
+  static_assert(sizeof(LONG) == 4 && 12 % alignof(LONG) == 0);
+  return reinterpret_cast<volatile LONG*>(static_cast<uint8_t*>(view.data) + 12);
+}
+void checkpoint(const View& view, CaptureReadPhase phase) noexcept {
+  (void)InterlockedExchange(checkpoint_word(view), static_cast<LONG>(phase));
+}
+struct FailedCheckpoint final {
+  View& view; CaptureReadPhase& phase; int exceptions = std::uncaught_exceptions();
+  ~FailedCheckpoint() {
+    if (!view.data || std::uncaught_exceptions() <= exceptions) return;
+    if (phase != CaptureReadPhase::window_worker_wait && phase != CaptureReadPhase::window_worker_exit) return;
+    const auto value = static_cast<uint32_t>(InterlockedCompareExchange(checkpoint_word(view), 0, 0));
+    if (const auto failed = capture_worker_failure_checkpoint(phase, value)) phase = *failed;
   }
 };
 winrt::handle duplicate(HANDLE source, DWORD rights, bool inherit) {
@@ -304,6 +324,7 @@ CaptureBitmap capture_window_isolated(const CaptureReadRequest& read, const Capt
     View request_view; request_view.map(request_map.get(), FILE_MAP_WRITE, capture_worker_request_bytes);
     std::memcpy(request_view.data, bytes->data(), bytes->size()); require(request_view.close());
     View output_view; output_view.map(output_map.get(), FILE_MAP_READ | FILE_MAP_WRITE, output_bytes);
+    FailedCheckpoint failed_checkpoint{output_view, phase};
     CaptureWorkerOutput pending; pending.nonce = request->nonce; pending.binding = request->target.binding; pending.extent = request->extent;
     const auto pending_bytes = encode_capture_worker_output(pending); require(pending_bytes.has_value());
     std::memcpy(output_view.data, pending_bytes->data(), pending_bytes->size());
@@ -399,12 +420,15 @@ int run_capture_worker(const CaptureWorkerCommand& command) noexcept {
     const auto current = [&watch] { return watch.current(); };
     const size_t output_bytes = capture_worker_output_header_bytes + static_cast<size_t>(request->extent.bytes);
     output_view.map(output_map.get(), FILE_MAP_READ | FILE_MAP_WRITE, output_bytes);
+    checkpoint(output_view, phase);
     {
       // No apartment, trust, token, package, WGC or GPU setup precedes the watchdog.
       Apartment apartment;
       phase = CaptureReadPhase::window_worker_auth;
+      checkpoint(output_view, phase);
       const auto authenticated = authenticate(command, *request, watch);
       require(watch.current());
+      phase = CaptureReadPhase::window_worker_target; checkpoint(output_view, phase);
       // The never-shipped driver also re-enters this exact private mode. Its normal
       // driver setup has not run; establish only this worker thread's physical geometry.
       require(SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != nullptr);
@@ -415,7 +439,9 @@ int run_capture_worker(const CaptureWorkerCommand& command) noexcept {
       require_windows_capture(available, &target.owner.process.token); require_windows_capture(available, &target.physical_owner.process.token);
       require(windows_window_current(target) && watch.current());
       CaptureReadRequest read{request->target.crop, target, true};
+      phase = CaptureReadPhase::window_worker_read; checkpoint(output_view, phase);
       auto image = capture_worker_window_bitmap(read, request->deadline, current, phase);
+      checkpoint(output_view, CaptureReadPhase::window_worker_reply);
       require(image.valid() && image.width == request->extent.width && image.height == request->extent.height && image.bgra.size() == request->extent.bytes);
       require(watch.current() && windows_owner_current(authenticated.parent) && windows_owner_current(authenticated.child) &&
         windows_window_current(target) && capture_worker_target_matches(request->target, target, frame_bounds(target.hwnd)) && watch.current());
@@ -424,9 +450,10 @@ int run_capture_worker(const CaptureWorkerCommand& command) noexcept {
       require(watch.current());
       CaptureWorkerOutput output; output.status = CaptureWorkerStatus::complete; output.nonce = request->nonce;
       output.binding = request->target.binding; output.extent = request->extent;
+      checkpoint(output_view, CaptureReadPhase::window_worker_cleanup);
       const auto bytes = encode_capture_worker_output(output); require(bytes.has_value());
-      // Header is committed only after pixels and native WGC cleanup. Parent reads neither
-      // until actual process exit, and independently repeats its own authority/postflight.
+      // Header is committed only after pixels and native WGC cleanup. Parent accepts neither
+      // before actual exit; only the closed failure checkpoint may be inspected earlier.
       std::memcpy(output_view.data, bytes->data(), bytes->size());
       require(output_view.close()); output_map.close();
       require(watch.current());

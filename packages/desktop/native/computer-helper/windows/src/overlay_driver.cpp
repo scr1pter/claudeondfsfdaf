@@ -474,6 +474,7 @@ std::optional<OverlayDriverStage> overlay_driver_guardian_stage(InputGuardianPha
     case InputGuardianPhase::reply_negative_own_move_only: return OverlayDriverStage::guardian_observe_reply_negative_own_move_only;
     case InputGuardianPhase::reply_negative_own_down_refused: return OverlayDriverStage::guardian_observe_reply_negative_own_down_refused;
     case InputGuardianPhase::reply_negative_own_up_only: return OverlayDriverStage::guardian_observe_reply_negative_own_up_only;
+    case InputGuardianPhase::reply_negative_own_tag_unflagged: return OverlayDriverStage::guardian_observe_reply_negative_own_tag_unflagged;
     default: return {};
   }
 }

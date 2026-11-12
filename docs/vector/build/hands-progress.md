@@ -6,39 +6,58 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
-**Latest native observation.** At `51e8f63d`, Windows diagnostic
+**Latest native observation.** At `655ac0e6`, Windows diagnostic
+[43154307054](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154307054),
+job `130972535343`, passed build/link, native units/version/probes and required
+protocol/lifecycle (30 passed, zero failed, one skipped). Its isolated report
+was 33 passed, five failed, ten skipped. Verified report artifact `13915772721`
+has archive SHA-256
+`18d0e4e41d08be36d500f4c246cd6204c8f34c86d484c018fbf6f3267f1806c5`.
+The failed rows were the aggregate, capture-color-patch
+(`enumeration-deadline` / `changed`), affinity exclusion and the explicitly
+forced isolated worker (both `worker-wait` / `capture_unavailable`), and the
+wrapper's `fixture-cleanup-failed`. The native cleanup scenario at index 14
+itself was not failed. The wrapper result does not identify a cleanup cause;
+the capture phases do not establish a timing cause or worker root cause.
+The forced-worker check at index 15 ran and failed, so actual successful
+isolated-worker capture is still unproven.
+
+Stop failed `input_post_failed` /
+`guardian-observe-reply-negative-no-callback-pump-progressed`. The authenticated
+full-budget negative reply recorded advancing hook-pump stamps but no matching
+own-tag injected MOVE, UP or DOWN evidence for this opted-in reservation.
+This narrow result does not establish absence of global callbacks, hardware
+input or other tags, none of which the diagnostic records. It supplies neither
+a matching DOWN receipt nor grounds to call the failure an environment skip.
+Private VIG2 diagnostics remain failure-only; external protocol, input
+authority, receipt requirements, success conditions and budgets are unchanged.
+
+**Candidate work in progress.** A closed, failure-only atomic capture
+checkpoint will preserve parent-unwind location around worker wait/exit.
+It will not participate in pixel acceptance. The next private guardian
+diagnostic will distinguish a callback carrying this guardian's full 64-bit
+own marker but lacking the injected flag, without recording hardware input,
+other tags or raw event data and without creating input or cleanup authority.
+Neither candidate is an executed result or an established fix; exact-source
+hosted verification remains pending.
+
+**Previous scoped passes.** At `51e8f63d`, diagnostic
 [43146189453](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146189453),
-job `130944827745`, built and linked successfully using the existing
-WindowsApp import library. Native units/version/probes and required
-protocol/lifecycle passed (30 passed, zero failed, one skipped); isolated
-checks were 35 passed, zero failed, 11 skipped. The verified JSON report in
-artifact `13912267619` confirms capture-color-patch and affinity-exclusion
-passes at this source revision. The successful report does not carry
-CaptureReadRoute; color capture may have used the ordinary screen route.
-Actual forced isolated-worker runtime proof remains pending. Registered worker
-protocol units passed; they do not prove process capture. The artifact archive
-SHA-256 is `39d9973742bdb64d7d1f2a105a4a002691da485e1675c9ba93655c2c822f20cb`.
-Stale-capture-refusal remained skipped for `input_detection_unavailable`, and
-the hardware-input scenario remained skipped. These are scoped native results,
-not proof of broad capture stability or those skipped input behaviors.
+job `130944827745`, passed build/link, native units/version/probes, core
+30/0/1 and isolated 35/0/11. Verified artifact `13912267619`, archive SHA-256
+`39d9973742bdb64d7d1f2a105a4a002691da485e1675c9ba93655c2c822f20cb`,
+confirms capture-color-patch and affinity-exclusion passes at that revision.
+The successful color report does not carry CaptureReadRoute and may have
+used the ordinary screen route; it is not forced-worker proof. Registered
+worker protocol units passed, but they do not prove process capture.
+Stale-capture-refusal was skipped for `input_detection_unavailable`, and the
+hardware-input scenario was skipped. Preserve these results at their exact
+source scope; they do not override the later failures or prove stability.
 
-Stop still failed `input_post_failed` /
-`guardian-observe-reply-negative-full-budget`: valid private transport returned
-a negative matching-DOWN result with the full child observation budget. It is
-not a transport failure or evidence authorizing an environment skip. The next
-private, opt-in diagnostic is implemented to distinguish own-tag MOVE,
-UP, refused DOWN and hook-pump progress for a full-budget negative reply. Only
-closed values use private VIG2; the external helper protocol, input authority,
-receipt requirement and budgets remain unchanged. This candidate is not a fix
-or an executed diagnostic result.
-
-The candidate also appends `capture-isolated-window-worker` to the native
-fixture catalog. It explicitly calls the production isolated backend on the
-validated synthetic patch, checks returned BGRA pixels and repeats target and
-capture-policy checks. Existing cleanup remains at index 14; the new check is
-index 15. It has no screen fallback or input-readiness gate and still needs its
-own hosted result. Local report/source/selftest checks passed 43/19/48 tests,
-with desktop typechecking and touched TypeScript formatting also passing.
+**Current unsigned preview.** The exact `655ac0e6` preview
+[43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544)
+is queued or in progress at this checkpoint. No completed packaging, signing
+or release credit is available from it.
 
 **Integrated regression.** Ordinary full PR run
 [43146183368](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146183368)

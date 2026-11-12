@@ -13,7 +13,7 @@ namespace vector::computer {
 inline constexpr uint64_t input_guardian_held_limit_ms=10'000;
 // Smoke-only observation of existing receipt refusal paths. No ticket, event, tag or native value.
 enum class InputGuardianPhase : uint8_t { none, request_invalid, lock_expired, budget_expired, inactive, write_refused, read_refused, reply_invalid, setup_failed, reply_negative, confirmed, reply_negative_zero_budget, reply_negative_short_budget, reply_negative_full_budget,
-  reply_negative_no_callback_pump_stalled, reply_negative_no_callback_pump_progressed, reply_negative_own_move_only, reply_negative_own_down_refused, reply_negative_own_up_only };
+  reply_negative_no_callback_pump_stalled, reply_negative_no_callback_pump_progressed, reply_negative_own_move_only, reply_negative_own_down_refused, reply_negative_own_up_only, reply_negative_own_tag_unflagged };
 struct InputGuardianDiagnostic { std::atomic<InputGuardianPhase> phase{InputGuardianPhase::none}; };
 static_assert(std::atomic<InputGuardianPhase>::is_always_lock_free);
 struct InputGuardianTicket {
@@ -31,10 +31,10 @@ struct InputGuardianEvent {
 // Private smoke metadata only. "No callback" means no matching own-tag injected callback
 // (or own mouse MOVE) recorded for this reservation, never absence of global/hardware input.
 enum class InputGuardianReceiptDiagnostic : uint8_t {
-  none, opt_in, no_callback_pump_stalled, no_callback_pump_progressed, own_move_only, own_down_refused, own_up_only,
+  none, opt_in, no_callback_pump_stalled, no_callback_pump_progressed, own_move_only, own_down_refused, own_up_only, own_tag_unflagged,
 };
 struct InputGuardianReceiptEvidence {
-  bool enabled = false, own_move = false, own_down_refused = false, own_up = false;
+  bool enabled = false, own_move = false, own_down_refused = false, own_up = false, own_tag_unflagged = false;
 };
 InputGuardianReceiptDiagnostic input_guardian_receipt_diagnostic(const InputGuardianReceiptEvidence&, uint64_t pump_before, uint64_t pump_after) noexcept;
 

@@ -42,7 +42,8 @@ size_t run_overlay_driver_tests() {
         InputGuardianPhase::reply_negative_zero_budget, InputGuardianPhase::reply_negative_short_budget,
         InputGuardianPhase::reply_negative_full_budget, InputGuardianPhase::reply_negative_no_callback_pump_stalled,
         InputGuardianPhase::reply_negative_no_callback_pump_progressed, InputGuardianPhase::reply_negative_own_move_only,
-        InputGuardianPhase::reply_negative_own_down_refused, InputGuardianPhase::reply_negative_own_up_only}) {
+        InputGuardianPhase::reply_negative_own_down_refused, InputGuardianPhase::reply_negative_own_up_only,
+        InputGuardianPhase::reply_negative_own_tag_unflagged}) {
       const auto stage = overlay_driver_guardian_stage(phase);
       require(stage && stages.insert(*stage).second && overlay_driver_stage(overlay_driver_stage_name(*stage)),
         "overlay-driver.guardian-failure-buckets-are-unique-closed-stages");

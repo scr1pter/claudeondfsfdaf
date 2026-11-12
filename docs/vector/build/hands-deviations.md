@@ -1,5 +1,21 @@
 # Vector Hands build: deviations from the contract
 
+The current cleanup candidate gives only Node's removal of the owned verified
+synthetic fixture directory five transient filesystem retries with 100 ms linear
+backoff. Windows may still be releasing a terminated worker's image after the
+acquisition ticket expires. Watcher timers join, but this does not prove the
+specific lock behind `655ac0e6`'s wrapper cleanup failure. Persistent removal
+errors still fail. No capture, input, native acceptance deadline or test run is
+retried or extended. Final local checks passed: report 44/27,704 assertions,
+selftest 48/1,025, source 19/174, and desktop typechecking. Native proof remains
+pending for the checkpoint and unflagged-marker candidates.
+
+Current continuation: exact `655ac0e6` native validation still fails capture
+and staged Stop. The [latest scoped record](#isolated-worker-and-guardian-diagnostic-observation--655ac0e6)
+distinguishes the observed failure phases from unproven causes and retains the
+earlier `51e8f63d` passes below. Pending diagnostic source and an unfinished
+unsigned preview supply no packaging, signing or release credit.
+
 ## 2026-10-28 E0 (shared schema files)
 
 Smallest changes that keep the contract's intent; later packages should build on these shapes.
@@ -1143,3 +1159,54 @@ Stop failed; ARM64 and the separate macOS matrix were skipped. A macOS build
 pass is not matrix or granted-OS evidence, and these passed jobs do not turn
 the full run green. Final x64/ARM64 packaged pins/self-tests, signing,
 notarization, owner-device checks and publication remain separate open gates.
+
+## Isolated worker and guardian diagnostic observation — `655ac0e6`
+
+At exact `655ac0e69bba1b9af459b5f7a1c5791cff397218`, diagnostic
+[43154307054](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154307054),
+job `130972535343`, passed build/link, native units/version/probes and required
+protocol/lifecycle (30 passed, zero failed, one skipped). The isolated report
+was 33 passed, five failed, ten skipped. Report artifact `13915772721` was
+verified against archive SHA-256
+`18d0e4e41d08be36d500f4c246cd6204c8f34c86d484c018fbf6f3267f1806c5`.
+The five failed rows were the aggregate, capture-color-patch
+(`enumeration-deadline` / `changed`), affinity exclusion and
+`capture-isolated-window-worker` (both `worker-wait` /
+`capture_unavailable`), and the wrapper's `fixture-cleanup-failed`.
+The native cleanup scenario at index 14 itself was not failed; the new forced
+worker scenario is index 15. Neither the wrapper failure nor a worker-wait
+phase proves a cleanup defect, elapsed-time cause or native worker root cause.
+Successful forced-worker pixel acquisition remains unproven. The earlier
+`51e8f63d` color and affinity passes, and the qualification that the successful
+color report may have used the ordinary screen route, retain their exact
+source scope rather than being rewritten as current passes or erased.
+
+Staged Stop failed `input_post_failed` /
+`guardian-observe-reply-negative-no-callback-pump-progressed`. This is an
+authenticated, full-budget negative matching-DOWN response with advancing
+existing pump stamps and no matching own-tag injected MOVE, UP or DOWN
+evidence recorded for that opted-in reservation. "No callback" is deliberately
+narrow: the diagnostic does not record global callbacks, hardware events or
+other tags and does not prove their absence. It does not establish why the
+receipt is missing and does not authorize an environment skip. The separate
+Raw Input readiness gate is still not a proxy for this guardian's hook
+delivery. Input insertion and diagnostic metadata cannot substitute for the
+actual matching receipt.
+
+The next candidate is source work in progress, not a result. A closed,
+failure-only atomic capture checkpoint will retain the parent-unwind phase
+around worker wait/exit and will have no role in accepting pixels. The next
+private guardian metadata extension will distinguish a callback with the
+guardian's full 64-bit own marker but without the injected flag. Its scope
+excludes hardware and other-tag observation, raw values and new authority.
+There is no change to the input matching requirement, return-success
+conditions, observation budgets or cleanup authority. Neither extension is a
+proven fix or grounds to relax the 750 ms acquisition deadline, 50 ms input,
+UIA and StartCapture checks, or existing public publication fences.
+
+Exact `655ac0e6` unsigned preview
+[43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544)
+is queued or in progress at this checkpoint. It supplies no completed final
+package, signing or release evidence. Final x64/ARM64 packaged pins and
+self-tests, signing/notarization, owner-device checks and publication remain
+open. Historical entries above retain their original source and run scope.
