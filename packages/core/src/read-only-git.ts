@@ -1,3 +1,4 @@
+import { DirectoryIdentityReader } from "./directory-identity"
 export * as ReadOnlyGit from "./read-only-git"
 
 import { constants } from "node:fs"
@@ -484,17 +485,34 @@ async function sameDirectory(location: string, expected: FileHandle) {
 }
 
 export interface Metadata extends Input {
+  /** Stable identity read from the same pinned FD that validated the registration. */
+  readonly commonIdentity?: DirectoryIdentity
   /** A bounded observation of HEAD/ref metadata, not proof that this commit object exists. */
   readonly head: string
   readonly branch?: string
   readonly objectValidated: false
 }
 
+export interface DirectoryIdentity {
+  readonly dev: string
+  readonly ino: string
+  readonly birth: string
+}
+
+async function directoryIdentity(handle: FileHandle, signal?: AbortSignal): Promise<DirectoryIdentity | undefined> {
+  return DirectoryIdentityReader.read(handle, signal)
+}
+
+function sameIdentity(left: DirectoryIdentity, right: DirectoryIdentity) {
+  return left.dev === right.dev && left.ino === right.ino && left.birth === right.birth
+}
+
 /**
  * Lightweight discovery for a known, canonical worktree root. It neither searches parents nor reads the index or
  * object store and starts no Git process. Full open is mandatory before collection/model execution.
  */
-export async function metadataHead(knownRoot: string): Promise<Metadata> {
+export async function metadataHead(knownRoot: string, options?: { signal?: AbortSignal }): Promise<Metadata> {
+  requireValue(!options?.signal?.aborted, "Git metadata observation was cancelled")
   requireValue(process.platform === "linux", "this host has no pinned-directory adapter")
   const handles: FileHandle[] = []
   try {
@@ -570,6 +588,9 @@ export async function metadataHead(knownRoot: string): Promise<Metadata> {
     const line = metadataLine(captured)
     requireValue(line === line.trim(), "HEAD contains unsupported whitespace")
     const observed = await head(current.git, current.common, captured)
+    const commonIdentity = await directoryIdentity(current.common, options?.signal)
+    requireValue(!options?.signal?.aborted, "Git metadata observation was cancelled")
+    // The long optional identity read precedes every final registration/config/HEAD/path revalidation below.
     const live = await openWithin(rootHandle, ".git", constants.O_RDONLY)
     try {
       const identity = await live.stat({ bigint: true })
@@ -608,10 +629,12 @@ export async function metadataHead(knownRoot: string): Promise<Metadata> {
     await sameDirectory(root, rootHandle)
     await sameDirectory(current.gitDirectory, current.git)
     if (current.commonDirectory !== current.gitDirectory) await sameDirectory(current.commonDirectory, current.common)
+    requireValue(!options?.signal?.aborted, "Git metadata observation was cancelled")
     return {
       directory: root,
       gitDirectory: current.gitDirectory,
       commonDirectory: current.commonDirectory,
+      commonIdentity,
       head: observed,
       branch: line.startsWith("ref: refs/heads/") ? line.slice(16) : undefined,
       objectValidated: false,
@@ -632,15 +655,20 @@ export interface Input {
   readonly directory: string
   readonly gitDirectory: string
   readonly commonDirectory: string
+  /** A genuine metadata capture can bind the later private snapshot to that exact store. */
+  readonly commonIdentity?: DirectoryIdentity
 }
 
 export interface Repository {
   readonly directory: string
   readonly gitDirectory: string
   readonly commonDirectory: string
+  readonly commonIdentity?: DirectoryIdentity
   readonly head: string
   readonly branch?: string
   readonly shallow: boolean
+  /** Synchronous lifetime witness; false as soon as close starts. */
+  readonly isOpen: () => boolean
   readonly status: () => Promise<{ head: string; dirty: boolean }>
   readonly read: (operation: Read) => Promise<{ code: number; bytes: Buffer }>
   readonly close: () => Promise<void>
@@ -695,7 +723,8 @@ function relative(file: string) {
 }
 
 /** A scoped private Git view for the entire review collection; callers still enforce their own file/read policy. */
-export async function open(input: Input): Promise<Repository> {
+export async function open(input: Input, options?: { signal?: AbortSignal }): Promise<Repository> {
+  requireValue(!options?.signal?.aborted, "Git snapshot was cancelled")
   requireValue(process.platform === "linux", "this host has no pinned-directory adapter")
   const root = await directory(input.directory)
   const git = await directory(input.gitDirectory)
@@ -739,6 +768,12 @@ export async function open(input: Input): Promise<Repository> {
     handles.push(gitHandle)
     const commonHandle = await pin(common)
     handles.push(commonHandle)
+    const commonIdentity = await directoryIdentity(commonHandle, options?.signal)
+    requireValue(!options?.signal?.aborted, "Git snapshot was cancelled")
+    requireValue(
+      !input.commonIdentity || (commonIdentity !== undefined && sameIdentity(input.commonIdentity, commonIdentity)),
+      "the admitted common store changed identity",
+    )
     const program = await executable([root, common, path.dirname(common)])
     const env = environment(temporary, program)
     const base = await configuration(program, await read(commonHandle, "config", LIMIT.config), temporary, env)
@@ -1051,17 +1086,23 @@ export async function open(input: Input): Promise<Repository> {
     }
     await status()
     transferred = true
-    return {
-      directory: root,
-      gitDirectory: git,
-      commonDirectory: common,
-      head: capturedHead,
-      branch,
-      shallow: !!shallow?.byteLength,
-      status,
-      read: safeRead,
-      close,
-    }
+    return Object.defineProperty(
+      {
+        directory: root,
+        gitDirectory: git,
+        commonDirectory: common,
+        commonIdentity,
+        head: capturedHead,
+        branch,
+        shallow: !!shallow?.byteLength,
+        isOpen: () => !closed,
+        status,
+        read: safeRead,
+        close,
+      },
+      "isOpen",
+      { writable: false, configurable: false },
+    )
   } catch (error) {
     throw unavailable(error)
   } finally {
