@@ -33,6 +33,7 @@ export function ConnectedTools(props: {
     error: "",
     saving: false,
     acting: "",
+    epoch: Symbol(),
   })
   createEffect(on(client, () => setState({ acting: "", error: "" })))
   const saved = createMemo(() => readReviewSettings(props.config), undefined, {
@@ -48,49 +49,110 @@ export function ConnectedTools(props: {
     }),
   )
   let pending: AbortController | undefined
+  let blocked: ReturnType<typeof createConnectClient> | undefined
   let disposed = false
+  let actionRead: AbortController | undefined
+  const [data, { refetch, mutate }] = createResource(
+    () => {
+      const api = client()
+      const epoch = state.epoch
+      return !disposed && api && api !== blocked ? { api, epoch } : undefined
+    },
+    async (
+      request,
+    ): Promise<{
+      client: ReturnType<typeof createConnectClient>
+      epoch: symbol
+      members: ReturnType<typeof memberRows>
+      runs: readonly Connect.Run[]
+      externalFailed: boolean
+    }> => {
+      const api = request.api
+      pending?.abort()
+      const abort = new AbortController()
+      pending = abort
+      const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)])
+      const [members, runs] = await Promise.all([api.list(undefined, signal), api.runs(undefined, signal)]).catch(
+        () => {
+          if (request.epoch === state.epoch && api === client()) retire(api)
+          throw new Error("Connected tools access could not be verified.")
+        },
+      )
+      // Refused owner routes must not trigger discovery commands on this desktop.
+      if (disposed || abort.signal.aborted || api !== client() || request.epoch !== state.epoch)
+        throw new Error("The connected workspace changed.")
+      const external = await (externalAgentsApi()
+        ?.detect?.()
+        .then((agents) => ({ agents, failed: false }))
+        .catch(() => ({ agents: [], failed: true })) ?? { agents: [], failed: false })
+      const desktop: Connect.Member[] = external.agents.map((agent) => ({
+        id: `external:${agent.id}`,
+        kind: "agent",
+        title: agent.name,
+        summary: "Uses this agent's own model and account settings.",
+        owner: "user",
+        place: "local",
+        reach: "ui",
+        state: agent.state === "ready" ? "ready" : agent.state === "not-installed" ? "not-installed" : "unavailable",
+        ...(agent.state === "ready"
+          ? {}
+          : {
+              reason:
+                agent.state === "signed-out"
+                  ? "Sign in to this agent in Agents."
+                  : agent.state === "not-installed"
+                    ? "Install this agent from Agents."
+                    : "Check this agent's sign-in in Agents.",
+            }),
+      }))
+      if (disposed || abort.signal.aborted || api !== client() || request.epoch !== state.epoch)
+        throw new Error("The connected workspace changed.")
+      return {
+        client: api,
+        epoch: request.epoch,
+        members: memberRows(members, desktop),
+        runs,
+        externalFailed: external.failed,
+      }
+    },
+  )
+  const retire = (denied?: ReturnType<typeof createConnectClient>) => {
+    blocked = denied
+    pending?.abort()
+    actionRead?.abort()
+    mutate(undefined)
+    setState({
+      epoch: Symbol(),
+      acting: "",
+      saving: false,
+      error: denied ? "Connected tools access could not be verified." : "",
+    })
+  }
   onCleanup(() => {
     disposed = true
-    pending?.abort()
-  })
-  const [data, { refetch }] = createResource(client, async (api) => {
-    pending?.abort()
-    const abort = new AbortController()
-    pending = abort
-    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)])
-    const [members, runs] = await Promise.all([api.list(undefined, signal), api.runs(undefined, signal)])
-    // Refused owner routes must not trigger discovery commands on this desktop.
-    if (disposed || abort.signal.aborted || api !== client()) throw new Error("The connected workspace changed.")
-    const external = await (externalAgentsApi()
-      ?.detect?.()
-      .then((agents) => ({ agents, failed: false }))
-      .catch(() => ({ agents: [], failed: true })) ?? { agents: [], failed: false })
-    const desktop: Connect.Member[] = external.agents.map((agent) => ({
-      id: `external:${agent.id}`,
-      kind: "agent",
-      title: agent.name,
-      summary: "Uses this agent's own model and account settings.",
-      owner: "user",
-      place: "local",
-      reach: "ui",
-      state: agent.state === "ready" ? "ready" : agent.state === "not-installed" ? "not-installed" : "unavailable",
-      ...(agent.state === "ready"
-        ? {}
-        : {
-            reason:
-              agent.state === "signed-out"
-                ? "Sign in to this agent in Agents."
-                : agent.state === "not-installed"
-                  ? "Install this agent from Agents."
-                  : "Check this agent's sign-in in Agents.",
-          }),
-    }))
-    return { client: api, members: memberRows(members, desktop), runs, externalFailed: external.failed }
+    retire()
   })
   const loaded = () => {
-    if (data.error || data.latest?.client !== client()) return
-    return data.latest
+    if (disposed) return
+    const value = data.latest
+    if (!value || data.error || value.client !== client() || value.epoch !== state.epoch) return
+    return value
   }
+  createEffect(() => {
+    const server = sdk()
+    const directory = props.directory
+    const stop = server.event.listen((event) => {
+      if (server !== sdk()) return
+      if (
+        (event.name === "global" &&
+          (event.details.type === "server.connected" || event.details.type === "global.disposed")) ||
+        (event.name === directory && event.details.type === "server.instance.disposed")
+      ) {
+        retire()
+      }
+    })
+    onCleanup(stop)
+  })
   createEffect(() => {
     const active = scope()
     if (!active) return
@@ -108,20 +170,27 @@ export function ConnectedTools(props: {
     })
   })
   const save = () => {
+    if (disposed) return
     setState("error", "")
     try {
       const settings = parseReviewSettings(state)
       const active = client()
+      const directory = props.directory
+      const epoch = state.epoch
+      const current = () =>
+        !disposed && !!active && active === client() && directory === props.directory && epoch === state.epoch
       props.confirm("Save connected review settings?", () => {
-        if (!active || active !== client())
-          return setState("error", "The connected workspace changed. Check its settings again.")
+        if (!current()) return
         setState("saving", true)
         void props
           .save(reviewSettingsPatch(settings))
           .catch((error: unknown) => {
+            if (!current()) return
             setState("error", error instanceof Error ? error.message : "Could not save the review settings.")
           })
-          .finally(() => setState("saving", false))
+          .finally(() => {
+            if (current()) setState("saving", false)
+          })
       })
     } catch (error) {
       setState("error", error instanceof Error ? error.message : "Check the review settings.")
@@ -131,13 +200,27 @@ export function ConnectedTools(props: {
     const active = client()
     const directory = props.directory
     const sessionID = params.id
-    if (!active || !sessionID || state.acting || !actionableFindings(run, sessionID, true).length) return
-    const current = () => active === client() && directory === props.directory && sessionID === params.id
+    const epoch = state.epoch
+    if (disposed || !active || !sessionID || state.acting || !actionableFindings(run, sessionID, true).length) return
+    const abort = new AbortController()
+    actionRead?.abort()
+    actionRead = abort
+    const current = () =>
+      !disposed &&
+      !abort.signal.aborted &&
+      active === client() &&
+      directory === props.directory &&
+      sessionID === params.id &&
+      epoch === state.epoch
     setState({ acting: run.id, error: "" })
     await actOnFindings(
       { run: run.id, sessionID, action },
       {
-        load: (id, session) => active.get(id, session, AbortSignal.timeout(30_000)),
+        load: (id, session) =>
+          active.get(id, session, AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)])).catch(() => {
+            if (current()) retire(active)
+            throw new Error("Connected review access could not be verified.")
+          }),
         send: (text) => current() && requestComposerPrompt({ text, send: true }),
         dismiss: async () => {
           throw new Error("A repair does not dismiss findings.")
@@ -148,6 +231,7 @@ export function ConnectedTools(props: {
         if (current()) setState("error", error instanceof Error ? error.message : "Could not send these findings.")
       })
       .finally(() => {
+        if (actionRead === abort) actionRead = undefined
         if (current()) setState("acting", "")
       })
   }
@@ -328,7 +412,10 @@ export function ConnectedTools(props: {
           variant="ghost"
           size="normal"
           disabled={!props.directory || data.loading}
-          onClick={() => void refetch()}
+          onClick={() => {
+            if (blocked) retire()
+            else void refetch()
+          }}
         >
           Refresh connected tools
         </Button>

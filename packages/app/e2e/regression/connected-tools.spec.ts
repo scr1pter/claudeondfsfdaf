@@ -167,3 +167,309 @@ test("a refused owner result leaves the plain tool row without findings actions"
   await expect(page.locator('[data-component="connect-findings-card"]')).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Fix in a worktree", exact: true })).toHaveCount(0)
 })
+
+test("root authority changes clear Connected tools and findings cards before fresh owner proof and ignore old responses", async ({
+  page,
+}) => {
+  const fixture = reviewRun()
+  const run = {
+    ...fixture,
+    request: { ...fixture.request, directory, requester: { kind: "user", sessionID: rootID } },
+    result: { ...fixture.result!, summary: "Private owner review evidence" },
+  }
+  const app = await setup(page, {
+    capabilities: { connections: true },
+    globalConfig: {},
+    messages: {
+      [rootID]: [
+        userMessage(rootID, "msg_owner_retirement", "Review changes."),
+        assistantMessage(rootID, "msg_owner_retirement_call", "msg_owner_retirement", [
+          {
+            id: "prt_owner_retirement",
+            type: "tool",
+            tool: "connect",
+            callID: "call_owner_retirement",
+            state: {
+              status: "completed",
+              input: { action: "review" },
+              output: "Review completed",
+              title: "VectorScope review",
+              metadata: { connect: run },
+              time: { start: 1, end: 2 },
+            },
+          },
+        ]),
+      ],
+    },
+  })
+  let mode: "owner" | "old" | "guest" | "fresh" = "owner"
+  const oldReleases: (() => void)[] = []
+  const freshReleases: (() => void)[] = []
+  const posts: string[] = []
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, async (route) => {
+    if (route.request().method() === "OPTIONS") return reply(route, [])
+    if (route.request().method() === "POST") posts.push(route.request().url())
+    const path = new URL(route.request().url()).pathname
+    const selected = mode
+    if (selected === "old") await new Promise<void>((resolve) => oldReleases.push(resolve))
+    if (selected === "fresh") await new Promise<void>((resolve) => freshReleases.push(resolve))
+    if (selected === "guest") return reply(route, { message: "Owner only" }, 403)
+    return reply(route, path.endsWith("/runs") ? [run] : path.endsWith("/runs/cr_fixture") ? run : [])
+  })
+  await app.open()
+  const card = page.locator('[data-component="connect-findings-card"]')
+  await expect(card).toContainText("Private owner review evidence")
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.locator(".settings-v2-workspace")
+  await settings.getByRole("tab", { name: "Agents", exact: true }).click()
+  const tools = settings.locator('[data-component="connected-tools"]')
+  await expect(tools).toContainText("Private owner review evidence")
+  mode = "old"
+  await app.send("connect.run.updated", { sessionID: rootID, run })
+  await expect.poll(() => oldReleases.length).toBeGreaterThanOrEqual(2)
+  mode = "guest"
+  const refused = page.waitForResponse(
+    (response) => response.status() === 403 && new URL(response.url()).pathname.startsWith("/experimental/connect"),
+  )
+  await app.send("global.disposed", {}, "global")
+  await refused
+  await expect(page.getByText("Private owner review evidence", { exact: true })).toHaveCount(0)
+  oldReleases.forEach((release) => release())
+  await expect(card).toHaveCount(0)
+  await expect(tools.getByRole("button", { name: "Fix", exact: true })).toHaveCount(0)
+  mode = "fresh"
+  await app.send("server.connected", {}, "global")
+  await expect.poll(() => freshReleases.length).toBeGreaterThanOrEqual(2)
+  await expect(page.getByText("Private owner review evidence", { exact: true })).toHaveCount(0)
+  freshReleases.forEach((release) => release())
+  await expect(tools).toContainText("Private owner review evidence")
+  await expect(card).toContainText("Private owner review evidence")
+  expect(posts).toEqual([])
+})
+
+for (const label of ["Fix", "Fix in a worktree"]) {
+  test(`closing Connected tools aborts a delayed ${label} read without a late prompt`, async ({ page }) => {
+    const fixture = reviewRun()
+    const run = {
+      ...fixture,
+      request: { ...fixture.request, directory, requester: { kind: "user", sessionID: rootID } },
+    }
+    const app = await setup(page, {
+      capabilities: { connections: true },
+      globalConfig: {},
+      messages: { [rootID]: [userMessage(rootID, "msg_disposed_tools", "Review changes.")] },
+    })
+    let release: () => void = () => {}
+    let notify: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const entered = new Promise<void>((resolve) => {
+      notify = resolve
+    })
+    const effects: string[] = []
+    await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (route.request().method() === "POST") effects.push(path)
+      if (route.request().method() === "GET" && path.endsWith("/runs/cr_fixture")) {
+        notify()
+        await gate
+      }
+      return reply(route, path.endsWith("/runs/cr_fixture") ? run : path.endsWith("/runs") ? [run] : [])
+    })
+    await app.open()
+    await page.getByRole("button", { name: "Settings", exact: true }).click()
+    const settings = page.locator(".settings-v2-workspace")
+    await settings.getByRole("tab", { name: "Agents", exact: true }).click()
+    const tools = settings.locator('[data-component="connected-tools"]')
+    await tools.getByRole("button", { name: label, exact: true }).click()
+    await entered
+    const aborted = page.waitForEvent("requestfailed", {
+      predicate: (request) =>
+        request.method() === "GET" && new URL(request.url()).pathname.endsWith("/experimental/connect/runs/cr_fixture"),
+    })
+    await page.keyboard.press("Escape")
+    await expect(tools).toHaveCount(0)
+    await aborted
+    release()
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    expect(effects).toEqual([])
+    expect(
+      app.capture.session.filter(
+        (request) => request.method === "POST" && /\/(?:message|prompt_async)(?:\?|$)/.test(request.path),
+      ),
+    ).toEqual([])
+    await page.unroute(/\/experimental\/connect(?:\/.*)?(?:\?|$)/)
+  })
+}
+
+for (const label of ["Fix", "Fix in a worktree", "Dismiss"]) {
+  test(`removing a findings card aborts a delayed ${label} read without a late write`, async ({ page }) => {
+    const fixture = reviewRun()
+    const run = {
+      ...fixture,
+      request: { ...fixture.request, directory, requester: { kind: "user", sessionID: rootID } },
+    }
+    const partID = "prt_disposed_card"
+    const messageID = "msg_disposed_card"
+    const app = await setup(page, {
+      capabilities: { connections: true },
+      messages: {
+        [rootID]: [
+          userMessage(rootID, "msg_disposed_card_owner", "Review changes."),
+          assistantMessage(rootID, messageID, "msg_disposed_card_owner", [
+            {
+              id: partID,
+              type: "tool",
+              tool: "connect",
+              callID: "call_disposed_card",
+              state: {
+                status: "completed",
+                input: { action: "review" },
+                output: "Review completed",
+                title: "VectorScope review",
+                metadata: { connect: run },
+                time: { start: 1, end: 2 },
+              },
+            },
+          ]),
+        ],
+      },
+    })
+    let hold = false
+    let release: () => void = () => {}
+    let notify: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const entered = new Promise<void>((resolve) => {
+      notify = resolve
+    })
+    const effects: string[] = []
+    await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (route.request().method() === "POST") effects.push(path)
+      if (hold && route.request().method() === "GET" && path.endsWith("/runs/cr_fixture")) {
+        notify()
+        await gate
+      }
+      return reply(route, run)
+    })
+    await app.open()
+    const card = page.locator('[data-component="connect-findings-card"]')
+    await expect(card).toBeVisible()
+    hold = true
+    await card.getByRole("button", { name: label, exact: true }).click()
+    await entered
+    const aborted = page.waitForEvent("requestfailed", {
+      predicate: (request) =>
+        request.method() === "GET" && new URL(request.url()).pathname.endsWith("/experimental/connect/runs/cr_fixture"),
+    })
+    await app.send("message.part.removed", { sessionID: rootID, messageID, partID })
+    await expect(card).toHaveCount(0)
+    await aborted
+    release()
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    expect(effects).toEqual([])
+    expect(
+      app.capture.session.filter(
+        (request) => request.method === "POST" && /\/(?:message|prompt_async)(?:\?|$)/.test(request.path),
+      ),
+    ).toEqual([])
+    await page.unroute(/\/experimental\/connect(?:\/.*)?(?:\?|$)/)
+  })
+}
+
+test("a pending connected-review save confirmation cannot apply after same-SDK authority retirement", async ({
+  page,
+}) => {
+  const app = await setup(page, {
+    capabilities: { connections: true },
+    globalConfig: {},
+    status: { [rootID]: { type: "busy" } },
+  })
+  let fresh = false
+  let reads = 0
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, async (route) => {
+    if (fresh && route.request().method() === "GET") {
+      reads++
+      await gate
+    }
+    return reply(route, [])
+  })
+  await app.open()
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.locator(".settings-v2-workspace")
+  await settings.getByRole("tab", { name: "Agents", exact: true }).click()
+  const tools = settings.locator('[data-component="connected-tools"]')
+  await tools.getByRole("textbox", { name: "Review cap", exact: true }).fill("1.25")
+  await tools.getByRole("button", { name: "Save review settings", exact: true }).click()
+  const confirm = page.getByRole("dialog", { name: "Save connected review settings?" })
+  await expect(confirm).toBeVisible()
+  fresh = true
+  await app.send("global.disposed", {}, "global")
+  await expect.poll(() => reads).toBeGreaterThan(0)
+  await expect(tools.getByRole("button", { name: "Save review settings", exact: true })).toHaveCount(0)
+  await confirm.getByRole("button", { name: "Save anyway", exact: true }).click()
+  await expect(confirm).toHaveCount(0)
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  expect(app.capture.config).toEqual([])
+  release()
+})
+
+test("closing Connected tools during the save-confirmation owner read cannot save after that read completes", async ({
+  page,
+}) => {
+  const app = await setup(page, {
+    capabilities: { connections: true, backgroundShells: true },
+    globalConfig: {},
+    status: { [rootID]: { type: "idle" } },
+  })
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, (route) => reply(route, []))
+  let hold = false
+  let release: () => void = () => {}
+  let notify: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const entered = new Promise<void>((resolve) => {
+    notify = resolve
+  })
+  await page.route(/\/experimental\/session\/[^/]+\/tasks(?:\?|$)/, async (route) => {
+    const url = new URL(route.request().url())
+    if (
+      !hold ||
+      route.request().method() !== "GET" ||
+      url.searchParams.get("shells") !== "true" ||
+      url.searchParams.get("limit") !== "1"
+    )
+      return route.fallback()
+    notify()
+    await gate
+    return reply(route, { tasks: [], shells: [] })
+  })
+  await app.open()
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.locator(".settings-v2-workspace")
+  await settings.getByRole("tab", { name: "Agents", exact: true }).click()
+  const tools = settings.locator('[data-component="connected-tools"]')
+  await tools.getByRole("textbox", { name: "Review cap", exact: true }).fill("1.25")
+  hold = true
+  await tools.getByRole("button", { name: "Save review settings", exact: true }).click()
+  await entered
+  await page.keyboard.press("Escape")
+  await expect(tools).toHaveCount(0)
+  const response = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith(`/experimental/session/${rootID}/tasks`) &&
+      new URL(response.url()).searchParams.get("shells") === "true",
+  )
+  release()
+  await (await response).finished()
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  expect(app.capture.config).toEqual([])
+})

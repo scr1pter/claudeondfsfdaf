@@ -81,6 +81,7 @@ test("run responses are decoded before surfaces can treat them as reviews", asyn
 })
 
 test("directory review preserves the captured authenticated checkout and decodes a sessionless queued run", async () => {
+  const requestKey = "41b41bdc-cb6b-4c96-98d2-f0bad73db1c2"
   const fixture = reviewRun()
   const run = {
     ...fixture,
@@ -106,11 +107,15 @@ test("directory review preserves the captured authenticated checkout and decodes
     }),
   )
   expect(
-    (await client.directoryReview({ target: { kind: "branch", base: "a".repeat(40) }, background: true })).request
-      .requester.sessionID,
+    (await client.directoryReview({ requestKey, target: { kind: "branch", base: "a".repeat(40) }, background: true }))
+      .request.requester.sessionID,
   ).toBeUndefined()
   expect(new URL(calls[0]!.url).pathname).toBe("/experimental/connect/review")
   expect(new URL(calls[0]!.url).searchParams.get("directory")).toBe(fixture.request.directory)
   expect(calls[0]!.headers.get("authorization")).toBe("Bearer fixture-only")
-  expect(await calls[0]!.json()).toEqual({ target: { kind: "branch", base: "a".repeat(40) }, background: true })
+  expect(await calls[0]!.json()).toEqual({
+    requestKey,
+    target: { kind: "branch", base: "a".repeat(40) },
+    background: true,
+  })
 })

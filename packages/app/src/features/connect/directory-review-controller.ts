@@ -19,6 +19,7 @@ export type DirectoryReviewState = {
   run?: Connect.Run
   permission?: PermissionRequest
   error: string
+  admissionUncertain?: boolean
 }
 
 /** The directory and base come from the native workspace record, never a chat or event. */
@@ -58,21 +59,46 @@ export function createDirectoryReviewController(input: {
   transport: DirectoryReviewTransport
   subscribe: (invalidate: () => void) => () => void
   changed: (state: DirectoryReviewState) => void
+  admission?: { pending: () => boolean; hold: (retry: boolean) => void; confirm: () => void }
 }) {
   const abort = new AbortController()
   const answered = new Set<string>()
   const cancelled = new Set<string>()
-  let state: DirectoryReviewState = { phase: input.enabled ? "loading" : "unavailable", busy: false, error: "" }
+  let state: DirectoryReviewState = {
+    phase: input.enabled ? "loading" : "unavailable",
+    busy: false,
+    error: "",
+    admissionUncertain: input.admission?.pending() ?? false,
+  }
   let runID: string | undefined
   let disposed = false
+  let retired = false
   let starting = false
   let dirty = false
   let reading: Promise<void> | undefined
-  const current = () => !disposed && input.enabled && input.current()
+  const current = () => !disposed && !retired && input.enabled && input.current()
   const update = (patch: Partial<DirectoryReviewState>) => {
     if (!current()) return
     state = { ...state, ...patch }
     input.changed(state)
+  }
+  const retire = (error = "") => {
+    if (retired) return
+    const publish = current()
+    state = {
+      phase: "unavailable",
+      busy: false,
+      run: undefined,
+      permission: undefined,
+      error,
+      admissionUncertain: state.admissionUncertain,
+    }
+    runID = undefined
+    dirty = false
+    retired = true
+    abort.abort()
+    unsubscribe()
+    if (publish) input.changed(state)
   }
   const read = async () => {
     if (!current()) return
@@ -112,13 +138,9 @@ export function createDirectoryReviewController(input: {
         await read()
       }
     })()
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!current() || abort.signal.aborted) return
-        update({
-          phase: "unavailable",
-          permission: undefined,
-          error: error instanceof Error ? error.message : "Could not load the workspace review.",
-        })
+        retire("Workspace review access could not be verified. Reopen the workspace to try again.")
       })
       .finally(() => {
         reading = undefined
@@ -136,30 +158,65 @@ export function createDirectoryReviewController(input: {
       return state
     },
     refresh,
-    async start() {
-      if (!current() || state.phase !== "ready" || state.busy || (state.run && state.run.status !== "done")) return
+    retire,
+    async start(retry = false) {
+      if (
+        !current() ||
+        state.phase !== "ready" ||
+        state.busy ||
+        (state.admissionUncertain && (!retry || !input.admission)) ||
+        (!state.admissionUncertain && retry) ||
+        (!retry && state.run && state.run.status !== "done")
+      )
+        return
       starting = true
+      runID = undefined
       update({ busy: true, permission: undefined, error: "" })
+      // Persist only an unpaid uncertainty marker; a list cannot prove a lost POST will never admit later.
+      const held = (() => {
+        try {
+          input.admission?.hold(retry)
+          return true
+        } catch {
+          return false
+        }
+      })()
+      if (!held || !current()) {
+        starting = false
+        update({
+          busy: false,
+          admissionUncertain: true,
+          error: "This review start cannot be tracked safely. Starting another review is blocked.",
+        })
+        return
+      }
+      update({ admissionUncertain: true })
       // A view change must not abort the admission POST or implicitly stop the durable job.
-      const admitted = await input.transport
+      await input.transport
         .start()
         .then((run) => {
           if (!current()) return false
           if (!directoryRunMatches(run, input.target))
             throw new Error("The engine returned a review for another workspace.")
           runID = run.id
+          input.admission?.confirm()
+          update({ admissionUncertain: false })
           update({ run: undefined })
           return true
         })
-        .catch((error: unknown) => {
-          update({ error: error instanceof Error ? error.message : "Could not start the workspace review." })
+        .catch(() => {
+          update({
+            admissionUncertain: true,
+            error:
+              "The review start was not confirmed. Refresh to inspect existing reviews; starting another review remains blocked until this request can be identified.",
+          })
           return false
         })
         .finally(() => {
           starting = false
-          update({ busy: false })
         })
-      if (admitted && current()) await refresh()
+      if (current()) await refresh()
+      update({ busy: false })
     },
     async reply(id: string, reply: "once" | "reject") {
       if (!current() || state.busy || answered.has(id) || state.permission?.id !== id) return
@@ -181,8 +238,8 @@ export function createDirectoryReviewController(input: {
       const replied = await input.transport
         .reply(id, reply)
         .then(() => true)
-        .catch((error: unknown) => {
-          update({ error: error instanceof Error ? error.message : "Could not answer the review approval." })
+        .catch(() => {
+          retire("Workspace review approval could not be verified.")
           return false
         })
       update({ busy: false })
@@ -203,8 +260,8 @@ export function createDirectoryReviewController(input: {
       const stopped = await input.transport
         .cancel(expected)
         .then(() => true)
-        .catch((error: unknown) => {
-          update({ error: error instanceof Error ? error.message : "Could not cancel the workspace review." })
+        .catch(() => {
+          retire("Workspace review cancellation could not be verified.")
           cancelled.delete(expected)
           return false
         })
@@ -212,9 +269,8 @@ export function createDirectoryReviewController(input: {
       if (stopped && current()) await refresh()
     },
     dispose() {
+      retire()
       disposed = true
-      abort.abort()
-      unsubscribe()
     },
   }
 }

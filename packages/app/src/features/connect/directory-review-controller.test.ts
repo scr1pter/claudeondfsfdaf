@@ -5,6 +5,7 @@ import {
   createDirectoryReviewController,
   directoryPermissionMatches,
   directoryRunMatches,
+  type DirectoryReviewState,
 } from "./directory-review-controller"
 import { reviewRun } from "./test-fixture"
 
@@ -51,7 +52,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-function fixture(enabled = true) {
+function fixture(enabled = true, admission?: Parameters<typeof createDirectoryReviewController>[0]["admission"]) {
   const data = {
     current: true,
     run: run(),
@@ -60,15 +61,20 @@ function fixture(enabled = true) {
     calls: [] as string[],
     replies: [] as { id: string; reply: string }[],
     signals: [] as AbortSignal[],
+    states: [] as DirectoryReviewState[],
     invalidate: (): void => undefined,
     start: async (): Promise<Connect.Run> => data.run,
     get: async (): Promise<Connect.Run> => data.run,
+    pendingRead: async (): Promise<readonly PermissionRequest[]> => data.pending,
   }
   const controller = createDirectoryReviewController({
     target,
     enabled,
     current: () => data.current,
-    changed: () => undefined,
+    admission,
+    changed: (state) => {
+      data.states.push(state)
+    },
     subscribe: (notify) => {
       data.calls.push("subscribe")
       data.invalidate = notify
@@ -89,9 +95,10 @@ function fixture(enabled = true) {
         data.calls.push("start")
         return data.start()
       },
-      pending: async () => {
+      pending: async (signal) => {
         data.calls.push("pending")
-        return data.pending
+        data.signals.push(signal)
+        return data.pendingRead()
       },
       reply: async (id, reply) => {
         data.calls.push("reply")
@@ -244,5 +251,147 @@ test("a cross-directory owner response clears the approval and refuses its reply
   expect(data.replies).toEqual([])
   expect(controller.state.phase).toBe("unavailable")
   expect(controller.state.permission).toBeUndefined()
+  expect(controller.state.run).toBeUndefined()
   controller.dispose()
+})
+
+test("a failed owner read destroys previously displayed private findings and aborts the pending approval read", async () => {
+  const { data, controller } = fixture()
+  await controller.refresh()
+  data.run = { ...data.run, status: "done", result: reviewRun().result }
+  data.runs = [data.run]
+  await controller.refresh()
+  expect(controller.state.run?.result?.findings).toHaveLength(1)
+  const pending = deferred<readonly PermissionRequest[]>()
+  data.pendingRead = () => pending.promise
+  data.get = async () => {
+    throw new Error("403 with private payload")
+  }
+  await controller.refresh()
+  expect(controller.state.phase).toBe("unavailable")
+  expect(controller.state.run).toBeUndefined()
+  expect(controller.state.permission).toBeUndefined()
+  expect(JSON.stringify(controller.state)).not.toContain(reviewRun().result!.findings[0].body)
+  expect(data.signals.every((signal) => signal.aborted)).toBe(true)
+  pending.resolve([permission()])
+  await Promise.resolve()
+  expect(controller.state.run).toBeUndefined()
+  controller.dispose()
+})
+
+test("same-SDK authority retirement immediately clears results and ignores a delayed old GET without a reply or stop", async () => {
+  const { data, controller } = fixture()
+  await controller.refresh()
+  data.run = { ...data.run, status: "done", result: reviewRun().result }
+  data.runs = [data.run]
+  await controller.refresh()
+  const delayed = deferred<Connect.Run>()
+  data.get = () => delayed.promise
+  const old = controller.refresh()
+  controller.retire()
+  expect(controller.state.run).toBeUndefined()
+  expect(controller.state.permission).toBeUndefined()
+  delayed.resolve(data.run)
+  await old
+  await controller.start()
+  await controller.reply(permission().id, "once")
+  await controller.cancel()
+  expect(controller.state.run).toBeUndefined()
+  expect(data.replies).toEqual([])
+  expect(data.calls.filter((call) => call === "start" || call.startsWith("cancel:"))).toEqual([])
+})
+
+test("a lost admission flushes early notifications but empty or unrelated terminal history never authorizes another POST", async () => {
+  const marker = { pending: false }
+  const admission = {
+    pending: () => marker.pending,
+    hold: () => {
+      marker.pending = true
+    },
+    confirm: () => {
+      marker.pending = false
+    },
+  }
+  const { data, controller } = fixture(true, admission)
+  await controller.refresh()
+  data.start = async () => {
+    data.invalidate()
+    throw new Error("Lost POST response")
+  }
+  await controller.start()
+  expect(controller.state.admissionUncertain).toBe(true)
+  expect(marker.pending).toBe(true)
+  expect(data.calls.filter((call) => call === "runs").length).toBeGreaterThan(1)
+  await controller.start()
+  data.run = { ...data.run, status: "done", result: reviewRun().result }
+  data.runs = [data.run]
+  await controller.refresh()
+  await controller.start()
+  expect(marker.pending).toBe(true)
+  expect(data.calls.filter((call) => call === "start")).toHaveLength(1)
+  controller.dispose()
+  const reopened = fixture(true, admission)
+  await reopened.controller.refresh()
+  await reopened.controller.start()
+  expect(reopened.controller.state.admissionUncertain).toBe(true)
+  expect(reopened.data.calls).not.toContain("start")
+  reopened.controller.dispose()
+})
+
+test("only an explicit retry can confirm the same held admission, and a stale successful POST cannot release its marker", async () => {
+  const marker = { pending: false, confirmations: 0 }
+  const admission = {
+    pending: () => marker.pending,
+    hold: () => {
+      marker.pending = true
+    },
+    confirm: () => {
+      marker.pending = false
+      marker.confirmations++
+    },
+  }
+  const first = fixture(true, admission)
+  await first.controller.refresh()
+  first.data.start = async () => {
+    throw new Error("Lost response")
+  }
+  await first.controller.start()
+  expect(marker.confirmations).toBe(0)
+  first.controller.dispose()
+  const retry = fixture(true, admission)
+  await retry.controller.refresh()
+  expect(retry.data.calls).not.toContain("start")
+  await retry.controller.start(true)
+  expect(retry.data.calls.filter((call) => call === "start")).toHaveLength(1)
+  expect(marker.confirmations).toBe(1)
+  expect(retry.controller.state.admissionUncertain).toBe(false)
+  retry.controller.dispose()
+  const stale = fixture(true, admission)
+  await stale.controller.refresh()
+  const accepted = deferred<Connect.Run>()
+  stale.data.start = () => accepted.promise
+  const starting = stale.controller.start()
+  stale.controller.retire()
+  accepted.resolve(stale.data.run)
+  await starting
+  expect(marker.pending).toBe(true)
+  expect(marker.confirmations).toBe(1)
+  expect(stale.controller.state.run).toBeUndefined()
+})
+
+test("authority retirement while an approval GET is pending cannot send an old permission reply", async () => {
+  const { data, controller } = fixture()
+  await controller.refresh()
+  data.runs = [data.run]
+  data.pending = [permission()]
+  await controller.refresh()
+  const delayed = deferred<Connect.Run>()
+  data.get = () => delayed.promise
+  const reply = controller.reply(permission().id, "once")
+  controller.retire()
+  expect(controller.state.permission).toBeUndefined()
+  delayed.resolve(data.run)
+  await reply
+  expect(data.replies).toEqual([])
+  expect(controller.state.run).toBeUndefined()
 })

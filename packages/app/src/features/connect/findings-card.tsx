@@ -5,7 +5,9 @@ import { useParams } from "@solidjs/router"
 import { ToolRegistry, type ToolComponent, type ToolProps } from "@vectordevai/session-ui/message-part"
 import { GenericTool } from "@vectordevai/session-ui/basic-tool"
 import { Button } from "@vectordevai/ui/button"
+import type { Connect } from "@vectordevai/schema/connect"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
 import { requestComposerPrompt } from "@/utils/composer-handoff"
 import { createConnectClient } from "./client"
 import {
@@ -35,31 +37,75 @@ export function registerConnectFindingsCard() {
 
 function FindingsCard(props: ToolProps & { plain?: ToolComponent }) {
   const sdk = useSDK()
+  const serverSDK = useServerSDK()
   const params = useParams()
   const client = createMemo(() => createConnectClient(sdk().client))
-  const [state, setState] = createStore({ busy: false, error: "" })
-  const [data, { refetch }] = createResource(
+  const [state, setState] = createStore({ busy: false, error: "", epoch: Symbol(), wasOwned: false })
+  let pending: AbortController | undefined
+  let blocked: ReturnType<typeof createConnectClient> | undefined
+  let disposed = false
+  let actionRead: AbortController | undefined
+  const [data, { refetch, mutate }] = createResource(
     () => {
+      const epoch = state.epoch
       const id = metadataRunID(props.metadata, props.sessionID)
-      if (props.status !== "completed" || !id || !props.sessionID) return false
-      return { client: client(), run: id, sessionID: props.sessionID }
+      if (disposed || props.status !== "completed" || !id || !props.sessionID || client() === blocked) return false
+      return { client: client(), run: id, sessionID: props.sessionID, epoch }
     },
-    async (input) => ({
-      client: input.client,
-      run: await input.client.get(input.run, input.sessionID, AbortSignal.timeout(30_000)),
-    }),
+    async (input): Promise<{ client: ReturnType<typeof createConnectClient>; run: Connect.Run; epoch: symbol }> => {
+      pending?.abort()
+      const abort = new AbortController()
+      pending = abort
+      const run = await input.client
+        .get(input.run, input.sessionID, AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]))
+        .catch(() => {
+          if (input.epoch === state.epoch && input.client === client()) retire(input.client)
+          throw new Error("Connected review access could not be verified.")
+        })
+      if (disposed || abort.signal.aborted || input.epoch !== state.epoch || input.client !== client())
+        throw new Error("The connected conversation changed.")
+      setState("wasOwned", true)
+      return { client: input.client, run, epoch: input.epoch }
+    },
   )
+  const retire = (denied?: ReturnType<typeof createConnectClient>) => {
+    blocked = denied
+    pending?.abort()
+    actionRead?.abort()
+    mutate(undefined)
+    setState({ epoch: Symbol(), busy: false, error: "" })
+  }
+  onCleanup(() => {
+    disposed = true
+    retire()
+  })
   const run = () => {
-    if (data.error) return
+    if (disposed || data.error) return
     const loaded = data.latest
     if (
       loaded?.client !== client() ||
+      loaded.epoch !== state.epoch ||
       loaded.run.id !== metadataRunID(props.metadata, props.sessionID) ||
       loaded.run.request.requester.sessionID !== props.sessionID
     )
       return
     return loaded.run
   }
+  createEffect(() => {
+    const server = serverSDK()
+    const directory = sdk().directory
+    const stop = server.event.listen((event) => {
+      if (server !== serverSDK()) return
+      if (
+        (event.name === "global" &&
+          (event.details.type === "server.connected" || event.details.type === "global.disposed")) ||
+        (event.name === directory && event.details.type === "server.instance.disposed")
+      ) {
+        retire()
+      }
+    })
+    onCleanup(stop)
+  })
   createEffect(() => {
     const active = sdk()
     const id = metadataRunID(props.metadata, props.sessionID)
@@ -85,18 +131,29 @@ function FindingsCard(props: ToolProps & { plain?: ToolComponent }) {
   const act = async (action: "fix" | "worktree" | "dismiss") => {
     const sessionID = props.sessionID
     const runID = run()?.id
-    if (state.busy || !sessionID || !runID) return
+    const epoch = state.epoch
+    if (disposed || state.busy || !sessionID || !runID) return
     setState({ busy: true, error: "" })
     const active = client()
+    const abort = new AbortController()
+    actionRead?.abort()
+    actionRead = abort
     const current = () =>
+      !disposed &&
+      !abort.signal.aborted &&
       active === client() &&
       props.sessionID === sessionID &&
       params.id === sessionID &&
-      metadataRunID(props.metadata, sessionID) === runID
+      metadataRunID(props.metadata, sessionID) === runID &&
+      epoch === state.epoch
     await actOnFindings(
       { run: runID, sessionID, action },
       {
-        load: (id, sessionID) => active.get(id, sessionID, AbortSignal.timeout(30_000)),
+        load: (id, sessionID) =>
+          active.get(id, sessionID, AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)])).catch(() => {
+            if (current()) retire(active)
+            throw new Error("Connected review access could not be verified.")
+          }),
         dismiss: (id, input) => {
           if (!current()) throw new Error("The connected conversation changed. Try again in the current conversation.")
           return active.dismiss(id, input)
@@ -104,15 +161,23 @@ function FindingsCard(props: ToolProps & { plain?: ToolComponent }) {
         send: (text) => current() && requestComposerPrompt({ text, send: true }),
       },
     )
-      .then(() => refetch())
+      .then(() => {
+        if (current()) return refetch()
+      })
       .catch((error: unknown) => {
         if (current())
           setState("error", error instanceof Error ? error.message : "Could not complete this review action.")
       })
-      .finally(() => setState("busy", false))
+      .finally(() => {
+        if (actionRead === abort) actionRead = undefined
+        if (current()) setState("busy", false)
+      })
   }
   return (
-    <Show when={run()?.result} fallback={props.plain ? <Dynamic component={props.plain} {...props} /> : undefined}>
+    <Show
+      when={run()?.result}
+      fallback={!state.wasOwned && props.plain ? <Dynamic component={props.plain} {...props} /> : undefined}
+    >
       {(result) => (
         <section
           class="rounded-lg border p-3 flex flex-col gap-3"

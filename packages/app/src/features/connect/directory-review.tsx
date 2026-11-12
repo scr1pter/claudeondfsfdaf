@@ -4,8 +4,9 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { directoryReviewTarget } from "@/features/agents/agent-dashboard-model"
 import { createConnectClient } from "./client"
+import { createDirectoryReviewReservation } from "./directory-review-reservation"
 import { connectConsentDetails } from "./consent"
-import { destinationLabel, verdictLabel } from "./connect-model"
+import { costLabel, destinationLabel, verdictLabel } from "./connect-model"
 import {
   createDirectoryReviewController,
   type DirectoryReviewState,
@@ -15,6 +16,7 @@ import {
 export function DirectoryReview(props: DirectoryReviewTarget) {
   const sdk = useServerSDK()
   const sync = useServerSync()
+  const [authority, setAuthority] = createStore({ epoch: Symbol() })
   const scope = createMemo(() =>
     sync().capabilities().connections ? sdk().ensureDirSdkContext(props.directory) : undefined,
   )
@@ -22,7 +24,38 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
     scope: scope(),
     target: { workspaceID: props.workspaceID, directory: props.directory, base: props.base },
     epoch: Symbol(),
+    authority: authority.epoch,
   }))
+  const admission = createMemo(() => {
+    return scope()
+      ? { server: sdk(), workspaceID: props.workspaceID, directory: props.directory, base: props.base }
+      : undefined
+  })
+  const [reservation] = createResource(admission, async (identity) => {
+    const hash = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        JSON.stringify([
+          identity.server.scope,
+          identity.server.url,
+          identity.workspaceID,
+          identity.directory,
+          identity.base,
+        ]),
+      ),
+    )
+    const key = `connect.directory-admission.${Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, "0")).join("")}`
+    const body = { target: { kind: "branch" as const, base: identity.base }, background: true }
+    return {
+      identity,
+      ...createDirectoryReviewReservation({
+        storage: window.sessionStorage,
+        key,
+        body,
+        requestKey: () => crypto.randomUUID(),
+      }),
+    }
+  })
   const [state, setState] = createStore<DirectoryReviewState & { epoch?: symbol }>({
     phase: "loading",
     busy: false,
@@ -30,10 +63,27 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
   })
   let controller: ReturnType<typeof createDirectoryReviewController> | undefined
   createEffect(() => {
+    const server = sdk()
+    const directory = props.directory
+    const stop = server.event.listen((event) => {
+      if (server !== sdk()) return
+      if (
+        (event.name === "global" &&
+          (event.details.type === "server.connected" || event.details.type === "global.disposed")) ||
+        (event.name === directory && event.details.type === "server.instance.disposed")
+      ) {
+        controller?.retire()
+        setAuthority("epoch", Symbol())
+      }
+    })
+    onCleanup(stop)
+  })
+  createEffect(() => {
     const identity = binding()
     const active = identity.scope
     const target = identity.target
-    if (!active) {
+    const saved = reservation()
+    if (!active || !saved || saved.identity !== admission()) {
       controller = undefined
       setState({
         phase: "unavailable",
@@ -52,10 +102,11 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
       enabled: true,
       current,
       changed: (value) => setState({ ...value, run: value.run, permission: value.permission, epoch: identity.epoch }),
+      admission: saved,
       transport: {
         runs: (signal) => client.runs(undefined, signal),
         get: (id, signal) => client.get(id, undefined, signal),
-        start: () => client.directoryReview({ target: { kind: "branch", base: target.base }, background: true }),
+        start: () => client.directoryReview(saved.request()),
         pending: async (signal) => {
           const result = await active.client.permission.list(undefined, { throwOnError: true, signal })
           if (!Array.isArray(result.data)) throw new Error("The engine returned invalid review approvals.")
@@ -86,7 +137,7 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
     })
   })
 
-  const available = () => state.epoch === binding().epoch && scope() && (state.phase !== "unavailable" || state.run)
+  const available = () => state.epoch === binding().epoch && scope() && state.phase !== "unavailable"
   return (
     <Show when={available()}>
       <section
@@ -109,7 +160,9 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
               <Show when={run().result}>
                 {(result) => (
                   <>
-                    <p>Sends code: {destinationLabel(result().sendsTo)}.</p>
+                    <p>
+                      Sends code: {destinationLabel(result().sendsTo)}. {costLabel(result())}.
+                    </p>
                     <For each={result().notes}>{(note) => <p>{note}</p>}</For>
                     <For each={result().findings}>
                       {(finding) => (
@@ -163,6 +216,19 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
         <Show when={state.error}>
           <p role="alert">{state.error}</p>
         </Show>
+        <Show when={state.admissionUncertain}>
+          <p role="status">
+            The review start is unconfirmed. Refresh to inspect existing reviews, or retry the same saved request.
+            Starting a different review remains blocked.
+          </p>
+          <button
+            type="button"
+            disabled={state.busy || state.phase !== "ready"}
+            onClick={() => void controller?.start(true)}
+          >
+            Retry review start
+          </button>
+        </Show>
         <div class="mt-2 flex gap-3">
           <Show
             when={!state.run || state.run.status === "done"}
@@ -178,7 +244,7 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
           >
             <button
               type="button"
-              disabled={state.busy || state.phase !== "ready"}
+              disabled={state.busy || state.phase !== "ready" || state.admissionUncertain}
               onClick={() => void controller?.start()}
             >
               {state.busy ? "Starting review…" : "Review with VectorScope"}
