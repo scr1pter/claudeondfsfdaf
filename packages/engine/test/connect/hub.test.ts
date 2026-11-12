@@ -1303,6 +1303,7 @@ describe("MCP servers in the registry", () => {
             skills: [],
             workflows: [],
             mcp: {
+              cold: { status: "uninitialized" },
               docs: { status: "connected" },
               tracker: { status: "connected" },
               blocked: { status: "failed", error: "Off in Vector Local: not allowed" },
@@ -1312,6 +1313,10 @@ describe("MCP servers in the registry", () => {
           }).map((item) => [item.id, item]),
         )
       expect(list(false).get("mcp:docs")).toMatchObject({ place: "local", state: "ready" })
+      expect(list(false).get("mcp:cold")).toMatchObject({
+        state: "unavailable",
+        reason: "Configured, but it has not connected in this workspace.",
+      })
       expect(list(false).get("mcp:tracker")).toMatchObject({ place: "your-cloud", state: "ready" })
       expect(list(false).get("mcp:tracker")?.summary).toContain("another host")
       // Under Vector Local, MCP decides: a remote server it connected stays ready, one it refused is off.

@@ -932,7 +932,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const agentList = yield* agents.list()
         const skillList = yield* skills.all()
         const workflows = yield* library.list().pipe(Effect.orElseSucceed(() => []))
-        const status = yield* mcp.status()
+        const status = yield* mcp.snapshot()
         const remoteMcp = new Set(
           Object.entries((yield* config.get()).mcp ?? {}).flatMap(([name, entry]) =>
             entry && typeof entry === "object" && "type" in entry && entry.type === "remote" ? [name] : [],

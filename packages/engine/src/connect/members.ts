@@ -28,11 +28,12 @@ export interface WorkflowSource {
   readonly issues?: readonly { readonly message: string }[]
 }
 
-/** An MCP server's status, as `MCP.status()` reports it. */
+/** An MCP server's inventory snapshot; reading it never starts a configured server. */
 export type McpSource =
   | { readonly status: "connected" }
   | { readonly status: "disabled" }
   | { readonly status: "needs_auth" }
+  | { readonly status: "uninitialized" }
   | { readonly status: "failed"; readonly error: string }
   | { readonly status: "needs_client_registration"; readonly error: string }
 
@@ -309,6 +310,8 @@ function mcpMember(name: string, source: McpSource, remote: boolean): MemberInpu
   }
   if (source.status === "connected") return { ...base, state: "ready" }
   if (source.status === "disabled") return { ...base, state: "off", reason: "Turned off in your MCP settings." }
+  if (source.status === "uninitialized")
+    return { ...base, state: "unavailable", reason: "Configured, but it has not connected in this workspace." }
   if (source.status === "needs_auth")
     return { ...base, state: "unavailable", reason: words(`Needs you to sign in: vector mcp auth ${name}`, 500) }
   // MCP refuses a server Vector Local does not allow with this reason, so it reads as off.
