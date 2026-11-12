@@ -87,9 +87,37 @@ function createModelSections(input: {
   fixed?: boolean
 }) {
   // Temporary focused CI trace: observe state propagation without forcing a memo read or changing its behavior.
-  let traces = 0
+  const host = globalThis as typeof globalThis & {
+    scopePickerTrace?: {
+      armed: boolean
+      instances: number
+      sequence: number
+      toggle: number
+      lifecycle: number
+      render: number
+    }
+  }
+  const diagnostic = (host.scopePickerTrace ??= {
+    armed: false,
+    instances: 0,
+    sequence: 0,
+    toggle: 0,
+    lifecycle: 0,
+    render: 0,
+  })
+  const instance = ++diagnostic.instances
   const trace = (phase: string, value: unknown) => {
-    if (traces++ < 64) console.debug("SCOPE_PICKER_REACTIVITY", phase, JSON.stringify(value))
+    const category = phase.startsWith("toggle-")
+      ? "toggle"
+      : phase === "views" || phase.endsWith("-render")
+        ? "render"
+        : "lifecycle"
+    const limit = category === "toggle" ? 8 : category === "render" ? 12 : 24
+    if (!diagnostic.armed || diagnostic[category]++ >= limit) return
+    console.debug(
+      "SCOPE_PICKER_REACTIVITY",
+      JSON.stringify({ instance, sequence: ++diagnostic.sequence, phase, value }),
+    )
   }
   const models = createMemo(() => {
     const provider = input.provider()

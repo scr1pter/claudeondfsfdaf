@@ -93,11 +93,8 @@ test("the owner saves a separate model, variant and disable setting only after c
   page,
 }, info) => {
   const app = await setup(page, engine({ status: { [rootID]: { type: "busy" } } }))
-  const reactivity: string[] = []
   page.on("console", (message) => {
-    if (!message.text().startsWith("SCOPE_PICKER_REACTIVITY")) return
-    reactivity.push(message.text())
-    if (reactivity.length > 40) reactivity.shift()
+    if (message.text().startsWith("SCOPE_PICKER_REACTIVITY")) console.log(message.text())
   })
   await catalog(page)
   await app.open()
@@ -115,7 +112,17 @@ test("the owner saves a separate model, variant and disable setting only after c
   await anthropic.evaluate((header) => {
     const key = "vector.model-picker.open-sections.v1"
     const diagnostic = { nativeClicks: 0, writes: [] as string[], before: localStorage.getItem(key) }
-    const click = () => diagnostic.nativeClicks++
+    const trace = (
+      globalThis as unknown as {
+        scopePickerTrace?: { armed: boolean; sequence: number; toggle: number; lifecycle: number; render: number }
+      }
+    ).scopePickerTrace
+    if (!trace) throw new Error("The focused picker diagnostic hook is unavailable")
+    // Capture arms collection immediately before the real component click handler, after initial rendering.
+    const click = () => {
+      diagnostic.nativeClicks++
+      Object.assign(trace, { armed: true, sequence: 0, toggle: 0, lifecycle: 0, render: 0 })
+    }
     const write = Storage.prototype.setItem
     header.addEventListener("click", click, true)
     Storage.prototype.setItem = function (this: Storage, name, value) {
@@ -132,7 +139,6 @@ test("the owner saves a separate model, variant and disable setting only after c
   console.log(
     "SCOPE_PICKER_CLICK_DIAGNOSTIC",
     await page.evaluate(() => (window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic()),
-    reactivity,
   )
   await expect(anthropic).toHaveAttribute("aria-expanded", "true")
   const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
