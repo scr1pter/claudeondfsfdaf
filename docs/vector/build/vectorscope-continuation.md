@@ -1,5 +1,94 @@
 # VectorScope continuation
 
+## Current checkpoint: physical memory scope and metadata-proof CI, 12 November 2026
+
+This checkpoint supersedes the older picker and preliminary memory status below.
+Each receipt applies to its named source. The memory consumer, public memory
+routes and App memory controls remain inactive; complete VS-11 acceptance and
+release readiness remain open.
+
+- Core physical-scope storage is saved at `70cbb8aa2`. It preserves the real ProjectID
+  and adds a separate mandatory physical scope to entries, enabled state,
+  generations and owner/source digests. Independent clones with the same remote
+  or root commit cannot inherit each other's enabled state or preferences.
+  Verified worktrees and subdirectories of the same common Git store can share.
+  Legacy unbound rows stay invisible and are never automatically adopted. Actual
+  SQLite scope, migration, erasure and compatibility checks passed at that
+  storage checkpoint; those checks do not establish the new OS proof's runtime.
+- The strict memory wire contract is saved at `5b0b6064b`. The unmounted App
+  controls are saved at `82894e3b9`, and browser acceptance at `7bbf4d88b` passed run
+  `43306048425`: one actual Solid case and 32 Chromium cases, one worker, zero
+  retries. This qualifies that App/browser source, including the local review
+  regressions, without mounting memory controls or granting execution consent.
+- The picker repair is saved at `8b2a3a747`; acceptance at `e00d579b3` passed nine browser
+  cases and three Solid cases. The older pre-click overflow/picker-open notes
+  below are historical. They are not an outstanding request for the same repair.
+- The immutable winning-request source binding is saved at `018108007`.
+  Its four actual SQL cases and package types pass. The initial winning
+  reservation retains the trusted physical source binding; retries cannot
+  replace it and legacy null bindings refuse memory authority.
+- Prepared owner source `f983765f0` passed 13 cases in Root batch 143 (5.64
+  seconds). Unregistered HTTP source `2e955b8f0` passed six cases in Root batch
+  147 (6.59 seconds), with its Engine typecheck passing in 56.20 seconds.
+  Those are historical integration receipts for the preceding proof port.
+  The replacement metadata helper requires fresh actual Git, folder,
+  owner/source, lifecycle and HTTP acceptance before those results can qualify
+  its runtime.
+
+The numerical Node/Bun birth timestamp did not prove that the kernel supplied
+birth time. The authorized implementation now permits one fixed trusted OS
+metadata child as an explicit exception to the earlier command-free metadata
+wording. It starts no Git process, repository executable, model or network call.
+The child receives the actual already-pinned directory at FD3 and requires
+`statx(3, "", AT_EMPTY_PATH, STATX_TYPE | STATX_INO | STATX_BTIME)` with the returned
+bits and before/after device/inode agreement. A genuine birth time equal to
+ctime is valid; missing capability has no numerical or path-stat fallback.
+
+The invocation is fixed `/usr/bin/python3 -I -S -c <trusted literal>`, with fixed
+cwd and scrubbed PATH/LC environment. Its supported source profile is the trusted
+root-owned Ubuntu 24.04/noble installation, native architecture and installed
+stock CPython 3.12 package records. The actual interpreter, and any linked shared
+Python image, must match exact installed package membership and file-integrity
+records. MD5 provides consistency with those trusted local installed-file
+records; it does not authenticate a package or remote supply chain. Immutable
+runtime/dependency ancestry, loader-cache/ELF checks and pre-start getpath override
+refusal remain mandatory. Unsupported or missing proof returns unavailable.
+
+The reader forwards cancellation across one absolute deadline, refuses a late
+spawn after cancellation, bounds output and kills its own child on failure.
+Only observed successful child close can return a proof; uncertain cleanup stays
+owned and cannot become success. The long proof precedes the final Git marker,
+common-store, config, HEAD and canonical directory rechecks.
+
+The reader Core source is saved at `35cd3665e` and the Engine candidate at
+`eb711df8c`; dedicated CI workflow source is `f8d52664e`. Root batches 152/155
+qualify source parsing and types only: eight pure cases, Engine types (46.30
+seconds), final Core types (14.14 seconds), and AST parsing of all three fixed
+Python literals passed.
+The exact five-file r4 manifest is
+`482b9f7a2d8a388f58a137cce19c028495c8cf0f3c12a8d5cc4876e71f833d69` in
+`/tmp/vector-directory-identity-source.json`. Independent source review closes
+the loader, startup-prefix, cancellation, registration and CI-fixture lifetime
+findings. No helper, native metadata operation, integrated Git/folder proof or
+systemd fixture was executed by those checks.
+
+Thirty actual cases are authored for the dedicated CI gate: twelve ordinary
+Node/Bun cases and eighteen private-mount provenance cases. Their test controller
+uses an owned transient systemd service/cgroup, finite runtime/stop bounds and
+explicit empty-group plus launcher-close confirmation. A removed launch permit
+prevents late registration from starting work; unconfirmed cleanup retains the
+temporary tree and refuses more witnesses. This is fixture ownership, not a
+production service or an activation path. Actual supported-host availability,
+private-FD closure, statx capability, cancellation/reaping, runtime poisoning and
+fresh integration acceptance remain unrun at this checkpoint.
+
+The private source/deletion witness is a separate work package. Its unfinished
+compatibility work must not be read as closure of older-binary session-only
+memory forget while the session row remains. Review-context consumption, actual
+public/UI activation, required branch merges, owner rollout, funded quality
+evaluation and publication remain held. No paid call, new default or whole-memory
+readiness claim follows from this checkpoint.
+
 ## Qualified continuation checkpoint: 12 November 2026
 
 These source and acceptance receipts supersede older pending descriptions below.

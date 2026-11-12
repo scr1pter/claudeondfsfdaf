@@ -15928,3 +15928,78 @@ either new helper and the new option is unset. No new replay variant is needed;
 desktop difference. Source pin moves; revision remains 1 because no default
 changes. Tests/types/pin validation are pending root at this source checkpoint.
 No paid evaluation, publishing, live provider or production readiness is claimed.
+
+## 2026-11-12 · VS-11 physical repository scope and fixed metadata-proof exception
+
+This continuation supersedes earlier descriptions of a ProjectID-only review
+namespace, numerical birth-time proof, unfinished picker repair and unavailable
+prepared owner controls. It records source and named acceptance receipts rather
+than complete VS-11 or release readiness.
+
+- **Physical storage remains separate from repository identity.** Core `70cbb8aa2`
+  retains the real ProjectID and requires a separate trusted physical scope for
+  entries, enabled/generation/witness state and owner/source digests. Independent
+  clones sharing repository metadata stay disabled and empty; verified linked
+  worktrees/subdirectories can share one common store. Legacy null-scoped rows
+  are never adopted. Actual SQLite, erasure, migration and older-build checks
+  qualified that storage package. The winning-request source binding at
+  `018108007` has four passing SQL cases and passing types; only the initial
+  reservation can retain that immutable binding.
+- **Metadata may start one fixed OS child.** The approved implementation
+  makes this an explicit exception to earlier command-free metadata wording.
+  There is no Git/repository executable, model or network operation. The fixed
+  `/usr/bin/python3 -I -S -c <trusted literal>` receives the actual pinned
+  directory at FD3, replaces an inherited private FD3 and closes descriptors
+  above it before reading metadata. Positive `statx` returned capability bits
+  and before/after same-FD identity replace the unsafe birth/ctime heuristic.
+  Missing proof refuses memory; there is no path-stat or numeric fallback.
+- **The stock runtime is an explicit trusted host boundary.** Support is bounded
+  to the root-owned Ubuntu 24.04/noble native CPython 3.12 installation and exact
+  installed package/status/list/integrity records. The interpreter image and any
+  linked native `libpython3.12t64` image must match the same stock source/version
+  profile. MD5 is installed-file consistency against trusted local metadata,
+  never a package-authenticity or remote-signature claim. Immutable runtime and
+  library ancestry, cache-only dependency closure and adjacent getpath override
+  refusal remain necessary before startup. Unsupported layouts return
+  unavailable rather than guessing a compiled prefix.
+- **Cancellation and registration remain part of the proof.** One absolute
+  deadline covers preflight and child work. A cancelled preflight cannot later
+  spawn. Success needs an observed successful child close; uncertain child
+  cleanup remains owned and denies proof. The long identity read occurs before
+  final Git registration/config/HEAD/canonical-directory checks, preventing an
+  honest old FD from being paired with a replaced path registration.
+- **Current local acceptance is source-only.** Core reader `35cd3665e`, Engine
+  candidate `eb711df8c` and dedicated workflow `f8d52664e` are saved. Root
+  batches 152/155 passed eight pure parser/integrity cases, Engine types in
+  46.30 seconds, final Core types in 14.14 seconds and AST parsing of the three
+  fixed Python literals. Independent review closes the five reported
+  production/fixture findings on manifest
+  `482b9f7a2d8a388f58a137cce19c028495c8cf0f3c12a8d5cc4876e71f833d69`.
+  None of those checks executes the helper, statx path, integrated Git/folder
+  proof or systemd fixture. Thirty actual Node/Bun cases are authored for CI,
+  including private descriptors, lowered limits, cancellation/reaping, replaced
+  Git registration, changed runtime/package/cache and adjacent startup overrides.
+- **CI children have an explicit controller.** The fixture uses unpredictable
+  transient systemd services with control-group termination and finite
+  runtime/stop bounds, not a process-group assumption across privileged wrappers.
+  Cleanup removes the launch permit before stopping the unit, observes exact
+  cgroup emptiness/removal and launcher close, then releases temporary files.
+  Unknown cleanup keeps the unit/tree tracked and blocks later witnesses.
+  This is CI-only ownership; systemd/cgroup and runtime availability still need
+  actual acceptance.
+- **Earlier UI and owner results keep their original scope.** Schema
+  `5b0b6064b`, unmounted App `82894e3b9` and browser source `7bbf4d88b` are saved. Run
+  `43306048425` passed one Solid case and 32 Chromium cases with one worker and
+  zero retries. Picker source `8b2a3a747` and acceptance `e00d579b3` passed nine browser and
+  three Solid cases. Prepared owner source `f983765f0` passed 13 cases in
+  Root batch 143 (5.64 seconds); unregistered HTTP source `2e955b8f0` passed
+  six cases and Engine types in Root batch 147 (6.59/56.20 seconds). They
+  qualified the earlier proof port and require fresh actual integration CI
+  for the replacement helper.
+
+The memory routes and controls remain unregistered/unmounted and the context
+consumer is inactive. A separate private-witness package still owns deletion
+compatibility; older-binary session-only forget with the session row retained
+is not declared closed here. Actual merge, owner rollout, quality-evaluation and
+publication gates remain. No paid call, default enablement or complete memory
+activation follows from the source checkpoint.
