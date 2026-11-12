@@ -27,6 +27,7 @@ import { consumeGithubOidc, verifyGithubOidc, type GithubIdentity } from "./gith
 import { ApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 import { requireUnrevokedAccount } from "./revocation.js"
+import { cloudRunArtifactKey } from "./cloud-agents-artifact.js"
 
 const Decimal = Schema.String.check(
   Schema.makeFilter((value: string) => /^[1-9]\d{0,15}$/.test(value) && Number.isSafeInteger(Number(value))),
@@ -465,6 +466,25 @@ export function createCloudAgentsApi(
     json(response, 200, { ok: true })
   }
 
+  async function artifactKey(request: ApiRequest, response: ApiResponse) {
+    cleanUrl(request)
+    requireMethod(request, "POST")
+    requireTrustedJsonRequest(request, 2_000)
+    await ipLimit(request, response)
+    const body = await objectBody(request)
+    if (Object.keys(body).some((key) => key !== "thread") || typeof body.thread !== "string") throw invalidRequest()
+    const claims = await requireRunToken(request, { allowAfterDeadline: false }, { now: now(), store, revokedBefore })
+    if (body.thread !== claims.thr) throw invalidRequest()
+    await enforceRateLimit(request, response, {
+      scope: "cloud-agents-artifact-key-run",
+      identifier: claims.rid,
+      limit: 10,
+      windowSeconds: 3600,
+      requirePersistent: true,
+    })
+    json(response, 200, cloudRunArtifactKey(claims))
+  }
+
   async function publicDefaultBranch(identity: GithubIdentity) {
     if (identity.repositoryVisibility !== "public") throw needsDefaultBranch()
     const key = `vector:cloud-agents:default-branch:${identity.repositoryId}`
@@ -536,6 +556,7 @@ export function createCloudAgentsApi(
     mint: safe(mint),
     heartbeat: safe(heartbeat),
     settle: safe(settle),
+    artifactKey: safe(artifactKey),
   }
 }
 

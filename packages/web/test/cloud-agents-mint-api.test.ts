@@ -45,6 +45,7 @@ function integrationTests() {
     "KV_REST_API_URL",
     "KV_REST_API_TOKEN",
     "VECTOR_RUN_TOKEN_SECRET",
+    "VECTOR_RUN_ARTIFACT_SECRET",
     "VECTOR_LICENSE_SECRET",
     "VECTOR_CLI_TOKEN_SECRET",
   ]
@@ -56,6 +57,7 @@ function integrationTests() {
       KV_REST_API_URL: upstream.url.origin,
       KV_REST_API_TOKEN: "mint-fixture-kv",
       VECTOR_RUN_TOKEN_SECRET: "cloud-mint-fixture-secret-32-characters",
+      VECTOR_RUN_ARTIFACT_SECRET: "cloud-artifact-fixture-secret-32-characters",
       VECTOR_CLI_TOKEN_SECRET: "cloud-mint-cli-fixture-secret-32-characters",
     })
   })
@@ -138,7 +140,7 @@ function integrationTests() {
       },
       revokedBefore: async () => policy.before,
     })
-    const handlers = { mint: api.mint, heartbeat: api.heartbeat, settle: api.settle }
+    const handlers = { mint: api.mint, heartbeat: api.heartbeat, settle: api.settle, artifactKey: api.artifactKey }
     const server = createServer((request, response) => {
       const route = new URL(request.url ?? "/", "http://fixture").pathname.slice(1) as keyof typeof handlers
       void handlers[route](request, response)
@@ -613,6 +615,53 @@ function integrationTests() {
       expect((await f.send("settle", minted.body.token, { outcome: "no-changes" })).status).toBe(429)
     } finally {
       await f.close()
+    }
+  })
+
+  test("artifact keys require the live token's own thread and enforce their persistent run limit", async () => {
+    const f = await fixture()
+    try {
+      const minted = await f.mint()
+      expect(minted.status).toBe(200)
+      expect((await f.send("artifactKey", minted.body.token, { thread: "18" })).status).toBe(400)
+      expect((await f.send("artifactKey", minted.body.token, { thread: "17", repositoryId: "999" })).status).toBe(400)
+      let first: unknown
+      for (let index = 0; index < 10; index++) {
+        const key = await f.send("artifactKey", minted.body.token, { thread: "17" })
+        expect(key.status).toBe(200)
+        expect(Object.keys(key.body).sort()).toEqual(["key", "keyId"])
+        expect(Buffer.from(key.body.key, "base64url")).toHaveLength(32)
+        first ??= key.body
+        expect(key.body).toEqual(first)
+      }
+      const limited = await f.send("artifactKey", minted.body.token, { thread: "17" })
+      expect(limited.status).toBe(429)
+      expect(limited.body.error.code).toBe("RATE_LIMITED")
+    } finally {
+      await f.close()
+    }
+  })
+
+  test("artifact keys refuse expired, rebound, revoked and settled tokens and store outages", async () => {
+    for (const change of ["expired", "rebound", "revoked", "settled", "outage"] as const) {
+      const f = await fixture()
+      try {
+        const minted = await f.mint()
+        expect(minted.status).toBe(200)
+        expect((await f.send("artifactKey", minted.body.token, { thread: "17" })).status).toBe(200)
+        if (change === "expired") f.policy.now = minted.body.deadline
+        if (change === "rebound") await f.bind()
+        if (change === "revoked") await f.revoke()
+        if (change === "settled") await f.send("settle", minted.body.token, { outcome: "no-changes" })
+        if (change === "outage") state.down = true
+        const response = await f.send("artifactKey", minted.body.token, { thread: "17" })
+        expect(response.status).toBe(change === "outage" ? 503 : 401)
+        expect(response.body.key).toBeUndefined()
+        expect(response.body.keyId).toBeUndefined()
+      } finally {
+        state.down = false
+        await f.close()
+      }
     }
   })
 

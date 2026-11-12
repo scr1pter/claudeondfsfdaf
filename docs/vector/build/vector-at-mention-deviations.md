@@ -560,3 +560,8 @@ The progress file records passing focused tests and typechecks, the independent 
 
 1. Everywhere must atomically win its laptop/Actions routing claim before dispatch. Returning a ticket hash only after `startCloudRun` has dispatched allows the laptop to claim concurrently. The additive `prepareCloudRun` port creates the existing private ticket first and retains raw ticket/prompt only in server memory; it exposes a hash, a single-operation dispatch closure and a pre-dispatch cancellation closure. The existing function keeps its public result shape by composing both steps. No reserved source is enabled.
 2. Dispatch repeats current authorization after preparation rather than treating preparation as continuing authority. Its read-only store script fences revocation, binding generation/suspension and exact ticket contents. Mint continues to repeat the existing checks before granting model authority. Persistent errors fail closed and grant no fallback route.
+
+## 2026-11-12 V27a (authenticated artifact key)
+
+1. Key derivation is isolated in `api/_lib/cloud-agents-artifact.ts`, while the existing API wrapper owns token verification, strict request shape and persistent rate limits. The 16-hex rotation identifier is the SHA-256 prefix of the artifact master, not account or repository detail. No session bytes or new persistent data are stored by the key endpoint.
+2. This checkpoint implements only the server key and its fixtures. Privacy copy remains unchanged until the actual authenticated zip/save/restore path is validated. B08's fixed `brain/bundle.json` hook does not itself define an initial desktop upload transport; no implicit upload or production activation is introduced.
