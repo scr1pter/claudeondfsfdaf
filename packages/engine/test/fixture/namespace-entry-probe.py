@@ -21,9 +21,9 @@ import sys
 import time
 
 
-SELF = "/opt/vector-namespace-entry.py"
-SPEC = "/opt/vector-namespace-entry.json"
-PRIVATE = "/opt/vector-namespace-entry-private.json"
+SELF = "/usr/libexec/vector-namespace-probe/vector-namespace-entry.py"
+SPEC = "/usr/libexec/vector-namespace-probe/vector-namespace-entry.json"
+PRIVATE = "/usr/libexec/vector-namespace-probe/vector-namespace-entry-private.json"
 CONTAINERS = ("/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox")
 KINDS = {"user": 0x10000000, "mnt": 0x00020000, "pid": 0x20000000}
 NS_GET_USERNS = 0xB701

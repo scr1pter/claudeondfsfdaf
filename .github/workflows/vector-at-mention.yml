@@ -86,9 +86,12 @@ jobs:
           bun build --target=node packages/engine/test/fixture/namespace-entry-host.ts --outfile "$RUNNER_TEMP/vector-probe-tools/namespace-entry-host.mjs"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
-          sudo -n install -o root -g root -m 0444 packages/engine/test/fixture/namespace-entry-probe.py /opt/vector-namespace-entry.py
-          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-engine.mjs" /opt/vector-namespace-entry-engine.mjs
-          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-host.mjs" /opt/vector-namespace-entry-host.mjs
+          # /opt is world writable on this hosted image. Do not change global permissions or trust assets beneath it.
+          test ! -e /usr/libexec/vector-namespace-probe
+          sudo -n mkdir -m 0755 /usr/libexec/vector-namespace-probe
+          sudo -n install -o root -g root -m 0444 packages/engine/test/fixture/namespace-entry-probe.py /usr/libexec/vector-namespace-probe/vector-namespace-entry.py
+          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-engine.mjs" /usr/libexec/vector-namespace-probe/vector-namespace-entry-engine.mjs
+          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-host.mjs" /usr/libexec/vector-namespace-probe/vector-namespace-entry-host.mjs
           sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
           cc -shared -fPIC -O2 packages/engine/test/fixture/sandbox-loader-probe.c -o "$RUNNER_TEMP/vector-probe-tools/loader-probe.so"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/loader-probe.so" /opt/vector-probe-loader.so
@@ -104,20 +107,20 @@ jobs:
 
       - name: Prepare the secret-free namespace experiment before channel capture
         id: namespace_prepare
-        run: sudo -n /usr/bin/python3 -I -S /opt/vector-namespace-entry.py prepare "$RUNNER_TEMP/vector-sandbox/state.json"
+        run: sudo -n /usr/bin/python3 -I -S /usr/libexec/vector-namespace-probe/vector-namespace-entry.py prepare "$RUNNER_TEMP/vector-sandbox/state.json"
 
       - name: Run the namespace-entry and host-supervised cancellation experiment
         id: agent
         shell: env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}
-        run: node /opt/vector-namespace-entry-host.mjs
+        run: node /usr/libexec/vector-namespace-probe/vector-namespace-entry-host.mjs
 
       - name: Stop the disposable UID before removing owned namespace pins
         id: namespace_cleanup
         if: always()
         working-directory: ${{ runner.temp }}
         run: |
-          if [ -f /opt/vector-namespace-entry-private.json ]; then
-            sudo -n /usr/bin/python3 -I -S /opt/vector-namespace-entry.py cleanup
+          if [ -f /usr/libexec/vector-namespace-probe/vector-namespace-entry-private.json ]; then
+            sudo -n /usr/bin/python3 -I -S /usr/libexec/vector-namespace-probe/vector-namespace-entry.py cleanup
           else
             test '${{ steps.namespace_prepare.outcome }}' = skipped
           fi
@@ -135,7 +138,7 @@ jobs:
           PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
           PROBE_NAMESPACE_CLEANUP_OUTCOME: ${{ steps.namespace_cleanup.outcome }}
           PROBE_AGENT_OUTCOME: ${{ steps.agent.outcome }}
-        run: node /opt/vector-namespace-entry-host.mjs --assert
+        run: node /usr/libexec/vector-namespace-probe/vector-namespace-entry-host.mjs --assert
 
       - name: Observe fixed AppArmor denial categories and remove the diagnostic label
         if: always()

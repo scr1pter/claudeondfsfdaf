@@ -124,7 +124,7 @@ async function correlatePayload(group: Identity[], value: unknown, namespaces: u
         "/usr/bin/python3",
         "-I",
         "-S",
-        "/opt/vector-namespace-entry.py",
+        "/usr/libexec/vector-namespace-probe/vector-namespace-entry.py",
         "observe",
         String(member.pid),
         member.start,
@@ -221,7 +221,7 @@ async function stopped(uid: number, baseline: Identity[]) {
 
 async function main() {
   requireValue(process.platform === "linux", "The host namespace observer is Linux-only")
-  const spec = await jsonFile("/opt/vector-namespace-entry.json", 0)
+  const spec = await jsonFile("/usr/libexec/vector-namespace-probe/vector-namespace-entry.json", 0)
   requireValue(
     spec.v === 1 && typeof spec.container === "string" && containers.includes(spec.container),
     "Invalid prototype scope",
@@ -253,7 +253,7 @@ async function main() {
   let queue = Promise.resolve()
   const child = spawn(
     "/usr/local/bin/vector",
-    ["github", "sandbox", "run", "--", "node", "/opt/vector-namespace-entry-engine.mjs"],
+    ["github", "sandbox", "run", "--", "node", "/usr/libexec/vector-namespace-probe/vector-namespace-entry-engine.mjs"],
     {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],

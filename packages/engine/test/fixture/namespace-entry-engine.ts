@@ -8,8 +8,8 @@ import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 
 // Disposable CI experiment only. This does not replace any production launcher or actual-tool assertion.
-const metadata = "/opt/vector-namespace-entry.json"
-const launcher = "/opt/vector-namespace-entry.py"
+const metadata = "/usr/libexec/vector-namespace-probe/vector-namespace-entry.json"
+const launcher = "/usr/libexec/vector-namespace-probe/vector-namespace-entry.py"
 const containers = ["/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox"]
 const proofFlags = [
   "entry",
