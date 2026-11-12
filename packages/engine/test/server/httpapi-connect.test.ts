@@ -139,6 +139,17 @@ it.live("registered desktop findings persist as unverified data and survive the 
     const loaded = yield* call(() => f.client.connect.get({ runID: registered.data!.id, sessionID }))
     expect(loaded.data?.id).toBe(registered.data!.id)
     expect(loaded.data?.result?.findings[0]?.body).toBe(findings[0]!.body)
+    const dismissed = yield* call(() =>
+      f.client.connect.dismiss({
+        runID: registered.data!.id,
+        connectDismissInput: { sessionID, findings: ["finding_parser"], reason: "The guard is intentional." },
+      }),
+    )
+    expect(dismissed.data?.result?.findings[0]?.status).toBe("dismissed")
+    expect(dismissed.data?.request).toEqual(registered.data?.request)
+    expect(dismissed.data?.time).toEqual(registered.data?.time)
+    const after = yield* call(() => f.client.connect.get({ runID: registered.data!.id, sessionID }))
+    expect(after.data?.result?.findings[0]?.status).toBe("dismissed")
     const messages = (yield* call(() => f.client.session.messages({ sessionID }))).data ?? []
     expect(
       messages
@@ -147,6 +158,16 @@ it.live("registered desktop findings persist as unverified data and survive the 
         .map((part) => part.text)
         .join("\n"),
     ).not.toContain(findings[0]!.body)
+    const reviews = messages
+      .flatMap((message) => message.parts)
+      .filter(
+        (part) =>
+          part.type === "tool" &&
+          part.tool === "connect" &&
+          "metadata" in part.state &&
+          part.state.metadata?.connect !== undefined,
+      )
+    expect(reviews).toHaveLength(1)
     expect(yield* f.llm.pending).toBe(0)
   }),
 )

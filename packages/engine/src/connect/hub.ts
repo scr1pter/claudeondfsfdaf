@@ -5,6 +5,7 @@ import path from "node:path"
 import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ConnectFindings } from "@vectordevai/core/connect/findings"
+import { ConnectFrame } from "@vectordevai/core/connect/frame"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Database } from "@vectordevai/core/database/database"
 import { FSUtil } from "@vectordevai/core/fs-util"
@@ -39,6 +40,7 @@ import type { ConnectAdapter } from "./adapter"
 import { ADAPTERS, DEPS as ADAPTER_DEPS } from "./adapters"
 import { ConnectMembers } from "./members"
 import { ConnectNote } from "./note"
+import { ConnectContext } from "./context"
 import { ConnectPlacement } from "./placement"
 import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
 import type { RunBudget } from "@vectordevai/schema/run-budget"
@@ -140,6 +142,13 @@ export interface Interface {
   readonly run: (input: StartInput) => Effect.Effect<Connect.Run>
   /** Cancels a run that is going. With `sessionID`, only that session's own runs. False when there was none. */
   readonly cancel: (runID: string, scope?: { readonly sessionID?: SessionID }) => Effect.Effect<boolean>
+  /** Owner service only: save dismissal context, then change the original trusted durable review row. */
+  readonly dismiss: <E, R>(
+    runID: string,
+    sessionID: SessionID,
+    ids: readonly string[],
+    save: (findings: readonly Connect.Finding[]) => Effect.Effect<void, E, R>,
+  ) => Effect.Effect<Connect.Run | undefined, E, R>
   /** A run of this instance's ledger, else (with `sessionID`) the one saved in that session. */
   readonly get: (runID: string, sessionID?: SessionID) => Effect.Effect<Connect.Run | undefined>
   /** The ledger's runs, newest first; with `sessionID`, only the runs that session asked for. */
@@ -421,6 +430,56 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         yield* stopRun(entry, "cancelled")
         return true
       })
+
+      const dismiss: Interface["dismiss"] = (runID, sessionID, ids, save) =>
+        Effect.gen(function* () {
+          const found: { part?: SessionV1.ToolPart; run?: Connect.Run } = {}
+          yield* sessions
+            .findMessage(sessionID, (message) => {
+              if (message.info.role !== "assistant") return false
+              for (const part of message.parts) {
+                if (part.type !== "tool" || part.tool !== "connect" || part.state.status !== "completed") continue
+                const run = fromPart(part)
+                if (run?.id !== runID || run.request.requester.sessionID !== sessionID) continue
+                found.part = part
+                found.run = run
+                return true
+              }
+              return false
+            })
+            .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
+          if (!found.part || !found.run) return undefined
+          const updated = ConnectContext.dismissed(found.run, ids)
+          if (!updated?.result) return undefined
+          const selected = new Set(ids)
+          yield* save(
+            found.run.result!.findings.filter((finding) => selected.has(finding.id) && finding.status !== "dismissed"),
+          )
+          const current = yield* sessions.getPart({ sessionID, messageID: found.part.messageID, partID: found.part.id })
+          if (!current || current.type !== "tool" || current.state.status !== "completed") return undefined
+          const still = fromPart(current)
+          if (!still || JSON.stringify(still) !== JSON.stringify(found.run)) return undefined
+          // Preserve the original request, time, cost, lineage and tool identity; the click row is only an ack.
+          yield* sessions.updatePart({
+            ...current,
+            state: {
+              ...current.state,
+              output: ConnectFrame.frame(updated.result, { run: updated.id }),
+              metadata: { ...current.state.metadata, ...metadata(updated) },
+            },
+          })
+          const state = yield* InstanceState.get(ledger)
+          const entry = state.runs.get(runID)
+          if (entry) {
+            entry.run = updated
+            yield* publish(entry)
+          } else {
+            yield* events
+              .publish(Connect.Event.RunUpdated, { sessionID, run: updated })
+              .pipe(Effect.catchCause(() => Effect.void))
+          }
+          return updated
+        })
 
       // Before its work starts, a stopped run ends as soon as the work begins; after, its fiber is interrupted, and
       // the work records the run as cancelled on its way out.
@@ -1131,7 +1190,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return list.map((member) => withActivity(member, state))
       })
 
-      return Service.of({ run, cancel, get, runs, request, members })
+      return Service.of({ run, cancel, get, runs, request, members, dismiss })
     }),
   )
 

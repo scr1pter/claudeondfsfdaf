@@ -3,6 +3,11 @@ export * as ConnectOwner from "./owner"
 import { randomUUID } from "node:crypto"
 import { Cause, Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
+import { Instruction } from "@/session/instruction"
+import { ConnectContext } from "./context"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { ConnectFrame } from "@vectordevai/core/connect/frame"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -56,6 +61,9 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const hub = yield* ConnectHub.Service
+    const brain = yield* Brain.Service
+    const brainDatabase = yield* BrainDatabase.Service
+    const instruction = yield* Instruction.Service
     const sessions = yield* Session.Service
     const prompts = yield* SessionPrompt.Service
     const agents = yield* Agent.Service
@@ -217,7 +225,7 @@ const layer = Layer.effect(
                 })
                 .pipe(Effect.asVoid),
         )
-      const complete = (run: Connect.Run) =>
+      const complete = (run: Connect.Run, acknowledgement?: string) =>
         Effect.gen(function* () {
           const end = yield* Clock.currentTimeMillis
           const completed = yield* sessions.updatePart({
@@ -225,11 +233,16 @@ const layer = Layer.effect(
             state: {
               status: "completed",
               input,
-              title: "VectorScope review",
-              output: run.result
-                ? ConnectFrame.frame(run.result, { run: run.id })
-                : "Review running in the background.",
-              metadata: { ...provenance, ...ConnectHub.metadata(run) },
+              title: acknowledgement ? "VectorScope findings dismissed" : "VectorScope review",
+              output:
+                acknowledgement ??
+                (run.result ? ConnectFrame.frame(run.result, { run: run.id }) : "Review running in the background."),
+              metadata: {
+                ...provenance,
+                ...(acknowledgement
+                  ? { action: "dismiss", run: run.id, findings: input.findings }
+                  : ConnectHub.metadata(run)),
+              },
               time: { start: now, end },
             },
           })
@@ -383,9 +396,71 @@ const layer = Layer.effect(
           )
         }),
       )
-    const dismiss: Interface["dismiss"] = () =>
-      Effect.fail(
-        new Error({ code: "disabled", message: "Owner review dismissal is not available in this build yet." }),
+    const dismiss: Interface["dismiss"] = (runID, input) =>
+      own(
+        input.sessionID,
+        Effect.gen(function* () {
+          // Recorder reserves the click's message id before any async lookup can admit a newer human message.
+          const saved = yield* recorder(
+            input.sessionID,
+            `Dismiss ${new Set(input.findings).size} selected findings from review ${runID}.`,
+            { action: "dismiss", run: runID, findings: [...input.findings] },
+          )
+          return yield* Effect.gen(function* () {
+            const current = yield* get(runID, input.sessionID)
+            if (!ConnectContext.dismissed(current, input.findings))
+              return yield* new Error({
+                code: "invalid",
+                message: "Choose findings from a completed review in this conversation.",
+              })
+            const place = yield* instruction.place()
+            const applied = yield* hub.dismiss(runID, input.sessionID, input.findings, (findings) =>
+              brainDatabase.db
+                .transaction(() =>
+                  Effect.gen(function* () {
+                    // One refusal rolls back the whole clicked batch, including earlier dedup/evidence updates.
+                    for (const finding of findings) {
+                      const relative = ConnectPolicy.normalizePath(finding.path)
+                      if (!relative)
+                        return yield* new Error({
+                          code: "invalid",
+                          message: "That finding has no repository path to remember.",
+                        })
+                      const result = yield* brain.dismissReview(place, {
+                        text: ConnectContext.dismissalText(finding, input.reason),
+                        paths: [relative],
+                        sessionID: input.sessionID,
+                      })
+                      if (result.type === "refused")
+                        return yield* new Error({ code: "invalid", message: result.message })
+                    }
+                  }),
+                )
+                .pipe(
+                  Effect.catchTag("SqlError", () =>
+                    Effect.fail(
+                      new Error({ code: "invalid", message: "Review dismissal context could not be saved." }),
+                    ),
+                  ),
+                ),
+            )
+            if (!applied)
+              return yield* new Error({
+                code: "invalid",
+                message:
+                  "The review row is no longer available. Any review notes already saved remain in repository memory.",
+              })
+            return {
+              value: applied,
+              message: yield* saved.complete(
+                applied,
+                `Dismissed ${new Set(input.findings).size} findings and saved repository review context.`,
+              ),
+            }
+          }).pipe(
+            Effect.onExit((exit) => (Exit.isFailure(exit) ? saved.fail(Cause.hasInterrupts(exit.cause)) : Effect.void)),
+          )
+        }),
       )
     const loops = yield* InstanceState.make(() =>
       Effect.gen(function* () {
@@ -532,6 +607,9 @@ export const node = LayerNode.make({
   layer,
   deps: [
     ConnectHub.node,
+    Brain.node,
+    BrainDatabase.node,
+    Instruction.node,
     Session.node,
     SessionPrompt.node,
     Agent.node,
