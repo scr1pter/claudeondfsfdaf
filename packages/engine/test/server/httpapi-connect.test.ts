@@ -33,7 +33,7 @@ const provider = ConfigProvider.layer(
 const it = testEffect(Layer.mergeAll(httpApiLayer.pipe(Layer.provide(provider)), TestLLMServer.layer))
 const call = <A>(run: () => Promise<A>) => Effect.promise(run)
 
-const fixture = (ask = false, transport: "node" | "web" = "node") =>
+const fixture = (ask = false, transport: "node" | "web" = "node", conversation = true) =>
   Effect.gen(function* () {
     const llm = yield* TestLLMServer
     const directory = yield* tmpdirScoped({
@@ -67,16 +67,18 @@ const fixture = (ask = false, transport: "node" | "web" = "node") =>
           }),
         ),
       )
-    const created = yield* call(() =>
-      fetchRequest(
-        new Request(new URL("/api/session", baseUrl), {
-          method: "POST",
-          headers: { ...owner, "content-type": "application/json" },
-          body: JSON.stringify({ id: sessionID, title: "Connected review fixture", location: { directory } }),
-        }),
-      ),
-    )
-    expect(created.status).toBe(200)
+    if (conversation) {
+      const created = yield* call(() =>
+        fetchRequest(
+          new Request(new URL("/api/session", baseUrl), {
+            method: "POST",
+            headers: { ...owner, "content-type": "application/json" },
+            body: JSON.stringify({ id: sessionID, title: "Connected review fixture", location: { directory } }),
+          }),
+        ),
+      )
+      expect(created.status).toBe(200)
+    }
     return { raw, client, directory, llm, baseUrl, fetchRequest }
   })
 
@@ -169,6 +171,64 @@ it.live("registered desktop findings persist as unverified data and survive the 
       )
     expect(reviews).toHaveLength(1)
     expect(yield* f.llm.pending).toBe(0)
+  }),
+)
+
+it.live("the actual directory API queues sessionless owner consent and refuses guests or forwarded approvals", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture(true, "web", false)
+    for (const headers of [guest, forwarded]) {
+      const denied = yield* f.raw("/experimental/connect/review", headers, { background: true })
+      expect(denied.status).toBe(403)
+    }
+    const wrongOwner = yield* f.raw(
+      "/experimental/connect/review",
+      { authorization: basic("vector", "wrong-fixture-password") },
+      { background: true },
+    )
+    expect(wrongOwner.status).toBe(401)
+    expect((yield* call(() => f.client.session.list())).data).toEqual([])
+    const response = yield* call(() => f.client.connect.directoryReview({ connectReviewInput: { background: true } }))
+    const run = Schema.decodeUnknownSync(Connect.Run)(response.data)
+    expect(run.status).not.toBe("done")
+    expect(run.request.requester.kind).toBe("user")
+    expect(run.request.requester.sessionID).toBeUndefined()
+    expect(run.request.directory).toBe(f.directory)
+    const pending = yield* pollWithTimeout(
+      call(() => f.client.permission.list()).pipe(
+        Effect.map((value) => value.data?.find((ask) => ask.metadata.runID === run.id)),
+      ),
+      "The actual directory API did not publish owner consent",
+      "10 seconds",
+    )
+    expect(pending.permission).toBe("connect")
+    expect(pending.metadata).toMatchObject({ directoryReview: true, directory: f.directory, runID: run.id })
+    expect((yield* call(() => f.client.session.messages({ sessionID: pending.sessionID }))).data).toEqual([])
+    const fresh = Schema.decodeUnknownSync(Connect.Run)(
+      (yield* call(() => f.client.connect.get({ runID: run.id }))).data,
+    )
+    expect(fresh.request.requester.sessionID).toBeUndefined()
+    expect(fresh.id).toBe(run.id)
+    expect((yield* call(() => f.client.session.list())).data).toEqual([])
+    for (const headers of [guest, forwarded]) {
+      const denied = yield* f.raw(`/experimental/connect/runs/${run.id}/cancel`, headers, {})
+      expect(denied.status).toBe(403)
+      const approval = yield* f.raw(`/permission/${pending.id}/reply`, headers, { reply: "once" })
+      expect(approval.status).toBe(403)
+    }
+    expect((yield* call(() => f.client.permission.list())).data?.some((ask) => ask.id === pending.id)).toBe(true)
+    expect((yield* call(() => f.client.connect.cancel({ runID: run.id }))).data).toBe(true)
+    const done = yield* pollWithTimeout(
+      call(() => f.client.connect.get({ runID: run.id })).pipe(
+        Effect.map((value) => (value.data?.status === "done" ? value.data : undefined)),
+      ),
+      "The actual directory cancel did not settle",
+      "10 seconds",
+    )
+    expect(done.result?.state).toBe("cancelled")
+    expect((yield* call(() => f.client.permission.list())).data).toEqual([])
+    expect(yield* f.llm.inputs).toHaveLength(0)
+    expect((yield* call(() => f.client.session.list())).data).toEqual([])
   }),
 )
 

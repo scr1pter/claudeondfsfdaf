@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { once } from "node:events"
+import { realpath } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { setTimeout } from "node:timers/promises"
 
@@ -106,6 +107,62 @@ export async function connectedReviews(engine: { url: URL; authorization: string
   } finally {
     socket.destroy()
   }
+
+  const visibleSessions = async () => {
+    const rows = await json("/session")
+    assert.ok(Array.isArray(rows))
+    return rows
+      .map((row: unknown) => {
+        assert.ok(isRecord(row) && typeof row.id === "string")
+        return row.id
+      })
+      .sort()
+  }
+  const visibleBefore = await visibleSessions()
+  const directoryRun = await json("/experimental/connect/review", { background: true })
+  assert.ok(isRecord(directoryRun) && typeof directoryRun.id === "string" && isRecord(directoryRun.request))
+  assert.notEqual(directoryRun.status, "done", "the owner must receive a real queued directory job before consent")
+  const directoryRequest = directoryRun.request
+  assert.ok(isRecord(directoryRequest.requester) && directoryRequest.requester.kind === "user")
+  assert.equal(
+    directoryRequest.requester.sessionID,
+    undefined,
+    "a directory review fabricated a requester conversation",
+  )
+  assert.ok(typeof directoryRequest.directory === "string")
+  assert.equal(await realpath(directoryRequest.directory), await realpath(directory))
+  const directoryApproval = await wait(async () => {
+    const rows = await json("/permission")
+    assert.ok(Array.isArray(rows))
+    return rows.find(
+      (row: unknown) => isRecord(row) && isRecord(row.metadata) && row.metadata.runID === directoryRun.id,
+    )
+  }, "the native directory owner job never asked for approval")
+  assert.ok(
+    isRecord(directoryApproval) &&
+      typeof directoryApproval.id === "string" &&
+      typeof directoryApproval.sessionID === "string",
+  )
+  assert.ok(isRecord(directoryApproval.metadata))
+  assert.equal(directoryApproval.metadata.directoryReview, true)
+  assert.equal(directoryApproval.metadata.directory, directoryRequest.directory)
+  assert.equal(directoryApproval.permission, "connect")
+  assert.deepEqual(
+    await json(`/session/${directoryApproval.sessionID}/message`),
+    [],
+    "the hidden execution anchor fabricated human messages",
+  )
+  assert.deepEqual(await visibleSessions(), visibleBefore, "a directory review created a visible conversation")
+  const directoryFresh = await json(`/experimental/connect/runs/${directoryRun.id}`)
+  assert.ok(isRecord(directoryFresh) && isRecord(directoryFresh.request) && isRecord(directoryFresh.request.requester))
+  assert.equal(directoryFresh.request.requester.sessionID, undefined)
+  assert.equal(await json(`/experimental/connect/runs/${directoryRun.id}/cancel`, {}), true)
+  await wait(async () => {
+    const value = await json(`/experimental/connect/runs/${directoryRun.id}`)
+    return isRecord(value) && value.status === "done" && isRecord(value.result) && value.result.state === "cancelled"
+  }, "the native directory cancel left a real job running")
+  assert.deepEqual(await json("/permission"), [], "the canceled directory review left owner consent pending")
+  assert.deepEqual(await visibleSessions(), visibleBefore, "the canceled directory review left a visible conversation")
   return [] as string[]
 }
 

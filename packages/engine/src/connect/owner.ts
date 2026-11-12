@@ -8,6 +8,7 @@ import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Instruction } from "@/session/instruction"
 import { ConnectContext } from "./context"
+import { ConnectDirectory } from "./directory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { ConnectFrame } from "@vectordevai/core/connect/frame"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -35,6 +36,7 @@ import { InstanceHooks } from "@/project/instance-hooks"
 import { ConnectAfterRun } from "./after-run"
 import { ConnectNote } from "./note"
 import { TaskNotify } from "@/task/notify"
+import { TaskPlace } from "@/task/place"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectOwner.Error", {
   code: Schema.Literals(["disabled", "forbidden", "not_found", "invalid"]),
@@ -48,6 +50,10 @@ export interface Interface {
   readonly cancel: (runID: string, sessionID?: SessionID) => Effect.Effect<boolean, Error>
   readonly review: (
     sessionID: SessionID,
+    input: Connect.ReviewInput,
+    options?: { readonly abort?: AbortSignal },
+  ) => Effect.Effect<Connect.Run, Error>
+  readonly directoryReview: (
     input: Connect.ReviewInput,
     options?: { readonly abort?: AbortSignal },
   ) => Effect.Effect<Connect.Run, Error>
@@ -356,6 +362,68 @@ const layer = Layer.effect(
           )
         }),
       )
+    const directoryReview: Interface["directoryReview"] = (input, options) =>
+      Effect.gen(function* () {
+        yield* enabled
+        if (options?.abort?.aborted) return yield* Effect.interrupt
+        if (
+          (input.to !== undefined && input.to !== "vectorscope") ||
+          input.target?.kind === "task" ||
+          input.background === false
+        )
+          return yield* new Error({
+            code: "invalid",
+            message:
+              "Directory reviews run VectorScope as an owner-controlled job; task reviews use their launching conversation.",
+          })
+        const current = yield* InstanceState.context
+        if (TaskPlace.isTaskDirectory(current.directory))
+          return yield* new Error({
+            code: "forbidden",
+            message: "Review this task from its launching conversation so its worktree ownership stays protected.",
+          })
+        const name = yield* agents.defaultAgent()
+        const agent = yield* agents.get(name)
+        if (!agent) return yield* new Error({ code: "invalid", message: "The owner's agent is unavailable." })
+        const anchor = yield* sessions.create({
+          title: "VectorScope directory review",
+          internal: ConnectDirectory.INTERNAL,
+        })
+        yield* audience
+          .fenceIsolation({ sessionID: anchor.id, actor: "owner" })
+          .pipe(
+            Effect.mapError(
+              () => new Error({ code: "forbidden", message: "The directory owner could not be verified." }),
+            ),
+          )
+        const token = yield* ConnectDirectory.issue({
+          sessionID: anchor.id,
+          projectID: current.project.id,
+          directory: current.directory,
+        }).pipe(Effect.mapError((error) => new Error({ code: "invalid", message: error.message })))
+        const run = yield* hub.run({
+          request: {
+            to: "vectorscope",
+            action: "review",
+            requester: { kind: "user", agent: agent.name },
+            directory: current.directory,
+            target: input.target ?? { kind: "uncommitted" },
+            background: true,
+            ...(input.budget ? { budget: input.budget } : {}),
+            ...(input.security !== undefined ? { security: input.security } : {}),
+            ...(input.since ? { since: input.since } : {}),
+          },
+          call: {
+            directory: { token, complete: (run) => ConnectDirectory.write(token, run) },
+            promptOps,
+            ...(options?.abort ? { abort: options.abort } : {}),
+            update: (run) => ConnectDirectory.write(token, run).pipe(Effect.asVoid, Effect.orDie),
+          },
+        })
+        if (run.status === "done" && run.result?.state === "refused")
+          return yield* new Error({ code: "invalid", message: run.result.summary })
+        return run
+      })
     const register: Interface["register"] = (input) =>
       own(
         input.sessionID,
@@ -598,7 +666,7 @@ const layer = Layer.effect(
     )
     const init = () => (flags.experimentalConnect ? InstanceState.get(loops).pipe(Effect.asVoid) : Effect.void)
     yield* hooks.register("connected-tools", init())
-    return Service.of({ members, runs, get, cancel, review, register, dismiss, init })
+    return Service.of({ members, runs, get, cancel, review, directoryReview, register, dismiss, init })
   }),
 )
 

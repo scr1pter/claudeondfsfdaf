@@ -78,13 +78,8 @@ export const connectHandlers = HttpApiBuilder.group(InstanceHttpApi, "connect", 
       .handle("review", ({ params, payload }) =>
         withRequestAbort((abort) => mapped(owner.review(params.sessionID, payload, { abort }))),
       )
-      .handle("directoryReview", () =>
-        Effect.fail(
-          new ConnectApiError({
-            code: "disabled",
-            message: "Directory reviews are unavailable until the review service supports a directory-only owner.",
-          }),
-        ),
+      .handle("directoryReview", ({ payload }) =>
+        withRequestAbort((abort) => mapped(owner.directoryReview(payload, { abort }))),
       )
       .handle("cancel", ({ params, query }) => mapped(owner.cancel(params.runID, query.sessionID)))
       .handle("register", ({ payload }) => mapped(owner.register(payload)))

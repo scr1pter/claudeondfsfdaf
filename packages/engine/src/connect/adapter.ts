@@ -100,7 +100,7 @@ export interface HandoffContext {
    * adapter worked out (undefined `maxCostUsd`: no dollar cap, as for a local model): a background review then holds
    * only that much of the requester's budget from its other reviews, instead of the most it could have been capped at.
    */
-  readonly working?: (cap?: { readonly maxCostUsd?: number }) => Effect.Effect<void>
+  readonly working?: (cap?: { readonly maxCostUsd?: number }) => Effect.Effect<void, Connect.Refusal>
   /** Only the vectorscope adapter receives it, and only when the caller gave the hub prompt calls to build it from. */
   readonly helper?: HelperHandle
   /** What the requester's run has left in dollars; undefined when it has no dollar limit or there is no session. */

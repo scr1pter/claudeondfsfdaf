@@ -11,6 +11,8 @@ import { Database } from "@vectordevai/core/database/database"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Wildcard } from "@vectordevai/core/util/wildcard"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
@@ -27,6 +29,7 @@ import { WorkflowLibrary } from "@/orchestration/library"
 import { Permission } from "@/permission"
 import type { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
+import { SessionAdmission } from "@/session/admission"
 import { Skill } from "@/skill"
 import { DesktopTasks } from "@/task/desktop"
 import { TaskNotify } from "@/task/notify"
@@ -42,6 +45,8 @@ import { ConnectMembers } from "./members"
 import { ConnectNote } from "./note"
 import { ConnectContext } from "./context"
 import { ConnectPlacement } from "./placement"
+import { ConnectDirectory } from "./directory"
+import { FileLock } from "@/tool/file-lock"
 import { ConfigConnectV1 } from "@vectordevai/core/v1/config/connect"
 import type { RunBudget } from "@vectordevai/schema/run-budget"
 
@@ -96,6 +101,11 @@ export type StartRequest =
 
 /** What a tool call (or the owner service) lends the hub for one run. */
 export interface Call {
+  /** Owner-only directory execution, never accepted from public input or a model tool call. */
+  readonly directory?: {
+    readonly token: ConnectDirectory.Token
+    readonly complete: (run: Connect.Run) => Effect.Effect<string, ConnectDirectory.Error>
+  }
   /** Internal after-run work: opt-in authorizes the review, but no fresh question or write may be started. */
   readonly unattended?: boolean
   /** Only the after-run owner may request a waking note for blocking findings. */
@@ -242,6 +252,10 @@ const decodeConsent = Schema.decodeUnknownOption(Connect.Consent)
 type Stop = "cancelled" | "timeout" | "caller"
 
 interface Entry {
+  readonly directory?: NonNullable<ReturnType<typeof ConnectDirectory.read>>
+  receiptHash?: string
+  jobOwner?: string
+  finishing?: boolean
   run: Connect.Run
   readonly adapter?: ConnectAdapter.Adapter
   readonly call: Call
@@ -311,6 +325,8 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const background = yield* BackgroundJob.Service
       const notify = yield* TaskNotify.Service
       const database = yield* Database.Service
+      const audience = yield* SessionAudience.Service
+      const jobStore = yield* BackgroundJobStore.Service
       const isolation = yield* TaskIsolation.Service
       // Where a background run's tool-part write runs: the hub's own scope, so nothing waits on it.
       const scope = yield* Scope.Scope
@@ -321,14 +337,60 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         Effect.succeed({ runs: new Map<string, Entry>(), models: new Set<string>() }),
       )
 
+      const directoryParent = Effect.fnUntraced(function* (
+        binding: NonNullable<ReturnType<typeof ConnectDirectory.read>>,
+      ) {
+        const current = yield* InstanceState.context
+        const anchor = yield* sessions.get(binding.sessionID).pipe(Effect.orElseSucceed(() => undefined))
+        return anchor &&
+          ConnectDirectory.current(binding) &&
+          anchor.internal === ConnectDirectory.INTERNAL &&
+          anchor.parentID === undefined &&
+          anchor.projectID === current.project.id &&
+          binding.projectID === current.project.id &&
+          FileLock.key(anchor.directory) === FileLock.key(current.directory) &&
+          FileLock.key(binding.directory) === FileLock.key(current.directory) &&
+          (yield* audience.isPrivate(anchor.id)) &&
+          !(yield* audience.hasGuestInput(anchor.id))
+          ? anchor
+          : undefined
+      })
+      const directoryCurrent = Effect.fnUntraced(function* (entry: Entry) {
+        if (!entry.directory) return
+        if (
+          !entry.call.directory ||
+          ConnectDirectory.read(entry.call.directory.token) !== entry.directory ||
+          !(yield* directoryParent(entry.directory))
+        )
+          return yield* refusal("not-allowed", "The private directory review authority is no longer current.")
+      })
+      const directoryVisible = Effect.fnUntraced(function* (entry: Entry) {
+        if (!entry.directory) return true
+        if (!entry.jobOwner || !(yield* directoryParent(entry.directory))) return false
+        const job = (yield* jobStore.forParent(entry.directory.sessionID)).find((row) => row.id === entry.run.id)
+        return (
+          job !== undefined &&
+          job.type === JOB_TYPE &&
+          job.owner.runtime === entry.jobOwner &&
+          FileLock.key(job.directory) === FileLock.key(entry.directory.directory) &&
+          job.metadata?.directoryReview === true &&
+          job.metadata.runID === entry.run.id &&
+          job.metadata.member === "vectorscope" &&
+          job.metadata.action === "review" &&
+          (!(job.status === "cancelled" || job.status === "interrupted") || entry.run.result?.state === "cancelled") &&
+          (job.status !== "error" || entry.run.result?.state === "failed")
+        )
+      })
+
       // Never fails: a run must reach its end whatever a listener or the caller's update does.
       const publish = Effect.fnUntraced(function* (entry: Entry) {
-        const sessionID = entry.run.request.requester.sessionID
+        // A directory run has no requester session, but its events still need the private owner's audience fence.
+        const sessionID = entry.run.request.requester.sessionID ?? entry.directory?.sessionID
         yield* events
           .publish(Connect.Event.RunUpdated, { ...(sessionID ? { sessionID } : {}), run: entry.run })
           .pipe(Effect.catchCause((cause) => Effect.logWarning("connect.run.updated was not published", { cause })))
         // A caller that stopped waiting has nothing left to stream into.
-        if (entry.call.update && !entry.detached)
+        if (entry.call.update && !entry.detached && (!entry.directory || entry.run.status !== "done"))
           yield* entry.call.update(entry.run).pipe(Effect.catchCause(() => Effect.void))
       })
 
@@ -385,6 +447,65 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return [...found.values()].slice(0, limit)
       })
 
+      const directoryRuns = Effect.fnUntraced(function* (runID?: string) {
+        const current = yield* InstanceState.context
+        const input = { projectID: current.project.id, directory: current.directory }
+        const ids = runID ? [runID] : yield* ConnectDirectory.list(input, LEDGER_SIZE)
+        const found: Connect.Run[] = []
+        for (const id of ids) {
+          const receipt = yield* ConnectDirectory.load(input, id)
+          if (!receipt) continue
+          const anchor = yield* sessions.get(receipt.anchor).pipe(Effect.orElseSucceed(() => undefined))
+          if (
+            !anchor ||
+            anchor.internal !== ConnectDirectory.INTERNAL ||
+            anchor.parentID !== undefined ||
+            anchor.projectID !== current.project.id ||
+            FileLock.key(anchor.directory) !== FileLock.key(current.directory) ||
+            !(yield* audience.isPrivate(anchor.id)) ||
+            (yield* audience.hasGuestInput(anchor.id))
+          )
+            continue
+          const job = (yield* jobStore.forParent(anchor.id)).find((item) => item.id === id)
+          if (
+            !job ||
+            job.type !== JOB_TYPE ||
+            FileLock.key(job.directory) !== FileLock.key(current.directory) ||
+            job.metadata?.directoryReview !== true ||
+            job.metadata.runID !== id ||
+            job.metadata.member !== "vectorscope" ||
+            job.metadata.action !== "review"
+          )
+            continue
+          if (job.status === "running") {
+            if (BackgroundJobStore.alive(job.owner) !== "dead") continue
+            if (receipt.run.status === "done") continue
+            found.push(settled(receipt.run))
+            continue
+          }
+          // A terminal receipt is trusted only beside the matching job's terminal lifecycle. A crash never resumes it.
+          if (receipt.run.status !== "done") {
+            found.push(settled(receipt.run))
+            continue
+          }
+          const seal = job.metadata?.ended
+          if (
+            !seal ||
+            typeof seal !== "object" ||
+            !("kind" in seal) ||
+            seal.kind !== "connect.directory.receipt" ||
+            !("sha256" in seal) ||
+            seal.sha256 !== receipt.digest
+          )
+            continue
+          if ((job.status === "cancelled" || job.status === "interrupted") && receipt.run.result?.state !== "cancelled")
+            continue
+          if (job.status === "error" && receipt.run.result?.state !== "failed") continue
+          found.push(receipt.run)
+        }
+        return found.toSorted((a, b) => b.time.created - a.time.created).slice(0, LEDGER_SIZE)
+      })
+
       const request: Interface["request"] = Effect.fn("ConnectHub.request")(function* (sessionID: SessionID) {
         const state = yield* InstanceState.get(ledger)
         const saved = yield* recorded(sessionID)
@@ -394,8 +515,9 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const get: Interface["get"] = Effect.fn("ConnectHub.get")(function* (runID: string, sessionID?: SessionID) {
         const state = yield* InstanceState.get(ledger)
         const entry = state.runs.get(runID)
-        if (entry && (sessionID === undefined || entry.run.request.requester.sessionID === sessionID)) return entry.run
-        if (!sessionID) return undefined
+        if (entry && (sessionID === undefined || entry.run.request.requester.sessionID === sessionID))
+          return (yield* directoryVisible(entry)) ? entry.run : undefined
+        if (!sessionID) return (yield* directoryRuns(runID))[0]
         const [found] = yield* stored(
           sessionID,
           1,
@@ -409,15 +531,18 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const runs: Interface["runs"] = Effect.fn("ConnectHub.runs")(function* (input) {
         const state = yield* InstanceState.get(ledger)
         const sessionID = input?.sessionID
-        const live = [...state.runs.values()]
-          .map((entry) => entry.run)
-          .filter((run) => sessionID === undefined || run.request.requester.sessionID === sessionID)
+        const live = (yield* Effect.filter(
+          [...state.runs.values()].filter(
+            (entry) => sessionID === undefined || entry.run.request.requester.sessionID === sessionID,
+          ),
+          directoryVisible,
+        )).map((entry) => entry.run)
         const known = new Set(live.map((run) => run.id))
         const saved = sessionID
           ? (yield* stored(sessionID, LEDGER_SIZE)).filter(
               (run) => !known.has(run.id) && run.request.requester.sessionID === sessionID,
             )
-          : []
+          : (yield* directoryRuns()).filter((run) => !known.has(run.id))
         const all = [...live, ...saved].toSorted((a, b) => b.time.created - a.time.created || (a.id < b.id ? 1 : -1))
         return sessionID === undefined ? all : all.slice(0, LEDGER_SIZE)
       })
@@ -425,7 +550,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const cancel: Interface["cancel"] = Effect.fn("ConnectHub.cancel")(function* (runID, scope) {
         const state = yield* InstanceState.get(ledger)
         const entry = state.runs.get(runID)
-        if (!entry || entry.run.status === "done") return false
+        if (!entry || entry.run.status === "done" || entry.finishing) return false
         if (scope?.sessionID !== undefined && entry.run.request.requester.sessionID !== scope.sessionID) return false
         yield* stopRun(entry, "cancelled")
         return true
@@ -501,6 +626,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
 
       const asker = (entry: Entry, sessionID: SessionID | undefined, rules: PermissionV1.Ruleset) =>
         Effect.fnUntraced(function* (consent: Connect.Consent) {
+          yield* directoryCurrent(entry)
           const checked = Option.getOrUndefined(decodeConsent(consent))
           if (!checked)
             return yield* Effect.die(new Error("A connect adapter asked a consent connect does not accept."))
@@ -533,6 +659,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               description: checked.message,
               runID: entry.run.id,
               member: entry.run.request.to,
+              ...(entry.directory ? { directoryReview: true, directory: entry.directory.directory } : {}),
               ...(checked.model ? { model: checked.model } : {}),
               ...(checked.sendsTo ? { sendsTo: checked.sendsTo } : {}),
               ...(checked.maxCostUsd !== undefined ? { maxCostUsd: checked.maxCostUsd } : {}),
@@ -574,6 +701,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.interrupt
             return yield* Effect.die(Cause.squash(exit.cause))
           }
+          yield* directoryCurrent(entry)
           entry.asked.add(key)
           if (checked.permission === "connect_model")
             for (const pattern of checked.patterns) approve(state, `${requestID}\u0000${pattern}`)
@@ -584,11 +712,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       // run going now. A prompt keeps the member's fixed rules: it may not swap the session's tools, re-arm its
       // budget or skip its reply, and runs only as one of the member's own agents.
       const helperFor = (entry: Entry, ops: TaskPromptOps, member: string): ConnectAdapter.HelperHandle => {
-        const requester = entry.run.request.requester.sessionID
+        const requester = entry.run.request.requester.sessionID ?? entry.directory?.sessionID
         const refuse = (sessionID: SessionID, why: string) =>
           Effect.die(new Error(`Connect's helper handle refused session ${sessionID}: ${why}`))
         const admit = Effect.fnUntraced(function* (sessionID: SessionID) {
-          if (entry.run.status !== "running") return yield* refuse(sessionID, "the run is not going")
+          if (entry.run.status !== "running" || entry.finishing) return yield* refuse(sessionID, "the run is not going")
           if (sessionID === requester) return yield* refuse(sessionID, "it is the requester's own session")
           const info = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
           if (!info) return yield* refuse(sessionID, "there is no such session")
@@ -627,7 +755,29 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             Effect.gen(function* () {
               yield* checkInput(input)
               yield* admit(input.sessionID)
+              yield* directoryCurrent(entry).pipe(Effect.orDie)
               entry.sessions.add(input.sessionID)
+              const directory = entry.directory
+              if (directory) {
+                const token = entry.call.directory?.token
+                const policy = yield* SessionAdmission.Current
+                if (!token || !policy || policy.sessionID !== input.sessionID)
+                  return yield* refuse(input.sessionID, "its directory review has no scoped model admission policy")
+                return yield* ops.prompt(input).pipe(
+                  Effect.provideService(SessionAdmission.Current, {
+                    ...policy,
+                    // Preserve the review's existing synchronous reservation policy. A replaced checkout cannot
+                    // send the next tool result to a provider; refusing delegates no new spend or model authority.
+                    admit: (request) =>
+                      entry.run.status === "running" &&
+                      !entry.finishing &&
+                      ConnectDirectory.read(token) === directory &&
+                      ConnectDirectory.current(directory)
+                        ? policy.admit(request)
+                        : undefined,
+                  }),
+                )
+              }
               return yield* ops.prompt(input)
             }),
           cancel: (sessionID) =>
@@ -642,7 +792,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const launcherFor =
         (entry: Entry, launch: ConnectAdapter.Launcher): ConnectAdapter.Launcher =>
         (input) =>
-          entry.run.status === "running"
+          entry.run.status === "running" && !entry.finishing
             ? launch(input)
             : Effect.die(new Error("Connect's fix launcher refused a start: the run is not going."))
 
@@ -667,11 +817,14 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const request = entry.run.request
         const requester = request.requester
         if (!flags.experimentalConnect) return yield* refusal("not-allowed", OFF)
+        yield* directoryCurrent(entry)
         const session = requester.sessionID
           ? yield* sessions.get(requester.sessionID).pipe(Effect.orElseSucceed(() => undefined))
           : undefined
         if (requester.sessionID && !session)
           return yield* refusal("not-allowed", "The session that asked no longer exists, so connect did not start.")
+        if (!requester.sessionID && !entry.directory)
+          return yield* refusal("not-allowed", "A directory review needs the current owner's execution authority.")
         // A member's own helper session never starts a hand-off (no chains).
         if (session?.internal)
           return yield* refusal("not-allowed", "A helper session cannot hand work to another member.")
@@ -708,7 +861,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               "input",
               `${member.title} cannot run ${request.action} in the background. Run it in the foreground.`,
             )
-          if (!requester.sessionID || !entry.call.promptOps)
+          if ((!requester.sessionID && !entry.directory) || !entry.call.promptOps)
             return yield* refusal(
               "unavailable",
               "A background hand-off reports to its session as a note, and this one has no session to report to.",
@@ -737,6 +890,18 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           )
           if (!capped.ok) return yield* capped.refusal
           yield* checkReads(request.directory, rules)
+          if (entry.directory) {
+            const canonical = yield* Effect.tryPromise(() => realpath(request.directory)).pipe(
+              Effect.catch(() => refusal("read-rule", "Connect could not resolve this directory's read authority.")),
+            )
+            const denies = ConnectPlacement.readDenies({
+              rules,
+              sources: [request.directory, canonical],
+              work: [request.directory, canonical],
+            })
+            if (!denies.ok) return yield* denies.refusal
+            entry.readDenies = denies.value
+          }
           if (placed) {
             const roots = yield* Effect.tryPromise(() =>
               Promise.all([placed.parentDirectory, placed.directory].map((root) => realpath(root))),
@@ -760,7 +925,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           const checked = ConnectPolicy.narrowing({ effects: action.effects, ruleset: rules, patterns: touched })
           if (!checked.ok) return yield* checked.refusal
         }
-        const ask = asker(entry, requester.sessionID, rules)
+        const ask = asker(entry, requester.sessionID ?? entry.directory?.sessionID, rules)
         yield* ask({
           permission: "connect",
           patterns: [`${request.to}.${request.action}`],
@@ -785,26 +950,32 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         }
         if (request.action === "review" && request.background) entry.reservedUsd = reserve(request, spend)
         // What the requester already had, so the helper handle reaches only the sessions this run makes.
-        entry.earlier = new Set(
-          requester.sessionID ? (yield* sessions.children(requester.sessionID)).map((child) => child.id) : [],
-        )
+        const parentID = requester.sessionID ?? entry.directory?.sessionID
+        entry.earlier = new Set(parentID ? (yield* sessions.children(parentID)).map((child) => child.id) : [])
         const remainingUsd =
           spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0) - heldUsd) : undefined
         const ops = entry.call.promptOps
         const context: ConnectAdapter.HandoffContext = {
           runID: entry.run.id,
           ...(requester.sessionID ? { sessionID: requester.sessionID } : {}),
+          ...(entry.directory ? { reviewParentID: entry.directory.sessionID } : {}),
           requestID: request.requestID,
           directory: request.directory,
           abort: entry.controller.signal,
           ask,
           progress: (update) => progress(entry, update),
           working: (cap) =>
-            Effect.suspend(() => {
+            Effect.gen(function* () {
+              if (entry.directory) {
+                yield* directoryCurrent(entry)
+                // Uncommitted/staged input is collected after model consent. A newly restricted file must not enter
+                // that diff just because it did not exist at the first preflight; tool denies remain in force too.
+                yield* checkReads(request.directory, rules)
+              }
               // The adapter's own cap is never above what was held for it; a review with no dollar cap holds none.
               if (cap && entry.reservedUsd !== undefined)
                 entry.reservedUsd = Math.min(entry.reservedUsd, cap.maxCostUsd ?? 0)
-              return Deferred.succeed(entry.working, undefined).pipe(Effect.asVoid)
+              yield* Deferred.succeed(entry.working, undefined)
             }),
           ...(ops && HELPER_MEMBERS.has(adapter.id) ? { helper: helperFor(entry, ops, adapter.id) } : {}),
           ...(remainingUsd !== undefined ? { remainingUsd } : {}),
@@ -879,7 +1050,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       })
 
       const progress = Effect.fnUntraced(function* (entry: Entry, update: ConnectAdapter.ProgressUpdate) {
-        if (entry.run.status !== "running") return
+        if (entry.run.status !== "running" || entry.finishing) return
         const at = update.at ?? (yield* Clock.currentTimeMillis)
         const message = clip(update.message.trim() || "Working", 500)
         const pass = update.pass?.trim() ? clip(update.pass.trim(), 64) : undefined
@@ -888,6 +1059,8 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       })
 
       const finish = Effect.fnUntraced(function* (entry: Entry, exit: Exit.Exit<Connect.Result, Connect.Refusal>) {
+        if (entry.run.status === "done" || entry.finishing) return
+        entry.finishing = true
         const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
         // A cancel stops the helper sessions too: interrupting the adapter does not stop a session's own loop.
         if (interrupted && entry.call.promptOps)
@@ -896,7 +1069,32 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const result = Exit.isSuccess(exit) ? accepted(exit.value, entry) : resultOf(exit.cause, entry)
         const ended = yield* Clock.currentTimeMillis
         const { progress: _, ...rest } = entry.run
-        entry.run = { ...rest, status: "done", result, time: { ...entry.run.time, ended } }
+        let completed: Connect.Run = { ...rest, status: "done", result, time: { ...entry.run.time, ended } }
+        if (entry.directory && entry.call.directory) {
+          const persisted = yield* entry.call.directory.complete(completed).pipe(Effect.exit)
+          if (Exit.isSuccess(persisted)) entry.receiptHash = persisted.value
+          if (Exit.isFailure(persisted)) {
+            // A result too large to preserve is a failed review, never a truncated clean result. Keep only actual
+            // trusted usage and lineage, then attempt a bounded failure receipt before notifying the owner.
+            completed = {
+              ...completed,
+              result: {
+                ...result,
+                state: "failed",
+                verdict: "incomplete",
+                summary: "The directory review result could not be saved within its receipt limits.",
+                findings: [],
+                notes: ["Vector did not retain a complete result. Run the review again after resolving this error."],
+              },
+            }
+            const failed = yield* entry.call.directory.complete(completed).pipe(Effect.exit)
+            if (Exit.isSuccess(failed)) entry.receiptHash = failed.value
+            if (Exit.isFailure(failed)) yield* Effect.logWarning("directory review failure receipt could not be saved")
+          }
+          ConnectDirectory.retire(entry.call.directory.token)
+        }
+        // In-memory GET has the same terminal ordering as the receipt writer, including an oversized-result failure.
+        entry.run = completed
         yield* publish(entry)
         yield* Deferred.succeed(entry.done, entry.run)
       })
@@ -918,6 +1116,40 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             "input",
             `The hand-off request is not valid, so connect did not start it: ${clip(why(decoded.cause), 600)}`,
           )
+        const directory = input.call?.directory ? ConnectDirectory.read(input.call.directory.token) : undefined
+        if (input.call?.directory) {
+          const current = yield* InstanceState.context
+          const anchor = directory
+            ? yield* sessions.get(directory.sessionID).pipe(Effect.orElseSucceed(() => undefined))
+            : undefined
+          if (
+            !directory ||
+            !ConnectDirectory.current(directory) ||
+            !anchor ||
+            anchor.internal !== ConnectDirectory.INTERNAL ||
+            anchor.parentID !== undefined ||
+            anchor.projectID !== current.project.id ||
+            directory.projectID !== current.project.id ||
+            FileLock.key(anchor.directory) !== FileLock.key(current.directory) ||
+            FileLock.key(directory.directory) !== FileLock.key(current.directory) ||
+            FileLock.key(decoded.value.directory) !== FileLock.key(current.directory) ||
+            !(yield* audience.isPrivate(anchor.id)) ||
+            (yield* audience.hasGuestInput(anchor.id)) ||
+            decoded.value.requester.kind !== "user" ||
+            decoded.value.requester.sessionID !== undefined ||
+            decoded.value.to !== "vectorscope" ||
+            decoded.value.action !== "review" ||
+            decoded.value.target.kind === "task" ||
+            !decoded.value.background
+          )
+            return unrecorded(
+              id,
+              input.request,
+              created,
+              "not-allowed",
+              "The directory review's private execution authority is no longer valid.",
+            )
+        }
         const state = yield* InstanceState.get(ledger)
         const requester = decoded.value.requester
         const saved = requester.sessionID ? yield* recorded(requester.sessionID) : undefined
@@ -951,6 +1183,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             : {}),
         }
         const entry: Entry = {
+          ...(directory ? { directory } : {}),
           run: { id, request, status: "queued", time: { created } },
           adapter: byID.get(request.to),
           call: input.call ?? {},
@@ -963,7 +1196,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           owed: yield* Deferred.make<boolean>(),
         }
         remember(state, entry)
-        yield* publish(entry)
+        yield* publish(entry).pipe(Effect.onInterrupt(() => unstarted(entry)))
 
         const execute = (placed?: TaskIsolation.Record) =>
           Effect.gen(function* () {
@@ -1047,8 +1280,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         Effect.gen(function* () {
           const request = entry.run.request
           const minutes = request.budget?.timeoutMinutes
+          const admission = yield* Deferred.make<boolean>()
+          const lease = entry.directory ? yield* background.lease() : undefined
           // Stopping the job (deleting its session, say) cancels the run, and the job ends only once the run did.
           const job = Effect.gen(function* () {
+            if (entry.directory && !(yield* Deferred.await(admission))) return yield* Effect.interrupt
             const fiber = yield* Effect.forkChild(work)
             entry.fiber = fiber
             const outcome = yield* Effect.raceAll([
@@ -1060,13 +1296,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             if (outcome) yield* stopRun(entry, outcome)
             return (yield* Deferred.await(entry.done)).result?.summary ?? ""
           }).pipe(Effect.onInterrupt(() => unstarted(entry)))
-          yield* background
+          const started = yield* background
             .start({
               id: entry.run.id,
               type: JOB_TYPE,
               title: `VectorScope ${request.action}`,
               metadata: {
-                parentSessionId: request.requester.sessionID,
+                parentSessionId: request.requester.sessionID ?? entry.directory?.sessionID,
                 background: true,
                 runID: entry.run.id,
                 member: request.to,
@@ -1076,11 +1312,71 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                   ? { parentMessageId: entry.call.part.messageID, callID: entry.call.part.callID }
                   : {}),
               },
+              ...(entry.directory
+                ? {
+                    durable: {
+                      parentSessionID: entry.directory.sessionID,
+                      directory: entry.directory.directory,
+                      metadata: {
+                        directoryReview: true,
+                        runID: entry.run.id,
+                        member: request.to,
+                        action: request.action,
+                      },
+                    },
+                  }
+                : {}),
               promotable: false,
               onComplete: (info) => ended(entry, info),
               run: job,
             })
             .pipe(Effect.onInterrupt(() => unstarted(entry)))
+          if (entry.directory) {
+            const directory = entry.directory
+            const persisted = yield* Effect.gen(function* () {
+              if (!lease || !started.durable || started.owner !== lease.runtime || !entry.call.directory)
+                return yield* refusal("unavailable", "The directory review could not register its durable job.")
+              entry.jobOwner = lease.runtime
+              // The registry queues its durable start write. Await the same actual job identity through the public
+              // store port before releasing any ask/model or returning a queued response; settlement stays ordered.
+              yield* jobStore.started({
+                id: started.id,
+                type: JOB_TYPE,
+                title: started.title,
+                parentSessionID: directory.sessionID,
+                directory: directory.directory,
+                background: true,
+                startedAt: started.started_at,
+                owner: lease,
+                metadata: {
+                  directoryReview: true,
+                  runID: entry.run.id,
+                  member: request.to,
+                  action: request.action,
+                },
+              })
+              yield* entry.call.directory.complete(entry.run)
+            }).pipe(Effect.exit)
+            yield* Deferred.succeed(admission, Exit.isSuccess(persisted))
+            if (Exit.isFailure(persisted)) {
+              yield* finish(
+                entry,
+                Exit.fail(
+                  refusal("unavailable", "The directory review could not preserve its durable job and receipt."),
+                ),
+              )
+              yield* background.cancel(entry.run.id)
+              return yield* Deferred.await(entry.done)
+            }
+            // The owner needs the genuine job id before it can answer desktop consent. The private job and its
+            // durable receipt already exist; no model can pass a pending ask merely because this response returns.
+            if (entry.call.abort?.aborted) yield* stopRun(entry, "caller")
+            const shown = entry.run
+            const owed = shown.status !== "done"
+            if (owed) entry.detached = true
+            yield* Deferred.succeed(entry.owed, owed)
+            return owed ? shown : yield* Deferred.await(entry.done)
+          }
           const signal = entry.call.abort
           const waited = yield* Effect.raceAll([
             Deferred.await(entry.done).pipe(Effect.as<"ended" | "working" | "caller">("ended")),
@@ -1112,6 +1408,27 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       // lost, as a restart loses it, and its part reads as cut off. Any other is written into its tool part, the only
       // place a run is read back from, and reported once through TaskNotify.
       const ended = Effect.fnUntraced(function* (entry: Entry, info: BackgroundJob.Info) {
+        const directory = entry.directory
+        if (directory) {
+          const digest = entry.receiptHash
+          if (!digest || entry.run.status !== "done" || !entry.jobOwner) return
+          // A terminal row is a barrier after the registry's queued start write. A crash or unknown lifecycle stays
+          // unsealed and cannot turn a storage file into clean evidence on reload.
+          const row = yield* Effect.gen(function* () {
+            while (true) {
+              const row = (yield* jobStore.forParent(directory.sessionID)).find((job) => job.id === entry.run.id)
+              if (row && row.owner.runtime === entry.jobOwner && row.status !== "running") return row
+              yield* Effect.sleep("20 millis")
+            }
+          }).pipe(
+            Effect.timeout("3 seconds"),
+            Effect.orElseSucceed(() => undefined),
+          )
+          if (!row || row.status !== info.status) return
+          yield* jobStore.ended(entry.run.id, { kind: "connect.directory.receipt", sha256: digest })
+          yield* ConnectDirectory.prune(directory, LEDGER_SIZE)
+          return
+        }
         if (!(yield* Deferred.await(entry.owed)) || info.status === "interrupted") return
         const run = entry.run
         const sessionID = run.request.requester.sessionID
@@ -1220,6 +1537,8 @@ export const DEPS = [
   TaskNotify.node,
   TaskIsolation.node,
   Database.node,
+  SessionAudience.node,
+  BackgroundJobStore.node,
 ] as const
 
 export const node = LayerNode.make({ service: Service, layer, deps: [...DEPS, ...ADAPTER_DEPS] })

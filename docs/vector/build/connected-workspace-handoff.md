@@ -2,9 +2,23 @@
 
 This build moves to a new agent. Start here, then read the contract (`connected-workspace-spec.md`) and the deviations log (`connected-workspace-deviations.md`) in this folder. The deviations log records every reading the build made where the contract was silent; it wins over the contract where they differ.
 
+## Continuation checkpoint, 2026-11-12
+
+This section supersedes the historical starting status below. Work continues on `build-connect`; root owns ordinary pushes and CI. Do not assume that every current edit is committed or pushed. The original owner rules below still apply.
+
+- **CW-13:** report-mode after-run reviews are source-qualified (`eea441ec4`). Automatic repair remains quiet because its safe original-budget continuation capability is unavailable; no protected budget exception has been granted.
+- **CW-14:** settled task worktree review is source-qualified (`4a5287689`), with the separate canonical trust repair (`167dfa110`). Public SDK/schema generation is handled by root. Task-review fixes must resume/settle the owned task and re-review; they must not silently edit the launching checkout.
+- **CW-16:** read-only workflow stage schema/plan/held execution checkpoints are `aed826382`, `df225c944` and `055b117fa`. They describe and validate connected stages, but execution refuses before model work while the private workflow helper-scope capability is unavailable. These commits do not qualify workflow execution or repair.
+- **CW-17:** repository user dismissal context is committed separately in Core (`9f2411d26`) and Engine (`543a32a3f`). It updates original finding statuses in place, preserves provenance/cost/verdict, and keeps review context separate from learned facts. The cross-branch VectorScope consumer remains gated.
+- **CW-18:** this Engine checkpoint provides genuine sessionless directory jobs, private owner consent, bounded atomic job-bound receipts, strict directory identity/read authority, reload/cancel behavior and a production Node transport proof. Final domain tests passed 15 cases; real reviewer/provider tests passed 6; actual SDK/HTTP tests passed 8; Engine types and Node bundle smoke passed. The root-owned App workspace-card/controller source is separate; newer App checks and actual browser CI are still pending.
+- **Already authorized:** the owner approved nonstarting MCP status snapshots and keeping the additive TUI consent patch. Do not ask those questions again.
+- **Still held:** safe-Git callback integration requires the qualified selected Git service and safe review context; do not claim the whole C2 phase or the full review path finished before it is closed. Optional automatic swarm review stays unavailable without shared-budget authority. Protected budget/prompt changes, Q1/main landing, default-on activation and CW-20 to CW-25 integration remain held under their existing owner/merge gates. Hands and cloud-workspace development remain outside this continuation's scope.
+
+Root must finish the remaining App/browser and safe-Git integration checks, review the full C2 phase, and run CI on the exact pushed head. This note is source qualification, not a push, release, main-merge or activation receipt.
+
 ## Where it stands
 
-- **Branch** `connected-workspace`, cut from `main` at `0dcbb8e2` (PR #20, the self-evolving merge). The branch is pushed and clean. Everything is on GitHub; nothing exists only on one computer.
+- **Historical starting branch:** `connected-workspace`, cut from `main` at `0dcbb8e2` (PR #20, the self-evolving merge). The clean/pushed status here described the original handoff only; use the continuation checkpoint above for current work.
 - **Built, reviewed and repaired:** phases A1 to A3, which cover CW-01 to CW-08. After each phase, three reviews ran (does it work for real, security and fail-closed, fits the code base), followed by one repair commit.
 
 | WP | What | Commit |

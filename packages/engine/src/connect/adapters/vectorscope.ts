@@ -320,7 +320,7 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
         if (request.action === "fix") return yield* fix(request, context)
         if (request.target.kind === "task")
           return yield* refusal("input", "A task review must be placed by the connected-tools hub.")
-        if (!context.sessionID)
+        if (!context.sessionID && !context.reviewParentID)
           return yield* refusal("unavailable", "A VectorScope review through connect needs a session to run in.")
         if (!context.helper)
           return yield* refusal(
