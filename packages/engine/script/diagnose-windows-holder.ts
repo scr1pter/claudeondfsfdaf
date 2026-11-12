@@ -84,7 +84,7 @@ try {
     { name: "trusted-utility", env: baseline, args: imported },
   ]) {
     const started = performance.now()
-    const result = await observe(mode.env, "args" in mode ? mode.args : args)
+    const result = await observe(mode.env, "args" in mode && mode.args ? mode.args : args)
     console.log(JSON.stringify({ mode: mode.name, ...result, elapsedMs: Math.round(performance.now() - started) }))
   }
 } finally {
