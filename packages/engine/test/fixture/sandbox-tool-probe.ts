@@ -320,8 +320,12 @@ export async function probeToolProcesses() {
                 )
                   throw new Error("The actual Read tool did not enforce its non-bypassable kernel path refusal")
               }
-              const globOutcome = yield* globber.execute({ path: "/proc", pattern: "*" }, context).pipe(Effect.exit)
-              const grepOutcome = yield* searcher.execute({ path: "/proc", pattern: "." }, context).pipe(Effect.exit)
+              const globOutcome = yield* globber
+                .execute({ path: "/proc", pattern: "*" }, context)
+                .pipe(Effect.asVoid, Effect.exit)
+              const grepOutcome = yield* searcher
+                .execute({ path: "/proc", pattern: "." }, context)
+                .pipe(Effect.asVoid, Effect.exit)
               for (const outcome of [globOutcome, grepOutcome]) {
                 if (
                   !Exit.isFailure(outcome) ||
