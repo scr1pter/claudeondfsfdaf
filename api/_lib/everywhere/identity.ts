@@ -844,6 +844,7 @@ export function oauthUrl(
     url.searchParams.set("state", input.state)
     // An install acts as the workspace's app user and needs an admin; a link signs in as the person (3.8, 4.3).
     url.searchParams.set("actor", input.purpose === "install" ? "app" : "user")
+    if (input.purpose === "install") url.searchParams.set("update_scopes_on_existing_token", "true")
     return url.href
   }
   return undefined

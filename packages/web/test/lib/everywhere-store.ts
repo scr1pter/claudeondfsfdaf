@@ -4,6 +4,7 @@ import { FINISH_DELIVERY_SCRIPT } from "../../../../api/_lib/everywhere/dedupe"
 import { LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
 import { CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
 import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
+import { REPLACE_NATIVE_RESERVATION_SCRIPT } from "../../../../api/_lib/everywhere/native-resource"
 import { SWAP_SCRIPT } from "../../../../api/_lib/everywhere/store"
 
 /*
@@ -47,6 +48,11 @@ export class FakeStore {
     [AUDIT_APPEND_SCRIPT, (keys, argv) => this.auditAppend(keys, argv)],
     [COUNT_JOB_SCRIPT, (keys, argv) => this.countJob(keys, argv)],
     [SWAP_SCRIPT, (keys, argv) => this.swap(keys, argv)],
+    [REPLACE_NATIVE_RESERVATION_SCRIPT, (keys, argv) => {
+      if (this.run("GET", [keys[0]!]) !== argv[0]) return 0
+      this.run("SET", [keys[0]!, argv[1]!, "PX", "30000"])
+      return 1
+    }],
     [LINK_TRIES_SCRIPT, (keys, argv) => this.tries(keys, argv)],
     [CREATE_JOB_SCRIPT, (keys, argv) => this.createJob(keys, argv)],
     [TRANSITION_SCRIPT, (keys, argv) => this.transition(keys, argv)],
@@ -365,6 +371,7 @@ export class FakeStore {
     ]
     if (keys[6] && this.run("GET", [keys[6]]) !== argv[11]) return -4
     if (keys[7] && this.run("GET", [keys[7]]) !== argv[12]) return -5
+    if (keys[11] && this.run("GET", [keys[11]]) !== argv[19]) return -6
     if (this.read(job)) return 0
     if ((this.zset(live)?.size ?? 0) >= Number(liveCap)) return -3
     if (keys[8]) {
@@ -374,6 +381,7 @@ export class FakeStore {
         if (this.pttl(keys[index]!) < 0) this.run("PEXPIRE", [keys[index]!, argv[index + 8]!])
       }
     }
+    if (keys[11]) this.run("SET", [keys[11], argv[19]!, "PX", argv[20]!])
     if (keys[6]) this.run("SET", [keys[6], `job:${jid}`, "PX", argv[10]!])
     this.run("SET", [job, record, "PX", recordTtl])
     this.run("SET", [body, sealed, "PX", bodyTtl])

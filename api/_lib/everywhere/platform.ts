@@ -19,6 +19,7 @@ export type ResultView = {
   readonly result?: ResultInput
 }
 export type ParsedTrigger = { readonly trigger: InboundTrigger; readonly reply: ReplyReference; readonly place: string }
+export type NativeReservation = { readonly resource: string; readonly owner: string }
 
 export interface PlatformAdapter {
   readonly id: PlatformId
@@ -34,12 +35,14 @@ export interface PlatformAdapter {
   prepare?(parsed: ParsedTrigger, installation: InstallRecord): Promise<ParsedTrigger | { readonly ignore: string }>
   /** Native account-link/help controls may run before an identity has linked. True means handled without a job. */
   control?(parsed: ParsedTrigger, installation: InstallRecord): Promise<boolean>
+  /** Server-owned native session/context reservation. Undefined means handled or busy, without admitting a job. */
+  reserve?(parsed: ParsedTrigger, view: JobView): Promise<NativeReservation | undefined>
   progress(job: JobView, milestone: Milestone | RouteNote): Promise<void>
   finish(job: JobView, result: ResultView | RenderedResult): Promise<void>
   linkPrompt(trigger: InboundTrigger): Promise<void>
   help(trigger: InboundTrigger): Promise<void>
   refuse(trigger: InboundTrigger, code: RefusalCode | DeclineCode): Promise<void>
-  repositoryPrompt(trigger: InboundTrigger, repositories: readonly { readonly fullName: string }[]): Promise<void>
+  repositoryPrompt(trigger: InboundTrigger, repositories: readonly { readonly fullName: string }[], view?: JobView): Promise<void>
   erase(installation: string): Promise<void>
 }
 

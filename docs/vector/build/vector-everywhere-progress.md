@@ -187,3 +187,38 @@ Local skips are intentional and scoped: jobs skips seven real-Redis cases plus t
 The package now includes exact raw installation admission before quotas/job/index writes; a fresh opaque revision for every authoritative install/connect, including tokenless same-clock reinstall; server-owned sealed reply authority; and current-authority checks before each native effect, using a refreshed token only when its authorization revision is preserved. It holds ambiguous first Slack posts and legacy unproved/changed-authority replies instead of inventing delivery or replay guarantees.
 
 Software gates still open: first-post reconciliation/live acceptance, current prerequisite laptop/cloud bridge ports and owner surfaces, real Slack/Grid/Connect qualification, owner app registration and privacy/listing review. No PR, push, release, main merge, credential/settings change or paid inference is part of this commit. VE-12 and VE-13 follow as separate packages; whole-P2 independent review precedes the branch push and fresh CI.
+
+
+## VE-12 first full validation freeze (2026-11-12)
+
+VE-11 is committed as `c9d125e0dac3796d141cbfb3742ab459696ecacd`. The Linear package now has signed raw-body routes, native OAuth and refresh-pair handling, explicit human membership proof, immutable prompt/selection authority, exact activity recovery, whole-plan updates, scoped session admission, stop/reconnect fencing and conservative revocation erasure. Shared private summaries use an injected private account/job surface; missing delivery keeps the terminal outbox.
+
+The source and four separately runnable `everywhere-linear-{verify,webhook,oauth,render}.test.ts` files are frozen. Root owns their runtime checks, API/web package types and shared intake/jobs/identity/install/Slack regressions. No test result is claimed yet. The earlier API preflight reported one UUID nonce inference error, repaired before this freeze; fresh API types are owed. The native-resource create fence includes a hosted-only real Redis regression, intentionally skipped locally. Current docs drift and owner/native/live gates are recorded in deviations. No P2 push or deployment has occurred.
+
+
+### VE-12 first checks and second freeze
+
+Root batch050 passed signature (1 case / 16 assertions), webhook (13 / 130, with one real-Redis case and two hooks skipped locally), and API types. OAuth passed five cases and failed its reconnect/erase refresh race; render passed eight and failed two cases before native delivery because a display-only URL constant lacked an HTTPS scheme. Web types found three fixture typing errors. These are real failures under repair, not waived checks.
+
+The second candidate fixes absolute native job/auth URLs, rechecks the exact installation after a delayed refresh before any viewer request, and types the generated fake credentials. Self-review additionally found two concrete races: the permanent identity CAS helper removes expiry, so a crash between native-owner replacement and its separate TTL write could strand a session forever; and concurrent same-authorization credential rotation could send an obsolete token or erase its fresh replacement on 401. The coordinator authorized precise repairs. A new native reservation CAS sets its thirty-second expiry in the same transaction, leaving the permanent identity helper unchanged. The native client holds if its opened credential pair differs from the latest authorized pair; a 401 cannot erase a later record. Deterministic lost-response/expiry, twelve-owner reservation races, before-request rotation and during-401 replacement cases retain positive retries. The new reservation script also has a CI-only actual Redis case. All four Linear files, common regressions and API/web types are frozen for root checks again; no second-candidate pass or real Redis proof is claimed yet.
+
+
+## VE-12 scoped local qualification (2026-11-12)
+
+Root batch052 passed every requested file separately using generated credentials and actual loopback HTTP under the fetch guard:
+
+| File | Passed | Skipped locally | Assertions |
+| --- | ---: | ---: | ---: |
+| everywhere-linear-verify.test.ts | 1 | 0 | 16 |
+| everywhere-linear-webhook.test.ts | 15 | 4 | 144 |
+| everywhere-linear-oauth.test.ts | 6 | 0 | 40 |
+| everywhere-linear-render.test.ts | 11 | 0 | 74 |
+| everywhere-intake.test.ts | 8 | 0 | 68 |
+| everywhere-jobs.test.ts | 43 | 9 | 334 |
+| everywhere-slack-render.test.ts | 10 | 0 | 51 |
+| everywhere-identity.test.ts | 39 | 4 | 243 |
+| everywhere-install-api.test.ts | 15 | 0 | 116 |
+
+API types passed in 1.29 seconds through the documented engine-package command. Web `bun typecheck` passed in 29 seconds: 240 files, zero errors and zero warnings. The final four native files took 0.04, 0.32, 0.13 and 0.42 seconds. These results close the earlier URL, refresh-race and fixture typing failures at this source; no assertion was removed to pass them. The source includes atomic terminal-owner replacement with its expiry, lost-response expiry recovery, and both credential rotation/401 negative cases with a successful current-token retry.
+
+Webhook's four local skips are two actual Redis cases and two hooks. Jobs skips seven Redis cases and two hooks; identity skips two Redis cases and two hooks. New installation/quota, native-resource create, reservation-replacement and cooldown scripts/races still require actual Redis on fresh exact-P2-head hosted CI. No local Redis, model, real platform, owner computer, registration or deployment was exercised. The package is ready for its scoped software commit, followed by VE-13 Jira and whole-P2 independent review/repair. Current native and owner surface/distribution/prerequisite ports remain explicitly gated.

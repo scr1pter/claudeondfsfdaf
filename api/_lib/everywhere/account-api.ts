@@ -28,6 +28,7 @@ import {
 import { jobEraser } from "./jobs.js"
 import { platformExchanges } from "./oauth-exchanges.js"
 import { revokeSlack } from "./slack/install.js"
+import { revokeLinear } from "./linear/install.js"
 import { everywhereStore, type Store } from "./store.js"
 
 /*
@@ -247,7 +248,8 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
             jobs: deps.jobs ?? jobEraser(session.ctx.store, () => session.ctx.now),
             // A caller replacing the native exchanges also owns that transport's revocation port.
             ...(deps.revoke ? { revoke: deps.revoke } : deps.exchanges === undefined ? {
-              revoke: (installation: string, record: InstallRecord) => revokeSlack(installation, record, session.config.dataKeys, deps.fetcher),
+              revoke: (installation: string, record: InstallRecord) => installation.startsWith("linear:")
+                ? revokeLinear(installation, record, session.config.dataKeys, deps.fetcher) : revokeSlack(installation, record, session.config.dataKeys, deps.fetcher),
             } : {}),
           },
           installation,
@@ -314,7 +316,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
           email: session.email,
           code: input.code,
           state: input.state,
-          exchanges: deps.exchanges ?? platformExchanges(session.config, deps.fetcher),
+          exchanges: deps.exchanges ?? platformExchanges(session.config, deps.fetcher, () => session.ctx.now),
           platformOn: (platform) => platformOn(session.config, platform),
         })
         json(response, 200, result)

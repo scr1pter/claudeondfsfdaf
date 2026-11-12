@@ -12,7 +12,7 @@ import { readCounts } from "./limits.js"
 import type { JobView, ParsedTrigger, PlatformAdapter, Platforms } from "./platform.js"
 import { safePorts, type Ports, type Repository } from "./ports.js"
 import { routeFacts, routeJob } from "./router.js"
-import { everywhereStore, type Store } from "./store.js"
+import { everywhereStore, swapValue, type Store } from "./store.js"
 
 export type IntakeDeps = {
   readonly config?: EverywhereConfig
@@ -130,21 +130,27 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
     }
     if (decision.action === "ask-repository" || !resolved) {
       const mapping = await findMapping(store, trigger.installation, parsed.place)
-      await adapter.repositoryPrompt(trigger, mapping?.repositories ?? [])
+      await adapter.repositoryPrompt(trigger, mapping?.repositories ?? [], { ...view, reply: { ...view.reply, installRevision: installationAuthority(snapshot!) } })
       await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     // Always server-derived: a webhook, native payload or laptop cannot choose the authority for later posts.
     view = { ...view, reply: { ...view.reply, installRevision: installationAuthority(snapshot!) } }
+    const reservation = await adapter.reserve?.(parsed, view)
+    if (adapter.reserve && !reservation) { await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid); return }
+    if (reservation && (reservation.resource !== trigger.thread.ref || reservation.owner !== initial.jid))
+      throw new ApiError(400, "RESERVATION_INVALID", "The native request could not be admitted.")
     const created = await createJob(context(), {
       platform: trigger.platform, installation: trigger.installation, kind: trigger.kind,
       requester: { userId: trigger.actor.userId, account: linked.account }, sponsor,
       repository: resolved, shared: trigger.shared, issue: trigger.issue, github: trigger.github,
       task: trigger.task, context: trigger.context, reply: view.reply,
-    }, { jid: initial.jid, deliveryId: trigger.deliveryId, installationRecord: snapshot!.raw })
+    }, { jid: initial.jid, deliveryId: trigger.deliveryId, installationRecord: snapshot!.raw, reservation })
     if (!created.ok) {
       if (created.code === "duplicate") return
-      if (created.code === "installation-changed") {
+      if (reservation && !await readJob(store, initial.jid))
+        await swapValue(store, everywhereKeys.nativeResource(trigger.platform, trigger.installation, reservation.resource), reservation.owner, undefined)
+      if (created.code === "installation-changed" || created.code === "reservation-changed") {
         await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
         return
       }

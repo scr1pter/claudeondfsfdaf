@@ -159,6 +159,12 @@ export const everywhereKeys = {
   /** Slack's conservative one-thread-read-per-workspace-per-minute budget, shared by all functions. */
   slackThreadRead: (team: string) => key("slack", "thread", matching(team, /^T[A-Z0-9]{1,31}$/)),
   slackRetry: (installationKey: string, method: string) => key("slack", "retry", installation(installationKey), matching(method, /^[a-zA-Z.]{1,64}$/)),
+  linearRefresh: (installationKey: string) => key("linear", "refresh", installation(installationKey)),
+  linearRetry: (installationKey: string) => key("linear", "retry", installation(installationKey)),
+  nativeResource: (platformId: string, installationKey: string, ref: string) => key("resource", platform(platformId), installation(installationKey), freePart(ref)),
+  nativeResourceLock: (platformId: string, installationKey: string, ref: string) => key("resource", platform(platformId), installation(installationKey), freePart(ref), "posting"),
+  linearReceipt: (installationKey: string, ref: string) => key("linear", "receipt", installation(installationKey), freePart(ref)),
+  linearHeader: (installationKey: string, delivery: string) => key("linear", "delivery", installation(installationKey), matching(delivery, UUID)),
   /** VE-05: the live jobs on an installation, so erasing it finds them without scanning (E13). */
   installationJobs: (installationKey: string) => key("livejobs", installation(installationKey)),
   /** VE-05: every job an account sponsored in the last 30 days, for its job list and for account erase. */

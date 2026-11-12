@@ -518,14 +518,18 @@ export function claimedJob(record: JobRecord, body: JobBody, lease: JobLease, li
  * create a job, and that same transaction replaces it with `job:<jid>` for ARGV[11] milliseconds. -4 means lost admission.
  * Native intake also supplies key 8 and ARGV[13], its exact installation snapshot. A mismatch is -5 before writes.
  * Keys 9–11 and ARGV[14–19] admit its day/hour quotas in this same transaction, after every fence/cap check.
+ * Optional key 12 fences a native session reservation against ARGV[20] before writes (-6 on mismatch); admission
+ * extends that exact owner with ARGV[21] TTL atomically, so stalled requests cannot overwrite a newer native task.
  */
 export const CREATE_JOB_SCRIPT = [
   "if KEYS[7] and redis.call('GET', KEYS[7]) ~= ARGV[12] then return -4 end",
   "if KEYS[8] and redis.call('GET', KEYS[8]) ~= ARGV[13] then return -5 end",
+  "if KEYS[12] and redis.call('GET', KEYS[12]) ~= ARGV[20] then return -6 end",
   "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end",
   "if redis.call('ZCARD', KEYS[4]) >= tonumber(ARGV[8]) then return -3 end",
   "if KEYS[9] then for i = 9, 11 do if tonumber(redis.call('GET', KEYS[i]) or '0') >= tonumber(ARGV[i + 5]) then return -3 end end end",
   "if KEYS[9] then for i = 9, 11 do redis.call('INCR', KEYS[i]) if redis.call('PTTL', KEYS[i]) < 0 then redis.call('PEXPIRE', KEYS[i], ARGV[i + 8]) end end end",
+  "if KEYS[12] then redis.call('SET', KEYS[12], ARGV[20], 'PX', ARGV[21]) end",
   "if KEYS[7] then redis.call('SET', KEYS[7], 'job:' .. ARGV[6], 'PX', ARGV[11]) end",
   "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])",
   "redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[4])",
@@ -690,6 +694,7 @@ export type CreateVerdict =
   | { readonly ok: false; readonly code: "over-limit" }
   | { readonly ok: false; readonly code: "duplicate" }
   | { readonly ok: false; readonly code: "installation-changed" }
+  | { readonly ok: false; readonly code: "reservation-changed" }
   | { readonly ok: false; readonly code: "invalid"; readonly error: string }
 
 /**
@@ -703,6 +708,7 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
   readonly deliveryId?: string
   /** Exact trusted store value captured before native preparation; enables atomic installation and quota admission. */
   readonly installationRecord?: string
+  readonly reservation?: { readonly resource: string; readonly owner: string }
 } = {}) {
   const jid = options.jid ?? createJobId(ctx.now)
   const invalid = (error: string): CreateVerdict => ({ ok: false, code: "invalid", error })
@@ -715,6 +721,8 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
   if (!ctx.keys.length) return invalid("data key: missing")
   if (options.installationRecord !== undefined && (options.deliveryId === undefined || !options.installationRecord || options.installationRecord.length > 32_000))
     return invalid("installation snapshot: malformed")
+  if (options.reservation && (options.installationRecord === undefined || options.reservation.owner !== jid || !options.reservation.resource || options.reservation.resource.length > LIMITS.threadRefChars))
+    return invalid("native reservation: malformed")
 
   const record: JobRecord = {
     version: 1,
@@ -762,6 +770,7 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
         everywhereKeys.jobHistory(record.sponsor),
         ...(options.deliveryId === undefined ? [] : [deliveryKey(input.platform, options.deliveryId)]),
         ...(caps ? [everywhereKeys.install(record.installation), caps.sponsorToday.key, caps.requesterHour.key, caps.installationToday.key] : []),
+        ...(options.reservation ? [everywhereKeys.nativeResource(input.platform, input.installation, options.reservation.resource)] : []),
       ],
       [
         encodeJobRecord(record),
@@ -777,12 +786,14 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: {
         ...(options.deliveryId === undefined ? [] : [KEEP_MS.deliveryDone, `pending:${jid}`]),
         ...(caps ? [options.installationRecord!, SERVER_CAPS.sponsorPerDay, SERVER_CAPS.requesterPerHour, SERVER_CAPS.installationPerDay,
           caps.sponsorToday.ttlMs, caps.requesterHour.ttlMs, caps.installationToday.ttlMs] : []),
+        ...(options.reservation ? [options.reservation.owner, KEEP_MS.jobBody + 5 * 60_000] : []),
       ],
     ),
   )
   if (result === -3) return { ok: false, code: "over-limit" } satisfies CreateVerdict
   if (result === -4) return { ok: false, code: "duplicate" } satisfies CreateVerdict
   if (result === -5) return { ok: false, code: "installation-changed" } satisfies CreateVerdict
+  if (result === -6) return { ok: false, code: "reservation-changed" } satisfies CreateVerdict
   if (result === 0) return invalid("jid: exists")
   if (result !== 1) throw storeUnavailable()
   await audit(ctx, record, { event: "job-accepted" })
