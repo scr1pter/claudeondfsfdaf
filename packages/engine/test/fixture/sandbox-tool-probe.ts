@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { spawn } from "node:child_process"
+import { spawn, execFile } from "node:child_process"
+import { promisify } from "node:util"
 
 /** CI-only: the real ShellTool must not signal an engine-shaped process outside its tool namespace. */
 export async function probeToolProcesses() {
@@ -72,6 +73,7 @@ export async function probeToolProcesses() {
     const privateValue = 'synthetic-engine-memory-9126';
     process.on('message', async message => {
       if (message === 'report') process.send({kind:'report',opened:!!inspector.url()});
+      if (message === 'close') {inspector.close();process.send({kind:'close',opened:!!inspector.url()})}
       if (message === 'guard') {
         const {assertNoDebugger}=await import('/opt/vector-inspector-guard.mjs');
         let refused=false;try{await assertNoDebugger()}catch{refused=true}
@@ -112,6 +114,58 @@ export async function probeToolProcesses() {
         ready.opened !== false
       )
         throw new Error("The disposable engine is not a matching uninspected user process")
+      const loaderMarker = path.join(root, "loader-constructor")
+      const loaderEnv = {
+        LD_PRELOAD: "/opt/vector-probe-loader.so",
+        VECTOR_PROBE_TARGET_PID: String(dummy.pid),
+        VECTOR_PROBE_LOADER_MARKER: loaderMarker,
+      }
+      // Trusted positive control, deliberately outside the shared API: never runs repository code or a real engine.
+      await promisify(execFile)("/usr/bin/true", [], { env: { ...process.env, ...loaderEnv }, timeout: 5000 })
+      if ((await fs.readFile(loaderMarker, "utf8")) !== "synthetic loader constructor")
+        throw new Error("The native loader positive control did not execute")
+      const loaderUntil = Date.now() + 5000
+      while (!diagnostics.includes("Debugger listening") && Date.now() < loaderUntil)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      if (!diagnostics.includes("Debugger listening"))
+        throw new Error("The preload constructor did not signal the disposable target")
+      const loaderClosed = message("close")
+      dummy.send("close")
+      if ((await loaderClosed).opened !== false)
+        throw new Error("The disposable inspector did not close after its loader control")
+      diagnostics = ""
+      await fs.unlink(loaderMarker)
+      const refusedLoader = (error: unknown) =>
+        error instanceof Error && error.message.includes("native loader environment")
+      if (!(await Process.run([node, "-e", "0"], { env: loaderEnv }).then(() => false, refusedLoader)))
+        throw new Error("The actual utility launcher accepted a native preload")
+      try {
+        const child = LSPLaunch.spawn(node, ["-e", "0"], { env: loaderEnv })
+        child.kill("SIGKILL")
+        throw new Error("The actual LSP launcher accepted a native preload")
+      } catch (error) {
+        if (!refusedLoader(error)) throw error
+      }
+      if (
+        !(await localTransport({ command: node, args: ["-e", "0"], cwd: process.cwd(), env: loaderEnv }).then(
+          () => false,
+          refusedLoader,
+        ))
+      )
+        throw new Error("The actual MCP transport accepted a native preload")
+      const refusedEffect = await Effect.runPromise(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+          return yield* spawner.string(ChildProcess.make(node, ["-e", "0"], { env: loaderEnv }))
+        }).pipe(Effect.exit, Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.scoped),
+      )
+      if (!Exit.isFailure(refusedEffect) || !Cause.pretty(refusedEffect.cause).includes("native loader environment"))
+        throw new Error("The shared Effect launcher accepted a native preload")
+      if (await fs.stat(loaderMarker).catch(() => undefined))
+        throw new Error("A refused native loader constructor executed")
+      const loaderReport = message("report")
+      dummy.send("report")
+      if ((await loaderReport).opened !== false) throw new Error("A refused loader signalled the disposable engine")
       const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),'SIGUSR1');sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};process.stdout.write(JSON.stringify(result))`
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
       const output = await Effect.runPromise(
@@ -158,9 +212,19 @@ export async function probeToolProcesses() {
           throw new Error(`The ${label} can reach or signal the disposable engine`)
       }
       assertBlocked(actual, "actual ShellTool")
-      const utility = await Process.run([node, "-e", code, String(dummy.pid)])
+      const utility = await Process.run(
+        [
+          node,
+          "-e",
+          code.replace("{visible,sent,pid:", "{visible,sent,ordinary:process.env.VECTOR_PROBE_ORDINARY,pid:"),
+          String(dummy.pid),
+        ],
+        { env: { VECTOR_PROBE_ORDINARY: "ordinary environment positive control" } },
+      )
       if (utility.code !== 0) throw new Error("The shared utility launch failed")
       assertBlocked(JSON.parse(utility.stdout.toString()), "shared utility launch")
+      if (JSON.parse(utility.stdout.toString()).ordinary !== "ordinary environment positive control")
+        throw new Error("The ordinary child environment was not preserved")
       const lsp = LSPLaunch.spawn(node, ["-e", code, String(dummy.pid)])
       const lspOutput = new Promise<string>((resolve, reject) => {
         const parts: Buffer[] = []
@@ -307,6 +371,9 @@ export async function probeToolProcesses() {
         effectLaunch: true,
         engineProcHidden: true,
         actualFileToolsRefused: true,
+        nativeLoaderRefused: true,
+        ordinaryEnvironmentPreserved: true,
+        loaderControlExecuted: true,
         dummyNode: ready.node,
         callerRuntime: process.versions.bun ? `bun-${process.versions.bun}` : `node-${process.versions.node}`,
       }

@@ -299,6 +299,7 @@ export const make = Effect.gen(function* () {
       const isolated = ProcessIsolation.launch(command.command, command.args, {
         cwd: typeof opts.cwd === "string" ? opts.cwd : undefined,
         shell: opts.shell,
+        env: opts.env,
       })
       const proc = launch(isolated.file, isolated.args, { ...opts, shell: isolated.shell })
       // Bun resumes stdio at native exit, before a delayed Effect reader can attach.

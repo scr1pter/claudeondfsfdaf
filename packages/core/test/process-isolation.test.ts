@@ -4,6 +4,24 @@ import os from "node:os"
 import path from "node:path"
 import { ProcessIsolation } from "../src/process-isolation"
 
+test("native loader hooks are refused before a tool namespace wrapper can start", () => {
+  for (const name of [
+    "LD_PRELOAD",
+    "LD_AUDIT",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "GCONV_PATH",
+    "GLIBC_TUNABLES",
+    "LIBPATH",
+  ])
+    expect(() => ProcessIsolation.assertLoaderEnvironment({ [name]: "fixture-value" })).toThrow(
+      "native loader environment",
+    )
+  expect(() =>
+    ProcessIsolation.assertLoaderEnvironment({ PATH: "/usr/bin", LANG: "C.UTF-8", VECTOR_PROBE_ORDINARY: "preserved" }),
+  ).not.toThrow()
+})
+
 test("hosted process boundaries hide engine proc and give tools their own PID and proc", () => {
   const engine = ProcessIsolation.engineArguments("/usr/bin/setpriv", ["--no-new-privs", "--", "/bin/true"], "/tmp")
   expect(engine).toContain("--tmpfs")

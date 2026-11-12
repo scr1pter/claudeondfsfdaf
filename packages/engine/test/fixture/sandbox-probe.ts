@@ -194,7 +194,10 @@ if (process.argv[2] === "--crash-controls") {
     !report.toolProcess?.mcpLaunch ||
     !report.toolProcess?.effectLaunch ||
     !report.toolProcess?.engineProcHidden ||
-    !report.toolProcess?.actualFileToolsRefused
+    !report.toolProcess?.actualFileToolsRefused ||
+    !report.toolProcess?.nativeLoaderRefused ||
+    !report.toolProcess?.ordinaryEnvironmentPreserved ||
+    !report.toolProcess?.loaderControlExecuted
   )
     throw new Error("Missing actual ShellTool process-isolation acceptance")
   if (

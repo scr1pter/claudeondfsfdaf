@@ -66,22 +66,23 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
   if (cmd.length === 0) throw new Error("Command is required")
   opts.abort?.throwIfAborted()
 
-  const isolated = ProcessIsolation.launch(cmd[0]!, cmd.slice(1), opts)
+  const env =
+    opts.env === null
+      ? {}
+      : opts.inheritInternalEnv
+        ? opts.exactEnv
+          ? opts.env
+          : opts.env
+            ? { ...process.env, ...opts.env }
+            : process.env
+        : opts.exactEnv
+          ? untrustedChildEnvironment(opts.env)
+          : untrustedChildEnvironment(process.env, opts.env)
+  const isolated = ProcessIsolation.launch(cmd[0]!, cmd.slice(1), { cwd: opts.cwd, shell: opts.shell, env })
   const proc = launch(isolated.file, isolated.args, {
     cwd: opts.cwd,
     shell: isolated.shell,
-    env:
-      opts.env === null
-        ? {}
-        : opts.inheritInternalEnv
-          ? opts.exactEnv
-            ? opts.env
-            : opts.env
-              ? { ...process.env, ...opts.env }
-              : process.env
-          : opts.exactEnv
-            ? untrustedChildEnvironment(opts.env)
-            : untrustedChildEnvironment(process.env, opts.env),
+    env,
     stdio: [opts.stdin ?? "ignore", opts.stdout ?? "ignore", opts.stderr ?? "ignore"],
     windowsHide: process.platform === "win32",
   })

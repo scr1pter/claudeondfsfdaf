@@ -70,9 +70,10 @@ export function argumentsForTool(file: string, args: readonly string[], cwd: str
 export function launch(
   file: string,
   args: readonly string[],
-  options: { cwd?: string; shell?: boolean | string } = {},
+  options: { cwd?: string; shell?: boolean | string; env?: NodeJS.ProcessEnv } = {},
 ) {
   if (!required()) return { file, args: [...args], shell: options.shell }
+  assertLoaderEnvironment(options.env ?? process.env)
   assertBinary()
   const executable = typeof options.shell === "string" ? options.shell : options.shell ? "/bin/sh" : file
   const argv = options.shell ? ["-c", [file, ...args].join(" ")] : args
@@ -80,6 +81,19 @@ export function launch(
 }
 
 const KERNEL = ["/proc", "/sys", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr"]
+
+/** Native loader hooks run before bwrap can enter its namespaces; configuration validation is not the final boundary. */
+export function assertLoaderEnvironment(env: NodeJS.ProcessEnv) {
+  if (
+    Object.entries(env).some(
+      ([name, value]) =>
+        value !== undefined &&
+        (/^(?:LD_|DYLD_)/.test(name) ||
+          ["GCONV_PATH", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "LIBPATH", "SHLIB_PATH"].includes(name)),
+    )
+  )
+    throw new Error("GitHub agent tools cannot set a native loader environment.")
+}
 
 /** Refuse kernel paths before a filesystem tool asks permission, including links that traverse a kernel alias. */
 export function assertToolPath(target: string) {

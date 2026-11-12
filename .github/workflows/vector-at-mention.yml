@@ -50,6 +50,7 @@ on:
       - packages/engine/test/cli/github*.ts
       - packages/engine/test/lib/research.ts
       - packages/engine/test/fixture/sandbox-*.ts
+      - packages/engine/test/fixture/sandbox-loader-probe.c
       - packages/engine/test/tool/registry*.ts
       - packages/engine/test/session/retry.test.ts
       - packages/core/test/github-agents.test.ts
@@ -300,6 +301,8 @@ jobs:
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
           sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
+          cc -shared -fPIC -O2 packages/engine/test/fixture/sandbox-loader-probe.c -o "$RUNNER_TEMP/vector-probe-tools/loader-probe.so"
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/loader-probe.so" /opt/vector-probe-loader.so
           if [ -d "$RUNNER_TEMP/vector-probe-tools/assets" ]; then
             sudo -n mkdir -p /opt/assets
             sudo -n cp -R "$RUNNER_TEMP/vector-probe-tools/assets/." /opt/assets/

@@ -9,12 +9,13 @@ export async function localTransport(input: {
   env: Record<string, string>
 }) {
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js")
-  const isolated = ProcessIsolation.launch(input.command, input.args, { cwd: input.cwd })
+  const env = untrustedChildEnvironment(input.env)
+  const isolated = ProcessIsolation.launch(input.command, input.args, { cwd: input.cwd, env })
   return new StdioClientTransport({
     command: isolated.file,
     args: isolated.args,
     cwd: input.cwd,
-    env: untrustedChildEnvironment(input.env),
+    env,
     stderr: "pipe",
   })
 }

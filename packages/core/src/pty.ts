@@ -224,7 +224,7 @@ const layer = Layer.effect(
       }
       yield* Effect.logInfo("creating session", { id, cmd: command, args, cwd })
       const { spawn } = yield* Effect.promise(() => pty())
-      const isolated = ProcessIsolation.launch(command, args, { cwd })
+      const isolated = ProcessIsolation.launch(command, args, { cwd, env })
       const proc = yield* Effect.sync(() => spawn(isolated.file, isolated.args, { name: "xterm-256color", cwd, env }))
       const info: Info = {
         id,
