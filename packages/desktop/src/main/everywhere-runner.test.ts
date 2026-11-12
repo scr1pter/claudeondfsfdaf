@@ -49,9 +49,9 @@ function fixture() {
   }
   const git: RunnerGit = {
     run: async () => "", unchanged: async () => true, mapped: async () => true,
-    snapshot: async (directory) => ({ config: [], pushUrl: "https://github.com/acme/app.git", baseSha: (directory ? "b" : "a").repeat(40) }),
+    snapshot: async (directory) => ({ directory: directory ?? "/fixture/project", gitDirectory: "/fixture/git", commonDirectory: "/fixture/common", config: [], pushUrl: "https://github.com/acme/app.git", baseSha: (directory ? "b" : "a").repeat(40) }),
     fetch: async () => "b".repeat(40),
-    stage: async () => ({ held: [], files: 1, diff: "diff --git a/file.ts b/file.ts\n+const retry = true\n" }),
+    stage: async () => ({ held: [], files: 1, diff: "diff --git a/file.ts b/file.ts\n@@ -0,0 +1 @@\n+const retry = true\n" }),
     commit: async (_, __, message) => { calls.push({ kind: "commit", value: message }); return "c".repeat(40) },
     push: async (_, __, branch) => { calls.push({ kind: "push", value: branch }); return true },
   }
@@ -138,7 +138,7 @@ test("a public or newly public repository keeps its committed branch local", asy
 
 test("secret-bearing staged changes are held before any commit or push", async () => {
   const f = fixture()
-  f.git.stage = async () => ({ held: [], files: 1, diff: "+-----BEGIN PRIVATE KEY-----\n+fixture\n" })
+  f.git.stage = async () => ({ held: [], files: 1, diff: "@@ -0,0 +1,2 @@\n+-----BEGIN PRIVATE KEY-----\n+fixture\n" })
   await createEverywhereRunner(f.deps).offer("fixture-offer")
   expect(f.results[0]?.outcome).toBe("held")
   expect(f.calls.some((call) => call.kind === "commit" || call.kind === "push")).toBe(false)

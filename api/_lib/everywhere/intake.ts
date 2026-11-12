@@ -52,30 +52,30 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
 
   async function process(parsed: ParsedTrigger, initial: JobView) {
     const trigger = parsed.trigger
-    const claim = await claimDelivery(store, trigger.platform, trigger.deliveryId)
+    const claim = await claimDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
     if (claim === "seen") return
     await adapter.acknowledge(initial)
     const installation = await readInstall(store, trigger.installation)
     if (!installation || trigger.actor.bot || trigger.actor.external || trigger.actor.guest || trigger.actor.userId === installation.botUserId) {
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     const linked = await findLink(store, trigger.installation, trigger.actor.userId)
     if (!linked) {
       await adapter.linkPrompt(trigger)
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     const sponsor = linked.account
     const verdict = mayTrigger({ route: "laptop", sponsor, requester: { ...trigger.actor, account: linked.account } })
     if (!verdict.ok) {
       await adapter.refuse(trigger, verdict.code)
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     if (trigger.kind === "command") {
       await adapter.help(trigger)
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     if (trigger.kind === "stop") {
@@ -89,7 +89,7 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
         const cancelled = await cancelJob(context(), job.jid)
         if (cancelled.ok) await events.ended?.({ job: cancelled.job })
       }
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     for (const ended of await sweepAccount(context(), sponsor, { stop: await ports.switch("everywhere") === "stop" })) await events.ended?.(ended)
@@ -100,18 +100,18 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
     const decision = decideRoute(facts)
     if (decision.action === "refuse" || decision.action === "hand-back") {
       await adapter.refuse(trigger, decision.code)
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     if (decision.action === "ask-repository" || !resolved) {
       const mapping = await findMapping(store, trigger.installation, parsed.place)
       await adapter.repositoryPrompt(trigger, mapping?.repositories ?? [])
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     if (!(await countJob(store, subject, now())).admitted) {
       await adapter.refuse(trigger, "over-limit")
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     const created = await createJob(context(), {
@@ -119,14 +119,15 @@ export function createIntake(adapter: PlatformAdapter, deps: IntakeDeps = {}) {
       requester: { userId: trigger.actor.userId, account: linked.account }, sponsor,
       repository: resolved, shared: trigger.shared, issue: trigger.issue, github: trigger.github,
       task: trigger.task, context: trigger.context, reply: parsed.reply,
-    }, { jid: initial.jid })
+    }, { jid: initial.jid, deliveryId: trigger.deliveryId })
     if (!created.ok) {
+      if (created.code === "duplicate") return
       await adapter.refuse(trigger, created.code === "over-limit" ? "over-limit" : "unsupported")
-      await finishDelivery(store, trigger.platform, trigger.deliveryId)
+      await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
       return
     }
     // Dedupe is durable before the 20-second offer window. A platform retry must not create another accepted job.
-    await finishDelivery(store, trigger.platform, trigger.deliveryId)
+    await finishDelivery(store, trigger.platform, trigger.deliveryId, initial.jid)
     return routeJob({ context, ports, adapter, now, sleep, view: (job) => ({ ...initial, job }) }, created.job, facts)
   }
 

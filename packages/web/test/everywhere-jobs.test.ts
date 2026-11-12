@@ -3,6 +3,7 @@ import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto"
 import { AUDIT_APPEND_SCRIPT, readAudit } from "../../../api/_lib/everywhere/audit"
 import { readConfig, type OfferKey } from "../../../api/_lib/everywhere/config"
 import type { DataKey } from "../../../api/_lib/everywhere/crypto"
+import { claimDelivery, finishDelivery } from "../../../api/_lib/everywhere/dedupe"
 import { eraseEverywhereAccount } from "../../../api/_lib/everywhere/erase"
 import {
   ACTIONS_OVERDUE_MS,
@@ -48,7 +49,7 @@ import {
   type Store,
   type StoreCommand,
 } from "../../../api/_lib/everywhere/store"
-import { TIMING, decodeJob, type Settle } from "../../../packages/schema/src/everywhere"
+import { TIMING, createJobId, decodeJob, type Settle } from "../../../packages/schema/src/everywhere"
 import { everywhereEnv } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { FakeStore, realRedis, useKv, type RealRedis } from "./lib/everywhere-store"
@@ -1101,6 +1102,30 @@ describe("erasing", () => {
   })
 })
 
+describe("delivery admission", () => {
+  test("an expired intake worker cannot create or finish over a newer delivery lease", async () => {
+    const deliveryId = randomUUID()
+    const stale = createJobId(fake.clock.now)
+    expect(await claimDelivery(store, "slack", deliveryId, stale)).toBe("new")
+    fake.clock.advance(60_001)
+    const current = createJobId(fake.clock.now)
+    expect(await claimDelivery(store, "slack", deliveryId, current)).toBe("new")
+    await finishDelivery(store, "slack", deliveryId, stale)
+    expect(await store(["GET", everywhereKeys.delivery("slack", deliveryId)])).toBe(`pending:${current}`)
+    const [old, fresh] = await Promise.all([
+      createJob(ctx(), slackJob(), { jid: stale, deliveryId }),
+      createJob(ctx(), slackJob(), { jid: current, deliveryId }),
+    ])
+    expect(old).toMatchObject({ ok: false, code: "duplicate" })
+    expect(fresh).toMatchObject({ ok: true, job: { jid: current } })
+    await finishDelivery(store, "slack", deliveryId, current)
+    expect(await store(["GET", everywhereKeys.delivery("slack", deliveryId)])).toBe(`job:${current}`)
+    expect(fake.pttl(everywhereKeys.delivery("slack", deliveryId))).toBe(KEEP_MS.deliveryDone)
+    expect(members(everywhereKeys.jobs(ALICE))).toEqual([current])
+    expect(await readJob(store, stale)).toBeUndefined()
+  })
+})
+
 describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () => {
   let redis: RealRedis
   beforeAll(async () => {
@@ -1113,6 +1138,21 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
   function realCtx(): JobsContext {
     return { store: everywhereStore(redis.fetch), keys: KEYS, now: Date.now(), offer: OFFER }
   }
+
+  test("one delivery atomically admits one jid even when create responses race", async () => {
+    const sponsor = randomUUID()
+    const deliveryId = randomUUID()
+    const jid = createJobId(Date.now())
+    const ctx = realCtx()
+    expect(await claimDelivery(ctx.store, "slack", deliveryId, jid)).toBe("new")
+    const results = await Promise.all(Array.from({ length: 12 }, () => createJob(ctx,
+      slackJob({ sponsor, requester: { userId: "U0ALICE01", account: sponsor } }), { jid, deliveryId })))
+    expect(results.filter((result) => result.ok)).toHaveLength(1)
+    expect(results.filter((result) => !result.ok && result.code === "duplicate")).toHaveLength(11)
+    await finishDelivery(ctx.store, "slack", deliveryId, jid)
+    expect(await ctx.store(["GET", everywhereKeys.delivery("slack", deliveryId)])).toBe(`job:${jid}`)
+    expect(await claimDelivery(ctx.store, "slack", deliveryId)).toBe("seen")
+  })
 
   test("a claim racing a dispatch leaves exactly one winner", async () => {
     for (let round = 0; round < 5; round++) {

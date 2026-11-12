@@ -64,6 +64,8 @@ export async function postPending(context: () => JobsContext, platforms: Platfor
     try { job = await readJob(ctx.store, jid) } catch {
       // A record from a newer deployment remains queued for that deployment, as jobs:due does.
       console.error("Vector everywhere: a queued record was unreadable", { jid, code: "record-unreadable" })
+      // Keep newer records, but move this bounded page aside so a rollback cannot starve later replies.
+      await ctx.store(["ZADD", everywhereKeys.jobsPosts(), "XX", ctx.now + 60_000, jid])
       continue
     }
     if (!job) {
@@ -73,6 +75,7 @@ export async function postPending(context: () => JobsContext, platforms: Platfor
     try {
       await events.ended?.({ job, ending: job.ending })
       if (await ctx.store(["ZSCORE", everywhereKeys.jobsPosts(), jid]) === null) posted++
+      else await ctx.store(["ZADD", everywhereKeys.jobsPosts(), "XX", ctx.now + 60_000, jid])
     } catch {
       console.error("Vector everywhere: a queued reply failed", { jid, code: "post-failed" })
     }

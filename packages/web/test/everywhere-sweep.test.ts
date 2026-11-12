@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { randomUUID } from "node:crypto"
 import { createJobEvents, postPending } from "../../../api/_lib/everywhere/events"
-import { claimJob, offerJob, readJob, refuseJob, sweepDue } from "../../../api/_lib/everywhere/jobs"
+import { claimJob, encodeJobRecord, offerJob, readJob, refuseJob, sweepDue } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { createSweep } from "../../../api/_lib/everywhere/sweep"
-import { TIMING } from "../../../packages/schema/src/everywhere"
+import { createJobId, TIMING } from "../../../packages/schema/src/everywhere"
 import { RouteHarness, secret } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { routerFixture } from "./lib/everywhere-router"
@@ -50,6 +51,30 @@ test("failed posting stays queued and retries once its bounded lock expires", as
   expect(await postPending(f.context, { slack: f.adapter })).toBe(1)
   expect(attempts).toBe(2)
   expect(await postPending(f.context, { slack: f.adapter })).toBe(0)
+})
+
+test("a full page of newer or unavailable-platform records cannot starve a deliverable reply", async () => {
+  for (const unreadable of [true, false]) {
+    const f = routerFixture()
+    const job = await f.create()
+    const ended = await refuseJob(f.context(), job.jid, "not-mapped")
+    if (!ended.ok) throw new Error("Fixture must end")
+    const blocked: string[] = []
+    for (let index = 0; index < 200; index++) {
+      const jid = createJobId(f.fake.clock.now + index + 1)
+      blocked.push(jid)
+      await f.store(["SET", everywhereKeys.job(jid), unreadable ? '{"version":999,"state":"future"}' : encodeJobRecord({
+        ...ended.job, jid, platform: "linear", installation: `linear:${randomUUID()}`, issue: { key: "ENG-123" },
+      })])
+      await f.store(["ZADD", everywhereKeys.jobsPosts(), f.fake.clock.now - 1, jid])
+    }
+    expect(await postPending(f.context, { slack: f.adapter })).toBe(0)
+    expect(await f.store(["ZSCORE", everywhereKeys.jobsPosts(), blocked[0]!])).toBe(String(f.fake.clock.now + 60_000))
+    expect(await f.store(["GET", everywhereKeys.job(blocked[0]!)])).not.toBeNull()
+    expect(await postPending(f.context, { slack: f.adapter })).toBe(1)
+    expect(f.calls.filter((call) => call.kind === "finish")).toHaveLength(1)
+    expect(f.fake.sorted(everywhereKeys.jobsPosts())).toHaveLength(200)
+  }
 })
 
 test("the sweep requires its exact configured bearer before any store call", async () => {

@@ -2,12 +2,35 @@
 
 This build moves to a new agent. Start here, then read the contract (`vector-everywhere-spec.md`) and the deviations log (`vector-everywhere-deviations.md`) in this folder. The deviations log records every reading the build made where the contract was silent or wrong about the code; it wins over the contract where they differ.
 
+## Current continuation status (2026-11-12)
+
+This section supersedes the original handoff status below. The continuation is in isolated worktree `/workspace/vector-build-everywhere`, branch `build-everywhere`, based on `vector-everywhere` at `f9b19a041`. **The P1c continuation has not yet been pushed or qualified by fresh hosted CI at this checkpoint.** The coordinating agent owns the normal fast-forward branch push and CI dispatch; no main push, PR or platform registration is authorized by this checkpoint.
+
+| Package | Current implementation | Commit/evidence |
+| --- | --- | --- |
+| VE-06 | Router, intake, production jobs event hooks, terminal-post outbox and sweep; integrations default off | `252ce0e3f` |
+| Baseline CI repair | Canonical display-link formatter moved to import-free shared schema; unchanged compliance test passes locally | `bb37de676` |
+| VE-07 | Unwired runner and desktop boundaries; absent safe-worktree capability holds work, shell remains denied | `d27b7aaf7` |
+| VE-08 | Actual authenticated loopback engine behaviour, test only | `88276591c`; 3 passed / 58 assertions, engine types pass |
+| P1c identity repair | Actual project remote and strict PR URL validation | `79e1f0353`; focused tests and desktop types pass |
+| P1c independent-review repairs | Fair post retries, atomic delivery admission, active worktree config and canonical git identity, hunk-aware secret/privacy scanning | This revision; scoped local checks and re-review pass, fresh Redis CI pending |
+
+Independent review and re-review closed the five reported P1c findings; the optional-worktree-config compatibility correction was also reviewed without a new blocker. Final local repair receipts: dedupe 8 passed / 36 assertions; jobs 43 / 334; intake 6 / 29; sweep 6 / 34; git 7 / 73; scan 4 / 24; runner 12 / 59. API and desktop typechecks pass. Dedupe skips two real-Redis cases and two setup/teardown hooks locally; jobs skips five real-Redis cases and two hooks. Exact scope and earlier receipts are in `vector-everywhere-progress.md`.
+
+**Current gates and remaining coverage:**
+
+- Push this reviewed revision normally to `vector-everywhere`, then qualify its exact head with the nine-job `Vector everywhere` lane, including the new real-Redis delivery-admission race, and dispatch the general `test` and `typecheck` workflows. Earlier green CI qualifies `f9b19a041`, not this revision. The old general run finished with only the two proved display-address inventory failures; its local repair still needs fresh hosted confirmation.
+- Begin P2 package builds only after the new dedicated lane qualifies. P2 remains VE-10 GitHub, VE-11 Slack, VE-12 Linear, VE-13 Jira, with current official platform sources read before each package. No P2 source is built yet. Configured adapters must be constructed in shared runtime factories for every serverless entrypoint, and reply message ids must be persisted with the job; the current empty registry is not a production integration.
+- Component tests do not qualify a real laptop, relay, platform app or Actions workflow. The explicit safe-worktree capability, its physical placement, signing-key handoff and R-M2 offline shell remain unwired/unproven here. R-M3's screened outward Brain audience remains a separate prerequisite; VE-08 proves personal-fact exclusion, not that entire audience contract.
+- Dedicated runner cases for every server `stop`/`lost`/404/409 variant, five minutes of failed heartbeat acknowledgements and question rejection are still missing. Existing cases cover user Stop, toggle-off, deadline, interruption recovery and permission rejection. Complete that matrix with the later integration/journey qualification before activating the laptop route.
+- P3, P4, Surfaces and go-live retain their specified merge and owner gates. No registration, credentials/settings change, paid inference, PR, release or main merge occurred in this continuation.
+
 **What Vector everywhere is:** an @Vector bot on GitHub, Slack, Linear and Jira that is local-first.
 - When the owner's computer is online, jobs run there through the Vector Remote relay.
 - Otherwise they run in the owner's own GitHub Actions (that route comes after @vector merges), or they wait.
 - Vector's servers relay messages and never hold code.
 
-## Where it stands
+## Original handoff state (2026-11-11, historical)
 
 - **Branch** `vector-everywhere`, cut from `main` at `0dcbb8e2` (PR #20). The branch is pushed and clean. Everything is on GitHub.
 - **Built, reviewed and repaired:** phases P1a and P1b, which cover VE-00 to VE-05. After each phase, three reviews ran (works for real, security and fail-closed, fits the code base), followed by one repair commit.
@@ -29,12 +52,9 @@ This build moves to a new agent. Start here, then read the contract (`vector-eve
   - The real-Redis cases run only in the lane, which has Redis. Redis must not run on the owner's Mac.
 - Only this handoff note and the spec's status line came after `12f1793fe`.
 
-## What to build next, in order
+## Build order
 
-1. **Phase P1c:**
-   - VE-06: router, ports, the intake core and the sweep. VE-05 left a note: the deployed `everywhereJobsApi` has no event hooks yet. VE-06 must build the production jobs API with its `claimed`, `declined`, `reported`, `settled` and `ended` events, or nothing gets posted back to platforms.
-   - VE-07: laptop runner core, desktop, unwired.
-   - VE-08: engine behaviour check, test only, no engine source change.
+1. **Phase P1c:** VE-06, VE-07 and VE-08 are implemented with local scoped validation and reviewed repairs. Finish the exact-head hosted qualification described above before the next package build. The production jobs API now has all five event hooks; no platform or relay adapter is activated.
 2. **Phase P2, the platform intakes:** VE-10 GitHub, VE-11 Slack, VE-12 Linear, VE-13 Jira (VE-13 starts by re-reading the Atlassian pages). The real OAuth exchanges for Slack and Linear plug into `createAccountApi({exchanges})`. Until they exist, `oauth-finish` answers 501 for those platforms.
 3. **Final review** of the whole branch (`a6db1513d..HEAD`), then repair.
 4. **Later phases wait,** as the contract says:

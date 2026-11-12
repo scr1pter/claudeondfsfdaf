@@ -3,7 +3,7 @@ import { drainAfter } from "../../../api/_lib/everywhere/after"
 import { createIntake } from "../../../api/_lib/everywhere/intake"
 import { setMapping } from "../../../api/_lib/everywhere/identity"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
-import { readJob, recordSeen } from "../../../api/_lib/everywhere/jobs"
+import { CREATE_JOB_SCRIPT, readJob, recordSeen } from "../../../api/_lib/everywhere/jobs"
 import { setJson } from "../../../api/_lib/everywhere/store"
 import { createJobId } from "../../../packages/schema/src/everywhere"
 import { RouteHarness } from "./lib/everywhere-account"
@@ -47,6 +47,32 @@ test("duplicate delivery creates no second job or signal", async () => {
   await f.intake.process(f.parsed, { ...view, jid: createJobId(f.fake.clock.now + 1) })
   expect(f.calls).toHaveLength(count)
   expect(f.calls.filter((call) => call.kind === "offer")).toHaveLength(1)
+})
+
+test("a lost create response cannot admit another job after the pending lease expires", async () => {
+  const f = await ready()
+  let crash = true
+  const intake = createIntake(f.adapter, { config: { ...f.config, offer: f.context().offer }, ports: f.ports,
+    now: () => f.fake.clock.now, sleep: f.routing.sleep, store: async (command) => {
+      const result = await f.store(command)
+      if (crash && command[0] === "EVAL" && command[1] === CREATE_JOB_SCRIPT) {
+        crash = false
+        throw new Error("Fixture lost the create response")
+      }
+      return result
+    } })
+  const jid = createJobId(f.fake.clock.now)
+  const view = { jid, platform: "slack" as const, installation: f.trigger.installation, shared: false, reply: f.parsed.reply }
+  await expect(intake.process(f.parsed, view)).rejects.toThrow("Fixture lost the create response")
+  expect((await readJob(f.store, jid))?.state).toBe("received")
+  expect(await f.store(["GET", everywhereKeys.delivery("slack", f.trigger.deliveryId)])).toBe(`job:${jid}`)
+  f.fake.clock.advance(60_001)
+  const calls = f.calls.length
+  const retry = createJobId(f.fake.clock.now)
+  await f.intake.process(f.parsed, { ...view, jid: retry })
+  expect(await readJob(f.store, retry)).toBeUndefined()
+  expect(f.fake.sorted(everywhereKeys.jobHistory(f.account))).toEqual([jid])
+  expect(f.calls).toHaveLength(calls)
 })
 
 test("an unlinked requester receives a private link prompt and makes no offer", async () => {

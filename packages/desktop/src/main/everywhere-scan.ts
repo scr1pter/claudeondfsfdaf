@@ -9,7 +9,32 @@ export type PostingCheck = (parts: readonly string[], sessions: readonly string[
 /** Binary changes cannot be inspected by this textual secret/privacy boundary and remain local. */
 export function addedLines(diff: string): string | undefined {
   if (/^(?:GIT binary patch|Binary files )/m.test(diff)) return undefined
-  return diff.split(/\r?\n/).filter((line) => line.startsWith("+") && !line.startsWith("+++")).map((line) => line.slice(1)).join("\n")
+  const added: string[] = []
+  let old = 0
+  let next = 0
+  let patch = diff === ""
+  for (const line of diff.split(/\r?\n/)) {
+    const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@(?: .*)?$/.exec(line)
+    if (hunk) {
+      if (old || next) return undefined
+      old = Number(hunk[1] ?? 1)
+      next = Number(hunk[2] ?? 1)
+      if (!Number.isSafeInteger(old) || !Number.isSafeInteger(next)) return undefined
+      patch = true
+      continue
+    }
+    if (line === "\\ No newline at end of file") continue
+    if (old || next) {
+      if (line.startsWith("+") && next > 0) { added.push(line.slice(1)); next--; continue }
+      if (line.startsWith("-") && old > 0) { old--; continue }
+      if (line.startsWith(" ") && old > 0 && next > 0) { old--; next--; continue }
+      return undefined
+    }
+    if (line === "") continue
+    if (/^(?:diff --git |index |new file mode |deleted file mode |old mode |new mode |similarity index |dissimilarity index |rename from |rename to |copy from |copy to |--- |\+\+\+ )/.test(line)) { patch = true; continue }
+    return undefined
+  }
+  return patch && old === 0 && next === 0 ? added.join("\n") : undefined
 }
 
 export async function checkedSummary(job: EverywhereJob, text: string, sessions: readonly string[], check: PostingCheck) {

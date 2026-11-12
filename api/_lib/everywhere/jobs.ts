@@ -43,6 +43,7 @@ import { ApiError } from "../http.js"
 import { appendAudit, type AuditInput } from "./audit.js"
 import type { OfferKey } from "./config.js"
 import { openJson, sealJson, type DataKey } from "./crypto.js"
+import { deliveryKey } from "./dedupe.js"
 import type { JobEraser } from "./erase.js"
 import { KEEP_MS, everywhereKeys, userIdValid } from "./keys.js"
 import { signOffer, type SignedOffer } from "./offer.js"
@@ -514,11 +515,14 @@ export function claimedJob(record: JobRecord, body: JobBody, lease: JobLease, li
  * indexes; refused while the sponsor already has as many live jobs as the cap allows. KEYS: job, body, due, the
  * sponsor's live set, the installation's live set, the sponsor's history. ARGV: record, record TTL, sealed body, body
  * TTL, due score, jid, received score, live cap, history cutoff, history TTL. Answers 1, 0 (the id exists) or -3 (the
- * live cap is full).
+ * live cap is full). Optional key 7 is the delivery admission: only ARGV[12]'s exact `pending:<jid>` fence may
+ * create a job, and that same transaction replaces it with `job:<jid>` for ARGV[11] milliseconds. -4 means lost admission.
  */
 export const CREATE_JOB_SCRIPT = [
+  "if KEYS[7] and redis.call('GET', KEYS[7]) ~= ARGV[12] then return -4 end",
   "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end",
   "if redis.call('ZCARD', KEYS[4]) >= tonumber(ARGV[8]) then return -3 end",
+  "if KEYS[7] then redis.call('SET', KEYS[7], 'job:' .. ARGV[6], 'PX', ARGV[11]) end",
   "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])",
   "redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[4])",
   "redis.call('ZADD', KEYS[3], ARGV[5], ARGV[6])",
@@ -680,6 +684,7 @@ export type NewJob = {
 export type CreateVerdict =
   | { readonly ok: true; readonly job: JobRecord }
   | { readonly ok: false; readonly code: "over-limit" }
+  | { readonly ok: false; readonly code: "duplicate" }
   | { readonly ok: false; readonly code: "invalid"; readonly error: string }
 
 /**
@@ -688,7 +693,7 @@ export type CreateVerdict =
  * task (except GitHub, whose thread the computer reads itself), text on a GitHub job, too much context, a malformed
  * repository or issue key. Refused `over-limit` while the sponsor has 3 live jobs.
  */
-export async function createJob(ctx: JobsContext, input: NewJob, options: { readonly jid?: string } = {}) {
+export async function createJob(ctx: JobsContext, input: NewJob, options: { readonly jid?: string; readonly deliveryId?: string } = {}) {
   const jid = options.jid ?? createJobId(ctx.now)
   const invalid = (error: string): CreateVerdict => ({ ok: false, code: "invalid", error })
   if (!JOB_ID_PATTERN.test(jid)) return invalid("jid: malformed")
@@ -741,6 +746,7 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: { read
         everywhereKeys.jobs(record.sponsor),
         everywhereKeys.installationJobs(record.installation),
         everywhereKeys.jobHistory(record.sponsor),
+        ...(options.deliveryId === undefined ? [] : [deliveryKey(input.platform, options.deliveryId)]),
       ],
       [
         encodeJobRecord(record),
@@ -753,10 +759,12 @@ export async function createJob(ctx: JobsContext, input: NewJob, options: { read
         SERVER_CAPS.sponsorLive,
         ctx.now - KEEP_MS.job,
         KEEP_MS.job,
+        ...(options.deliveryId === undefined ? [] : [KEEP_MS.deliveryDone, `pending:${jid}`]),
       ],
     ),
   )
   if (result === -3) return { ok: false, code: "over-limit" } satisfies CreateVerdict
+  if (result === -4) return { ok: false, code: "duplicate" } satisfies CreateVerdict
   if (result === 0) return invalid("jid: exists")
   if (result !== 1) throw storeUnavailable()
   await audit(ctx, record, { event: "job-accepted" })

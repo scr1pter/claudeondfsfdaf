@@ -1,5 +1,6 @@
 import { RedisClient } from "bun"
 import { AUDIT_APPEND_SCRIPT } from "../../../../api/_lib/everywhere/audit"
+import { FINISH_DELIVERY_SCRIPT } from "../../../../api/_lib/everywhere/dedupe"
 import { LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
 import { CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
 import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
@@ -49,6 +50,13 @@ export class FakeStore {
     [LINK_TRIES_SCRIPT, (keys, argv) => this.tries(keys, argv)],
     [CREATE_JOB_SCRIPT, (keys, argv) => this.createJob(keys, argv)],
     [TRANSITION_SCRIPT, (keys, argv) => this.transition(keys, argv)],
+    [FINISH_DELIVERY_SCRIPT, (keys, argv) => {
+      const current = this.run("GET", [keys[0]!]) as string | null
+      if (current?.startsWith("job:")) return 0
+      if (argv[1] !== "" && current !== argv[1]) return 0
+      this.run("SET", [keys[0]!, "done", "PX", argv[0]!])
+      return 1
+    }],
   ])
 
   constructor(readonly clock = new FakeClock()) {}
@@ -130,9 +138,12 @@ export class FakeStore {
       case "PTTL":
         return this.pttl(args[0]!)
       case "ZADD": {
-        const set = this.zset(args[0]!, true)!
+        const onlyExisting = args[1]?.toUpperCase() === "XX"
+        const set = this.zset(args[0]!, !onlyExisting)
+        if (!set) return 0
         let added = 0
-        for (let index = 1; index < args.length; index += 2) {
+        for (let index = onlyExisting ? 2 : 1; index < args.length; index += 2) {
+          if (onlyExisting && !set.has(args[index + 1]!)) continue
           if (!set.has(args[index + 1]!)) added++
           set.set(args[index + 1]!, Number(args[index]))
         }
@@ -350,8 +361,10 @@ export class FakeStore {
       string,
       string,
     ]
+    if (keys[6] && this.run("GET", [keys[6]]) !== argv[11]) return -4
     if (this.read(job)) return 0
     if ((this.zset(live)?.size ?? 0) >= Number(liveCap)) return -3
+    if (keys[6]) this.run("SET", [keys[6], `job:${jid}`, "PX", argv[10]!])
     this.run("SET", [job, record, "PX", recordTtl])
     this.run("SET", [body, sealed, "PX", bodyTtl])
     this.run("ZADD", [due, dueScore, jid])

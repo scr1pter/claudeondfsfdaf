@@ -1,13 +1,14 @@
-import { LIMITS, type PlatformId } from "../../../packages/schema/src/everywhere.js"
+import { JOB_ID_PATTERN, LIMITS, type PlatformId } from "../../../packages/schema/src/everywhere.js"
 import { ApiError } from "../http.js"
 import { KEEP_MS, everywhereKeys } from "./keys.js"
-import { setValue, type Store } from "./store.js"
+import { runScript, setValue, storeInteger, storeUnavailable, type Store } from "./store.js"
 
 /*
  * Delivery dedupe (contract 3.2 step 4) and single-use ids. A delivery id (`X-GitHub-Delivery`, `Linear-Delivery`,
  * Slack `event_id`, an A2A message id) is claimed with `SET NX` as `pending` for 60 seconds, then marked `done` for 7
  * days. A second delivery of the same id is `seen` and gets its 200 at once with no work. A delivery whose work never
- * finished (the function died) is free again after 60 seconds, in time for the platform's retry.
+ * finished before admission is free again after 60 seconds. Intake reserves `pending:<jid>` and atomically changes
+ * it to `job:<jid>` with job creation, retained for seven days even if the create response or process is lost.
  */
 
 export type DeliveryClaim = "new" | "seen"
@@ -22,10 +23,16 @@ function checkDelivery(deliveryId: string) {
     throw new ApiError(400, "EVERYWHERE_DELIVERY_INVALID", "This delivery has no usable id.")
 }
 
-/** Claims a delivery: `new` the first time, `seen` for every later delivery of the same id while it is remembered. */
-export async function claimDelivery(store: Store, platform: PlatformId, deliveryId: string): Promise<DeliveryClaim> {
+/** Shared by atomic job admission; the delivery key also keeps its admitted jid for seven days. */
+export function deliveryKey(platform: PlatformId, deliveryId: string) {
   checkDelivery(deliveryId)
-  const fresh = await setValue(store, everywhereKeys.delivery(platform, deliveryId), "pending", {
+  return everywhereKeys.delivery(platform, deliveryId)
+}
+
+/** Claims a delivery: `new` the first time, `seen` for every later delivery of the same id while it is remembered. */
+export async function claimDelivery(store: Store, platform: PlatformId, deliveryId: string, jid?: string): Promise<DeliveryClaim> {
+  if (jid !== undefined && !JOB_ID_PATTERN.test(jid)) throw new ApiError(400, "EVERYWHERE_DELIVERY_INVALID", "Invalid admission id.")
+  const fresh = await setValue(store, deliveryKey(platform, deliveryId), jid === undefined ? "pending" : `pending:${jid}`, {
     ttlMs: KEEP_MS.deliveryPending,
     onlyNew: true,
   })
@@ -33,9 +40,18 @@ export async function claimDelivery(store: Store, platform: PlatformId, delivery
 }
 
 /** Marks a claimed delivery done, so retries in the next 7 days are answered at once. */
-export async function finishDelivery(store: Store, platform: PlatformId, deliveryId: string): Promise<void> {
-  checkDelivery(deliveryId)
-  await setValue(store, everywhereKeys.delivery(platform, deliveryId), "done", { ttlMs: KEEP_MS.deliveryDone })
+export const FINISH_DELIVERY_SCRIPT = [
+  "local current = redis.call('GET', KEYS[1])",
+  "if current and string.sub(current, 1, 4) == 'job:' then return 0 end",
+  "if ARGV[2] ~= '' and current ~= ARGV[2] then return 0 end",
+  "redis.call('SET', KEYS[1], 'done', 'PX', ARGV[1])",
+  "return 1",
+].join(" ")
+
+export async function finishDelivery(store: Store, platform: PlatformId, deliveryId: string, jid?: string): Promise<void> {
+  if (jid !== undefined && !JOB_ID_PATTERN.test(jid)) throw new ApiError(400, "EVERYWHERE_DELIVERY_INVALID", "Invalid admission id.")
+  const changed = storeInteger(await runScript(store, FINISH_DELIVERY_SCRIPT, [deliveryKey(platform, deliveryId)], [KEEP_MS.deliveryDone, jid === undefined ? "" : `pending:${jid}`]))
+  if (changed !== 0 && changed !== 1) throw storeUnavailable()
 }
 
 /**
