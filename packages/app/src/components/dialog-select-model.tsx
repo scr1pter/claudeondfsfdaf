@@ -86,6 +86,11 @@ function createModelSections(input: {
   now: () => number
   fixed?: boolean
 }) {
+  // Temporary focused CI trace: observe state propagation without forcing a memo read or changing its behavior.
+  let traces = 0
+  const trace = (phase: string, value: unknown) => {
+    if (traces++ < 64) console.debug("SCOPE_PICKER_REACTIVITY", phase, JSON.stringify(value))
+  }
   const models = createMemo(() => {
     const provider = input.provider()
     return input.model
@@ -109,11 +114,14 @@ function createModelSections(input: {
     }),
   )
   const [open, setOpenSections] = createSignal(readOpenSections())
-  const views = createMemo(() =>
-    pickerSectionViews(sections(), open(), input.search()).map((view) =>
+  const views = createMemo(() => {
+    const expanded = open()
+    const next = pickerSectionViews(sections(), expanded, input.search()).map((view) =>
       input.fixed ? { ...view, toggle: false, open: true } : view,
-    ),
-  )
+    )
+    trace("views", { open: [...expanded], sections: next.map((view) => [view.section.id, view.open]) })
+    return next
+  })
   // Navigation order is render order: every visible header and row, then Connect provider.
   const navigation = createMemo(() => {
     const visible = pickerNavigation(views())
@@ -124,12 +132,18 @@ function createModelSections(input: {
   const currentRow = () => pickerCurrentRow(navigation(), current())
   const toggle = (id: string) => {
     const next = toggleOpenSection(open(), id)
+    trace("toggle-before", { id, before: [...open()], next: [...next] })
     setOpenSections(next)
+    trace("toggle-after", { id, open: [...open()] })
     writeOpenSections(next)
   }
   // Another picker may have opened or closed sections since this one last showed.
-  const reload = () => setOpenSections(readOpenSections())
-  return { current, currentRow, sections, views, navigation, toggle, reload }
+  const reload = () => {
+    const next = readOpenSections()
+    trace("reload", { before: [...open()], next: [...next] })
+    setOpenSections(next)
+  }
+  return { current, currentRow, sections, views, navigation, toggle, reload, trace }
 }
 
 /** Pointer highlight that follows real movement only. Rows render under a resting
@@ -216,7 +230,7 @@ function SectionToggle(props: {
       // A cancelled mousedown never moves focus; a cancelled pointerdown still can.
       onMouseDown={(event) => event.preventDefault()}
       onMouseMove={(event) => props.onHover(event)}
-      on:click={() => props.onToggle()}
+      onClick={() => props.onToggle()}
     >
       <span data-slot="model-row-icon" aria-hidden="true">
         <ProviderMark id={props.view.section.providerID} />
@@ -402,6 +416,7 @@ export function ModelSelectorPopoverV2(props: {
     requestAnimationFrame(complete)
   }
   const setOpen = (open: boolean) => {
+    picker.trace("popover-open", { before: store.open, next: open })
     if (open) {
       // Account models can arrive after the list was first read, as when vectordev.ai answers a first Codium
       // catalog read slowly; opening the picker reads the list again so they show up.
@@ -523,6 +538,7 @@ export function ModelSelectorPopoverV2(props: {
               <Show when={sections().length > 0} fallback={<PickerEmpty term={store.search} />}>
                 <For each={picker.views()}>
                   {(view) => {
+                    picker.trace("popover-render", { id: view.section.id, open: view.open })
                     const section = view.section
                     const rows = `${uid}-${section.id}`
                     return (
@@ -712,6 +728,7 @@ export const DialogSelectModelV2: Component<{ provider?: string; model?: ModelSt
             <Show when={sections().length > 0} fallback={<PickerEmpty term={search()} />}>
               <For each={picker.views()}>
                 {(view) => {
+                  picker.trace("dialog-render", { id: view.section.id, open: view.open })
                   const section = view.section
                   const rows = `${uid}-${section.id}`
                   return (

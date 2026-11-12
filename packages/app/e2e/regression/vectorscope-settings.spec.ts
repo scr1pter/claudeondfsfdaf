@@ -93,6 +93,12 @@ test("the owner saves a separate model, variant and disable setting only after c
   page,
 }, info) => {
   const app = await setup(page, engine({ status: { [rootID]: { type: "busy" } } }))
+  const reactivity: string[] = []
+  page.on("console", (message) => {
+    if (!message.text().startsWith("SCOPE_PICKER_REACTIVITY")) return
+    reactivity.push(message.text())
+    if (reactivity.length > 40) reactivity.shift()
+  })
   await catalog(page)
   await app.open()
   await openSettings(page)
@@ -126,6 +132,7 @@ test("the owner saves a separate model, variant and disable setting only after c
   console.log(
     "SCOPE_PICKER_CLICK_DIAGNOSTIC",
     await page.evaluate(() => (window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic()),
+    reactivity,
   )
   await expect(anthropic).toHaveAttribute("aria-expanded", "true")
   const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
