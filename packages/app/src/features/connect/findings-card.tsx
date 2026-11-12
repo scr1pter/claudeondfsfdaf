@@ -88,7 +88,7 @@ function FindingsCard(props: ToolProps & { plain?: ToolComponent }) {
     await actOnFindings(
       { run: runID, sessionID, action },
       {
-        load: (id, sessionID) => active.get(id, sessionID),
+        load: (id, sessionID) => active.get(id, sessionID, AbortSignal.timeout(30_000)),
         dismiss: (id, input) => {
           if (!current()) throw new Error("The connected conversation changed. Try again in the current conversation.")
           return active.dismiss(id, input)

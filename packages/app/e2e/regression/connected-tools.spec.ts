@@ -37,6 +37,46 @@ test("connected settings keep an unsaved draft and focus when a run refreshes", 
   expect(app.capture.config).toEqual([])
 })
 
+test("Connected tools fixes an existing owned run through an identifier-only composer handoff", async ({ page }) => {
+  const fixture = reviewRun()
+  const run = { ...fixture, request: { ...fixture.request, directory, requester: { kind: "user", sessionID: rootID } } }
+  const app = await setup(page, {
+    capabilities: { connections: true },
+    globalConfig: {},
+    messages: { [rootID]: [userMessage(rootID, "msg_connected_action", "Review these changes.")] },
+  })
+  let ownerReads = 0
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    if (route.request().method() === "GET" && pathname.endsWith("/runs/cr_fixture")) ownerReads++
+    return reply(route, pathname.endsWith("/runs/cr_fixture") ? run : pathname.endsWith("/runs") ? [run] : [])
+  })
+  await app.open()
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.locator(".settings-v2-workspace")
+  await settings.getByRole("tab", { name: "Agents", exact: true }).click()
+  await settings.locator('[data-component="connected-tools"]').getByRole("button", { name: "Fix", exact: true }).click()
+  await expect
+    .poll(
+      () =>
+        app.capture.session.filter(
+          (request) =>
+            request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)(?:\?|$)/.test(request.path),
+        ).length,
+    )
+    .toBe(1)
+  expect(ownerReads).toBe(1)
+  const body = JSON.stringify(
+    app.capture.session.find(
+      (request) => request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)(?:\?|$)/.test(request.path),
+    )!.body,
+  )
+  expect(body).toContain(run.id)
+  expect(body).toContain(run.result!.findings[0]!.id)
+  expect(body).not.toContain(run.result!.findings[0]!.body)
+  expect(app.capture.config).toEqual([])
+})
+
 test("a background findings card reloads the owner result instead of displaying the event payload", async ({
   page,
 }) => {

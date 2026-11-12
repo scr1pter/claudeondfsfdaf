@@ -1,11 +1,15 @@
 import { For, Show, createEffect, createMemo, createResource, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
+import { useParams } from "@solidjs/router"
 import type { Config } from "@vectordevai/sdk/v2/client"
 import type { Connect } from "@vectordevai/schema/connect"
 import { Button } from "@vectordevai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
 import { externalAgentsApi } from "@/features/agents/external-agent-desktop"
 import { createConnectClient } from "./client"
+import { actionableFindings } from "./connect-model"
+import { actOnFindings } from "./findings-card-model"
+import { requestComposerPrompt } from "@/utils/composer-handoff"
 import { memberRows, parseReviewSettings, readReviewSettings, reviewSettingsPatch, verdictLabel } from "./connect-model"
 
 export function ConnectedTools(props: {
@@ -15,6 +19,7 @@ export function ConnectedTools(props: {
   save: (patch: Config) => Promise<void>
 }) {
   const sdk = useServerSDK()
+  const params = useParams()
   const scope = createMemo(() => (props.directory ? sdk().ensureDirSdkContext(props.directory) : undefined))
   const client = createMemo(() => {
     const selected = scope()
@@ -27,7 +32,9 @@ export function ConnectedTools(props: {
     max_cost_usd: "2",
     error: "",
     saving: false,
+    acting: "",
   })
+  createEffect(on(client, () => setState({ acting: "", error: "" })))
   const saved = createMemo(() => readReviewSettings(props.config), undefined, {
     equals: (a, b) =>
       a.after_run === b.after_run &&
@@ -119,6 +126,30 @@ export function ConnectedTools(props: {
     } catch (error) {
       setState("error", error instanceof Error ? error.message : "Check the review settings.")
     }
+  }
+  const fix = async (run: Connect.Run, action: "fix" | "worktree") => {
+    const active = client()
+    const directory = props.directory
+    const sessionID = params.id
+    if (!active || !sessionID || state.acting || !actionableFindings(run, sessionID, true).length) return
+    const current = () => active === client() && directory === props.directory && sessionID === params.id
+    setState({ acting: run.id, error: "" })
+    await actOnFindings(
+      { run: run.id, sessionID, action },
+      {
+        load: (id, session) => active.get(id, session, AbortSignal.timeout(30_000)),
+        send: (text) => current() && requestComposerPrompt({ text, send: true }),
+        dismiss: async () => {
+          throw new Error("A repair does not dismiss findings.")
+        },
+      },
+    )
+      .catch((error: unknown) => {
+        if (current()) setState("error", error instanceof Error ? error.message : "Could not send these findings.")
+      })
+      .finally(() => {
+        if (current()) setState("acting", "")
+      })
   }
   return (
     <div class="settings-v2-card settings-v2-card--wide" data-component="connected-tools">
@@ -238,6 +269,26 @@ export function ConnectedTools(props: {
                       <p class="settings-v2-row-description">
                         {run.result?.summary ?? run.progress?.message ?? "Queued"}
                       </p>
+                      <Show when={actionableFindings(run, params.id, true).length > 0}>
+                        <div class="flex flex-wrap gap-2">
+                          <Button
+                            variant="secondary"
+                            size="small"
+                            disabled={!!state.acting}
+                            onClick={() => void fix(run, "fix")}
+                          >
+                            Fix
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="small"
+                            disabled={!!state.acting}
+                            onClick={() => void fix(run, "worktree")}
+                          >
+                            Fix in a worktree
+                          </Button>
+                        </div>
+                      </Show>
                     </div>
                     <Show when={run.status !== "done"}>
                       <Button
