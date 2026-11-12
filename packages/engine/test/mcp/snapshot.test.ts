@@ -1,4 +1,4 @@
-import { beforeEach, expect } from "bun:test"
+import { beforeEach, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Effect, Layer } from "effect"
@@ -104,7 +104,9 @@ cold.instance("cold inventory snapshots spawn zero real MCP children and read no
   }),
 )
 
-live.instance("snapshots report an existing live cached connection without another child or auth probe", () =>
+const WARM = "snapshots report an existing live cached connection without another child or auth probe"
+const ISOLATED_WARM = process.env.VECTOR_TEST_MCP_SNAPSHOT_CHILD === "1"
+const warm = () =>
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
     const instance = yield* TestInstance
@@ -119,5 +121,31 @@ live.instance("snapshots report an existing live cached connection without anoth
     expect(yield* mcp.snapshot()).toEqual({ fixture: { status: "disabled" }, disabled: { status: "disabled" } })
     expect(yield* count(instance.directory)).toBe(1)
     expect(probes.auth).toBe(auth)
-  }),
-)
+    process.stdout.write("MCP_SNAPSHOT_WARM_PROVED\n")
+  })
+
+if (ISOLATED_WARM) live.instance(WARM, warm)
+else
+  test(WARM, async () => {
+    // Other MCP tests intentionally replace the SDK Client module. A real stdio lifecycle must load the real SDK
+    // in a fresh process, with the ordinary test preload's per-process storage and strict network guard.
+    const child = Bun.spawn([process.execPath, "test", "--timeout", "30000", import.meta.path, "-t", WARM], {
+      cwd: path.join(import.meta.dir, "../.."),
+      env: { ...process.env, VECTOR_TEST_MCP_SNAPSHOT_CHILD: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 25_000)
+    try {
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        Bun.readableStreamToText(child.stdout),
+        Bun.readableStreamToText(child.stderr),
+      ])
+      expect(code, `${stderr}\n${stdout}`).toBe(0)
+      expect(stdout).toContain("MCP_SNAPSHOT_WARM_PROVED")
+    } finally {
+      clearTimeout(timer)
+      if (child.exitCode === null) child.kill()
+    }
+  })

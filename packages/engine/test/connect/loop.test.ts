@@ -1,5 +1,5 @@
 import { $ } from "bun"
-import { afterEach, expect } from "bun:test"
+import { afterEach, beforeEach, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Effect, Fiber, Layer } from "effect"
@@ -11,11 +11,14 @@ import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
+import { ProjectV2 } from "@vectordevai/core/project"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { ConnectHub } from "@/connect/hub"
+import { Config } from "@/config/config"
+import { InstanceRef } from "@/effect/instance-ref"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
@@ -377,6 +380,88 @@ live.instance(
 // The worktree fix, in process: the real task tool starts the connect_fix child in an isolated worktree. The child's
 // write outside the owned-path rule's files is refused, its curl is denied, its fix stays in its worktree, and merging
 // the worktree asks connect_write again, with the diff.
+const isolatedReplacements: LayerNode.Replacements = [
+  [SessionSummary.node, summaryLayer],
+  [LSP.node, lspLayer],
+  [MCP.node, mcpLayer],
+  [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
+  [Npm.node, NpmTest.noop],
+  [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true, experimentalEventSystem: true })],
+]
+const transfers: {
+  parent: string
+  child: string
+  project: ProjectV2.ID
+  inherited: boolean
+  parentTrusted: boolean
+  childTrusted: boolean
+  parentKey: string
+  childKey: string
+  parentProvider: boolean
+  childProvider?: boolean
+  childInstance?: { directory: string; worktree: string; project: ProjectV2.ID }
+}[] = []
+beforeEach(() => {
+  transfers.length = 0
+})
+
+// Observe the actual transfer and the actual child's config read while its checkout still exists. Failed launches
+// retire the checkout before the final assertions; a later directory scan cannot explain a missing child model.
+// This decorator returns the real config and inheritance decision, and never grants trust or supplies a provider.
+const observedConfig = Layer.effect(
+  Config.Service,
+  Effect.gen(function* () {
+    const original = yield* Config.Service
+    return Config.Service.of({
+      ...original,
+      inheritTrust: (directory) =>
+        Effect.gen(function* () {
+          const parent = yield* InstanceState.context
+          const trust = yield* original.trust()
+          const info = yield* original.get()
+          const inherited = yield* original.inheritTrust(directory)
+          const snapshots = yield* Effect.promise(() =>
+            Promise.all([
+              WorkspaceTrust.snapshot(parent.directory, [path.join(parent.directory, "vector.json")]),
+              WorkspaceTrust.snapshot(directory, [path.join(directory, "vector.json")]),
+            ]),
+          )
+          const child = yield* Effect.promise(() => WorkspaceTrust.status(Global.Path.state, snapshots[1]!))
+          transfers.push({
+            parent: parent.directory,
+            child: directory,
+            project: parent.project.id,
+            inherited,
+            parentTrusted: trust.trusted,
+            childTrusted: child.trusted,
+            parentKey: WorkspaceTrust.contentKey(snapshots[0]!),
+            childKey: WorkspaceTrust.contentKey(snapshots[1]!),
+            parentProvider: info.provider?.lmstudio?.models?.["test-model"] !== undefined,
+          })
+          return inherited
+        }),
+      get: () =>
+        Effect.gen(function* () {
+          const info = yield* original.get()
+          const instance = yield* InstanceRef
+          const transfer = instance && transfers.find((entry) => path.relative(entry.child, instance.directory) === "")
+          if (transfer && instance) {
+            transfer.childProvider = info.provider?.lmstudio?.models?.["test-model"] !== undefined
+            transfer.childInstance = {
+              directory: instance.directory,
+              worktree: instance.worktree,
+              project: instance.project.id,
+            }
+            expect(path.relative(transfer.child, instance.worktree)).toBe("")
+            expect(instance.project.id).toBe(transfer.project)
+            expect(transfer.childProvider, JSON.stringify(transfer)).toBe(true)
+          }
+          return info
+        }),
+    })
+  }),
+).pipe(Layer.provide(AppNodeBuilder.build(Config.node, isolatedReplacements)))
+
 const isolated = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -388,14 +473,7 @@ const isolated = testEffect(
       Permission.node,
       LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
     ]),
-    [
-      [SessionSummary.node, summaryLayer],
-      [LSP.node, lspLayer],
-      [MCP.node, mcpLayer],
-      [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
-      [Npm.node, NpmTest.noop],
-      [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true, experimentalEventSystem: true })],
-    ],
+    isolatedReplacements.concat([[Config.node, observedConfig]]),
   ),
 )
 
@@ -523,8 +601,18 @@ isolated.instance(
       expect({
         state: fixed?.run?.result?.state,
         output: fixed?.output,
+        transfers,
         ...(fixed?.run?.result?.state === "completed" ? {} : yield* launchFacts(directory, project)),
       }).toMatchObject({ state: "completed" })
+      expect(transfers).toHaveLength(1)
+      expect(transfers[0]).toMatchObject({
+        inherited: true,
+        parentTrusted: true,
+        childTrusted: true,
+        parentProvider: true,
+        childProvider: true,
+      })
+      expect(transfers[0]!.parentKey).toBe(transfers[0]!.childKey)
       expect(fixed?.run?.result?.findings.map((item) => item.status)).toEqual(["fixing"])
       const childID = fixed!.run!.result!.sessions[0]!
       children.push(childID)
@@ -532,10 +620,12 @@ isolated.instance(
       expect(child.agent).toBe(ConnectPolicy.FIX_AGENT)
       expect(child.parentID).toBe(requester.id)
       const childDirectory = path.join(Global.Path.data, "task-worktree", project, childID)
-      const trustedInputs = yield* Effect.promise(() => Promise.all([
-        WorkspaceTrust.snapshot(directory, [path.join(directory, "vector.json")]),
-        WorkspaceTrust.snapshot(childDirectory, [path.join(childDirectory, "vector.json")]),
-      ]))
+      const trustedInputs = yield* Effect.promise(() =>
+        Promise.all([
+          WorkspaceTrust.snapshot(directory, [path.join(directory, "vector.json")]),
+          WorkspaceTrust.snapshot(childDirectory, [path.join(childDirectory, "vector.json")]),
+        ]),
+      )
       expect(WorkspaceTrust.contentKey(trustedInputs[0]!)).toBe(WorkspaceTrust.contentKey(trustedInputs[1]!))
       expect(fixed?.output).toContain(`task_id ${childID}`)
       // The checkout is untouched until a merge.

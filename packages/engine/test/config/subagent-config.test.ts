@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import path from "path"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, Struct } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -190,7 +190,7 @@ describe("a repository's subagent and workflow keys", () => {
   })
 })
 
-// The 1.99.111 shape: the same top-level keys, with budget and sizing as that version declared them.
+// Preserve the actual 1.99.111 key set; connected review settings were added by the newer engine.
 const RELEASED_TOP_LEVEL = [
   "$schema",
   "shell",
@@ -233,7 +233,7 @@ const RELEASED_TOP_LEVEL = [
   "experimental",
 ]
 const Released = Schema.Struct({
-  ...ConfigV1.Info.fields,
+  ...Struct.omit(ConfigV1.Info.fields, ["connect"]),
   budget: Schema.optional(
     Schema.Struct({
       run: Schema.optional(RunBudget.Info),
@@ -277,8 +277,10 @@ const everyKey = {
 }
 
 describe("version skew", () => {
-  test("no new top-level key", () => {
-    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
+  test("connect is the only intentional new top-level key", () => {
+    expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual([...RELEASED_TOP_LEVEL, "connect"].sort())
+    expect(Object.keys(Released.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
+    expect(() => ConfigParse.schema(Released, { connect: { review: { after_run: "off" } } }, "vector.json")).toThrow()
   })
 
   test("a config with every new key decodes against the 1.99.111 shape and passes its top-level check", () => {
