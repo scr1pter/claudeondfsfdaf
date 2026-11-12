@@ -3,6 +3,15 @@ import path from "node:path"
 
 export const BINARY = "/usr/bin/bwrap"
 export const REFUSAL = "The GitHub run cannot isolate its tool processes. The command is refused."
+export const ENGINE_HOME = "/home/vector-agent"
+export const ENGINE_PRIVATE_DIRECTORIES = Object.freeze([
+  `${ENGINE_HOME}/.local/share/vector`,
+  `${ENGINE_HOME}/.local/state/vector`,
+  `${ENGINE_HOME}/.config/vector`,
+  `${ENGINE_HOME}/.cache/vector`,
+  `${ENGINE_HOME}/tmp/vector-agent`,
+])
+const ENGINE_CONTAINERS = ["/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox"]
 let enabled = false
 
 /** Called once by the actual private-channel loader. There is deliberately no lowering/reset API. */
@@ -21,13 +30,25 @@ export function assertBinary() {
     throw new Error(REFUSAL)
 }
 
-/** Files retain their existing Unix permissions. Only the trusted engine keeps a host PID; its proc mount is empty. */
-export function engineArguments(file: string, args: readonly string[], cwd: string) {
+export interface EngineScope {
+  /** Both paths come from the hosted runner's verified private state, never a repository or tool request. */
+  readonly cwd: string
+  readonly container: string
+  /** The runner's existing private 0600 regular file; the agent cannot reopen its pathname. */
+  readonly proofFile?: string
+}
+
+/** Only the exact checkout and fixed agent-private data roots are writable; proc stays empty and read-only. */
+export function engineArguments(file: string, args: readonly string[], scope: EngineScope) {
+  const directories = engineWritableDirectories(scope)
   return [
     "--die-with-parent",
-    "--bind",
+    "--ro-bind",
     "/",
     "/",
+    ...directories.flatMap((directory) => ["--bind", directory, directory]),
+    // Root opens FD3 after bwrap, then drops identity. This single file retains the runner's private DAC boundary.
+    ...(scope.proofFile ? ["--bind", scope.proofFile, scope.proofFile] : []),
     // Ordinary binds are nodev; mount only bwrap's standard private devices, never the host /dev tree.
     "--dev",
     "/dev",
@@ -43,11 +64,47 @@ export function engineArguments(file: string, args: readonly string[], cwd: stri
     "--cap-add",
     "CAP_DAC_OVERRIDE",
     "--chdir",
-    cwd,
+    scope.cwd,
     "--",
     file,
     ...args,
   ]
+}
+
+export function engineWritableDirectories(scope: EngineScope) {
+  if (
+    !ENGINE_CONTAINERS.includes(scope.container) ||
+    !path.posix.isAbsolute(scope.cwd) ||
+    path.posix.normalize(scope.cwd) !== scope.cwd ||
+    scope.cwd.includes("\0")
+  )
+    throw new Error(REFUSAL)
+  const directories = [`${scope.container}/checkout`, ...ENGINE_PRIVATE_DIRECTORIES]
+  if (scope.proofFile !== undefined) {
+    const proof = scope.proofFile
+    if (
+      !path.posix.isAbsolute(proof) ||
+      path.posix.normalize(proof) !== proof ||
+      proof.includes("\0") ||
+      path.posix.basename(proof) !== "session-proof.json" ||
+      path.posix.basename(path.posix.dirname(proof)) !== "vector-sandbox" ||
+      directories.some((directory) => proof === directory || proof.startsWith(directory + "/")) ||
+      proof === ENGINE_HOME ||
+      proof.startsWith(ENGINE_HOME + "/") ||
+      KERNEL.some((prefix) => proof === prefix || proof.startsWith(prefix + "/"))
+    )
+      throw new Error(REFUSAL)
+    if (process.platform === "linux") assertKernelPath(proof)
+  }
+  return directories
+}
+
+/** Neither the holder nor its interpreter may execute from a model-writable directory. */
+export function assertEngineExecutable(file: string, scope: EngineScope) {
+  if (!path.posix.isAbsolute(file) || path.posix.normalize(file) !== file || file.includes("\0"))
+    throw new Error(REFUSAL)
+  if (engineWritableDirectories(scope).some((directory) => file === directory || file.startsWith(directory + "/")))
+    throw new Error("The GitHub engine executable is inside a writable agent directory. The run is refused.")
 }
 
 export function argumentsForTool(file: string, args: readonly string[], cwd: string) {
