@@ -438,5 +438,24 @@
       }
     ],
     "qualification": "Source candidate only; no native execution or cold timing acceptance established."
+  },
+  "buildFixturePortabilityFollowUp": {
+    "revisionUnderTest": "39d36ca3700fdb65a4761fc25dca2e0b1a2eb637 plus test-only correction",
+    "initialResult": {
+      "passed": 18,
+      "failed": 1,
+      "assertions": 180,
+      "exitCode": 1
+    },
+    "cause": "Injected universal Mac build test selected main.swift with a POSIX-only suffix; Windows compiler fixture paths have native separators. No real native compiler invoked.",
+    "repair": "Select main.swift with existing path.basename; retain exact expected absolute source path and all build/hash/lock assertions. Production builder unchanged.",
+    "localCheck": {
+      "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/build-computer-helper.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 237,
+      "seconds": 2.69,
+      "exitCode": 0
+    }
   }
 }

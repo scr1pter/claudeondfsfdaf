@@ -702,7 +702,7 @@ describe("native build boundaries", () => {
       const compilations = calls.filter((call) => call.includes("swiftc") && call.includes("-o"))
       expect(compilations).toHaveLength(8)
       const unit = compilations.find((call) => call.at(-1)?.endsWith("unit"))!
-      expect(unit.filter((file) => file.endsWith("/main.swift"))).toEqual([
+      expect(unit.filter((file) => path.basename(file) === "main.swift")).toEqual([
         path.join(root, "native/computer-helper/macos/Tests/main.swift"),
       ])
       const caller = compilations.find((call) => call.at(-1)?.endsWith("caller"))!
