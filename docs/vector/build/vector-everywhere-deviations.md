@@ -140,3 +140,12 @@ Validation receipts and remaining phase gates are recorded in `vector-everywhere
 ## 2026-11-11, handoff CI: canonical display-link ownership
 
 The real general CI failure on both platforms was the unlisted pure GitHub display address in core/everywhere/frame.ts. The shared schema already owns import-free platform URL validation. `githubThreadUrl` now owns canonical display-link construction there too, and core framing delegates to it. Valid outputs are unchanged; new cases reject invalid ids and repository/host injection. No address string was obscured and no compliance test or source registry was edited. The unchanged compliance test passes locally; fresh hosted confirmation awaits the phase push.
+
+
+## 2026-11-11, VE-07: unattended boundaries
+
+- The specified ordinary worktree endpoint is unsafe for unattended use: `Worktree.create` starts project startup scripts. The new main request spells out the required safe capability. The runner refuses its absence; it does not reinterpret a normal endpoint as safe. No avoided engine file was edited.
+- `unattendedRules` preserves the user's deny/ask rules for each allowed editing tool, including wildcard permission keys, then explicitly denies dangerous tools. No shell-allow boolean is exposed; an actual R-M2 sandbox must precede shell support.
+- The git command flags in the contract do not disable URL rewrites, filters, includes or arbitrary credential helpers. The runner also refuses unrecognized repository config, ignores global/system config and supplies git authentication only through that child's private environment. Its own canonical HTTPS URL and explicit branch refspec never consult a named remote; fetched refs are per job instead of shared FETCH_HEAD. No raw child-process error or authentication value is returned.
+- Public or newly public repositories, secret-bearing diffs, posting-check failures/interactive decisions and changed control metadata never authorize pushing. A failed summary check produces only the fixed withheld text. Approval requests are rejected, and any such request prevents partial publishing.
+- Persistent in-flight ids/leases use an injected private atomic file adapter. Production file location, signing keys, relay wiring and actual safe-worktree qualification remain VE-21/main-owner work; tests use only generated secrets, loopback servers and disposable repositories.
