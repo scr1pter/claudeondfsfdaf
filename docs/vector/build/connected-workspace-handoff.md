@@ -2,6 +2,44 @@
 
 This build moves to a new agent. Start here, then read the contract (`connected-workspace-spec.md`) and the deviations log (`connected-workspace-deviations.md`) in this folder. The deviations log records every reading the build made where the contract was silent; it wins over the contract where they differ.
 
+## Hosted qualification update, 2026-11-12
+
+This update supersedes the earlier pending-CI statements for the source heads
+listed here. The current CWI source is
+`6070835df17486741745cc809d217e672391e5ff` on `build-connect`. The phase and owner
+holds below remain in force; green CI does not activate the held capabilities.
+
+| Receipt | Exact source | Result |
+| --- | --- | --- |
+| [Full test 43294716509](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43294716509) | `6070835df17486741745cc809d217e672391e5ff` | All 21 ordinary jobs succeeded, including Linux and Windows engine/unit/E2E jobs and the desktop Node engine bundle; three manual jobs were skipped |
+| [Typecheck 43294722508](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43294722508) | `6070835df17486741745cc809d217e672391e5ff` | All four jobs succeeded: cloud, App, desktop and engine |
+| [Mounted App 43294254210](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43294254210) | `6070835df17486741745cc809d217e672391e5ff` | Hosted App job succeeded; all 21 connected-workspace browser cases passed |
+| [Verify 43283916158](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43283916158) | `00cf720fa4307bb2049418faa82ac02d484b9b5e` | All three jobs succeeded: air gap, the 30-minute Vector Local desktop packet capture, and website build |
+
+The three skipped `test` jobs are the manual production App benchmark,
+published-release engine evidence and offline request-footprint lanes. They are
+not recorded as executed checks. `Verify` is evidence at the prior
+production-equivalent source above, not a fresh run at `6070835df`. This update
+records workflow/job conclusions and Root's reported browser/diagnostic totals;
+downloadable artifact contents were not inspected for this update.
+
+The dedicated Windows diagnostic at `6070835df` passed **730 cases, with one
+skip and zero failures**. The earlier guest-budget-`undefined` symptom did not
+reproduce. Its cause remains unproven: the diagnostic is not a budget fix, and
+no protected budget implementation changed. Keep the symptom and its evidence
+distinct from the separately held original-budget continuation capability.
+
+The C2 source and mounted surfaces now have the hosted receipts above. Whole
+C2 acceptance still requires its phase review and resolution or explicit
+acceptance of the documented capability holds. Automatic repair remains quiet
+without original-budget continuation; workflow execution still refuses without
+its private helper-scope capability; automatic swarm review remains unavailable
+without shared-budget authority. Passing Windows refusal cases does not enable
+unsupported private-Git functionality. Q1/main landing, CW-20 through CW-25's
+actual branch/interface merge prerequisites, release/default-on activation and
+remaining owner actions are unchanged. Hands and cloud-workspace development
+remain outside this continuation.
+
 ## Continuation checkpoint, 2026-11-12
 
 This section supersedes the historical starting status below. Work continues on `build-connect`; root owns ordinary pushes and CI. Do not assume that every current edit is committed or pushed. The original owner rules below still apply.

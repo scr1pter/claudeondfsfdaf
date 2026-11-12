@@ -1,5 +1,17 @@
 # Connected workspace: where the build departs from, or reads into, the contract
 
+## 2026-11-12, current hosted CI and unresolved diagnostic
+
+This additive status entry supersedes older statements that whole-branch CI or
+mounted App CI was still pending for the exact heads below. It changes no
+protected-file, phase, merge or activation gate.
+
+- **Current exact head.** `6070835df17486741745cc809d217e672391e5ff` has a successful [full test run 43294716509](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43294716509): all 21 ordinary jobs succeeded, and three manual lanes were skipped. The skips are production App benchmarking, published-release engine evidence and offline request footprint; they are not executed-check receipts.
+- **Types and mounted UI.** At that same exact head, [typecheck 43294722508](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43294722508) passed all four jobs, and [App run 43294254210](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43294254210) succeeded with all 21 connected-workspace browser cases passing. This is later hosted qualification than the earlier `06fe604e4` App receipt.
+- **Verify remains pinned to its actual source.** [Run 43283916158](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43283916158) succeeded at prior production-equivalent head `00cf720fa4307bb2049418faa82ac02d484b9b5e`: air gap, the 30-minute Vector Local desktop packet capture, and website build all succeeded. It is not represented as an exact-`6070835df` Verify rerun. This update records conclusions and Root's reported test totals, not an inspection of downloadable artifacts.
+- **The guest-budget symptom remains unexplained.** The dedicated Windows diagnostic at `6070835df` passed 730 cases, with one skip and zero failures. The original guest-budget-`undefined` failure did not reproduce, so no cause or budget repair is established. No protected budget implementation was changed. This result does not supply the missing original-budget continuation capability for automatic repair.
+- **Phase status and holds.** The C2 source and mounted surfaces have the above hosted receipts; whole C2 acceptance still needs its phase review and resolution or explicit acceptance of the documented holds. Automatic repair, workflow helper scope and automatic swarm shared-budget authority remain unavailable. Successful Windows refusal coverage does not add unsupported private-Git capability. Q1/main landing, CW-20 through CW-25's actual branch/interface merge prerequisites, release/default-on activation and remaining owner actions retain their existing gates. Hands and cloud-workspace development remain outside this continuation.
+
 ## 2026-11-12, current C2 source and mounted App qualification
 
 This entry supersedes older pending-status notes below. It does not grant a
