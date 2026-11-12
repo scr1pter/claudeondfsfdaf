@@ -20,6 +20,46 @@ export async function probeToolProcesses() {
   process.env.VECTOR_BRAIN_EMBED = "off"
   process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
   process.env.VECTOR_PURE = "1"
+  const errorCode = (error: unknown) =>
+    error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code.slice(0, 40)
+      : "UNKNOWN"
+  const nullDevice = {
+    stat: await fs.lstat("/dev/null").then(
+      (info) => ({
+        uid: info.uid,
+        gid: info.gid,
+        mode: (info.mode & 0o7777).toString(8),
+        rdev: info.rdev,
+        character: info.isCharacterDevice(),
+        symbolic: info.isSymbolicLink(),
+      }),
+      (error: unknown) => ({ error: errorCode(error) }),
+    ),
+    readAccess: await fs.access("/dev/null", constants.R_OK).then(
+      () => true,
+      (error: unknown) => errorCode(error),
+    ),
+    writeAccess: await fs.access("/dev/null", constants.W_OK).then(
+      () => true,
+      (error: unknown) => errorCode(error),
+    ),
+    openRead: await fs.open("/dev/null", constants.O_RDONLY).then(
+      async (file) => {
+        await file.close()
+        return true
+      },
+      (error: unknown) => errorCode(error),
+    ),
+    openWrite: await fs.open("/dev/null", constants.O_WRONLY).then(
+      async (file) => {
+        await file.close()
+        return true
+      },
+      (error: unknown) => errorCode(error),
+    ),
+  }
+  console.log(`Fixed null-device metadata: ${JSON.stringify(nullDevice)}`)
   const controlNode = path.join(process.env.PATH!.split(path.delimiter)[0]!, "node")
   const originalSpawn = spawn
   const describeOptions = (options: SpawnOptions) => ({
@@ -31,9 +71,15 @@ export async function probeToolProcesses() {
     argv0: options.argv0 ?? null,
     stdio: options.stdio,
   })
-  async function control(stage: string) {
-    const options: SpawnOptions = { stdio: ["ignore", "ignore", "pipe", "ipc"] }
-    const child = spawn(controlNode, ["-e", 'process.send({kind:"fixed-control"});process.disconnect()'], options)
+  async function control(stage: string, file = controlNode, mode: "inherit" | "pipe" | "ignore" | "ipc" = "ipc") {
+    const options: SpawnOptions = { stdio: mode === "ipc" ? ["ignore", "ignore", "pipe", "ipc"] : mode }
+    const args =
+      file === "/bin/true"
+        ? []
+        : mode === "ipc"
+          ? ["-e", 'process.send({kind:"fixed-control"});process.disconnect()']
+          : ["-e", "0"]
+    const child = spawn(file, args, options)
     const observation: {
       stage: string
       executable: string
@@ -45,7 +91,7 @@ export async function probeToolProcesses() {
       signal?: string | null
     } = {
       stage,
-      executable: controlNode,
+      executable: file,
       options: describeOptions(options),
       sameSpawn: spawn === originalSpawn,
       acknowledged: false,
@@ -53,7 +99,7 @@ export async function probeToolProcesses() {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         child.kill("SIGKILL")
-        reject(new Error(`Fixed Node IPC control did not complete: ${JSON.stringify(observation)}`))
+        reject(new Error(`Fixed child execution control did not complete: ${JSON.stringify(observation)}`))
       }, 5000)
       child.on("error", (error: Error & { code?: string }) => {
         observation.error = error.code ?? error.name
@@ -69,9 +115,15 @@ export async function probeToolProcesses() {
         resolve()
       })
     })
-    console.log(`Fixed Node IPC control: ${JSON.stringify(observation)}`)
+    console.log(`Fixed child execution control: ${JSON.stringify(observation)}`)
     return observation
   }
+  const direct = [
+    await control("true-inherited-stdio", "/bin/true", "inherit"),
+    await control("node-inherited-stdio", controlNode, "inherit"),
+    await control("node-piped-stdio", controlNode, "pipe"),
+    await control("node-ignored-stdio", controlNode, "ignore"),
+  ]
   const beforeGuard = await control("before-strict-guard")
   const { EgressGuard } = await import("@vectordevai/core/local-mode/guard")
   const network = EgressGuard.installStrict()
@@ -118,10 +170,6 @@ export async function probeToolProcesses() {
       [[InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })]],
     )
     const node = path.join(process.env.PATH!.split(path.delimiter)[0]!, "node")
-    const errorCode = (error: unknown) =>
-      error && typeof error === "object" && "code" in error && typeof error.code === "string"
-        ? error.code.slice(0, 40)
-        : "UNKNOWN"
     const ancestors = [process.cwd()]
     for (let parent = path.dirname(process.cwd()); ; parent = path.dirname(parent)) {
       ancestors.push(parent)
@@ -222,7 +270,8 @@ export async function probeToolProcesses() {
         executable,
         spawnOptions: describeOptions(dummyOptions),
         sameSpawn: spawn === originalSpawn,
-        controls: { beforeGuard, afterGuard },
+        nullDevice,
+        controls: { direct, beforeGuard, afterGuard },
         pid: dummy.pid,
         connected: dummy.connected,
         killed: dummy.killed,
