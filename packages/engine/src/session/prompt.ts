@@ -87,7 +87,7 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
-import { ownerBlock, scopeOf, scopeQuery } from "@vectordevai/core/review/prompt"
+import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -135,6 +135,14 @@ const MAX_INSTRUCTION_SNAPSHOTS = 256
 const VECTORSCOPE = "vectorscope."
 // Agents whose output leaves the machine or reaches the web: research workers and the research judge.
 const OUTWARD_AGENTS = new Set(["researcher", "research-judge"])
+
+/** A pinned review cannot substitute ambient files or a lossy summary for its admitted context. */
+export class ReviewContextUnavailable extends Error {
+  constructor(reason: string) {
+    super(`Review incomplete: ${reason} Start a fresh review with the pinned context.`)
+    this.name = "ReviewContextUnavailable"
+  }
+}
 // The kinds of the owner's own entries that say how they work (section 6.4a): their rules, preferences, decisions,
 // lessons and terms.
 const HOW_YOU_WORK = new Set<string>([...Brain.HABIT_KINDS, "rule", "term"])
@@ -1384,7 +1392,12 @@ const layer = Layer.effect(
             if (session.revert) {
               yield* revert.cleanup(session)
             }
-            const agent = session.internal ? yield* agents.helper(input.agent) : yield* agents.get(input.agent)
+            const agent = session.internal
+              ? yield* agents.helper(
+                  input.agent,
+                  session.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+                )
+              : yield* agents.get(input.agent)
             if (!agent) {
               const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
               const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -1611,7 +1624,10 @@ const layer = Layer.effect(
       const ag = !agentName
         ? yield* agents.defaultInfo()
         : current.internal
-          ? yield* agents.helper(agentName)
+          ? yield* agents.helper(
+              agentName,
+              current.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+            )
           : yield* agents.get(agentName)
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -2430,6 +2446,7 @@ const layer = Layer.effect(
     ) {
       const ctx = yield* InstanceState.context
       const sessionID = session.id
+      const pinnedReview = session.internal?.startsWith(PINNED_SESSION_PREFIX) === true
       let structured: unknown
       // Invalid StructuredOutput calls this run; the tool is built again for every step, so the count lives here.
       const invalid = { count: 0 }
@@ -2482,6 +2499,13 @@ const layer = Layer.effect(
         const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
         if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+        // The durable internal identity remains restrictive when a compaction
+        // window loses the original metadata. No summary or provider request may
+        // replace the exact base instructions supplied by the owning service.
+        if (pinnedReview && tasks.some((task) => task.type === "compaction"))
+          throw new ReviewContextUnavailable("Compaction would discard the provided review context.")
+        if (pinnedReview && reviewScope(msgs).instructions !== "provided")
+          throw new ReviewContextUnavailable("The provided review context is no longer available.")
         if (resumed && lastUser.id === resumed.parentID)
           lastUser.model = { providerID: ProviderV2.ID.openrouter, modelID: resumed.modelID }
 
@@ -2701,7 +2725,9 @@ const layer = Layer.effect(
         // An app's own quick-lane message is sized as a build request, so it runs on the build agent once it is work.
         // A helper session's agent may be a Subagent specialist Settings turned off, which only `helper` finds.
         const agentName = onBuild(lastUser) ? "build" : lastUser.agent
-        const agent = session.internal ? yield* agents.helper(agentName) : yield* agents.get(agentName)
+        const agent = session.internal
+          ? yield* agents.helper(agentName, pinnedReview ? { reviewedPrompt: true } : undefined)
+          : yield* agents.get(agentName)
         if (!agent) {
           const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
           const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -2768,7 +2794,7 @@ const layer = Layer.effect(
         // The owner's personal memory never goes to a session an invited guest has acted in, nor to a model that may
         // train on prompts.
         const guest = yield* guests.marked(sessionID)
-        const personal = !guest && !freeModelMayTrain(model)
+        const personal = !pinnedReview && !guest && !freeModelMayTrain(model)
         // Attachments the user marked to remember become documents while this request runs, never at admission. A
         // session a guest is in keeps none.
         if (!guest && !session.parentID && !session.internal)
@@ -2789,7 +2815,7 @@ const layer = Layer.effect(
         // A fork starts from its parent's history, which already carries all that, and must never write to it.
         if (session.parentID && !session.internal && !fork)
           msgs = yield* briefFor({ session, msgs, personal, agent: agent.name })
-        if (session.internal?.startsWith(VECTORSCOPE))
+        if (!pinnedReview && session.internal?.startsWith(VECTORSCOPE))
           msgs = yield* reviewFor({ session, msgs, personal, agent: agent.name })
         // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
         // found for it is not filled in from the owner's personal memory or private documents.
@@ -3056,7 +3082,7 @@ const layer = Layer.effect(
             LLMRequestPrep.resolveTools({ tools, agent: stepAgent, permission: rules, user: lastUser }),
           )
           const [skills, env, snapshot, mcpInstructions, modelMsgs] = yield* Effect.all([
-            quick ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
             quick
               ? Effect.succeed({ stable: [], session: [] })
               : sys.environment(model, {
@@ -3076,11 +3102,11 @@ const layer = Layer.effect(
                   },
                   tools: offered,
                   nested,
-                  workspace: !OUTWARD_AGENTS.has(agent.name),
+                  workspace: !pinnedReview && !OUTWARD_AGENTS.has(agent.name),
                   // The day the history starts on; a later day is noted on the user message that starts it.
                   date: msgs.find((message) => message.info.role === "user")?.info.time.created,
                 }),
-            quick
+            quick || pinnedReview
               ? Effect.succeed({ instructions: [], documents: false, personal: 0 })
               : sessionInstructions(
                   sessionID,
@@ -3105,7 +3131,7 @@ const layer = Layer.effect(
                       : {}),
                   },
                 ).pipe(Effect.orDie),
-            quick ? Effect.succeed(undefined) : sys.mcp(agent, rules),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.mcp(agent, rules),
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
             MessageV2.toModelMessagesEffect(
               stepAgent.name === "quick" ? msgs.filter((message) => message.info.id >= opened) : msgs,
@@ -4306,7 +4332,10 @@ const layer = Layer.effect(
       const agent = !agentName
         ? yield* agents.defaultInfo()
         : currentSession.internal
-          ? yield* agents.helper(agentName)
+          ? yield* agents.helper(
+              agentName,
+              currentSession.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+            )
           : yield* agents.get(agentName)
       if (!agent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)

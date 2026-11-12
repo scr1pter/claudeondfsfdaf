@@ -52,6 +52,8 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/service.ts",
   "packages/engine/src/cli/cmd/review.ts",
   "packages/engine/src/session/tools.ts",
+  "packages/engine/src/session/prompt.ts",
+  "packages/engine/src/agent/agent.ts",
   "packages/engine/src/tool/grep.ts",
   "packages/engine/src/tool/glob.ts",
   "packages/engine/src/tool/read.ts",

@@ -221,6 +221,9 @@ const STRUCTURE_TAG =
  */
 export const SCOPE = "vector.review"
 
+/** Engine-owned session identity; survives compaction without trusting prompt metadata. */
+export const PINNED_SESSION_PREFIX = "vectorscope.bound."
+
 export type Scope = { paths: string[]; trust: Trust; instructions?: "provided"; restrictedReads?: true }
 
 const MAX_SCOPE_PATHS = 300

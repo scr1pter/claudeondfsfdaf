@@ -170,3 +170,29 @@ review recall and implicit Read instruction attachments must not accompany its
 provided base context. Bound helpers must refuse compaction or lost context
 rather than silently restore ambient instructions. Legacy reviews retain their
 existing instruction and compaction behavior.
+
+## Pinned instruction boundary checkpoint
+
+Provided-context helpers now have a durable `vectorscope.bound.<pass>` identity.
+They skip the ambient instruction/Brain snapshot, personal review recall, mutable
+reference descriptions and implicit Read instruction/memory attachments. Their
+review/security role prompts come from reviewed engine sources even when global
+or project settings override the generic agents. Legacy helper customization is
+unchanged, including after a bound run. Bound helpers retain configured read
+permission ceilings. A lost provided-context scope or any compaction task refuses
+before a further provider/summary call; the runner returns a specific incomplete
+reason and does not spend a finalizer on that refusal.
+
+Independent review closed the narrow ambient prompt repair. Root's batch 020
+passes engine types, all five genuine provider cases (53 assertions), the two
+legacy agent compatibility cases (11 assertions), and core prompt cases 47/274.
+The preceding batch 016 also passed core/engine types, the seven actual-Git
+service cases, source-pin checks and existing Read regression. The final ambient
+source pin is `e7a93c2580e49bb3`; full source-pin validation will repeat with the
+next package. No paid provider call or production activation occurred.
+
+This audit does not certify all configuration admission: explicit selected models
+win, while variants/options still inherit ambient agent configuration. VS-09 must
+assess those fields for its independent service-only identity. It must not expose
+that factory helper as a normal primary-chat agent. Desktop consolidation and the
+post-change production benchmark comparison remain owed.

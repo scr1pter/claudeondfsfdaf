@@ -188,6 +188,11 @@ const GeneratedAgent = Schema.Struct({
   systemPrompt: Schema.String,
 })
 
+export interface HelperOptions {
+  /** The owning review service supplied the pinned instructions; no ambient prompt override may accompany them. */
+  readonly reviewedPrompt?: true
+}
+
 export interface Interface {
   readonly get: (agent: string) => Effect.Effect<Info>
   /**
@@ -196,7 +201,7 @@ export interface Interface {
    * reach it, but the helpers that run as one keep it: only this finds it, so every lookup of a helper session's agent
    * goes through here.
    */
-  readonly helper: (agent: string) => Effect.Effect<Info>
+  readonly helper: (agent: string, options?: HelperOptions) => Effect.Effect<Info>
   readonly list: () => Effect.Effect<Info[]>
   readonly defaultInfo: () => Effect.Effect<Info>
   readonly defaultAgent: () => Effect.Effect<string>
@@ -889,8 +894,15 @@ const layer = Layer.effect(
           return agents[agent]
         })
 
-        const helper = Effect.fnUntraced(function* (agent: string) {
-          return agents[agent] ?? helpers[agent]
+        const helper = Effect.fnUntraced(function* (agent: string, options?: HelperOptions) {
+          const item = agents[agent] ?? helpers[agent]
+          if (!item || !options?.reviewedPrompt) return item
+          if (agent !== "review" && agent !== "security")
+            throw new Error("A pinned review requires a built-in review or security helper.")
+          // Retain configured permission ceilings and model facts, while the
+          // role prompt comes only from the reviewed engine source. Do not
+          // mutate the configured helper used by legacy review sessions.
+          return { ...item, name: agent, prompt: agent === "security" ? PROMPT_SECURITY : PROMPT_REVIEW }
         })
 
         const list = Effect.fnUntraced(function* () {
@@ -937,8 +949,8 @@ const layer = Layer.effect(
       get: Effect.fn("Agent.get")(function* (agent: string) {
         return yield* InstanceState.useEffect(state, (s) => s.get(agent))
       }),
-      helper: Effect.fn("Agent.helper")(function* (agent: string) {
-        return yield* InstanceState.useEffect(state, (s) => s.helper(agent))
+      helper: Effect.fn("Agent.helper")(function* (agent: string, options?: HelperOptions) {
+        return yield* InstanceState.useEffect(state, (s) => s.helper(agent, options))
       }),
       list: Effect.fn("Agent.list")(function* () {
         return yield* InstanceState.useEffect(state, (s) => s.list())

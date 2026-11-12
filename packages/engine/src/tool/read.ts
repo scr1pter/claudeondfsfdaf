@@ -328,7 +328,13 @@ export const ReadTool = Tool.define<
         const entry = FileState.record(ctx.sessionID, filepath, seen)
         return entry ? { fileState: entry } : {}
       }
-      const loaded = yield* instruction.resolve(ctx.messages, filepath, ctx.messageID, SessionMemory.linking(ctx))
+      // Bound reviewers already carry the admitted base instructions. Nearby
+      // AGENTS and repository memory are mutable ambient authority, not part of
+      // that context. The requested file itself remains ordinary tool data.
+      const loaded =
+        ctx.extra?.pinnedReviewInstructions === true
+          ? []
+          : yield* instruction.resolve(ctx.messages, filepath, ctx.messageID, SessionMemory.linking(ctx))
       // Lines naming what is linked to the file are saved as placeholders, rendered for each request.
       const links = loaded.flatMap((item) => (item.link ? [item.link] : []))
       const sample = yield* readSample(filepath, Number(stat.size), SAMPLE_BYTES)

@@ -9,7 +9,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
-import { scopeOf } from "@vectordevai/core/review/prompt"
+import { scopeOf, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -177,6 +177,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     extra: {
       model: input.model,
       ...(restrictedReadListing ? { restrictedReadListing: true } : {}),
+      ...(input.session.internal?.startsWith(PINNED_SESSION_PREFIX) ? { pinnedReviewInstructions: true } : {}),
       // Whether the model may train on prompts, for tools that keep the owner's personal memory away from such a model.
       mayTrain: freeModelMayTrain(input.model),
       personal: input.personal === true,

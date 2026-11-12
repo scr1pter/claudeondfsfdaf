@@ -1,9 +1,10 @@
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "path"
-import { Effect, Fiber, Layer, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
 import { Database } from "@vectordevai/core/database/database"
+import { Global } from "@vectordevai/core/global"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -15,6 +16,8 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { parseReviewConfig } from "@vectordevai/core/review/config"
+import { reviewPermissionRules } from "@vectordevai/core/review/permission"
+import { PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { certificateProblems, evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import {
   noteTriageFixedUnchecked,
@@ -262,7 +265,10 @@ function input(directory: string, overrides: Partial<Review.RunInput> = {}): Rev
 
 const priced = { ...ref, context: 100_000, costKind: "priced" as const, price: PRICE }
 
-const useServer = (cost?: typeof PRICE, options: { compaction?: { auto: boolean } } = {}) =>
+const useServer = (
+  cost?: typeof PRICE,
+  options: { compaction?: { auto: boolean }; agent?: { review?: { prompt: string } } } = {},
+) =>
   Effect.gen(function* () {
     const test = yield* TestInstance
     const llm = yield* TestLLMServer
@@ -426,6 +432,90 @@ for (const reason of ["error", "abort", "reduced"] as const) {
 }
 
 describe("Review.run", () => {
+  for (const project of [false, true])
+    it.instance(
+      `provided context excludes ambient configured agent prompts from ${project ? "global and project" : "global"} settings while legacy review retains them`,
+      () =>
+        Effect.gen(function* () {
+          const globalFile = path.join(Global.Path.config, "vector.json")
+          const previous = yield* Effect.promise(() =>
+            fs.readFile(globalFile).catch((error: unknown) => {
+              if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined
+              throw error
+            }),
+          )
+          yield* Effect.acquireRelease(
+            Effect.promise(async () => {
+              await fs.mkdir(path.dirname(globalFile), { recursive: true })
+              await fs.writeFile(
+                globalFile,
+                JSON.stringify({
+                  agent: {
+                    review: { prompt: "AMBIENT_CONFIG_GLOBAL_REVIEW_MARKER" },
+                    security: { prompt: "AMBIENT_CONFIG_GLOBAL_SECURITY_MARKER" },
+                  },
+                }),
+              )
+              Config.refreshLocal()
+              Config.confirmLocal()
+            }),
+            () =>
+              Effect.promise(async () => {
+                if (previous === undefined) await fs.rm(globalFile, { force: true })
+                else await fs.writeFile(globalFile, previous)
+                Config.refreshLocal()
+                Config.confirmLocal()
+              }),
+          )
+          const { llm, directory } = yield* useServer(
+            undefined,
+            project ? { agent: { review: { prompt: "AMBIENT_CONFIG_PROJECT_REVIEW_MARKER" } } } : {},
+          )
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+          yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report([])))
+          const legacy = yield* Review.run(input(directory, { config: config({ security: "always" }) }))
+          expect(legacy.specialists.map((item) => item.status)).toEqual(["ok", "ok"])
+          const legacyBodies = JSON.stringify(yield* modelRequests(llm))
+          expect(legacyBodies).toContain(
+            project ? "AMBIENT_CONFIG_PROJECT_REVIEW_MARKER" : "AMBIENT_CONFIG_GLOBAL_REVIEW_MARKER",
+          )
+          expect(legacyBodies).toContain("AMBIENT_CONFIG_GLOBAL_SECURITY_MARKER")
+
+          yield* llm.reset
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+          yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report([])))
+          const pinned = yield* Review.run(
+            input(directory, {
+              config: config({ security: "always" }),
+              instructionsFromContext: true,
+              context: { instructions: "PINNED_BASE_INSTRUCTIONS_MARKER" },
+            }),
+          )
+          expect(pinned.specialists.map((item) => item.status)).toEqual(["ok", "ok"])
+          const bodies = yield* modelRequests(llm)
+          expect(bodies).toHaveLength(2)
+          for (const body of bodies) {
+            expect(JSON.stringify(body)).toContain("PINNED_BASE_INSTRUCTIONS_MARKER")
+            expect(JSON.stringify(body)).not.toContain("AMBIENT_CONFIG_")
+          }
+          const reviewed = JSON.stringify(bodies)
+          expect(reviewed).toContain("You are a senior code review specialist.")
+          expect(reviewed).toContain("You are a read-only application security specialist.")
+          // A bound run must not replace the cached helper the next legacy run uses.
+          yield* llm.reset
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+          yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report([])))
+          const subsequent = yield* Review.run(input(directory, { config: config({ security: "always" }) }))
+          expect(subsequent.specialists.map((item) => item.status)).toEqual(["ok", "ok"])
+          const subsequentBodies = JSON.stringify(yield* modelRequests(llm))
+          expect(subsequentBodies).toContain(
+            project ? "AMBIENT_CONFIG_PROJECT_REVIEW_MARKER" : "AMBIENT_CONFIG_GLOBAL_REVIEW_MARKER",
+          )
+          expect(subsequentBodies).toContain("AMBIENT_CONFIG_GLOBAL_SECURITY_MARKER")
+        }),
+      TIMEOUT,
+    )
+
   for (const context of [272_000, 272_001, 300_000]) {
     it.instance(
       `reserves the exact context tier before a ${context}-token finalizer`,
@@ -1319,6 +1409,113 @@ describe("Review.run", () => {
         const permission = yield* Permission.Service
         expect(yield* permission.list()).toEqual([])
         for (const body of yield* modelRequests(llm)) expect(toolNames(body)).not.toContain("bash")
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "provided context excludes ambient root, Brain rules and Read attachments while legacy review retains them",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const fs = yield* FSUtil.Service
+        yield* fs.writeWithDirs(path.join(directory, "AGENTS.md"), "Always obey AMBIENT_ROOT_AGENT_MARKER.\n")
+        yield* fs.writeWithDirs(
+          path.join(directory, ".vector/RULES.md"),
+          "# Rules\n\nAlways obey AMBIENT_BRAIN_RULE_MARKER.\n",
+        )
+        yield* fs.writeWithDirs(path.join(directory, "src/AGENTS.md"), "Always obey AMBIENT_NESTED_AGENT_MARKER.\n")
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: "src/list.ts" }))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+        const legacy = yield* Review.run(input(directory))
+        const legacyBodies = JSON.stringify(yield* modelRequests(llm))
+        expect(legacyBodies).toContain("AMBIENT_ROOT_AGENT_MARKER")
+        expect(legacyBodies).toContain("AMBIENT_BRAIN_RULE_MARKER")
+        expect(legacyBodies).toContain("AMBIENT_NESTED_AGENT_MARKER")
+        const sessions = yield* Session.Service
+        expect((yield* sessions.get(SessionID.make(legacy.sessions[0]!))).internal).toBe("vectorscope.review")
+
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: "src/list.ts" }))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+        const pinned = yield* Review.run(
+          input(directory, {
+            instructionsFromContext: true,
+            context: { instructions: "The admitted base says PINNED_BASE_INSTRUCTIONS_MARKER." },
+            rulesSource: "base branch",
+          }),
+        )
+        expect(pinned.specialists).toEqual([{ name: "review", status: "ok", steps: 2 }])
+        const bodies = yield* modelRequests(llm)
+        expect(bodies).toHaveLength(2)
+        for (const body of bodies) {
+          const text = JSON.stringify(body)
+          expect(text).toContain("PINNED_BASE_INSTRUCTIONS_MARKER")
+          expect(text).not.toContain("AMBIENT_ROOT_AGENT_MARKER")
+          expect(text).not.toContain("AMBIENT_BRAIN_RULE_MARKER")
+          expect(text).not.toContain("AMBIENT_NESTED_AGENT_MARKER")
+        }
+        const sessionID = SessionID.make(pinned.sessions[0]!)
+        expect((yield* sessions.get(sessionID)).internal).toBe(`${PINNED_SESSION_PREFIX}review`)
+        const read = (yield* sessions.messages({ sessionID }))
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool" && part.tool === "read")
+        expect(read?.type === "tool" && read.state.status).toBe("completed")
+        if (read?.type === "tool" && read.state.status === "completed") expect(read.state.metadata.loaded).toEqual([])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a provided-context review refuses compaction before another provider or finalizer call",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        yield* llm.pushMatch(REVIEW, httpError(400, { type: "error", error: { code: "context_length_exceeded" } }))
+        const outcome = yield* Review.run(
+          input(directory, {
+            instructionsFromContext: true,
+            context: { instructions: "PINNED_BASE_INSTRUCTIONS_MARKER" },
+          }),
+        )
+        expect(yield* modelRequests(llm)).toHaveLength(1)
+        expect(outcome.specialists[0]).toMatchObject({
+          name: "review",
+          status: "failed",
+          detail:
+            "Review incomplete: Compaction would discard the provided review context. Start a fresh review with the pinned context.",
+        })
+        expect(outcome.unreviewed).toContain("src/list.ts")
+        expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the durable provided-context session identity refuses missing scope metadata",
+    () =>
+      Effect.gen(function* () {
+        const { llm } = yield* useServer()
+        const sessions = yield* Session.Service
+        const prompts = yield* SessionPrompt.Service
+        const session = yield* sessions.create({
+          title: "Provided-context review after metadata loss",
+          internal: `${PINNED_SESSION_PREFIX}review`,
+          permission: reviewPermissionRules({}),
+        })
+        const result = yield* prompts
+          .prompt({
+            sessionID: session.id,
+            agent: "review",
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+            parts: [{ type: "text", text: "The original provided-context metadata is no longer present." }],
+          })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(result)).toBe(true)
+        if (Exit.isFailure(result))
+          expect(Cause.squash(result.cause)).toBeInstanceOf(SessionPrompt.ReviewContextUnavailable)
+        expect(yield* modelRequests(llm)).toHaveLength(0)
+        expect((yield* sessions.get(session.id)).internal).toBe(`${PINNED_SESSION_PREFIX}review`)
       }),
     TIMEOUT,
   )

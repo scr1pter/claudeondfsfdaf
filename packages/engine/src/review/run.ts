@@ -55,6 +55,7 @@ import {
   buildSecurityPrompt,
   buildVerifyPrompt,
   SCOPE,
+  PINNED_SESSION_PREFIX,
   type PromptInput,
 } from "@vectordevai/core/review/prompt"
 import {
@@ -239,7 +240,7 @@ interface Asked<T> {
   detail?: string
 }
 
-type Sent = { timedOut: true } | { timedOut: false; message?: SessionV1.WithParts }
+type Sent = { timedOut: true } | { timedOut: false; message?: SessionV1.WithParts; contextError?: string }
 
 const VERIFY_STEPS = 10
 const FINALIZE_MS = 90_000
@@ -548,7 +549,7 @@ export const run: (
       // A helper session: it stays out of session lists, and the review reports what it spent.
       const session = yield* sessions.create({
         title: `Vectorscope review · ${input.head.slice(0, 7)} · ${spec.name}`,
-        internal: `vectorscope.${spec.name}`,
+        internal: `${input.instructionsFromContext ? PINNED_SESSION_PREFIX : "vectorscope."}${spec.name}`,
         parentID: input.parentID,
         permission: rules,
       })
@@ -677,7 +678,13 @@ export const run: (
               Effect.timeoutOption(Duration.millis(ms)),
               Effect.exit,
               Effect.flatMap((exit): Effect.Effect<Sent> => {
-                if (Exit.isFailure(exit)) return Effect.succeed({ timedOut: false })
+                if (Exit.isFailure(exit)) {
+                  const error = Cause.squash(exit.cause)
+                  return Effect.succeed({
+                    timedOut: false,
+                    ...(error instanceof SessionPrompt.ReviewContextUnavailable ? { contextError: error.message } : {}),
+                  })
+                }
                 if (Option.isNone(exit.value))
                   return prompts.cancel(session.id).pipe(Effect.as({ timedOut: true as const }))
                 return Effect.succeed({ timedOut: false, message: exit.value.value })
@@ -695,6 +702,7 @@ export const run: (
       })
 
       const first = yield* send(spec.text, deadline - Date.now())
+      if (!first.timedOut && first.contextError) return done(undefined, "failed", undefined, first.contextError)
       if (first.timedOut) track.stop ??= "timeout"
       const message = first.timedOut ? undefined : first.message
       // A budget.run cap can still stop a specialist through the run guard. Count it as a budget stop, so
@@ -725,6 +733,7 @@ export const run: (
       track.denied = false
       yield* sessions.setPermission({ sessionID: session.id, permission: [...rules, DENY_ALL, ALLOW_OUTPUT] })
       const last = yield* send(buildFinalizePrompt(), FINALIZE_MS)
+      if (!last.timedOut && last.contextError) return done(undefined, "failed", undefined, last.contextError)
       const final = last.timedOut ? undefined : last.message
       const finalStructured = final?.info.role === "assistant" ? final.info.structured : undefined
       const finalValue = spec.decode(finalStructured !== undefined ? finalStructured : lastText(final))
