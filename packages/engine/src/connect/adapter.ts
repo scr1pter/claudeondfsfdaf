@@ -8,6 +8,7 @@ import type { SessionV1 } from "@vectordevai/core/v1/session"
 // review run → session prompt → registry.
 import type { SessionPrompt } from "@/session/prompt"
 import type { SessionID } from "@/session/schema"
+import type { ConnectGit } from "./git"
 
 // How a member whose code lives elsewhere plugs into connected tools. An owner adds one file under connect/adapters/
 // and one line to its index. The hub checks effects, asks consent, records the run, emits events and keeps results;
@@ -80,6 +81,8 @@ export interface HandoffContext {
   readonly requestID: string
   /** Connect-owned hidden placement parent for a task worktree review; consent still belongs to sessionID. */
   readonly reviewParentID?: SessionID
+  /** Revocable Git authority minted only while the hub holds a verified task's review lock. Never request data. */
+  readonly reviewGit?: ConnectGit.TaskRoot
   /** A placed task review always ignores previous branch state. */
   readonly fullReview?: true
   /** Original task target for persisted findings comparison; execution still uses its verified branch range. */

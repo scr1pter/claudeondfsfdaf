@@ -45,6 +45,7 @@ import { ConnectMembers } from "./members"
 import { ConnectNote } from "./note"
 import { ConnectContext } from "./context"
 import { ConnectPlacement } from "./placement"
+import { ConnectGit } from "./git"
 import { ConnectDirectory } from "./directory"
 import type { ConnectDirectoryRequest } from "./directory-request"
 import { FileLock } from "@/tool/file-lock"
@@ -1238,7 +1239,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         remember(state, entry)
         yield* publish(entry).pipe(Effect.onInterrupt(() => unstarted(entry)))
 
-        const execute = (placed?: TaskIsolation.Record) =>
+        const execute = (placed?: TaskIsolation.Record, reviewGit?: ConnectGit.TaskRoot) =>
           Effect.gen(function* () {
             if (entry.stop) return yield* Effect.interrupt
             const admission = yield* admit(entry, saved?.runs ?? [], placed)
@@ -1246,6 +1247,8 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             entry.run = { ...entry.run, status: "running", time: { ...entry.run.time, started } }
             yield* publish(entry)
             if (!placed || request.action !== "review") return yield* admission.handle(request, admission.context)
+            if (!reviewGit)
+              return yield* refusal("input", "The isolated task review has no live verified Git authority.")
             const target = { kind: "branch", base: placed.reviewBase ?? placed.seed! } as const
             return yield* ConnectPlacement.use(
               {
@@ -1262,7 +1265,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 admission
                   .handle(
                     { ...request, target, directory: placed.directory },
-                    { ...admission.context, reviewParentID: parentID, fullReview: true, reviewTarget: request.target },
+                    {
+                      ...admission.context,
+                      reviewParentID: parentID,
+                      reviewGit,
+                      fullReview: true,
+                      reviewTarget: request.target,
+                    },
                   )
                   .pipe(
                     Effect.tap((result) =>
@@ -1283,7 +1292,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             return yield* refusal("input", "An isolated task review needs its launching conversation and VectorScope.")
           return yield* isolation
             .review({ taskID: request.target.task, parentSessionID: request.requester.sessionID }, (record) =>
-              execute(record),
+              ConnectGit.withTask(record, (reviewGit) => execute(record, reviewGit)),
             )
             .pipe(
               Effect.catch((error) =>

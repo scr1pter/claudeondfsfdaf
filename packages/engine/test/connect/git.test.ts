@@ -8,6 +8,7 @@ import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { ConnectHub } from "@/connect/hub"
 import { VectorScopeAdapter } from "@/connect/adapters/vectorscope"
 import { ConnectGit } from "@/connect/git"
@@ -350,6 +351,86 @@ local(
         expect(exit._tag).toBe("Failure")
         expect(model).toBe(false)
       }
+    }),
+  { git: true },
+)
+
+local(
+  "task Git authority refuses a copied token, another directory and every use after its locked callback ends",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const other = yield* tmpdirScoped()
+      const metadata = yield* Effect.promise(() => ReadOnlyGit.metadataHead(test.directory))
+      const record = {
+        directory: metadata.directory,
+        gitDirectory: metadata.gitDirectory,
+        gitCommonDirectory: metadata.commonDirectory,
+        tip: metadata.head,
+      }
+      let released: ConnectGit.TaskRoot | undefined
+      let retained: ConnectGit.Selected | undefined
+      let models = 0
+      yield* ConnectGit.withTask(record, (root) =>
+        Effect.gen(function* () {
+          released = root
+          for (const [directory, token] of [
+            [test.directory, { ...root }],
+            [other, root],
+          ] as const) {
+            const refused = yield* ConnectGit.use(
+              directory,
+              () =>
+                Effect.sync(() => {
+                  models++
+                }),
+              token,
+            ).pipe(Effect.exit)
+            expect(refused._tag).toBe("Failure")
+            expect(models).toBe(0)
+          }
+          yield* ConnectGit.use(
+            test.directory,
+            (selected) =>
+              Effect.gen(function* () {
+                retained = selected
+                yield* selected.check()
+                const result = yield* selected.git.run(
+                  ["status", "--porcelain", "--untracked-files=no", "--no-renames"],
+                  { cwd: test.directory },
+                )
+                expect(result.exitCode).toBe(0)
+                models++
+              }),
+            root,
+          )
+        }),
+      )
+      if (!released || !retained) return yield* Effect.die(new Error("The genuine task authority was not exercised"))
+      expect(models).toBe(1)
+      const late = yield* ConnectGit.use(
+        test.directory,
+        () =>
+          Effect.sync(() => {
+            models++
+          }),
+        released,
+      ).pipe(Effect.exit)
+      expect(late._tag).toBe("Failure")
+      expect((yield* retained.check().pipe(Effect.exit))._tag).toBe("Failure")
+      expect(models).toBe(1)
+      const stale = yield* ConnectGit.withTask({ ...record, tip: "0".repeat(40) }, (root) =>
+        ConnectGit.use(
+          test.directory,
+          () =>
+            Effect.sync(() => {
+              models++
+            }),
+          root,
+        ),
+      ).pipe(Effect.exit)
+      expect(stale._tag).toBe("Failure")
+      expect(models).toBe(1)
     }),
   { git: true },
 )

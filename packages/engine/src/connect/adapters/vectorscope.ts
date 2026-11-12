@@ -321,181 +321,191 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
       )
 
     const handle: NonNullable<ConnectAdapter.Adapter["handle"]> = (request, context) =>
-      ConnectGit.use(request.directory, (selected) =>
-        Effect.gen(function* () {
-          const git = selected.git
-          const selectedBase = Context.add(base, Git.Service, git)
-          if (request.action === "fix") return yield* fix(request, context, selected)
-          if (request.target.kind === "task")
-            return yield* refusal("input", "A task review must be placed by the connected-tools hub.")
-          if (!context.sessionID && !context.reviewParentID)
-            return yield* refusal("unavailable", "A VectorScope review through connect needs a session to run in.")
-          const lent = context.helper
-          if (!lent)
-            return yield* refusal(
-              "unavailable",
-              "Connect can run a VectorScope review only from a tool call that lends it this session's prompt calls.",
-            )
-          const helper = {
-            prompt: (input: SessionPrompt.PromptInput) =>
-              selected.check().pipe(
-                Effect.orDie,
-                Effect.flatMap(() => lent.prompt(input)),
-              ),
-            cancel: (sessionID: SessionID) => lent.cancel(sessionID),
-          }
-          const target = context.reviewTarget ?? request.target
-          const say = (pass: string, message: string) => context.progress({ pass, message })
-
-          // Check 1: the settings the reviewed changes may have edited. No model runs when they did. It runs again right
-          // before the review and once more after it, since an edit can land while connect waits on a question or while
-          // the review runs (a parallel tool call, a background helper).
-          yield* say("settings", "Checking what the changes edit")
-          const settings = Effect.fnUntraced(function* () {
-            const scope = yield* changes(git, request.directory, request.target)
-            return { scope, edited: ConnectPolicy.editedSettings(scope.settings, scope.links) }
-          })
-          const { scope, edited } = yield* settings()
-          if (edited.length > 0) return settingsResult(target, edited)
-
-          // Check 2: the models, the dollar cap, and `connect_model` when a model is priced, has no readable price, or is
-          // the repository's choice and not the user's own review model.
-          yield* say("model", "Checking the review model")
-          const planned = yield* plan(scope.root, git).pipe(Effect.catch((why) => refusal("unavailable", why.reason)))
-          const models = [planned.review, ...(planned.triage ? [planned.triage] : [])]
-          const cap = ConnectPolicy.effectiveCap({
-            costKind: capKind(models),
-            repository: planned.config.maxCostUsd,
-            tool: request.budget?.maxCostUsd,
-            run: context.spend,
-          })
-          if (!cap.ok) return yield* cap.refusal
-          const repository = models.some((model) => model.fromRepository)
-          const user = repository ? yield* userModel(git) : undefined
-          const consents = ConnectPolicy.reviewConsents({
-            models,
-            ...(user ? { userModel: user } : {}),
-            ...(cap.value !== undefined ? { maxCostUsd: cap.value } : {}),
-          }).filter((consent) => consent.permission === "connect_model")
-          // `connect` itself was asked by the hub before this adapter ran.
-          for (const consent of consents) yield* context.ask(consent)
-
-          // The review, through VectorScope's own entry point.
-          const loaded = yield* Effect.promise(async () => {
-            const [cli, run, model, review] = await Promise.all([
-              import("@/cli/cmd/review"),
-              import("@/review/run"),
-              import("@/review/model"),
-              import("@/review/context"),
-            ])
-            return {
-              executeLocalReview: cli.executeLocalReview,
-              run: run.Review.run,
-              ReviewModel: model.ReviewModel,
-              ReviewContext: review.ReviewContext,
+      ConnectGit.use(
+        request.directory,
+        (selected) =>
+          Effect.gen(function* () {
+            const git = selected.git
+            const selectedBase = Context.add(base, Git.Service, git)
+            if (request.action === "fix") return yield* fix(request, context, selected)
+            if (request.target.kind === "task")
+              return yield* refusal("input", "A task review must be placed by the connected-tools hub.")
+            if (!context.sessionID && !context.reviewParentID)
+              return yield* refusal("unavailable", "A VectorScope review through connect needs a session to run in.")
+            const lent = context.helper
+            if (!lent)
+              return yield* refusal(
+                "unavailable",
+                "Connect can run a VectorScope review only from a tool call that lends it this session's prompt calls.",
+              )
+            const helper = {
+              prompt: (input: SessionPrompt.PromptInput) =>
+                selected.check().pipe(
+                  Effect.orDie,
+                  Effect.flatMap(() => lent.prompt(input)),
+                ),
+              cancel: (sessionID: SessionID) => lent.cancel(sessionID),
             }
-          })
-          const prompts = yield* ConnectReviewPrompt.service(helper)
-          const reviewContext = Context.merge(selectedBase, prompts)
-          const runReview = deps.runReview ?? loaded.run
-          const resolve = yield* resolver()
-          const personal = models.every((model) => Connect.isLocal(model.sendsTo))
-          const requirements =
-            deps.requirements ??
-            ((input: { readonly files: readonly string[]; readonly personal: boolean }) =>
-              Effect.gen(function* () {
-                const place = yield* instruction.place()
-                return yield* loaded.ReviewContext.requirements({ place, files: input.files, personal: input.personal })
-              }).pipe(
-                Effect.provideService(BrainKnowledge.Service, knowledge),
-                Effect.catchCause(() => Effect.succeed(undefined)),
-              ))
-          const bridge = yield* EffectBridge.make()
-          const out: string[] = []
-          const local: LocalReviewDeps = {
-            runReview: (input) =>
-              selected.check().pipe(
-                Effect.orDie,
-                Effect.flatMap(() =>
-                  runReview({ ...input, parentID: context.reviewParentID ?? context.sessionID }).pipe(
-                    Effect.provideContext(reviewContext),
+            const target = context.reviewTarget ?? request.target
+            const say = (pass: string, message: string) => context.progress({ pass, message })
+
+            // Check 1: the settings the reviewed changes may have edited. No model runs when they did. It runs again right
+            // before the review and once more after it, since an edit can land while connect waits on a question or while
+            // the review runs (a parallel tool call, a background helper).
+            yield* say("settings", "Checking what the changes edit")
+            const settings = Effect.fnUntraced(function* () {
+              const scope = yield* changes(git, request.directory, request.target)
+              return { scope, edited: ConnectPolicy.editedSettings(scope.settings, scope.links) }
+            })
+            const { scope, edited } = yield* settings()
+            if (edited.length > 0) return settingsResult(target, edited)
+
+            // Check 2: the models, the dollar cap, and `connect_model` when a model is priced, has no readable price, or is
+            // the repository's choice and not the user's own review model.
+            yield* say("model", "Checking the review model")
+            const planned = yield* plan(scope.root, git).pipe(Effect.catch((why) => refusal("unavailable", why.reason)))
+            const models = [planned.review, ...(planned.triage ? [planned.triage] : [])]
+            const cap = ConnectPolicy.effectiveCap({
+              costKind: capKind(models),
+              repository: planned.config.maxCostUsd,
+              tool: request.budget?.maxCostUsd,
+              run: context.spend,
+            })
+            if (!cap.ok) return yield* cap.refusal
+            const repository = models.some((model) => model.fromRepository)
+            const user = repository ? yield* userModel(git) : undefined
+            const consents = ConnectPolicy.reviewConsents({
+              models,
+              ...(user ? { userModel: user } : {}),
+              ...(cap.value !== undefined ? { maxCostUsd: cap.value } : {}),
+            }).filter((consent) => consent.permission === "connect_model")
+            // `connect` itself was asked by the hub before this adapter ran.
+            for (const consent of consents) yield* context.ask(consent)
+
+            // The review, through VectorScope's own entry point.
+            const loaded = yield* Effect.promise(async () => {
+              const [cli, run, model, review] = await Promise.all([
+                import("@/cli/cmd/review"),
+                import("@/review/run"),
+                import("@/review/model"),
+                import("@/review/context"),
+              ])
+              return {
+                executeLocalReview: cli.executeLocalReview,
+                run: run.Review.run,
+                ReviewModel: model.ReviewModel,
+                ReviewContext: review.ReviewContext,
+              }
+            })
+            const prompts = yield* ConnectReviewPrompt.service(helper)
+            const reviewContext = Context.merge(selectedBase, prompts)
+            const runReview = deps.runReview ?? loaded.run
+            const resolve = yield* resolver()
+            const personal = models.every((model) => Connect.isLocal(model.sendsTo))
+            const requirements =
+              deps.requirements ??
+              ((input: { readonly files: readonly string[]; readonly personal: boolean }) =>
+                Effect.gen(function* () {
+                  const place = yield* instruction.place()
+                  return yield* loaded.ReviewContext.requirements({
+                    place,
+                    files: input.files,
+                    personal: input.personal,
+                  })
+                }).pipe(
+                  Effect.provideService(BrainKnowledge.Service, knowledge),
+                  Effect.catchCause(() => Effect.succeed(undefined)),
+                ))
+            const bridge = yield* EffectBridge.make()
+            const out: string[] = []
+            const local: LocalReviewDeps = {
+              runReview: (input) =>
+                selected.check().pipe(
+                  Effect.orDie,
+                  Effect.flatMap(() =>
+                    runReview({ ...input, parentID: context.reviewParentID ?? context.sessionID }).pipe(
+                      Effect.provideContext(reviewContext),
+                    ),
                   ),
                 ),
-              ),
-            // VectorScope resolves the model again; it must be the one connect checked and asked about.
-            resolveModel: (input) =>
-              resolve(input).pipe(
-                Effect.provideContext(selectedBase),
-                Effect.flatMap((model) => {
-                  const expected = input.exact !== undefined ? planned.triage?.model : planned.review.model
-                  if (nameOf(model) === expected) return Effect.succeed(model)
-                  return Effect.fail(
-                    new loaded.ReviewModel.ReviewModelError({
-                      message: `The review model changed to ${nameOf(model)} after connect checked ${expected ?? "another model"}, so connect stopped. Ask for the review again.`,
-                    }),
-                  )
-                }),
-              ),
-            // Connect passes no `checks`, `post` or `pr`, so nothing reaches `confirm`; if a change ever does, the
-            // answer is no.
-            confirm: async () => false,
-            stdout: async (text) => {
-              out.push(text)
-            },
-            stderr: (text) => {
-              for (const line of text.split("\n").map((item) => item.trim()))
-                if (line) bridge.fork(progressOf(context, line))
-            },
-            // Connect never posts.
-            posting: async () => [],
-            requirements: (input) => requirements({ files: input.files, personal: personal && !input.shared }),
-          }
-          // Check 1 again: nothing may have edited the settings while connect asked or loaded.
-          const before = yield* settings()
-          if (before.edited.length > 0) return settingsResult(target, before.edited)
-          // A branch review reads VectorScope's state file only when connect saw VectorScope write it as it is now.
-          const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
-          const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
-          const trusted = statePath !== undefined && stateBefore !== undefined && states.get(statePath) === stateBefore
-          // Every question is behind it: a background run's caller stops waiting here.
-          if (context.working) yield* context.working(cap.value !== undefined ? { maxCostUsd: cap.value } : {})
-          yield* say("review", "Reviewing")
-          const result = yield* loaded
-            .executeLocalReview(
-              reviewOptions({ request, maxCost: cap.value, full: context.fullReview || !trusted, env }),
-              local,
-            )
-            .pipe(Effect.provideService(Git.Service, git))
-          if (statePath) {
-            const stateAfter = yield* Effect.promise(() => fingerprint(statePath))
-            states.delete(statePath)
-            // Trusted from here: what VectorScope wrote in this run, or the trusted file it left as it was.
-            if (stateAfter !== undefined && (stateAfter !== stateBefore || trusted)) {
-              states.set(statePath, stateAfter)
-              for (const key of states.keys()) if (states.size > MAX_TRUSTED_STATES) states.delete(key)
+              // VectorScope resolves the model again; it must be the one connect checked and asked about.
+              resolveModel: (input) =>
+                resolve(input).pipe(
+                  Effect.provideContext(selectedBase),
+                  Effect.flatMap((model) => {
+                    const expected = input.exact !== undefined ? planned.triage?.model : planned.review.model
+                    if (nameOf(model) === expected) return Effect.succeed(model)
+                    return Effect.fail(
+                      new loaded.ReviewModel.ReviewModelError({
+                        message: `The review model changed to ${nameOf(model)} after connect checked ${expected ?? "another model"}, so connect stopped. Ask for the review again.`,
+                      }),
+                    )
+                  }),
+                ),
+              // Connect passes no `checks`, `post` or `pr`, so nothing reaches `confirm`; if a change ever does, the
+              // answer is no.
+              confirm: async () => false,
+              stdout: async (text) => {
+                out.push(text)
+              },
+              stderr: (text) => {
+                for (const line of text.split("\n").map((item) => item.trim()))
+                  if (line) bridge.fork(progressOf(context, line))
+              },
+              // Connect never posts.
+              posting: async () => [],
+              requirements: (input) => requirements({ files: input.files, personal: personal && !input.shared }),
             }
-          }
-          const shown = printed(out)
-          // Check 1 once more: a review whose settings changed while it ran is never shown as VectorScope's result. Its
-          // sessions and cost stay on the result, since they were made and spent.
-          const after = yield* settings().pipe(
-            Effect.map((again) => again.edited),
-            Effect.catchCause((cause) =>
-              Cause.hasInterrupts(cause) ? Effect.failCause(cause) : Effect.succeed([...ConnectPolicy.SETTINGS_PATHS]),
-            ),
-          )
-          if (after.length > 0)
-            return settingsResult(target, after, spentOf({ local: result, printed: shown, plan: planned }))
-          return resultOf({
-            request,
-            target,
-            local: result,
-            printed: shown,
-            plan: planned,
-            scope,
-            ...(context.previous ? { previous: context.previous } : {}),
-          })
-        }),
+            // Check 1 again: nothing may have edited the settings while connect asked or loaded.
+            const before = yield* settings()
+            if (before.edited.length > 0) return settingsResult(target, before.edited)
+            // A branch review reads VectorScope's state file only when connect saw VectorScope write it as it is now.
+            const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
+            const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
+            const trusted =
+              statePath !== undefined && stateBefore !== undefined && states.get(statePath) === stateBefore
+            // Every question is behind it: a background run's caller stops waiting here.
+            if (context.working) yield* context.working(cap.value !== undefined ? { maxCostUsd: cap.value } : {})
+            yield* say("review", "Reviewing")
+            const result = yield* loaded
+              .executeLocalReview(
+                reviewOptions({ request, maxCost: cap.value, full: context.fullReview || !trusted, env }),
+                local,
+              )
+              .pipe(Effect.provideService(Git.Service, git))
+            if (statePath) {
+              const stateAfter = yield* Effect.promise(() => fingerprint(statePath))
+              states.delete(statePath)
+              // Trusted from here: what VectorScope wrote in this run, or the trusted file it left as it was.
+              if (stateAfter !== undefined && (stateAfter !== stateBefore || trusted)) {
+                states.set(statePath, stateAfter)
+                for (const key of states.keys()) if (states.size > MAX_TRUSTED_STATES) states.delete(key)
+              }
+            }
+            const shown = printed(out)
+            // Check 1 once more: a review whose settings changed while it ran is never shown as VectorScope's result. Its
+            // sessions and cost stay on the result, since they were made and spent.
+            const after = yield* settings().pipe(
+              Effect.map((again) => again.edited),
+              Effect.catchCause((cause) =>
+                Cause.hasInterrupts(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.succeed([...ConnectPolicy.SETTINGS_PATHS]),
+              ),
+            )
+            if (after.length > 0)
+              return settingsResult(target, after, spentOf({ local: result, printed: shown, plan: planned }))
+            return resultOf({
+              request,
+              target,
+              local: result,
+              printed: shown,
+              plan: planned,
+              scope,
+              ...(context.previous ? { previous: context.previous } : {}),
+            })
+          }),
+        context.reviewGit,
       )
 
     // A fix works from the review it names, over what that review's target changes now (the owned-path rule's diff).

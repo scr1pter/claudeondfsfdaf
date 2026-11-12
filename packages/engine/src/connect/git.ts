@@ -137,14 +137,58 @@ export interface Selected {
   readonly check: () => Effect.Effect<void, Connect.Refusal>
 }
 
-function selected(repository: ReadOnlyGit.Repository, admitted: string) {
+const taskRoot = Symbol("Connect verified task Git root")
+export interface TaskRoot {
+  readonly [taskRoot]: true
+}
+interface TaskBinding {
+  readonly directory: string
+  readonly gitDirectory: string
+  readonly commonDirectory: string
+  readonly head: string
+}
+const taskRoots = new WeakMap<TaskRoot, TaskBinding>()
+
+/** Called by the hub only inside TaskIsolation.review's verified, locked callback. Nothing serializable grants it. */
+export const withTask = <A, E, R>(
+  record: {
+    readonly directory: string
+    readonly gitDirectory?: string
+    readonly gitCommonDirectory?: string
+    readonly tip?: string
+  },
+  body: (root: TaskRoot) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | Connect.Refusal, R> =>
+  Effect.gen(function* () {
+    if (!record.gitDirectory || !record.gitCommonDirectory || !record.tip) return yield* refusal()
+    const binding: TaskBinding = Object.freeze({
+      directory: record.directory,
+      gitDirectory: record.gitDirectory,
+      commonDirectory: record.gitCommonDirectory,
+      head: record.tip,
+    })
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const root = Object.freeze<TaskRoot>({ [taskRoot]: true })
+        taskRoots.set(root, binding)
+        return root
+      }),
+      body,
+      (root) =>
+        Effect.sync(() => {
+          taskRoots.delete(root)
+        }),
+    )
+  })
+
+function selected(repository: ReadOnlyGit.Repository, admitted: string, active: () => boolean) {
   let blocked: Connect.Refusal | undefined
   const block = () => {
     blocked ??= refusal()
     return blocked
   }
   const fail = () => Effect.die(block())
-  const cwd = (directory: string) => directory === repository.directory || directory === admitted
+  const cwd = (directory: string) => active() && (directory === repository.directory || directory === admitted)
   const output = (code: number, bytes: Buffer, bound = MAX): Git.Result => ({
     exitCode: code,
     stdout: bytes.subarray(0, bound),
@@ -204,11 +248,12 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string) {
       const result = yield* Effect.tryPromise({ try: () => repository.read(mapped), catch: () => block() }).pipe(
         Effect.orDie,
       )
+      if (!active()) return yield* fail()
       return output(result.code, result.bytes, options.maxOutputBytes)
     })
   const check = () =>
-    blocked
-      ? Effect.fail(blocked)
+    blocked || !active()
+      ? Effect.fail(block())
       : Effect.tryPromise({
           try: async () => {
             const current = await ReadOnlyGit.metadataHead(repository.directory)
@@ -218,6 +263,7 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string) {
                 current.commonDirectory === repository.commonDirectory,
             )
             await repository.status()
+            requireRead(active())
           },
           catch: () => block(),
         })
@@ -254,29 +300,43 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string) {
   return { git, check, failed: () => blocked }
 }
 
-/** The admitted instance supplies the root; no request string or Git config can select another workspace. */
+/** Only the admitted instance or the hub's live verified-task capability supplies the root. */
 export const use = <A, E, R>(
   directory: string,
   body: (selected: Selected) => Effect.Effect<A, E, R>,
+  task?: TaskRoot,
 ): Effect.Effect<A, E | Connect.Refusal, R> =>
   Effect.gen(function* () {
     const instance = yield* InstanceRef
-    if (!instance || instance.worktree === "/") return yield* refusal()
+    const placed = task === undefined ? undefined : taskRoots.get(task)
+    if (task !== undefined && !placed) return yield* refusal()
+    const root = placed?.directory ?? instance?.worktree
+    if (!root || root === "/") return yield* refusal()
+    const active = () => task === undefined || taskRoots.get(task) === placed
     const acquire = Effect.tryPromise({
       try: async () => {
         const admitted = await realpath(directory)
         requireRead(admitted === path.resolve(directory))
-        const metadata = await ReadOnlyGit.metadataHead(instance.worktree)
+        requireRead(active())
+        const metadata = await ReadOnlyGit.metadataHead(root)
+        if (placed)
+          requireRead(
+            admitted === placed.directory &&
+              metadata.directory === placed.directory &&
+              metadata.gitDirectory === placed.gitDirectory &&
+              metadata.commonDirectory === placed.commonDirectory &&
+              metadata.head === placed.head,
+          )
         const relative = path.relative(metadata.directory, admitted)
         requireRead(
           relative === "" || (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative)),
         )
         const repository = await ReadOnlyGit.open(metadata)
-        if (repository.head !== metadata.head) {
+        if (!active() || repository.head !== metadata.head) {
           await repository.close()
           throw refusal()
         }
-        return { repository, selected: selected(repository, admitted) }
+        return { repository, selected: selected(repository, admitted, active) }
       },
       catch: () => refusal(),
     })
