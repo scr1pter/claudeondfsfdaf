@@ -1,5 +1,41 @@
 # VectorScope continuation
 
+## Qualified continuation checkpoint: 12 November 2026
+
+These source and acceptance receipts supersede older pending descriptions below.
+They qualify the named packages, not the entire build or a release.
+
+- The local App runs passed the actual Solid state test and all 20 Chromium
+  regression cases, with one worker and zero retries, on `ef42a459e` in run
+  `43254787062`, job `131309957598`. The production repair is `5ed107184`:
+  directory config seeds no longer share nested objects with owner-global
+  policy. Repository overlays cannot enable the owner-global switch.
+- `8b5975be4` binds admitted local collection, settings, context and actual
+  reviewer callbacks to one private read-only Git view. The actual provider
+  fixture first proves an ordinary same-size clean-filter conversion executes,
+  then requires zero executions through the review. Durable lifecycle, three
+  actual provider/deletion races, owner HTTP and Engine types passed in the
+  isolated checkout. Unknown read shapes refuse before provider admission.
+  The Core boundary remains deliberately unavailable on unsupported platforms;
+  there is no live Git fallback.
+- `56c12bd7e` adds the separate, default-off repository review-memory store.
+  Nine authority/proposal tests and nine older-build/erasure tests passed with
+  actual SQLite, along with Core types and existing Brain, learning, revocation
+  and skill compatibility files. Independent review repaired raw-generation
+  validation, exact frozen approval display and atomic session erasure. Generic
+  memory and review erasure now roll back together on invalid review state.
+  Engine owner/source authority, actual Session deletion, UI controls and
+  review-context consumption are the next package; the Core default ports deny.
+- The picker remains open: its focused CI exposed a pre-click reactive stack
+  overflow and repeated section rebuilding. Diagnostics and any candidate repair
+  stay in `build-scope-ui` until actual browser acceptance closes the issue.
+
+All existing owner, actual-merge, funded-evaluation and publication gates remain.
+Hands, cloud workspaces and benchmark changes remain outside this continuation.
+No default-on, external registration, paid model call or quality claim follows
+from these deterministic receipts.
+
+
 The owner authorized completion of unfinished VectorScope software on 11 November
 2026 (Pacific), while excluding Vector Hands, cloud workspaces and features already
 merged into main. This lane starts from `bee92d8e9` and integrates main
