@@ -102,7 +102,8 @@ export async function backup(input: {
   const manifest: Vault.Manifest = {
     format: "vector-vault",
     version: 1,
-    minReader: Vault.MIN_READER,
+    minReader: input.files.some((file) => file.section === "skills" || file.section === "insights")
+      ? Vault.LEARNED_READER : Vault.MIN_READER,
     vault: opened.vault,
     id: version,
     createdAt: now,

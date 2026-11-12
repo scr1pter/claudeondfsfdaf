@@ -82,6 +82,23 @@ const entry = (input: { id: string; text: string; status: string; pinned: boolea
 })
 
 describe("Brain Vault memory routes", () => {
+  test("restored skills and insight history wait for review and never restore approval or pins", async () => {
+    const skill = { ...entry({ id: "s_import", text: "Check changes", status: "active", pinned: true, kind: "skill" }),
+      scope: "repository", private: true, skill: { name: "learned-check-changes", description: "Check changes",
+        procedure: "Run the repository check.", checks: ["bun test"], commands: ["git diff"], version: 1 },
+    }
+    const file = { format: "vector-memory", version: 1, scope: "repository", exportedAt: Date.now(), entries: [], documents: [], skills: [skill] }
+    const restored = await call("POST", "/memory/restore", { section: "skills", text: JSON.stringify(file), repository: "" })
+    expect(restored.status).toBe(200)
+    expect(await restored.json()).toMatchObject({ restored: 1, active: 0, pinned: 0, waiting: 1 })
+    const skills = await call("GET", "/memory/skills?filter=review")
+    const listing = await skills.json() as { entries?: Array<{ status: string; private?: boolean }> }
+    expect(JSON.stringify(listing)).toContain('"private":true')
+    const insights = { format: "vector-workflow-insights", version: 1, rows: [{ tier: "standard", model: "vector-plan/floor", effort: "default", split: "solo", runs: 10, passRate: 1, checkedShare: 1 }] }
+    const history = await call("POST", "/memory/restore", { section: "insights", text: JSON.stringify(insights), repository: "" })
+    expect(history.status).toBe(200)
+    expect(await history.json()).toMatchObject({ active: 0, pinned: 0, waiting: 1 })
+  }, 30_000)
   test("an invited guest gets 403 from the backup and the restore", async () => {
     expect((await call("GET", "/memory/backup", undefined, guest)).status).toBe(403)
     expect((await call("POST", "/memory/restore", { text: "{}", repository: "" }, guest)).status).toBe(403)

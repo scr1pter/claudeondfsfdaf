@@ -430,9 +430,10 @@ export const VaultRestoreCommand = effectCmd({
     const total = { restored: 0, active: 0, pinned: 0, waiting: 0, known: 0, refused: 0, unreadable: 0, documents: 0 }
     for (const { file, bytes: content } of read.files) {
       const done =
-        file.section === "memory"
+        (file.section === "memory" || file.section === "skills" || file.section === "insights")
           ? yield* VaultMemory.restore(services, {
               text: content.toString("utf8"),
+              section: file.section,
               ...(file.repository !== undefined ? { repository: file.repository } : {}),
               ...(file.worktree !== undefined ? { worktree: file.worktree } : {}),
             })

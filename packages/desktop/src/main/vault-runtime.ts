@@ -16,6 +16,7 @@ import {
 import { githubVaultStore } from "./vault-github"
 import { vaultSecrets } from "./vault-secrets"
 import { vectorAccount } from "./vector-account-runtime"
+import { Vault } from "@vectordevai/schema/vault"
 
 // Brain Vault in the running app (WP A45): the backup controller (vault-backup.ts) with Electron's pieces. The vault
 // key is sealed in-process with the key the OS credential store holds (vault-secrets.ts, the app's use of safeStorage)
@@ -106,10 +107,13 @@ async function readMemory(base: string, authorization: string): Promise<MemoryFi
     if (!file || typeof file !== "object") return []
     const item = file as Record<string, unknown>
     if (typeof item.path !== "string" || typeof item.text !== "string" || typeof item.repository !== "string") return []
+    if (item.section !== undefined && !(Vault.SECTIONS as readonly unknown[]).includes(item.section))
+      throw new Error("Update Vector to back up this engine's learned content.")
     return [
       {
         path: item.path,
         text: item.text,
+        ...(item.section === undefined ? {} : { section: item.section as Vault.Section }),
         repository: item.repository,
         ...(typeof item.worktree === "string" ? { worktree: item.worktree } : {}),
       },
@@ -124,6 +128,7 @@ async function restoreMemory(base: string, authorization: string, file: MemoryFi
     headers: { authorization, accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({
       text: file.text,
+      ...(file.section === undefined ? {} : { section: file.section }),
       repository: file.repository,
       ...(file.worktree !== undefined ? { worktree: file.worktree } : {}),
     }),

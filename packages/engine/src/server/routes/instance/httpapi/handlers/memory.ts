@@ -10,7 +10,6 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
-import { Billing } from "@vectordevai/schema/billing"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { ResearchStore } from "@vectordevai/core/research/store"
 import { VaultMemory } from "@/brain/vault-memory"
@@ -64,10 +63,7 @@ const SKILL_ENTRY = "That is a learned skill. Change learned skills in Settings 
 const REMEMBER_INSTEAD = { bytes: 1024 * 1024, pages: 20 }
 
 function workflowArm(stats: BrainWorkflow.ArmStats): BrainWorkflow.ArmStats {
-  const codium = stats.codium ?? (Billing.isCodium(stats.arm.providerID) ? "only" : undefined)
-  if (!codium) return stats
-  const { tokens: _tokens, costUsd, ...display } = stats
-  return { ...display, codium, ...(codium === "mixed" && costUsd !== undefined ? { costUsd } : {}) }
+  return BrainWorkflow.displayStats(stats)
 }
 
 function workflowAdvice(advice: BrainWorkflow.Advice): BrainWorkflow.Advice {
@@ -199,15 +195,15 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     // Brain Vault (WP A45): the desktop app encrypts these files on this computer before a backup, and restores the
     // files it opened with the vault's key. Like every memory route, both are the owner's own (guests get 403).
     const backup = Effect.fn("MemoryHttpApi.backup")(function* () {
-      return { files: (yield* VaultMemory.files({ instruction, brain, knowledge, projects })).files }
+      return { files: (yield* VaultMemory.files({ instruction, brain, knowledge, projects, skills, workflow })).files }
     })
 
     const restoreMemory = Effect.fn("MemoryHttpApi.restore")(function* (ctx: {
-      payload: { text: string; repository: string; worktree?: string }
+      payload: { text: string; repository: string; worktree?: string; section?: "memory" | "skills" | "insights" }
     }) {
       if (ctx.payload.text.length > IMPORT_CHARS)
         return yield* refused("Vector restores at most 2 MB at a time.", "limit")
-      const done = yield* VaultMemory.restore({ instruction, brain }, ctx.payload)
+      const done = yield* VaultMemory.restore({ instruction, brain, skills }, ctx.payload)
       if (done.unreadable)
         return yield* refused("This backup needs a newer version of Vector. Update Vector, then restore it.", "version")
       return {

@@ -294,7 +294,7 @@ export const MemoryImportResult = Schema.Struct({
 /** One memory file of a Brain Vault backup: the `vector-memory` JSON of the person's own memory or a repository's. */
 export const MemoryBackupFile = Schema.Struct({
   path: Schema.String,
-  section: Schema.Literal("memory"),
+  section: Schema.Literals(["memory", "skills", "insights"]),
   /** The export JSON. */
   text: Schema.String,
   /** The repository's id, or "" for the person's own memory. */
@@ -308,6 +308,7 @@ export const MemoryBackup = Schema.Struct({
 }).annotate({ identifier: "MemoryBackup" })
 
 export const MemoryRestorePayload = Schema.Struct({
+  section: Schema.optional(Schema.Literals(["memory", "skills", "insights"])),
   /** A memory file of the person's own vault, opened with its key: the `vector-memory` JSON, at most 2 MB. */
   text: Schema.String,
   /** The repository it came from, or "" for the person's own memory. */

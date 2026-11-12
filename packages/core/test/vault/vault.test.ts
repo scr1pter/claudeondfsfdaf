@@ -45,6 +45,16 @@ async function refusal(promise: Promise<unknown>) {
 }
 
 describe("VaultRecovery", () => {
+  test("learned-content manifests require reader two while ordinary memory stays reader one", async () => {
+    const { store, opened } = await fresh()
+    await VaultBackup.backup({ store, opened, files: [{ path: "skills/repository.json", section: "skills", bytes: encoder.encode("review-only") }] })
+    const restored = await VaultBackup.read({ store, opened })
+    expect(restored.manifest.minReader).toBe(2)
+    expect(restored.files[0]?.file.section).toBe("skills")
+    expect(restored.files[0]?.bytes.toString()).toBe("review-only")
+    expect(Vault.MIN_READER).toBe(1)
+    expect(Vault.READER).toBe(2)
+  })
   test("a code is 26 base32 symbols and a checksum in seven groups, read back however it is typed", () => {
     const code = VaultRecovery.generate()
     expect(code).toMatch(/^([0-9A-HJKMNP-TV-Z]{4}-){6}[0-9A-HJKMNP-TV-Z]{4}$/)

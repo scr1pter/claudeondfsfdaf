@@ -87,6 +87,7 @@ export type VaultStatus = {
 /** A file of the engine's backup (GET /memory/backup). */
 export type MemoryFile = {
   readonly path: string
+  readonly section?: Vault.Section
   readonly text: string
   readonly repository: string
   readonly worktree?: string
@@ -402,7 +403,7 @@ export function createVaultBackup(deps: VaultDeps) {
             opened,
             files: memory.map((file) => ({
               path: file.path,
-              section: "memory" as const,
+              section: file.section ?? "memory",
               bytes: encoder.encode(file.text),
               repository: file.repository,
               ...(file.worktree !== undefined ? { worktree: file.worktree } : {}),
@@ -532,17 +533,19 @@ export function createVaultBackup(deps: VaultDeps) {
             unreadable: 0,
           }
           for (const { file, bytes } of read.files) {
-            if (file.section !== "memory" || file.repository === undefined) {
+            if (!(Vault.SECTIONS as readonly string[]).includes(file.section) || file.repository === undefined) {
               totals.unreadable++
               continue
             }
-            const { parts, documents } = restoreParts(bytes.toString("utf8"))
+            const { parts, documents } = file.section === "memory" ? restoreParts(bytes.toString("utf8")) :
+              { parts: [bytes.toString("utf8")], documents: 0 }
             totals.documents += documents
             for (const text of parts) {
               const done = await deps
                 .restore({
                   path: file.path,
                   text,
+                  section: file.section as Vault.Section,
                   repository: file.repository,
                   ...(file.worktree !== undefined ? { worktree: file.worktree } : {}),
                 })

@@ -10,9 +10,11 @@ import { Schema } from "effect"
  */
 
 /** The reader this build implements. A version whose `minReader` is higher is refused with "update Vector". */
-export const READER = 1
+export const READER = 2
 /** What this build's writer asks of a reader: every field and section it writes is one a reader at this level knows. */
 export const MIN_READER = 1
+/** Skills and workflow insights restore as review drafts; older readers must not silently omit those sections. */
+export const LEARNED_READER = 2
 
 export const LIMIT = {
   /** Objects one uploads or downloads request names. */
@@ -65,7 +67,7 @@ export const WrappedKey = Schema.Struct({
 export type WrappedKey = typeof WrappedKey.Type
 
 /** Sections a version may hold. A reader skips a section it does not know; `minReader` says when it may not. */
-export const SECTIONS = ["memory"] as const
+export const SECTIONS = ["memory", "skills", "insights"] as const
 export type Section = (typeof SECTIONS)[number]
 
 /**

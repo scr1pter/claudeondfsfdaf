@@ -5,6 +5,10 @@ import { Effect, Schema } from "effect"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
+import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
+import { BrainTransfer } from "@vectordevai/core/brain/transfer"
+import type { Vault } from "@vectordevai/schema/vault"
 import { Project as ProjectV2 } from "@vectordevai/core/project"
 import { Project } from "@/project/project"
 import { Instruction } from "@/session/instruction"
@@ -18,7 +22,7 @@ import { Instruction } from "@/session/instruction"
 /** One memory file of a backup. `repository` is "" for the person's own memory. */
 export type File = {
   readonly path: string
-  readonly section: "memory"
+  readonly section: Vault.Section
   readonly text: string
   readonly repository: string
   readonly worktree?: string
@@ -30,6 +34,8 @@ export type Services = {
   readonly brain: Brain.Interface
   readonly knowledge: BrainKnowledge.Interface
   readonly projects: Project.Interface
+  readonly skills?: BrainSkill.Interface
+  readonly workflow?: BrainWorkflow.Interface
 }
 
 /** The services from the context, for a caller that does not hold them already (the CLI). */
@@ -39,6 +45,8 @@ export const services = Effect.fnUntraced(function* () {
     brain: yield* Brain.Service,
     knowledge: yield* BrainKnowledge.Service,
     projects: yield* Project.Service,
+    skills: yield* BrainSkill.Service,
+    workflow: yield* BrainWorkflow.Service,
   } satisfies Services
 })
 
@@ -58,15 +66,17 @@ export const files = Effect.fnUntraced(function* (input: Services) {
       .map((project) => ({ repository: project.id, root: project.worktree, sources: [], held: false })),
   ]
   for (const place of places) {
-    const file = yield* BrainExport.collect({ brain, knowledge, place, scope: "repository" })
-    if (!file.entries.some((entry) => !entry.file)) continue
-    out.push({
-      path: `memory/repository-${createHash("sha256").update(place.repository).digest("hex").slice(0, 24)}.json`,
-      section: "memory",
-      text: json(file),
-      repository: place.repository,
-      worktree: place.root,
-    })
+    const file = yield* BrainExport.collect({ brain, knowledge, place, scope: "repository", skills: input.skills })
+    const suffix = `repository-${createHash("sha256").update(place.repository).digest("hex").slice(0, 24)}.json`
+    const { skills, ...memory } = file
+    const append = (section: Vault.Section, text: string) => out.push({ path: `${section}/${suffix}`, section, text,
+      repository: place.repository, worktree: place.root })
+    if (file.entries.some((entry) => !entry.file)) append("memory", json(memory))
+    if (skills?.length) append("skills", json({ ...memory, entries: [], documents: [], skills }))
+    if (input.workflow) {
+      const insights = BrainTransfer.insights(yield* input.workflow.insights(place))
+      if (insights.rows.length) append("insights", JSON.stringify(insights))
+    }
   }
   return { files: out, here }
 })
@@ -81,10 +91,11 @@ export type Restored =
  * repository's under its own id, which is where Vector finds it once that repository is opened on this computer.
  */
 export const restore = Effect.fnUntraced(function* (
-  services: Pick<Services, "instruction" | "brain">,
-  input: { readonly text: string; readonly repository?: string; readonly worktree?: string },
+  services: Pick<Services, "instruction" | "brain" | "skills">,
+  input: { readonly text: string; readonly repository?: string; readonly worktree?: string; readonly section?: Vault.Section },
 ) {
-  const memory = BrainExport.decodeBackup(input.text)
+  const insight = input.section === "insights" ? BrainTransfer.decodeInsights(input.text) : undefined
+  const memory = insight ? BrainTransfer.insightMemory(insight) : BrainExport.decodeBackup(input.text)
   if (!memory || input.repository === undefined) return { unreadable: true } satisfies Restored
   const { instruction, brain } = services
   const here = yield* instruction.place()
@@ -92,6 +103,13 @@ export const restore = Effect.fnUntraced(function* (
     input.repository === "" || input.repository === here.repository
       ? here
       : { repository: input.repository, root: input.worktree ?? here.root, sources: [], held: false }
+  if (input.section === "skills" || input.section === "insights") {
+    if ((input.section === "skills" && (!services.skills || memory.entries.length || memory.documents.length)) ||
+      (input.section === "insights" && !insight)) return { unreadable: true } satisfies Restored
+    const restored = yield* BrainExport.importText({ brain, skills: services.skills, place, text: JSON.stringify(memory) })
+    return { unreadable: false, restored: restored.entries.length, active: 0, pinned: 0, waiting: restored.entries.length, batches: 1,
+      known: restored.known, refused: restored.refused + restored.over, documents: 0 } satisfies Restored
+  }
   const done = yield* BrainExport.restore({ brain, place, file: memory, trust: "vault" })
   return { ...done, unreadable: false, documents: memory.documents.length } satisfies Restored
 })

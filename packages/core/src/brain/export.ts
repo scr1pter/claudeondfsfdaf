@@ -292,6 +292,7 @@ export type IncomingSkill = {
   readonly checks: readonly string[]
   readonly commands: readonly string[]
   readonly paths: readonly string[]
+  readonly private?: boolean
 }
 
 /**
@@ -311,6 +312,7 @@ export function skills(text: string): IncomingSkill[] {
             checks: entry.skill.checks,
             commands: entry.skill.commands,
             paths: entry.paths,
+            ...(entry.private ? { private: true } : {}),
           },
         ]
       : [],
@@ -369,7 +371,7 @@ export const importText = Effect.fn("BrainExport.importText")(function* (input: 
             paths: skill.paths,
             drafter: "rules",
           },
-          { origin: "import", evidence: { type: "user" } },
+          { origin: "import", evidence: { type: "user" }, ...(skill.private ? { private: true } : {}) },
         ),
       )
     : []
