@@ -6227,6 +6227,10 @@ export type ConnectTarget =
       kind: "branch"
       base?: string
     }
+  | {
+      kind: "task"
+      task: string
+    }
 
 export type ConnectReviewRequest = {
   id: string
@@ -7505,23 +7509,41 @@ export type WorkflowValidateInput = {
   }
 }
 
-export type WorkflowPlanStage = {
+export type WorkflowPlanAgentStage = {
   id: string
   title: string
   phase: string
-  agent: string
-  model?: string
-  effort?: string
-  isolation?: string
   items: number | "dynamic"
   serial: boolean
   writes: string
   asks: Array<string>
+  kind?: "agent"
+  agent: string
+  model?: string
+  effort?: string
+  isolation?: string
   verify?: {
     agent: string
     maxRounds: number
   }
 }
+
+export type WorkflowPlanConnectStage = {
+  id: string
+  title: string
+  phase: string
+  items: number | "dynamic"
+  serial: boolean
+  writes: string
+  asks: Array<string>
+  kind: "connect"
+  connect: {
+    to: string
+    action: string
+  }
+}
+
+export type WorkflowPlanStage = WorkflowPlanAgentStage | WorkflowPlanConnectStage
 
 export type WorkflowPlan = {
   title: string

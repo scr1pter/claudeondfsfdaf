@@ -48035,6 +48035,21 @@
             },
             "required": ["kind"],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["task"]
+              },
+              "task": {
+                "type": "string",
+                "pattern": "^ses"
+              }
+            },
+            "required": ["kind", "task"],
+            "additionalProperties": false
           }
         ]
       },
@@ -52163,7 +52178,7 @@
         },
         "additionalProperties": false
       },
-      "WorkflowPlanStage": {
+      "WorkflowPlanAgentStage": {
         "type": "object",
         "properties": {
           "id": {
@@ -52173,18 +52188,6 @@
             "type": "string"
           },
           "phase": {
-            "type": "string"
-          },
-          "agent": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "effort": {
-            "type": "string"
-          },
-          "isolation": {
             "type": "string"
           },
           "items": {
@@ -52211,6 +52214,22 @@
               "type": "string"
             }
           },
+          "kind": {
+            "type": "string",
+            "enum": ["agent"]
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "string"
+          },
           "verify": {
             "type": "object",
             "properties": {
@@ -52226,8 +52245,75 @@
             "additionalProperties": false
           }
         },
-        "required": ["id", "title", "phase", "agent", "items", "serial", "writes", "asks"],
+        "required": ["id", "title", "phase", "items", "serial", "writes", "asks", "agent"],
         "additionalProperties": false
+      },
+      "WorkflowPlanConnectStage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "enum": ["dynamic"]
+              }
+            ]
+          },
+          "serial": {
+            "type": "boolean"
+          },
+          "writes": {
+            "type": "string"
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["connect"]
+          },
+          "connect": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              }
+            },
+            "required": ["to", "action"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "title", "phase", "items", "serial", "writes", "asks", "kind", "connect"],
+        "additionalProperties": false
+      },
+      "WorkflowPlanStage": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/WorkflowPlanAgentStage"
+          },
+          {
+            "$ref": "#/components/schemas/WorkflowPlanConnectStage"
+          }
+        ]
       },
       "WorkflowPlan": {
         "type": "object",
