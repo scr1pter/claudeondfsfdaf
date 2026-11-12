@@ -87,6 +87,8 @@ const observer = setInterval(() => {
 let early: ReturnType<typeof setTimeout> | undefined
 const handle = await promises.open(directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY)
 let result: DirectoryIdentityReader.Info | undefined,
+  second: DirectoryIdentityReader.Info | undefined,
+  rechecked = false,
   rejected = false
 try {
   const before = await handle.stat({ bigint: true })
@@ -100,6 +102,19 @@ try {
   } else result = await DirectoryIdentityReader.read(handle, controller.signal)
   if (result && (result.dev !== before.dev.toString() || result.ino !== before.ino.toString()))
     throw new Error("Wrong actual pinned directory")
+  if (scenario === "parent-recheck") {
+    if (!result) throw new Error("First anonymous runtime proof was unavailable")
+    // This marker and tmpfs exist only in POISON_RUNTIME's private anonymous /usr/bin bind mount.
+    if (
+      (await promises.statfs("/usr/bin", { bigint: true })).type !== 0x01021994n ||
+      (await promises.readFile("/usr/bin/.vector-identity-private-runtime", "utf8")) !== "anonymous-fixture-only\n"
+    )
+      throw new Error("Missing anonymous runtime mount proof")
+    await promises.chmod("/usr/bin", 0o777)
+    second = await DirectoryIdentityReader.read(handle, controller.signal)
+    rechecked = true
+    if (second) throw new Error("A new read reused stale runtime parent authority")
+  }
 } finally {
   clearInterval(observer)
   if (early) clearTimeout(early)
@@ -131,5 +146,7 @@ process.stdout.write(
     loweredLimit: 256,
     observedChild: !!observed,
     rejected,
+    rechecked,
+    secondValue: second ?? null,
   }) + "\n",
 )

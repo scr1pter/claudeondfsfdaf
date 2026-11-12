@@ -408,7 +408,7 @@ export function packageImage(list: string, sums: string, member: string, image: 
   requireValue(digests.get(member.slice(1)) === createHash("md5").update(image).digest("hex"))
 }
 
-type Check = () => void
+type Check = (() => void) & { readonly directories: Set<string> }
 const step = async <A>(check: Check, operation: () => Promise<A>): Promise<A> => {
   check()
   const value = await operation()
@@ -417,19 +417,27 @@ const step = async <A>(check: Check, operation: () => Promise<A>): Promise<A> =>
 }
 async function immutable(file: string, check: Check) {
   requireValue(path.isAbsolute(file) && path.normalize(file) === file)
+  const directories = new Set<string>()
   for (let current = file; ; current = path.dirname(current)) {
+    // Only proven runtime DIRECTORY ancestry is reused, within this one read. Every leaf remains fresh.
+    if (current !== file && check.directories.has(current)) break
     const named = await step(check, () => fs.lstat(current, { bigint: true }))
     requireValue(named.uid === 0n && (named.isSymbolicLink() || (named.mode & 0o022n) === 0n))
+    if (named.isDirectory()) directories.add(current)
     if (current === "/") break
   }
   const canonical = await step(check, () => fs.realpath(file))
   for (let current = canonical; ; current = path.dirname(current)) {
+    if (current !== canonical && check.directories.has(current)) break
     const info = await step(check, () => fs.lstat(current, { bigint: true }))
     requireValue(info.uid === 0n && (info.mode & 0o022n) === 0n && !info.isSymbolicLink())
+    if (info.isDirectory()) directories.add(current)
     if (current === "/") break
   }
   const info = await step(check, () => fs.stat(canonical, { bigint: true }))
   requireValue((info.isFile() || info.isDirectory()) && (info.mode & 0o6000n) === 0n)
+  // Publish only after BOTH ancestry walks and the leaf proof completed successfully.
+  for (const directory of directories) check.directories.add(directory)
   return { canonical, info }
 }
 async function bytes(file: string, maximum: number, check: Check) {
@@ -596,9 +604,12 @@ export function read(handle: FileHandle, signal?: AbortSignal): Promise<Info | u
   const expires = performance.now() + LIMIT.milliseconds,
     workExpires = expires - LIMIT.reap,
     controller = new AbortController()
-  const check = () => {
-    requireValue(!signal?.aborted && !controller.signal.aborted && performance.now() < workExpires)
-  }
+  const check: Check = Object.assign(
+    () => {
+      requireValue(!signal?.aborted && !controller.signal.aborted && performance.now() < workExpires)
+    },
+    { directories: new Set<string>() },
+  )
   return new Promise((resolve) => {
     let settled = false
     const finish = (value?: Info) => {

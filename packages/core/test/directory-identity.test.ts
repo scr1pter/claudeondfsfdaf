@@ -359,6 +359,9 @@ function diagnostic(text: string) {
     ["Missing actual replacement repository", "fixture-replacement"],
     ["Wrong actual pinned directory", "fixture-directory"],
     ["Actual proof child was not reaped", "fixture-child-reap"],
+    ["First anonymous runtime proof was unavailable", "fixture-parent-positive"],
+    ["Missing anonymous runtime mount proof", "fixture-parent-mount"],
+    ["A new read reused stale runtime parent authority", "fixture-parent-reuse"],
   ])
   // Match only an emitted error line, never the quoted source excerpts printed with a stack trace.
   const fixture = [...text.matchAll(/^[ \t]*(?:Error|error): ([^\r\n]*)$/gm)]
@@ -471,6 +474,9 @@ test("CI failure diagnostics expose only fixed metadata and never echo stderr pa
     ["Missing actual replacement repository", "fixture-replacement"],
     ["Wrong actual pinned directory", "fixture-directory"],
     ["Actual proof child was not reaped", "fixture-child-reap"],
+    ["First anonymous runtime proof was unavailable", "fixture-parent-positive"],
+    ["Missing anonymous runtime mount proof", "fixture-parent-mount"],
+    ["A new read reused stale runtime parent authority", "fixture-parent-reuse"],
   ]) {
     for (const prefix of ["Error", "error"])
       expect(diagnostic(`${prefix}: ${message}\n    at /private/example.js:1:1`)).toEqual({
@@ -829,7 +835,7 @@ if kind in {"binary", "module", "cache", "cache-baseline", "image", "package-rec
     if libc.mount(os.fsencode(replacement), target, None, 0x1000, None) != 0:
         os._exit(125)
 else:
-    if kind not in {"adjacent-pth", "pyvenv", "builddir"}:
+    if kind not in {"adjacent-pth", "pyvenv", "builddir", "parent-recheck"}:
         os._exit(125)
     # New override names are created ONLY on an anonymous private tmpfs, never on the host's /usr/bin.
     files = {"python3.12":"/usr/bin/python3.12", "prlimit":"/usr/bin/prlimit"}
@@ -847,10 +853,14 @@ else:
             output.write(content)
         os.chmod(os.path.join(replacement, name), 0o755)
     os.symlink("python3.12", os.path.join(replacement, "python3"))
-    override = {"adjacent-pth":"python3.12._pth", "pyvenv":"pyvenv.cfg", "builddir":"pybuilddir.txt"}[kind]
-    with open(os.path.join(replacement, override), "w") as output:
-        poison = os.path.dirname(sys.argv[3])
-        output.write({"adjacent-pth":"/usr/lib/python3.12\n/usr/lib/python3.12/lib-dynload\n" + poison + "\nimport site\n", "pyvenv":"home = " + poison + "\n", "builddir":poison + "\n"}[kind])
+    if kind == "parent-recheck":
+        with open(os.path.join(replacement, ".vector-identity-private-runtime"), "w") as output:
+            output.write("anonymous-fixture-only\n")
+    else:
+        override = {"adjacent-pth":"python3.12._pth", "pyvenv":"pyvenv.cfg", "builddir":"pybuilddir.txt"}[kind]
+        with open(os.path.join(replacement, override), "w") as output:
+            poison = os.path.dirname(sys.argv[3])
+            output.write({"adjacent-pth":"/usr/lib/python3.12\n/usr/lib/python3.12/lib-dynload\n" + poison + "\nimport site\n", "pyvenv":"home = " + poison + "\n", "builddir":poison + "\n"}[kind])
     if libc.mount(os.fsencode(replacement), b"/usr/bin", None, 0x1000, None) != 0:
         os._exit(125)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 4096))
@@ -879,9 +889,12 @@ for (const name of ["node", "bun"] as const)
     "adjacent-pth",
     "pyvenv",
     "builddir",
+    "parent-recheck",
   ] as const)
     rootCI(
-      `actual ${name} refuses ${poison} runtime provenance in a private mount namespace before launching the proof helper`,
+      poison === "parent-recheck"
+        ? `actual ${name} rechecks anonymous runtime parent authority on a second read without another helper spawn`
+        : `actual ${name} refuses ${poison} runtime provenance in a private mount namespace before launching the proof helper`,
       async () => {
         await using temporary = await witnessDirectory()
         const target = path.join(temporary.path, "directory"),
@@ -925,6 +938,7 @@ for (const name of ["node", "bun"] as const)
             path.join(temporary.path, "witness.mjs"),
             target,
             proof,
+            poison === "parent-recheck" ? "parent-recheck" : "positive",
           ],
           { PATH: "/usr/local/bin:/usr/bin:/bin", LC_ALL: "C" },
           { directory: temporary.path, root: true },
@@ -932,10 +946,13 @@ for (const name of ["node", "bun"] as const)
         expect(result.code).toBe(0)
         expect(JSON.parse(result.output)).toMatchObject({
           runtime: name,
-          value: null,
+          value:
+            poison === "parent-recheck"
+              ? { dev: expect.any(String), ino: expect.any(String), birth: expect.any(String) }
+              : null,
           loweredLimit: 256,
           inheritedPrivateDescriptors: [3, 2003],
-          observedChild: false,
+          ...(poison === "parent-recheck" ? { rechecked: true, secondValue: null } : { observedChild: false }),
         })
         const traces = await Promise.all(
           (await fs.readdir(temporary.path))
@@ -943,7 +960,10 @@ for (const name of ["node", "bun"] as const)
             .map((file) => fs.readFile(path.join(temporary.path, file), "utf8")),
         )
         expect(traces.length).toBeGreaterThan(0)
-        expect(traces.some((trace) => trace.includes('"-c", "import sys, os\\n'))).toBe(false)
+        const helpers = traces
+          .flatMap((trace) => trace.split("\n"))
+          .filter((line) => line.includes('"-c", "import sys, os\\n'))
+        expect(helpers).toHaveLength(poison === "parent-recheck" ? 1 : 0)
         expect(
           await fs.lstat(marker).then(
             () => true,
@@ -961,7 +981,7 @@ for (const name of ["node", "bun"] as const)
         }
         if (poison === "package-record")
           expect(await fs.readFile(replacement, "utf8")).toContain(`${"0".repeat(32)}  usr/bin/python3.12\n`)
-        if (poison === "adjacent-pth" || poison === "pyvenv" || poison === "builddir")
+        if (poison === "adjacent-pth" || poison === "pyvenv" || poison === "builddir" || poison === "parent-recheck")
           expect(await fs.readdir(replacement)).toEqual([])
       },
       60_000,
