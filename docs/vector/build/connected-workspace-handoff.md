@@ -7,14 +7,65 @@ This build moves to a new agent. Start here, then read the contract (`connected-
 This section supersedes the historical starting status below. Work continues on `build-connect`; root owns ordinary pushes and CI. Do not assume that every current edit is committed or pushed. The original owner rules below still apply.
 
 - **CW-13:** report-mode after-run reviews are source-qualified (`eea441ec4`). Automatic repair remains quiet because its safe original-budget continuation capability is unavailable; no protected budget exception has been granted.
-- **CW-14:** settled task worktree review is source-qualified (`4a5287689`), with the separate canonical trust repair (`167dfa110`). Public SDK/schema generation is handled by root. Task-review fixes must resume/settle the owned task and re-review; they must not silently edit the launching checkout.
+- **CW-14:** the verified Task-root capability is now source-qualified on Linux in `a4c4f86ce`, with actual saved-task/provider coverage in `e20a8184a`. Root batch123 passed the four focused admission cases and the full 12-case Task lifecycle file; batch124 passed the saved-provider case again and final Engine types. This supersedes the batch118 failure. Task-review fixes must resume/settle the owned task and re-review; they must not silently edit the launching checkout.
 - **CW-16:** read-only workflow stage schema/plan/held execution checkpoints are `aed826382`, `df225c944` and `055b117fa`. They describe and validate connected stages, but execution refuses before model work while the private workflow helper-scope capability is unavailable. These commits do not qualify workflow execution or repair.
 - **CW-17:** repository user dismissal context is committed separately in Core (`9f2411d26`) and Engine (`543a32a3f`). It updates original finding statuses in place, preserves provenance/cost/verdict, and keeps review context separate from learned facts. The cross-branch VectorScope consumer remains gated.
-- **CW-18:** this Engine checkpoint provides genuine sessionless directory jobs, private owner consent, bounded atomic job-bound receipts, strict directory identity/read authority, reload/cancel behavior and a production Node transport proof. Final domain tests passed 15 cases; real reviewer/provider tests passed 6; actual SDK/HTTP tests passed 8; Engine types and Node bundle smoke passed. The root-owned App workspace-card/controller source is separate; newer App checks and actual browser CI are still pending.
+- **CW-18:** genuine sessionless jobs, private owner consent and sealed receipts now have the later stable request-key ledger and private-Git callback repairs. See the exact source/CI checkpoint below; earlier 15-domain/6-provider/8-HTTP receipts are retained as history, separate from the later qualified Task path.
 - **Already authorized:** the owner approved nonstarting MCP status snapshots and keeping the additive TUI consent patch. Do not ask those questions again.
-- **Still held:** safe-Git callback integration requires the qualified selected Git service and safe review context; do not claim the whole C2 phase or the full review path finished before it is closed. Optional automatic swarm review stays unavailable without shared-budget authority. Protected budget/prompt changes, Q1/main landing, default-on activation and CW-20 to CW-25 integration remain held under their existing owner/merge gates. Hands and cloud-workspace development remain outside this continuation's scope.
+- **Still held:** whole C2 acceptance, unsupported-platform qualification and fresh whole-branch CI remain open. Optional automatic swarm review stays unavailable without shared-budget authority; automatic repair still lacks original-budget continuation, and workflow execution lacks its qualified helper-scope port. Protected budget/prompt changes, Q1/main landing, default-on activation and CW-20 to CW-25 integration retain their actual owner/merge gates. Hands and cloud-workspace development remain outside this continuation's scope.
 
-Root must finish the remaining App/browser and safe-Git integration checks, review the full C2 phase, and run CI on the exact pushed head. This note is source qualification, not a push, release, main-merge or activation receipt.
+### Latest committed source and qualified checks
+
+| Checkpoint | Commit | Evidence and limits |
+| --- | --- | --- |
+| Private-Git callback | `8e22f756d` | Reviewer callbacks stay within the qualified read-only Git service |
+| Exact directory admission ledger | `c197dd9ea` | Stable UUID plus exact body, durable lost-response recovery, private job/index binding |
+| Generated contract | `526164271` | Root regenerated the keyed directory-review SDK/OpenAPI contract; no hand edits |
+| Bootstrap isolation | `8f87e92d9` | Directory overlays cannot mutate global configuration |
+| App privacy and retry | `1a7d43733` | Authority/disposal retirement, exact persisted retry identity, guarded settings confirmation and canonical cost display |
+| Dedicated mounted App CI | `06fe604e4` | Normal push to `build-connect`; exact-head hosted result below |
+| Verified Task-root capability | `a4c4f86ce` | Private, callback-scoped authority minted inside the verified task lock; no serialized root authority |
+| Actual saved-task/provider coverage | `e20a8184a` | Full 12-case Linux lifecycle file passed; saved-provider case and Engine types passed again after final fixture typing |
+
+Root batch112 passed Engine types, the API coverage exerciser (**343 passed,
+zero failed/skipped/missing/extra**), authorization and effect-boundary checks
+(16 each), and the production Node build/transport smoke. The genuine SDK/HTTP
+file passed **9 cases / 103 assertions**, including an actual lost response and
+recovery using the same request key. Those are source-scoped backend receipts.
+
+Root batch117 passed the three App pure files (controller 13 cases,
+reservation 4, owner client 5), App types and E2E source types. Dedicated
+[App CI 43260314713](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43260314713)
+then passed on exact source `06fe604e4349850a3bc5280c6f894d5c6b4dffe7`:
+job `131329488493`, **21 mounted Chromium cases, one worker, zero retries**
+(2.4 minutes). This covers both connected-tools and directory-review specs,
+including the nine new disposal/confirmation/retry negative cases. It closes
+their earlier browser-CI pending item. That exact App result predates the two
+Task commits above; it does not qualify their backend changes or the full C2
+phase.
+
+The Task repair keeps the hub as the production capability issuer, inside
+`TaskIsolation.review`'s verified callback and existing mutex. A private WeakMap
+binds the frozen handle to the task's directory, Git directory, common directory
+and saved tip. Private `HandoffContext.reviewGit` carries it to the adapter;
+acquisition requires the exact task directory and current matching Git identity.
+Read operations check that the handle remains live, and callback completion,
+failure or cancellation revokes it. Caller JSON cannot supply this authority;
+the ordinary instance root, read permissions, budget and consent paths stay in
+place.
+
+Root batch123 passed the four focused admission cases and all **12 Task
+lifecycle/provider cases** (29.43 seconds). After the final fixture typing,
+batch124 passed the actual saved-task provider case again (6.76 seconds) and
+Engine types (84.35 seconds). The six private-Git capability cases also passed,
+including refusal of copied handles, another directory and use after the locked
+callback. Independent source review accepted the boundary. Disposable providers
+were used; these are Linux source checks, not unsupported-platform acceptance.
+
+Fresh whole-branch `test`, `typecheck` and `Verify` remain owed on the next pushed
+docs head. Root must finish phase review and those checks before claiming C2
+acceptance. No release, main merge, default activation, real owner-machine
+operation or paid inference is implied by these receipts.
 
 ## Where it stands
 
@@ -57,12 +108,16 @@ Each phase was built one WP at a time: build it, run its own test files, typeche
   - Q6: connect keeps its own start route until VectorScope's VS-10 decides.
 - **Still open:** Q1, whether Stage A may land on `main` behind `VECTOR_EXPERIMENTAL_CONNECT`. Nothing goes to `main` without the owner's yes.
 
-## Blocked or left open by the repairs
+## Historical repair notes (current checkpoint supersedes their status)
 
-Each item below is also in the deviations log.
+These are the original A1–A3 observations, not a fresh permission request or a
+current backlog. Later checkpoints/deviations supersede them. In particular the
+MCP and TUI questions below were approved and completed; never ask them again.
+Other historical observations require current-source verification before being
+treated as unfinished work.
 
-- **MCP status read (A1, finding 11).** `members()` calls `MCP.status()`, which starts every configured MCP server on first use. A status read that does not start them needs an additive change in `packages/engine/src/mcp/index.ts`, which is outside connect's file plan. Ask the owner whether to allow that additive read, or whether to accept config-only MCP rows.
-- **TUI consent text (A2).** In the terminal UI, the `connect_model` ask still reads only "Call tool connect_model". The fix belongs in `tui/src/routes/session/permission.tsx`, which the Hands branch edits. The request to that owner is in the deviations log. `VECTOR_EXPERIMENTAL_CONNECT` must stay off by default until this lands.
+- **Resolved MCP status read (A1, finding 11):** the owner-approved additive `MCP.snapshot()` is committed in `5f26e3f78`. It reads only existing completed status and does not start servers or read credentials; the old `MCP.status()` observation is superseded.
+- **Resolved TUI consent text (A2):** the approved additive connected-tools/consent surface is committed in `04d6468da`. The historical request to keep it open is superseded. The experimental default still remains off for the independent phase/owner gates above.
 - **Background runs (CW-08):**
   - `vector run` does not wait for a background connect review. Its tracker lives in `cli/cmd/run.ts` and `run/background-wait.ts`, outside connect's files.
   - Reverting the message that started a review does not stop the review: `session/revert.ts` cancels only task and shell jobs.
@@ -77,9 +132,9 @@ Each item below is also in the deviations log.
 `test.yml`, `typecheck.yml` and `verify.yml` run only on `main`, on pull requests, or when dispatched by hand:
 
 ```bash
-gh workflow run test.yml -R scr1pter/claudeondfsfdaf --ref connected-workspace
-gh workflow run typecheck.yml -R scr1pter/claudeondfsfdaf --ref connected-workspace
-gh workflow run verify.yml -R scr1pter/claudeondfsfdaf --ref connected-workspace
+gh workflow run test.yml -R scr1pter/claudeondfsfdaf --ref build-connect
+gh workflow run typecheck.yml -R scr1pter/claudeondfsfdaf --ref build-connect
+gh workflow run verify.yml -R scr1pter/claudeondfsfdaf --ref build-connect
 ```
 
 Read failures with `gh run view <id> -R scr1pter/claudeondfsfdaf --log-failed`. Re-run once with `--failed` only when the failure is a known flake and nothing else failed in that job. Known flakes:
