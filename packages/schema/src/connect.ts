@@ -257,7 +257,7 @@ export interface ReviewInput extends Schema.Schema.Type<typeof ReviewInput> {}
 /** Stable identity of one explicit directory-review click, retained across an uncertain POST response. */
 export const DirectoryRequestKey = Schema.String.annotate({ identifier: "Connect.DirectoryRequestKey" }).check(
   Schema.isLengthBetween(36, 36),
-  Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+  Schema.isUUID(4),
 )
 export type DirectoryRequestKey = typeof DirectoryRequestKey.Type
 

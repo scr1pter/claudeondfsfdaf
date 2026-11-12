@@ -473,3 +473,25 @@ test("directory starts require a bounded stable UUID while conversation starts r
     refuses(Connect.DirectoryReviewInput, { ...input, requestKey })
   roundTrip(Connect.ReviewInput, { target: input.target, background: true })
 })
+
+test("the directory UUID JSON schema preserves uppercase wire validation and UUID format", () => {
+  const document = Schema.toJsonSchemaDocument(Connect.DirectoryRequestKey)
+  const schema = document.definitions["Connect.DirectoryRequestKey"] ?? document.schema
+  const members = (value: unknown): Record<string, unknown>[] => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return []
+    const own = Object.fromEntries(Object.entries(value))
+    return [own, ...(Array.isArray(own.allOf) ? own.allOf.flatMap(members) : [])]
+  }
+  const clauses = members(schema)
+  const uuid = clauses.find((clause) => clause.format === "uuid" && typeof clause.pattern === "string")
+  if (!uuid || typeof uuid.pattern !== "string")
+    throw new Error("The directory UUID JSON schema has no explicit pattern")
+  expect(clauses.some((clause) => clause.minLength === 36)).toBe(true)
+  expect(clauses.some((clause) => clause.maxLength === 36)).toBe(true)
+  const pattern = new RegExp(uuid.pattern)
+  const value = "0196aa50-50d0-4f17-9c1d-85eff018e829"
+  expect(pattern.test(value)).toBe(true)
+  expect(pattern.test(value.toUpperCase())).toBe(true)
+  expect(pattern.test(value.replace("4f17", "1f17"))).toBe(false)
+  expect(pattern.test(value.replace("9c1d", "0c1d"))).toBe(false)
+})
