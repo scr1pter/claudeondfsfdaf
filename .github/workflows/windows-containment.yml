@@ -25,6 +25,8 @@ jobs:
   native:
     runs-on: windows-latest
     timeout-minutes: 20
+    env:
+      VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
     defaults:
       run:
         shell: bash
@@ -45,3 +47,11 @@ jobs:
         timeout-minutes: 10
         working-directory: packages/engine
         run: GITHUB_ACTIONS=false bun test test/tool/shell-windows-process.test.ts --timeout 60000
+      - name: Run Windows durable background command integration
+        timeout-minutes: 5
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test test/task/shells.test.ts --timeout 60000
+      - name: Run Windows task management command integration
+        timeout-minutes: 5
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
