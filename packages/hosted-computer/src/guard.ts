@@ -10,10 +10,10 @@ import type { GuardView } from "./computer"
  *
  * The guard fails closed: whenever it cannot answer for every page in time, the field counts as a credential field and
  * the action is refused. It cannot answer while it is not in place (not started, or its pipe closed), for a page or
- * frame whose setup failed (or timed out on every try), while a session it never attached to reports a guard world, and
- * when the focus or the point is in a frame no guard world answers for. While a page or frame is only on its way (its
- * setup in flight, announced but not attached yet, or its top document's guard world not there yet, as right after a
- * navigation), a question waits for it, for at most `settleMs`, before it answers "credential".
+ * frame whose setup failed (or, until it answers, timed out on every try), while a session it never attached to reports
+ * a guard world, and when the focus or the point is in a frame no guard world answers for. While a page or frame is
+ * only on its way (its setup in flight, announced but not attached yet, or its top document's guard world not there
+ * yet, as right after a navigation), a question waits for it, for at most `settleMs`, before it answers "credential".
  */
 
 export const GUARD_WORLD = "vector-guard"
@@ -23,8 +23,10 @@ const START_MS = 30_000
 const QUERY_MS = 1_500
 /** How often the guard asks again when pages, frames or documents appeared while it was asking. */
 const ROUNDS = 3
-/** How often a page's setup is sent before the guard gives up on it, when the page did not answer in time. */
+/** How often a page's setup is sent before the guard stops waiting for it, when the page did not answer in time. */
 const SETUP_TRIES = 3
+/** The longest pause between later tries of a setup that timed out on every try. */
+const RETRY_MAX_MS = 60_000
 /** The largest single message the guard takes from the browser. */
 const MAX_MESSAGE = 64 * 1024 * 1024
 /** The targets the guard is put into; other targets (workers) are only let run. */
@@ -133,8 +135,11 @@ export class CdpPipe {
 }
 
 type Context = { id: number; sessionId: string; frameId: string }
-/** A page or frame the guard attached to, and how far its setup got: only a finished setup lets the guard answer for it. */
-type Session = { sessionId: string; targetId?: string; type: string; setup: "pending" | "done" | "failed"; mainFrame?: string }
+/**
+ * A page or frame the guard attached to, and how far its setup got: only a finished setup lets the guard answer for it.
+ * "stalled" is a setup that timed out on every try and is still being sent; "failed" one the browser refused.
+ */
+type Session = { sessionId: string; targetId?: string; type: string; setup: "pending" | "done" | "stalled" | "failed"; mainFrame?: string }
 /** What a guard world answers: the kind of secret, whether the focus or the point is in this frame, or in a child frame it cannot see into. */
 type Answer = { kind?: unknown; here?: unknown; child?: unknown } | undefined
 
@@ -305,10 +310,11 @@ export class BrowserGuard {
    * for each answer first can stall the target: while it navigates, the browser holds commands meant for its renderer,
    * and the navigation can itself be held until the go-ahead.
    *
-   * A setup that only timed out (a busy renderer) is sent again, up to `SETUP_TRIES` times: the commands are harmless to
-   * repeat, and the script keeps its first copy in a document. One that the browser refused, or that timed out on every
-   * try, leaves the page or frame as one the guard cannot answer for until it goes away. Nothing is thrown, since an
-   * event handler that threw would take hostd down with an unhandled rejection.
+   * A setup that only timed out (a busy renderer) is sent again: the commands are harmless to repeat, and the script
+   * keeps its first copy in a document. After `SETUP_TRIES` tries the page or frame is held like a failed one (typing is
+   * refused without a wait), but its setup keeps going out, ever less often, while it is there, and it counts once its
+   * renderer answers. One that the browser refused leaves the page or frame as one the guard cannot answer for until it
+   * goes away. Nothing is thrown, since an event handler that threw would take hostd down with an unhandled rejection.
    */
   private async setUp(session: Session) {
     const { sessionId } = session
@@ -339,10 +345,18 @@ export class BrowserGuard {
         this.changed()
         return
       }
-      if (attempt < SETUP_TRIES && errors.every((error) => error instanceof CdpTimeout)) continue
-      session.setup = "failed"
-      this.changed()
-      return
+      if (!errors.every((error) => error instanceof CdpTimeout)) {
+        session.setup = "failed"
+        this.changed()
+        return
+      }
+      if (attempt < SETUP_TRIES) continue
+      if (session.setup !== "stalled") {
+        session.setup = "stalled"
+        this.changed()
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(this.callMs * 2 ** (attempt - SETUP_TRIES), RETRY_MAX_MS)))
+      if (this.sessions.get(sessionId) !== session || this.pipe.closed) return
     }
   }
 
@@ -373,7 +387,7 @@ export class BrowserGuard {
     let wait = false
     for (const session of this.sessions.values()) {
       if (guarded.has(session.targetId ?? session.sessionId)) continue
-      if (session.setup === "failed") return "no"
+      if (session.setup === "failed" || session.setup === "stalled") return "no"
       wait = true
     }
     for (const target of this.targets) if (!guarded.has(target)) wait = true

@@ -222,6 +222,8 @@ describe("the credential guard", () => {
     expect(await guard.focusedSecret()).toBe("credential")
     expect(await guard.captchas()).toEqual([])
     expect(browser.asked("S2")).toBe(false)
+    // A refusal is final: the setup is not sent again.
+    expect(browser.count("S2", "Runtime.enable")).toBe(1)
     // Once the browser says the page is gone, the guard answers for the pages left.
     browser.destroy("T2")
     expect(await guard.focusedSecret()).toBeUndefined()
@@ -249,22 +251,48 @@ describe("the credential guard", () => {
     expect(browser.count("S3", "Runtime.runIfWaitingForDebugger")).toBe(1)
   })
 
-  test("a setup that times out on every try is held like a failed one", async () => {
+  test("a setup that times out on every try is held like a failed one, and keeps going out until the page answers", async () => {
+    // A renderer busy for longer than all the tries (a long task on a heavy page, a loaded machine).
+    let busy = true
     const { browser, guard } = await guarded(
-      { silent: (message) => message.sessionId === "S3" && message.method === "Page.addScriptToEvaluateOnNewDocument" },
-      { callMs: 50 },
+      { silent: (message) => busy && message.sessionId === "S3" && message.method === "Page.addScriptToEvaluateOnNewDocument" },
+      { callMs: 50, settleMs: 1_000 },
     )
     browser.announce("T3", "page")
     browser.attach("S3", "page", "T3")
+    browser.world("S3", 13)
     await browser.until(() => !browser.waiting.has("S3"))
+    // The question waits through the tries, then answers "credential".
     expect(await guard.focusedSecret()).toBe("credential")
-    // Past its tries the setup has failed; typing is still refused, now without waiting.
-    await settle(200)
-    expect(browser.count("S3", "Page.addScriptToEvaluateOnNewDocument")).toBe(3)
+    expect(browser.count("S3", "Page.addScriptToEvaluateOnNewDocument")).toBeGreaterThanOrEqual(3)
+    // Past its tries typing is refused without waiting, and the page is not asked.
+    const started = Date.now()
     expect(await guard.focusedSecret()).toBe("credential")
+    expect(Date.now() - started).toBeLessThan(500)
     expect(browser.asked("S3")).toBe(false)
+    // Its setup keeps going out (the go-ahead only once), and once the renderer answers the page counts again.
+    await browser.until(() => browser.count("S3", "Page.addScriptToEvaluateOnNewDocument") >= 4)
+    busy = false
+    await browser.until(async () => (await guard.focusedSecret()) === undefined)
+    expect(browser.asked("S3")).toBe(true)
+    expect(browser.count("S3", "Runtime.runIfWaitingForDebugger")).toBe(1)
+  })
+
+  test("a setup that keeps timing out stops going out once its page or frame is gone", async () => {
+    const { browser, guard } = await guarded(
+      { silent: (message) => message.sessionId === "S3" && message.method === "Page.addScriptToEvaluateOnNewDocument" },
+      { callMs: 30 },
+    )
+    browser.announce("T3", "page")
+    browser.attach("S3", "page", "T3")
+    await browser.until(() => browser.count("S3", "Page.addScriptToEvaluateOnNewDocument") >= 4)
+    expect(await guard.focusedSecret()).toBe("credential")
     browser.destroy("T3")
     expect(await guard.focusedSecret()).toBeUndefined()
+    await settle(150)
+    const sent = browser.count("S3", "Page.addScriptToEvaluateOnNewDocument")
+    await settle(300)
+    expect(browser.count("S3", "Page.addScriptToEvaluateOnNewDocument")).toBe(sent)
   })
 
   test("a page or frame the browser detaches without destroying it stops counting", async () => {
