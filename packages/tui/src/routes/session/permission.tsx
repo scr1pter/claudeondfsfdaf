@@ -23,6 +23,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { VECTOR_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { connectedConsent } from "./connect-presentation"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -447,6 +448,24 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                       </box>
                     </box>
                   </Show>
+                ),
+              }
+            }
+
+            const connected = connectedConsent(permission, props.request.metadata)
+            if (connected !== undefined) {
+              return {
+                icon: "↔",
+                title:
+                  permission === "connect_write"
+                    ? "Apply review fixes"
+                    : permission === "connect_model"
+                      ? "Use this review model"
+                      : "Connected review",
+                body: (
+                  <box paddingLeft={1}>
+                    <text fg={theme.text}>{connected}</text>
+                  </box>
                 ),
               }
             }

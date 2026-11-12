@@ -64,6 +64,7 @@ export type Capabilities = {
   taskIsolation: boolean
   workflows: boolean
   backgroundShells: boolean
+  connections: boolean
 }
 
 const CAPABILITY_FLAGS = [
@@ -76,6 +77,7 @@ const CAPABILITY_FLAGS = [
   "taskIsolation",
   "workflows",
   "backgroundShells",
+  "connections",
 ] as const
 
 export function readCapabilities(value: unknown): Capabilities {
