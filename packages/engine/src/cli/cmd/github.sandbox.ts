@@ -12,6 +12,8 @@ import { GithubSessionProof } from "./github.session-proof"
 const execute = promisify(execFile)
 const USER = GithubAgents.SANDBOX_USER
 const AGENT_HOME = `/home/${USER}`
+// Diagnostic branch only: the named profile has no executable attachment or transition rule.
+const DIAGNOSTIC_PROFILE = ["/usr/bin/aa-exec", "--profile=vector-isolation-diagnostic", "--"]
 const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 const STAGING_PARENTS = ["/mnt", "/var/lib", "/home"] as const
 const STAGING_CONTAINERS = STAGING_PARENTS.map((parent) => path.join(parent, "vector-agent-sandbox"))
@@ -501,19 +503,44 @@ export async function prepare(env: Env = process.env) {
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
   if (!state.sudo) {
     ProcessIsolation.assertBinary()
+    // Identical UID/GID, clean environment, core limit, no-new-privs, binary and argv; only the root-entered label differs.
+    const probe = [
+      ...asAgent,
+      "/bin/sh",
+      "-c",
+      'printf "vector-userns-probe-pid=%s\\n" "$$"; exec "$@"',
+      "vector-userns-control",
+      ProcessIsolation.BINARY,
+      ...ProcessIsolation.argumentsForTool("/bin/true", [], staged),
+    ]
+    const baseline = await sudo(probe, [0, 1])
+    console.log(`Diagnostic unprofiled tool namespace: exit ${baseline.code}`)
+    if (baseline.code !== 0) console.log(namespaceProbeFailure("unprofiled tool PID/proc", baseline).message)
+    const label = await sudo([...DIAGNOSTIC_PROFILE, ...asAgent, "/usr/bin/cat", "/proc/self/attr/current"])
+    if (label.stdout.trim() !== "vector-isolation-diagnostic (enforce)") throw refused()
+    console.log("Diagnostic agent label: vector-isolation-diagnostic (enforce)")
+    const toolProbe = await sudo([...DIAGNOSTIC_PROFILE, ...probe], [0, 1])
+    const pids = [baseline, toolProbe].map((result) => {
+      const match = /^vector-userns-probe-pid=(\d+)\n$/.exec(result.stdout)
+      if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) < 2) throw refused()
+      return Number(match[1])
+    })
+    await fs.writeFile(
+      path.join(absolute(env.RUNNER_TEMP), "vector-aa-probe-pids.json"),
+      JSON.stringify({ uid: state.uid, pids }),
+      { mode: 0o600, flag: "wx" },
+    )
+    console.log(`Diagnostic profiled tool namespace: exit ${toolProbe.code}`)
+    if (toolProbe.code !== 0) throw namespaceProbeFailure("tool PID/proc", toolProbe)
     const engineProbe = await sudo(
       [
+        ...DIAGNOSTIC_PROFILE,
         ProcessIsolation.BINARY,
         ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
       ],
       [0, 1],
     )
     if (engineProbe.code !== 0) throw namespaceProbeFailure("engine mount", engineProbe)
-    const toolProbe = await sudo(
-      [...asAgent, ProcessIsolation.BINARY, ...ProcessIsolation.argumentsForTool("/bin/true", [], staged)],
-      [0, 1],
-    )
-    if (toolProbe.code !== 0) throw namespaceProbeFailure("tool PID/proc", toolProbe)
     state.isolatedTools = true
   }
   for (const name of FILE_COMMANDS) {
@@ -665,7 +692,11 @@ export async function run(args: readonly string[], env: Env = process.env) {
         "-n",
         ...(state!.sudo
           ? inner
-          : [ProcessIsolation.BINARY, ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), workspace)]),
+          : [
+              ...DIAGNOSTIC_PROFILE,
+              ProcessIsolation.BINARY,
+              ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), workspace),
+            ]),
       ]
   return new Promise<number>((resolve, reject) => {
     const child = spawn(launcher, arguments_, {

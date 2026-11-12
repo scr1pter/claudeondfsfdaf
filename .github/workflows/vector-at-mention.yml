@@ -54,10 +54,22 @@ jobs:
       - name: Install probe build dependencies
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap apparmor-utils
           bun install --frozen-lockfile --ignore-scripts
           bun run script/prepare-gitlab.ts
           bun run --cwd packages/core fix-node-pty
+
+      - name: Install the Vector-only diagnostic AppArmor label
+        run: |
+          set -euo pipefail
+          for setting in /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/kernel/unprivileged_userns_clone /sys/module/apparmor/parameters/enabled; do
+            if [ -f "$setting" ]; then printf '%s=' "$setting"; cat "$setting"; fi
+          done
+          test ! -e /etc/apparmor.d/vector-isolation-diagnostic
+          if sudo -n grep -q '^vector-isolation-diagnostic ' /sys/kernel/security/apparmor/profiles; then exit 1; fi
+          sudo -n install -o root -g root -m 0444 packages/engine/script/isolation-apparmor-diagnostic.profile /etc/apparmor.d/vector-isolation-diagnostic
+          touch "$RUNNER_TEMP/vector-aa-profile-owned"
+          sudo -n /usr/sbin/apparmor_parser --add /etc/apparmor.d/vector-isolation-diagnostic
 
       - name: Compile and install the disposable probe harness
         run: |
@@ -122,3 +134,33 @@ jobs:
           PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
           PROBE_UPLOAD_OUTCOME: ${{ steps.artifact_boundary.outcome }}
         run: node /opt/vector-sandbox-probe.mjs --assert
+
+      - name: Observe fixed AppArmor denial categories and remove the diagnostic label
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
+        run: |
+          set -euo pipefail
+          cleanup_profile() {
+            if [ "$PROBE_FINISH_OUTCOME" != success ]; then
+              echo 'Sandbox UID cleanup was not proven; the owned diagnostic label remains until disposable VM teardown.'
+              return
+            fi
+            if [ -f "$RUNNER_TEMP/vector-aa-profile-owned" ]; then
+              if sudo -n grep -q '^vector-isolation-diagnostic ' /sys/kernel/security/apparmor/profiles; then
+                sudo -n /usr/sbin/apparmor_parser --remove /etc/apparmor.d/vector-isolation-diagnostic || return 1
+              fi
+              sudo -n rm -- /etc/apparmor.d/vector-isolation-diagnostic
+            fi
+          }
+          trap cleanup_profile EXIT
+          # Read at most the fixed probe PIDs' denial events. Emit categories/counts only, never raw log text.
+          if [ -f "$RUNNER_TEMP/vector-aa-probe-pids.json" ]; then
+            probe_pids="$(python3 -c 'import json,os; v=json.load(open(os.environ["RUNNER_TEMP"]+"/vector-aa-probe-pids.json")); assert len(v["pids"])==2 and all(type(p) is int and p>1 for p in v["pids"]); print("|".join(map(str,v["pids"])))')"
+            sudo -n journalctl --kernel --boot --no-pager --output=cat --lines=20 --grep="apparmor=\"DENIED\".*pid=($probe_pids)( |$)" | awk '
+              /userns_create/ { userns++ }
+              /uid_map/ { uidmap++ }
+              /profile="vector-isolation-diagnostic"/ { vector++ }
+              END { printf "Fixed-probe AppArmor denials: userns_create=%d uid_map=%d vector_profile=%d\n", userns, uidmap, vector }' || test "${PIPESTATUS[0]}" = 1
+          fi
