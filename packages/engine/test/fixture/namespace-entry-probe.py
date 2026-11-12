@@ -226,7 +226,9 @@ def prepare(state_path):
     require(all(namespaces[kind] != os.stat("/proc/self/ns/" + kind).st_ino for kind in KINDS),
             "The keeper shares a host namespace")
     for kind, pin in pins.items():
-        fixed(["/usr/bin/mount", "--bind", f"/proc/{pid}/ns/{kind}", pin], stdout=subprocess.DEVNULL)
+        # Keep the same bounded clean-environment root helper, but retain the kernel's errno instead of mount(8)'s 32.
+        fixed(["/usr/bin/python3", "-I", "-S", SELF, "pin", kind, str(pid), identity["start"],
+               str(devices[kind]), str(namespaces[kind])])
     value.update({"namespaces": namespaces, "devices": devices, "runtimeImages": images,
                   "keeper": {"pid": pid, "start": identity["start"]},
                   "canary": {"path": canary, "sha256": hashlib.sha256(pathlib.Path(canary).read_bytes()).hexdigest()}})
@@ -547,6 +549,56 @@ def cleanup():
     output({"event": "namespace-cleaned", "v": 1, "uidStoppedBeforeUnpin": True, "trustedCanaryUnchanged": True})
 
 
+def mount_flags(pid, target):
+    """Only fixed root/destination propagation booleans, never raw host mountinfo."""
+    try:
+        with open(f"/proc/{pid}/mountinfo", "r", encoding="utf8") as file:
+            text = file.read(65537)
+        if len(text) > 65536:
+            return {"available": False, "truncated": True}
+        lines = [line.split() for line in text.splitlines()]
+        covering = [fields for fields in lines if fields[4] == "/" or target == fields[4] or target.startswith(fields[4] + "/")]
+        fields = max(covering, key=lambda item: len(item[4]))
+        propagation = fields[6:fields.index("-")]
+        return {"available": True, "readOnly": "ro" in fields[5].split(","),
+                "shared": any(item.startswith("shared:") for item in propagation),
+                "slave": any(item.startswith("master:") for item in propagation),
+                "propagateFrom": any(item.startswith("propagate_from:") for item in propagation)}
+    except (OSError, ValueError, IndexError):
+        return {"available": False}
+
+
+def pin_namespace(kind, pid, start, device, inode):
+    require(os.geteuid() == 0 and kind in KINDS and 1 < pid < (1 << 31) and start.isdigit() and len(start) <= 32,
+            "Invalid fixed namespace pin request")
+    value = validate_spec(read_json(PRIVATE, 0))
+    descriptor = os.open(f"/proc/{pid}/ns/{kind}", os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        identity = process_identity(pid)
+        require(identity["uid"] == value["uid"] and identity["start"] == start and identity["state"] != "Z",
+                "The namespace keeper identity changed before binding")
+        info = os.fstat(descriptor)
+        require(fcntl.ioctl(descriptor, NS_GET_NSTYPE) == KINDS[kind] and
+                info.st_dev == device and info.st_ino == inode, "The namespace source handle changed before binding")
+        # A pinned source FD avoids a PID reuse between validation and the identical MS_BIND syscall.
+        result = LIBC.mount(os.fsencode(f"/proc/self/fd/{descriptor}"), os.fsencode(value["pins"][kind]), None, 4096, None)
+        code = ctypes.get_errno() if result != 0 else 0
+        if result != 0:
+            try:
+                current_mount = os.stat("/proc/self/ns/mnt").st_ino
+                keeper_mount = os.stat(f"/proc/{pid}/ns/mnt").st_ino
+            except OSError:
+                current_mount = keeper_mount = None
+            output({"event": "namespace-pin-refused", "kind": kind, "errno": code,
+                    "category": errno.errorcode.get(code, "UNKNOWN"), "kernel": os.uname().release[:128],
+                    "currentMountNamespace": current_mount, "keeperMountNamespace": keeper_mount,
+                    "hostDestination": mount_flags("self", value["directory"]),
+                    "keeperDestination": mount_flags(pid, value["directory"])})
+            raise RuntimeError(f"The fixed {kind} namespace bind failed with {errno.errorcode.get(code, 'UNKNOWN')} ({code})")
+    finally:
+        os.close(descriptor)
+
+
 def observe(pid, start):
     """A fixed root-only metadata reader; cross-UID nsfs metadata is otherwise correctly denied by Yama."""
     require(os.geteuid() == 0 and 1 < pid < (1 << 31) and start.isdigit() and len(start) <= 32,
@@ -590,5 +642,7 @@ if __name__ == "__main__":
         cleanup()
     elif len(sys.argv) == 4 and sys.argv[1] == "observe":
         observe(int(sys.argv[2]), sys.argv[3])
+    elif len(sys.argv) == 7 and sys.argv[1] == "pin":
+        pin_namespace(sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5]), int(sys.argv[6]))
     else:
         raise RuntimeError("Unexpected namespace-entry prototype invocation")
