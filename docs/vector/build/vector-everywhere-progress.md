@@ -5,6 +5,42 @@ The handoff, detailed contract and accepted decisions remain in
 `vector-everywhere-deviations.md`. This continuation uses isolated branch
 `build-everywhere`; nothing is merged to main or registered with a platform.
 
+## Current software CI checkpoint (2026-11-12)
+
+This checkpoint supersedes earlier chronological entries that still owed hosted
+qualification. The reviewed P1c/P2 source is
+`15e92e6ac9d75885f53e1edc3ff2712ad5eb9c85`, pushed normally to
+`vector-everywhere` by the coordinating agent.
+
+| Check at that exact source | Run | Result |
+| --- | --- | --- |
+| Dedicated Vector everywhere | [43228105045](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43228105045) | Success, 9/9 jobs; 53/53 test files |
+| General typecheck | [43229968596](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43229968596) | Success |
+| General test | [43229955763](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43229955763) | Attempt 2 success; 21 successful jobs, 3 manual-only skips |
+
+The phase commit `4915bc64a` first exposed a real native response-contract
+failure: Redis `ZSCORE` returned a number that the cooldown parser refused.
+Commit `15e92e6ac` accepts valid native numeric/string scores and retains
+malformed/negative refusal; batch084 passed its focused tests and API types.
+The successful dedicated run then exercised actual Redis on healthy,
+digest-pinned Valkey 7.2.14. Test job `131217999679` reports all 53 files passing,
+including the new account/link admission, readiness/erasure, wrong-type
+poststate, in-flight revocation and canonical `00`/`01` counter cases. Native
+resource, Jira draft, delivery/claim/quota and cooldown maximum-ordering races
+also passed. No local Redis proof is substituted for that hosted log.
+
+The general test's first attempt had exactly two setup failures: Windows engine
+shards 3/12 (`131222518054`) and 7/12 (`131222518086`) received a Chocolatey
+community-feed HTTP 504 while fetching ripgrep 15.2.0. Build/tests were skipped
+in those jobs. Other Windows shards installed the same version and passed;
+Windows E2E and all other enabled jobs passed. Root reran only the two failed
+jobs once, producing attempt 2 success without a source/workflow change.
+
+These are software qualification receipts. P3, P4, Surfaces and go-live still
+wait for the specified actual branch merges, trusted production ports and owner
+actions. No live app registration, native grant, production deployment,
+owner-computer proof, paid inference, PR or main merge is implied.
+
 ## P1c: VE-06 router, intake and result delivery
 
 Implemented on the working tree based on `f9b19a041`:
@@ -294,6 +330,6 @@ Earlier candidates exposed actual source/type/fixture issues, all repaired befor
 
 The final production boundary received two read-only reviews. The storage/deletion reviewer closed mapping snapshots, all-key/canonical-counter preflight, newest-code consumption, default foreign-sponsored erasure and per-loop actor ownership; prior test-helper/core-fixture authorship was disclosed. The separate native reviewer closed captured-token preflight, pending revocation serialization, exact same-generation confirmation, uncertain owner recovery and local account erasure without active authority. Neither reviewer ran tests or contacted a platform.
 
-These are scoped local software receipts, not native or hosted qualification. Skips include the new actual-Redis admission/link/tombstone, readiness bounds, wrong-type/canonical-counter and revocation-concurrency cases plus their setup/teardown hooks. Root must normally push the reviewed phase to `vector-everywhere` and obtain fresh exact-head dedicated Redis/types and general CI. No local Redis was started. No paid inference, real native workspace, owner computer, registration, deployment, PR or main change was used.
+Those were scoped local receipts. Their outstanding hosted requirement is now closed by the exact-source CI checkpoint at the top of this journal, including actual Redis execution of the locally skipped admission/link/tombstone, readiness, wrong-type/canonical-counter and revocation-concurrency cases. No local Redis was started. No paid inference, real native workspace, owner computer, registration, deployment, PR or main change was used.
 
 P3, P4, Surfaces and go-live remain held for their specified merges and owner actions. The real mode-separated Codium tombstone port is missing here and fails closed; tests inject it explicitly. Native uncertainty/process-death reconciliation is not automatic. Minimal closing/account/epoch security metadata may remain after private data is purged; external provider work already delivered and out-of-band reinstalls cannot be canceled by a final preflight. Those native acceptance/retention/reconciliation questions remain actual live gates, not passing software evidence.
