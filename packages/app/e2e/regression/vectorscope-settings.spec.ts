@@ -212,6 +212,7 @@ test("the owner saves a separate model, variant and disable setting only after c
       })
       console.log("SCOPE_PICKER_BROWSER_ERRORS", JSON.stringify({ pageErrors, consoleErrors, errors }))
     })
+  expect(pageErrors).toBe(0)
   const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
   await expect(chosen).toContainText("Maker Text")
   await chosen.click()
@@ -232,6 +233,7 @@ test("the owner saves a separate model, variant and disable setting only after c
     { agent: { vectorscope: { model: "anthropic/maker/text", variant: "high", disable: true } } },
   ])
   await expect(settings.getByRole("button", { name: "Save VectorScope settings", exact: true })).toBeDisabled()
+  expect(pageErrors).toBe(0)
   await page.screenshot({ path: info.outputPath("vectorscope-settings-saved.png") })
 })
 

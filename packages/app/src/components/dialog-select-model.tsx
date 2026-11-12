@@ -32,6 +32,7 @@ import { useLanguage } from "@/context/language"
 import { decode64 } from "@/utils/base64"
 import { offInLocalProviders, type OffModel } from "@/features/local/local-model"
 import { useCodiumPurchase } from "@/components/codium-purchase"
+import { createPickerCurrent } from "./model-picker-state"
 import {
   brandProviderName,
   buildModelSections,
@@ -209,10 +210,7 @@ function createModelSections(input: {
     trace("models", { list: ownerID(list), provider, count: next.length })
     return next
   })
-  const current = () => {
-    const value = input.model.current()
-    return value ? pickerModelKey(value) : undefined
-  }
+  const current = createPickerCurrent(() => input.model.current())
   const sections = createMemo(() => {
     const list = models()
     const term = input.search()

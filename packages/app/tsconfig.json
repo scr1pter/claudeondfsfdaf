@@ -21,6 +21,11 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "package.json", "test-browser/vectorscope-owner.test.ts"],
+  "include": [
+    "src",
+    "package.json",
+    "test-browser/vectorscope-owner.test.ts",
+    "test-browser/model-picker-state.test.ts"
+  ],
   "exclude": ["dist", "ts-dist"]
 }

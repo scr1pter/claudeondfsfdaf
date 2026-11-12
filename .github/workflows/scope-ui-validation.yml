@@ -56,6 +56,10 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: packages/app
         run: bunx playwright install chromium
+      - name: Check actual Solid picker key and feedback regression
+        run: bun test --isolate --conditions=browser --preload ./happydom.ts ./test-browser/model-picker-state.test.ts
+        working-directory: packages/app
+        timeout-minutes: 2
       - name: Run nine VectorScope settings regressions
         run: bunx playwright test e2e/regression/vectorscope-settings.spec.ts --project chromium --workers 1 --retries
           0
