@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "hands-windows-validation-continuation",
-  "observedAtUtc": "2026-11-11T18:57:26.516339+00:00",
+  "observedAtUtc": "2026-11-12T02:52:45.022380+00:00",
   "repository": "scr1pter/claudeondfsfdaf",
   "branch": "hands",
   "parentRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
@@ -112,7 +112,7 @@
     }
   ],
   "localLimits": "Serial individual provider-free tests and package typecheck only. No native compile/test, owner input/capture/clipboard, Electron, Playwright or OS permission changes.",
-  "pending": "New candidate hosted native outcomes; cold capture; Windows ARM64 runtime/final packaged verification; actual granted Mac/device checks; signing/notarization; gateway and owner publication gates. Hands remains unversioned/unreleased.",
+  "pending": "Exact candidate hosted native outcomes including Stop and isolated cold capture; successful artifact infrastructure and final packaged x64/ARM64 verification; real Mac/device grants, signing/notarization, gateway and owner publication gates. Hands remains unversioned/unreleased.",
   "styleFollowUp": {
     "parentRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
     "sourceEvidence": {
@@ -346,5 +346,97 @@
       }
     ],
     "qualification": "Source race corrected; not yet established as cause of observed native DOWN failure. New hosted native result required. Capture50ms policy remains unchanged; owner design decision pending."
+  },
+  "guardianCandidateHostedOutcome": {
+    "headRevision": "b19bcf67f775a9711f2a9bd436d142504d7cdbc9",
+    "run": 43091454762,
+    "job": 130772485755,
+    "conclusion": "failure",
+    "nativeBuildUnitVersionProbes": "passed",
+    "requiredProtocolLifecycle": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1
+    },
+    "stagedBuild": "passed",
+    "isolated": {
+      "passed": 35,
+      "failed": 0,
+      "skipped": 11
+    },
+    "stop": {
+      "ok": false,
+      "reason": "input_post_failed",
+      "stage": "guardian-observe-reply-negative",
+      "cause": "driver_failure"
+    },
+    "qualification": "Guardian exchange returned an authenticated negative ledger reply; not transport failure. Real matching DOWN proof still absent. Cold capture succeeded once at unchanged source; prior failures remain and no stable capture fix is claimed."
+  },
+  "b19ArtifactsPreview": {
+    "headRevision": "b19bcf67f775a9711f2a9bd436d142504d7cdbc9",
+    "run": 43091462774,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091462774",
+    "conclusion": "failure",
+    "inputs": {
+      "ref": "hands",
+      "tag": "v1.99.112",
+      "prerelease": false,
+      "dry_run": true,
+      "allow_unsigned": true
+    },
+    "applicationTestsAndTypes": "All application test and typecheck jobs passed; inspected API job conclusions. No final installer credit.",
+    "artifactFailures": {
+      "macBuildJob": 130775141101,
+      "desktopSmokeJob": 130775914692,
+      "arm64ReportJob": 130781393553,
+      "observed": "Official logs: artifact Create/Finalize/GetSignedArtifactURL requests repeatedly returned HTML instead of JSON. No production change justified by these transport failures."
+    },
+    "arm64Core": {
+      "passed": 30,
+      "failed": 0,
+      "skipped": 1,
+      "qualification": "Actual native unit/version/probes and core passed; job failed preserving report. Not packaged or privileged proof."
+    },
+    "publication": "Skipped. No release, signing, version change or tag created."
+  },
+  "isolatedCaptureCandidate": {
+    "parentRevision": "b19bcf67f775a9711f2a9bd436d142504d7cdbc9",
+    "ownerApproval": "Implement the isolated capture redesign. Explicit session approval revises W3 cold setup50ms limit only for process-isolated factory/CreateForWindow within the original750ms native acquisition deadline.",
+    "boundary": "One immutable QPC deadline starts before parent launch/auth/mapping/D3D/IPC setup; includes actual worker exit, cleanup, copy and final native postflight. Existing public10s encode/receipt/transport and epoch/policy gates unchanged. Input/UIA/StartCapture retain50ms.",
+    "implementation": "One-shot exact same-image child, authenticated immediate parent and wait-only witness, read-only fixed request map, exact inherited handles, atomic creation into private kill-on-close job, independent watchdogs, full target hash, nonce/extent/version binding, actual normal exit required before pixel access. Reject cancellation, stale authority, changed frame and late cleanup. No cache/replay/retry/warmup/inline fallback.",
+    "tests": "13 new native protocol/auth/binding/CLI/deadline groups registered in existing capture suite; not executed locally. Two source wiring regressions cover native and publication fences.",
+    "guardianDiagnostics": "Three closed negative reply buckets distinguish echoed zero/short/full observation budget; no new IPC/query/timer or receipt authority.",
+    "review": "Two independent read-only source/security/build reviews found no confirmed blocker. Native compilation/runtime still required.",
+    "localChecks": [
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-report.test.ts",
+        "passed": 43,
+        "failed": 0,
+        "assertions": 26735,
+        "seconds": 2.04,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-overlay-smoke-source.test.ts",
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174,
+        "seconds": 2.93,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file test --timeout 30000 --only-failures ./scripts/computer-helper-selftest.test.ts",
+        "passed": 48,
+        "failed": 0,
+        "assertions": 1021,
+        "seconds": 1.249,
+        "exitCode": 0
+      },
+      {
+        "command": "packages/desktop: bun --no-env-file run typecheck",
+        "exitCode": 0
+      }
+    ],
+    "qualification": "Source candidate only; no native execution or cold timing acceptance established."
   }
 }

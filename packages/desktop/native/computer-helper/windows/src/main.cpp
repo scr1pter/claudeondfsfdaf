@@ -1,5 +1,6 @@
 #include "core.h"
 #include "input_guardian.h"
+#include "capture_worker.h"
 #include <shellapi.h>
 #include <winrt/base.h>
 
@@ -12,6 +13,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     std::vector<std::wstring> arguments;
     for (int index = 1; index < count; ++index) arguments.emplace_back(argv[index]);
     LocalFree(argv);
+    // The one-shot capture mode arms its independent parent/deadline supervision before COM.
+    if (const auto capture = parse_capture_worker(arguments)) return run_capture_worker(*capture);
     if (const auto guardian=parse_input_guardian(arguments)) {
       winrt::init_apartment(winrt::apartment_type::multi_threaded);
       return run_input_guardian(*guardian,GetStdHandle(STD_INPUT_HANDLE),GetStdHandle(STD_OUTPUT_HANDLE));

@@ -466,6 +466,9 @@ std::optional<OverlayDriverStage> overlay_driver_guardian_stage(InputGuardianPha
     case InputGuardianPhase::reply_invalid: return OverlayDriverStage::guardian_observe_reply_invalid;
     case InputGuardianPhase::setup_failed: return OverlayDriverStage::guardian_observe_setup_failed;
     case InputGuardianPhase::reply_negative: return OverlayDriverStage::guardian_observe_reply_negative;
+    case InputGuardianPhase::reply_negative_zero_budget: return OverlayDriverStage::guardian_observe_reply_negative_zero_budget;
+    case InputGuardianPhase::reply_negative_short_budget: return OverlayDriverStage::guardian_observe_reply_negative_short_budget;
+    case InputGuardianPhase::reply_negative_full_budget: return OverlayDriverStage::guardian_observe_reply_negative_full_budget;
     default: return {};
   }
 }

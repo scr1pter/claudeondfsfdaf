@@ -1,4 +1,5 @@
 #include "capture.h"
+#include "capture_worker_protocol.h"
 #include "availability.h"
 #include <algorithm>
 #include <array>
@@ -119,6 +120,7 @@ size_t run_capture_tests() {
     catch (...) { throw std::runtime_error("capture.group-" + std::to_string(groups + 1) + ".unexpected"); }
     ++groups;
   };
+  test([] { check(run_capture_worker_tests() > 0, "capture.worker-tests-registered"); });
   test([] {
     struct Case { int64_t setup, rpc; CaptureReadPhase expected, cancelled; };
     constexpr std::array cases{

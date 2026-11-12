@@ -6,20 +6,38 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
-**Latest native observation, 11 November 2026.** The style-corrected
-`68fcb2fe` passed Windows native build/unit/version/probe/protocol checks and
-advanced through final window/freshness validation to accepted insertion. It
-still failed guardian DOWN confirmation (`observe-down`), so Stop is not
-verified. The next candidate fixes a demonstrated stale I/O-cancellation
-generation race and adds closed transport-versus-ledger diagnostics without
-relaxing any 50 ms bound. Local report/source checks passed 41/19 tests and
-desktop types passed; native confirmation is pending. Cold capture still
-fails and its separate design decision is awaiting the owner.
+**Latest native observation, 11 November 2026.** At `b19bcf67`, Windows
+manual diagnostic [43091454762](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091454762),
+job `130772485755`, passed native build/unit/version/probes, staging and the
+required protocol/lifecycle checks (30 passed, zero failed, one skipped). Its
+isolated report was 35 passed, zero failed, 11 skipped; cold capture succeeded
+once on the unchanged capture path. This does not establish capture stability or
+validate the new isolated worker. Stop still failed `input_post_failed` /
+`guardian-observe-reply-negative`: a valid guardian reply reported no matching
+DOWN receipt. Transport completed; the source of the missing receipt remains
+unproven. Insertion alone is not a passing Stop.
 
-Older-source native ARM64 core checks passed in the unsigned preview; final
-packaging did not run because integration assertions failed. Those fixture
-repairs are now pushed. The [dated record](./evidence/hands-windows-validation-2026-11-11.json)
-retains failures, cancellations, exact source/run scope and remaining gates.
+**Current source work.** The owner explicitly answered “Implement the isolated
+capture redesign” to the proposal to allow isolated cold capture setup within
+the original 750 ms total acquisition deadline. Input, UIA and StartCapture
+retain their 50 ms checks. The worker candidate starts one inherited QPC
+deadline before launch/authentication and accepts no late pixels after cleanup
+and parent postflight; the public 10 s operation/encode deadline is unchanged.
+There is no retry, cache, warm-up or fallback capture route. Worker native source
+tests and the new zero/short/full-budget negative guardian-reply categories
+still require hosted execution. These are source changes, not native passes.
+
+**Latest unsigned preview.** Exact `b19bcf67` preview
+[43091462774](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091462774)
+passed its app tests and typechecks. Artifact upload/download attempts returned
+HTML instead of the expected JSON after retries, preventing a completed
+preview. ARM64 native core checks passed (30 passed, zero failed, one skipped),
+but that job failed its report upload. No packaged, signing or publication
+success is claimed. The [dated record](./evidence/hands-windows-validation-2026-11-11.json)
+retains failures, exact source/run scope and remaining gates.
+
+**Earlier continuation observations** below retain their original source/run
+scope; statements about a next candidate are historical.
 
 **Windows validation, 11 November 2026 (Pacific).** At `601c17d0`, all
 16 engine shards, ordinary Windows/Linux unit and E2E jobs, and the Node
@@ -71,7 +89,7 @@ Hosted integration at `2229637c` passed all four type jobs, Linux/Windows units 
 
 Latest Windows measurement: [42732319448](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42732319448), diagnostic source `418e744299ff46654dbd28d52518146aeb7e74dd`, failed. Windows packaged-pin reader tests passed (17/85 assertions); core conformance was 30 passed/1 skipped/0 failed. Isolated checks were 34 passed/10 skipped/2 failed: the aggregate and capture color patch (`capture-window-item-full-ticket-expired`, `capture_unavailable`). Staged Stop still refused at `stop-root-refused`, `core_failure:no_ui_tree`; early accessibility startup did not fix it. The actor stayed available. The capture observation does not distinguish RPC time from ticket setup and scheduling. [Source-bound record](./evidence/42732319448-windows-diagnostic.json) uses actual log receipts and API artifact metadata; raw archives remain locally unverified because their storage host is blocked. No release credit.
 
-All **73 of 73 source work packages** are implemented. This is an integration/validation continuation, not release readiness. Main at `0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c` is being joined into `hands`; the new combined source still needs its own hosted CI, production benchmark comparison and final package evidence. The [pre-integration benchmark](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42724172551) passed at `4aede6ac`; that is a baseline, not evidence for the merged tree.
+All **73 of 73 source work packages** are implemented. This is an integration/validation continuation, not release readiness. Main at `0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c` has been joined into `hands`; the final combined source still needs source-matched regression, production benchmark comparison and final package evidence. The [pre-integration benchmark](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42724172551) passed at `4aede6ac`; that is a baseline, not evidence for the merged tree.
 
 Desktop **1.99.112 is already published without Hands**. Its history and `publishedDesktopVersion` are retained from main. Hands now has separate, **unversioned** draft notes (`handsReleasePreview`) and an [unreleased owner checklist](../owner-actions/hands-release.md). No Hands release version is assigned, and main's existing 1.99.113 copy is unchanged. The enforced measured macOS helper remains **1.0.15**.
 

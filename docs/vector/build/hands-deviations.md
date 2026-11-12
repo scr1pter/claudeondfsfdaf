@@ -1018,8 +1018,9 @@ request, lock, budget, admission, transport and parsed reply refusal; no new
 IPC, native query, content, event tag or observed identifier is recorded.
 Insertion still requires the same actual matching receipt within 50 ms.
 Local report/source checks passed 41/19 tests (26,203/174 assertions) and
-desktop typechecking passed. Capture's 50 ms rule remains unchanged; its
-separate owner design question is pending, not assumed approved.
+desktop typechecking passed. At this source checkpoint, capture's 50 ms setup
+rule remained unchanged and its owner design question was pending. The later
+explicit approval and isolated-worker candidate are recorded below.
 
 The earlier unsigned preview was cancelled only after its two explained
 precondition failures and completed native core checks. Its actual ARM64
@@ -1027,3 +1028,61 @@ unit/version/probe and protocol/lifecycle job `130752315043` passed, with
 30 core checks passed and privileged execution explicitly skipped. macOS
 15 Intel/26 required matrices also passed. This is older-source core evidence,
 not final packaging, granted input/capture, or a Hands release.
+
+## Isolated capture design approval and native evidence — 11 November 2026 (Pacific)
+
+The owner explicitly answered “Implement the isolated capture redesign” to the
+proposal to allow cold capture setup in an isolated worker within the original
+750 ms total acquisition deadline. This deliberately revises W3's 50 ms limit
+for cold factory activation and CreateForWindow in that isolated process only.
+Input, UIA and StartCapture retain their existing 50 ms checks; the public 10 s
+capture operation/encode deadline is unchanged. This supersedes the earlier
+pending design question without rewriting its historical evidence.
+
+The source candidate uses one fresh same-image worker for an admitted window.
+The raw QPC acquisition deadline starts before parent preparation, process
+launch, authentication and D3D/WGC setup, is inherited by the child and is never
+renewed. Private inherited handles, a launch nonce, held parent identity and
+exact target/geometry binding constrain the request. The parent associates the
+worker with its kill-on-close job at process creation; parent and child watches
+reject cancellation, parent death, lost authority and expired work. Pixels are
+accepted only after actual normal child exit, WGC cleanup, exact output binding
+and parent postflight inside the same deadline. Late or cancelled output is
+rejected. There is no retry, cache, warm-up, inline WGC fallback or fallback
+capture route. The existing screen path is not used to recover a failed window
+capture. Native worker codec/deadline/authority tests are source coverage until
+they execute in hosted CI; no local native capture or owner permission was used.
+
+At `b19bcf67`, diagnostic
+[43091454762](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091454762),
+job `130772485755`, passed native build/unit/version/probes, source-bound staging
+and required protocol/lifecycle checks (30 passed, zero failed, one skipped).
+Its isolated report was 35 passed, zero failed, 11 skipped. Cold capture
+succeeded once on the unchanged capture implementation; that result neither
+establishes stability nor validates the later worker candidate. Staged Stop
+still failed `input_post_failed` / `guardian-observe-reply-negative`. The
+private transport returned a valid authenticated negative reply, so this
+observation is a missing matching DOWN receipt, not a demonstrated transport
+failure. It does not establish the cause of the missing receipt or a passing
+Stop. The stale I/O-cancellation race was a real source defect, but correcting
+it did not make this native Stop proof pass.
+
+The next diagnostic candidate separates a valid negative reply into zero,
+short and full child observation-budget categories. The reply echoes the
+actual transmitted budget after parent lock/queued-retirement work, within the
+same original 50 ms parent bound. A negative reply alone did not establish
+that the child had the nominal 40 ms observation budget. The three new buckets
+remain pending hosted execution; none changes the actual matching receipt,
+input insertion, deadline or release-authority predicates. No raw event, tag,
+key, observed identifier or user content is emitted.
+
+Exact `b19bcf67` unsigned artifacts-only preview
+[43091462774](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43091462774)
+passed its app tests and typechecks. Artifact upload/download attempts returned
+HTML rather than expected JSON after retries and prevented a completed
+preview. ARM64 native core checks were 30 passed, zero failed, one skipped,
+although that job failed while uploading its report. Preserve that actual core
+evidence without calling the failed job successful. There is no final packaged,
+signing, notarization or publication success from this preview. The new worker
+and negative-budget diagnostic changes still need their own exact-source
+native results; final packaging and owner-device/release gates remain open.

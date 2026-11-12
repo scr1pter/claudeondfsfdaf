@@ -20,7 +20,7 @@ inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-inline constexpr std::array<std::wstring_view, 146> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 154> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -62,7 +62,10 @@ inline constexpr std::array<std::wstring_view, 146> windows_privileged_stages{
   L"capture-window-content-size", L"capture-window-texture", L"capture-window-description",
   L"capture-window-staging", L"capture-window-copy", L"capture-window-map",
   L"capture-window-crop", L"capture-window-current", L"capture-read-surface-after",
-  L"capture-read-context-after", L"capture-color-location-screen", L"capture-color-location-window",
+  L"capture-read-context-after", L"capture-window-worker-prepare", L"capture-window-worker-start",
+  L"capture-window-worker-wait", L"capture-window-worker-exit", L"capture-window-worker-reply",
+  L"capture-window-worker-cleanup", L"capture-window-worker-deadline", L"capture-window-worker-auth",
+  L"capture-color-location-screen", L"capture-color-location-window",
   L"capture-color-location-unknown", L"capture-color-masked-screen", L"capture-color-masked-window",
   L"capture-color-masked-unknown", L"capture-color-unmasked-screen", L"capture-color-unmasked-window",
   L"capture-color-unmasked-unknown", L"capture-color-mask-unknown-screen", L"capture-color-mask-unknown-window",

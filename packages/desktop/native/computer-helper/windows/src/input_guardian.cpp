@@ -392,7 +392,9 @@ class NativeGuardian final : public InputGuardian, public std::enable_shared_fro
     const auto budget=std::min<uint32_t>(timeout,50); packet.budget=budget>10 ? budget-10 : 0;
     auto phase=InputGuardianPhase::setup_failed;
     const auto reply=exchange(packet,budget,diagnostic_ ? &phase : nullptr);
-    if (reply) phase=reply->ok ? InputGuardianPhase::confirmed : InputGuardianPhase::reply_negative;
+    if (reply) phase=reply->ok ? InputGuardianPhase::confirmed :
+      reply->budget==0 ? InputGuardianPhase::reply_negative_zero_budget :
+      reply->budget<packet.budget ? InputGuardianPhase::reply_negative_short_budget : InputGuardianPhase::reply_negative_full_budget;
     // Smoke observations are sequential. Only this returning caller publishes; cancellation,
     // hook, control and retirement workers never retain or write this caller-local phase.
     if (diagnostic_) diagnostic_->phase.store(phase,std::memory_order_relaxed);

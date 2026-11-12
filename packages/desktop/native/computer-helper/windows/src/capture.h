@@ -61,7 +61,9 @@ enum class CaptureReadPhase {
   window_item_size, window_pool, window_session, window_start_ticket, window_start,
   window_start_current, window_first_frame, window_content_size, window_texture,
   window_description, window_staging, window_copy, window_map, window_crop,
-  window_current, surface_after, context_after, count
+  window_current, surface_after, context_after,
+  window_worker_prepare, window_worker_start, window_worker_wait, window_worker_exit,
+  window_worker_reply, window_worker_cleanup, window_worker_deadline, window_worker_auth, count
 };
 // RPC span includes the unchanged immediate pre/post checks; no claim of pure OS execution time.
 // Unknown or invalid observations preserve the original full-ticket-expired diagnostic.

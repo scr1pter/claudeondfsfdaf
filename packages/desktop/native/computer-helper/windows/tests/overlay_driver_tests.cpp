@@ -38,7 +38,9 @@ size_t run_overlay_driver_tests() {
     std::set<OverlayDriverStage> stages;
     for (const auto phase : {InputGuardianPhase::request_invalid, InputGuardianPhase::lock_expired, InputGuardianPhase::budget_expired,
         InputGuardianPhase::inactive, InputGuardianPhase::write_refused, InputGuardianPhase::read_refused,
-        InputGuardianPhase::reply_invalid, InputGuardianPhase::setup_failed, InputGuardianPhase::reply_negative}) {
+        InputGuardianPhase::reply_invalid, InputGuardianPhase::setup_failed, InputGuardianPhase::reply_negative,
+        InputGuardianPhase::reply_negative_zero_budget, InputGuardianPhase::reply_negative_short_budget,
+        InputGuardianPhase::reply_negative_full_budget}) {
       const auto stage = overlay_driver_guardian_stage(phase);
       require(stage && stages.insert(*stage).second && overlay_driver_stage(overlay_driver_stage_name(*stage)),
         "overlay-driver.guardian-failure-buckets-are-unique-closed-stages");

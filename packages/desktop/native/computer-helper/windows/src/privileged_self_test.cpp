@@ -117,7 +117,9 @@ std::wstring_view capture_read_stage(CaptureReadPhase phase) noexcept {
     L"capture-window-start-current", L"capture-window-first-frame", L"capture-window-content-size",
     L"capture-window-texture", L"capture-window-description", L"capture-window-staging", L"capture-window-copy",
     L"capture-window-map", L"capture-window-crop", L"capture-window-current", L"capture-read-surface-after",
-    L"capture-read-context-after"};
+    L"capture-read-context-after", L"capture-window-worker-prepare", L"capture-window-worker-start",
+    L"capture-window-worker-wait", L"capture-window-worker-exit", L"capture-window-worker-reply",
+    L"capture-window-worker-cleanup", L"capture-window-worker-deadline", L"capture-window-worker-auth"};
   const auto index = static_cast<size_t>(phase); return index < stages.size() ? stages[index] : std::wstring_view{};
 }
 bool fixture_color(const CaptureBitmap& image, uint32_t x, uint32_t y) noexcept {

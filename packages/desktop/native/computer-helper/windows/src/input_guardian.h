@@ -12,7 +12,7 @@
 namespace vector::computer {
 inline constexpr uint64_t input_guardian_held_limit_ms=10'000;
 // Smoke-only observation of existing receipt refusal paths. No ticket, event, tag or native value.
-enum class InputGuardianPhase : uint8_t { none, request_invalid, lock_expired, budget_expired, inactive, write_refused, read_refused, reply_invalid, setup_failed, reply_negative, confirmed };
+enum class InputGuardianPhase : uint8_t { none, request_invalid, lock_expired, budget_expired, inactive, write_refused, read_refused, reply_invalid, setup_failed, reply_negative, confirmed, reply_negative_zero_budget, reply_negative_short_budget, reply_negative_full_budget };
 struct InputGuardianDiagnostic { std::atomic<InputGuardianPhase> phase{InputGuardianPhase::none}; };
 static_assert(std::atomic<InputGuardianPhase>::is_always_lock_free);
 struct InputGuardianTicket {

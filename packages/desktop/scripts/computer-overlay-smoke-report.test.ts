@@ -525,39 +525,82 @@ test("initial Windows window diagnostics preserve predicate order and leave fina
   const current = driver.slice(driver.indexOf("bool window_current("), driver.indexOf("struct StopElement"))
   expect(current).toContain("OverlayDriverStage* diagnostic = nullptr")
   const predicates = [
-    "!life->current()", "!windows_owner_current(parent)", "!windows_window_current(expected)",
-    "request.parent_created != parent.process.creation_time", "bounds(request.banner, diagnostic) != request.banner_bounds",
-    "caption(request.banner, diagnostic) != request.title", "GetWindowThreadProcessId(request.banner, &owner) != expected.thread_id",
-    "owner != request.parent", "GetAncestor(request.banner, GA_ROOT) != request.banner", "!IsWindowVisible(request.banner)",
-    "IsIconic(request.banner)", "!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != request.parent",
-    "WindowFromPoint(point(request))", "!hit", "GetAncestor(hit, GA_ROOT) != request.banner",
-    "!GetWindowThreadProcessId(hit, &hit_pid) || hit_pid != request.parent", "GetClassNameW(request.banner, type, 257)",
-    "GetWindowLongPtrW(request.banner, GWL_EXSTYLE)", "GetWindowLongPtrW(request.banner, GWL_STYLE)",
+    "!life->current()",
+    "!windows_owner_current(parent)",
+    "!windows_window_current(expected)",
+    "request.parent_created != parent.process.creation_time",
+    "bounds(request.banner, diagnostic) != request.banner_bounds",
+    "caption(request.banner, diagnostic) != request.title",
+    "GetWindowThreadProcessId(request.banner, &owner) != expected.thread_id",
+    "owner != request.parent",
+    "GetAncestor(request.banner, GA_ROOT) != request.banner",
+    "!IsWindowVisible(request.banner)",
+    "IsIconic(request.banner)",
+    "!GetWindowThreadProcessId(GetForegroundWindow(), &foreground) || foreground != request.parent",
+    "WindowFromPoint(point(request))",
+    "!hit",
+    "GetAncestor(hit, GA_ROOT) != request.banner",
+    "!GetWindowThreadProcessId(hit, &hit_pid) || hit_pid != request.parent",
+    "GetClassNameW(request.banner, type, 257)",
+    "GetWindowLongPtrW(request.banner, GWL_EXSTYLE)",
+    "GetWindowLongPtrW(request.banner, GWL_STYLE)",
     "valid_overlay_stop_styles(extended, style)",
     "windows_desktop_available(observe_windows_desktop())",
   ].map((predicate) => current.indexOf(predicate))
   expect(predicates.every((index) => index >= 0)).toBe(true)
   expect(predicates).toEqual([...predicates].sort((left, right) => left - right))
-  const stages = ["request", "lifetime", "owner", "window", "created", "bounds", "caption", "thread", "pid", "root",
-    "visible", "minimized", "foreground", "point", "point-root", "point-owner", "class", "styles", "desktop"]
+  const stages = [
+    "request",
+    "lifetime",
+    "owner",
+    "window",
+    "created",
+    "bounds",
+    "caption",
+    "thread",
+    "pid",
+    "root",
+    "visible",
+    "minimized",
+    "foreground",
+    "point",
+    "point-root",
+    "point-owner",
+    "class",
+    "styles",
+    "desktop",
+  ]
   expect(COMPUTER_SMOKE_DRIVER_STAGES.filter((stage) => stage.startsWith("window-current-"))).toEqual(
     stages.map((stage) => `window-current-${stage}`),
   )
-  expect(current.match(/if \(diagnostic\) \*diagnostic = OverlayDriverStage::window_current_[a-z_]+; return false;/g)).toHaveLength(18)
+  expect(
+    current.match(/if \(diagnostic\) \*diagnostic = OverlayDriverStage::window_current_[a-z_]+; return false;/g),
+  ).toHaveLength(18)
   expect(current.match(/GetWindowThreadProcessId\(/g)).toHaveLength(3)
   expect(current.match(/GetAncestor\(/g)).toHaveLength(2)
   expect(current.match(/GetWindowLongPtrW\(/g)).toHaveLength(2)
   expect(current.match(/observe_windows_desktop\(/g)).toHaveLength(1)
   expect(current).not.toMatch(/GetTickCount|now_ms|sleep|wait_for|new |make_shared|std::function/)
-  const styles = driver.slice(driver.indexOf("bool valid_overlay_stop_styles("), driver.indexOf("bool valid_overlay_stop_request("))
-  expect(styles).toContain("return (extended & WS_EX_NOACTIVATE) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION);")
+  const styles = driver.slice(
+    driver.indexOf("bool valid_overlay_stop_styles("),
+    driver.indexOf("bool valid_overlay_stop_request("),
+  )
+  expect(styles).toContain(
+    "return (extended & WS_EX_NOACTIVATE) && !(extended & WS_EX_TRANSPARENT) && !(style & WS_CAPTION);",
+  )
   expect(styles).not.toMatch(/GetWindowLong|SetWindowLong|SetOpacity\s*\(|GetTickCount|now_ms|sleep|wait_for/)
   expect(current.match(/valid_overlay_stop_styles\(extended, style\)/g)).toHaveLength(1)
-  expect(driver).toContain("if (!valid_overlay_stop_request(observed_request)) { stage = Stage::window_current_request; invalid(); }")
+  expect(driver).toContain(
+    "if (!valid_overlay_stop_request(observed_request)) { stage = Stage::window_current_request; invalid(); }",
+  )
   expect(driver.match(/window_current\(observed_request, parent, window, life, &stage\)/g)).toHaveLength(1)
   expect(driver.match(/window_current\(observed_request, parent, window, life\)/g)).toHaveLength(2)
-  expect(driver).toContain("window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50")
-  expect(driver).toContain("!window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50")
+  expect(driver).toContain(
+    "window_current(observed_request, parent, window, life) && backend.quiet() && guardian->alive() && GetTickCount64() - prepared < 50",
+  )
+  expect(driver).toContain(
+    "!window_current(observed_request, parent, window, life) || !guardian->alive() || GetTickCount64() - prepared >= 50",
+  )
 })
 
 test("Windows DOWN diagnostics retain the original receipt and transport boundaries", async () => {
@@ -574,20 +617,33 @@ test("Windows DOWN diagnostics retain the original receipt and transport boundar
   expect(observed).toContain("std::min<uint32_t>(timeout,50)")
   expect(observed).toContain("packet.budget=budget>10 ? budget-10 : 0")
   expect(observed).toContain("exchange(packet,budget,diagnostic_ ? &phase : nullptr)")
-  expect(observed).toContain("reply->ok ? InputGuardianPhase::confirmed : InputGuardianPhase::reply_negative")
+  expect(observed).toContain("reply->ok ? InputGuardianPhase::confirmed")
+  expect(observed).toContain("reply->budget==0 ? InputGuardianPhase::reply_negative_zero_budget")
+  expect(observed).toContain(
+    "reply->budget<packet.budget ? InputGuardianPhase::reply_negative_short_budget : InputGuardianPhase::reply_negative_full_budget",
+  )
   expect(observed).toContain("return reply && reply->ok")
   expect(guardian.match(/diagnostic_->phase.store/g)).toHaveLength(2)
   expect(observed).not.toMatch(/GetTickCount|WaitForSingleObject|sleep|SendInput|CancelSynchronousIo/)
-  const exchange = guardian.slice(guardian.indexOf("std::optional<Packet> exchange("), guardian.indexOf("void flush_retired_locked("))
+  const exchange = guardian.slice(
+    guardian.indexOf("std::optional<Packet> exchange("),
+    guardian.indexOf("void flush_retired_locked("),
+  )
   expect(exchange.match(/GetTickCount64\(/g)).toHaveLength(2)
-  const locked = guardian.slice(guardian.indexOf("std::optional<Packet> exchange_locked("), guardian.indexOf("  void start()"))
+  const locked = guardian.slice(
+    guardian.indexOf("std::optional<Packet> exchange_locked("),
+    guardian.indexOf("  void start()"),
+  )
   expect(locked.match(/GetTickCount64\(/g)).toHaveLength(1)
   expect(locked.match(/WaitForSingleObject\(/g)).toHaveLength(1)
   expect(locked.match(/io.transfer\(/g)).toHaveLength(2)
   expect(locked.indexOf("io.transfer(input_.get(),bytes,true,deadline)")).toBeLessThan(
     locked.indexOf("io.transfer(output_.get(),bytes,false,deadline)"),
   )
-  const down = driver.slice(driver.indexOf("// Insertion alone never proves DOWN"), driver.indexOf("if (backend.confirm_down)"))
+  const down = driver.slice(
+    driver.indexOf("// Insertion alone never proves DOWN"),
+    driver.indexOf("if (backend.confirm_down)"),
+  )
   expect(down).toContain("if (outcome == InputPostResult::accepted)")
   expect(down.match(/guardian->observed\(\*ticket, true, 50\)/g)).toHaveLength(1)
   expect(down).toContain("guardian_diagnostic->phase.load(std::memory_order_relaxed)")
@@ -600,6 +656,169 @@ test("Windows DOWN diagnostics retain the original receipt and transport boundar
   expect(watcher.indexOf("(void)deadlines_.retire(*ticket); ticket.reset();")).toBeLessThan(
     watcher.lastIndexOf("GetTickCount64()<deadline"),
   )
+})
+
+test("isolated Windows capture keeps resource setup behind one admitted native deadline", async () => {
+  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+  const [implementation, main, driver, capture] = await Promise.all([
+    readFile(path.join(native, "capture_native.cpp"), "utf8"),
+    readFile(path.join(native, "main.cpp"), "utf8"),
+    readFile(path.join(native, "../tests/overlay_driver.cpp"), "utf8"),
+    readFile(path.join(native, "capture.cpp"), "utf8"),
+  ])
+  // These are source-wiring checks, not evidence that cold WGC setup meets its OS deadline.
+  const serving = implementation.slice(
+    implementation.indexOf("backend.read ="),
+    implementation.indexOf("backend.label ="),
+  )
+  const admission = [
+    "acquisition_deadline = capture_worker_deadline()",
+    "require_capture_surface(request.window)",
+    "capture_window_isolated(request, *acquisition_deadline, current, phase)",
+    "phase = CaptureReadPhase::surface_after",
+    "phase = CaptureReadPhase::context_after",
+    "capture_worker_deadline_current(*acquisition_deadline)",
+    "return result;",
+  ].map((gate) => serving.indexOf(gate))
+  expect(admission.every((index) => index >= 0)).toBe(true)
+  expect(admission).toEqual([...admission].sort((left, right) => left - right))
+  expect(serving).toContain("if (request.window && request.isolate_window)")
+  expect(serving.match(/capture_window_isolated\(/g)).toHaveLength(1)
+  expect(serving.match(/capture_worker_deadline\(/g)).toHaveLength(1)
+  expect(serving).not.toMatch(
+    /worker_window_bitmap\(|capture_worker_window_bitmap\(|get_activation_factory|CreateForWindow|StartCapture/,
+  )
+
+  const reader = implementation.slice(
+    implementation.indexOf("CaptureBitmap worker_window_bitmap("),
+    implementation.indexOf("class BoundedStream"),
+  )
+  const setup = [
+    "winrt::get_activation_factory<",
+    "interop->CreateForWindow(",
+    "WindowsComCall call(ticket_budget())",
+    "session.StartCapture()",
+  ].map((gate) => reader.indexOf(gate))
+  expect(setup.every((index) => index >= 0)).toBe(true)
+  expect(setup).toEqual([...setup].sort((left, right) => left - right))
+  expect(reader.match(/WindowsComCall\s+call\(/g)).toHaveLength(1)
+  expect(reader).toContain("capture_worker_remaining_ms(deadline)")
+  expect(reader).toContain("std::min<uint32_t>(50, remaining)")
+  expect(reader).not.toMatch(/capture_worker_deadline\(|Clock::now/)
+  expect(implementation.match(/winrt::get_activation_factory<GraphicsCaptureItem/g)).toHaveLength(1)
+  expect(implementation.match(/interop->CreateForWindow\(/g)).toHaveLength(1)
+  expect(reader).toContain(
+    "if (result.bgra[index + 3] != 255) result.bgra[index] = result.bgra[index + 1] = result.bgra[index + 2] = 0;",
+  )
+  expect(reader).toContain("result.bgra[index + 3] = 255;")
+  const completed = implementation.slice(
+    implementation.indexOf("CaptureBitmap capture_worker_window_bitmap("),
+    implementation.indexOf("CaptureBackend CaptureBackend::system("),
+  )
+  expect(completed.indexOf("worker_window_bitmap(request, deadline, current, phase)")).toBeGreaterThanOrEqual(0)
+  expect(completed.indexOf("require(current() && capture_worker_deadline_current(deadline))")).toBeGreaterThan(
+    completed.indexOf("worker_window_bitmap(request, deadline, current, phase)"),
+  )
+
+  for (const entry of [main, driver]) {
+    expect(entry.indexOf("parse_capture_worker(arguments)")).toBeGreaterThanOrEqual(0)
+    expect(entry.indexOf("run_capture_worker(*capture)")).toBeGreaterThan(
+      entry.indexOf("parse_capture_worker(arguments)"),
+    )
+    expect(entry.indexOf("winrt::init_apartment(")).toBeGreaterThan(entry.indexOf("run_capture_worker(*capture)"))
+  }
+  // Isolation must preserve the existing privacy, fresh-inventory and public publication fences.
+  expect(capture).toContain("const bool isolate_window = window && (occluded || !plan.masks.empty());")
+  const publication = [
+    "backend_.read({bounds, window, isolate_window}, context.is_current)",
+    "same_capture_inventory(inventory, fresh) && context.is_current()",
+    "paint_capture_masks(image, plan, bounds, fit)",
+    "backend_.encode(image, args.format, args.quality)",
+    "encoded.size() <= kMaxFrameBytes",
+    "context.with_current([&]",
+    "WindowsSessionPolicy(session).require(*window, WindowsPolicyOperation::capture)",
+    "registry_.put(std::move(record), generation)",
+    "done(Reply{header, encoded})",
+  ].map((gate) =>
+    capture.indexOf(gate, capture.indexOf("backend_.read({bounds, window, isolate_window}, context.is_current)")),
+  )
+  expect(publication.every((index) => index >= 0)).toBe(true)
+  expect(publication).toEqual([...publication].sort((left, right) => left - right))
+})
+
+test("isolated Windows capture validates a protected exited worker before accepting pixels", async () => {
+  const native = path.join(fileURLToPath(new URL("../", import.meta.url)), "native/computer-helper/windows/src")
+  const [worker, protocol] = await Promise.all([
+    readFile(path.join(native, "capture_worker.cpp"), "utf8"),
+    readFile(path.join(native, "capture_worker_protocol.cpp"), "utf8"),
+  ])
+  const parent = worker.slice(
+    worker.indexOf("CaptureBitmap capture_window_isolated("),
+    worker.indexOf("int run_capture_worker("),
+  )
+  const launch = [
+    "ParentWatch watch(deadline, target_current)",
+    "observe_windows_process(GetCurrentProcessId())",
+    "duplicate(request_map.get(), SECTION_MAP_READ, true)",
+    "watch.prepare_job()",
+    "PROC_THREAD_ATTRIBUTE_HANDLE_LIST",
+    "PROC_THREAD_ATTRIBUTE_JOB_LIST",
+    "CreateProcessW(",
+    "watch.validate_and_resume(thread.get())",
+  ].map((gate) => parent.indexOf(gate))
+  expect(launch.every((index) => index >= 0)).toBe(true)
+  expect(launch).toEqual([...launch].sort((left, right) => left - right))
+  expect(parent).toContain("EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED")
+  expect(parent.match(/CreateProcessW\(/g)).toHaveLength(1)
+  expect(parent).toContain("duplicate(output_map.get(), SECTION_MAP_READ | SECTION_MAP_WRITE, true)")
+  expect(parent.match(/HANDLE inherited\[\]\{([^}]+)\}/)?.[1]).toBe(
+    "child_request.get(), child_output.get(), child_parent.get(), child_cancel.get(), null.get()",
+  )
+  expect(parent).toContain("HANDLE jobs[]{watch.job()}")
+  expect(worker).toContain("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE")
+  const resume = worker.slice(worker.indexOf("void validate_and_resume("), worker.indexOf("HANDLE process() const"))
+  expect(resume.indexOf("IsProcessInJob(")).toBeGreaterThanOrEqual(0)
+  expect(resume.indexOf("ResumeThread(")).toBeGreaterThan(resume.indexOf("IsProcessInJob("))
+  expect(worker).not.toMatch(/AssignProcessToJobObject|CREATE_BREAKAWAY_FROM_JOB/)
+  expect(worker).toContain("CompareObjectHandles(watch.parent(), facts.parent.lease->process_handle())")
+  expect(worker).toContain("require(capture_worker_parent_allowed(facts)")
+
+  const acceptance = [
+    "WaitForSingleObject(watch.process()",
+    "GetExitCodeProcess(watch.process(), &exit)",
+    "decode_capture_worker_output(",
+    "require(output.has_value())",
+    "capture_worker_accept(*request, *output, output_bytes, true, exit, watch.current())",
+    "image.bgra.assign(pixels, pixels + output->extent.bytes)",
+    "SecureZeroMemory(",
+    "require(output_view.close())",
+    "require(watch.finish())",
+    "phase = CaptureReadPhase::window_worker_deadline",
+    "capture_worker_deadline_current(deadline) && authority(current) && windows_window_current(*read.window)",
+    "return image;",
+  ].map((gate) => parent.indexOf(gate))
+  expect(acceptance.every((index) => index >= 0)).toBe(true)
+  expect(acceptance).toEqual([...acceptance].sort((left, right) => left - right))
+  expect(parent).toContain("exit != STILL_ACTIVE && watch.current()")
+  expect(protocol).toContain(
+    "return exited && exit_code == 0 && authority_current && capture_worker_request_valid(request)",
+  )
+  expect(protocol).toContain("output.status == CaptureWorkerStatus::complete")
+  expect(parent).not.toMatch(/capture_worker_deadline\(|worker_window_bitmap\(|screen_bitmap\(/)
+
+  const child = worker.slice(worker.indexOf("int run_capture_worker("))
+  expect(child).toContain("request_view.map(request_map.get(), FILE_MAP_READ, capture_worker_request_bytes)")
+  const capture = [
+    "ChildWatch watch(request->deadline",
+    "Apartment apartment",
+    "authenticate(command, *request, watch)",
+    "capture_worker_window_bitmap(read, request->deadline, current, phase)",
+    "CaptureWorkerStatus::complete",
+    "return 0;",
+  ].map((gate) => child.indexOf(gate))
+  expect(capture.every((index) => index >= 0)).toBe(true)
+  expect(capture).toEqual([...capture].sort((left, right) => left - right))
+  expect(child).not.toMatch(/capture_worker_deadline\(|WriteFile\(|write_utf8|std::cout|std::cerr/)
 })
 
 describe("fixed real Electron computer smoke reports", () => {

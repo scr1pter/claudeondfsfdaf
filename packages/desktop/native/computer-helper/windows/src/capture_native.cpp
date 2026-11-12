@@ -1,4 +1,5 @@
 #include "capture.h"
+#include "capture_worker.h"
 #include "guard.h"
 #include "windows_com.h"
 #include "windows_process_tree.h"
@@ -177,13 +178,12 @@ CaptureBitmap screen_bitmap(const WindowsRect& bounds, CaptureReadPhase& phase) 
 bool window_capture_supported() {
   try { return winrt::Windows::Graphics::Capture::GraphicsCaptureSession::IsSupported(); } catch (...) { return false; }
 }
-struct WindowBitmap { CaptureBitmap image; Clock::time_point deadline; };
-WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::function<bool()>& current, CaptureReadPhase& phase) {
+CaptureBitmap worker_window_bitmap(const CaptureReadRequest& request, const CaptureWorkerDeadline& deadline, const std::function<bool()>& current, CaptureReadPhase& phase) {
   using winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool;
   using winrt::Windows::Graphics::Capture::GraphicsCaptureItem;
   using winrt::Windows::Graphics::DirectX::DirectXPixelFormat;
   phase = CaptureReadPhase::window_supported;
-  require(request.window && window_capture_supported() && current());
+  require(request.window && capture_worker_deadline_current(deadline) && current() && window_capture_supported());
   phase = CaptureReadPhase::window_frame;
   RECT native_frame{};
   require(SUCCEEDED(DwmGetWindowAttribute(request.window->hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &native_frame, sizeof(native_frame))));
@@ -201,77 +201,38 @@ WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::functio
   const auto graphics = inspectable.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
   GraphicsCaptureItem item{nullptr};
   winrt::com_ptr<IGraphicsCaptureItemInterop> interop;
-  // One acquisition acceptance bound covers preparation through pixels; OS calls may return late.
-  // Every COM cancellation ticket remains <=50ms, and late results are discarded, never replayed.
-  const auto deadline = Clock::now() + std::chrono::milliseconds(750);
+  // This reader runs only in the authenticated one-shot capture process. Its inherited QPC
+  // deadline began before parent launch/authentication/D3D work and is never renewed here.
   const auto metadata_current = [&] {
-    require(Clock::now() < deadline && current());
+    require(capture_worker_deadline_current(deadline) && current());
     require_capture_surface(request.window);
     require(windows_window_current(*request.window));
     RECT fresh{};
     require(SUCCEEDED(DwmGetWindowAttribute(request.window->hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &fresh, sizeof(fresh))) && rectangle(fresh) == bounds);
-    require(current() && Clock::now() < deadline);
+    require(current() && capture_worker_deadline_current(deadline));
   };
-  const auto ticket_budget = [&](Clock::time_point* observed_at = nullptr) {
-    const auto observed = Clock::now();
-    if (observed_at) *observed_at = observed;
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - observed).count();
-    require(remaining > 0);
-    return static_cast<uint32_t>(std::min<int64_t>(50, remaining));
+  const auto ticket_budget = [&] {
+    const auto remaining = capture_worker_remaining_ms(deadline); require(remaining > 0);
+    return std::min<uint32_t>(50, remaining);
   };
-  phase = CaptureReadPhase::window_factory_ticket; metadata_current();
-  { WindowsComCall call(ticket_budget()); require(call.current());
-    require(current() && Clock::now() < deadline && call.current());
-    phase = CaptureReadPhase::window_factory;
-    interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-    phase = CaptureReadPhase::window_factory_current; require(call.current() && Clock::now() < deadline);
-    phase = CaptureReadPhase::window_factory_context; require(current());
-  } // Retire and join the first timer before admitting any successor RPC on this thread.
-  phase = CaptureReadPhase::window_factory_retired; metadata_current();
-  phase = CaptureReadPhase::window_item_ticket;
-  Clock::time_point item_setup, rpc_started;
-  const auto item_budget = ticket_budget(&item_setup);
-  { WindowsComCall call(item_budget); require(call.current());
-    // Reuse the existing clock observation in exactly its prior short-circuit position.
-    require(current() && (rpc_started = Clock::now()) < deadline && call.current());
-    phase = CaptureReadPhase::window_item_create;
-    const auto created = interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item));
-    if (FAILED(created)) {
-      const auto observation = call.observation();
-      const auto cancelled = created == RPC_E_CALL_CANCELED || created == HRESULT_FROM_WIN32(RPC_S_CALL_CANCELLED) || created == HRESULT_FROM_WIN32(ERROR_CANCELLED);
-      if (observation == WindowsComObservation::expired)
-        phase = cancelled ? CaptureReadPhase::window_item_expired_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_expired_denied : CaptureReadPhase::window_item_expired_other;
-      if (observation == WindowsComObservation::current)
-        phase = cancelled ? CaptureReadPhase::window_item_current_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_current_denied : CaptureReadPhase::window_item_current_other;
-      if (observation == WindowsComObservation::expired && cancelled && item_budget == 50) {
-        // Failure-only closing sample; success and the existing acceptance/HRESULT checks are unchanged.
-        const auto rpc_finished = Clock::now();
-        if (rpc_finished < deadline)
-          phase = capture_item_cancelled_ticket_expiry(std::chrono::duration_cast<std::chrono::milliseconds>(rpc_started - item_setup).count(),
-            std::chrono::duration_cast<std::chrono::milliseconds>(rpc_finished - rpc_started).count());
-      }
-    }
-    winrt::check_hresult(created);
-    phase = CaptureReadPhase::window_item_current;
-    const auto ticket_current = call.current();
-    const auto rpc_finished = Clock::now();
-    const auto acquisition_current = rpc_finished < deadline;
-    if (!acquisition_current) phase = CaptureReadPhase::window_item_acquisition_expired;
-    if (acquisition_current && !ticket_current)
-      phase = item_budget == 50
-        ? capture_item_ticket_expiry(std::chrono::duration_cast<std::chrono::milliseconds>(rpc_started - item_setup).count(),
-            std::chrono::duration_cast<std::chrono::milliseconds>(rpc_finished - rpc_started).count())
-        : CaptureReadPhase::window_item_truncated_ticket_expired;
-    require(ticket_current && acquisition_current);
-    phase = CaptureReadPhase::window_item_context; require(current()); }
-  phase = CaptureReadPhase::window_item_retired; metadata_current();
+  metadata_current();
+  // Cold resource creation may use the remaining acquisition budget ONLY in this isolated
+  // process. Parent/job and child watchdogs reject/terminate late work; no inline fallback exists.
+  phase = CaptureReadPhase::window_factory;
+  interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+  phase = CaptureReadPhase::window_factory_current; require(current() && capture_worker_deadline_current(deadline));
+  phase = CaptureReadPhase::window_factory_context; metadata_current();
+  phase = CaptureReadPhase::window_item_create;
+  winrt::check_hresult(interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item)));
+  phase = CaptureReadPhase::window_item_current; require(current() && capture_worker_deadline_current(deadline));
+  phase = CaptureReadPhase::window_item_context; metadata_current();
   phase = CaptureReadPhase::window_item_size;
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   const auto size = item.Size();
   // DWM's real extended frame and the OS capture item must agree; no guessed shadow/border offset.
-  require(current() && Clock::now() < deadline && size.Width == bounds.width && size.Height == bounds.height);
+  require(current() && capture_worker_deadline_current(deadline) && size.Width == bounds.width && size.Height == bounds.height);
   phase = CaptureReadPhase::window_pool;
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   winrt::Windows::Graphics::Capture::GraphicsCaptureSession session{nullptr};
   auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(graphics, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
   struct Close {
@@ -281,54 +242,54 @@ WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::functio
       if (frame_pool) try { frame_pool.Close(); } catch (...) {}
     }
   } close{pool, session};
-  require(pool && current() && Clock::now() < deadline);
+  require(pool && current() && capture_worker_deadline_current(deadline));
   phase = CaptureReadPhase::window_session;
   session = pool.CreateCaptureSession(item);
-  require(session && current() && Clock::now() < deadline);
+  require(session && current() && capture_worker_deadline_current(deadline));
   phase = CaptureReadPhase::window_start_ticket;
   { WindowsComCall call(ticket_budget()); require(call.current());
-    require(current() && Clock::now() < deadline && call.current()); phase = CaptureReadPhase::window_start;
+    require(current() && capture_worker_deadline_current(deadline) && call.current()); phase = CaptureReadPhase::window_start;
     session.IsCursorCaptureEnabled(false);
-    require(current() && Clock::now() < deadline && call.current()); session.StartCapture();
-    phase = CaptureReadPhase::window_start_current; require(call.current() && current() && Clock::now() < deadline); }
+    require(current() && capture_worker_deadline_current(deadline) && call.current()); session.StartCapture();
+    phase = CaptureReadPhase::window_start_current; require(call.current() && current() && capture_worker_deadline_current(deadline)); }
   phase = CaptureReadPhase::window_first_frame;
   winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
-  while (!frame && current() && Clock::now() < deadline) {
+  while (!frame && current() && capture_worker_deadline_current(deadline)) {
     frame = pool.TryGetNextFrame(); if (!frame) std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
-  require(frame && current() && Clock::now() < deadline);
+  require(frame && current() && capture_worker_deadline_current(deadline));
   phase = CaptureReadPhase::window_content_size;
-  const auto content = frame.ContentSize(); require(current() && Clock::now() < deadline && content.Width == size.Width && content.Height == size.Height);
+  const auto content = frame.ContentSize(); require(current() && capture_worker_deadline_current(deadline) && content.Width == size.Width && content.Height == size.Height);
   phase = CaptureReadPhase::window_texture;
   const auto surface = frame.Surface();
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   const auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   winrt::com_ptr<ID3D11Texture2D> texture; winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   phase = CaptureReadPhase::window_description;
   D3D11_TEXTURE2D_DESC description{}; texture->GetDesc(&description);
-  require(current() && Clock::now() < deadline && description.Width >= static_cast<uint32_t>(size.Width) && description.Height >= static_cast<uint32_t>(size.Height) && description.Format == DXGI_FORMAT_B8G8R8A8_UNORM && description.SampleDesc.Count == 1);
+  require(current() && capture_worker_deadline_current(deadline) && description.Width >= static_cast<uint32_t>(size.Width) && description.Height >= static_cast<uint32_t>(size.Height) && description.Format == DXGI_FORMAT_B8G8R8A8_UNORM && description.SampleDesc.Count == 1);
   description.Width = static_cast<uint32_t>(size.Width); description.Height = static_cast<uint32_t>(size.Height); description.MipLevels = 1; description.ArraySize = 1;
   description.Usage = D3D11_USAGE_STAGING; description.BindFlags = 0; description.CPUAccessFlags = D3D11_CPU_ACCESS_READ; description.MiscFlags = 0;
   phase = CaptureReadPhase::window_staging;
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   winrt::com_ptr<ID3D11Texture2D> staging; winrt::check_hresult(device->CreateTexture2D(&description, nullptr, staging.put()));
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   phase = CaptureReadPhase::window_copy;
   D3D11_BOX region{0, 0, 0, description.Width, description.Height, 1}; commands->CopySubresourceRegion(staging.get(), 0, 0, 0, 0, texture.get(), 0, &region);
-  require(current() && Clock::now() < deadline);
+  require(current() && capture_worker_deadline_current(deadline));
   D3D11_MAPPED_SUBRESOURCE mapped{};
   phase = CaptureReadPhase::window_map;
   for (;;) {
-    require(current() && Clock::now() < deadline);
+    require(current() && capture_worker_deadline_current(deadline));
     const auto map = commands->Map(staging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
     if (map == DXGI_ERROR_WAS_STILL_DRAWING) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); continue; }
     require(SUCCEEDED(map)); break;
   }
   struct Unmap { ID3D11DeviceContext* context; ID3D11Texture2D* texture; ~Unmap() { context->Unmap(texture, 0); } } unmap{commands.get(), staging.get()};
   phase = CaptureReadPhase::window_crop;
-  require(current() && Clock::now() < deadline && mapped.pData && mapped.RowPitch >= description.Width * 4U);
+  require(current() && capture_worker_deadline_current(deadline) && mapped.pData && mapped.RowPitch >= description.Width * 4U);
   CaptureBitmap result{static_cast<uint32_t>(request.bounds.width), static_cast<uint32_t>(request.bounds.height), std::vector<uint8_t>(static_cast<size_t>(request.bounds.width) * static_cast<size_t>(request.bounds.height) * 4)};
   const auto x = static_cast<size_t>(request.bounds.x - bounds.x), y = static_cast<size_t>(request.bounds.y - bounds.y);
   for (size_t row = 0; row < result.height; ++row) std::memcpy(result.bgra.data() + row * result.width * 4U,
@@ -339,7 +300,7 @@ WindowBitmap window_bitmap(const CaptureReadRequest& request, const std::functio
     result.bgra[index + 3] = 255;
   }
   phase = CaptureReadPhase::window_current;
-  require(current() && Clock::now() < deadline); return {std::move(result), deadline};
+  require(current() && capture_worker_deadline_current(deadline)); return result;
 }
 
 class BoundedStream final : public IStream {
@@ -433,6 +394,14 @@ void label_vector(CaptureBitmap& image, const CapturePrivacyPlan& plan, const Wi
 }
 }
 
+CaptureBitmap capture_worker_window_bitmap(const CaptureReadRequest& request, const CaptureWorkerDeadline& deadline,
+    const std::function<bool()>& current, CaptureReadPhase& phase) {
+  auto result = worker_window_bitmap(request, deadline, current, phase);
+  // The private reader's WGC/D3D destructors have now completed. Cleanup may not make a late
+  // frame acceptable; the worker and parent independently repeat the same deadline afterward.
+  require(current() && capture_worker_deadline_current(deadline)); return result;
+}
+
 CaptureBackend CaptureBackend::system(WindowsInventoryObserver diagnostic, CaptureReadObserver read_diagnostic) {
   const auto native = std::make_shared<NativeCapture>();
   native->diagnostic = diagnostic;
@@ -442,16 +411,20 @@ CaptureBackend CaptureBackend::system(WindowsInventoryObserver diagnostic, Captu
   backend.read = [read_diagnostic](const CaptureReadRequest& request, const std::function<bool()>& current) {
     auto phase = CaptureReadPhase::surface_before;
     try {
-      require_capture_surface(request.window); phase = CaptureReadPhase::context_before; require(current(), L"changed");
-      CaptureBitmap result; std::optional<Clock::time_point> acquisition_deadline;
+      std::optional<CaptureWorkerDeadline> acquisition_deadline;
       if (request.window && request.isolate_window) {
-        auto captured = window_bitmap(request, current, phase);
-        result = std::move(captured.image); acquisition_deadline = captured.deadline;
-      } else result = screen_bitmap(request.bounds, phase);
+        phase = CaptureReadPhase::window_worker_prepare; acquisition_deadline = capture_worker_deadline();
+        require(acquisition_deadline.has_value());
+      }
+      phase = CaptureReadPhase::surface_before; require_capture_surface(request.window);
+      phase = CaptureReadPhase::context_before; require(current(), L"changed");
+      CaptureBitmap result;
+      if (acquisition_deadline) result = capture_window_isolated(request, *acquisition_deadline, current, phase);
+      else result = screen_bitmap(request.bounds, phase);
       phase = CaptureReadPhase::surface_after; require_capture_surface(request.window);
       phase = CaptureReadPhase::context_after; require(current(), L"changed");
       // WGC/COM cleanup and postflight may return late; no pixels cross this acceptance boundary then.
-      if (acquisition_deadline) { phase = CaptureReadPhase::window_current; require(current() && Clock::now() < *acquisition_deadline); }
+      if (acquisition_deadline) { phase = CaptureReadPhase::window_current; require(current() && capture_worker_deadline_current(*acquisition_deadline)); }
       return result;
     } catch (...) {
       // A best-effort observer cannot replace, suppress or recover the original native failure.

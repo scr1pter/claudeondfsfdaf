@@ -1005,7 +1005,7 @@ test("privileged tests stay off even when a verified isolated target is availabl
   expect(fake.state.closed).toBe(1)
   expect(result.checks.find((check) => check.name === "target-control")).toMatchObject({ status: "passed" })
   expect(fake.state.commands.find((command) => command.args.includes("--self-test=control"))).toMatchObject({
-    executable: "/virtual/tests/VectorComputerTestTarget.app/Contents/MacOS/VectorComputerTestTarget",
+    executable: path.join("/virtual/tests/VectorComputerTestTarget.app/Contents/MacOS/VectorComputerTestTarget"),
   })
   expect(result.checks.find((check) => check.name === "privileged")).toMatchObject({
     status: "skipped",

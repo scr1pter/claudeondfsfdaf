@@ -41,7 +41,9 @@ enum class OverlayDriverStage : uint8_t {
   observe_up, cleanup, guardian_observe_request_invalid, guardian_observe_lock_expired,
   guardian_observe_budget_expired, guardian_observe_inactive, guardian_observe_write_refused,
   guardian_observe_read_refused, guardian_observe_reply_invalid, guardian_observe_setup_failed,
-  guardian_observe_reply_negative, uia_root_current, uia_actor_admission, uia_actor_queued, uia_actor_budget,
+  guardian_observe_reply_negative, guardian_observe_reply_negative_zero_budget,
+  guardian_observe_reply_negative_short_budget, guardian_observe_reply_negative_full_budget,
+  uia_root_current, uia_actor_admission, uia_actor_queued, uia_actor_budget,
   uia_prepare_desktop, uia_prepare_create, uia_prepare_interface, uia_prepare_connection, uia_prepare_transaction, uia_prepare_walker,
   uia_prepare_cache, uia_prepare_scope, uia_prepare_control, uia_prepare_filter, uia_prepare_property, uia_root_availability,
   uia_root_target, uia_root_element, uia_root_handle, uia_root_wrap, uia_runtime_id, uia_runtime_shape,
@@ -52,7 +54,7 @@ enum class OverlayDriverStage : uint8_t {
   uia_actor_current, uia_actor_current_budget, uia_actor_complete, uia_actor_expired, uia_actor_cancelled,
   uia_actor_revoked, uia_actor_com_uninitialized, uia_actor_com_cancellation_unavailable, uia_actor_com_timer_unavailable, uia_actor_com_expired
 };
-inline constexpr std::array<std::wstring_view, 160> overlay_driver_stages{
+inline constexpr std::array<std::wstring_view, 163> overlay_driver_stages{
   L"dpi", L"parent", L"files", L"observe-parent", L"observe-bootstrap", L"isolation",
   L"token", L"desktop", L"ready-write", L"envelope-read", L"envelope-shape", L"request",
   L"foreground", L"guardian-create", L"backend-create", L"uia-create", L"uia-available", L"window-observe",
@@ -67,7 +69,9 @@ inline constexpr std::array<std::wstring_view, 160> overlay_driver_stages{
   L"observe-up", L"cleanup", L"guardian-observe-request-invalid", L"guardian-observe-lock-expired",
   L"guardian-observe-budget-expired", L"guardian-observe-inactive", L"guardian-observe-write-refused",
   L"guardian-observe-read-refused", L"guardian-observe-reply-invalid", L"guardian-observe-setup-failed",
-  L"guardian-observe-reply-negative", L"uia-root-current", L"uia-actor-admission", L"uia-actor-queued", L"uia-actor-budget",
+  L"guardian-observe-reply-negative", L"guardian-observe-reply-negative-zero-budget",
+  L"guardian-observe-reply-negative-short-budget", L"guardian-observe-reply-negative-full-budget",
+  L"uia-root-current", L"uia-actor-admission", L"uia-actor-queued", L"uia-actor-budget",
   L"uia-prepare-desktop", L"uia-prepare-create", L"uia-prepare-interface", L"uia-prepare-connection", L"uia-prepare-transaction", L"uia-prepare-walker",
   L"uia-prepare-cache", L"uia-prepare-scope", L"uia-prepare-control", L"uia-prepare-filter", L"uia-prepare-property", L"uia-root-availability",
   L"uia-root-target", L"uia-root-element", L"uia-root-handle", L"uia-root-wrap", L"uia-runtime-id", L"uia-runtime-shape",
