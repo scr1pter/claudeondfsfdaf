@@ -1905,7 +1905,8 @@ const layer = Layer.effect(
     })
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
-      function* (ctx: InstanceContext) {
+      function* (current: InstanceContext) {
+        const ctx = yield* Effect.promise(() => ConfigPaths.canonicalScope(current))
         const auth = yield* authSvc.all().pipe(Effect.orDie)
         const managed = ConfigManaged.read()
         const projectFiles = Flag.VECTOR_DISABLE_PROJECT_CONFIG
@@ -1970,10 +1971,17 @@ const layer = Layer.effect(
           ...localAgentConfig,
           ...(tuiConfig?.project ? [tuiConfig.path] : []),
         ]
-        const captureTrustSnapshot = () =>
-          WorkspaceTrust.snapshot(trustWorkspace, trustInputs).catch((cause) =>
-            WorkspaceTrust.unavailableSnapshot(trustWorkspace, cause),
-          )
+        const captureTrustSnapshot = async () => {
+          try {
+            const captured = await WorkspaceTrust.snapshot(trustWorkspace, trustInputs)
+            const latest = await ConfigPaths.canonicalScope(current)
+            if (latest.directory !== ctx.directory || latest.worktree !== ctx.worktree)
+              throw new Error("The configuration scope changed while its trusted inputs were captured.")
+            return captured
+          } catch (cause) {
+            return WorkspaceTrust.unavailableSnapshot(trustWorkspace, cause)
+          }
+        }
         const existingTrustSnapshot = yield* Effect.promise(captureTrustSnapshot)
         const snapshotFailure = WorkspaceTrust.unavailableReason(existingTrustSnapshot)
         if (snapshotFailure) {

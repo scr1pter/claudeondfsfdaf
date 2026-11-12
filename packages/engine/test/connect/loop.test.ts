@@ -29,6 +29,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { TaskClaims } from "@/task/claims"
 import { TaskPlace } from "@/task/place"
 import { FileLock } from "@/tool/file-lock"
+import { ConfigPaths } from "@/config/paths"
 import { SessionPrompt } from "@/session/prompt"
 import type { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
@@ -474,8 +475,9 @@ const observedConfig = Layer.effect(
           if (transfer && instance) {
             transfer.childProvider = info.provider?.lmstudio?.models?.["test-model"] !== undefined
             transfer.childConfigTrusted = (yield* original.trust()).trusted
+            const scope = yield* Effect.promise(() => ConfigPaths.canonicalScope(instance))
             const actual = yield* Effect.promise(() =>
-              WorkspaceTrust.snapshot(instance.worktree, [path.join(instance.directory, "vector.json")]),
+              WorkspaceTrust.snapshot(scope.worktree, [path.join(scope.directory, "vector.json")]),
             )
             transfer.childSnapshotTrusted = (yield* Effect.promise(() =>
               WorkspaceTrust.status(Global.Path.state, actual),
