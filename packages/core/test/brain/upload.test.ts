@@ -12,6 +12,7 @@ const content = (privateEntry = false, skills = false) => new TextEncoder().enco
 
 test("only the exact owner-approved preview is encrypted for the selected repository", async () => {
   const bytes = content()
+  const approvedBytes = Buffer.from(bytes)
   const sha256 = createHash("sha256").update(bytes).digest("hex")
   const uploadId = `vbu_${"a".repeat(32)}`
   const key = new Uint8Array(32).fill(7)
@@ -23,13 +24,15 @@ test("only the exact owner-approved preview is encrypted for the selected reposi
       if (kind === "prepare") {
         expect(body).toEqual({ repositoryId: "42", sha256, bytes: bytes.length, includeBrain: true })
         expect(JSON.stringify(body)).not.toContain("approved repository context")
+        // Mutating a still-mounted preview during the network wait must not change the captured approved payload.
+        bytes.fill(0)
         return { uploadId, key: BrainUpload.base64url(key), aad, expiresAt: Date.now() + 60_000, publicRepository: false }
       }
       const ciphertext = Buffer.from(String(body.ciphertext), "base64url")
       const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(String(body.nonce), "base64url"))
       decipher.setAAD(Buffer.from(aad))
       decipher.setAuthTag(ciphertext.subarray(-16))
-      expect(Buffer.concat([decipher.update(ciphertext.subarray(0, -16)), decipher.final()])).toEqual(Buffer.from(bytes))
+      expect(Buffer.concat([decipher.update(ciphertext.subarray(0, -16)), decipher.final()])).toEqual(approvedBytes)
       return { uploadId, sha256, bytes: bytes.length, approvedAt: Date.now() }
     },
   })

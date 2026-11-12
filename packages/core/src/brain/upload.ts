@@ -49,19 +49,23 @@ export function validate(bytes: Uint8Array, publicRepository: boolean) {
 export async function upload(input: {
   repositoryId: string; selection: Selection; approvedSha256: string; includeBrain: boolean; transport: Transport
 }): Promise<Reference> {
-  const { selection } = input
-  if (!input.includeBrain || !/^[1-9]\d{0,15}$/.test(input.repositoryId) || !Number.isSafeInteger(Number(input.repositoryId)) ||
-    selection.bytes.byteLength < 1 || selection.bytes.byteLength > 512 * 1024 || !/^[0-9a-f]{64}$/.test(selection.sha256) ||
-    input.approvedSha256 !== selection.sha256 || await digest(selection.bytes) !== selection.sha256)
+  const { repositoryId, approvedSha256, includeBrain, transport } = input
+  if (input.selection.bytes.byteLength < 1 || input.selection.bytes.byteLength > 512 * 1024)
+    throw new Error("The Brain attachment must fit within 512 KiB.")
+  // Freeze the approved bytes before any async hashing, transport, or key import. Changing the UI preview while
+  // those operations wait cannot switch the plaintext after its digest/privacy checks.
+  const selection = { bytes: Uint8Array.from(input.selection.bytes), sha256: input.selection.sha256 }
+  if (!includeBrain || !/^[1-9]\d{0,15}$/.test(repositoryId) || !Number.isSafeInteger(Number(repositoryId)) ||
+    !/^[0-9a-f]{64}$/.test(selection.sha256) || approvedSha256 !== selection.sha256 || await digest(selection.bytes) !== selection.sha256)
     throw new Error("Review and approve the exact Brain attachment before starting this run.")
   validate(selection.bytes, false)
-  const prepared = await input.transport("prepare", { repositoryId: input.repositoryId, sha256: selection.sha256,
+  const prepared = await transport("prepare", { repositoryId, sha256: selection.sha256,
     bytes: selection.bytes.byteLength, includeBrain: true })
   if (!record(prepared) || typeof prepared.uploadId !== "string" || !/^vbu_[A-Za-z0-9_-]{32}$/.test(prepared.uploadId) ||
     typeof prepared.key !== "string" || prepared.key.length !== 43 || typeof prepared.aad !== "string" || prepared.aad.length > 256 ||
     typeof prepared.expiresAt !== "number" || prepared.expiresAt <= Date.now() || typeof prepared.publicRepository !== "boolean") throw new Error("Vector could not prepare this Brain attachment.")
   const parts = prepared.aad.split("|")
-  if (parts.length !== 5 || parts[0] !== "vector-brain-upload-v1" || parts[2] !== input.repositoryId ||
+  if (parts.length !== 5 || parts[0] !== "vector-brain-upload-v1" || parts[2] !== repositoryId ||
     parts[4] !== prepared.uploadId || !/^[1-9]\d*$/.test(parts[3]!)) throw new Error("The Brain attachment repository changed. Review it again.")
   validate(selection.bytes, prepared.publicRepository)
   const keyBytes = fromBase64url(prepared.key)
@@ -71,7 +75,7 @@ export async function upload(input: {
   const nonce = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce,
     additionalData: new TextEncoder().encode(prepared.aad), tagLength: 128 }, key, Uint8Array.from(selection.bytes))
-  const committed = await input.transport("commit", { uploadId: prepared.uploadId,
+  const committed = await transport("commit", { uploadId: prepared.uploadId,
     nonce: base64url(nonce), ciphertext: base64url(new Uint8Array(ciphertext)) })
   if (!record(committed) || committed.uploadId !== prepared.uploadId || committed.sha256 !== selection.sha256 ||
     committed.bytes !== selection.bytes.byteLength || typeof committed.approvedAt !== "number" || committed.approvedAt <= 0)
