@@ -8,7 +8,7 @@ import { PlaybookCheck } from "./check"
 export type Request = (url: string, init?: RequestInit) => Promise<Response>
 
 /** The link comes from the authenticated account listing. Tokens are never forwarded to its signed download URL. */
-export async function download(link: Playbooks.Link, request: Request = fetch) {
+export async function download(link: Playbooks.Link, request: Request) {
   if (!Playbooks.decodeLinks([link])) throw new Error("The playbook listing is invalid.")
   const response = await request(link.url, { redirect: "error", signal: AbortSignal.timeout(30_000) })
   if (!response.ok || !response.body) throw new Error("The playbook could not be downloaded.")
@@ -39,7 +39,7 @@ export async function download(link: Playbooks.Link, request: Request = fetch) {
 export async function install(input: {
   readonly link: Playbooks.Link
   readonly directory: string
-  readonly request?: Request
+  readonly request: Request
   readonly replace?: boolean
 }) {
   const bytes = await download(input.link, input.request)
