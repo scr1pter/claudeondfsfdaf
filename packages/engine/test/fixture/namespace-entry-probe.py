@@ -84,6 +84,10 @@ def secure_chain(path):
     resolved = pathlib.Path(path).resolve(strict=True)
     for part in (resolved, *resolved.parents):
         info = part.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            # Fixed trusted-launcher/runtime paths only; never emit environment, arguments or private descriptor data.
+            output({"event": "namespace-provenance-refused", "path": str(part)[:512],
+                    "uid": info.st_uid, "gid": info.st_gid, "mode": oct(stat.S_IMODE(info.st_mode))})
         require(info.st_uid == 0 and not info.st_mode & 0o022, "A trusted Python/launcher path is mutable")
     return str(resolved)
 
