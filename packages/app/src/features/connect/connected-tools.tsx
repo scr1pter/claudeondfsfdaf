@@ -161,7 +161,7 @@ export function ConnectedTools(props: {
       </div>
       <div class="settings-v2-card-body">
         <Show when={!props.directory}>
-          <p>Open a project to view its connected tools.</p>
+          <p>Open a workspace to view its connected tools.</p>
         </Show>
         <Show when={props.directory && data.error}>
           <p role="alert">Could not load connected tools. Only the engine's owner can view them.</p>

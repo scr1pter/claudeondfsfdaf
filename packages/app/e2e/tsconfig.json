@@ -18,6 +18,8 @@
     "./performance/timeline/session-timeline-stress.fixture.ts",
     "./performance/timeline/timeline-test-helpers.ts",
     "./regression/account-settings.spec.ts",
+    "./regression/connected-tools.spec.ts",
+    "../src/features/connect/test-fixture.ts",
     "./regression/agent-launcher.spec.ts",
     "./regression/external-agent-chat.spec.ts",
     "./regression/free-models.spec.ts",
