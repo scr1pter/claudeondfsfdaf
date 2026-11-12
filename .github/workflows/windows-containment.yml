@@ -39,6 +39,19 @@ jobs:
           node-version: "24"
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+      # Match the main engine jobs: the strict test network guard cannot download ripgrep on demand.
+      - name: Install native ripgrep
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          choco install ripgrep -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Installing ripgrep failed." }
+          $tools = Join-Path $env:ChocolateyInstall 'lib\ripgrep\tools'
+          $native = @(Get-ChildItem -LiteralPath $tools -Filter rg.exe -File -Recurse)
+          if ($native.Count -ne 1) { throw "Expected one native ripgrep executable in $tools." }
+          & ($native[0].FullName) --version
+          if ($LASTEXITCODE -ne 0) { throw "The native ripgrep executable failed." }
+          $native[0].DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Locate PowerShell startup failure without printing environment values
         timeout-minutes: 6
         working-directory: packages/engine
