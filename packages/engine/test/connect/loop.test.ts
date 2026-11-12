@@ -241,6 +241,9 @@ live.instance(
       const test = yield* TestInstance
       const directory = test.directory
       const llm = yield* TestLLMServer
+      // Worktree trust compares exact config bytes. A Windows checkout's global autocrlf conversion would
+      // change vector.json and correctly withhold its fake provider, before this test reaches the fix.
+      yield* git(directory, "config", "core.autocrlf", "false")
       yield* write(directory, {
         "vector.json": JSON.stringify({
           $schema: "https://vectordev.ai/config.json",
@@ -447,6 +450,8 @@ isolated.instance(
       const test = yield* TestInstance
       const directory = test.directory
       const llm = yield* TestLLMServer
+      // Keep the parent and its task checkout byte-identical, as the task-isolation fixtures do.
+      yield* git(directory, "config", "core.autocrlf", "false")
       yield* write(directory, {
         "vector.json": JSON.stringify({
           $schema: "https://vectordev.ai/config.json",
@@ -525,6 +530,12 @@ isolated.instance(
       const child = yield* sessions.get(childID)
       expect(child.agent).toBe(ConnectPolicy.FIX_AGENT)
       expect(child.parentID).toBe(requester.id)
+      const childDirectory = path.join(Global.Path.data, "task-worktree", project, childID)
+      const trustedInputs = yield* Effect.promise(() => Promise.all([
+        WorkspaceTrust.snapshot(directory, [path.join(directory, "vector.json")]),
+        WorkspaceTrust.snapshot(childDirectory, [path.join(childDirectory, "vector.json")]),
+      ]))
+      expect(WorkspaceTrust.contentKey(trustedInputs[0]!)).toBe(WorkspaceTrust.contentKey(trustedInputs[1]!))
       expect(fixed?.output).toContain(`task_id ${childID}`)
       // The checkout is untouched until a merge.
       expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "src", "list.ts"), "utf8"))).toBe(
