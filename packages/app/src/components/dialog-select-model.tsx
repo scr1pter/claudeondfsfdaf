@@ -216,7 +216,7 @@ function SectionToggle(props: {
       // A cancelled mousedown never moves focus; a cancelled pointerdown still can.
       onMouseDown={(event) => event.preventDefault()}
       onMouseMove={(event) => props.onHover(event)}
-      onClick={() => props.onToggle()}
+      on:click={() => props.onToggle()}
     >
       <span data-slot="model-row-icon" aria-hidden="true">
         <ProviderMark id={props.view.section.providerID} />
