@@ -34,16 +34,19 @@ test("Solid's real local review state reacts to admission and preserves owned St
         directory: "/repo",
         projectID: "project",
         api: {
-          verify: async () => target,
+          // HTTP responses are fresh DTOs. Solid decorates objects admitted to
+          // its store with private symbols; reusing that same raw object as a
+          // later fake HTTP response would correctly fail strict decoding.
+          verify: async () => structuredClone(target),
           list: async () => ({ runs: [] }),
           start: async () => {
             calls.starts++
-            return info("running")
+            return structuredClone(info("running"))
           },
-          get: async () => info("running"),
+          get: async () => structuredClone(info("running")),
           stop: async () => {
             calls.stops++
-            return info("cancelled")
+            return structuredClone(info("cancelled"))
           },
         },
       },
@@ -60,8 +63,21 @@ test("Solid's real local review state reacts to admission and preserves owned St
     await state.controller.check()
     expect(state.canStart()).toBe(true)
     expect(calls.starts).toBe(0)
+    expect(Reflect.ownKeys(target)).toEqual(["kind", "head"])
     await state.controller.start("working-tree")
+    if (!state.current()) {
+      const actual = state.controller.state()
+      console.log("SCOPE_SOLID_REVIEW_RECEIPT", {
+        calls,
+        controllerStatus: actual.current?.run.status,
+        memoStatus: state.current()?.run.status,
+        error: actual.error,
+        busy: actual.busy,
+        uncertain: actual.uncertain,
+      })
+    }
     expect(state.current()?.run.status).toBe("running")
+    expect(Reflect.ownKeys(target)).toEqual(["kind", "head"])
     expect(state.canStart()).toBe(false)
     state.setEnabled(false)
     expect(state.canStart()).toBe(false)
