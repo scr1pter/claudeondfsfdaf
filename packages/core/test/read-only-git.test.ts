@@ -408,8 +408,13 @@ local("metadata polling observes a primary binding without Git, index or object 
   process.env.PATH = bin
   try {
     const metadata = await ReadOnlyGit.metadataHead(f.directory)
+    const identity = await fs.stat(f.gitDirectory, { bigint: true })
     expect(metadata).toEqual({
       ...f.input,
+      commonIdentity:
+        identity.birthtimeNs > 0n && identity.birthtimeNs !== identity.ctimeNs
+          ? { dev: identity.dev.toString(), ino: identity.ino.toString(), birth: identity.birthtimeNs.toString() }
+          : undefined,
       head: expected,
       branch: (await fs.readFile(path.join(f.gitDirectory, "HEAD"), "utf8")).trim().slice(16),
       objectValidated: false,
@@ -431,11 +436,81 @@ local("metadata polling validates a real linked registration and packed branch r
   expect(metadata.directory).toBe(linked)
   expect(metadata.gitDirectory).toBe(gitDirectory)
   expect(metadata.commonDirectory).toBe(f.gitDirectory)
+  expect(metadata.commonIdentity).toEqual((await ReadOnlyGit.metadataHead(f.directory)).commonIdentity)
   expect(metadata.branch).toBe("metadata-linked")
   expect(metadata.head).toBe((await f.git(["rev-parse", "HEAD"], linked)).stdout.trim())
   expect(metadata.objectValidated).toBe(false)
   await fs.writeFile(path.join(gitDirectory, "gitdir"), path.join(f.directory, ".git") + "\n")
   await expect(ReadOnlyGit.metadataHead(linked)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+})
+
+local(
+  "pinned common-store identity survives ordinary writes but separates a physical clone with the same HEAD and remote",
+  async () => {
+    const f = await fixture()
+    await f.git(["remote", "add", "origin", "https://example.invalid/vector/same.git"])
+    const initial = await ReadOnlyGit.metadataHead(f.directory)
+    await fs.writeFile(path.join(f.directory, "probe.txt"), "changed contents\n")
+    await f.git(["add", "probe.txt"])
+    await f.git([
+      "-c",
+      "user.name=Vector Fixture",
+      "-c",
+      "user.email=fixture@invalid",
+      "commit",
+      "--quiet",
+      "-m",
+      "next",
+    ])
+    const changed = await ReadOnlyGit.metadataHead(f.directory)
+    expect(changed.head).not.toBe(initial.head)
+    expect(changed.commonIdentity).toEqual(initial.commonIdentity)
+    expect(Object.isFrozen(changed.commonIdentity)).toBe(true)
+    const clone = path.join(f.base, "clone")
+    await f.git(["clone", "--quiet", "--no-hardlinks", f.directory, clone])
+    await f.git(["remote", "set-url", "origin", "https://example.invalid/vector/same.git"], clone)
+    const copied = await ReadOnlyGit.metadataHead(clone)
+    expect(copied.head).toBe(changed.head)
+    expect(copied.commonIdentity).not.toEqual(changed.commonIdentity)
+    expect((await f.git(["remote", "get-url", "origin"], clone)).stdout).toBe(
+      (await f.git(["remote", "get-url", "origin"])).stdout,
+    )
+  },
+)
+
+local("a replacement store with identical paths and HEAD cannot acquire the old admission's identity", async () => {
+  const f = await fixture()
+  const original = await ReadOnlyGit.metadataHead(f.directory)
+  expect(original.commonIdentity).toBeDefined()
+  const saved = path.join(f.base, "original-store")
+  await fs.rename(f.gitDirectory, saved)
+  await fs.cp(saved, f.gitDirectory, { recursive: true })
+  // A just-created directory can have indistinguishable birth/ctime. Evolve
+  // real metadata with an ordinary write; never treat an unbound input as an
+  // attested replacement or sleep until a heuristic happens to pass.
+  await f.git(["config", "--local", "fixture.scopeIdentity", "replacement"])
+  const replacement = await ReadOnlyGit.metadataHead(f.directory)
+  expect(replacement.commonIdentity).toBeDefined()
+  expect(replacement.head).toBe(original.head)
+  expect(replacement.commonDirectory).toBe(original.commonDirectory)
+  expect(replacement.commonIdentity).not.toEqual(original.commonIdentity)
+  await expect(ReadOnlyGit.open(original)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+  expect(await f.calls()).toBe(0)
+  const current = await ReadOnlyGit.open(replacement)
+  try {
+    expect(current.commonIdentity).toEqual(replacement.commonIdentity)
+  } finally {
+    await current.close()
+  }
+  await fs.rename(f.gitDirectory, path.join(f.base, "replacement-store"))
+  await fs.rename(saved, f.gitDirectory)
+  await expect(ReadOnlyGit.open(replacement)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+  const restored = await ReadOnlyGit.open(original)
+  try {
+    expect(restored.commonIdentity).toEqual(original.commonIdentity)
+  } finally {
+    await restored.close()
+  }
 })
 
 local("a metadata HEAD observation cannot substitute for commit-object validation", async () => {
