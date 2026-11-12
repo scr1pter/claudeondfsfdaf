@@ -164,7 +164,7 @@ describe("@vector CI lane", () => {
   }
   type Job = {
     "runs-on"?: string
-    strategy?: { matrix?: { include?: Array<{ mode: string; scenario: string }> } }
+    strategy?: { matrix?: { include?: Array<{ mode: string; scenario: string; runtime?: string }> } }
     environment?: unknown
     permissions?: unknown
     services?: Record<string, { image?: string; ports?: unknown[] }>
