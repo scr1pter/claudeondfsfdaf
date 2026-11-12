@@ -313,16 +313,114 @@ export function checkWindowsHelperFinalVersion(
 // Fixed code only. The literal path is supplied through a private child environment value, never interpolated
 // into PowerShell source or appended to a -Command string where it could become syntax.
 const signatureScript = `$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$signature = Get-AuthenticodeSignature -LiteralPath $env:VECTOR_VERIFY_COMPUTER_HELPER_PATH
-$publisher = $null
-$thumbprint = $null
-if ($null -ne $signature.SignerCertificate) {
-  $publisher = $signature.SignerCertificate.Subject
-  $thumbprint = $signature.SignerCertificate.Thumbprint
-}
-@{status=$signature.Status.ToString(); publisher=$publisher; thumbprint=$thumbprint} | ConvertTo-Json -Compress
+try {
+  $signature = Get-AuthenticodeSignature -LiteralPath $env:VECTOR_VERIFY_COMPUTER_HELPER_PATH
+  $publisher = $null
+  $thumbprint = $null
+  if ($null -ne $signature.SignerCertificate) {
+    $publisher = $signature.SignerCertificate.Subject
+    $thumbprint = $signature.SignerCertificate.Thumbprint
+  }
+} catch { exit 21 }
+try {
+  $json = @{status=$signature.Status.ToString(); publisher=$publisher; thumbprint=$thumbprint} | ConvertTo-Json -Compress
+  $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($json)
+} catch { exit 22 }
+try {
+  $output = [Console]::OpenStandardOutput()
+  $output.Write($bytes, 0, $bytes.Length)
+  $output.Flush()
+} catch { exit 23 }
 `
+
+/** Observe the OS signature without loading the helper or requiring a console/code-page mutation. */
+export async function observeWindowsHelperAuthenticode(
+  file: string,
+  dependencies: {
+    directory?: string
+    environment?: NodeJS.ProcessEnv
+    timeoutMs?: 5000 | 10000
+    run?: NativeCommand
+  } = {},
+): Promise<WindowsHelperAuthenticode> {
+  if (process.platform !== "win32" && !dependencies.run)
+    throw new Error("Observe the Windows helper Authenticode status on Windows.")
+  if (!path.isAbsolute(file) || file.includes("\0"))
+    throw new Error("The Windows helper Authenticode observation requires an absolute literal path.")
+  const timeoutMs = dependencies.timeoutMs === undefined ? 5000 : dependencies.timeoutMs
+  if (timeoutMs !== 5000 && timeoutMs !== 10000)
+    throw new Error("The Windows helper Authenticode observation timeout is invalid.")
+  const powershell = path.win32.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32/WindowsPowerShell/v1.0/powershell.exe",
+  )
+  // Windows PowerShell uses .NET Framework, whose Console.OutputEncoding setter calls
+  // SetConsoleOutputCP and throws without a console even when the inherited stdout pipe is valid.
+  // Explicit UTF-8 bytes preserve certificate Subjects without that unnecessary console dependency.
+  const result = await Promise.resolve()
+    .then(() =>
+      (dependencies.run ?? runNativeCommand)(
+        powershell,
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-EncodedCommand",
+          Buffer.from(signatureScript, "utf16le").toString("base64"),
+        ],
+        {
+          cwd: path.resolve(dependencies.directory ?? packageDirectory),
+          env: { ...(dependencies.environment ?? process.env), VECTOR_VERIFY_COMPUTER_HELPER_PATH: file },
+          timeoutMs,
+        },
+      ),
+    )
+    .catch(() => {
+      throw new Error(
+        "The Windows helper Authenticode status could not be observed. [reason=runner-threw; exit=unknown; stage=process]",
+      )
+    })
+  if (
+    result.code !== 0 ||
+    result.failureReason !== undefined ||
+    Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > 65_536
+  ) {
+    const reason =
+      result.failureReason === "timed-out" ||
+      result.failureReason === "output-cap" ||
+      result.failureReason === "spawn-failed"
+        ? result.failureReason
+        : result.failureReason !== undefined
+          ? "unknown"
+          : result.code !== 0
+            ? "process-exit"
+            : "output-limit"
+    const exit =
+      Number.isSafeInteger(result.code) && result.code >= -0x80000000 && result.code <= 0xffffffff
+        ? String(result.code)
+        : "unknown"
+    const stage =
+      result.failureReason !== undefined
+        ? "process"
+        : result.code === 21
+          ? "signature"
+          : result.code === 22
+            ? "serialize"
+            : result.code === 23
+              ? "stdout"
+              : "process"
+    throw new Error(
+      `The Windows helper Authenticode status could not be observed. [reason=${reason}; exit=${exit}; stage=${stage}]`,
+    )
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(result.stdout.replace(/^\uFEFF/, ""))
+  } catch {
+    throw new Error("The Windows helper Authenticode observation is invalid. [stage=decode]")
+  }
+  return parseWindowsHelperAuthenticode(value)
+}
 
 /** Extracts the pins actually decoded by packaged Main. An optional supplied map is only an extra assertion. */
 export async function verifyComputerHelperWindows(
@@ -417,23 +515,7 @@ export async function verifyComputerHelperWindows(
       throw new Error(message)
     return result
   }
-  const powershell = path.win32.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32/WindowsPowerShell/v1.0/powershell.exe",
-  )
-  const observed = await command(
-    powershell,
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(signatureScript, "utf16le").toString("base64"),
-    ],
-    "The Windows helper Authenticode status could not be observed.",
-    { VECTOR_VERIFY_COMPUTER_HELPER_PATH: helper },
-  )
-  const signature = parseWindowsHelperAuthenticode(JSON.parse(observed.stdout.replace(/^\uFEFF/, "")))
+  const signature = await observeWindowsHelperAuthenticode(helper, { directory, run })
   checkWindowsHelperAuthenticode(signature, input.expectSigning, input.publisher)
   const version = await command(
     helper,

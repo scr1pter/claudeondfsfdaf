@@ -183,6 +183,11 @@ jobs:
         run: |
           bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64 --channel prod --out native/out/win32
           if ($LASTEXITCODE -ne 0) { throw "The x64 native diagnostic build failed." }
+      - name: Observe the actual built helper signature through the hidden Windows observer
+        timeout-minutes: 2
+        run: |
+          bun --no-env-file --eval 'import path from "node:path"; import { observeWindowsHelperAuthenticode } from "./scripts/verify-computer-helper-windows.ts"; const actual = await observeWindowsHelperAuthenticode(path.resolve("native/out/win32/x64/vector-computer.exe")); if (actual.status !== "NotSigned" || actual.publisher !== null || actual.thumbprint !== null) throw new Error("The built unsigned helper signature observation is invalid."); console.log("native-signature-observer: NotSigned");'
+          if ($LASTEXITCODE -ne 0) { throw "The actual hidden Windows signature observer failed." }
       - name: Run Windows unit and fresh version/probe checks
         timeout-minutes: 5
         shell: bash

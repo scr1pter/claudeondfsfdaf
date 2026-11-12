@@ -16,23 +16,12 @@ import {
   checkWindowsHelperAuthenticode,
   checkWindowsHelperFinalVersion,
   inspectWindowsHelperPe,
-  parseWindowsHelperAuthenticode,
+  observeWindowsHelperAuthenticode,
 } from "./verify-computer-helper-windows"
 
 const packageDirectory = fileURLToPath(new URL("../", import.meta.url))
 const architectures = ["x64", "arm64"] as const
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
-const signatureScript = `$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$signature = Get-AuthenticodeSignature -LiteralPath $env:VECTOR_VERIFY_COMPUTER_HELPER_PATH
-$publisher = $null
-$thumbprint = $null
-if ($null -ne $signature.SignerCertificate) {
-  $publisher = $signature.SignerCertificate.Subject
-  $thumbprint = $signature.SignerCertificate.Thumbprint
-}
-@{status=$signature.Status.ToString(); publisher=$publisher; thumbprint=$thumbprint} | ConvertTo-Json -Compress
-`
 
 /** Preserve every tested PE byte except CheckSum, the certificate directory and appended signature/padding. */
 export function windowsHelperSigningDigest(input: Uint8Array) {
@@ -137,23 +126,8 @@ export async function prepareWindowsComputerHelpers(
       throw new Error(message)
     return result.stdout.replace(/^\uFEFF/, "")
   }
-  const signature = async (file: string) =>
-    parseWindowsHelperAuthenticode(
-      JSON.parse(
-        await command(
-          "pwsh",
-          [
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            Buffer.from(signatureScript, "utf16le").toString("base64"),
-          ],
-          "The Windows helper signature could not be observed.",
-          { VECTOR_VERIFY_COMPUTER_HELPER_PATH: file },
-        ),
-      ),
-    )
+  const signature = (file: string) =>
+    observeWindowsHelperAuthenticode(file, { directory, environment: observations, timeoutMs: 10000, run })
   const regular = async (root: string, relative: string, limit: number) => {
     const file = path.join(root, relative)
     const status = await lstat(file)

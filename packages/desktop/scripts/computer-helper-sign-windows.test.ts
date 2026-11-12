@@ -50,7 +50,11 @@ async function fixture(options: { noSignature?: boolean; changeCode?: boolean; c
   const source = path.join(root, "native ' source")
   const output = path.join(root, "final helpers")
   const identity = readIdentity(path.join(directory, "native/computer-helper/identity.json"))
-  const events: { command: string; args: readonly string[]; env: NodeJS.ProcessEnv }[] = []
+  const events: { command: string; args: readonly string[]; env: NodeJS.ProcessEnv; timeoutMs: number }[] = []
+  const powershell = path.win32.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32/WindowsPowerShell/v1.0/powershell.exe",
+  )
   const inspected: string[] = []
   const manifests: Partial<Record<HelperArchitecture, HelperManifest>> = {}
   for (const architecture of ["x64", "arm64"] as const) {
@@ -69,7 +73,7 @@ async function fixture(options: { noSignature?: boolean; changeCode?: boolean; c
     await writeFile(path.join(source, architecture, "computer-helper.json"), JSON.stringify(manifest, null, 2) + "\n")
   }
   const run: NativeCommand = async (command, args, input) => {
-    events.push({ command, args, env: input.env })
+    events.push({ command, args, env: input.env, timeoutMs: input.timeoutMs })
     if (command === "pwsh" && args.includes("-File")) {
       if (options.noSignature) return { code: 0, stdout: "", stderr: "" }
       for (const file of args.slice(args.indexOf("-File") + 2)) {
@@ -84,7 +88,7 @@ async function fixture(options: { noSignature?: boolean; changeCode?: boolean; c
         )
       return { code: 0, stdout: "Signed both fixed helper files.", stderr: "" }
     }
-    if (command === "pwsh") {
+    if (command === powershell) {
       const file = input.env.VECTOR_VERIFY_COMPUTER_HELPER_PATH!
       const bytes = await readFile(file)
       return {
@@ -117,6 +121,7 @@ async function fixture(options: { noSignature?: boolean; changeCode?: boolean; c
     source,
     output,
     events,
+    powershell,
     manifests,
     dependencies: {
       directory,
@@ -157,11 +162,27 @@ describe("immutable Windows helper release signing", () => {
       ])
       expect(signing[0]!.env.VECTOR_REQUIRE_WINDOWS_SIGNING).toBe("true")
       expect(signing[0]!.env.AZURE_CLIENT_SECRET).toBe("fixture-value")
+      expect(signing[0]!.command).toBe("pwsh")
+      expect(signing[0]!.timeoutMs).toBe(300_000)
       expect(
         f.events
           .filter((event) => !event.args.includes("-File"))
           .every((event) => event.env.AZURE_CLIENT_SECRET === undefined),
       ).toBe(true)
+      const observations = f.events.filter((event) => event.args.includes("-EncodedCommand"))
+      expect(observations).toHaveLength(4)
+      for (const observation of observations) {
+        expect(observation.command).toBe(f.powershell)
+        expect(path.win32.isAbsolute(observation.command)).toBe(true)
+        expect(observation.timeoutMs).toBe(10_000)
+        expect(observation.env.AZURE_CLIENT_SECRET).toBeUndefined()
+        expect(observation.env.VECTOR_VERIFY_COMPUTER_HELPER_PATH).toEndWith("vector-computer.exe")
+        const script = Buffer.from(observation.args.at(-1)!, "base64").toString("utf16le")
+        expect(script).toContain("Get-AuthenticodeSignature -LiteralPath $env:VECTOR_VERIFY_COMPUTER_HELPER_PATH")
+        expect(script).toContain("[Console]::OpenStandardOutput()")
+        expect(script).not.toMatch(/OutputEncoding\s*=|SetConsoleOutputCP/)
+        expect(script).not.toContain(observation.env.VECTOR_VERIFY_COMPUTER_HELPER_PATH!)
+      }
       for (const architecture of ["x64", "arm64"] as const) {
         const bytes = await readFile(path.join(f.output, architecture, "vector-computer.exe"))
         const manifest = JSON.parse(await readFile(path.join(f.output, architecture, "computer-helper.json"), "utf8"))
@@ -236,6 +257,36 @@ describe("immutable Windows helper release signing", () => {
           f.dependencies,
         ),
       ).rejects.toThrow("configured publisher")
+    } finally {
+      await rm(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test("a failed shared OS signature observation prevents signing, version execution and returned pins", async () => {
+    const f = await fixture()
+    try {
+      let observations = 0
+      const error = await prepareWindowsComputerHelpers(
+        { source: f.source, output: f.output, channel: "prod", expectSigning: "authenticode", publisher: subject },
+        {
+          ...f.dependencies,
+          run: async (command, args, settings) => {
+            if (command === f.powershell) {
+              observations++
+              return { code: 23, stdout: "PRIVATE stdout", stderr: "PRIVATE signature error" }
+            }
+            return f.dependencies.run(command, args, settings)
+          },
+        },
+      ).then(
+        () => new Error("Unexpected successful signing preparation"),
+        (cause: unknown) => cause,
+      )
+      expect(String(error)).toContain("[reason=process-exit; exit=23; stage=stdout]")
+      expect(String(error)).not.toContain("PRIVATE")
+      expect(observations).toBe(1)
+      expect(f.events).toEqual([])
+      expect(await readFile(path.join(f.source, "x64/vector-computer.exe"))).toEqual(pe("x64"))
     } finally {
       await rm(f.root, { recursive: true, force: true })
     }

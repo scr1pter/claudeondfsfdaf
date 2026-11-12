@@ -14,6 +14,7 @@ import {
   checkWindowsHelperFinalVersion,
   extractWindowsHelperCompiledPins,
   inspectWindowsHelperPe,
+  observeWindowsHelperAuthenticode,
   parseWindowsHelperAuthenticode,
   verifyComputerHelperWindows,
 } from "./verify-computer-helper-windows"
@@ -63,6 +64,151 @@ const helperManifest = (bytes: Uint8Array, architecture: HelperArchitecture = "x
   sourceDigest: "a".repeat(64),
   toolchain: "measured-msvc-toolchain",
   files: { "vector-computer.exe": { sha256: digest(bytes), arch: [architecture] } },
+})
+
+describe("Windows Authenticode observation without a console", () => {
+  test("uses the real fixed cmdlet and binary UTF-8 stdout without changing the console code page", async () => {
+    const file = path.resolve(os.tmpdir(), "helper's literal [path] $é.exe")
+    const publisher = "CN=Vectör 研究, O=Vector, C=US"
+    const calls: { command: string; args: readonly string[]; settings: Parameters<NativeCommand>[2] }[] = []
+    expect(
+      await observeWindowsHelperAuthenticode(file, {
+        directory: os.tmpdir(),
+        run: async (command, args, settings) => {
+          calls.push({ command, args, settings })
+          return {
+            code: 0,
+            stdout: JSON.stringify({ status: "Valid", publisher, thumbprint: "A".repeat(40) }),
+            stderr: "",
+          }
+        },
+      }),
+    ).toEqual({ status: "Valid", publisher, thumbprint: "a".repeat(40) })
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.command).toBe(
+      path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
+    )
+    expect(call.args.slice(0, 4)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand"])
+    expect(call.settings.timeoutMs).toBe(5000)
+    expect(call.settings.cwd).toBe(path.resolve(os.tmpdir()))
+    expect(call.settings.env.VECTOR_VERIFY_COMPUTER_HELPER_PATH).toBe(file)
+    const script = Buffer.from(call.args[4]!, "base64").toString("utf16le")
+    expect(script).toContain("Get-AuthenticodeSignature -LiteralPath $env:VECTOR_VERIFY_COMPUTER_HELPER_PATH")
+    expect(script).toContain("ConvertTo-Json -Compress")
+    expect(script).toContain("[System.Text.UTF8Encoding]::new($false).GetBytes($json)")
+    expect(script).toContain("[Console]::OpenStandardOutput()")
+    expect(script).toContain("$output.Write($bytes, 0, $bytes.Length)")
+    expect(script).toContain("$output.Flush()")
+    expect(script).not.toMatch(/OutputEncoding\s*=|SetConsoleOutputCP|Set-Content|Out-File/)
+    expect(script).not.toContain(file)
+    expect(call.args).not.toContain(file)
+  })
+
+  test("reports only closed process and script stages when the OS observation fails", async () => {
+    const file = path.resolve(os.tmpdir(), "PRIVATE literal helper.exe")
+    for (const failure of [
+      { code: 21, stage: "signature", reason: "process-exit" },
+      { code: 22, stage: "serialize", reason: "process-exit" },
+      { code: 23, stage: "stdout", reason: "process-exit" },
+      { code: 1, stage: "process", reason: "process-exit" },
+      { code: 1, stage: "process", reason: "timed-out", failureReason: "timed-out" as const },
+      { code: 1, stage: "process", reason: "output-cap", failureReason: "output-cap" as const },
+      { code: 1, stage: "process", reason: "spawn-failed", failureReason: "spawn-failed" as const },
+    ]) {
+      const error = await observeWindowsHelperAuthenticode(file, {
+        run: async () => ({
+          ...failure,
+          stdout: "PRIVATE stdout",
+          stderr: "PRIVATE certificate/host error",
+          diagnostic: "PRIVATE runner output",
+        }),
+      }).then(
+        () => new Error("Unexpected successful signature observation"),
+        (cause: unknown) => cause,
+      )
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toContain(`[reason=${failure.reason}; exit=${failure.code}; stage=${failure.stage}]`)
+      expect(String(error)).not.toContain("PRIVATE")
+    }
+    for (const asynchronous of [false, true]) {
+      const thrown = await observeWindowsHelperAuthenticode(file, {
+        run: () => {
+          if (asynchronous) return Promise.reject(new Error("PRIVATE runner exception"))
+          throw new Error("PRIVATE runner exception")
+        },
+      }).then(
+        () => new Error("Unexpected successful signature observation"),
+        (cause: unknown) => cause,
+      )
+      expect(String(thrown)).toContain("[reason=runner-threw; exit=unknown; stage=process]")
+      expect(String(thrown)).not.toContain("PRIVATE")
+    }
+  })
+
+  test("retains bounded output, strict signature data and literal absolute-path admission", async () => {
+    const file = path.resolve(os.tmpdir(), "helper.exe")
+    for (const stdout of [
+      "PRIVATE malformed JSON",
+      "",
+      JSON.stringify({ status: "NotSigned", publisher: null, thumbprint: null, extra: true }),
+    ])
+      await expect(
+        observeWindowsHelperAuthenticode(file, {
+          run: async () => ({ code: 0, stdout, stderr: "" }),
+        }),
+      ).rejects.toThrow("Authenticode observation is invalid")
+    await expect(
+      observeWindowsHelperAuthenticode(file, {
+        run: async () => ({ code: 0, stdout: " ".repeat(65_537), stderr: "" }),
+      }),
+    ).rejects.toThrow("[reason=output-limit; exit=0; stage=process]")
+    let calls = 0
+    for (const invalid of ["relative.exe", file + "\0.exe"])
+      await expect(
+        observeWindowsHelperAuthenticode(invalid, {
+          run: async () => {
+            calls++
+            return { code: 0, stdout: "", stderr: "" }
+          },
+        }),
+      ).rejects.toThrow("absolute literal path")
+    expect(calls).toBe(0)
+  })
+
+  test("uses only the supplied observer environment and retains the two existing deadline profiles", async () => {
+    const file = path.resolve(os.tmpdir(), "actual helper.exe")
+    for (const timeoutMs of [5000, 10000] as const) {
+      const calls: Parameters<NativeCommand>[2][] = []
+      await observeWindowsHelperAuthenticode(file, {
+        environment: { PATH: "observation-only", VECTOR_VERIFY_COMPUTER_HELPER_PATH: "untrusted replacement" },
+        timeoutMs,
+        run: async (_command, _args, settings) => {
+          calls.push(settings)
+          return {
+            code: 0,
+            stdout: JSON.stringify({ status: "NotSigned", publisher: null, thumbprint: null }),
+            stderr: "",
+          }
+        },
+      })
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.timeoutMs).toBe(timeoutMs)
+      expect(calls[0]!.env).toEqual({ PATH: "observation-only", VECTOR_VERIFY_COMPUTER_HELPER_PATH: file })
+    }
+    let calls = 0
+    for (const timeoutMs of [null, false, "5000", 0, -1, 4999, 5001, 9999, 10001, Number.NaN, Number.POSITIVE_INFINITY])
+      await expect(
+        observeWindowsHelperAuthenticode(file, {
+          timeoutMs: timeoutMs as 5000,
+          run: async () => {
+            calls++
+            return { code: 0, stdout: "", stderr: "" }
+          },
+        }),
+      ).rejects.toThrow("timeout is invalid")
+    expect(calls).toBe(0)
+  })
 })
 
 describe("Windows helper final PE and execution posture", () => {

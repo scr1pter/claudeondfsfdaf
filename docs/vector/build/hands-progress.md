@@ -6,20 +6,19 @@ The historical continuation prompt, superseded by the checkpoint below, is [hand
 
 ## Current continuation: main integration and native validation pending
 
-**Latest native observation.** At `8570aedb`, Windows diagnostic
-[43162088502](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43162088502),
-job `130996325266`, passed build, native units/version/probes and required
-protocol/lifecycle (30 passed, zero failed, one skipped). Verified isolated
-artifact `13918588958` is 822 bytes, with archive SHA-256
-`d37c779f22e59ee7b7629799748cd37b6ab1dd2648194c65313bd3d769f2af56`.
-Its 36 passed, zero failed, 11 skipped include the forced-worker case requiring
-all three independent fresh acquisitions. This is actual repeated worker
-execution evidence, not a stability guarantee or proof of skipped input behavior.
-Baseline Stop still failed with the authenticated matching-callback/pump-progressed
-result. The separate `MOVE-PROBE-ONLY` invocation skipped for `physical_input`
-with exit 77; it establishes no callback cause or release credit. The next
-diagnostic candidate separates baseline/probe VMs and skips the preceding
-isolated input self-test only in the diagnostic probe VM to avoid contamination.
+**Latest native observation.** Independent-VM diagnostic
+[43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805)
+at `b286accd` completed with failure. Baseline job `131006042604` passed core
+30/0/1 and isolated 36/0/11, including the three required fresh worker reads.
+Its verified 822-byte report artifact `13920132497` has SHA-256
+`6ed101e07a9b8bf2e30744e1f1b6cc9349450cf753a4a46750491c8066d5c0e0`.
+Baseline Stop failed `input_post_failed` /
+`guardian-observe-reply-negative-no-callback-pump-progressed`, `driver_failure`,
+exit 1. Independently fresh probe job `131006042630` passed core 30/0/1; its
+isolated input self-test was not run by design. `MOVE-PROBE-ONLY` reached the
+same missing-receipt failure, exit 1, without the earlier `physical_input` skip.
+Source control flow supports guarded MOVE acceptance and cursor readback, not
+a full-tag callback receipt, absence of global hooks or proven tag truncation.
 
 **Earlier failed native observation.** At `655ac0e6`, Windows diagnostic
 [43154307054](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154307054),
@@ -51,9 +50,11 @@ authority, receipt requirements, success conditions and budgets are unchanged.
 checkpoint and exact-full-own-tag/missing-injected-flag metadata compiled and
 ran at `9ec38ce4` and `8570aedb`. They do not participate in pixel acceptance or
 input/cleanup authority. The missing-injected-flag category was not observed;
-neither extension establishes the cause of the baseline Stop failure. The next
-independent-VM baseline/probe comparison is source work, not an executed result.
-It retains the original receipt predicates and authority/timing limits.
+neither extension establishes the cause of the baseline Stop failure. The fresh
+VM comparison now ran at `b286accd`. The next reviewed metadata-only diagnostic
+records weak low32 marker correlation for an opted-in reservation, without
+changing full64 receipt authority. Its four new native groups remain pending;
+source report 45/28,211 assertions and source checks 19/174 passed.
 
 **Previous scoped passes.** At `51e8f63d`, diagnostic
 [43146189453](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146189453),
@@ -70,9 +71,25 @@ source scope; they do not override the later failures or prove stability.
 
 **Current unsigned preview.** The exact `655ac0e6` preview
 [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544)
-has Windows/macOS final installers in progress and Linux installers queued at
-the last audit. It predates `8570aedb`; no completed final packaging, signing
-or release credit is available from it.
+has a known Windows installer failure in job `130997275856`. Both explicit
+PowerShell 7 unsigned-helper signature checks passed, but the full x64 package
+verifier failed when its Windows PowerShell 5 Authenticode observer could not
+return an accepted result. Its generic nonzero/output-bound error does not
+identify the underlying cause. The final packaged ARM64 verifier was skipped.
+At the 06:13 UTC audit, 28 jobs had succeeded, one failed, three were skipped
+and the macOS installer was still active; Linux installer success is API
+metadata only. No actual package-signature/source-pin/full-verifier pass is
+claimed from the failed Windows check. A reviewed .NET Framework console
+encoding compatibility candidate is being built, not yet an observed fix.
+
+**Pending native and design work.** The reviewed low32-correlation diagnostic
+is a next candidate, not a demonstrated fix. Its 172-stage catalog preserves
+the full64 receipt and cleanup requirements. The signature-observer candidate
+passed 20 local tests / 131 assertions and typechecking; signer reuse is being
+prepared, while actual PowerShell 5/package-path proof remains pending.
+W9 proposal `20202293` is pushed and awaiting an owner decision; production W9
+code remains unchanged. Repeated capture passes do not establish stability or
+the skipped input behavior.
 
 **Integrated regression.** Ordinary full PR run
 [43146183368](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43146183368)
@@ -1572,3 +1589,23 @@ The next candidate moves baseline and probe to independent matrix VMs. Only the 
 Local source validation for that matrix layout passed three focused workflow tests (530 assertions; 27 filtered), desktop typechecking and formatting of the changed workflow/test files. Earlier full-file Bash failures remain recorded; these focused checks do not establish hosted or native success.
 
 The older `655ac0e6` preview `43154306544` still had Windows/macOS installers in progress and Linux installers queued at the last audit. Its successful helper builds, matrices and ordinary checks do not establish final installer success or validate the newer `8570aedb` package. Final exact-source packaging, native Stop, owner-device checks, signing/notarization and publication remain open.
+
+## Older unsigned preview Windows observer failure — `655ac0e6`
+
+Root inspected the official log for preview [43154306544](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544), Windows desktop-apps job `130997275856`, at the older `655ac0e6` source. Both explicit unsigned-helper signature checks executed successfully under PowerShell 7. The subsequent full x64 package verifier failed at the Windows PowerShell 5 Authenticode observation in `verify-computer-helper-windows.ts:417`, exit 1: “The Windows helper Authenticode status could not be observed.” This is the observer's generic nonzero/output-bound failure. Without raw diagnostic output, its exact cause and actual Authenticode result are unobserved. This record claims neither a native package-signature result, source-pin validation nor a passing full package verifier from that failed call.
+
+At the 06:13 UTC audit, the preview had 28 successful jobs, one failed job, three skipped jobs and one macOS installer still active. Windows final ARM64 packaged verifier job `131007920315`, “Verify the final ARM64 helper and actual packed Main pins,” was skipped following the upstream failure; the other skips were the conditionally omitted desktop-E2E-Linux and overlay-Linux jobs. Linux installer job `130997275944` was successful in API metadata only. macOS installer job `130997275864` remained active, packaging its x64 app. There is no final cross-platform packaging or release success here.
+
+A reviewed .NET Framework console-encoding compatibility candidate is being prepared. It must be validated against the actual Windows PowerShell 5 observer and full package path before it can be called a fix; the prior error alone does not establish its cause. Fresh native matrix run `43165063805` at `b286accdd5c4b95c1689286b4234d4d109ef0309` had baseline job `131006042604` and separate probe job `131006042630` at stage build, with no results yet at this checkpoint. The pushed W9 proposal `20202293` still awaits an owner decision and makes no production-code change. Earlier preview-pending observations above retain their historical audit scope.
+
+## Independent fresh baseline and MOVE probe both miss the receipt — `b286accd`
+
+Run [43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805) at exact `b286accdd5c4b95c1689286b4234d4d109ef0309` completed with failure. Baseline job `131006042604` passed required core checks (30 passed, zero failed, one skipped) and isolated checks (36 passed, zero failed, 11 skipped), including all three independently required fresh worker acquisitions. Root verified report artifact `13920132497`, 822 bytes, archive SHA-256 `6ed101e07a9b8bf2e30744e1f1b6cc9349450cf753a4a46750491c8066d5c0e0`. Baseline Stop remained failed: `input_post_failed`, `guardian-observe-reply-negative-no-callback-pump-progressed`, `driver_failure`, exit 1. Earlier successful worker samples remain evidence at their own revisions, without a stable-timing guarantee.
+
+Independently fresh diagnostic probe job `131006042630` passed core 30/0/1. Its isolated input self-test was not run by design, so it receives no isolated-scenario credit. Its `MOVE-PROBE-ONLY` invocation failed with the same Stop reason/stage/cause and exit 1, without the earlier `physical_input` skip. Root verified probe evidence artifact `13919749208`, 5,070 bytes, archive SHA-256 `215f869a29050675d620c353c4195bda5317638240f9d8d8dab2ed26a2c3fcb8`; its manifest reports helper 1.0.15 and source digest `6427bb52babfff44c120c46b72f1b802491603bee2bb4bc7b3beb0f316d94927`.
+
+The observed guardian-observation stage is reached only after the guarded MOVE returns accepted; that path also requires actual cursor-position readback. This is a source-derived cursor-path inference from the recorded stage, not a matching full-tag receipt or proof of global hook absence. It does not prove marker truncation, device/host root cause or a passing Stop. The separate diagnostic result still cannot replace baseline status or supply release credit.
+
+The next reviewed opt-in diagnostic records only a weak low32 marker-correlation boolean when its strict candidate predicate matches. It never creates DOWN/UP/order/release debt or changes the original full64 injected receipt requirement. The private result code and appended stage bring the closed stage catalog to 172; four new native groups remain unexecuted at this checkpoint. Candidate local report checks passed 45 tests / 28,211 assertions; source checks passed 19 / 174. The signature-observer candidate separately passed 20 tests / 131 assertions and typechecking, with signer reuse being prepared and actual PowerShell 5 verification still pending. These local checks and candidates are not native fixes. W9 proposal `20202293` remains owner-pending and unimplemented; final packaging, native Stop, owner-device and release gates stay open.
+
+Final signature-observer source validation, after signer reuse and explicit environment/deadline profiles, passed verifier 21 tests / 151 assertions and signer 9 / 80. Four focused workflow tests passed with 543 assertions, desktop typechecking passed, and formatting of all changed TypeScript/workflow files passed. The verifier retains its five-second observation bound; signing retains its filtered observation environment and ten-second bound. No signing command ran locally. The hosted diagnostic now requires the actual built unsigned helper to pass this same hidden PowerShell observer before runtime checks; that new check remains unexecuted here. Earlier full-file Bash failures remain recorded.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "hands-windows-validation-continuation",
-  "observedAtUtc": "2026-11-12T05:56:54+00:00",
+  "observedAtUtc": "2026-11-12T06:18:42+00:00",
   "repository": "scr1pter/claudeondfsfdaf",
   "branch": "hands",
   "parentRevision": "601c17d0da22ca810fad2cd798c994b906e10905",
@@ -113,7 +113,7 @@
     }
   ],
   "localLimits": "Serial individual provider-free tests and package typecheck only. No native compile/test, owner input/capture/clipboard, Electron, Playwright or OS permission changes.",
-  "pending": "Baseline native Stop remains failed. Three independently required fresh worker reads passed at8570aedb without a stability guarantee; the next independent-VM baseline/probe layout needs exact-source execution. Older655 preview has no completed final installer result at last audit. Final packaged x64/ARM64 verification, real Mac/device grants, signing/notarization, gateway and owner publication gates remain open. Hands remains unversioned/unreleased.",
+  "pending": "Independent-VM run 43165063805 at b286accd completed with failure: baseline and fresh MOVE probe both miss the authenticated matching DOWN receipt. Each passed core 30/0/1; baseline isolated 36/0/11 includes three required fresh worker reads without a stability guarantee. Probe isolated checks were not run by design. Native groups for the reviewed opt-in low32 metadata diagnostic remain pending. Older655 Windows installer failed in the PS5 Authenticode observer; Linux success is metadata only and Mac remained active at the last audit. Final packaged x64/ARM64 proof, live PS5 observer, real-device, signing/notarization and publication gates remain open. W9 proposal 20202293 awaits owner decision; production is unchanged. Hands remains unreleased.",
   "styleFollowUp": {
     "parentRevision": "9ad84b3ef5b68f2cacd802fc13d97bab2e4efa5a",
     "sourceEvidence": {
@@ -814,39 +814,195 @@
   },
   "independentVmProbeCandidate": {
     "parentRevision": "8570aedbc84944fd9d03e77d721217edd8610615",
-    "status": "source candidate; not executed at this checkpoint",
+    "status": "Executed at b286accd in completed failed run 43165063805; baseline and fresh probe both fail the matching DOWN receipt. See independentVmNativeOutcome.",
     "scope": "Run mandatory baseline and diagnostic-only movement probe in independent matrix VMs. Only the probe VM skips the preceding isolated input self-test to avoid contamination; baseline checks remain mandatory.",
     "unchanged": "Actual DOWN receipt, target/authority/freshness predicates, native input/UIA/capture deadlines and release/cleanup authority. No diagnostic result replaces baseline or supplies release proof.",
     "localChecks": {
       "workflowRouting": { "passed": 3, "filtered": 27, "failed": 0, "assertions": 530 },
       "desktopTypecheckExitCode": 0,
       "prettierSelectedFilesExitCode": 0,
-      "qualification": "Provider-free source checks only. Earlier three full-file Bash failures remain recorded; native matrix results are pending."
+      "qualification": "Provider-free source checks only. Earlier three full-file Bash failures remain recorded; later native matrix outcome is recorded separately."
     }
   },
   "olderPreviewLatestAudit": {
     "run": 43154306544,
     "revision": "655ac0e69bba1b9af459b5f7a1c5791cff397218",
     "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43154306544",
-    "aggregateStatus": "queued",
+    "auditAtUtc": "2026-11-12T06:13:00+00:00",
+    "aggregateStatus": "unfinished; known Windows installer failure",
     "conclusion": null,
+    "jobCountsAtAudit": {
+      "success": 28,
+      "failure": 1,
+      "skipped": 3,
+      "active": 1
+    },
     "finalInstallers": [
       {
         "job": 130997275856,
         "name": "Windows desktop apps",
-        "status": "in_progress"
+        "status": "completed",
+        "conclusion": "failure"
       },
       {
         "job": 130997275864,
         "name": "macOS desktop apps",
-        "status": "in_progress"
+        "status": "in_progress",
+        "observedStep": "Packaging x64 app"
       },
       {
         "job": 130997275944,
         "name": "Linux desktop apps",
-        "status": "queued"
+        "status": "completed",
+        "conclusion": "success",
+        "qualification": "API metadata only; package archive verification not claimed."
       }
     ],
-    "qualification": "Last API audit only; no completed final installer or newer8570 package success claimed."
+    "finalArm64PackagedVerifier": {
+      "job": 131007920315,
+      "name": "Verify the final ARM64 helper and actual packed Main pins",
+      "conclusion": "skipped",
+      "qualification": "Upstream Windows installer failed; no final packaged ARM64 proof."
+    },
+    "otherSkips": ["desktop-e2e-linux", "overlay-linux"],
+    "windowsFailure": {
+      "evidence": "Official job log inspected by root.",
+      "explicitUnsignedPowerShell7HelperChecks": "Both passed without exception.",
+      "failedOperation": "Full x64 package verifier: Windows PowerShell5 Authenticode observer",
+      "source": "packages/desktop/scripts/verify-computer-helper-windows.ts:417",
+      "message": "The Windows helper Authenticode status could not be observed.",
+      "exitCode": 1,
+      "qualification": "Generic nonzero/output-bound observer failure. Exact underlying cause and actual Authenticode result are unobserved; no raw stderr retained. Native actual signature, source pins or full package-verifier pass not claimed."
+    },
+    "qualification": "Older655 exact-source preview only. Windows failed; Mac remains active, Linux success is metadata only, final ARM64 verifier skipped. No final cross-platform or newer8570 package success claimed."
+  },
+  "authenticodeObserverCompatibilityCandidate": {
+    "status": "Reviewed candidate passed 20 local tests / 131 assertions and types; signer reuse is being prepared. No live PS5/package fix is proven.",
+    "scope": "Windows PowerShell5 Authenticode observer compatibility only; existing strict output and package verification predicates remain required.",
+    "qualification": "The generic old-run observer failure does not establish its exact cause. Actual PS5 observer and full package-path validation remain required.",
+    "localChecks": {
+      "observerTests": {
+        "passed": 20,
+        "failed": 0,
+        "assertions": 131
+      },
+      "typecheckExitCode": 0
+    }
+  },
+  "independentVmNativeRunPending": {
+    "revision": "b286accdd5c4b95c1689286b4234d4d109ef0309",
+    "run": 43165063805,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805",
+    "baselineJob": 131006042604,
+    "probeJob": 131006042630,
+    "status": "Completed with failure; pending-state chronology remains in earlier docs. Actual results are in independentVmNativeOutcome."
+  },
+  "w9DesignProposal": {
+    "revision": "20202293",
+    "status": "pushed; owner decision pending",
+    "productionCode": "unchanged",
+    "qualification": "Reviewable design proposal only, not implemented or passed."
+  },
+  "independentVmNativeOutcome": {
+    "revision": "b286accdd5c4b95c1689286b4234d4d109ef0309",
+    "run": 43165063805,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805",
+    "conclusion": "failure",
+    "baseline": {
+      "job": 131006042604,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "passed": 36,
+        "failed": 0,
+        "skipped": 11
+      },
+      "report": {
+        "artifact": 13920132497,
+        "archiveBytes": 822,
+        "archiveDigest": "sha256:6ed101e07a9b8bf2e30744e1f1b6cc9349450cf753a4a46750491c8066d5c0e0",
+        "archiveDigestMatchedAPI": true,
+        "verification": "Root verified report and logs."
+      },
+      "forcedWorkerRequiredFreshReads": 3,
+      "forcedWorkerStatus": "passed",
+      "stop": {
+        "ok": false,
+        "reason": "input_post_failed",
+        "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+        "cause": "driver_failure",
+        "exitCode": 1
+      }
+    },
+    "probe": {
+      "job": 131006042630,
+      "core": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      },
+      "isolated": {
+        "status": "not_run",
+        "reason": "By design: independent diagnostic probe omits preceding isolated input self-test."
+      },
+      "artifact": {
+        "id": 13919749208,
+        "archiveBytes": 5070,
+        "archiveDigest": "sha256:215f869a29050675d620c353c4195bda5317638240f9d8d8dab2ed26a2c3fcb8",
+        "archiveDigestMatchedAPI": true,
+        "verification": "Root verified probe evidence and logs."
+      },
+      "manifest": {
+        "helperVersion": "1.0.15",
+        "sourceDigest": "6427bb52babfff44c120c46b72f1b802491603bee2bb4bc7b3beb0f316d94927"
+      },
+      "moveProbeOnlyStop": {
+        "ok": false,
+        "reason": "input_post_failed",
+        "stage": "guardian-observe-reply-negative-no-callback-pump-progressed",
+        "cause": "driver_failure",
+        "exitCode": 1,
+        "physicalInputSkip": false
+      },
+      "sourceDerivedInference": "Reaching guardian observation requires an accepted guarded MOVE, whose native path includes actual GetCursorPos readback. This supports cursor-path success, not a full-tag receipt, global hook absence or proven marker truncation."
+    },
+    "qualification": "The fresh-VM probe removes the earlier physical_input skip but still fails the receipt. There is no baseline replacement, skipped-isolated credit, root-cause claim or release credit. Three worker reads passed without a stability guarantee."
+  },
+  "signatureObserverFinalLocalChecks": {
+    "verifier": { "passed": 21, "failed": 0, "assertions": 151 },
+    "signer": { "passed": 9, "failed": 0, "assertions": 80 },
+    "focusedWorkflow": { "passed": 4, "failed": 0, "filtered": 27, "assertions": 543 },
+    "desktopTypecheckExitCode": 0,
+    "selectedFormattingExitCode": 0,
+    "hostedActualObserver": "New required native-diagnostic step observes the actual built unsigned helper through the same hidden PowerShell observer; not run at this checkpoint.",
+    "qualification": "Provider-free source/injected checks only. Existing five-second verifier and ten-second signer observation bounds and filtered signer environment retained. No actual signing or native signature observation ran locally. Earlier full-file Bash failures remain recorded."
+  },
+  "low32MarkerDiagnosticCandidate": {
+    "status": "Reviewed opt-in metadata-only next diagnostic; not a demonstrated fix or authority change.",
+    "predicate": "Injected callback, observed upper32 zero, own upper32 nonzero, matching nonzero lower32 and a valid matching opted descriptor or opted mouse MOVE interval. A weak boolean only; stronger full-tag evidence outranks it.",
+    "unchanged": "Original full64 injected DOWN/UP/order/release-debt predicate and all timing/cleanup authority.",
+    "privateResult": 8,
+    "rejectedPrivateResults": [9, 255],
+    "stageCatalogSize": 172,
+    "nativeGroups": {
+      "added": 4,
+      "status": "not_run; hosted execution pending"
+    },
+    "localChecks": {
+      "report": {
+        "passed": 45,
+        "failed": 0,
+        "assertions": 28211
+      },
+      "source": {
+        "passed": 19,
+        "failed": 0,
+        "assertions": 174
+      }
+    },
+    "qualification": "The fresh-VM result justifies investigating marker correlation, but does not prove truncation. Another injector can correlate; this candidate never identifies owned input or creates receipt/release authority."
   }
 }

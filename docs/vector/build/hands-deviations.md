@@ -1,17 +1,18 @@
 # Vector Hands build: deviations from the contract
 
-Current continuation: exact `8570aedb` diagnostic
-[43162088502](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43162088502),
-job `130996325266`, passed native build/units and core 30/0/1. Verified isolated
-artifact `13918588958` (822 bytes; SHA-256
-`d37c779f22e59ee7b7629799748cd37b6ab1dd2648194c65313bd3d769f2af56`)
-reports 36 passed, zero failed, 11 skipped, including all three independently
-required fresh worker acquisitions. This is execution evidence, not a stability
-guarantee. Baseline Stop still failed; the separate `MOVE-PROBE-ONLY` call skipped
-for `physical_input` with exit 77 and supplies no callback cause or release credit.
-The next source candidate uses independent baseline/probe VMs, with the preceding
-isolated input self-test skipped only in the diagnostic probe VM. No receipt or
-authority relaxation is proposed.
+Current continuation: independent-VM run
+[43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805)
+at exact `b286accd` completed with failure. Baseline `131006042604` passed core
+30/0/1 and isolated 36/0/11, including all three required fresh worker reads;
+verified artifact `13920132497` is 822 bytes, SHA-256
+`6ed101e07a9b8bf2e30744e1f1b6cc9349450cf753a4a46750491c8066d5c0e0`.
+Fresh probe `131006042630` passed core 30/0/1 and omitted isolated input checks
+by design. Baseline and `MOVE-PROBE-ONLY` both failed the same authenticated
+matching-receipt/pump-progressed gate, exit 1. The probe reached guarded MOVE
+acceptance/readback without the earlier physical-input skip, but proves no
+full-tag callback, global hook absence or marker-truncation cause. The next
+reviewed low32 metadata-only diagnostic keeps original full64 authority; its
+four native groups remain pending. No release credit or stability guarantee.
 
 The movement-probe log prefixes every output line with `MOVE-PROBE-ONLY` and
 cannot replace baseline failure or supply release outputs. Its earlier final
@@ -29,8 +30,12 @@ selftest 48/1,025, source 19/174, and desktop typechecking. Checkpoint and
 unflagged-marker source subsequently compiled and executed at `9ec38ce4` and
 `8570aedb`; the unflagged category was not observed. Earlier `655ac0e6` capture
 and wrapper failures remain recorded below rather than being rewritten.
-The older `655ac0e6` unsigned preview still had Windows/macOS final installers
-in progress and Linux queued at the last audit; final success is not claimed.
+The older `655ac0e6` unsigned preview has a Windows package-observer failure;
+its generic PowerShell 5 error does not prove an Authenticode result or root
+cause. Linux success is metadata only and Mac packaging was still active at
+the last audit. The observer candidate passed 20 local tests / 131 assertions
+and types, with signer reuse being prepared; live PS5/package proof is pending.
+The W9 design proposal remains owner-pending and unimplemented.
 
 ## 2026-10-28 E0 (shared schema files)
 
@@ -1283,3 +1288,13 @@ Setup must say plainly: “Move your pointer and tap/release the indicated key s
 - **Actual native x64/ARM64 checks:** build under the unchanged warning policy; use an owned isolated listener/window fixture to verify real registration readback and loss, same-thread challenge processing, termination and cancellation, exact deadline handling and generation retirement. Stall the actual listener thread and reconfigure only its owned routes to prove revocation/cleanup. Keep synthetic parser/state tests clearly labelled; an automated VM without real reported-hardware calibration must report unavailable/skipped, never a hardware-delivery pass. Native tests must not post a fake `WM_INPUT` as evidence.
 - **Owner-device manual gate:** on supported real Windows 11 x64/ARM64 hardware, demonstrate actual mouse and keyboard calibration, takeover during agent work, banner/tray/chord Stop and phase-correct Esc. Cover built-in/USB devices and supported touchpad/remote configurations explicitly; unsupported or uncalibratable configurations stay unavailable. Exercise unplug/replug, route replacement, sleep/resume, lock/secure desktop, elevated foreground, session changes and stalled capture/UIA. Verify immediate authority retirement, held-input cleanup, explicit recalibration/Resume and rejection of late notices. Preserve exact revision/OS and closed pass/fail/skip evidence without key values or input recordings.
 - **Review boundary:** owner approval of the changed periodic proof precedes implementation. Then review native service plus frontend readiness/setup and existing protocol/schema compatibility together. Do not weaken production admission, use a CI-only calibration grant in production, modify the guardian receipt policy, convert the current staged Stop failure to an environment skip, or credit this proposal as an implemented fix. The contract file and current source remain unchanged by this section.
+
+## Fresh-VM result and weak-marker diagnostic scope — `b286accd`
+
+Completed run [43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805) at exact `b286accdd5c4b95c1689286b4234d4d109ef0309` failed. Baseline `131006042604` passed core 30/0/1 and isolated 36/0/11, with the three required independent worker reads passing. Root verified baseline report `13920132497` (822 bytes), archive SHA-256 `6ed101e07a9b8bf2e30744e1f1b6cc9349450cf753a4a46750491c8066d5c0e0`. Its Stop result remained `input_post_failed` / `guardian-observe-reply-negative-no-callback-pump-progressed` / `driver_failure`, exit 1. These repeated successful worker checks do not prove stable timing or skipped input capability.
+
+Independent probe `131006042630` passed core 30/0/1, with isolated input self-tests not run by design. `MOVE-PROBE-ONLY` reached the same failed guardian observation, exit 1, without the earlier `physical_input` skip. Root verified probe artifact `13919749208` (5,070 bytes), SHA-256 `215f869a29050675d620c353c4195bda5317638240f9d8d8dab2ed26a2c3fcb8`; its manifest identifies helper 1.0.15 and source digest `6427bb52babfff44c120c46b72f1b802491603bee2bb4bc7b3beb0f316d94927`. Reaching that stage implies, from the source's gates, accepted guarded MOVE and cursor readback. It does not establish a full64 callback receipt, prove absent global hooks or identify truncation as the cause. No probe result replaces baseline or supplies release credit.
+
+The next reviewed diagnostic therefore remains a hypothesis test: injected callbacks with observed upper32 zero, the guardian's own upper32 nonzero, matching nonzero lower32 and a valid matching opted descriptor (or opted mouse MOVE interval) may set one weak-correlation boolean. Another injector can correlate; this metadata never identifies an owned event. Stronger full-tag evidence retains priority. The original full64 injected predicate alone still controls DOWN, UP, ordering and release debt; no new cleanup authority is introduced. Private VIG2 appends result 8 and rejects 9/255, with the corresponding stage appended to the 172-name catalog. Four new native groups are pending; local report 45/28,211 assertions and source 19/174 passed. This is not an observed fix.
+
+The separate Authenticode observer candidate passed 20 local tests / 131 assertions and types; signer reuse is being prepared, while live PS5 and final package verification remain pending. W9 proposal `20202293` is still awaiting an owner decision, with no production implementation. The preceding source/run history and all open native/manual/release gates remain intact.

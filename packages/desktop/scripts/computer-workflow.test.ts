@@ -862,6 +862,33 @@ test("Windows unit and diagnostic lanes exercise the packed Main pin reader befo
   )
 })
 
+test("Windows diagnostics exercise the actual hidden signature observer before native runtime checks", () => {
+  const current = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
+  const build = current.findIndex((step) => step.name === "Build only the x64 native diagnostic artifacts")
+  const observer = current.find(
+    (step) => step.name === "Observe the actual built helper signature through the hidden Windows observer",
+  )!
+  expect(build).toBeGreaterThan(-1)
+  expect(current.indexOf(observer)).toBeGreaterThan(build)
+  expect(current.indexOf(observer)).toBeLessThan(
+    current.findIndex((step) => step.name === "Run Windows unit and fresh version/probe checks"),
+  )
+  expect(observer.if).toBeUndefined()
+  expect(observer["continue-on-error"]).toBeUndefined()
+  expect(observer["timeout-minutes"]).toBe(2)
+  const script = String(observer.run)
+  expect(script).toContain("bun --no-env-file --eval")
+  expect(script).toContain(
+    'import { observeWindowsHelperAuthenticode } from "./scripts/verify-computer-helper-windows.ts"',
+  )
+  expect(script).toContain(
+    'await observeWindowsHelperAuthenticode(path.resolve("native/out/win32/x64/vector-computer.exe"))',
+  )
+  expect(script).toContain('actual.status !== "NotSigned" || actual.publisher !== null || actual.thumbprint !== null')
+  expect(script).toContain('if ($LASTEXITCODE -ne 0) { throw "The actual hidden Windows signature observer failed." }')
+  expect(script).not.toMatch(/--expect-signing|--publisher|continue-on-error|exit 0|process\.env/)
+})
+
 test("x64 diagnostics reuse bounded native checks and isolated scenarios without release evidence", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
   expect(diagnostic["runs-on"]).toBe("windows-2025")
