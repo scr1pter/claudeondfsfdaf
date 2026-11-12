@@ -3253,6 +3253,7 @@ const layer = Layer.effect(
             retries: warm ? warm.retries : retries,
             // A Vectorscope review's helper sessions (vectorscope.review, vectorscope.verify, ...) say so to Codium.
             ...(session.internal?.startsWith("vectorscope.") ? { purpose: "review" as const } : {}),
+            ...(pinnedReview ? { pinnedContext: true as const } : {}),
             answering: () => Deferred.doneUnsafe(answering, Effect.succeed(true)),
             // The digest in the system prompt carries the owner's rules, MEMORY.md and pinned entries too.
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },

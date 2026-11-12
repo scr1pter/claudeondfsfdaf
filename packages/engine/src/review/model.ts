@@ -3,7 +3,7 @@ import { FREE_MODEL_TRAINING_LABEL, freeModelMayTrain } from "@vectordevai/core/
 // Which model a review runs on (section 2.9), what it costs (section 5.5), and the 32k context floor.
 
 import { providerCredentialAllowed } from "@vectordevai/core/provider-policy"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
@@ -16,6 +16,7 @@ import { SpendGuard } from "@vectordevai/core/spend-guard"
 import type { CostKind, Trigger } from "@vectordevai/core/review/types"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import type { ModelV2 } from "@vectordevai/core/model"
+import { VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 
 export interface ResolvedModel {
   providerID: ProviderV2.ID
@@ -42,6 +43,8 @@ export interface ResolveInput {
   // review.json's "modelEvidence": "warn" (VS-07, off by default). A local model the provider retired is then refused
   // with that reason, as a workflow's already is, instead of as one that is not available.
   evidence?: boolean
+  /** Internal service identity; absent preserves the generic review setting. */
+  identity?: "vectorscope"
 }
 
 // CI (auto and command): REVIEW_AUTO_MODEL for automatic runs only, then review.json, then MODEL.
@@ -57,7 +60,13 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   const catalog = yield* ModelCatalog.Service
 
   const ci = input.trigger === "auto" || input.trigger === "command"
-  const agent = ci ? undefined : (yield* config.get()).agent?.["review"]
+  const scope = input.identity === VECTORSCOPE_AGENT
+  if (scope && ci)
+    return yield* new ReviewModelError({ message: "The VectorScope service requires a local review model selection." })
+  const global = scope ? yield* config.getGlobal() : undefined
+  const agent = ci ? undefined : scope ? global?.agent?.[VECTORSCOPE_AGENT] : (yield* config.get()).agent?.["review"]
+  if (scope && agent?.disable)
+    return yield* new ReviewModelError({ message: "VectorScope is disabled in agent.vectorscope." })
   // Each source names its setting, so a workflow's refusal points at the one that chose the model.
   const picked = (
     ci
@@ -71,7 +80,7 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
           { value: input.exact, setting: TRIAGE_SETTING },
           { value: input.flag, setting: "--model" },
           { value: input.config, setting: CONFIG_SETTING },
-          { value: agent?.model, setting: "agent.review.model" },
+          { value: agent?.model, setting: scope ? "agent.vectorscope.model" : "agent.review.model" },
         ]
   )
     .map((source) => ({ ...source, value: source.value?.trim() }))
@@ -84,7 +93,17 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
         Object.values(yield* provider.list())
           .flatMap((item) => Object.values(item.models))
           .find((model) => isFreeModel(model) && !freeModelMayTrain(model))
-  const configured = chosen || ci ? undefined : yield* provider.defaultModel().pipe(Effect.option)
+  // Service defaults come from the owner, never an ambient project model. When
+  // no project model is set the existing provider fallback is owner history and
+  // the available catalog. Explicit/pinned selections above always win.
+  const configured =
+    chosen || ci
+      ? undefined
+      : scope && global?.model
+        ? Option.some(Provider.parseModel(global.model))
+        : scope && (yield* config.get()).model
+          ? undefined
+          : yield* provider.defaultModel().pipe(Effect.option)
   const name =
     chosen ??
     (free ? `${free.providerID}/${free.id}` : undefined) ??
@@ -94,7 +113,9 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
     return yield* new ReviewModelError({
       message: ci
         ? "No review model is set. Set MODEL or REVIEW_AUTO_MODEL in the workflow, or model in .vector/review.json, and provide that provider's key."
-        : "No review model is set. Pass --model, set model in .vector/review.json, or connect a provider in Vector.",
+        : scope
+          ? "No VectorScope model is set. Choose agent.vectorscope.model in your Vector settings or provide an explicit or pinned review model."
+          : "No review model is set. Pass --model, set model in .vector/review.json, or connect a provider in Vector.",
     })
 
   const ref = Provider.parseModel(name)
@@ -151,7 +172,10 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   })
 
   // The agent's variant applies only when the agent's own model was chosen, as elsewhere in the engine.
-  const variant = chosen && chosen === agent?.model && agent.variant ? agent.variant : undefined
+  const variant =
+    chosen && chosen === agent?.model && agent.variant && (!scope || picked?.setting === "agent.vectorscope.model")
+      ? agent.variant
+      : undefined
   const subject: ModelSubject = {
     model: `${model.providerID}/${model.id}`,
     ...(variant ? { variant } : {}),

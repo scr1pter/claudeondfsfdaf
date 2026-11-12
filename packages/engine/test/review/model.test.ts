@@ -69,6 +69,10 @@ interface Setup {
   /** Free models listed ahead of the curated ones under Vector. */
   before?: Provider.Model[]
   oauth?: string[]
+  vectorscope?: { model?: string; variant?: string; disable?: boolean }
+  projectVectorscope?: { model?: string; variant?: string }
+  globalModel?: string
+  projectModel?: string
 }
 
 const services = (setup: Setup) =>
@@ -113,7 +117,21 @@ const services = (setup: Setup) =>
               }),
             ),
     }),
-    TestConfig.layer({ get: () => Effect.succeed(setup.agent ? { agent: { review: setup.agent } } : {}) }),
+    TestConfig.layer({
+      get: () =>
+        Effect.succeed({
+          ...(setup.projectModel ? { model: setup.projectModel } : {}),
+          agent: {
+            ...(setup.agent ? { review: setup.agent } : {}),
+            ...(setup.projectVectorscope ? { vectorscope: setup.projectVectorscope } : {}),
+          },
+        }),
+      getGlobal: () =>
+        Effect.succeed({
+          ...(setup.globalModel ? { model: setup.globalModel } : {}),
+          ...(setup.vectorscope ? { agent: { vectorscope: setup.vectorscope } } : {}),
+        }),
+    }),
     // The catalog lists acme and anthropic, whose key is not set in these tests; "retired" is in no catalog.
     Layer.mock(ModelCatalog.Service, {
       get: () =>
@@ -192,6 +210,65 @@ describe("ReviewModel.resolveReviewModel order", () => {
       expect(agent.variant).toBe("high")
       expect(yield* chosen({ trigger: "desktop", env }, { defaultModel: "acme/default" })).toBe("acme/default")
       expect((yield* resolve({ trigger: "local", env }).pipe(Effect.flip)).message).toContain("No review model is set")
+    }),
+  )
+})
+
+describe("VectorScope service model admission", () => {
+  it.effect("uses the owner-only independent setting and ignores project and generic review overrides", () =>
+    Effect.gen(function* () {
+      const result = yield* resolve(
+        { trigger: "local", identity: "vectorscope" },
+        {
+          vectorscope: { model: "acme/agent", variant: "high" },
+          projectVectorscope: { model: "acme/json", variant: "project-variant" },
+          agent: { model: "acme/env", variant: "generic-variant" },
+          defaultModel: "acme/default",
+        },
+      )
+      expect(`${result.providerID}/${result.modelID}`).toBe("acme/agent")
+      expect(result.variant).toBe("high")
+      expect(result.subject?.choice).toEqual({ explicit: true, setting: "agent.vectorscope.model" })
+    }),
+  )
+
+  it.effect("explicit and pinned models win without inheriting an agent variant for the same model ID", () =>
+    Effect.gen(function* () {
+      const setup = { vectorscope: { model: "acme/agent", variant: "high" } }
+      for (const source of [{ flag: "acme/agent" }, { config: "acme/agent" }, { exact: "acme/agent" }]) {
+        const result = yield* resolve({ trigger: "local", identity: "vectorscope", ...source }, setup)
+        expect(`${result.providerID}/${result.modelID}`).toBe("acme/agent")
+        expect(result.variant).toBeUndefined()
+      }
+    }),
+  )
+
+  it.effect("uses an owner default and refuses an ambient project default instead of silently selecting it", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* chosen(
+          { trigger: "desktop", identity: "vectorscope" },
+          { globalModel: "acme/default", projectModel: "acme/json" },
+        ),
+      ).toBe("acme/default")
+      const refused = yield* resolve(
+        { trigger: "local", identity: "vectorscope" },
+        { projectModel: "acme/json", defaultModel: "acme/json" },
+      ).pipe(Effect.flip)
+      expect(refused.message).toContain("No VectorScope model is set")
+      expect(yield* chosen({ trigger: "local", identity: "vectorscope" }, { defaultModel: "acme/default" })).toBe(
+        "acme/default",
+      )
+    }),
+  )
+
+  it.effect("an explicit owner disable refuses before a selected model can run", () =>
+    Effect.gen(function* () {
+      const refused = yield* resolve(
+        { trigger: "local", identity: "vectorscope", flag: "acme/flag" },
+        { vectorscope: { disable: true } },
+      ).pipe(Effect.flip)
+      expect(refused.message).toBe("VectorScope is disabled in agent.vectorscope.")
     }),
   )
 })

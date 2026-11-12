@@ -17,7 +17,7 @@ import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { parseReviewConfig } from "@vectordevai/core/review/config"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
-import { PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
+import { PINNED_SESSION_PREFIX, VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { certificateProblems, evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import {
   noteTriageFixedUnchecked,
@@ -38,6 +38,7 @@ import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
+import { PromptTrust } from "@/config/prompt-trust"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { Permission } from "../../src/permission"
@@ -265,6 +266,36 @@ function input(directory: string, overrides: Partial<Review.RunInput> = {}): Rev
 
 const priced = { ...ref, context: 100_000, costKind: "priced" as const, price: PRICE }
 
+const ownerSettings = (settings: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const file = path.join(Global.Path.config, "vector.json")
+    const previous = yield* Effect.promise(() =>
+      fs.readFile(file).catch((error: unknown) => {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined
+        throw error
+      }),
+    )
+    yield* Effect.acquireRelease(
+      Effect.promise(async () => {
+        await fs.mkdir(path.dirname(file), { recursive: true })
+        await fs.writeFile(file, JSON.stringify(settings))
+        Config.refreshLocal()
+        Config.confirmLocal()
+      }).pipe(Effect.andThen(PromptTrust.accept([file])), Effect.andThen(config.invalidate())),
+      () =>
+        Effect.promise(async () => {
+          if (previous === undefined) await fs.rm(file, { force: true })
+          else await fs.writeFile(file, previous)
+          Config.refreshLocal()
+          Config.confirmLocal()
+        }).pipe(Effect.andThen(PromptTrust.accept([file])), Effect.andThen(config.invalidate())),
+    )
+    // These cases model a global edit the owner approved. An unapproved
+    // replacement is correctly stripped by Config.withheld before any review.
+    expect(PromptTrust.allowed(file)).toBe(true)
+  })
+
 const useServer = (
   cost?: typeof PRICE,
   options: { compaction?: { auto: boolean }; agent?: { review?: { prompt: string } } } = {},
@@ -432,45 +463,231 @@ for (const reason of ["error", "abort", "reduced"] as const) {
 }
 
 describe("Review.run", () => {
+  for (const variant of [false, true])
+    it.instance(
+      `pinned context survives actual OpenAI Responses ${variant ? "variant" : "model"} instruction options`,
+      () =>
+        Effect.gen(function* () {
+          yield* ownerSettings({
+            agent: { vectorscope: { model: "openai/gpt-5.5", ...(variant ? { variant: "high" } : {}) } },
+          })
+          const test = yield* TestInstance
+          const llm = yield* TestLLMServer
+          const fs = yield* FSUtil.Service
+          yield* fs.writeWithDirs(
+            path.join(test.directory, "vector.json"),
+            JSON.stringify({
+              formatter: false,
+              lsp: false,
+              provider: {
+                openai: {
+                  npm: "@ai-sdk/openai",
+                  options: { apiKey: "responses-local-test-only", baseURL: llm.url, concurrency: 64 },
+                  models: {
+                    "gpt-5.5": {
+                      id: "gpt-5.5",
+                      name: "Responses test",
+                      tool_call: true,
+                      reasoning: true,
+                      limit: { context: 100_000, output: 10_000 },
+                      cost: { input: 0, output: 0 },
+                      options: {
+                        instructions: "AMBIENT_RESPONSES_MODEL_MARKER",
+                        systemMessageMode: "remove",
+                        truncation: "auto",
+                        ...(!variant ? { conversation: "conv_ambient_model" } : {}),
+                      },
+                      variants: {
+                        high: {
+                          instructions: "AMBIENT_RESPONSES_VARIANT_MARKER",
+                          systemMessageMode: "remove",
+                          truncation: "auto",
+                          previousResponseId: "resp_ambient_variant",
+                          reasoningEffort: "low",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            }),
+          )
+          yield* fs.writeWithDirs(path.join(test.directory, "src/list.ts"), LIST_SOURCE)
+          yield* Effect.promise(() => trustWorkspace(test.directory))
+          const selected = yield* resolveReviewModel({ trigger: "local", identity: VECTORSCOPE_AGENT })
+          for (const pinned of [false, true]) {
+            yield* llm.reset
+            yield* llm.push(reply().tool("StructuredOutput", report([])))
+            const outcome = yield* Review.run(
+              input(test.directory, {
+                model: selected,
+                config: config({ security: "off" }),
+                ...(pinned
+                  ? {
+                      identity: VECTORSCOPE_AGENT,
+                      instructionsFromContext: true,
+                      context: { instructions: "PINNED_BASE_INSTRUCTIONS_MARKER" },
+                    }
+                  : {}),
+              }),
+            )
+            expect(outcome.specialists.map((pass) => pass.status)).toEqual(["ok"])
+            const requests = yield* modelRequests(llm)
+            expect(requests).toHaveLength(1)
+            const body = requests[0]!
+            expect(Array.isArray(body.input)).toBe(true)
+            if (!pinned) {
+              expect(body.instructions).toBe(
+                variant ? "AMBIENT_RESPONSES_VARIANT_MARKER" : "AMBIENT_RESPONSES_MODEL_MARKER",
+              )
+              expect(body.truncation).toBe("auto")
+              expect(body.conversation).toBe(variant ? undefined : "conv_ambient_model")
+              expect(body.previous_response_id).toBe(variant ? "resp_ambient_variant" : undefined)
+              continue
+            }
+            expect(body.instructions).toBeUndefined()
+            expect(body.truncation).toBe("disabled")
+            expect(body.conversation).toBeUndefined()
+            expect(body.previous_response_id).toBeUndefined()
+            expect(JSON.stringify(body.input)).toContain("You are VectorScope")
+            expect(JSON.stringify(body.input)).toContain("PINNED_BASE_INSTRUCTIONS_MARKER")
+            expect(JSON.stringify(body)).not.toContain("AMBIENT_RESPONSES_")
+          }
+        }),
+      TIMEOUT,
+    )
+
+  it.instance(
+    "VectorScope service uses its owner model and fixed factory when generic specialists are disabled",
+    () =>
+      Effect.gen(function* () {
+        yield* ownerSettings({
+          agent: {
+            vectorscope: {
+              model: "lmstudio/scope-model",
+              variant: "high",
+              prompt: "AMBIENT_SCOPE_GLOBAL_PROMPT_MARKER",
+              options: { instructions: "AMBIENT_SCOPE_GLOBAL_OPTIONS_MARKER" },
+            },
+          },
+        })
+        const test = yield* TestInstance
+        const llm = yield* TestLLMServer
+        const fs = yield* FSUtil.Service
+        const configured = testProviderConfig(llm.url)
+        yield* fs.writeWithDirs(
+          path.join(test.directory, "vector.json"),
+          JSON.stringify({
+            ...configured,
+            provider: {
+              lmstudio: {
+                ...configured.provider.lmstudio,
+                models: {
+                  ...configured.provider.lmstudio.models,
+                  "scope-model": {
+                    ...configured.provider.lmstudio.models["test-model"],
+                    id: "scope-model",
+                    variants: { high: { reasoningEffort: "high" } },
+                  },
+                },
+              },
+            },
+            agent: {
+              review: { disable: true, model: "lmstudio/test-model", prompt: "AMBIENT_SCOPE_GENERIC_REVIEW_MARKER" },
+              security: { disable: true, prompt: "AMBIENT_SCOPE_GENERIC_SECURITY_MARKER" },
+              vectorscope: {
+                model: "lmstudio/test-model",
+                variant: "AMBIENT_SCOPE_PROJECT_VARIANT_MARKER",
+                prompt: "AMBIENT_SCOPE_PROJECT_PROMPT_MARKER",
+                options: { instructions: "AMBIENT_SCOPE_PROJECT_OPTIONS_MARKER" },
+                mode: "all",
+                hidden: false,
+              },
+            },
+          }),
+        )
+        yield* fs.writeWithDirs(path.join(test.directory, "src/list.ts"), LIST_SOURCE)
+        yield* Effect.promise(() => trustWorkspace(test.directory))
+        const agents = yield* Agent.Service
+        expect(yield* agents.get(VECTORSCOPE_AGENT)).toBeUndefined()
+        expect(yield* agents.get("review")).toBeUndefined()
+        expect(yield* agents.get("security")).toBeUndefined()
+        expect((yield* agents.list()).map((agent) => agent.name)).not.toContain(VECTORSCOPE_AGENT)
+        const helper = yield* agents.helper(VECTORSCOPE_AGENT, { reviewedPrompt: true })
+        expect(helper.options).toEqual({})
+        expect(helper.model).toBeUndefined()
+        expect(helper.variant).toBeUndefined()
+        for (const explicit of [false, true]) {
+          yield* llm.reset
+          const model = yield* resolveReviewModel({
+            trigger: "local",
+            identity: VECTORSCOPE_AGENT,
+            ...(explicit ? { flag: "lmstudio/scope-model" } : {}),
+          })
+          expect(model.modelID).toBe(ModelV2.ID.make("scope-model"))
+          expect(model.variant).toBe(explicit ? undefined : "high")
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+          yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report([])))
+          const outcome = yield* Review.run(
+            input(test.directory, {
+              identity: VECTORSCOPE_AGENT,
+              instructionsFromContext: true,
+              context: { instructions: "PINNED_BASE_INSTRUCTIONS_MARKER" },
+              config: config({ security: "always" }),
+              model,
+            }),
+          )
+          expect(outcome.specialists.map((pass) => pass.status)).toEqual(["ok", "ok"])
+          const bodies = yield* modelRequests(llm)
+          expect(bodies).toHaveLength(2)
+          for (const body of bodies) {
+            expect(body.model).toBe("scope-model")
+            expect(JSON.stringify(body)).toContain("You are VectorScope")
+            expect(JSON.stringify(body)).toContain("PINNED_BASE_INSTRUCTIONS_MARKER")
+            expect(JSON.stringify(body)).not.toContain("AMBIENT_SCOPE_")
+          }
+          const sessions = yield* Session.Service
+          for (const id of outcome.sessions) {
+            const sessionID = SessionID.make(id)
+            expect((yield* sessions.get(sessionID)).internal?.startsWith(PINNED_SESSION_PREFIX)).toBe(true)
+            const messages = yield* sessions.messages({ sessionID })
+            const user = messages.find((message) => message.info.role === "user")?.info
+            expect(user?.role === "user" && user.model.variant).toBe(explicit ? undefined : "high")
+            expect(
+              messages
+                .filter((message) => message.info.role === "assistant")
+                .every((message) => message.info.agent === VECTORSCOPE_AGENT),
+            ).toBe(true)
+          }
+        }
+      }),
+    TIMEOUT,
+  )
+
   for (const project of [false, true])
     it.instance(
       `provided context excludes ambient configured agent prompts from ${project ? "global and project" : "global"} settings while legacy review retains them`,
       () =>
         Effect.gen(function* () {
-          const globalFile = path.join(Global.Path.config, "vector.json")
-          const previous = yield* Effect.promise(() =>
-            fs.readFile(globalFile).catch((error: unknown) => {
-              if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined
-              throw error
-            }),
-          )
-          yield* Effect.acquireRelease(
-            Effect.promise(async () => {
-              await fs.mkdir(path.dirname(globalFile), { recursive: true })
-              await fs.writeFile(
-                globalFile,
-                JSON.stringify({
-                  agent: {
-                    review: { prompt: "AMBIENT_CONFIG_GLOBAL_REVIEW_MARKER" },
-                    security: { prompt: "AMBIENT_CONFIG_GLOBAL_SECURITY_MARKER" },
-                  },
-                }),
-              )
-              Config.refreshLocal()
-              Config.confirmLocal()
-            }),
-            () =>
-              Effect.promise(async () => {
-                if (previous === undefined) await fs.rm(globalFile, { force: true })
-                else await fs.writeFile(globalFile, previous)
-                Config.refreshLocal()
-                Config.confirmLocal()
-              }),
-          )
+          yield* ownerSettings({
+            agent: {
+              review: { prompt: "AMBIENT_CONFIG_GLOBAL_REVIEW_MARKER" },
+              security: { prompt: "AMBIENT_CONFIG_GLOBAL_SECURITY_MARKER" },
+            },
+          })
+          const configuration = yield* Config.Service
+          const global = yield* configuration.getGlobal()
+          expect(global.agent?.review?.prompt).toBe("AMBIENT_CONFIG_GLOBAL_REVIEW_MARKER")
+          expect(global.agent?.security?.prompt).toBe("AMBIENT_CONFIG_GLOBAL_SECURITY_MARKER")
           const { llm, directory } = yield* useServer(
             undefined,
             project ? { agent: { review: { prompt: "AMBIENT_CONFIG_PROJECT_REVIEW_MARKER" } } } : {},
           )
+          const agents = yield* Agent.Service
+          expect((yield* agents.helper("review")).prompt).toBe(
+            project ? "AMBIENT_CONFIG_PROJECT_REVIEW_MARKER" : "AMBIENT_CONFIG_GLOBAL_REVIEW_MARKER",
+          )
+          expect((yield* agents.helper("security")).prompt).toBe("AMBIENT_CONFIG_GLOBAL_SECURITY_MARKER")
           yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
           yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report([])))
           const legacy = yield* Review.run(input(directory, { config: config({ security: "always" }) }))

@@ -223,6 +223,8 @@ export const SCOPE = "vector.review"
 
 /** Engine-owned session identity; survives compaction without trusting prompt metadata. */
 export const PINNED_SESSION_PREFIX = "vectorscope.bound."
+/** Service-only helper identity, independent from general review/security Subagents. */
+export const VECTORSCOPE_AGENT = "vectorscope"
 
 export type Scope = { paths: string[]; trust: Trust; instructions?: "provided"; restrictedReads?: true }
 

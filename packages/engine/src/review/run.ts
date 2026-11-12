@@ -56,6 +56,7 @@ import {
   buildVerifyPrompt,
   SCOPE,
   PINNED_SESSION_PREFIX,
+  VECTORSCOPE_AGENT,
   type PromptInput,
 } from "@vectordevai/core/review/prompt"
 import {
@@ -129,6 +130,8 @@ export interface RunInput {
   /** Frozen internal authority admitted before asynchronous adapter setup. */
   admittedReads?: ReadAuthority
   instructionsFromContext?: true
+  /** The shared service uses its own helper; legacy adapters retain their specialists. */
+  identity?: "vectorscope"
   /** An owning cloud run can stop every specialist without discarding completed reports. */
   stopSignal?: AbortSignal
   knownPath: (path: string) => Promise<boolean>
@@ -665,7 +668,12 @@ export const run: (
           return prompts
             .prompt({
               sessionID: session.id,
-              agent: spec.name === "security" ? "security" : "review",
+              agent:
+                input.identity === VECTORSCOPE_AGENT
+                  ? VECTORSCOPE_AGENT
+                  : spec.name === "security"
+                    ? "security"
+                    : "review",
               model: { providerID: spec.model.providerID, modelID: spec.model.modelID },
               ...(spec.model.variant ? { variant: spec.model.variant } : {}),
               // A class instance: the stored user message only accepts the schema class, not a plain object.

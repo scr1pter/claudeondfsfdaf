@@ -126,6 +126,7 @@ export interface LocalReviewOptions {
     readDenies?: readonly string[]
     readRoot?: string
     admittedReads?: ReadAuthority
+    identity?: "vectorscope"
     stopSignal?: AbortSignal
   }
 }
@@ -408,10 +409,17 @@ export function executeLocalReview<RunR, ModelR>(
       config: config.model,
       env,
       ...evidence,
+      ...(options.context?.identity ? { identity: options.context.identity } : {}),
     })
     // review.json's cheaper first pass; the double-check stays on `model`.
     const triage = config.triageModel
-      ? yield* deps.resolveModel({ trigger: "local", exact: config.triageModel, env, ...evidence })
+      ? yield* deps.resolveModel({
+          trigger: "local",
+          exact: config.triageModel,
+          env,
+          ...evidence,
+          ...(options.context?.identity ? { identity: options.context.identity } : {}),
+        })
       : undefined
     const modelName = `${model.providerID}/${model.modelID}`
     if (options.checks) {
@@ -498,6 +506,7 @@ export function executeLocalReview<RunR, ModelR>(
       ...(options.context?.readRoot ? { readRoot: options.context.readRoot } : {}),
       ...(authority ? { admittedReads: authority } : {}),
       ...(options.context ? { instructionsFromContext: true } : {}),
+      ...(options.context?.identity ? { identity: options.context.identity } : {}),
       trigger: "local",
       trust,
       base: range.mergeBase,

@@ -196,3 +196,49 @@ win, while variants/options still inherit ambient agent configuration. VS-09 mus
 assess those fields for its independent service-only identity. It must not expose
 that factory helper as a normal primary-chat agent. Desktop consolidation and the
 post-change production benchmark comparison remain owed.
+
+## VS-09 engine foundation (UI acceptance remains open)
+
+The shared service selects a separate VectorScope factory helper. Normal agent
+lookup and lists never expose it, and an ordinary helper lookup refuses it. The
+factory has its own fixed engine prompt and read-only permission ceiling; generic
+Review/Security switches do not disable it. It carries no ambient agent model,
+variant, options, sampling or step fields. `agent.vectorscope` is reserved for
+service settings rather than a normal primary-chat or Subagent launch.
+
+The service resolves the owner's global `agent.vectorscope.model`, `variant` and
+`disable` independently. Explicit invocation and pinned review model selections
+win; a same-model explicit selection does not inherit the agent variant. Project
+agent/default-model overrides cannot select the service default. Existing generic
+review selection stays unchanged. An explicit owner disable refuses the service.
+
+Independent review found that project-materialized provider/model or variant
+options could still replace OpenAI Responses instructions, remove system items,
+import remote context or enable server truncation. The durable bound session now
+sets an internal request flag. After all model/agent/variant and parameter-hook
+merges, that boundary removes instruction/context replacement channels, retains
+only runtime-owned OAuth instruction placement, and forces Responses truncation
+to `disabled`. Legacy requests keep their established option behavior. These are
+source/wire checks, not transport or privacy certification.
+
+Root's final batch 029 passes engine types and the combined ten genuine provider
+cases (173 assertions), including actual API-key Responses model and variant wire
+requests, legacy customization before/after, owner model/factory selection,
+compaction/missing-scope refusal, actual nested placement and symlink retarget.
+Core types, the complete LLM request/wire suite, seven Git service cases, core
+prompt/source-pin checks also pass at production pin `8726e238083cd6c0`. The
+independent narrow review reports no concrete remaining instruction-channel or
+truncation bypass. The earlier model policy suite passes 20/84 and agent suite
+64/426.
+
+The global-prompt fixture now models an owner-approved edit through the real
+PromptTrust acceptance lifecycle, followed by config invalidation and exact
+source/merged-prompt assertions. A cache invalidation alone correctly left those
+edits held; the legacy checks were never weakened. All receipts remain in the
+coordinator's validation ledger.
+
+This commits the engine foundation only. The separate owner settings UI, its
+qualified selection/save behavior, explicit cancellation and structured-output
+acceptance still need completion before VS-09 is marked done. VS-10 and remaining
+packages, final integration CI and production post-change comparison remain open.
+No public rollout, performance, quality or transport-readiness claim follows.

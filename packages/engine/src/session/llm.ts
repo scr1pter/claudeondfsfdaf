@@ -64,6 +64,8 @@ export type StreamInput = {
   // What a Vector Codium request is for (X-Vector-Purpose): "title", "brain", a Vectorscope review's "review"; without
   // one, a judge agent's request is "judge" and anything else "chat".
   purpose?: ModelPlanStatus.Purpose
+  /** Server-derived pinned review context; model/provider options may not replace it. */
+  pinnedContext?: true
   retries?: number
   // "required" is sent as "auto" where the provider refuses forced tool use with thinking on
   // (ProviderTransform.toolChoice); `chose` hears what was sent.

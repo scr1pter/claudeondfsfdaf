@@ -8,6 +8,7 @@ import { disposeAllInstances, TestInstance, trustWorkspace } from "../fixture/fi
 import { testEffect } from "../lib/effect"
 import { Agent, RESEARCHER, RESEARCH_JUDGE } from "../../src/agent/agent"
 import PROMPT_REVIEW from "../../src/agent/prompt/review.txt"
+import { VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 import { GENERAL_SUBAGENT } from "../../src/agent/subagent-kind"
 import { NATIVE_SPECIALISTS } from "@vectordevai/core/agent/specialists"
 import { WorkflowMarkers } from "../../src/orchestration/constants"
@@ -33,6 +34,54 @@ const agentLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   )
 
 const it = testEffect(agentLayer())
+
+it.instance(
+  "VectorScope is a read-only service factory absent from normal agent lookup and lists",
+  () =>
+    Effect.gen(function* () {
+      expect(yield* load((svc) => svc.get(VECTORSCOPE_AGENT))).toBeUndefined()
+      expect((yield* load((svc) => svc.list())).map((agent) => agent.name)).not.toContain(VECTORSCOPE_AGENT)
+      expect(Exit.isFailure(yield* load((svc) => svc.helper(VECTORSCOPE_AGENT)).pipe(Effect.exit))).toBe(true)
+      const helper = yield* load((svc) => svc.helper(VECTORSCOPE_AGENT, { reviewedPrompt: true }))
+      expect(helper).toMatchObject({
+        name: VECTORSCOPE_AGENT,
+        mode: "primary",
+        hidden: true,
+        native: true,
+        options: {},
+      })
+      expect(helper.prompt).toContain("You are VectorScope")
+      expect(helper.prompt).not.toContain("AMBIENT_FACTORY_MARKER")
+      expect(helper.model).toBeUndefined()
+      expect(helper.variant).toBeUndefined()
+      expect(helper.temperature).toBeUndefined()
+      expect(helper.steps).toBeUndefined()
+      expect(Agent.readOnly(VECTORSCOPE_AGENT)).toBe(true)
+      for (const tool of ["edit", "task", "webfetch", "memory", "mcp_server_tool"])
+        expect(evalPerm(helper, tool)).toBe("deny")
+      expect(Permission.evaluate("read", "private.ts", helper.permission).action).toBe("deny")
+    }),
+  {
+    trusted: true,
+    config: {
+      agent: {
+        review: { disable: true },
+        security: { disable: true },
+        vectorscope: {
+          model: "ambient/project-model",
+          variant: "ambient-variant",
+          prompt: "AMBIENT_FACTORY_MARKER",
+          options: { instructions: "AMBIENT_FACTORY_MARKER" },
+          temperature: 1,
+          steps: 1,
+          mode: "all",
+          hidden: false,
+          permission: { "*": "allow", edit: "allow", read: { "private.ts": "deny" } },
+        },
+      },
+    },
+  },
+)
 
 // Helper to evaluate permission for a tool with wildcard pattern
 function evalPerm(agent: Agent.Info | undefined, permission: string): PermissionV1.Action | undefined {

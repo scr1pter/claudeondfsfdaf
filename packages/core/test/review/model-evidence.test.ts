@@ -54,6 +54,11 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/session/tools.ts",
   "packages/engine/src/session/prompt.ts",
   "packages/engine/src/agent/agent.ts",
+  "packages/engine/src/review/model.ts",
+  "packages/engine/src/config/agent.ts",
+  "packages/engine/src/session/processor.ts",
+  "packages/engine/src/session/llm.ts",
+  "packages/engine/src/session/llm/request.ts",
   "packages/engine/src/tool/grep.ts",
   "packages/engine/src/tool/glob.ts",
   "packages/engine/src/tool/read.ts",
@@ -79,6 +84,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/impact.ts",
   "packages/engine/src/agent/prompt/review.txt",
   "packages/engine/src/agent/prompt/security.txt",
+  "packages/engine/src/agent/prompt/vectorscope.txt",
 ]
 
 // Model evidence (VS-07) over synthetic certificates. No real certificate exists: MODEL_EVIDENCE is empty until the
