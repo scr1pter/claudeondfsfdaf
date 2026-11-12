@@ -2449,7 +2449,7 @@ const layer = Layer.effect(
       const pinnedReview = session.internal?.startsWith(PINNED_SESSION_PREFIX) === true
       let structured: unknown
       // Invalid StructuredOutput calls this run; the tool is built again for every step, so the count lives here.
-      const invalid = { count: 0 }
+      const invalid: { count: number; refused?: string } = { count: 0 }
       // A json_schema step that could not force the call ("auto" for thinking) and ended without a kept value gets one
       // closing step with thinking off and the call required.
       let closing: "due" | "done" | undefined
@@ -3064,6 +3064,7 @@ const layer = Layer.effect(
               retryCount: lastUser.format.retryCount,
               invalid,
               model,
+              ...(pinnedReview ? { strict: true } : {}),
             })
           }
 
@@ -3259,6 +3260,14 @@ const layer = Layer.effect(
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },
           })
 
+          if (invalid.refused) {
+            handle.message.error = new SessionV1.StructuredOutputError({
+              message: `Model returned invalid review output: ${invalid.refused}`,
+              retries: invalid.count,
+            }).toObject()
+            yield* sessions.updateMessage(handle.message)
+            return "break" as const
+          }
           if (structured !== undefined) {
             handle.message.structured = structured
             handle.message.finish = handle.message.finish ?? "stop"
@@ -5009,8 +5018,10 @@ export function createStructuredOutputTool(input: {
   onSuccess: (output: unknown) => void
   // Invalid calls answered with an error before a value is kept as it is (the format's retryCount, at most 5).
   retryCount?: number
+  /** Pinned reviews never keep an invalid or unchecked value after retries. */
+  strict?: true
   // The run's count of invalid calls. The tool is built again for every step, so the run keeps the count.
-  invalid?: { count: number }
+  invalid?: { count: number; refused?: string }
   // The model the schema is rendered for: bounds its provider drops are restated in descriptions.
   model?: Provider.Model
 }): AITool {
@@ -5019,7 +5030,7 @@ export function createStructuredOutputTool(input: {
   // The AI SDK does not check a JSON Schema tool's input, so Vector does, for every schema JsonSchemaCheck can enforce
   // in full. Any other schema is passed on and its value kept unchecked.
   const check = JsonSchemaCheck.accept(input.schema)
-  const invalid = input.invalid ?? { count: 0 }
+  const invalid: { count: number; refused?: string } = input.invalid ?? { count: 0 }
   const retryCount = Math.min(input.retryCount ?? 2, STRUCTURED_OUTPUT_MAX_RETRIES)
 
   return tool({
@@ -5031,6 +5042,14 @@ export function createStructuredOutputTool(input: {
     ),
     async execute(args) {
       const problems = check.ok ? JsonSchemaCheck.validate(check.schema, args) : []
+      if (input.strict && (!check.ok || (problems.length > 0 && invalid.count >= retryCount))) {
+        invalid.refused = check.ok ? JsonSchemaCheck.describe(problems) : "The review schema could not be checked."
+        return {
+          output: `Invalid review output: ${invalid.refused}`,
+          title: "Structured Output",
+          metadata: { valid: false, captured: false },
+        }
+      }
       if (problems.length > 0 && invalid.count < retryCount) {
         invalid.count++
         return {

@@ -242,3 +242,46 @@ qualified selection/save behavior, explicit cancellation and structured-output
 acceptance still need completion before VS-09 is marked done. VS-10 and remaining
 packages, final integration CI and production post-change comparison remain open.
 No public rollout, performance, quality or transport-readiness claim follows.
+
+## VS-09 staged settings and acceptance checkpoint
+
+The owner model, variant and disable controls now have a separate Agents settings
+card. It appears only with the owner's global `experimental.vectorscope: true`,
+the engine's optional `vectorscopeSettings` capability, and positive owner proof.
+The default remains off; older engines and guests see no new card. The factory
+never enters ordinary chat or @ menus. Model choices use the existing picker,
+include local providers without requiring GitHub, and retain unavailable saved
+choices rather than silently selecting another model.
+
+The card saves only its three global fields in one patch. It waits for running
+work confirmation, verifies the returned fields, retains failed drafts, and
+supports discard/default reset and managed locks. Source review found that the
+shared legacy owner heuristic accepted HTTP errors; the new card now requires
+HTTP 200 with a valid workflow list. A retained owner result is also bound to its
+captured SDK instance and rejected while the next check loads. Switching servers
+unmounts the draft, and disposed confirmation callbacks cannot submit it. Shared
+legacy ownership behavior remains unchanged.
+
+Factory acceptance also covers cancellation before admission and while a real
+fake-provider request is active, with no extra finalizer. Bound reviews now refuse
+invalid/unchecked StructuredOutput at retry exhaustion instead of keeping it;
+retryCount remains zero. Unbound sessions retain their previous behavior. The
+actual factory output file passes 5 cases/22 assertions; legacy structured-output
+validation passes 29/82. The actual Solid browser-conditions resource regression
+passes 1/9 and proves a delayed owner-to-guest transition cannot reuse retained
+proof.
+
+Root's generation of client, SDK and public config schema passes. Core, engine,
+App and the explicitly included browser-spec types pass, as do settings data,
+capability fallback, actual capability HTTP, factory cancellation and pipeline-pin
+checks. The final App/server-proof checks are batch 039. Production pin:
+`de31596795175ed3`. The nine real Playwright settings cases remain **pending CI
+runtime**; their presence/typecheck is not a browser pass. VS-09 remains qualified
+on that evidence until those cases and the final phase review pass.
+
+The existing `test.yml` workflow includes the new spec in its e2e job. A manual
+`production_benchmark=true` dispatch also records the same three navigation flows
+three times for comparison with source `693e86d042`. The coordinator owns push,
+CI dispatch, artifact verification and interpretation. No Vector app/server was
+started or restarted locally. No full-workflow, public parity, performance,
+transport/privacy certification or release-readiness claim is made.

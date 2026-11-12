@@ -37,6 +37,7 @@ describe("engine capabilities", () => {
     const parsed = parseCapabilities({
       backgroundSubagents: true,
       sessionStop: true,
+      vectorscopeSettings: true,
       taskPromote: "true",
       taskResume: 1,
       workflows: false,
@@ -44,6 +45,7 @@ describe("engine capabilities", () => {
     })
     expect(parsed.backgroundSubagents).toBe(true)
     expect(parsed.sessionStop).toBe(true)
+    expect(parsed.vectorscopeSettings).toBe(true)
     expect(parsed.taskPromote).toBe(false)
     expect(parsed.taskResume).toBe(false)
     expect(parsed.workflows).toBe(false)

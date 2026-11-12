@@ -40,6 +40,7 @@
     "./regression/isolated-subagent.spec.ts",
     "./regression/stop-helpers.spec.ts",
     "./regression/subagent-limits.spec.ts",
+    "./regression/vectorscope-settings.spec.ts",
     "./regression/workflow-permission.spec.ts",
     "./regression/workflow-progress.spec.ts",
     "./utils/**/*.ts"

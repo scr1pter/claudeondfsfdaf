@@ -1343,6 +1343,39 @@ describe("Review.run", () => {
   )
 
   it.instance(
+    "VectorScope service cancellation stops admission and its active factory without a finalizer",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const status = yield* SessionStatus.Service
+        const alreadyStopped = new AbortController()
+        alreadyStopped.abort()
+        const scope = {
+          identity: VECTORSCOPE_AGENT,
+          instructionsFromContext: true as const,
+          context: { instructions: "PINNED_BASE_INSTRUCTIONS_MARKER" },
+        } as const
+        const stopped = yield* Review.run(input(directory, { ...scope, stopSignal: alreadyStopped.signal }))
+        expect(yield* modelRequests(llm)).toHaveLength(0)
+        expect(stopped.unreviewed).toEqual(["src/list.ts"])
+        const controller = new AbortController()
+        yield* llm.pushMatch(REVIEW, reply().hang())
+        const running = yield* Review.run(input(directory, { ...scope, stopSignal: controller.signal })).pipe(
+          Effect.forkChild,
+        )
+        yield* llm.wait(1)
+        controller.abort()
+        const outcome = yield* Fiber.join(running)
+        expect((yield* status.list()).size).toBe(0)
+        expect(outcome.partial).toBe("timeout")
+        expect(outcome.unreviewed).toEqual(["src/list.ts"])
+        expect(yield* modelRequests(llm)).toHaveLength(1)
+        expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
     "a cloud stop denies an initial request without starting a specialist or finalizer",
     () =>
       Effect.gen(function* () {

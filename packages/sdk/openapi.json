@@ -35051,6 +35051,9 @@
           "experimental": {
             "type": "object",
             "properties": {
+              "vectorscope": {
+                "type": "boolean"
+              },
               "disable_paste_summary": {
                 "type": "boolean"
               },
@@ -35680,6 +35683,9 @@
           "experimental": {
             "type": "object",
             "properties": {
+              "vectorscope": {
+                "type": "boolean"
+              },
               "disable_paste_summary": {
                 "type": "boolean"
               },
@@ -36240,6 +36246,9 @@
             "type": "boolean"
           },
           "backgroundShells": {
+            "type": "boolean"
+          },
+          "vectorscopeSettings": {
             "type": "boolean"
           }
         },

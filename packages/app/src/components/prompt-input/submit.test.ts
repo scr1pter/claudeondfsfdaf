@@ -1992,6 +1992,7 @@ describe("the abort scope", () => {
     taskIsolation: true,
     workflows: true,
     backgroundShells: true,
+    vectorscopeSettings: false,
   })
   const stopper = (input: {
     scope: "turn" | "all"

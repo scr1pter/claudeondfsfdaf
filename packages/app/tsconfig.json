@@ -21,6 +21,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "package.json"],
+  "include": ["src", "package.json", "test-browser/vectorscope-owner.test.ts"],
   "exclude": ["dist", "ts-dist"]
 }

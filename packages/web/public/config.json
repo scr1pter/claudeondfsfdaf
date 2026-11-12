@@ -1854,6 +1854,10 @@
         "experimental": {
           "type": "object",
           "properties": {
+            "vectorscope": {
+              "type": "boolean",
+              "description": "Enable the staged VectorScope service settings UI; off by default."
+            },
             "disable_paste_summary": {
               "type": "boolean"
             },

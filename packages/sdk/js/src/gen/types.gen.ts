@@ -2452,6 +2452,7 @@ export type ConfigWithLocks = {
   local?: LocalConfig
   research?: ResearchConfig
   experimental?: {
+    vectorscope?: boolean
     disable_paste_summary?: boolean
     batch_tool?: boolean
     openTelemetry?: boolean
@@ -2648,6 +2649,7 @@ export type Config = {
   local?: LocalConfig
   research?: ResearchConfig
   experimental?: {
+    vectorscope?: boolean
     disable_paste_summary?: boolean
     batch_tool?: boolean
     openTelemetry?: boolean
@@ -2830,6 +2832,7 @@ export type ExperimentalCapabilities = {
   taskIsolation?: boolean
   workflows?: boolean
   backgroundShells?: boolean
+  vectorscopeSettings?: boolean
 }
 
 export type ToolListItem = {

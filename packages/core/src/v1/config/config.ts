@@ -299,6 +299,9 @@ export const Info = Schema.Struct({
   }),
   experimental: Schema.optional(
     Schema.Struct({
+      vectorscope: Schema.optional(Schema.Boolean).annotate({
+        description: "Enable the staged VectorScope service settings UI; off by default.",
+      }),
       disable_paste_summary: Schema.optional(Schema.Boolean),
       batch_tool: Schema.optional(Schema.Boolean).annotate({ description: "Enable the batch tool" }),
       openTelemetry: Schema.optional(Schema.Boolean).annotate({
