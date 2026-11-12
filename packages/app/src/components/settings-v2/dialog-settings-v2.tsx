@@ -89,7 +89,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "about") return <SettingsAboutV2 />
     if (item === "trust")
       return <SettingsProjectTrustV2 repositoryPath={props.repositoryPath} sessionDirectory={props.sessionDirectory} />
-    if (item === "subagents") return <SettingsSubagentsV2 />
+    if (item === "subagents") return <SettingsSubagentsV2 directory={props.sessionDirectory ?? props.repositoryPath} />
     if (item === "memory")
       return <SettingsMemoryV2 repositoryPath={props.repositoryPath} sessionDirectory={props.sessionDirectory} />
     if (item === "local") return <SettingsLocalV2 />
