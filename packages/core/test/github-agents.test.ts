@@ -268,8 +268,11 @@ describe("credentials", () => {
         "VECTOR_RUN_ID",
         "VECTOR_BUNDLE_DIR",
         "VECTOR_SECRET_CHANNEL",
+        "VECTOR_GITHUB_SESSION_PROOF",
+        "VECTOR_GITHUB_TOOL_PID_NAMESPACE",
         "HOME",
         "RUNNER_TEMP",
+        "TMPDIR",
       ].sort(),
     )
     expect(new Set(allow).size).toBe(allow.length)
