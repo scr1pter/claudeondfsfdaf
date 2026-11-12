@@ -256,11 +256,9 @@ export async function probeToolProcesses() {
                 )
                   throw new Error("The actual Read tool did not enforce its non-bypassable kernel path refusal")
               }
-              for (const tool of [
-                globber.execute({ path: "/proc", pattern: "*" }, context),
-                searcher.execute({ path: "/proc", pattern: "." }, context),
-              ]) {
-                const outcome = yield* tool.pipe(Effect.exit)
+              const globOutcome = yield* globber.execute({ path: "/proc", pattern: "*" }, context).pipe(Effect.exit)
+              const grepOutcome = yield* searcher.execute({ path: "/proc", pattern: "." }, context).pipe(Effect.exit)
+              for (const outcome of [globOutcome, grepOutcome]) {
                 if (
                   !Exit.isFailure(outcome) ||
                   !Cause.pretty(outcome.cause).includes("GitHub agent tools cannot access kernel process files.")

@@ -32,6 +32,8 @@ test.skipIf(process.platform !== "linux")(
       const chain = path.join(root, "ordinary-chain")
       await fs.symlink("/proc/self/fd/3", alias)
       await fs.symlink(alias, chain)
+      const parent = path.join(root, "parent-link")
+      await fs.symlink("/proc/self", parent)
       for (const target of [
         "/proc/self/fd/3",
         "/proc/1/task/1/mem",
@@ -40,6 +42,7 @@ test.skipIf(process.platform !== "linux")(
         "/dev/stdout",
         alias,
         chain,
+        parent + "/../1/mem",
       ])
         expect(() => ProcessIsolation.assertKernelPath(target)).toThrow("kernel process files")
       expect(() => ProcessIsolation.assertKernelPath(path.join(root, "normal", "new-file.txt"))).not.toThrow()

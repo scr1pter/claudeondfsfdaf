@@ -88,11 +88,17 @@ export function assertToolPath(target: string) {
 }
 
 export function assertKernelPath(target: string) {
-  let pending = path.resolve(target).split("/").filter(Boolean)
+  let pending = (path.isAbsolute(target) ? target : process.cwd() + "/" + target).split("/").filter(Boolean)
   let current = "/"
   let links = 0
   while (pending.length) {
-    const candidate = path.join(current, pending.shift()!)
+    const part = pending.shift()!
+    if (part === ".") continue
+    if (part === "..") {
+      current = path.dirname(current)
+      continue
+    }
+    const candidate = path.join(current, part)
     if (KERNEL.some((prefix) => candidate === prefix || candidate.startsWith(prefix + "/")))
       throw new Error("GitHub agent tools cannot access kernel process files.")
     const info = fs.lstatSync(candidate, { throwIfNoEntry: false })
@@ -101,8 +107,9 @@ export function assertKernelPath(target: string) {
       continue
     }
     if (++links > 40) throw new Error("GitHub agent tools cannot resolve this file safely.")
+    const link = fs.readlinkSync(candidate)
     pending = [
-      ...path.resolve(path.dirname(candidate), fs.readlinkSync(candidate)).split("/").filter(Boolean),
+      ...(path.isAbsolute(link) ? link : path.dirname(candidate) + "/" + link).split("/").filter(Boolean),
       ...pending,
     ]
     current = "/"
