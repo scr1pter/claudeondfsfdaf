@@ -3,6 +3,7 @@
 import { $ } from "bun"
 import fs from "fs"
 import { prepareGitLab } from "../../../script/prepare-gitlab"
+import { linuxIsolationBuildPlugin, linuxIsolationCIMode } from "../../../script/linux-isolation-asset"
 import path from "path"
 import { fileURLToPath } from "url"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
@@ -26,6 +27,7 @@ const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
+const isolation = await linuxIsolationBuildPlugin(linuxIsolationCIMode(process.argv, process.env.GITHUB_ACTIONS))
 const sourceRevision = process.env.VECTOR_SOURCE_REVISION ?? (await $`git rev-parse HEAD`.text()).trim()
 if (!/^[a-f0-9]{40}$/.test(sourceRevision))
   throw new Error("VECTOR_SOURCE_REVISION must be a full lowercase Git revision")
@@ -206,7 +208,7 @@ for (const item of targets) {
   await Bun.build({
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
-    plugins: [plugin],
+    plugins: [plugin, isolation],
     external: ["node-gyp"],
     format: "esm",
     minify: true,
