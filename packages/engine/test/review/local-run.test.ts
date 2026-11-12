@@ -4,14 +4,22 @@ import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { eq, sql } from "drizzle-orm"
-import { Deferred, Effect, Exit, Option, Result, Schema, Scope } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Result, Schema, Scope } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Database } from "@vectordevai/core/database/database"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { ReviewStore } from "@vectordevai/core/brain/review-store"
-import { BrainEntryTable, BrainReviewMemoryStateTable, BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
+import { ReviewWitness } from "@vectordevai/core/brain/review-witness"
+import {
+  BrainEntryTable,
+  BrainEvidenceTable,
+  BrainReviewMemorySourceTable,
+  BrainReviewMemoryStateTable,
+  BrainReviewMemoryTable,
+} from "@vectordevai/core/brain/sql"
+import { ReviewRequestTable } from "@vectordevai/core/review/request.sql"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { BackgroundJob as CoreBackgroundJob } from "@vectordevai/core/background-job"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
@@ -21,6 +29,7 @@ import { SessionProjector } from "@vectordevai/core/session/projector"
 import { selectFindings } from "@vectordevai/core/review/select"
 import type { Finding, ReviewOutcome } from "@vectordevai/core/review/types"
 import { ReviewRun } from "@vectordevai/schema/review-run"
+import { SessionID } from "@vectordevai/schema/session-id"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { ReviewLifecycle } from "@/review/lifecycle"
 import { BackgroundJob } from "@/background/job"
@@ -28,6 +37,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
 import { ReviewLocalRun } from "@/review/local-run"
+import { ReviewMemoryScope } from "@/review/memory-scope"
+import { ReviewMemoryAuthority } from "@/review/memory-authority"
 import type { ReviewLocalAdmission } from "@/review/local-admission"
 import type { RunInput } from "@/review/run"
 import { Session } from "@/session/session"
@@ -85,6 +96,20 @@ const resolveModel = () =>
     costKind: "local" as const,
   })
 
+// Explicit owner-enabled Core fixture; the runner must independently verify the
+// actual saved Main binding and register only its first attached winner.
+const enableMemory = Effect.fnUntraced(function* (repo: Effect.Success<typeof fixture>) {
+  const brain = yield* BrainDatabase.Service
+  const physical = yield* ReviewMemoryScope.git(repo.source.worktree, repo.source.directory)
+  yield* brain.db.transaction((tx) =>
+    Effect.gen(function* () {
+      yield* ReviewStore.register(tx, repo.parent.projectID, physical.binding.scope)
+      yield* ReviewStore.advance(tx, repo.parent.projectID, physical.binding.scope, true)
+    }),
+  )
+  return physical.binding.scope
+})
+
 function outcome(input: RunInput, partial = false): ReviewOutcome {
   const finding: Finding = {
     id: "finding_fixture",
@@ -140,6 +165,302 @@ function outcome(input: RunInput, partial = false): ReviewOutcome {
 }
 
 describe("durable server-owned local review runs", () => {
+  it.instance(
+    "an enabled first winner registers both genuine witnesses before the runner and exact retry adds nothing",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* fixture
+        const scope = yield* enableMemory(repo)
+        const brain = yield* BrainDatabase.Service
+        const requests = yield* ReviewRequestStore.Service
+        const jobs = yield* BackgroundJob.Service
+        let calls = 0
+        const observations: Exit.Exit<{ current: boolean; evidence: number }, unknown>[] = []
+        const runs = yield* ReviewLocalRun.make({
+          resolveModel,
+          runReview: (input: RunInput) =>
+            Effect.gen(function* () {
+              calls++
+              observations.push(
+                yield* Effect.exit(
+                  Effect.gen(function* () {
+                    if (!input.parentID) throw new Error("The real runner has no hidden parent")
+                    const snapshot = yield* requests.sourceSnapshot(repo.parent.id, SessionID.make(input.parentID))
+                    const witnesses = snapshot?.sourceBinding?.witnesses
+                    const proof = witnesses
+                      ? ReviewWitness.proof({
+                          repository: repo.parent.projectID,
+                          scope,
+                          parentID: repo.parent.id,
+                          reviewID: input.parentID,
+                          head: repo.request.target.head,
+                          witnesses,
+                        })
+                      : undefined
+                    if (!proof) throw new Error("The first runner has no saved Main pair")
+                    return {
+                      current: yield* ReviewWitness.current(brain.db, proof),
+                      evidence: (yield* brain.db.select().from(BrainEvidenceTable)).length,
+                    }
+                  }),
+                ),
+              )
+              return outcome(input)
+            }),
+        })
+        const first = yield* runs.start(repo.request, repo.source)
+        yield* jobs.wait({ id: first.runID })
+        const sources = yield* brain.db.select().from(BrainReviewMemorySourceTable)
+        const markers = yield* brain.db.select().from(BrainEntryTable)
+        expect(sources).toHaveLength(1)
+        expect(markers).toHaveLength(2)
+        expect((yield* runs.start(repo.request, repo.source)).runID).toBe(first.runID)
+        expect(calls).toBe(1)
+        expect(observations).toHaveLength(1)
+        for (const observed of observations) {
+          if (Exit.isFailure(observed)) throw new Error(Cause.pretty(observed.cause))
+          expect(observed.value).toEqual({ current: true, evidence: 2 })
+        }
+        expect(yield* brain.db.select().from(BrainReviewMemorySourceTable)).toEqual(sources)
+        expect(yield* brain.db.select().from(BrainEntryTable)).toEqual(markers)
+      }),
+    options,
+  )
+
+  it.instance(
+    "default-off runs cannot gain witnesses on later enable while a fresh review gets a new pair",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* fixture
+        const brain = yield* BrainDatabase.Service
+        const requests = yield* ReviewRequestStore.Service
+        const jobs = yield* BackgroundJob.Service
+        let calls = 0
+        const runs = yield* ReviewLocalRun.make({
+          resolveModel,
+          runReview: (input: RunInput) => {
+            calls++
+            return Effect.succeed(outcome(input))
+          },
+        })
+        const first = yield* runs.start(repo.request, repo.source)
+        yield* jobs.wait({ id: first.runID })
+        const original = yield* requests.sourceSnapshot(repo.parent.id, first.runID)
+        if (!original?.sourceBinding?.witnesses) throw new Error("Missing original immutable Main pair")
+        expect(yield* brain.db.select().from(BrainReviewMemorySourceTable)).toEqual([])
+        expect(yield* brain.db.select().from(BrainEntryTable)).toEqual([])
+        const scope = yield* enableMemory(repo)
+        expect((yield* runs.start(repo.request, repo.source)).runID).toBe(first.runID)
+        expect(yield* brain.db.select().from(BrainReviewMemorySourceTable)).toEqual([])
+        const fresh = yield* runs.start({ ...repo.request, requestID: "request_memory_fresh" }, repo.source)
+        yield* jobs.wait({ id: fresh.runID })
+        expect(fresh.runID).not.toBe(first.runID)
+        const stored = yield* brain.db.select().from(BrainReviewMemorySourceTable)
+        expect(stored).toHaveLength(1)
+        expect(stored[0].review_session_id).toBe(fresh.runID)
+        expect(stored[0].parent_marker_id).not.toBe(original.sourceBinding.witnesses.parent)
+        const old = ReviewWitness.proof({
+          repository: repo.parent.projectID,
+          scope,
+          parentID: repo.parent.id,
+          reviewID: first.runID,
+          head: repo.request.target.head,
+          witnesses: original.sourceBinding.witnesses,
+        })
+        if (!old) throw new Error("Missing old private proof")
+        expect(yield* ReviewWitness.current(brain.db, old)).toBe(false)
+        expect(calls).toBe(2)
+      }),
+    options,
+  )
+
+  it.instance(
+    "a required real SQLite registration failure settles its fixed request before any runner or retry takeover",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* fixture
+        yield* enableMemory(repo)
+        const brain = yield* BrainDatabase.Service
+        const database = yield* Database.Service
+        let calls = 0
+        const runs = yield* ReviewLocalRun.make({
+          resolveModel,
+          runReview: (input: RunInput) => {
+            calls++
+            return Effect.succeed(outcome(input))
+          },
+        })
+        yield* brain.db.run(
+          sql`CREATE TRIGGER fixture_registration_failure BEFORE INSERT ON brain_review_memory_source BEGIN SELECT RAISE(ABORT, 'fixture_registration_failure'); END`,
+        )
+        const failed = yield* runs.start(repo.request, repo.source).pipe(Effect.result)
+        expect(Result.isFailure(failed) && failed.failure.code).toBe("unavailable")
+        expect(calls).toBe(0)
+        expect(yield* brain.db.select().from(BrainReviewMemorySourceTable)).toEqual([])
+        expect(yield* brain.db.select().from(BrainEntryTable)).toEqual([])
+        const before = yield* database.db
+          .select()
+          .from(ReviewRequestTable)
+          .where(eq(ReviewRequestTable.parent_session_id, repo.parent.id))
+        expect(before).toHaveLength(1)
+        expect(before[0].phase).toBe("settled")
+        yield* brain.db.run(sql`DROP TRIGGER fixture_registration_failure`)
+        yield* runs.start(repo.request, repo.source).pipe(Effect.result)
+        expect(calls).toBe(0)
+        expect(
+          yield* database.db
+            .select()
+            .from(ReviewRequestTable)
+            .where(eq(ReviewRequestTable.parent_session_id, repo.parent.id)),
+        ).toEqual(before)
+        expect(yield* brain.db.select().from(BrainReviewMemorySourceTable)).toEqual([])
+      }),
+    options,
+  )
+
+  it.instance(
+    "actual session deletion retires a registered zero-content source and removes both markers",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* fixture
+        yield* enableMemory(repo)
+        const brain = yield* BrainDatabase.Service
+        const jobs = yield* BackgroundJob.Service
+        const sessions = yield* Session.Service
+        const database = yield* Database.Service
+        const runs = yield* ReviewLocalRun.make({
+          resolveModel,
+          runReview: (input: RunInput) => Effect.succeed(outcome(input)),
+        })
+        const started = yield* runs.start(repo.request, repo.source)
+        yield* jobs.wait({ id: started.runID })
+        expect(yield* brain.db.select().from(BrainReviewMemoryTable)).toEqual([])
+        expect(yield* brain.db.select().from(BrainEntryTable)).toHaveLength(2)
+        yield* sessions.remove(repo.parent.id)
+        expect(yield* brain.db.select().from(BrainEntryTable)).toEqual([])
+        expect((yield* brain.db.select().from(BrainReviewMemorySourceTable))[0].state).toBe("retired")
+        expect(
+          yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, repo.parent.id)).get(),
+        ).toBeUndefined()
+      }),
+    options,
+  )
+
+  it.instance(
+    "closing after the Brain commit still prevents the first runner and leaves no usable partial Main source",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* fixture
+        const scope = yield* enableMemory(repo)
+        const brain = yield* BrainDatabase.Service
+        const database = yield* Database.Service
+        const requests = yield* ReviewRequestStore.Service
+        const lifecycle = yield* ReviewLifecycle.Service
+        const closing = BackgroundJobStore.open()
+        const closingNonce = randomUUID()
+        yield* Effect.addFinalizer(() =>
+          requests
+            .endDelete(repo.parent.id, closingNonce)
+            .pipe(Effect.ensuring(Effect.sync(() => BackgroundJobStore.close(closing)))),
+        )
+        let closed = false
+        let calls = 0
+        const readyObservations: Exit.Exit<boolean, unknown>[] = []
+        const observed: ReviewRequestStore.Interface = {
+          ...requests,
+          ready: (identity) =>
+            Effect.gen(function* () {
+              const observed = yield* Effect.exit(
+                Effect.gen(function* () {
+                  if (!(yield* requests.ready(identity))) return false
+                  const registered = yield* brain.db
+                    .select()
+                    .from(BrainReviewMemorySourceTable)
+                    .where(eq(BrainReviewMemorySourceTable.review_session_id, identity.runID))
+                    .get()
+                  if (registered && !closed) {
+                    closed = true
+                    // Forward actual closing; never replace the real registration.
+                    yield* requests.beginDelete({
+                      sessionID: repo.parent.id,
+                      ownerNonce: closingNonce,
+                      owner: closing,
+                      localNonces: new Set([identity.ownerNonce]),
+                      insideReview: false,
+                    })
+                  }
+                  return yield* requests.ready(identity)
+                }),
+              )
+              readyObservations.push(observed)
+              return Exit.isSuccess(observed) ? observed.value : false
+            }),
+        }
+        const runs = yield* ReviewLocalRun.make({
+          resolveModel,
+          runReview: (input: RunInput) => {
+            calls++
+            return Effect.succeed(outcome(input))
+          },
+        }).pipe(Effect.provideService(ReviewRequestStore.Service, observed))
+        const failed = yield* runs.start(repo.request, repo.source).pipe(Effect.result)
+        expect(Result.isFailure(failed) && failed.failure.code).toBe("unavailable")
+        expect(closed).toBe(true)
+        expect(calls).toBe(0)
+        expect(readyObservations.length).toBeGreaterThan(0)
+        for (const observed of readyObservations)
+          if (Exit.isFailure(observed)) throw new Error(Cause.pretty(observed.cause))
+        expect(readyObservations.some((observed) => Exit.isSuccess(observed) && !observed.value)).toBe(true)
+        const partial = (yield* brain.db.select().from(BrainReviewMemorySourceTable))[0]
+        if (!partial) throw new Error("The real Brain registration did not commit")
+        expect(partial.state).toBe("active")
+        const retained = yield* database.db
+          .select()
+          .from(ReviewRequestTable)
+          .where(eq(ReviewRequestTable.parent_session_id, repo.parent.id))
+          .get()
+        expect(retained?.phase).toBe("settled")
+        const authority = ReviewMemoryAuthority.make({
+          database: database.db,
+          requests,
+          lifecycle,
+          settings: {
+            trust: () =>
+              Effect.succeed({
+                workspace: repo.directory,
+                fingerprint: "partial-source-fixture",
+                trusted: true,
+                settings: false,
+                ignored: false,
+              }),
+          },
+        })
+        let admitted = 0
+        const read = () =>
+          authority.source(
+            {
+              repository: repo.parent.projectID,
+              scope,
+              parentID: repo.parent.id,
+              reviewID: partial.review_session_id,
+              head: repo.request.target.head,
+            },
+            () =>
+              Effect.sync(() => {
+                admitted++
+                return { ok: true as const, value: true }
+              }),
+          )
+        expect(yield* read()).toEqual({ ok: false, reason: "source-unavailable" })
+        yield* requests.endDelete(repo.parent.id, closingNonce)
+        // Even after closing ends, the failed setup has no valid settled artifact.
+        expect(yield* read()).toEqual({ ok: false, reason: "source-unavailable" })
+        expect(admitted).toBe(0)
+        expect(calls).toBe(0)
+      }),
+    options,
+  )
+
   it.instance(
     "survives request disconnect, joins exact retries, and reloads the placed result without another review",
     () =>
@@ -528,6 +849,7 @@ describe("durable server-owned local review runs", () => {
         const database = yield* Database.Service
         const brain = yield* BrainDatabase.Service
         const jobs = yield* BackgroundJob.Service
+        const requests = yield* ReviewRequestStore.Service
         const original = yield* fixture
         const snapshot = () =>
           Effect.gen(function* () {
@@ -553,20 +875,24 @@ describe("durable server-owned local review runs", () => {
           const started = yield* runs.start(repo.request, repo.source)
           yield* jobs.wait({ id: started.runID })
           expect((yield* runs.get(repo.parent.id, started.runID)).status).toBe("completed")
+          const retained = yield* requests.sourceSnapshot(repo.parent.id, started.runID)
+          const physical = retained?.sourceBinding?.scope
+          if (!physical) throw new Error("The real review did not retain its physical admission binding")
           const repository = repo.parent.projectID
           const reviewEntry = `source-${started.runID}`
           const ownerEntry = `owner-${started.runID}`
           const ordinaryEntry = `ordinary-${started.runID}`
           yield* brain.db.transaction((tx) =>
             Effect.gen(function* () {
-              yield* ReviewStore.register(tx, repository)
-              yield* ReviewStore.advance(tx, repository, true)
+              yield* ReviewStore.register(tx, repository, physical)
+              yield* ReviewStore.advance(tx, repository, physical, true)
               yield* tx
                 .insert(BrainReviewMemoryTable)
                 .values([
                   {
                     id: reviewEntry,
                     repository_id: repository,
+                    scope_id: physical,
                     kind: "outcome",
                     status: "active",
                     visibility: "repository",
@@ -588,6 +914,7 @@ describe("durable server-owned local review runs", () => {
                   {
                     id: ownerEntry,
                     repository_id: repository,
+                    scope_id: physical,
                     kind: "preference",
                     status: "active",
                     visibility: "repository",

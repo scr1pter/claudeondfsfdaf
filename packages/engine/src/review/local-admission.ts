@@ -8,6 +8,8 @@ import type { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { TRUNCATION_DIR } from "@/tool/truncation-dir"
 import { readAuthority } from "./read-authority"
 import type { ReviewService } from "./service"
+import { ReviewMemoryScope } from "./memory-scope"
+import type { ReviewSourceBinding } from "@vectordevai/core/review/source-binding"
 import { ReviewGit } from "./git"
 
 export class Refused extends Schema.TaggedErrorClass<Refused>()("ReviewLocalAdmission.Refused", {
@@ -28,6 +30,7 @@ export interface Admitted {
   request: ReviewRun.Start
   invocation: ReviewService.Input
   placement: ReadOnlyGit.Metadata
+  sourceBinding?: ReviewSourceBinding.Info
 }
 
 export const prepare = Effect.fn("ReviewLocalAdmission.prepare")(function* (input: unknown, source: Source) {
@@ -81,6 +84,24 @@ export const prepare = Effect.fn("ReviewLocalAdmission.prepare")(function* (inpu
   const placement = yield* ReviewGit.metadata(root).pipe(
     Effect.mapError((error) => new Refused({ code: "placement", message: error.message })),
   )
+  // Safe review need not acquire memory authority. Missing stable identity
+  // leaves this run explicitly unbound; no future retry may adopt it.
+  const captured = placement.commonIdentity
+    ? yield* ReviewMemoryScope.git(root, directory).pipe(
+        Effect.mapError((error) => new Refused({ code: "placement", message: error.message })),
+      )
+    : undefined
+  if (
+    captured &&
+    (captured.metadata.head !== placement.head ||
+      captured.binding.commonIdentity.dev !== placement.commonIdentity?.dev ||
+      captured.binding.commonIdentity.ino !== placement.commonIdentity?.ino ||
+      captured.binding.commonIdentity.birth !== placement.commonIdentity?.birth)
+  )
+    return yield* new Refused({
+      code: "placement",
+      message: "The review's physical Git binding changed during admission.",
+    })
   if (placement.directory !== root || FSUtil.realpath(worktree) !== root)
     return yield* new Refused({ code: "placement", message: "The conversation's Git worktree changed." })
   if (placement.head !== request.target.head)
@@ -97,7 +118,12 @@ export const prepare = Effect.fn("ReviewLocalAdmission.prepare")(function* (inpu
     readDenies: authority.absolute,
     ...(request.maxCost === undefined ? {} : { maxCost: request.maxCost }),
   }
-  return { request, invocation, placement } satisfies Admitted
+  return {
+    request,
+    invocation,
+    placement: captured?.metadata ?? placement,
+    ...(captured ? { sourceBinding: captured.binding } : {}),
+  } satisfies Admitted
 })
 
 export * as ReviewLocalAdmission from "./local-admission"

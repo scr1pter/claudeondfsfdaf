@@ -5,7 +5,7 @@ import { Cause, Context, Effect, Layer, Schema } from "effect"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { BrainPaths } from "@vectordevai/core/brain/paths"
 import { ReviewStore } from "@vectordevai/core/brain/review-store"
-import { BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
+import { BrainReviewMemorySourceTable, BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Project } from "@vectordevai/core/project"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
@@ -50,12 +50,27 @@ export function make(requests: ReviewRequestStore.Interface, brain: BrainDatabas
                 )
                 .limit(201)
                 .all()
-              if (rows.length > 200)
+              const sources = yield* tx
+                .selectDistinct({ repository: BrainReviewMemorySourceTable.repository_id })
+                .from(BrainReviewMemorySourceTable)
+                .where(
+                  or(
+                    eq(BrainReviewMemorySourceTable.parent_session_id, sessionID),
+                    eq(BrainReviewMemorySourceTable.review_session_id, sessionID),
+                  ),
+                )
+                .limit(201)
+                .all()
+              const repositories = new Set([
+                repository,
+                ...rows.map((row) => row.repository),
+                ...sources.map((row) => row.repository),
+              ])
+              if (rows.length > 200 || sources.length > 200 || repositories.size > 200)
                 return yield* new ReviewRequestStore.Refused({
                   code: "unavailable",
                   message: "The review deletion namespace is unavailable.",
                 })
-              const repositories = new Set([repository, ...rows.map((row) => row.repository)])
               for (const selected of repositories) yield* ReviewStore.eraseSession(tx, selected, sessionID)
             }),
           )

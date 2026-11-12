@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test"
+import { $ } from "bun"
 import { randomUUID } from "node:crypto"
 import path from "node:path"
+import fs from "node:fs/promises"
 import { eq, sql } from "drizzle-orm"
 import { Deferred, Effect, Fiber, Function, Layer, Result } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
@@ -13,6 +15,7 @@ import {
   BrainEntryTable,
   BrainEventTable,
   BrainReviewMemoryStateTable,
+  BrainReviewMemoryScopeStateTable,
   BrainReviewMemoryTable,
   BrainTombstoneTable,
 } from "@vectordevai/core/brain/sql"
@@ -22,6 +25,7 @@ import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { Project } from "@vectordevai/core/project"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { ReviewSessionFenceTable } from "@vectordevai/core/review/request.sql"
+import { ReviewRequestTable } from "@vectordevai/core/review/request.sql"
 import { reviewVerdict } from "@vectordevai/core/review/verdict"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { EffectFlock } from "@vectordevai/core/util/effect-flock"
@@ -33,6 +37,8 @@ import { ReviewLifecycle } from "@/review/lifecycle"
 import { ReviewLocalRun } from "@/review/local-run"
 import { ReviewMemoryAuthority } from "@/review/memory-authority"
 import { ReviewMemoryErasure } from "@/review/memory-erasure"
+import { ReviewMemoryScope } from "@/review/memory-scope"
+import type { InstanceContext } from "@/project/instance-context"
 import { tmpdir } from "../fixture/fixture"
 import { awaitWithTimeout } from "../lib/effect"
 
@@ -47,7 +53,13 @@ const source = { repository, parentID, reviewID, head: request.target.head }
 const owner = BackgroundJobStore.open()
 afterAll(() => BackgroundJobStore.close(owner))
 const success = () => Effect.succeed({ ok: true as const, value: "authorized" })
-const inspection: ReviewMemory.OwnerRequest = { repository, operation: "inspect", digest: "a".repeat(64), payload: {} }
+const inspection = (setup: Setup): ReviewMemory.OwnerRequest => ({
+  repository,
+  scope: setup.scope,
+  operation: "inspect",
+  digest: "a".repeat(64),
+  payload: {},
+})
 type Setup = {
   db: Database.Interface["db"]
   brain: BrainDatabase.Database
@@ -59,17 +71,26 @@ type Setup = {
   directory: string
   held: { value: boolean }
   ownerNonce: string
+  scope: string
+  source: ReviewMemory.Source & { repository: string; scope: string }
+  instance: InstanceContext
   settle: Effect.Effect<void>
 }
 
 async function run(body: (setup: Setup) => Effect.Effect<void, unknown>) {
-  await using directory = await tmpdir()
+  await using directory = await tmpdir({ git: true })
+  const instance: InstanceContext = {
+    directory: directory.path,
+    worktree: directory.path,
+    project: { id: repository, worktree: directory.path, time: { created: 1, updated: 1 }, sandboxes: [] },
+  }
   await Effect.runPromise(
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const brain = (yield* BrainDatabase.Service).db
       const requests = ReviewRequestStore.make(db)
       const eraser = ReviewMemoryErasure.make(requests, brain)
+      const physical = yield* ReviewMemoryScope.git(directory.path)
       yield* db.run(
         sql`INSERT INTO project (id, worktree, sandboxes, time_created, time_updated) VALUES (${repository}, ${directory.path}, '[]', 1, 1)`,
       )
@@ -101,7 +122,7 @@ async function run(body: (setup: Setup) => Effect.Effect<void, unknown>) {
         })
         .run()
       const identity = { parentID, runID: reviewID, requestID: request.requestID, ownerNonce: randomUUID() }
-      yield* requests.reserve({ ...identity, request, owner })
+      yield* requests.reserve({ ...identity, request, owner, sourceBinding: physical.binding })
       yield* requests.attach(identity)
       yield* requests.begin(identity)
       const held = { value: false }
@@ -151,6 +172,9 @@ async function run(body: (setup: Setup) => Effect.Effect<void, unknown>) {
           directory: directory.path,
           held,
           ownerNonce: identity.ownerNonce,
+          scope: physical.binding.scope,
+          source: { ...source, scope: physical.binding.scope },
+          instance,
           settle,
         })
       }).pipe(
@@ -165,11 +189,7 @@ async function run(body: (setup: Setup) => Effect.Effect<void, unknown>) {
             ),
           ),
         ),
-        Effect.provideService(InstanceRef, {
-          directory: directory.path,
-          worktree: directory.path,
-          project: { id: repository, worktree: directory.path, time: { created: 1, updated: 1 }, sandboxes: [] },
-        }),
+        Effect.provideService(InstanceRef, instance),
       )
     }).pipe(
       Effect.provide(
@@ -186,14 +206,15 @@ async function run(body: (setup: Setup) => Effect.Effect<void, unknown>) {
 const seedMemory = (setup: Setup) =>
   setup.brain.transaction((tx) =>
     Effect.gen(function* () {
-      yield* ReviewStore.register(tx, repository)
-      yield* ReviewStore.advance(tx, repository, true)
+      yield* ReviewStore.register(tx, repository, setup.scope)
+      yield* ReviewStore.advance(tx, repository, setup.scope, true)
       yield* tx
         .insert(BrainReviewMemoryTable)
         .values([
           {
             id: "review-origin",
             repository_id: repository,
+            scope_id: setup.scope,
             kind: "outcome",
             status: "active",
             visibility: "repository",
@@ -213,6 +234,7 @@ const seedMemory = (setup: Setup) =>
           {
             id: "owner-only",
             repository_id: repository,
+            scope_id: setup.scope,
             kind: "preference",
             status: "active",
             visibility: "repository",
@@ -236,6 +258,7 @@ const snapshot = (db: BrainDatabase.Database) =>
     return {
       review: yield* db.select().from(BrainReviewMemoryTable).all(),
       state: yield* db.select().from(BrainReviewMemoryStateTable).all(),
+      scoped: yield* db.select().from(BrainReviewMemoryScopeStateTable).all(),
       witness: yield* db.select().from(BrainTombstoneTable).all(),
       ordinary: yield* db.select().from(BrainEntryTable).all(),
       events: yield* db.select().from(BrainEventTable).all(),
@@ -252,10 +275,78 @@ const authenticated = <A>(effect: Effect.Effect<A>, headers?: HeadersInit) =>
   )
 
 describe("Engine review memory authority and erase-before-delete boundary", () => {
+  test("same-store directories/worktrees preserve exact source provenance while a same-ProjectID clone cannot inherit it", async () => {
+    await run((setup) =>
+      Effect.gen(function* () {
+        const nested = path.join(setup.directory, "nested")
+        yield* Effect.promise(() => fs.mkdir(nested))
+        const child = { ...setup.instance, directory: nested }
+        expect(
+          yield* setup.authority.source(setup.source, success).pipe(Effect.provideService(InstanceRef, child)),
+        ).toEqual({ ok: true, value: "authorized" })
+        const linked = path.join(setup.directory, "linked")
+        yield* Effect.promise(() => $`git worktree add --quiet -b scope-linked ${linked}`.cwd(setup.directory).quiet())
+        const sibling = { ...setup.instance, directory: linked, worktree: linked }
+        expect(
+          yield* setup.authority.source(setup.source, success).pipe(Effect.provideService(InstanceRef, sibling)),
+        ).toEqual({ ok: true, value: "authorized" })
+        const clone = path.join(setup.directory, "clone")
+        yield* Effect.promise(() =>
+          $`git clone --quiet --no-hardlinks ${setup.directory} ${clone}`.cwd(setup.directory).quiet(),
+        )
+        const copied = yield* ReviewMemoryScope.git(clone)
+        const foreign = { ...setup.instance, directory: clone, worktree: clone }
+        expect(copied.binding.scope).not.toBe(setup.scope)
+        expect(
+          yield* authenticated(setup.authority.owner(inspection(setup), success)).pipe(
+            Effect.provideService(InstanceRef, foreign),
+          ),
+        ).toEqual({ ok: false, reason: "authority-unavailable" })
+        expect(
+          yield* setup.authority
+            .source({ ...setup.source, scope: copied.binding.scope }, success)
+            .pipe(Effect.provideService(InstanceRef, foreign)),
+        ).toEqual({ ok: false, reason: "source-unavailable" })
+      }),
+    )
+  })
+
+  test("a replaced store cannot relabel an old artifact, and a missing legacy reservation binding is never adopted", async () => {
+    await run((setup) =>
+      Effect.gen(function* () {
+        const original = path.join(setup.directory, "saved-original-store")
+        const marker = path.join(setup.directory, ".git")
+        yield* Effect.promise(() => fs.rename(marker, original))
+        yield* Effect.promise(() => fs.cp(original, marker, { recursive: true }))
+        yield* Effect.promise(() =>
+          $`git config --local fixture.scopeIdentity replacement`.cwd(setup.directory).quiet(),
+        )
+        const replacement = yield* ReviewMemoryScope.git(setup.directory)
+        expect(replacement.binding.scope).not.toBe(setup.scope)
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
+        expect(yield* setup.authority.source({ ...setup.source, scope: replacement.binding.scope }, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
+        yield* Effect.promise(() => fs.rename(marker, path.join(setup.directory, "saved-replacement-store")))
+        yield* Effect.promise(() => fs.rename(original, marker))
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({ ok: true, value: "authorized" })
+        yield* setup.db.update(ReviewRequestTable).set({ source_binding: null }).run()
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
+      }),
+    )
+  })
+
   test("ambient owner defaults, absent HTTP requests, guests and forwarded requests never grant read-owner authority", async () => {
     await run((setup) =>
       Effect.gen(function* () {
-        const read = setup.authority.owner(inspection, success)
+        const read = setup.authority.owner(inspection(setup), success)
         expect(yield* read).toEqual({ ok: false, reason: "denied" })
         expect(
           yield* read.pipe(Effect.provideService(RequestPrincipal, { kind: "owner", username: "fixture-owner" })),
@@ -279,11 +370,15 @@ describe("Engine review memory authority and erase-before-delete boundary", () =
         ).toEqual({ ok: false, reason: "denied" })
         expect(yield* authenticated(read, { [GUEST_REQUEST_HEADER]: "1" })).toEqual({ ok: false, reason: "denied" })
         expect(yield* authenticated(read)).toEqual({ ok: true, value: "authorized" })
-        expect(yield* authenticated(setup.authority.owner({ ...inspection, repository: "foreign" }, success))).toEqual({
+        expect(
+          yield* authenticated(setup.authority.owner({ ...inspection(setup), repository: "foreign" }, success)),
+        ).toEqual({
           ok: false,
           reason: "authority-unavailable",
         })
-        expect(yield* authenticated(setup.authority.owner({ ...inspection, operation: "approve" }, success))).toEqual({
+        expect(
+          yield* authenticated(setup.authority.owner({ ...inspection(setup), operation: "approve" }, success)),
+        ).toEqual({
           ok: false,
           reason: "authority-unavailable",
         })
@@ -294,30 +389,39 @@ describe("Engine review memory authority and erase-before-delete boundary", () =
   test("actual instance, durable reservation, hidden lineage, trust and retained artifact all constrain source authority", async () => {
     await run((setup) =>
       Effect.gen(function* () {
-        expect(yield* setup.authority.source(source, success)).toEqual({ ok: true, value: "authorized" })
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({ ok: true, value: "authorized" })
         for (const invalid of [
-          { ...source, repository: "foreign" },
-          { ...source, head: "b".repeat(40) },
-          { ...source, reviewID: "ses_missing" },
+          { ...setup.source, repository: "foreign" },
+          { ...setup.source, head: "b".repeat(40) },
+          { ...setup.source, reviewID: "ses_missing" },
         ])
           expect(yield* setup.authority.source(invalid, success)).toEqual({ ok: false, reason: "source-unavailable" })
         setup.held.value = true
-        expect(yield* setup.authority.source(source, success)).toEqual({ ok: false, reason: "source-unavailable" })
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
         setup.held.value = false
         yield* setup.settle
-        expect(yield* setup.authority.source(source, success)).toEqual({ ok: true, value: "authorized" })
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({ ok: true, value: "authorized" })
         yield* setup.db
           .update(SessionTable)
           .set({ directory: path.join(setup.directory, "missing") })
           .where(eq(SessionTable.id, reviewID))
           .run()
-        expect(yield* setup.authority.source(source, success)).toEqual({ ok: false, reason: "source-unavailable" })
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
         yield* setup.db
           .update(SessionTable)
           .set({ directory: setup.directory, internal: "other-helper" })
           .where(eq(SessionTable.id, reviewID))
           .run()
-        expect(yield* setup.authority.source(source, success)).toEqual({ ok: false, reason: "source-unavailable" })
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
         yield* setup.db
           .update(SessionTable)
           .set({
@@ -337,7 +441,10 @@ describe("Engine review memory authority and erase-before-delete boundary", () =
           })
           .where(eq(SessionTable.id, reviewID))
           .run()
-        expect(yield* setup.authority.source(source, success)).toEqual({ ok: false, reason: "source-unavailable" })
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
       }),
     )
   })
@@ -358,7 +465,10 @@ describe("Engine review memory authority and erase-before-delete boundary", () =
             ])
             expect(yield* setup.brain.select().from(BrainEntryTable).all()).toEqual(before.ordinary)
             expect(yield* BrainRevocation.revision(setup.brain, repository)).toBeGreaterThan(before.revocation)
-            expect(yield* setup.authority.source(source, success)).toEqual({ ok: false, reason: "source-unavailable" })
+            expect(yield* setup.authority.source(setup.source, success)).toEqual({
+              ok: false,
+              reason: "source-unavailable",
+            })
             yield* setup.db.delete(SessionTable).where(eq(SessionTable.id, parentID)).run()
           }),
         )
@@ -465,7 +575,7 @@ describe("Engine review memory authority and erase-before-delete boundary", () =
           ),
         )
         const reader = yield* setup.authority
-          .source(source, () =>
+          .source(setup.source, () =>
             Effect.gen(function* () {
               yield* Deferred.succeed(entered, undefined)
               yield* awaitWithTimeout(Deferred.await(release), "Source callback release was not signalled").pipe(
@@ -499,7 +609,10 @@ describe("Engine review memory authority and erase-before-delete boundary", () =
           Deferred.await(deleting),
           "Deletion did not acquire its actual flock after the source left",
         )
-        expect(yield* setup.authority.source(source, success)).toEqual({ ok: false, reason: "source-unavailable" })
+        expect(yield* setup.authority.source(setup.source, success)).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
         yield* Deferred.succeed(finish, undefined)
         yield* awaitWithTimeout(Fiber.join(removal), "Deletion did not finish after the body was released")
       }).pipe(Effect.scoped),
