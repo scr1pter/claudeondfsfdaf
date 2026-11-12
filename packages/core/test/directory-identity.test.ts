@@ -350,7 +350,9 @@ async function witnessDirectory() {
   }
 }
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+const unsupportedObserver = (text: string) => text.split(/\r?\n/).some((line) => /^strace:[^\r\n]*seccomp/i.test(line))
 function diagnostic(text: string) {
+  if (unsupportedObserver(text)) return { stage: "strace-filter", class: "Unsupported", code: "SECCOMP_UNAVAILABLE" }
   const fixtures = new Map([
     ["Missing CI fixture inputs", "fixture-input"],
     ["No actual lowered descriptor limit", "fixture-prlimit"],
@@ -466,6 +468,22 @@ test("CI failure diagnostics expose only fixed metadata and never echo stderr pa
   const secret = "PRIVATE_VALUE_THAT_MUST_NEVER_BE_LOGGED"
   expect(JSON.stringify(diagnostic(secret.repeat(100)))).not.toContain(secret)
   expect(diagnostic(secret)).toEqual({ stage: "runtime-fixture", class: "Unknown", code: "Unknown" })
+  for (const message of [
+    "strace: seccomp filter is requested but unavailable",
+    "strace: Seccomp filter is requested but there are no syscalls to filter.  See -e trace to filter syscalls.",
+    "strace: --seccomp-bpf cannot be used without -f/--follow-forks, disabling",
+    "strace: --seccomp-bpf is not enabled because it is not compatible with --syscall-limit",
+    "strace: prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER): Operation not permitted",
+  ]) {
+    expect(unsupportedObserver(message)).toBe(true)
+    expect(diagnostic(message + " " + secret)).toEqual({
+      stage: "strace-filter",
+      class: "Unsupported",
+      code: "SECCOMP_UNAVAILABLE",
+    })
+    expect(unsupportedObserver(`20 | const source = "${message}"`)).toBe(false)
+    expect(JSON.stringify(diagnostic(message + " " + secret))).not.toContain(secret)
+  }
   for (const [message, stage] of [
     ["Missing CI fixture inputs", "fixture-input"],
     ["No actual lowered descriptor limit", "fixture-prlimit"],
@@ -544,7 +562,7 @@ async function run(
     size = 0,
     errorOutput = "",
     errorSize = 0,
-    failure: "timeout" | "stdout-bound" | "stderr-bound" | "spawn" | undefined
+    failure: "timeout" | "stdout-bound" | "stderr-bound" | "spawn" | "observer-unavailable" | undefined
   let release: ((code: number | null) => void) | undefined
   const completion = new Promise<number | null>((resolve) => {
     release = resolve
@@ -600,6 +618,9 @@ async function run(
       errorSize += chunk.length
       if (errorSize > 4096) {
         failure = "stderr-bound"
+        wake?.()
+      } else if (unsupportedObserver(errorOutput)) {
+        failure = "observer-unavailable"
         wake?.()
       }
     })
@@ -736,6 +757,8 @@ for (const name of ["node", "bun"] as const)
         const traced = await run(
           [
             "strace",
+            "--seccomp-bpf",
+            "-f",
             "-ff",
             "-s",
             "64",
@@ -919,6 +942,8 @@ for (const name of ["node", "bun"] as const)
         const result = await run(
           [
             "strace",
+            "--seccomp-bpf",
+            "-f",
             "-ff",
             "-s",
             "96",
