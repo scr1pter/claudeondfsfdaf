@@ -261,7 +261,7 @@ export const REFUSAL_COMMENT = {
   "not-in-plan": "This automation is unavailable for this repository right now.",
   "service-off": "Codium agents are off right now.",
   "source-unavailable": "Vector could not start this repository task.",
-  runner: "Codium runs need GitHub-hosted runners.",
+  runner: "Codium runs need GitHub’s runners.",
   hours: "Agent time for this repository is used up right now.",
   "at-once": "Vector is already running the tasks this repository can start at once; try again when one finishes.",
   scheduled: "This repository has reached its automation limit for today.",

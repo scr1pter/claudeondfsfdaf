@@ -73,3 +73,23 @@ test("owner acceptance retains default-off publication and actual runtime, artif
   expect(app).toContain("https://vectordev.ai/api/cloud-agents/mint")
   expect(app).toContain("https://vectordev.ai/api/cloud-agents/bind")
 })
+
+test("fixed public run refusals name GitHub's runners without Vector capacity promises", async () => {
+  const publisher = await Bun.file(new URL("packages/engine/src/cli/cmd/github.publish.ts", root)).text()
+  const table = publisher.split("export const REFUSAL_COMMENT = {")[1]!.split("} as const")[0]!
+  // Inspect literal copy only; importing the CLI publisher would pull its unrelated engine application graph.
+  const strings = [...table.matchAll(/"(?:[^"\\]|\\.)*"/g)].map((entry) => JSON.parse(entry[0]) as string)
+  expect(strings.length).toBeGreaterThan(10)
+  for (const value of strings) {
+    expect(value).not.toMatch(
+      /\b(?:hosted|compute|cloud hours|cloud capacity|our cloud|exclusive|every PR|every pull request|guaranteed|24\/7|SLA)\b/i,
+    )
+    expect(value).not.toMatch(
+      /vector-(?:10|50|100|200)|\b(?:Plus|Pro|Max|Ultra) plan|dispute|fraud|past_due|payment_failed|[$€£]\s*\d/i,
+    )
+  }
+  expect(strings).toContain("Codium runs need GitHub’s runners.")
+  const api = await Bun.file(new URL("api/_lib/cloud-agents-api.ts", root)).text()
+  expect(api).toContain('new ApiError(403, "RUNNER_NOT_SUPPORTED", "Use one of GitHub’s runners.")')
+  expect(api).not.toContain("GitHub-hosted runner")
+})

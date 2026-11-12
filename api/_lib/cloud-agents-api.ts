@@ -235,7 +235,7 @@ export function createCloudAgentsApi(
     if (Number(body.workflowVersion) < 3)
       throw new ApiError(426, "WORKFLOW_UPDATE_REQUIRED", "Update this repository's Vector workflow.")
     if (identity.runnerEnvironment !== "github-hosted")
-      throw new ApiError(403, "RUNNER_NOT_SUPPORTED", "Use a GitHub-hosted runner.")
+      throw new ApiError(403, "RUNNER_NOT_SUPPORTED", "Use one of GitHub’s runners.")
     const binding = await bindingFor(identity.repositoryId, store)
     if (!binding) throw new ApiError(404, "REPO_NOT_BOUND", "This repository is not connected.")
     await requireUnrevokedAccount(binding.account, fetcher).catch((error: unknown) => {
