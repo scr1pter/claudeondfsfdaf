@@ -45,6 +45,7 @@
     "./regression/vectorscope-local-app.spec.ts",
     "./regression/workflow-permission.spec.ts",
     "./regression/workflow-progress.spec.ts",
-    "./utils/**/*.ts"
+    "./utils/**/*.ts",
+    "./regression/vectorscope-memory.spec.ts"
   ]
 }
