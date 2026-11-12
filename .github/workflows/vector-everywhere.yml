@@ -44,6 +44,7 @@ on:
       - .github/workflows/vector-everywhere.yml
       # The helpers on main that the everywhere code imports.
       - api/_lib/http.ts
+      - api/_lib/abuse.ts
       - api/_lib/persistent-store.ts
       - api/_lib/account.ts
       - api/_lib/cli-token.ts

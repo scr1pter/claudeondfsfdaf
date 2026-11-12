@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto"
-import { readAudit } from "../../../api/_lib/everywhere/audit"
+import { AUDIT_APPEND_SCRIPT, readAudit } from "../../../api/_lib/everywhere/audit"
 import { readConfig, type OfferKey } from "../../../api/_lib/everywhere/config"
 import type { DataKey } from "../../../api/_lib/everywhere/crypto"
 import { eraseEverywhereAccount } from "../../../api/_lib/everywhere/erase"
@@ -15,6 +15,7 @@ import {
   declineJob,
   dispatchJob,
   encodeJobRecord,
+  eraseAccountJobs,
   eraseInstallationJobs,
   expectedBranch,
   jobEraser,
@@ -33,13 +34,20 @@ import {
   startDispatched,
   sweepAccount,
   sweepDue,
+  type JobRecord,
   type JobsContext,
   type NewJob,
   type Readiness,
 } from "../../../api/_lib/everywhere/jobs"
 import { KEEP_MS, everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { ownOfferKeys, verifyOffer } from "../../../api/_lib/everywhere/offer"
-import { everywhereStore, runScript, type Store } from "../../../api/_lib/everywhere/store"
+import {
+  everywhereStore,
+  runScript,
+  storeUnavailable,
+  type Store,
+  type StoreCommand,
+} from "../../../api/_lib/everywhere/store"
 import { TIMING, decodeJob, type Settle } from "../../../packages/schema/src/everywhere"
 import { everywhereEnv } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
@@ -141,6 +149,18 @@ function barrier(inner: Store, key: string, parties: number) {
       }
       return result
     }
+  }
+}
+
+/** A store that fails, as an outage would, the first `times` commands `fails` picks, and passes the rest through. */
+function failing(inner: Store, fails: (command: StoreCommand) => boolean, times = 1): Store {
+  let left = times
+  return async (command) => {
+    if (left > 0 && fails(command)) {
+      left--
+      throw storeUnavailable()
+    }
+    return inner(command)
   }
 }
 
@@ -258,8 +278,8 @@ describe("claims and the version fence", () => {
     expect(JSON.stringify(claim.job)).not.toContain(ALICE)
     expect(JSON.stringify(claim.job)).not.toContain("C0123")
     expect(claim.record).toMatchObject({ state: "claimed", route: "laptop", device: computer })
-    // The queue stays on the record while the job is claimed, so a release can go back to it.
-    expect(claim.record.queueUntil).toBe(job.receivedAt + 60 * 60_000)
+    // A claim is final: the queue the offer would have gone back to is dropped, so nothing can return the job to it.
+    expect(claim.record.queueUntil).toBeUndefined()
 
     fake.clock.advance(10_000)
     const report = await reportJob(ctx(), {
@@ -488,7 +508,7 @@ describe("declines", () => {
     expect(events.sort()).toEqual(["claim", "decline not-mapped", "job-accepted", "job-refused not-mapped", "offer"])
   })
 
-  test("after a claim a busy decline releases the job, which goes back to its queue", async () => {
+  test("after a claim any decline ends the job refused: it is never offered, queued or dispatched again", async () => {
     const job = await created()
     await offerJob(ctx(), job.jid, { queueUntil: fake.clock.now + 30 * 60_000 })
     const computer = device()
@@ -501,29 +521,87 @@ describe("declines", () => {
       reason: "busy",
       lease: claim.job.lease.id,
     })
-    expect(verdict).toMatchObject({
-      ok: true,
-      job: { state: "offered", declines: [{ device: computer, reason: "busy" }] },
+    expect(verdict).toMatchObject({ ok: true, recorded: true, job: { state: "refused", code: "busy" } })
+    expect(fake.read(everywhereKeys.jobBody(job.jid))).toBeUndefined()
+    expect(members(everywhereKeys.jobs(ALICE))).toEqual([])
+    expect(members(everywhereKeys.jobsDue())).toEqual([])
+    // No other computer and no Actions run can take it, and its queue does not take it back.
+    expect(await claimJob(ctx(), { account: ALICE, jid: job.jid, device: device() })).toMatchObject({
+      status: 409,
+      code: "JOB_TAKEN",
     })
-    const released = await readJob(store, job.jid)
-    expect(released?.device).toBeUndefined()
-    expect(released?.lease).toBeUndefined()
-    // Once the offer window passes nobody took it, so it waits in its queue again.
+    expect(await dispatchJob(ctx(), job.jid, { ticketHash: "ticket-hash-after-claim" })).toMatchObject({
+      ok: false,
+      state: "refused",
+    })
     fake.clock.advance(TIMING.offerTtlMs)
     expect(await sweepDue(ctx())).toEqual([])
-    expect(await readJob(store, job.jid)).toMatchObject({ state: "waiting", queueUntil: job.receivedAt + 30 * 60_000 })
+    expect(await state(job.jid)).toBe("refused")
+    const events = (await readAudit(store, ALICE)).map((entry) => `${entry.event} ${entry.code ?? ""}`.trim())
+    expect(events).toContain("job-refused busy")
+  })
 
-    // Without a queue a released job expires once the window passes.
-    const lone = await claimed()
-    await declineJob(ctx(), {
+  test("a running job a computer declines ends refused too, and its computer hears that it ended", async () => {
+    const job = await claimed()
+    expect(
+      await reportJob(ctx(), {
+        account: ALICE,
+        device: job.device,
+        report: { jid: job.jid, lease: job.lease, seq: 1, milestone: "editing", files: 2 },
+      }),
+    ).toMatchObject({ ok: true, action: "continue" })
+    expect(await state(job.jid)).toBe("running")
+    const verdict = await declineJob(ctx(), {
       account: ALICE,
-      jid: lone.jid,
-      device: lone.device,
-      reason: "trigger-changed",
-      lease: lone.lease,
+      jid: job.jid,
+      device: job.device,
+      reason: "busy",
+      lease: job.lease,
     })
-    fake.clock.advance(TIMING.offerTtlMs)
-    expect((await sweepDue(ctx())).map((entry) => [entry.job.jid, entry.job.state])).toEqual([[lone.jid, "expired"]])
+    expect(verdict).toMatchObject({ ok: true, job: { state: "refused", code: "busy", device: job.device } })
+    expect(await dispatchJob(ctx(), job.jid, { ticketHash: "ticket-hash-after-run" })).toMatchObject({ ok: false })
+    expect(await claimJob(ctx(), { account: ALICE, jid: job.jid, device: device() })).toMatchObject({ status: 409 })
+    expect(
+      await reportJob(ctx(), {
+        account: ALICE,
+        device: job.device,
+        report: { jid: job.jid, lease: job.lease, seq: 2, milestone: "heartbeat" },
+      }),
+    ).toMatchObject({ ok: false, status: 409, code: "JOB_ENDED" })
+
+    // A GitHub laptop job whose trigger changed ends the same way, so the handoff answers handled: false.
+    const github = await claimed(
+      slackJob({
+        platform: "github",
+        installation: GITHUB,
+        requester: { userId: "77", account: ALICE },
+        task: "",
+        context: [],
+        github: { kind: "issue", number: 12, commentId: 99 },
+      }),
+    )
+    expect(
+      await declineJob(ctx(), {
+        account: ALICE,
+        jid: github.jid,
+        device: github.device,
+        reason: "trigger-changed",
+        lease: github.lease,
+      }),
+    ).toMatchObject({ ok: true, job: { state: "refused", code: "trigger-changed" } })
+  })
+
+  test("a job a computer ever held is never dispatched, even in a state that otherwise allows it", async () => {
+    const job = await created()
+    // A record an older deployment left: offered again after a claim, with the claim's marks still on it.
+    const stale = { ...job, version: job.version + 1, state: "offered" as const, claimedAt: fake.clock.now }
+    fake.send(["SET", everywhereKeys.job(job.jid), encodeJobRecord(stale)])
+    expect(await dispatchJob(ctx(), job.jid, { ticketHash: "ticket-hash-held-0001" })).toMatchObject({
+      ok: false,
+      state: "offered",
+      code: "wrong-state",
+    })
+    expect(await state(job.jid)).toBe("offered")
   })
 
   test("a decline with a lease the computer does not hold is 409", async () => {
@@ -742,6 +820,168 @@ describe("timeouts", () => {
   })
 })
 
+describe("one bad record or one failed step", () => {
+  const auditAppend = (command: StoreCommand) => command[0] === "EVAL" && command[1] === AUDIT_APPEND_SCRIPT
+
+  /** Captures console.error while `work` runs. */
+  async function logs(work: () => Promise<void>) {
+    const logged: unknown[][] = []
+    const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args)
+    })
+    try {
+      await work()
+    } finally {
+      spy.mockRestore()
+    }
+    return logged
+  }
+
+  /** A record with a field this deployment does not know, as a newer deployment could leave after a rollback. */
+  function undecodable(job: JobRecord) {
+    const text = encodeJobRecord({ ...job, version: job.version + 1 })
+    fake.send(["SET", everywhereKeys.job(job.jid), `${text.slice(0, -1)},"newerField":true}`])
+  }
+
+  test("an audit append that fails after a change is written never turns the change into an error", async () => {
+    const job = await claimed()
+    const record = (await readJob(store, job.jid))!
+    const settle: Settle = { jid: job.jid, lease: job.lease, outcome: "changes", branch: expectedBranch(record) }
+    let settled: Awaited<ReturnType<typeof settleJob>> | undefined
+    const logged = await logs(async () => {
+      settled = await settleJob(ctx({ store: failing(store, auditAppend) }), {
+        account: ALICE,
+        device: job.device,
+        settle,
+      })
+    })
+    // The settle is fresh, so the route tells the adapters and the result is posted.
+    expect(settled).toMatchObject({ ok: true, fresh: true, job: { state: "settled" } })
+    expect(logged).toEqual([
+      [
+        "Vector everywhere: a jobs step failed",
+        { step: "audit-settle", jid: job.jid, code: "PERSISTENT_STORE_UNAVAILABLE" },
+      ],
+    ])
+
+    // The same for a claim, a decline and a sweep's ending.
+    const offered = await created()
+    await offerJob(ctx(), offered.jid)
+    const computer = device()
+    await logs(async () => {
+      const claim = await claimJob(ctx({ store: failing(store, auditAppend) }), {
+        account: ALICE,
+        jid: offered.jid,
+        device: computer,
+      })
+      expect(claim).toMatchObject({ ok: true, fresh: true })
+      if (!claim.ok) return
+      const decline = await declineJob(ctx({ store: failing(store, auditAppend, 2) }), {
+        account: ALICE,
+        jid: offered.jid,
+        device: computer,
+        reason: "not-mapped",
+        lease: claim.job.lease.id,
+      })
+      expect(decline).toMatchObject({ ok: true, recorded: true, job: { state: "refused" } })
+      const stale = await created()
+      fake.clock.advance(RECEIVED_STALE_MS)
+      const swept = await sweepDue(ctx({ store: failing(store, auditAppend) }))
+      expect(swept.map((entry) => [entry.job.jid, entry.job.state])).toEqual([[stale.jid, "expired"]])
+    })
+    // A job that failed to be recorded as created still exists and is answered as created.
+    await logs(async () => {
+      const verdict = await createJob(ctx({ store: failing(store, auditAppend) }), slackJob())
+      expect(verdict.ok).toBe(true)
+    })
+  })
+
+  test("the ticket is written before the dispatch, so a dispatch that went through is always found", async () => {
+    const job = await created()
+    const ticketWrite = (command: StoreCommand) =>
+      command[0] === "SET" && command[1] === everywhereKeys.ticket("ticket-hash-first-001")
+    await expect(
+      dispatchJob(ctx({ store: failing(store, ticketWrite) }), job.jid, { ticketHash: "ticket-hash-first-001" }),
+    ).rejects.toMatchObject({ statusCode: 503 })
+    // Nothing was dispatched, so the intake can try again or route the job elsewhere.
+    expect(await state(job.jid)).toBe("received")
+    expect((await dispatchJob(ctx(), job.jid, { ticketHash: "ticket-hash-first-001" })).ok).toBe(true)
+    expect(await startDispatched(ctx(), "ticket-hash-first-001", "run-1")).toMatchObject({
+      ok: true,
+      job: { state: "running" },
+    })
+    // A ticket left by a dispatch that lost starts nothing.
+    const other = await created()
+    await cancelJob(ctx(), other.jid)
+    expect(await dispatchJob(ctx(), other.jid, { ticketHash: "ticket-hash-lost-0001" })).toMatchObject({ ok: false })
+    expect(await startDispatched(ctx(), "ticket-hash-lost-0001", "run-2")).toMatchObject({ ok: false })
+    expect(await state(other.jid)).toBe("cancelled")
+  })
+
+  test("a record that does not decode stalls neither the sweep nor the account's calls, and keeps its place", async () => {
+    const bad = await created()
+    undecodable(bad)
+    const good = await created()
+    await queueJob(ctx(), good.jid, fake.clock.now + 60 * 60_000)
+    fake.clock.advance(RECEIVED_STALE_MS)
+    const stale = await created()
+    fake.clock.advance(RECEIVED_STALE_MS)
+    let ended: string[] = []
+    const logged = await logs(async () => {
+      ended = (await sweepDue(ctx())).map((entry) => entry.job.jid)
+    })
+    // The bad record is first in `jobs:due` (oldest), yet the job after it still ends.
+    expect(ended).toEqual([stale.jid])
+    expect(logged).toEqual([
+      ["Vector everywhere: a jobs step failed", { step: "sweep", jid: bad.jid, code: "undecodable" }],
+    ])
+    expect(members(everywhereKeys.jobsDue())).toContain(bad.jid)
+    expect(members(everywhereKeys.jobs(ALICE))).toContain(bad.jid)
+    // The account's own sweep and the waiting offers go on past it too.
+    await logs(async () => {
+      expect(await sweepAccount(ctx(), ALICE)).toEqual([])
+      const waiting = await offerWaiting(ctx(), ALICE)
+      expect(waiting).toMatchObject({ waiting: 1, offers: [expect.any(String)] })
+    })
+    expect(await state(good.jid)).toBe("offered")
+  })
+
+  test("a job whose record is gone leaves the indexes, so it neither comes back nor holds a live place", async () => {
+    const jobs = [await created(), await created(), await created()]
+    // Records gone before any sweep (they expired, or were erased), with their index entries left behind.
+    for (const job of jobs) fake.send(["DEL", everywhereKeys.job(job.jid)])
+    expect(await createJob(ctx(), slackJob())).toEqual({ ok: false, code: "over-limit" })
+    expect(await sweepAccount(ctx(), ALICE)).toEqual([])
+    expect(members(everywhereKeys.jobs(ALICE))).toEqual([])
+    expect(members(everywhereKeys.jobsDue())).toEqual([])
+    for (const job of jobs) expect(fake.read(everywhereKeys.jobBody(job.jid))).toBeUndefined()
+    expect((await createJob(ctx(), slackJob())).ok).toBe(true)
+
+    // The global sweep drops its own entry the same way.
+    const lone = await created(slackJob({ sponsor: BOB, requester: { userId: "U0BOB0001", account: BOB } }))
+    fake.send(["DEL", everywhereKeys.job(lone.jid)])
+    fake.clock.advance(RECEIVED_STALE_MS)
+    await sweepDue(ctx())
+    expect(members(everywhereKeys.jobsDue())).not.toContain(lone.jid)
+  })
+
+  test("erasing goes on past a record that does not decode, and erases it", async () => {
+    const bad = await created()
+    undecodable(bad)
+    const live = await claimed()
+    expect(await eraseInstallationJobs(ctx(), SLACK)).toBe(1)
+    expect(fake.read(everywhereKeys.job(bad.jid))).toBeUndefined()
+    expect(fake.read(everywhereKeys.jobBody(bad.jid))).toBeUndefined()
+    expect(await state(live.jid)).toBe("cancelled")
+
+    const other = await created()
+    undecodable(other)
+    await eraseAccountJobs(ctx(), ALICE)
+    expect(fake.read(everywhereKeys.job(other.jid))).toBeUndefined()
+    expect(fake.read(everywhereKeys.jobHistory(ALICE))).toBeUndefined()
+  })
+})
+
 describe("computers and waiting jobs", () => {
   const ready: Readiness = {
     takesJobs: true,
@@ -759,10 +999,23 @@ describe("computers and waiting jobs", () => {
     await recordSeen(ctx(), ALICE, computer, ready)
     expect(await readComputer(store, ALICE)).toEqual({ lastSeen: fake.clock.now, readiness: ready })
     expect(fake.pttl(everywhereKeys.seen(ALICE))).toBe(KEEP_MS.seen)
-    expect(fake.pttl(everywhereKeys.ready(computer))).toBe(KEEP_MS.ready)
+    expect(fake.pttl(everywhereKeys.ready(ALICE, computer))).toBe(KEEP_MS.ready)
     fake.clock.advance(1_000)
     await recordSeen(ctx(), ALICE, device())
     expect(await readComputer(store, ALICE)).toEqual({ lastSeen: fake.clock.now })
+  })
+
+  test("another account naming the same device id can neither write over nor erase a computer's readiness", async () => {
+    const computer = device()
+    await recordSeen(ctx(), ALICE, computer, ready)
+    const at = fake.clock.now
+    fake.clock.advance(1_000)
+    await recordSeen(ctx(), BOB, computer, { ...ready, takesJobs: false, capsRoom: false })
+    expect(await readComputer(store, ALICE)).toEqual({ lastSeen: at, readiness: ready })
+    expect(await readComputer(store, BOB)).toMatchObject({ readiness: { takesJobs: false } })
+    await eraseAccountJobs(ctx(), BOB)
+    expect(await readComputer(store, ALICE)).toEqual({ lastSeen: at, readiness: ready })
+    expect(fake.read(everywhereKeys.ready(BOB, computer))).toBeUndefined()
   })
 
   test("waiting jobs are offered again with fresh offers, and nothing is offered without a signing key", async () => {
@@ -839,7 +1092,7 @@ describe("erasing", () => {
       everywhereKeys.jobHistory(ALICE),
       everywhereKeys.jobs(ALICE),
       everywhereKeys.seen(ALICE),
-      everywhereKeys.ready(computer),
+      everywhereKeys.ready(ALICE, computer),
       everywhereKeys.audit(ALICE),
     ])
       expect(fake.read(key)).toBeUndefined()

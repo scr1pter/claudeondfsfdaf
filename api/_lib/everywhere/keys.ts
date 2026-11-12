@@ -156,7 +156,11 @@ export const everywhereKeys = {
   installationJobs: (installationKey: string) => key("livejobs", installation(installationKey)),
   /** VE-05: every job an account sponsored in the last 30 days, for its job list and for account erase. */
   jobHistory: (sponsor: string) => key("history", account(sponsor)),
-  ready: (device: string) => key("ready", matching(device, DEVICE_ID_PATTERN)),
+  /**
+   * A computer's readiness from its last `pending` call: per account and device (3.13 names it `ready:<device>`), so
+   * one account can never write over or erase another's by naming its device id.
+   */
+  ready: (accountId: string, device: string) => key("ready", account(accountId), matching(device, DEVICE_ID_PATTERN)),
   fit: (jti: string) => key("fit", freePart(jti)),
   handoff: (repositoryId: number, runId: number) => key("handoff", positive(repositoryId), positive(runId)),
   count: (scope: string, window: string) =>

@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto"
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { drainAfter } from "../../../api/_lib/everywhere/after"
+import { AUDIT_APPEND_SCRIPT } from "../../../api/_lib/everywhere/audit"
 import { ENV_NAMES, readConfig } from "../../../api/_lib/everywhere/config"
 import { DEVICE_HEADER, createJobsApi, type JobEvents, type JobsApiDeps } from "../../../api/_lib/everywhere/jobs-api"
 import {
@@ -19,7 +20,7 @@ import {
 } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { ownOfferKeys, verifyOffer } from "../../../api/_lib/everywhere/offer"
-import { everywhereStore } from "../../../api/_lib/everywhere/store"
+import { everywhereStore, storeUnavailable } from "../../../api/_lib/everywhere/store"
 import type { SwitchState } from "../../../api/_lib/everywhere/switch"
 import { LIMITS, TIMING, decodeJob } from "../../../packages/schema/src/everywhere"
 import { RouteHarness, everywhereEnv } from "./lib/everywhere-account"
@@ -439,6 +440,45 @@ describe("settle", () => {
     await drainAfter()
     expect(settled).toHaveLength(1)
   })
+  test("a settle whose audit entry cannot be written still answers and still tells the adapters", async () => {
+    const job = await claimed()
+    const record = (await readJob(ctx().store, job.jid))!
+    let failures = 1
+    const inner = everywhereStore(fake.fetch)
+    const logged: unknown[][] = []
+    const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args)
+    })
+    try {
+      mount({
+        store: async (command) => {
+          if (failures > 0 && command[0] === "EVAL" && command[1] === AUDIT_APPEND_SCRIPT) {
+            failures--
+            throw storeUnavailable()
+          }
+          return inner(command)
+        },
+      })
+      const answer = await post(
+        "settle",
+        { jid: job.jid, lease: job.lease, outcome: "changes", branch: expectedBranch(record) },
+        { device: job.device },
+      )
+      expect(answer.status).toBe(200)
+      expect(answer.body).toEqual({ settled: true })
+      await drainAfter()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(failures).toBe(0)
+    expect(settled.map((item) => item.jid)).toEqual([job.jid])
+    expect(logged).toEqual([
+      [
+        "Vector everywhere: a jobs step failed",
+        { step: "audit-settle", jid: job.jid, code: "PERSISTENT_STORE_UNAVAILABLE" },
+      ],
+    ])
+  })
 })
 
 describe("decline", () => {
@@ -449,6 +489,19 @@ describe("decline", () => {
     expect(await readJob(ctx().store, job.jid)).toMatchObject({ state: "refused", code: "not-mapped" })
     await drainAfter()
     expect(ended.map((item) => item.job.code)).toEqual(["not-mapped"])
+  })
+
+  test("a busy decline after the claim ends the job too: it is never offered to another computer", async () => {
+    const job = await claimed()
+    const answer = await post("decline", { jid: job.jid, device: job.device, reason: "busy", lease: job.lease })
+    expect(answer.body).toEqual({ recorded: true })
+    expect(await readJob(ctx().store, job.jid)).toMatchObject({ state: "refused", code: "busy" })
+    const again = await post("claim", { jid: job.jid, device: device() })
+    expect(again.status).toBe(409)
+    expect(again.body).toMatchObject({ error: { code: "JOB_TAKEN" } })
+    expect((await dispatchJob(ctx(), job.jid, { ticketHash: "ticket-hash-declined-1" })).ok).toBe(false)
+    await drainAfter()
+    expect(ended.map((item) => [item.job.jid, item.job.code])).toEqual([[job.jid, "busy"]])
   })
 
   test("a decline before the claim is recorded for the offer round", async () => {

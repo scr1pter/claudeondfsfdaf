@@ -625,28 +625,131 @@ describe("repository mappings", () => {
     expect((await listMappings(world.store, SLACK)).map((mapping) => mapping.place)).toEqual(["C0123"])
   })
 
-  test("the repo word: a linked requester sets the place's repository, and the private mark stays", async () => {
+  const allowed =
+    (...accounts: string[]) =>
+    (account: string) =>
+      accounts.includes(account)
+
+  test("the repo word: an allowed, linked requester sets a Slack channel's repository", async () => {
+    const world = new World()
+    await world.install(SLACK, A.id)
+    await redeemLinkCode(world.ctx(), dm(await codeFor(world, B), SLACK, U2))
+    const verdict = await setMappingByWord(world.ctx(), {
+      installation: SLACK,
+      place: "C0456",
+      userId: U2,
+      actor: person,
+      repository: repo("bob/tool"),
+      maySponsor: allowed(B.id),
+    })
+    expect(verdict).toMatchObject({
+      ok: true,
+      mapping: { setBy: B.id, private: false, repositories: [repo("bob/tool")] },
+    })
+    // Another allowed requester may change what a requester set.
+    await redeemLinkCode(world.ctx(), dm(await codeFor(world, A), SLACK, U1))
+    expect(
+      await setMappingByWord(world.ctx(), {
+        installation: SLACK,
+        place: "C0456",
+        userId: U1,
+        actor: person,
+        repository: repo("acme/api"),
+        maySponsor: allowed(A.id, B.id),
+      }),
+    ).toMatchObject({ ok: true, mapping: { setBy: A.id, repositories: [repo("acme/api")] } })
+  })
+
+  test("the repo word never changes the connector's mapping but from the connector, and the private mark stays", async () => {
     const world = new World()
     await world.install(SLACK, A.id)
     await setMapping(world.ctx(), {
       account: A.id,
       installation: SLACK,
       place: "C0123",
-      repositories: [],
+      repositories: [repo("acme/api", 7)],
       private: true,
     })
     await redeemLinkCode(world.ctx(), dm(await codeFor(world, B), SLACK, U2))
+    await redeemLinkCode(world.ctx(), dm(await codeFor(world, A), SLACK, U1))
+    const word = (userId: string) =>
+      setMappingByWord(world.ctx(), {
+        installation: SLACK,
+        place: "C0123",
+        userId,
+        actor: person,
+        repository: repo("bob/tool"),
+        maySponsor: allowed(A.id, B.id),
+      })
+    expect(await word(U2)).toEqual({ ok: false, code: "not-connector" })
+    expect(await findMapping(world.store, SLACK, "C0123")).toMatchObject({
+      setBy: A.id,
+      repositories: [repo("acme/api", 7)],
+    })
+    expect(await word(U1)).toMatchObject({
+      ok: true,
+      mapping: { setBy: A.id, private: true, repositories: [repo("bob/tool")] },
+    })
+  })
+
+  test("the repo word: a linked account that may not sponsor runs changes nothing", async () => {
+    const world = new World()
+    await world.install(SLACK, A.id)
+    await redeemLinkCode(world.ctx(), dm(await codeFor(world, B), SLACK, U2))
+    const asked: string[] = []
     const verdict = await setMappingByWord(world.ctx(), {
       installation: SLACK,
       place: "C0123",
       userId: U2,
       actor: person,
-      repository: repo("bob/tool"),
+      repository: repo("evil/repo"),
+      maySponsor: async (account) => {
+        asked.push(account)
+        return false
+      },
     })
-    expect(verdict).toMatchObject({
-      ok: true,
-      mapping: { setBy: B.id, private: true, repositories: [repo("bob/tool")] },
+    expect(verdict).toEqual({ ok: false, code: "not-allowed" })
+    expect(asked).toEqual([B.id])
+    expect(await findMapping(world.store, SLACK, "C0123")).toBeUndefined()
+  })
+
+  test("the repo word is Slack's only: a Linear team's or a Jira project's mapping stays the connector's", async () => {
+    const world = new World()
+    await world.install(LINEAR, A.id)
+    await world.install(JIRA, A.id)
+    const viewer = randomUUID()
+    expect(
+      (await linkBySignIn(world.ctx(), { account: B.id, installation: LINEAR, userId: viewer, actor: person })).ok,
+    ).toBe(true)
+    expect((await redeemLinkCode(world.ctx(), dm(await codeFor(world, B, "jira"), JIRA, JIRA_USER))).ok).toBe(true)
+    await setMapping(world.ctx(), {
+      account: A.id,
+      installation: LINEAR,
+      place: "TEAM1",
+      repositories: [repo("acme/api"), repo("acme/web")],
     })
+    await setMapping(world.ctx(), {
+      account: A.id,
+      installation: JIRA,
+      place: "PROJ",
+      repositories: [repo("acme/api")],
+    })
+    const word = (installation: string, place: string, userId: string) =>
+      setMappingByWord(world.ctx(), {
+        installation,
+        place,
+        userId,
+        actor: person,
+        repository: repo("bob/tool"),
+        maySponsor: allowed(A.id, B.id),
+      })
+    expect(await word(LINEAR, "TEAM1", viewer)).toEqual({ ok: false, code: "wrong-platform" })
+    expect(await word(JIRA, "PROJ", JIRA_USER)).toEqual({ ok: false, code: "wrong-platform" })
+    expect((await findMapping(world.store, LINEAR, "TEAM1"))?.repositories).toEqual([
+      repo("acme/api"),
+      repo("acme/web"),
+    ])
+    expect((await findMapping(world.store, JIRA, "PROJ"))?.repositories).toEqual([repo("acme/api")])
   })
 
   test("the repo word: an unlinked person, a bot, an external user or a guest changes nothing", async () => {
@@ -660,6 +763,7 @@ describe("repository mappings", () => {
         userId,
         actor,
         repository: repo("evil/repo"),
+        maySponsor: () => true,
       })
     expect(await word(U1, person)).toEqual({ ok: false, code: "not-linked" })
     expect(await word(U2, { ...person, bot: true })).toEqual({ ok: false, code: "bot" })

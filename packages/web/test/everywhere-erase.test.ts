@@ -6,6 +6,7 @@ import {
   EVERYWHERE_ERASE_PART,
   eraseEverywhereAccount,
   eraseInstallation,
+  everywhereStoreConfigured,
   type EraseContext,
   type EraseReason,
   type JobEraser,
@@ -125,7 +126,8 @@ describe("erasing an installation", () => {
     for (const key of [everywhereKeys.install(SLACK), everywhereKeys.linked(SLACK), everywhereKeys.repos(SLACK)])
       expect(fake.read(key)).toBeUndefined()
     expect([...fake.data.keys()].filter((key) => key.includes("T0123ABCD") && !key.includes(":audit:"))).toEqual([])
-    expect(erasedJobs.installations).toEqual([SLACK])
+    // Once with the record and once more after it went, for anything started in between.
+    expect(new Set(erasedJobs.installations)).toEqual(new Set([SLACK]))
     expect((await listInstalls(store, A)).map((item) => item.installation)).toEqual([LINEAR])
     expect((await listLinks(store, A)).map((item) => item.installation).sort()).toEqual([JIRA, LINEAR].sort())
     expect(await listLinks(store, B)).toEqual([])
@@ -194,6 +196,58 @@ describe("erasing an installation", () => {
     expect(await findInstall(store, SLACK)).toBeUndefined()
   })
 
+  test("a step that fails leaves the record, so the erase can run again and finish", async () => {
+    await world()
+    let failures = 1
+    const flaky: JobEraser = {
+      ...jobs,
+      installation: async (installation) => {
+        if (failures-- > 0) throw new Error("store busy")
+        erasedJobs.installations.push(installation)
+      },
+    }
+    await expect(eraseInstallation(eraseCtx({ jobs: flaky }), SLACK, "disconnected")).rejects.toThrow()
+    // Nothing is half gone: the record, its place in the connector's list, the links and mappings all stay.
+    expect(await findInstall(store, SLACK)).toMatchObject({ connector: A })
+    expect((await listInstalls(store, A)).map((item) => item.installation).sort()).toEqual([LINEAR, SLACK].sort())
+    expect(await findLink(store, SLACK, "U0BBB2222")).toBeDefined()
+    expect(await findMapping(store, SLACK, "C0001")).toBeDefined()
+    expect(await eraseInstallation(eraseCtx({ jobs: flaky }), SLACK, "disconnected")).toEqual({
+      installed: true,
+      links: 2,
+      mappings: 2,
+    })
+    expect(await findInstall(store, SLACK)).toBeUndefined()
+    expect(await findLink(store, SLACK, "U0BBB2222")).toBeUndefined()
+    expect(await findMapping(store, SLACK, "C0001")).toBeUndefined()
+    expect(erasedJobs.installations).toContain(SLACK)
+  })
+
+  test("a link written while the erase ran, before the record went, is erased too", async () => {
+    await world()
+    // A redemption that passed its installation check just before the record went writes its link after the links
+    // were erased (here: right after the mappings).
+    const inner = store
+    let linksDone = false
+    const watching: Store = async (command) => {
+      const result = await inner(command)
+      if (!linksDone && command[0] === "DEL" && command[1] === everywhereKeys.repos(SLACK)) {
+        linksDone = true
+        await inner(["SADD", everywhereKeys.linked(SLACK), "U0CCC3333"])
+        await inner([
+          "SET",
+          everywhereKeys.link(SLACK, "U0CCC3333"),
+          JSON.stringify({ account: B.toLowerCase(), linkedAt: fake.clock.now }),
+        ])
+      }
+      return result
+    }
+    const result = await eraseInstallation({ store: watching, now: fake.clock.now, jobs }, SLACK, "uninstalled")
+    expect(result).toEqual({ installed: true, links: 3, mappings: 2 })
+    expect(await findLink(store, SLACK, "U0CCC3333")).toBeUndefined()
+    expect(fake.read(everywhereKeys.linked(SLACK))).toBeUndefined()
+  })
+
   test("erase needs no data key: it works while the feature's keys are gone", async () => {
     await world()
     const keyless: EraseContext = { store, now: fake.clock.now }
@@ -224,7 +278,7 @@ describe("erasing an account", () => {
       }),
     ).toEqual({ ok: false, code: "link-invalid" })
     expect(erasedJobs.accounts).toEqual([A.toLowerCase()])
-    expect(erasedJobs.installations.sort()).toEqual([LINEAR, SLACK].sort())
+    expect(new Set(erasedJobs.installations)).toEqual(new Set([LINEAR, SLACK]))
     // No key that names A is left.
     expect([...fake.data.keys()].filter((key) => key.includes(A.toLowerCase()))).toEqual([])
     expect(await readAudit(store, A)).toEqual([])
@@ -241,8 +295,41 @@ describe("erasing an account", () => {
     )
   })
 
-  test("the erase part for Codium's account deletion is named everywhere", () => {
+  test("the erase part has the shape Codium's account deletion calls: configured(), then erase(account, context)", async () => {
     expect(EVERYWHERE_ERASE_PART.id).toBe("everywhere")
-    expect(typeof EVERYWHERE_ERASE_PART.erase).toBe("function")
+    // Configured whenever the store exists, whether or not the feature is on, so data left from before is erased.
+    expect(
+      everywhereStoreConfigured({ KV_REST_API_URL: "https://kv.example", KV_REST_API_TOKEN: "t".repeat(24) }),
+    ).toBe(true)
+    expect(
+      everywhereStoreConfigured({ UPSTASH_REDIS_REST_URL: "https://kv.example", UPSTASH_REDIS_REST_TOKEN: "x" }),
+    ).toBe(true)
+    expect(everywhereStoreConfigured({ KV_REST_API_URL: "https://kv.example" })).toBe(false)
+    expect(everywhereStoreConfigured({})).toBe(false)
+    expect(EVERYWHERE_ERASE_PART.configured()).toBe(true)
+
+    // A stand-in for Codium's loop (codium-erase.ts): skip a part that is not configured, else erase with the
+    // deletion's own fetcher and clock.
+    type CodiumPart = {
+      readonly id: string
+      readonly configured: () => boolean
+      readonly requires?: readonly string[]
+      readonly erase: (
+        account: string,
+        context: { fetcher: typeof fetch; now: number; deadline?: number },
+      ) => Promise<unknown>
+    }
+    const part: CodiumPart = EVERYWHERE_ERASE_PART
+    await world()
+    fake.clock.advance(60_000)
+    if (part.configured())
+      await part.erase(A, { fetcher: fake.fetch, now: fake.clock.now, deadline: Date.now() + 30_000 })
+    for (const installation of [SLACK, LINEAR]) expect(await findInstall(store, installation)).toBeUndefined()
+    expect(await findLink(store, JIRA, JIRA_USER)).toBeUndefined()
+    expect([...fake.data.keys()].filter((key) => key.includes(A.toLowerCase()))).toEqual([])
+    // The other account's log is dated by the deletion's clock.
+    expect(await readAudit(store, B)).toContainEqual(
+      expect.objectContaining({ event: "unlink", installation: SLACK, code: "account-deleted", at: fake.clock.now }),
+    )
   })
 })

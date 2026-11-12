@@ -42,7 +42,8 @@ import {
  *   signs in to Linear on the link page. A code is single use, lives 10 minutes, is stored only as a keyed hash, works
  *   only on the platform it was made for, and dies when it is posted in a shared place or a newer code is made.
  * - A repository mapping says which repositories a place (a Slack channel, a Linear team, a Jira project) works on. Only
- *   the connector sets it on vectordev.ai; a linked requester may set a place's repository with the `repo` word.
+ *   the connector sets it on vectordev.ai; in Slack an allowed, linked requester may also set a channel's repository
+ *   with the `repo` word, unless the connector set it.
  *
  * Records follow 3.13. Each one has a set that indexes it (`links:<account>`, `linked:<installation>`,
  * `installs:<account>`, `repos:<installation>`), written before the record, so erasing (erase.ts) finds every record
@@ -1128,7 +1129,16 @@ export type MappingVerdict =
   | { readonly ok: true; readonly mapping: RepoMapping }
   | {
       readonly ok: false
-      readonly code: "not-connected" | "not-connector" | "not-linked" | "bot" | "automation" | "external" | "guest"
+      readonly code:
+        | "not-connected"
+        | "not-connector"
+        | "not-linked"
+        | "not-allowed"
+        | "wrong-platform"
+        | "bot"
+        | "automation"
+        | "external"
+        | "guest"
     }
 
 function checkPlace(place: unknown): string {
@@ -1195,9 +1205,13 @@ export async function setMapping(
 }
 
 /**
- * Sets a place's repository from the requester's `repo owner/name` word (3.8). The requester must be a linked person
- * (not a bot, automation, external user or guest) on a connected installation: at launch the sponsor is the
- * requester's own linked account (3.9), so that is the sponsor's linked requester. The place keeps its private mark.
+ * Sets a Slack channel's repository from the `@Vector repo owner/name` word (3.8: "set by the connector (or an allowed
+ * requester)"). Slack only: a Linear team's or a Jira project's mapping is set on vectordev.ai by the connector
+ * (`setMapping`). The person must be linked (not a bot, automation, external user or guest) on a connected workspace,
+ * and their linked account must be one that may sponsor runs (`maySponsor`: the `everywhere` perk, R-C7, or before it
+ * exists `sponsorListed`), since at launch the sponsor is the requester's own account (3.9). A mapping the connector
+ * set stays until the connector changes it, so another member cannot move the connector's jobs to another repository.
+ * The channel keeps its private mark.
  */
 export async function setMappingByWord(
   ctx: IdentityContext,
@@ -1207,19 +1221,25 @@ export async function setMappingByWord(
     readonly userId: string
     readonly actor: LinkActor
     readonly repository: RepoRef
+    /** Whether a Vector account may sponsor runs (the intake's perk check, VE-06). */
+    readonly maySponsor: (account: string) => boolean | Promise<boolean>
   },
 ): Promise<MappingVerdict> {
-  platformOf(input.installation)
+  if (platformOf(input.installation) !== "slack") return { ok: false, code: "wrong-platform" }
   const place = checkPlace(input.place)
   const userId = checkUser(input.installation, input.userId)
   const repositories = checkRepositories([input.repository])
   if (!repositories) invalid("Name the repository as owner/name.")
   const refusal = actorRefusal(input.actor)
   if (refusal) return { ok: false, code: refusal }
-  if (!(await findInstall(ctx.store, input.installation))) return { ok: false, code: "not-connected" }
+  const install = await findInstall(ctx.store, input.installation)
+  if (!install) return { ok: false, code: "not-connected" }
   const link = await findLink(ctx.store, input.installation, userId)
   if (!link) return { ok: false, code: "not-linked" }
+  if ((await input.maySponsor(link.account)) !== true) return { ok: false, code: "not-allowed" }
   const existing = await findMapping(ctx.store, input.installation, place)
+  if (existing && existing.setBy === install.connector && link.account !== install.connector)
+    return { ok: false, code: "not-connector" }
   const mapping: RepoMapping = {
     place,
     repositories,

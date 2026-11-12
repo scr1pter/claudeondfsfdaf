@@ -62,7 +62,7 @@ describe("keys", () => {
     expect(everywhereKeys.jobBody(jid)).toBe(`vector:everywhere:job:${jid}:body`)
     expect(everywhereKeys.jobs(account)).toBe(`vector:everywhere:jobs:${account}`)
     expect(everywhereKeys.jobsDue()).toBe("vector:everywhere:jobs:due")
-    expect(everywhereKeys.ready(device)).toBe(`vector:everywhere:ready:${device}`)
+    expect(everywhereKeys.ready(account, device)).toBe(`vector:everywhere:ready:${account}:${device}`)
     expect(everywhereKeys.fit("0b6e2f2a-1111-4c3e")).toBe("vector:everywhere:fit:0b6e2f2a-1111-4c3e")
     expect(everywhereKeys.handoff(123, 456)).toBe("vector:everywhere:handoff:123:456")
     expect(everywhereKeys.count(capScopes.sponsor(account), "d20261111")).toBe(
@@ -94,7 +94,8 @@ describe("keys", () => {
       () => everywhereKeys.state("short"),
       () => everywhereKeys.repo(slack, "C01:23"),
       () => everywhereKeys.job("vej_short"),
-      () => everywhereKeys.ready("device"),
+      () => everywhereKeys.ready(account, "device"),
+      () => everywhereKeys.ready("not-an-account", device),
       () => everywhereKeys.handoff(0, 1),
       () => everywhereKeys.handoff(1.5, 1),
       () => everywhereKeys.count("anything:goes", "d20261111"),

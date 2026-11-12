@@ -15,7 +15,7 @@ import {
   type OAuthExchanges,
 } from "../../../api/_lib/everywhere/identity"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
-import { everywhereStore } from "../../../api/_lib/everywhere/store"
+import { everywhereStore, storeUnavailable } from "../../../api/_lib/everywhere/store"
 import { everywhereEnv, FakeAccounts, FakeJira, RouteHarness, testAccount } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { FakeStore, useKv } from "./lib/everywhere-store"
@@ -229,7 +229,7 @@ describe("OAuth installs", () => {
     })
     expect(gone.status).toBe(200)
     expect(gone.body).toEqual({ erased: true, links: 0, mappings: 0 })
-    expect(erasedJobs).toEqual([SLACK])
+    expect(new Set(erasedJobs)).toEqual(new Set([SLACK]))
     expect(await findInstall(ctx().store, SLACK)).toBeUndefined()
     expect(await readAudit(ctx().store, alice.id)).toContainEqual(
       expect.objectContaining({ event: "disconnect", installation: SLACK, code: "disconnected" }),
@@ -238,6 +238,41 @@ describe("OAuth installs", () => {
     const fresh = await finish(bob, (await start(bob)).state)
     expect(fresh.status).toBe(200)
     expect(fresh.body.change).toBe("new")
+  })
+
+  test("a disconnect that failed part way can be sent again and finishes", async () => {
+    let failures = 1
+    harness.use(
+      createAccountApi(
+        deps({
+          jobs: {
+            installation: async (installation) => {
+              if (failures-- > 0) throw storeUnavailable()
+              erasedJobs.push(installation)
+            },
+            account: async () => {},
+          },
+        }),
+      ),
+    )
+    expect((await finish(alice, (await start(alice)).state)).status).toBe(200)
+    await harness.call("PUT", "/api/everywhere/repos", {
+      token: alice.token,
+      body: { installation: SLACK, place: "C0123", repositories: [{ fullName: "acme/api", id: 7 }] },
+    })
+    const failed = await harness.call("DELETE", "/api/everywhere/installs", {
+      token: alice.token,
+      body: { installation: SLACK },
+    })
+    expect(failed.status).toBe(503)
+    expect(await findInstall(ctx().store, SLACK)).toMatchObject({ connector: alice.id })
+    const again = await harness.call("DELETE", "/api/everywhere/installs", {
+      token: alice.token,
+      body: { installation: SLACK },
+    })
+    expect(again.status).toBe(200)
+    expect(again.body).toEqual({ erased: true, links: 0, mappings: 1 })
+    expect(await findInstall(ctx().store, SLACK)).toBeUndefined()
   })
 
   test("a disconnect erases the workspace's links and mappings too", async () => {

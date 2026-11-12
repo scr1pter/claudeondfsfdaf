@@ -1,4 +1,4 @@
-import { ACCOUNT_ID_PATTERN, installationPlatform } from "../../../packages/schema/src/everywhere.js"
+import { ACCOUNT_ID_PATTERN, installationPlatform, type PlatformId } from "../../../packages/schema/src/everywhere.js"
 import { appendAudit, type AuditEvent, type ERASE_REASONS } from "./audit.js"
 import { PLACE_PATTERN, linkMember, parseLinkMember, readInstall, type InstallRecord } from "./identity.js"
 import { jobEraser } from "./jobs.js"
@@ -54,9 +54,11 @@ function report(step: string) {
 }
 
 /**
- * Erases an installation: its record (and so its token), every link made on it, every mapping, and its live jobs.
+ * Erases an installation: its live jobs, every link made on it, every mapping, and last its record (and so its token).
  * The connector's log records why, and every linked account's log records the unlink, except the log of an account
- * being deleted. Safe to run again: a second run finds nothing.
+ * being deleted. Safe to run again: a second run finds nothing, and a run that stopped part way (a store error, a job
+ * that kept changing) leaves the record in place, so the disconnect, the platform's retry or the account deletion's
+ * next pass can run it again and erase what is left.
  */
 export async function eraseInstallation(
   ctx: EraseContext,
@@ -70,9 +72,32 @@ export async function eraseInstallation(
   const record = await readInstall(ctx.store, installation)
   if (record && ctx.revoke) await ctx.revoke(installation, record).catch(() => report("revoke"))
 
-  // The record first: from here on nothing new is linked, mapped or posted for this installation.
+  const first = await eraseContents(ctx, installation, platform, reason, deleted)
+  // The record last, with its place in the connector's index: from here on nothing new is linked, mapped or posted.
   await deleteKeys(ctx.store, everywhereKeys.install(installation))
   if (record) await removeMembers(ctx.store, everywhereKeys.installs(record.connector), installation)
+  // Once more without the record, for anything a call that passed its installation check just before the record went
+  // wrote while the steps above ran. It usually finds nothing.
+  const late = await eraseContents(ctx, installation, platform, reason, deleted)
+
+  if (record && record.connector !== deleted)
+    await appendAudit(
+      ctx.store,
+      record.connector,
+      { event: EVENT[reason], platform, installation, code: reason },
+      ctx.now,
+    )
+  return { installed: record !== undefined, links: first.links + late.links, mappings: first.mappings + late.mappings }
+}
+
+/** An installation's live jobs, links and mappings, each found through its index. */
+async function eraseContents(
+  ctx: EraseContext,
+  installation: string,
+  platform: PlatformId,
+  reason: EraseReason,
+  deleted: string | undefined,
+): Promise<{ links: number; mappings: number }> {
   if (ctx.jobs) await ctx.jobs.installation(installation)
 
   let links = 0
@@ -98,15 +123,7 @@ export async function eraseInstallation(
     mappings += await deleteKeys(ctx.store, everywhereKeys.repo(installation, place))
   }
   await deleteKeys(ctx.store, reposKey)
-
-  if (record && record.connector !== deleted)
-    await appendAudit(
-      ctx.store,
-      record.connector,
-      { event: EVENT[reason], platform, installation, code: reason },
-      ctx.now,
-    )
-  return { installed: record !== undefined, links, mappings }
+  return { links, mappings }
 }
 
 function linkAccount(raw: string | undefined): string | undefined {
@@ -161,11 +178,29 @@ export async function eraseEverywhereAccount(ctx: EraseContext, account: string)
   )
 }
 
-/** The part Codium's account deletion runs (R-C9), with the production store and the jobs module's eraser. */
+/**
+ * What Codium's account deletion hands each part (codium-erase.ts `EraseContext`): its fetcher, the deletion's clock,
+ * and the real time by which a long part must stop. Repeated here, since this branch cannot import Codium's file.
+ */
+export type CodiumEraseContext = { readonly fetcher: typeof fetch; readonly now: number; readonly deadline?: number }
+
+/** Whether this deployment has the store at all, as `persistentStore` reads it: a deployment without one holds nothing. */
+export function everywhereStoreConfigured(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  const url = env.KV_REST_API_URL?.trim() || env.UPSTASH_REDIS_REST_URL?.trim()
+  const token = env.KV_REST_API_TOKEN?.trim() || env.UPSTASH_REDIS_REST_TOKEN?.trim()
+  return Boolean(url && token)
+}
+
+/**
+ * The part Codium's account deletion runs (R-C9), in the shape of Codium's `ErasePart`: `configured` says whether the
+ * store exists (not whether the feature is on, so an account's records are erased after the feature was switched off),
+ * and `erase` uses the deletion's own fetcher and clock, with the jobs module's eraser.
+ */
 export const EVERYWHERE_ERASE_PART = {
   id: "everywhere",
-  erase: (account: string) => {
-    const store = everywhereStore()
-    return eraseEverywhereAccount({ store, now: Date.now(), jobs: jobEraser(store) }, account)
+  configured: (): boolean => everywhereStoreConfigured(),
+  erase: (account: string, context: CodiumEraseContext): Promise<void> => {
+    const store = everywhereStore(context.fetcher)
+    return eraseEverywhereAccount({ store, now: context.now, jobs: jobEraser(store, () => context.now) }, account)
   },
 } as const

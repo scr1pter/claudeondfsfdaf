@@ -8,7 +8,6 @@ import {
   HEAD_SHA_PATTERN,
   JOB_ID_PATTERN,
   JOB_STATES,
-  LASTING_DECLINES,
   LIMITS,
   MILESTONES,
   OUTCOMES,
@@ -40,6 +39,7 @@ import {
   type UntrustedItem,
 } from "../../../packages/schema/src/everywhere.js"
 import { ENDINGS, queueDeadline, type Ending } from "../../../packages/schema/src/everywhere-policy.js"
+import { ApiError } from "../http.js"
 import { appendAudit, type AuditInput } from "./audit.js"
 import type { OfferKey } from "./config.js"
 import { openJson, sealJson, type DataKey } from "./crypto.js"
@@ -48,7 +48,6 @@ import { KEEP_MS, everywhereKeys, userIdValid } from "./keys.js"
 import { signOffer, type SignedOffer } from "./offer.js"
 import {
   deleteKeys,
-  getJson,
   getValue,
   runScript,
   setJson,
@@ -63,11 +62,14 @@ import {
  *
  *   received ─► refused | offered | dispatched | waiting
  *   offered  ─► claimed | dispatched | waiting | refused | expired
- *   claimed  ─► running | lost | refused | offered (released by a decline that is not lasting)
- *   running  ─► settled | lost (laptop only) | failed (Actions only)
+ *   claimed  ─► running | lost | refused (a decline under the lease, whatever its reason)
+ *   running  ─► settled | lost (laptop only) | refused (a decline under the lease) | failed (Actions only)
  *   dispatched ─► running | failed (no start hook in 900 s)
  *   waiting  ─► offered | claimed | expired
  *   any live state ─► cancelled
+ *
+ * A claim is final: a job a computer held never goes back to an offer, the queue or Actions (3.4, E8), so no other
+ * computer and no Actions run can start it while that computer may still be working on it.
  *
  * Every change is one Redis EVAL fenced by the record's version: the script writes only while the record still holds
  * the version and state it was read with, so two changes made from the same read (a claim racing a dispatch) leave
@@ -359,10 +361,45 @@ export function encodeJobRecord(record: JobRecord): string {
   return text
 }
 
-/** A job record, or undefined when there is none. A stored record that does not decode means the store is unwell. */
+/**
+ * A stored job record that does not decode: damage, or a record a newer deployment wrote (a field this one does not
+ * know, after a rollback). Routes answer it as the store being unavailable (503); the sweep and erase tell it apart, so
+ * one such record never stalls the others.
+ */
+class UndecodableJob extends ApiError {
+  constructor() {
+    const base = storeUnavailable()
+    super(base.statusCode, base.code, base.message)
+  }
+}
+
+/** A job record, or undefined when there is none. A stored record that does not decode throws (503). */
 export async function readJob(store: Store, jid: string): Promise<JobRecord | undefined> {
   if (!JOB_ID_PATTERN.test(jid)) return undefined
-  return getJson(store, everywhereKeys.job(jid), decodeJobRecord)
+  const raw = await getValue(store, everywhereKeys.job(jid))
+  if (raw === undefined) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new UndecodableJob()
+  }
+  const job = decodeJobRecord(parsed)
+  if (!job) throw new UndecodableJob()
+  return job
+}
+
+/** A step that failed for one job only: logged with its fixed name, the job id and an error code, never a message. */
+function report(step: string, error: unknown, jid?: string) {
+  const code =
+    error instanceof UndecodableJob
+      ? "undecodable"
+      : error instanceof ApiError
+        ? error.code
+        : error instanceof Busy
+          ? "busy"
+          : "error"
+  console.error("Vector everywhere: a jobs step failed", { step, ...(jid ? { jid } : {}), code })
 }
 
 function decodeBody(value: unknown): JobBody | undefined {
@@ -593,13 +630,23 @@ function withoutKeys<T extends object>(value: T, ...keys: readonly (keyof T)[]):
   return copy
 }
 
+/**
+ * Records a change that is already written. Best effort: the change happened, so a failed append is logged and never
+ * turns it into an error. Otherwise the route would answer 503 and skip its platform post, and the retry would find
+ * the job already moved (a settle answered `fresh: false`, a decline 409), so the result or the fixed reply would never
+ * be posted, and a sweep's ending would never be announced.
+ */
 async function audit(ctx: JobsContext, job: JobRecord, entry: Omit<AuditInput, "platform" | "installation" | "jid">) {
-  await appendAudit(
-    ctx.store,
-    job.sponsor,
-    { platform: job.platform, installation: job.installation, jid: job.jid, ...entry },
-    ctx.now,
-  )
+  try {
+    await appendAudit(
+      ctx.store,
+      job.sponsor,
+      { platform: job.platform, installation: job.installation, jid: job.jid, ...entry },
+      ctx.now,
+    )
+  } catch (error) {
+    report(`audit-${entry.event}`, error, job.jid)
+  }
 }
 
 /** A change lost the race too many times in a row: the store is busy, answered as unavailable. */
@@ -807,7 +854,8 @@ export async function queueJob(ctx: JobsContext, jid: string, until: number): Pr
 
 /**
  * Hands a job to the binder's GitHub Actions: `received` or `offered` to `dispatched`, with @vector's ticket hash
- * (R-A1), which `ticket:<hash>` maps back to the job for the start hook. A claim after this gets 409.
+ * (R-A1), which `ticket:<hash>` maps back to the job for the start hook. A claim after this gets 409, and a job any
+ * computer ever claimed is never dispatched (3.4: the laptop never hands a claimed job to Actions).
  */
 export async function dispatchJob(
   ctx: JobsContext,
@@ -815,11 +863,16 @@ export async function dispatchJob(
   input: { readonly ticketHash: string },
 ): Promise<Moved> {
   if (!TICKET_HASH_PATTERN.test(input.ticketHash)) return { ok: false, code: "wrong-state" }
+  if (!JOB_ID_PATTERN.test(jid)) return notFound()
+  // The ticket goes first, so a dispatch that went through can always be found by the start hook. It is harmless when
+  // the dispatch below loses: `startDispatched` also requires the job to be `dispatched` with this very ticket.
+  await setValue(ctx.store, everywhereKeys.ticket(input.ticketHash), jid, { ttlMs: KEEP_MS.ticket })
   const moved = await change<Moved>(
     ctx,
     jid,
     (job) => {
       if (job.state !== "received" && job.state !== "offered") return { answer: wrongState(job) }
+      if (job.claimedAt !== undefined || job.device !== undefined) return { answer: wrongState(job) }
       return {
         next: withoutKeys(
           next(job, { state: "dispatched", route: "actions", dispatchedAt: ctx.now, ticketHash: input.ticketHash }),
@@ -831,7 +884,6 @@ export async function dispatchJob(
     notFound,
   )
   if (!moved.ok) return moved
-  await setValue(ctx.store, everywhereKeys.ticket(input.ticketHash), jid, { ttlMs: KEEP_MS.ticket })
   await audit(ctx, moved.job, { event: "route", code: "actions" })
   return moved
 }
@@ -967,9 +1019,11 @@ export async function claimJob(
           done: () => ({ ok: false, status: 409, code: "JOB_INVALID" }) as const,
         }
       return {
+        // A claim is final, so the offer round's declines and the queue it would have gone back to are dropped.
         next: withoutKeys(
           next(job, { state: "claimed", route: "laptop", device: input.device, lease, claimedAt: ctx.now, limits }),
           "declines",
+          "queueUntil",
         ),
         body: "require",
         done: (written) => ({ ok: true, job: decoded.value, record: written, fresh: true }),
@@ -989,9 +1043,10 @@ export type DeclineVerdict = { readonly ok: true; readonly recorded: boolean; re
 
 /**
  * A computer turns a job down (3.4 step 5a, 3.5 steps 2 and 3, 4.1). Before a claim the decline is recorded for the
- * offer round the intake is waiting on. After a claim (with its lease) a lasting reason refuses the job with that
- * reason, and any other reason releases it to `offered`, where the intake or the sweep moves it on (to the queue
- * when it has one, else it expires).
+ * offer round the intake is waiting on, where a `busy` decline moves the job on and lasting ones refuse it. After a
+ * claim (with its lease, `claimed` or `running`) the job ends `refused` with the decline's reason, whatever it is: a
+ * claim is final, so a job a computer held never goes back to an offer, the queue or Actions (3.4, E8). For a GitHub
+ * handoff the job's end answers `handled: false`, and @vector's own run goes on.
  */
 export async function declineJob(
   ctx: JobsContext,
@@ -1012,29 +1067,10 @@ export async function declineJob(
       if (input.lease !== undefined || claimedHere) {
         if (!holds(job, input.device, input.lease)) return { answer: MISMATCH }
         if (job.state !== "claimed" && job.state !== "running") return { answer: MISMATCH }
-        if (LASTING_DECLINES.has(input.reason))
-          return {
-            next: ended(job, "refused", ctx.now, { code: input.reason }),
-            done: (written) => ({ ok: true, recorded: true, job: written }),
-          }
-        const released = withoutKeys(
-          next(job, {
-            state: "offered",
-            offeredAt: ctx.now,
-            declines: [{ device: input.device, reason: input.reason }],
-          }),
-          "device",
-          "lease",
-          "claimedAt",
-          "startedAt",
-          "limits",
-          "seq",
-          "milestone",
-          "files",
-          "lastReportAt",
-          "route",
-        )
-        return { next: released, done: (written) => ({ ok: true, recorded: true, job: written }) }
+        return {
+          next: ended(job, "refused", ctx.now, { code: input.reason }),
+          done: (written) => ({ ok: true, recorded: true, job: written }),
+        }
       }
       if (job.state !== "offered") return { answer: { ok: true, recorded: false } }
       const declines = [...(job.declines ?? []).filter((entry) => entry.device !== input.device)]
@@ -1213,16 +1249,57 @@ function timeout(job: JobRecord, now: number, stop: boolean): Decision<Swept> | 
   }
 }
 
-async function sweepOne(ctx: JobsContext, jid: string, stop: boolean): Promise<EndedJob | undefined> {
+/**
+ * Sweeps one job of an index. A job whose record is gone (it expired before any sweep, or was erased) leaves the
+ * indexes named, and its body goes, so it neither comes up again nor holds a place under the live cap.
+ */
+async function sweepOne(
+  ctx: JobsContext,
+  jid: string,
+  stop: boolean,
+  indexes: readonly string[],
+): Promise<EndedJob | undefined> {
+  let gone = false
   const swept = await change<Swept | undefined>(
     ctx,
     jid,
     (job) => timeout(job, ctx.now, stop) ?? { answer: undefined },
-    () => undefined,
+    () => {
+      gone = true
+      return undefined
+    },
   )
+  if (gone) {
+    for (const key of indexes) await ctx.store(["ZREM", key, jid])
+    await deleteKeys(ctx.store, everywhereKeys.jobBody(jid))
+    return undefined
+  }
   if (!swept?.ended) return undefined
   await audit(ctx, swept.job, { event: "settle", code: swept.job.state })
   return swept.ending ? { job: swept.job, ending: swept.ending } : { job: swept.job }
+}
+
+/**
+ * Sweeps each job on its own: a job that fails (a record that does not decode, a change that kept losing) is logged
+ * with its id and an error code and the rest go on, so one bad entry never stalls the sweep or an account's calls. A
+ * record that does not decode keeps its place in the indexes: it may be a newer deployment's live job.
+ */
+async function sweepEach(
+  ctx: JobsContext,
+  jids: readonly string[],
+  stop: boolean,
+  indexes: readonly string[],
+): Promise<EndedJob[]> {
+  const done: EndedJob[] = []
+  for (const jid of jids) {
+    try {
+      const result = await sweepOne(ctx, jid, stop, indexes)
+      if (result) done.push(result)
+    } catch (error) {
+      report("sweep", error, jid)
+    }
+  }
+  return done
 }
 
 function members(value: unknown): string[] {
@@ -1240,13 +1317,9 @@ export async function sweepAccount(
   account: string,
   options: { readonly stop?: boolean } = {},
 ): Promise<EndedJob[]> {
-  const jids = members(await ctx.store(["ZRANGE", everywhereKeys.jobs(account), 0, -1]))
-  const done: EndedJob[] = []
-  for (const jid of jids) {
-    const result = await sweepOne(ctx, jid, options.stop === true)
-    if (result) done.push(result)
-  }
-  return done
+  const live = everywhereKeys.jobs(account)
+  const jids = members(await ctx.store(["ZRANGE", live, 0, -1]))
+  return sweepEach(ctx, jids, options.stop === true, [live, everywhereKeys.jobsDue()])
 }
 
 /**
@@ -1260,13 +1333,9 @@ export async function sweepDue(
   const limit = options.limit ?? 200
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) throw new RangeError("Pick 1 to 1,000.")
   const max = options.stop ? "+inf" : ctx.now
-  const jids = members(await ctx.store(["ZRANGEBYSCORE", everywhereKeys.jobsDue(), "-inf", max, "LIMIT", 0, limit]))
-  const done: EndedJob[] = []
-  for (const jid of jids) {
-    const result = await sweepOne(ctx, jid, options.stop === true)
-    if (result) done.push(result)
-  }
-  return done
+  const due = everywhereKeys.jobsDue()
+  const jids = members(await ctx.store(["ZRANGEBYSCORE", due, "-inf", max, "LIMIT", 0, limit]))
+  return sweepEach(ctx, jids, options.stop === true, [due])
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1343,7 +1412,7 @@ export async function recordSeen(
   await setJson(ctx.store, everywhereKeys.seen(owner), { at: ctx.now, device }, { ttlMs: KEEP_MS.seen })
   if (readiness) {
     const ready: Ready = { account: owner, at: ctx.now, ...pickReadiness(readiness) }
-    await setJson(ctx.store, everywhereKeys.ready(device), ready, { ttlMs: KEEP_MS.ready })
+    await setJson(ctx.store, everywhereKeys.ready(owner, device), ready, { ttlMs: KEEP_MS.ready })
   }
 }
 
@@ -1367,7 +1436,7 @@ export async function readComputer(
   const owner = account.toLowerCase()
   const seen = await readSoft(store, everywhereKeys.seen(owner), decodeSeen)
   if (!seen) return {}
-  const ready = await readSoft(store, everywhereKeys.ready(seen.device), decodeReady)
+  const ready = await readSoft(store, everywhereKeys.ready(owner, seen.device), decodeReady)
   return ready && ready.account === owner
     ? { lastSeen: seen.at, readiness: pickReadiness(ready) }
     : { lastSeen: seen.at }
@@ -1382,11 +1451,16 @@ export async function offerWaiting(ctx: JobsContext, account: string): Promise<{
   const offers: string[] = []
   let waiting = 0
   for (const jid of jids) {
-    const job = await readJob(ctx.store, jid)
-    if (!job || job.state !== "waiting" || !sponsored(job, account)) continue
-    waiting++
-    const offered = await offerJob(ctx, jid)
-    if (offered.ok) offers.push(offered.offer.offer)
+    // Each job on its own: one that fails is logged and the computer still hears of the others.
+    try {
+      const job = await readJob(ctx.store, jid)
+      if (!job || job.state !== "waiting" || !sponsored(job, account)) continue
+      waiting++
+      const offered = await offerJob(ctx, jid)
+      if (offered.ok) offers.push(offered.offer.offer)
+    } catch (error) {
+      report("offer-waiting", error, jid)
+    }
   }
   return { offers, waiting }
 }
@@ -1400,8 +1474,16 @@ export async function eraseInstallationJobs(ctx: JobsContext, installation: stri
   const key = everywhereKeys.installationJobs(installation)
   let cancelled = 0
   for (const jid of members(await ctx.store(["ZRANGE", key, 0, -1]))) {
-    const moved = await cancelJob(ctx, jid)
-    if (moved.ok) cancelled++
+    try {
+      const moved = await cancelJob(ctx, jid)
+      if (moved.ok) cancelled++
+    } catch (error) {
+      if (!(error instanceof UndecodableJob)) throw error
+      // A record this deployment cannot read is on this installation's live index, so it is this installation's job:
+      // it goes, rather than stopping the erase for good.
+      await deleteKeys(ctx.store, everywhereKeys.job(jid))
+      await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
+    }
     // A job that is gone or already ended may still hold a body: erase it all the same.
     await deleteKeys(ctx.store, everywhereKeys.jobBody(jid))
   }
@@ -1415,7 +1497,14 @@ export async function eraseInstallationJobs(ctx: JobsContext, installation: stri
  */
 export async function eraseAccountJobs(ctx: JobsContext, account: string): Promise<void> {
   const owner = account.toLowerCase()
-  for (const jid of members(await ctx.store(["ZRANGE", everywhereKeys.jobs(owner), 0, -1]))) await cancelJob(ctx, jid)
+  for (const jid of members(await ctx.store(["ZRANGE", everywhereKeys.jobs(owner), 0, -1]))) {
+    try {
+      await cancelJob(ctx, jid)
+    } catch (error) {
+      // A record this deployment cannot read is deleted with the history below.
+      if (!(error instanceof UndecodableJob)) throw error
+    }
+  }
   const history = everywhereKeys.jobHistory(owner)
   for (const jid of members(await ctx.store(["ZRANGE", history, 0, -1]))) {
     const job = await readJob(ctx.store, jid).catch(() => undefined)
@@ -1424,7 +1513,7 @@ export async function eraseAccountJobs(ctx: JobsContext, account: string): Promi
     await ctx.store(["ZREM", everywhereKeys.jobsDue(), jid])
   }
   const seen = await readSoft(ctx.store, everywhereKeys.seen(owner), decodeSeen)
-  if (seen) await deleteKeys(ctx.store, everywhereKeys.ready(seen.device))
+  if (seen) await deleteKeys(ctx.store, everywhereKeys.ready(owner, seen.device))
   await deleteKeys(ctx.store, history, everywhereKeys.jobs(owner))
 }
 

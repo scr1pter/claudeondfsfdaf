@@ -45,6 +45,21 @@ const step = (job: string, name: string) => lane.jobs[job]?.steps?.find((entry) 
 const paths = (lane.on.pull_request as { paths: string[] }).paths
 const matches = (file: string) => paths.some((pattern) => new Bun.Glob(pattern).match(file))
 
+/** The files outside api/_lib/everywhere and api/everywhere that the everywhere server code imports by relative path. */
+const serverImports = await (async () => {
+  const found = new Set<string>()
+  for (const dir of ["api/_lib/everywhere", "api/everywhere"])
+    for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: path.join(root, dir) })) {
+      const source = await read(path.posix.join(dir, file))
+      for (const match of source.matchAll(/from\s+"(\.\.?\/[^"]+)"/g)) {
+        const target = path.posix.normalize(path.posix.join(dir, path.posix.dirname(file), match[1]!))
+        if (!target.startsWith("api/_lib/everywhere/") && !target.startsWith("api/everywhere/"))
+          found.add(target.replace(/\.js$/, ".ts"))
+      }
+    }
+  return [...found].sort()
+})()
+
 const SCOPE = step("scope", "Decide whether this run concerns Vector everywhere")?.run ?? ""
 const PICKER = step("tests", "Run every Vector everywhere test file")?.run ?? ""
 
@@ -274,6 +289,7 @@ describe("the lane's shape", () => {
     expect(zones.filter((file) => !matches(file))).toEqual([])
     const helpers = [
       "api/_lib/http.ts",
+      "api/_lib/abuse.ts",
       "api/_lib/persistent-store.ts",
       "api/_lib/account.ts",
       "api/_lib/cli-token.ts",
@@ -285,6 +301,10 @@ describe("the lane's shape", () => {
     expect(helpers.filter((file) => !matches(file))).toEqual([])
     // A helper that moves on main would silently stop starting the lane.
     expect(helpers.filter((file) => !existsSync(path.join(root, file)))).toEqual([])
+    // Worked out from the code too: every file outside the everywhere zones that the server code imports.
+    expect(serverImports.length).toBeGreaterThan(0)
+    expect(serverImports.filter((file) => !matches(file))).toEqual([])
+    expect(serverImports.filter((file) => !existsSync(path.join(root, file)))).toEqual([])
     const unrelated = [
       "README.md",
       "api/_lib/usage.ts",
