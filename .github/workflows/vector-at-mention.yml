@@ -1,7 +1,7 @@
-name: Vector isolation diagnostic
+name: Vector namespace-entry experiment
 
-# One disposable hosted probe to identify a setup refusal. This diagnostic branch
-# does not qualify the full native matrix or change the production containment floor.
+# One disposable namespace-entry experiment. The actual ShellTool acceptance
+# assertions remain unchanged and held; this is not the production native matrix.
 on:
   push:
     branches: [build-isolation]
@@ -13,8 +13,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  sandbox-probe:
-    name: sandbox (${{ matrix.mode }}, ${{ matrix.scenario }}, ${{ matrix.runtime || 'node' }})
+  namespace-entry-prototype:
+    name: namespace entry only (Codium, Node)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -82,8 +82,13 @@ jobs:
           bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
           bun packages/engine/script/stage-sandbox-probe.ts
           bun build --target=node packages/engine/src/cli/cmd/github.secrets.ts --outfile "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs"
+          bun build --target=node packages/engine/test/fixture/namespace-entry-engine.ts --outfile "$RUNNER_TEMP/vector-probe-tools/namespace-entry-engine.mjs"
+          bun build --target=node packages/engine/test/fixture/namespace-entry-host.ts --outfile "$RUNNER_TEMP/vector-probe-tools/namespace-entry-host.mjs"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
+          sudo -n install -o root -g root -m 0444 packages/engine/test/fixture/namespace-entry-probe.py /opt/vector-namespace-entry.py
+          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-engine.mjs" /opt/vector-namespace-entry-engine.mjs
+          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-host.mjs" /opt/vector-namespace-entry-host.mjs
           sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
           cc -shared -fPIC -O2 packages/engine/test/fixture/sandbox-loader-probe.c -o "$RUNNER_TEMP/vector-probe-tools/loader-probe.so"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/loader-probe.so" /opt/vector-probe-loader.so
@@ -97,23 +102,25 @@ jobs:
       - name: Prepare the agent sandbox
         run: vector github sandbox prepare
 
-      - name: Run the unprivileged probe
+      - name: Prepare the secret-free namespace experiment before channel capture
+        id: namespace_prepare
+        run: sudo -n /usr/bin/python3 -I -S /opt/vector-namespace-entry.py prepare "$RUNNER_TEMP/vector-sandbox/state.json"
+
+      - name: Run the namespace-entry and host-supervised cancellation experiment
         id: agent
         shell: env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}
-        run: |
-          if [ "$PROBE_SCENARIO" = bundle-refusal ]; then
-            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --bundle-refusal
-          elif [ "$PROBE_SCENARIO" = session-replaced ]; then
-            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --session-replaced
-          elif [ "$PROBE_RUNTIME" = bun ]; then
-            vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe.mjs
-          else
-            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
-          fi
+        run: node /opt/vector-namespace-entry-host.mjs
 
-      - name: Observe the synthetic probe report
+      - name: Stop the disposable UID before removing owned namespace pins
+        id: namespace_cleanup
         if: always()
-        run: node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --observe
+        working-directory: ${{ runner.temp }}
+        run: |
+          if [ -f /opt/vector-namespace-entry-private.json ]; then
+            sudo -n /usr/bin/python3 -I -S /opt/vector-namespace-entry.py cleanup
+          else
+            test '${{ steps.namespace_prepare.outcome }}' = skipped
+          fi
 
       - name: Finish the agent sandbox
         id: sandbox_finish
@@ -121,29 +128,25 @@ jobs:
         continue-on-error: true
         run: vector github sandbox finish
 
-      - name: Artifact boundary sentinel
-        id: artifact_boundary
-        if: always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'
-        working-directory: ${{ runner.temp }}
-        run: touch "$RUNNER_TEMP/vector-probe-tools/upload-allowed"
-
-      - name: Assert isolation, crash protection and cleanup
+      - name: Assert the limited experiment and actual sandbox cleanup
         if: always()
         working-directory: ${{ runner.temp }}
         env:
           PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
-          PROBE_UPLOAD_OUTCOME: ${{ steps.artifact_boundary.outcome }}
-        run: node /opt/vector-sandbox-probe.mjs --assert
+          PROBE_NAMESPACE_CLEANUP_OUTCOME: ${{ steps.namespace_cleanup.outcome }}
+          PROBE_AGENT_OUTCOME: ${{ steps.agent.outcome }}
+        run: node /opt/vector-namespace-entry-host.mjs --assert
 
       - name: Observe fixed AppArmor denial categories and remove the diagnostic label
         if: always()
         working-directory: ${{ runner.temp }}
         env:
           PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
+          PROBE_NAMESPACE_CLEANUP_OUTCOME: ${{ steps.namespace_cleanup.outcome }}
         run: |
           set -euo pipefail
           cleanup_profile() {
-            if [ "$PROBE_FINISH_OUTCOME" != success ]; then
+            if [ "$PROBE_FINISH_OUTCOME" != success ] || [ "$PROBE_NAMESPACE_CLEANUP_OUTCOME" != success ]; then
               echo 'Sandbox UID cleanup was not proven; the owned diagnostic label remains until disposable VM teardown.'
               return
             fi

@@ -10,6 +10,10 @@ profile vector-isolation-diagnostic flags=(attach_disconnected,mediate_deleted) 
   ptrace,
   capability setuid,
   capability setgid,
+  # The CI-only namespace-entry launcher drops every bounding-set bit before executing any tool.
+  capability setpcap,
+  # Needed only by immutable setup's parent-UID0 map; every model payload asserts all capability sets are empty.
+  capability setfcap,
   capability dac_override,
   capability sys_admin,
   capability sys_chroot,
