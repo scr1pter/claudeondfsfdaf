@@ -448,6 +448,7 @@ describe("the variant registry", () => {
       "engine:rule-strict",
       "engine:verify-cert",
       "engine:explore-slice",
+      "engine:receipt-json",
     ])
     for (const adapter of ["engine", "desktop"] as const)
       for (const name of variantNames(adapter)) {
@@ -536,6 +537,7 @@ describe("the variant registry", () => {
       "engine:rule-strict": "VS-43 wiring",
       "engine:verify-cert": "VS-44 wiring",
       "engine:explore-slice": "VS-49 wiring",
+      "engine:receipt-json": "VS-47 runner wiring",
     })
     // Addendum A's entries are pending on both runners and set no key yet, and an addendum name whose package has not
     // begun here is still unknown.
@@ -546,6 +548,7 @@ describe("the variant registry", () => {
       "rule-strict",
       "verify-cert",
       "explore-slice",
+      "receipt-json",
     ] as const) {
       const entry: VariantEntry = VARIANTS[suffix]
       expect(Object.hasOwn(entry, "keys") || Object.hasOwn(entry, "models")).toBe(false)

@@ -571,3 +571,93 @@ export const UNAPPLIED_REVIEW_KEYS = [
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:
 // the plan's proposed default. Today's default stays DEFAULT_REVIEW_CONFIG.verify while the policy is "legacy".
 export const SHARED_VERIFY_DEFAULT: ReviewConfig["verify"] = "all"
+
+// VS-47's observation contract only. No runner populates it and ReviewOutcome has no receipt field yet.
+export type ReceiptUnavailable =
+  | "not-recorded"
+  | "unsupported"
+  | "not-applicable"
+  | "observer-failed"
+  | "limit"
+  | "upstream-not-reported"
+export type ReceiptFact<T> =
+  | { readonly state: "observed"; readonly value: T }
+  | { readonly state: "unavailable"; readonly reason: ReceiptUnavailable }
+export type ReceiptObservation<T, S extends string> =
+  | { readonly state: "observed"; readonly runID: string; readonly head: string; readonly source: S; readonly value: T }
+  | { readonly state: "unavailable"; readonly reason: ReceiptUnavailable }
+export interface ReceiptRoute {
+  readonly requestID: string
+  readonly requestKind: "openai-chat" | "openai-responses" | "anthropic-messages" | "google-generate" | "other"
+  readonly provider: string
+  readonly operator:
+    | "openai"
+    | "anthropic"
+    | "google"
+    | "openrouter"
+    | "loopback"
+    | "vector-codium"
+    | "vector-free"
+    | "upstream-not-reported"
+  readonly decision:
+    | {
+        readonly allowed: true
+        readonly kind: "standard" | "loopback" | "openrouter-attested" | "attested-provider" | "attested-host"
+      }
+    | { readonly allowed: false; readonly refusal: string }
+  readonly sent: boolean
+  readonly transport: "sync" | "not-sent"
+  readonly cacheTtls: ReceiptFact<readonly ("5m" | "1h" | "24h")[]>
+  readonly store: ReceiptFact<boolean>
+  readonly zdr: ReceiptFact<boolean>
+  readonly account: "byok" | "loopback" | "vector-codium" | "vector-free" | "unreported"
+  readonly vendorStore: "none" | "vector-codium" | "vector-free" | "upstream-not-reported"
+  // A wire flag does not establish the upstream provider's retention behavior.
+  readonly upstreamRetention: "not-reported"
+}
+export interface ReceiptContext {
+  readonly source:
+    | "diff"
+    | "head"
+    | "base-instructions"
+    | "scoped-instructions"
+    | "impact"
+    | "history"
+    | "cards"
+    | "requirements"
+  readonly state: "used" | "fallback" | "missing" | "off" | "incomplete"
+  readonly paths: readonly string[]
+}
+export type ReceiptCheck = {
+  readonly status: "completed"
+  readonly files: readonly string[]
+} & (
+  | { readonly kind: "pass"; readonly name: "review" | "security" | "verify" | "judge" | "repro" }
+  | { readonly kind: "lens"; readonly name: ReviewLens }
+  | { readonly kind: "strict-rule"; readonly name: "S1" | "S2" | "S3" | "S4" | "S5" | "S6" | "S7" | "S8" | "S9" }
+)
+export interface ReviewReceipt {
+  readonly version: 1
+  readonly runID: string
+  readonly head: string
+  readonly references: readonly ["skipped", "unreviewed", "specialists", "passes"]
+  readonly routes: ReceiptObservation<readonly ReceiptRoute[], "transport-observer">
+  readonly context: ReceiptObservation<readonly ReceiptContext[], "context-collector">
+  readonly checked: ReceiptObservation<readonly ReceiptCheck[], "run-observer">
+  readonly holdback: ReceiptObservation<
+    {
+      readonly redactions: readonly { readonly path: string; readonly diff: number; readonly head: number }[]
+      readonly ignoredCommitted: readonly string[]
+    },
+    "holdback-collector"
+  >
+  readonly suppression: ReceiptObservation<
+    {
+      readonly baseProtection: "confirmed" | "unavailable"
+      readonly root: "applied" | "not-applied"
+      readonly nested: "not-applied"
+    },
+    "trusted-base-policy"
+  >
+  readonly verdict: "not-reviewed" | "policy-skip" | "incomplete" | "blocking" | "findings" | "clean-complete"
+}

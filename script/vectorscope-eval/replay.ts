@@ -260,6 +260,11 @@ export const VARIANTS = {
       pending: "VS-49's desktop half, a documented difference until the desktop runner records session events",
     },
   },
+  "receipt-json": {
+    planned: 'receipt: "json", built only from recorded execution facts',
+    engine: { pending: "VS-47 runner wiring" },
+    desktop: { pending: "VS-47 desktop wiring" },
+  },
 } as const satisfies Record<string, VariantEntry>
 
 export type VariantResolution =
