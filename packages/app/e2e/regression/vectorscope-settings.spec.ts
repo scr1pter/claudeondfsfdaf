@@ -234,8 +234,82 @@ test("the owner saves a separate model, variant and disable setting only after c
   await expect(chosen).toContainText("Maker Text")
   await chosen.click()
   await expect(settings.getByRole("button", { name: "VectorScope model", exact: true })).toContainText("Maker Text")
+  const variantSnapshot = async (stage: string) => {
+    try {
+      const snapshot = await page.evaluate(() => {
+        const state = (element: Element) => {
+          const style = getComputedStyle(element)
+          const rect = element.getBoundingClientRect()
+          return {
+            tag: element.tagName,
+            id: element.id.slice(0, 120),
+            role: element.getAttribute("role"),
+            expanded: element.getAttribute("aria-expanded"),
+            disabled: element.hasAttribute("disabled"),
+            ariaDisabled: element.getAttribute("aria-disabled"),
+            ariaHidden: element.getAttribute("aria-hidden"),
+            hidden: element.hasAttribute("hidden"),
+            inert: element.hasAttribute("inert"),
+            display: style.display,
+            visibility: style.visibility,
+            pointerEvents: style.pointerEvents,
+            zIndex: style.zIndex,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          }
+        }
+        const ancestors = (element: Element) => {
+          const result = []
+          let parent = element.parentElement
+          while (parent && result.length < 8) {
+            result.push(state(parent))
+            parent = parent.parentElement
+          }
+          return result
+        }
+        const named = (element: Element) => {
+          const labelled = (element.getAttribute("aria-labelledby") ?? "")
+            .split(/\s+/)
+            .slice(0, 4)
+            .map((id) => document.getElementById(id)?.textContent ?? "")
+            .join(" ")
+          return {
+            ...state(element),
+            name: (element.getAttribute("aria-label") || labelled || element.textContent || "").trim().slice(0, 160),
+            ancestors: ancestors(element),
+          }
+        }
+        const trigger = document.querySelector('[data-component="vectorscope-settings"] [data-component="select-v2"]')
+        return {
+          trigger: trigger ? named(trigger) : undefined,
+          // DOM queries deliberately include roles hidden from Playwright's
+          // accessible lookup. Names and ancestry stay bounded fixture data.
+          roles: [...document.querySelectorAll('[role="listbox"], [role="option"]')].slice(0, 16).map(named),
+          portals: [...document.querySelectorAll('[data-slot="select-v2-content"]')].slice(0, 4).map(named),
+          host: (
+            globalThis as typeof globalThis & { scopeSettingsTrace?: { snapshot?: () => unknown } }
+          ).scopeSettingsTrace?.snapshot?.(),
+        }
+      })
+      console.log("SCOPE_VARIANT_POPUP_DIAGNOSTIC", JSON.stringify({ stage, snapshot }))
+    } catch (error) {
+      console.log("SCOPE_VARIANT_POPUP_DIAGNOSTIC", {
+        stage,
+        unavailable: error instanceof Error ? error.message.slice(0, 300) : "Page unavailable",
+      })
+    }
+  }
   await settings.locator('[data-component="select-v2"]').click()
-  await page.getByRole("option", { name: "high", exact: true }).click()
+  // Keep a pre-wait snapshot too: the enclosing test deadline may expire
+  // together with the ordinary click, leaving no page for its failure handler.
+  await variantSnapshot("after-trigger-click")
+  await page
+    .getByRole("option", { name: "high", exact: true })
+    .click()
+    .catch(async (error: unknown) => {
+      await variantSnapshot("high-option-failed")
+      throw error
+    })
   await disableReviews(settings)
   expect(app.capture.config).toEqual([])
   await settings.getByRole("button", { name: "Save VectorScope settings", exact: true }).click()
