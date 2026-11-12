@@ -17,13 +17,20 @@ afterEach(() => {
   if (prior === undefined) delete process.env[ChildEnvironment.AGENT_MARKER]
   else process.env[ChildEnvironment.AGENT_MARKER] = prior
 })
-async function invoke(argv: string[], vector = true) {
+async function invoke(argv: string[], vector = true, githubActions = false) {
   const calls: string[] = []
   let failure: unknown
   await yargs(argv)
     .exitProcess(false)
     .help(false)
     .version(false)
+    .command({
+      command: "codium",
+      aliases: ["credits"],
+      handler: () => {
+        calls.push("handler")
+      },
+    })
     .command({
       ...WorkflowCommand,
       handler: () => {
@@ -61,6 +68,7 @@ async function invoke(argv: string[], vector = true) {
         options,
         vector,
         accountRequired: true,
+        githubActions,
         local: async () => {
           calls.push("local")
         },
@@ -75,6 +83,12 @@ async function invoke(argv: string[], vector = true) {
     })
   return { calls, failure }
 }
+test("both Actions status aliases bypass account transport while ordinary status keeps its gate", async () => {
+  for (const command of ["codium", "credits"]) {
+    expect(await invoke([command], true, true)).toEqual({ calls: ["handler"], failure: undefined })
+    expect(await invoke([command], true, false)).toEqual({ calls: ["account", "handler"], failure: undefined })
+  }
+})
 test("real workflow argv keeps offline validation ahead of all account transport", async () => {
   expect(await invoke(["workflow", "validate", "./fixture.json"])).toEqual({ calls: ["handler"], failure: undefined })
   expect(await invoke(["workflow", "validate", "saved-name", "--attach", "http://localhost:4096"])).toEqual({

@@ -16,6 +16,7 @@ export async function commandGate(input: {
   options: CommandOptions
   vector: boolean
   accountRequired: boolean
+  githubActions?: boolean
   local: (attach?: string) => Promise<unknown>
   account: () => Promise<unknown>
 }) {
@@ -34,5 +35,8 @@ export async function commandGate(input: {
   if (opts.local === true && command === "run")
     await input.local(typeof opts.attach === "string" ? opts.attach : undefined)
   const offline = command === "workflow" && opts.action === "validate" && opts.attach === undefined
-  if (active && input.vector && input.accountRequired && !offline) await input.account()
+  // Public Actions output has no account status command. Keep owner/local checks above, but do not read a
+  // credential or start account transport for either spelling of this silent command.
+  const silentStatus = input.githubActions === true && (command === "codium" || command === "credits")
+  if (active && input.vector && input.accountRequired && !offline && !silentStatus) await input.account()
 }

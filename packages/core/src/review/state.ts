@@ -267,6 +267,9 @@ export interface ClassifyContext {
   thread?: ThreadInfo
   isWriter: (login: string) => boolean // a cached permission lookup
   prAuthor: string
+  // The workflow's mentions (its MENTIONS), the App handle included once the workflow bakes it in; DEFAULT_MENTIONS when
+  // absent. The route job reads a dismissal with the same list.
+  mentions?: string[]
 }
 
 export interface ClassifiedPrior extends PriorFinding {
@@ -294,7 +297,8 @@ export function classifyPrior(prior: PriorFinding, ctx: ClassifyContext): Classi
   const signals: string[] = []
   if (thread?.resolved && thread.resolvedBy) signals.push(thread.resolvedBy)
   for (const reaction of thread?.reactions ?? []) if (thumbsDown(reaction.content)) signals.push(...reaction.users)
-  for (const reply of thread?.replies ?? []) if (dismissReply(reply.body)) signals.push(reply.author)
+  for (const reply of thread?.replies ?? [])
+    if (dismissReply(reply.body, ctx.mentions ?? DEFAULT_MENTIONS)) signals.push(reply.author)
 
   // Only writers and the PR author can dismiss. A blocking security finding needs a writer other than the author.
   const guarded = prior.severity === "blocking" && prior.category === "security"
@@ -317,12 +321,12 @@ function thumbsDown(content: string): boolean {
 }
 
 // A reply starting with one of the phrases, or a `/vector dismiss` command. The command is read by the parser the
-// route job runs, so both jobs agree on it: a quote-reply ending in the command counts, "/vector dismissal" does not.
-function dismissReply(body: string): boolean {
+// route job runs, with the same mentions, so both jobs agree on it: a quote-reply ending in the command counts,
+// "/vector dismissal" does not, and `@<slug> dismiss` counts once the workflow's MENTIONS names the App.
+function dismissReply(body: string, mentions: string[]): boolean {
   const text = body.trim().toLowerCase().replace(/’/g, "'")
   return (
-    DISMISS_PHRASES.some((phrase) => text.startsWith(phrase)) ||
-    parseReviewCommand(body, DEFAULT_MENTIONS).kind === "dismiss"
+    DISMISS_PHRASES.some((phrase) => text.startsWith(phrase)) || parseReviewCommand(body, mentions).kind === "dismiss"
   )
 }
 

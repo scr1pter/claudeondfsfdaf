@@ -1,3 +1,4 @@
+import { GithubSecrets } from "@/cli/cmd/github.secrets"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { InstanceBootstrap } from "@/project/bootstrap"
@@ -22,6 +23,14 @@ const freeModelCredentials = makeGlobalNode({
       const auth = yield* Auth.Service
       return FreeModels.CredentialsService.of({
         get: Effect.fn("FreeModels.legacyCredential")(function* (provider) {
+          // A pending run has no account/own-key fallback. Its credential appears only after the starting heartbeat.
+          if (GithubSecrets.credentials.pendingRunToken())
+            return provider === "vector" ? GithubSecrets.credentials.runToken() : undefined
+          const channel =
+            provider === "vector"
+              ? GithubSecrets.credentials.cliToken()
+              : GithubSecrets.credentials.providerKeys().OPENROUTER_API_KEY
+          if (channel) return channel
           const environment = process.env[provider === "vector" ? "VECTOR_CLI_TOKEN" : "OPENROUTER_API_KEY"]
           if (environment) return environment
           const stored = yield* auth.get(provider).pipe(Effect.orDie)

@@ -4,7 +4,9 @@ import { PublicSession } from "@vectordevai/schema/public-session"
 export function prepareGithubEnvironment(env: Record<string, string | undefined>, review: boolean) {
   const stale =
     env.GITHUB_ACTIONS === "true" &&
-    (env.VECTOR_WORKFLOW_VERSION !== GITHUB_WORKFLOW_VERSION || (review && !env.VECTOR_CONFIG_CONTENT))
+    (!/^\d+$/.test(env.VECTOR_WORKFLOW_VERSION ?? "") ||
+      Number(env.VECTOR_WORKFLOW_VERSION) < Number(GITHUB_WORKFLOW_VERSION) ||
+      (review && !env.VECTOR_CONFIG_CONTENT))
   const app = env.USE_GITHUB_TOKEN !== "true" && ["auto", "app"].includes(env.VECTOR_GITHUB_AUTH ?? "")
   if (review || app) {
     env.VECTOR_PURE = "1"

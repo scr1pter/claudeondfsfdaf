@@ -193,7 +193,7 @@ Columns: (a) a session that ran only on Codium; (b) a mixed session, here with $
 
 - **Builders.** `packages/engine/src/cli/cmd/github.evidence.ts:106-129` (`measureCost`) and `:258-271` (`formatCost`), added to the body at `:207`. Posted at `cmd/github.handler.ts:649,682,699,723,729`, built at `:1437-1448`, with subagents counted from `:1466`.
 - **Codium only:** `**Cost:** Codium · Vector Codium · <model> · 4 turns`.
-- **Mixed:** `**Cost:** $0.12 + Codium · 48.2k in / 3.1k out on your keys · 4 turns`. `measureCost` sorts each message with `Billing.of(message.info)`. `MeasuredCost` gains `codiumTurns`, and its token fields become own-only.
+- **Mixed:** `**Cost:** $0.12 + Codium · 48.2k in / 3.1k out from other models · 4 turns`. `measureCost` sorts each message with `Billing.of(message.info)`, including the existing stamped-step override and positive provider identity check. `MeasuredCost` gains `codiumTurns`, and its token fields exclude Codium. Portable messages do not retain free-model versus OAuth-plan provenance: a zero non-Codium subtotal omits the price, without inferring either label from current credentials. Durable review-pass `costKind` may still support the more specific labels elsewhere in this plan.
 - **Vectorscope sticky comment and Actions log:** see 3.4.
 - **`vector github install`** (`github.handler.ts:228,1935-1942`) does not offer Codium. No change.
 

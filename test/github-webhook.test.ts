@@ -17,6 +17,11 @@ import {
   routeOpsEvent,
   type OpsPullRequest,
 } from "../api/_lib/github-webhook-handlers/ops"
+import {
+  cloudAgentsWebhookHandler,
+  createCloudAgentsWebhookHandler,
+} from "../api/_lib/github-webhook-handlers/cloud-agents"
+import type { RepoBinding, SuspendReason } from "../api/_lib/cloud-agents-binding"
 import { switchKey } from "../api/_lib/codium-switches"
 import { ApiError } from "../api/_lib/http"
 import {
@@ -291,18 +296,14 @@ describe("the router", () => {
 })
 
 describe("the route", () => {
-  test("takes the raw body, registers the ops handler, and Codex's handler fits beside it", async () => {
+  test("takes the raw body and registers the actual ops and cloud-agent handlers together", async () => {
     expect(webhookConfig).toEqual({ api: { bodyParser: false } })
-    expect(GITHUB_WEBHOOK_HANDLERS.map((handler) => handler.id)).toEqual(["ops"])
+    expect(GITHUB_WEBHOOK_HANDLERS.map((handler) => handler.id)).toEqual(["ops", "cloud-agents"])
+    expect(GITHUB_WEBHOOK_HANDLERS).toContain(cloudAgentsWebhookHandler)
     for (const handler of GITHUB_WEBHOOK_HANDLERS)
       for (const event of handler.events) expect(GITHUB_APP_WEBHOOK_EVENTS as readonly string[]).toContain(event)
-    // Codex's handler as its spec 2.14 defines it: id "cloud-agents", events ["repository"].
-    const cloudAgentsWebhookHandler: GithubWebhookHandler = {
-      id: "cloud-agents",
-      events: ["repository"],
-      handle: async () => {},
-    }
-    expect(checkGithubWebhookHandlers([...GITHUB_WEBHOOK_HANDLERS, cloudAgentsWebhookHandler])).toHaveLength(2)
+    expect(cloudAgentsWebhookHandler.events).toEqual(["repository"])
+    expect(checkGithubWebhookHandlers(GITHUB_WEBHOOK_HANDLERS)).toHaveLength(2)
     // The deployed route reads its secret per request.
     delete process.env.VECTOR_GITHUB_APP_WEBHOOK_SECRET
     expect((await deliver(webhookRoute, { event: "ping" })).status).toBe(503)
@@ -489,7 +490,10 @@ describe("deployments → Release Guard", () => {
     process.env.VECTOR_OPS_ENABLED = "true"
     // Release Guard not listed, and the account not on the owner's allowlist: no watch either.
     delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
-    expect(await route(event("deployment_status", deploymentStatus()))).toEqual({ kind: "ignored", reason: "not-listed" })
+    expect(await route(event("deployment_status", deploymentStatus()))).toEqual({
+      kind: "ignored",
+      reason: "not-listed",
+    })
     expect(releases()).toBe(0)
     process.env.CODIUM_LISTED_PERKS = "release-guard"
     world.seed(MAX, "vector-100", "renewing")
@@ -730,4 +734,144 @@ test("a Pro account with settings left over never reaches the Worker", async () 
   await ready(PRO, "vector-50")
   expect(await route(event("deployment_status", deploymentStatus()))).toEqual({ kind: "ignored", reason: "plan" })
   expect(releases()).toBe(0)
+})
+
+// The production registration topology, with the real handler factory's persistence seam and the real ops handler.
+// These cases prove signed routing/fanout/retry; the binding helpers' atomic Redis fences are tested separately.
+function cloudBindingFixture() {
+  const state = {
+    binding: {
+      repositoryId: String(REPO),
+      ownerId: "7",
+      repository: "old/project",
+      account: MAX,
+      visibility: "private",
+      defaultRef: "refs/heads/main",
+      generation: 1,
+      binder: { githubId: "9", login: "writer" },
+      workflowVersion: "3",
+      boundAt: world.now,
+    } as RepoBinding,
+    reads: [] as string[],
+    suspended: [] as { generation: number; reason: SuspendReason }[],
+    renamed: [] as string[],
+    fail: false,
+  }
+  const handler = createCloudAgentsWebhookHandler({
+    bindingFor: async (repositoryId) => {
+      state.reads.push(repositoryId)
+      return state.binding.repositoryId === repositoryId ? { ...state.binding } : undefined
+    },
+    suspendBinding: async (binding, reason) => {
+      if (state.fail) throw new ApiError(503, "PERSISTENT_STORE_UNAVAILABLE", "fixture-only failure")
+      if (state.binding.account !== binding.account || state.binding.generation !== binding.generation) return
+      state.suspended.push({ generation: binding.generation, reason })
+      state.binding = { ...state.binding, generation: binding.generation + 1, suspended: reason }
+    },
+    renameBinding: async (_repositoryId, repository) => {
+      state.renamed.push(repository)
+      state.binding = { ...state.binding, repository }
+    },
+  })
+  const route = createGithubWebhookRoute({
+    handlers: GITHUB_WEBHOOK_HANDLERS.map((registered) => {
+      if (registered.id === "ops") return createOpsWebhookHandler({ fetcher: world.fetcher(), clock: () => world.now })
+      if (registered === cloudAgentsWebhookHandler) return handler
+      throw new Error("Provide a scoped dependency seam for the new registered handler")
+    }),
+    fetcher: world.fetcher(),
+  })
+  return { state, route }
+}
+
+describe("the registered cloud-agent repository handler through the signed router", () => {
+  test("a signed deletion reaches both real handlers once; invalid signatures reach neither", async () => {
+    await ready()
+    const f = cloudBindingFixture()
+    const payload = { action: "deleted", repository: { id: REPO } }
+    const before = world.fakes.store.commands.length
+    expect(
+      (await deliver(f.route, { event: "repository", payload, signature: `sha256=${"0".repeat(64)}` })).status,
+    ).toBe(401)
+    expect(f.state.reads).toEqual([])
+    expect(world.fakes.store.commands).toHaveLength(before)
+    expect((await readOpsSettings(MAX, world.fetcher())).settings?.repos).toHaveLength(1)
+    const delivery = "cccccccc-0000-4000-8000-000000000001"
+    expect(await deliver(f.route, { event: "repository", payload, delivery })).toMatchObject({
+      status: 200,
+      body: { ok: true },
+    })
+    expect(f.state.suspended).toEqual([{ generation: 1, reason: "deleted" }])
+    expect((await readOpsSettings(MAX, world.fetcher())).settings?.repos).toEqual([])
+    expect(await deliver(f.route, { event: "repository", payload, delivery })).toMatchObject({
+      status: 200,
+      body: { ok: true, duplicate: true },
+    })
+    expect(f.state.suspended).toHaveLength(1)
+    expect(world.fakes.store.get(githubDeliveryKey(delivery))).toBe("done")
+  })
+
+  test("signed transfer and rename preserve a new owner's binding and ignore malformed repository data", async () => {
+    const transferred = cloudBindingFixture()
+    const transfer = { action: "transferred", repository: { id: REPO, owner: { id: 8 }, full_name: "new/project" } }
+    expect((await deliver(transferred.route, { event: "repository", payload: transfer })).status).toBe(200)
+    expect((await deliver(transferred.route, { event: "repository", payload: transfer })).status).toBe(200)
+    expect(transferred.state.suspended).toEqual([{ generation: 1, reason: "transferred" }])
+    const rebound = cloudBindingFixture()
+    rebound.state.binding = { ...rebound.state.binding, ownerId: "8", account: OTHER, generation: 7 }
+    expect((await deliver(rebound.route, { event: "repository", payload: transfer })).status).toBe(200)
+    expect(rebound.state.suspended).toEqual([])
+    expect(rebound.state.binding).toMatchObject({ ownerId: "8", account: OTHER, generation: 7 })
+    const renamed = cloudBindingFixture()
+    const rename = { action: "renamed", repository: { id: REPO, full_name: "new/project" } }
+    expect((await deliver(renamed.route, { event: "repository", payload: rename })).status).toBe(200)
+    expect((await deliver(renamed.route, { event: "repository", payload: rename })).status).toBe(200)
+    expect(renamed.state.renamed).toEqual(["new/project"])
+    expect(renamed.state.binding).toMatchObject({ repository: "new/project", account: MAX, generation: 1 })
+    const reads = renamed.state.reads.length
+    for (const payload of [
+      { action: "edited", repository: { id: REPO } },
+      { action: "deleted", repository: null },
+      { action: "transferred", repository: { id: REPO, owner: { id: "invalid" } } },
+      { action: "renamed", repository: { id: REPO, full_name: "../bad" } },
+    ])
+      expect((await deliver(renamed.route, { event: "repository", payload })).status).toBe(200)
+    expect(renamed.state.reads).toHaveLength(reads)
+  })
+
+  test("a binding persistence failure releases the signed delivery for an idempotent retry without logging payload", async () => {
+    await ready()
+    const f = cloudBindingFixture()
+    f.state.fail = true
+    const delivery = "cccccccc-0000-4000-8000-000000000002"
+    const payload = { action: "deleted", repository: { id: REPO }, privateContext: "DO_NOT_LOG_REPOSITORY_CONTEXT" }
+    const errors = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      expect(await deliver(f.route, { event: "repository", payload, delivery })).toMatchObject({
+        status: 500,
+        body: { error: { code: "GITHUB_WEBHOOK_FAILED" } },
+      })
+      expect(f.state.suspended).toEqual([])
+      expect(world.fakes.store.get(githubDeliveryKey(delivery))).toBeUndefined()
+      expect(errors.mock.calls).toEqual([
+        [
+          "Vector GitHub webhook handler failed",
+          { handler: "cloud-agents", delivery, code: "PERSISTENT_STORE_UNAVAILABLE" },
+        ],
+      ])
+      f.state.fail = false
+      expect(await deliver(f.route, { event: "repository", payload, delivery })).toMatchObject({
+        status: 200,
+        body: { ok: true },
+      })
+      expect(f.state.suspended).toEqual([{ generation: 1, reason: "deleted" }])
+      expect((await readOpsSettings(MAX, world.fetcher())).settings?.repos).toEqual([])
+      expect(await deliver(f.route, { event: "repository", payload, delivery })).toMatchObject({
+        status: 200,
+        body: { duplicate: true },
+      })
+    } finally {
+      errors.mockRestore()
+    }
+  })
 })

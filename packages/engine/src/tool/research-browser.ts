@@ -1,5 +1,6 @@
 export * as ResearchBrowser from "./research-browser"
 
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { WebFence } from "@vectordevai/core/research/fence"
 import { ResearchOutbound } from "@vectordevai/core/research/outbound"
 import { ResearchProvenance } from "@vectordevai/core/research/provenance"
@@ -135,9 +136,15 @@ export type Report = {
 
 const EMPTY: Report = { ok: false, generation: "", label: "", url: "", address: "", title: "", joined: [], refused: [] }
 
-/** Whether this engine runs inside the desktop app, which holds the research browsers. */
+/**
+ * Whether this engine runs inside the desktop app, which holds the research browsers. Never on GitHub Actions, whatever
+ * bridge variables are set (INV-S13): research_search and research_read's rendering drive the same desktop browser.
+ */
 export function available() {
-  return Boolean(process.env.VECTOR_BROWSER_BRIDGE_URL && process.env.VECTOR_BROWSER_BRIDGE_TOKEN)
+  return (
+    !GithubAgents.onActionsRunner(process.env) &&
+    Boolean(process.env.VECTOR_BROWSER_BRIDGE_URL && process.env.VECTOR_BROWSER_BRIDGE_TOKEN)
+  )
 }
 
 type Synced = { readonly generation: string; readonly sent: ReadonlySet<string> }

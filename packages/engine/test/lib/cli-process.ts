@@ -176,8 +176,18 @@ export type VectorCli = {
   // the subprocess exits on stdin close, which the scope finalizer triggers.
   readonly acp: (opts?: AcpOpts) => Effect.Effect<AcpHandle, Error, Scope.Scope>
   // Escape hatch: any CLI invocation with full control over argv. Used to test
-  // commands that don't yet have a typed builder.
+  // commands that don't yet have a typed builder. The CLI starts as a child of
+  // Vector, through core's spawner, so with GITHUB_ACTIONS=true in opts.env the
+  // INV-S5 filter withholds GITHUB_TOKEN and every secret-named variable from it.
   readonly spawn: (args: string[], opts?: SpawnOpts) => Effect.Effect<RunResult>
+  // A workflow step's command as GitHub starts it: directly, not through
+  // Vector's spawner, with this process's environment as the runner's and
+  // opts.env as the step's `env:`, so the CLI holds the step's credentials and
+  // its own children meet the filter. The npm launcher (bin/vector.cjs, which
+  // sets VECTOR_CLI=1) is not modelled. On timeout or interruption the step is
+  // stopped as GitHub cancels one: SIGTERM first, so the CLI's own finalizers
+  // stop what it started, then SIGKILL after a grace period (see below).
+  readonly actionsStep: (args: string[], opts?: SpawnOpts) => Effect.Effect<RunResult>
   // Convenience assertion. Dumps captured stderr/stdout on mismatch so CI
   // failures are debuggable without re-running locally.
   readonly expectExit: (result: RunResult, expected: number, label?: string) => void
@@ -262,6 +272,78 @@ export function withCliFixture<A, E>(
         stderr: normalizeLines(execution.result.stderr.toString()),
         durationMs: Date.now() - start,
         timedOut: execution.timedOut,
+      }
+    })
+
+    const actionsStep = Effect.fn("vector.actionsStep")(function* (args: string[], opts?: SpawnOpts) {
+      const start = Date.now()
+      const step = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const proc = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...args], {
+                cwd: opts?.cwd ?? home,
+                env: { ...process.env, ...env, ...opts?.env },
+                stdin: opts?.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
+                stdout: "pipe",
+                stderr: "pipe",
+                // A session and process group of its own on POSIX, as core's spawner starts `spawn`'s child, so the
+                // release can signal the CLI and whatever runs in its group.
+                detached: process.platform !== "win32",
+              }),
+            ),
+            (child) =>
+              Effect.gen(function* () {
+                // The children the CLI starts through core's spawner (git, the shell tool's commands, formatters)
+                // are detached into sessions of their own, so no kill of the CLI's group reaches them: only the
+                // CLI's own finalizers stop them. MCP and language servers, started without detaching, stay in its
+                // group. So a step still running is stopped as GitHub cancels one: SIGTERM first, which the CLI
+                // turns into an interruption that runs those finalizers, and SIGKILL only after a grace period. A
+                // child the CLI cannot stop in that time is orphaned, as under `spawn`. After a normal exit this
+                // only clears what is left in the CLI's group.
+                const group = (signal: NodeJS.Signals) =>
+                  Effect.ignore(Effect.try({ try: () => process.kill(-child.pid, signal), catch: (error) => error }))
+                if (process.platform !== "win32") {
+                  yield* group("SIGTERM")
+                  yield* Effect.promise(() => child.exited).pipe(
+                    Effect.timeoutOrElse({ duration: Duration.seconds(5), orElse: () => Effect.void }),
+                  )
+                  yield* group("SIGKILL")
+                }
+                // Windows has no POSIX process groups or SIGTERM, so the CLI's finalizers do not run there: taskkill
+                // stops its tree, and only while the CLI still runs, since its pid may be reused once it has exited.
+                if (process.platform === "win32" && child.exitCode === null)
+                  yield* Effect.promise(
+                    () =>
+                      Bun.spawn(["taskkill", "/pid", String(child.pid), "/T", "/F"], {
+                        stdout: "ignore",
+                        stderr: "ignore",
+                      }).exited,
+                  )
+                child.kill("SIGKILL")
+                yield* Effect.promise(() => child.exited)
+              }),
+          )
+          const stdout = new Response(proc.stdout).text()
+          const stderr = new Response(proc.stderr).text()
+          const exitCode = yield* Effect.promise(() => proc.exited).pipe(
+            Effect.timeoutOrElse({
+              duration: Duration.millis(opts?.timeoutMs ?? 30_000),
+              orElse: () => Effect.succeed(undefined),
+            }),
+          )
+          return { exitCode, stdout, stderr }
+        }),
+      )
+      // The release has stopped the CLI and what was left in its group. A process that holds a pipe after that was
+      // detached with the CLI's stdout or stderr and holds this call until the test's own timeout; core's spawner
+      // gives every child pipes of its own unless told to inherit, which no `github` path does.
+      return {
+        exitCode: step.exitCode ?? -1,
+        stdout: normalizeLines(yield* Effect.promise(() => step.stdout)),
+        stderr: normalizeLines(yield* Effect.promise(() => step.stderr)),
+        durationMs: Date.now() - start,
+        timedOut: step.exitCode === undefined,
       }
     })
 
@@ -509,7 +591,7 @@ export function withCliFixture<A, E>(
       } satisfies AcpHandle
     })
 
-    const vector: VectorCli = { run, startRun, pipe, serve, acp, spawn, expectExit, parseJsonEvents }
+    const vector: VectorCli = { run, startRun, pipe, serve, acp, spawn, actionsStep, expectExit, parseJsonEvents }
 
     return yield* fn({ llm, home, vector })
     // FetchHttpClient is provided so test bodies can `yield* HttpClient.HttpClient`

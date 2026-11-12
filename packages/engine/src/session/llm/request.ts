@@ -64,13 +64,27 @@ export type Prepared = {
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
   mergeDeep(target, source ?? {}) as Record<string, any>
 
+// System text every request this process sends carries after the session's own, whatever its session, agent or user
+// message. `vector github run` pins its repository-work policy here (INV-S14): one user message's `system` reaches only
+// the turns that message starts, so the run's subagents, compaction and judge follow-ups would go without it.
+const pinned: { system?: string } = {}
+
+/** Pins `system` to every request this process sends from now on; undefined unpins it. */
+export function pin(system: string | undefined) {
+  pinned.system = system
+}
+
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
   const prompt = [
     ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model, input.explore)),
     ...(input.stableSystem ?? []),
   ]
-  const rest = [...input.system, ...(input.user.system ? [input.user.system] : [])]
+  const rest = [
+    ...input.system,
+    ...(input.user.system ? [input.user.system] : []),
+    ...(pinned.system ? [pinned.system] : []),
+  ]
   // With stable parts, the prompt and those parts form the first block and everything per-session (directory, date,
   // references, project instructions, MCP, skills, the user's system text) the second, so a new session, directory or
   // date leaves the first block, and every prefix it starts, unchanged. A model that takes cache breakpoints gets one

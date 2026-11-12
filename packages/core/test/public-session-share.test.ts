@@ -1228,3 +1228,19 @@ for (const engine of ["v1", "v2"] as const) {
     }),
   )
 }
+
+test("run credentials are refused before an authenticated sharing request", async () => {
+  let sent = 0
+  const client = makeShareTransport({
+    token: async () => "vrt_e30.c2ln",
+    fetch: Object.assign(
+      async () => {
+        sent++
+        throw new Error("A run token must never reach sharing")
+      },
+      { preconnect: fetch.preconnect },
+    ),
+  })
+  await expect(client.remove("a".repeat(32), "b".repeat(64))).rejects.toThrow("Sign in to your Vector account")
+  expect(sent).toBe(0)
+})

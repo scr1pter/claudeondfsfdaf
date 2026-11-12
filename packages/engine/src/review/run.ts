@@ -78,6 +78,7 @@ import { Session } from "@/session/session"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { Truncate } from "@/tool/truncate"
+import { EffectBridge } from "@/effect/bridge"
 import type { ResolvedModel } from "./model"
 
 export interface RunInput {
@@ -112,6 +113,8 @@ export interface RunInput {
   judge?: ResolvedModel
   allowDirs?: string[]
   checks?: boolean
+  /** An owning cloud run can stop every specialist without discarding completed reports. */
+  stopSignal?: AbortSignal
   knownPath: (path: string) => Promise<boolean>
   onProgress?: (
     e:
@@ -231,6 +234,21 @@ export const run: (
   const sessionIDs: SessionID[] = []
   const state = { spent: 0, reported: 0, codium: false, ownReported: false, uncertain: 0, incomplete: false }
   const scope = yield* Scope.make()
+  const bridge = input.stopSignal ? yield* EffectBridge.make() : undefined
+  const stop = () => {
+    for (const track of tracks.values()) track.stop ??= "timeout"
+    // Abort callbacks retain this review's instance and services. Admission below also checks the signal, so
+    // a session created concurrently with cancellation cannot start a provider call or a finalizer.
+    if (bridge)
+      bridge.fork(
+        Effect.forEach(sessionIDs, (sessionID) => prompts.cancel(sessionID), { concurrency: "unbounded" }).pipe(
+          Effect.ignore,
+          Effect.forkIn(scope),
+          Effect.asVoid,
+        ),
+      )
+  }
+  input.stopSignal?.addEventListener("abort", stop, { once: true })
 
   const progress = (event: Progress) =>
     Effect.sync(() => input.onProgress?.(event)).pipe(Effect.catchCause(() => Effect.void))
@@ -435,6 +453,8 @@ export const run: (
   // session with every tool but StructuredOutput denied.
   function ask<T>(spec: Spec<T>): Effect.Effect<Asked<T>> {
     return Effect.gen(function* () {
+      if (input.stopSignal?.aborted)
+        return { name: spec.name, status: "stopped", stop: "timeout", detail: "timeout", steps: 0 } satisfies Asked<T>
       // Include the structured-output schema and a fixed context allowance. The first turn has no reported usage
       // yet, so this is only an admission estimate; provider usage replaces it as soon as it arrives.
       const context = Math.ceil((spec.text.length + JSON.stringify(spec.schema).length) / 3.5)
@@ -475,15 +495,17 @@ export const run: (
       const policy: SessionAdmission.Policy = {
         sessionID: session.id,
         admit: (request) => {
-          const stop = track.finalizing
-            ? track.finalizeAttempts >= 1 || !request.tools.includes("StructuredOutput")
-              ? "steps"
-              : undefined
-            : track.attempts >= track.cap
-              ? "steps"
-              : Date.now() >= deadline
-                ? "timeout"
+          const stop = input.stopSignal?.aborted
+            ? "timeout"
+            : track.finalizing
+              ? track.finalizeAttempts >= 1 || !request.tools.includes("StructuredOutput")
+                ? "steps"
                 : undefined
+              : track.attempts >= track.cap
+                ? "steps"
+                : Date.now() >= deadline
+                  ? "timeout"
+                  : undefined
           if (stop) {
             track.stop ??= stop
             track.denied = true
@@ -524,7 +546,7 @@ export const run: (
 
       const send = (text: string, ms: number): Effect.Effect<Sent> =>
         Effect.suspend(() => {
-          if (ms <= 0) return Effect.succeed<Sent>({ timedOut: true })
+          if (ms <= 0 || input.stopSignal?.aborted) return Effect.succeed<Sent>({ timedOut: true })
           return prompts
             .prompt({
               sessionID: session.id,
@@ -569,6 +591,7 @@ export const run: (
       const value =
         structured !== undefined ? spec.decode(structured) : !track.stop ? spec.decode(lastText(message)) : undefined
       if (value !== undefined) return done(value, "ok")
+      if (input.stopSignal?.aborted) return done(undefined, "stopped", "timeout", "timeout")
 
       // The first prompt is now idle. Unknown exposure stays in the review's ledger; only unused future work is
       // released. The finalizer must still fit beside every other specialist's admitted work.
@@ -914,7 +937,14 @@ export const run: (
     } satisfies ReviewOutcome
   })
 
-  return yield* body.pipe(Effect.ensuring(unsubscribe.pipe(Effect.andThen(Scope.close(scope, Exit.void)))))
+  return yield* body.pipe(
+    Effect.ensuring(
+      Effect.sync(() => input.stopSignal?.removeEventListener("abort", stop)).pipe(
+        Effect.andThen(unsubscribe),
+        Effect.andThen(Scope.close(scope, Exit.void)),
+      ),
+    ),
+  )
 })
 
 type Chosen = ResolvedModel & { lab?: string }
