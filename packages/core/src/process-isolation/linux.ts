@@ -9,6 +9,9 @@ export const ENTRY = `${ROOT}/entry.py`
 export const SPEC = `${ROOT}/run.json`
 export const PRIVATE = `${ROOT}/private/state.json`
 export const PYTHON = "/usr/bin/python3"
+// First supported native host: GitHubHosted Ubuntu24.04. No caller-selected temporary mount exists.
+export const HOST_TEMP = "/home/runner/work/_temp"
+export const MASKS = Object.freeze(["/home/vector-agent", "/tmp", "/var/tmp", "/run", HOST_TEMP] as const)
 export const CONTAINERS = Object.freeze([
   "/mnt/vector-agent-sandbox",
   "/var/lib/vector-agent-sandbox",
@@ -58,6 +61,25 @@ export class Unavailable extends Error {
 }
 function requireValue(condition: unknown): asserts condition {
   if (!condition) throw new Unavailable()
+}
+export function hostedTemporary(value: unknown) {
+  requireValue(value === HOST_TEMP)
+  return HOST_TEMP
+}
+/** Actual protected mount targets are evidence only; different-device nested mounts are equally unsupported. */
+export function assertMaskMountTargets(value: unknown) {
+  requireValue(Array.isArray(value) && value.length <= 64)
+  const targets: readonly unknown[] = value
+  for (const target of targets) {
+    canonical(target)
+    requireValue(!MASKS.some((parent) => target !== parent && target.startsWith(parent + "/")))
+  }
+  requireValue(MASKS.every((parent) => targets.includes(parent)))
+}
+/** An immutable engine/runtime placed under a hidden parent cannot be exposed as an exception. */
+export function assertUnmaskedRuntime(value: string) {
+  canonical(value)
+  requireValue(!MASKS.some((parent) => value === parent || value.startsWith(parent + "/")))
 }
 function shape(value: unknown, keys: readonly string[]): asserts value is Record<string, unknown> {
   requireValue(value !== null && typeof value === "object" && !Array.isArray(value))

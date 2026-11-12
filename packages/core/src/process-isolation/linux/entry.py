@@ -16,6 +16,7 @@ import os
 import pathlib
 import pwd
 import resource
+import re
 import select
 import signal
 import socket
@@ -30,6 +31,8 @@ SELF = ROOT + "/entry.py"
 SPEC = ROOT + "/run.json"
 PRIVATE = ROOT + "/private/state.json"
 CONTAINERS = ("/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox")
+HOST_TEMP = "/home/runner/work/_temp"
+MASKS = ("/home/vector-agent", "/tmp", "/var/tmp", "/run", HOST_TEMP)
 KINDS = {"user": 0x10000000, "mnt": 0x00020000, "pid": 0x20000000}
 KEYS = {"v", "container", "uid", "gid", "stage", "scratch", "directory", "socket", "nonce", "namespaces",
         "devices", "keeper", "broker", "socketIdentity"}
@@ -153,10 +156,11 @@ def read_state():
             stat.S_IMODE(directory.st_mode) == 0o700 and os.path.realpath(ROOT + "/private") == ROOT + "/private")
     require(stat.S_IMODE(os.lstat(PRIVATE).st_mode) == 0o600)
     value = read_json(PRIVATE)
-    exact(value, ("v", "public", "phase", "brokerPending", "runtimeImages"))
+    exact(value, ("v", "public", "phase", "brokerPending", "runtimeImages", "maskSources"))
     require(type(value["v"]) is int and value["v"] == 1 and type(value["brokerPending"]) is bool and value["phase"] in
             ("recorded", "keeper-ready", "broker-pending", "adopted", "quiesced", "uid-stopped", "broker-stopped"))
     validate_spec(value["public"], partial=True)
+    mask_records(value["maskSources"])
     require(type(value["runtimeImages"]) is dict and len(value["runtimeImages"]) <= 128)
     for name, digest in value["runtimeImages"].items():
         canonical(name)
@@ -881,6 +885,159 @@ def runtime_images():
     return images
 
 
+def mask_records(records):
+    require(type(records) is list and len(records) == len(MASKS))
+    for target, record in zip(MASKS, records, strict=True):
+        exact(record, ("path", "device", "inode", "filesystem", "root"))
+        require(record["path"] == target and integer(record["device"]) and integer(record["inode"]))
+        canonical(record["root"])
+        device = record["filesystem"]
+        require(type(device) is str and 3 <= len(device) <= 32 and device.count(":") == 1 and
+                all(part.isascii() and part.isdigit() for part in device.split(":")))
+    return records
+
+
+def mount_path(value):
+    # Decode the kernel's escaped fields once. Replacing backslashes in multiple passes corrupts literal aliases.
+    def decode(match):
+        require(match[1] in ("040", "011", "012", "134"))
+        return chr(int(match[1], 8))
+    return canonical(re.sub(r"\\([0-7]{3})", decode, value))
+
+
+def mount_table(pid=None):
+    name = "/proc/self/mountinfo" if pid is None else f"/proc/{pid}/mountinfo"
+    with open(name, "rb") as stream:
+        data = stream.read(2097153)
+    require(len(data) <= 2097152)
+    lines = data.decode("utf-8", "strict").splitlines()
+    require(0 < len(lines) <= 4096)
+    result = []
+    for line in lines:
+        fields = line.split()
+        middle = fields.index("-")
+        require(middle >= 6 and len(fields) >= middle + 4 and fields[2].count(":") == 1 and
+                all(part.isascii() and part.isdigit() for part in fields[2].split(":")))
+        result.append({"filesystem": fields[2], "root": mount_path(fields[3]), "target": mount_path(fields[4]),
+                       "readOnly": "ro" in fields[5].split(","), "kind": fields[middle + 1]})
+    return result
+
+
+def beneath(name, parent):
+    return name == parent or name.startswith(parent.rstrip("/") + "/")
+
+
+def hidden(name):
+    return any(beneath(name, parent) for parent in MASKS)
+
+
+def refuse_nested_mask_mounts(mounts):
+    # A nested source can belong to another filesystem and also be mounted outside the mask. Tracking only
+    # the protected root's device cannot prove that other origin safe, so this first host contract refuses it.
+    require(not any(row["target"] != parent and beneath(row["target"], parent)
+                    for row in mounts for parent in MASKS), "Nested mounts beneath protected parents are unsupported")
+
+
+def refuse_mask_aliases(records, mounts):
+    for source in mask_records(records):
+        for candidate in mounts:
+            if candidate["filesystem"] != source["filesystem"]:
+                continue
+            if beneath(source["root"], candidate["root"]):
+                relative = os.path.relpath(source["root"], candidate["root"])
+                alias = os.path.normpath(os.path.join(candidate["target"], relative))
+                require(hidden(alias), "An alternate bind exposes a protected parent")
+            if beneath(candidate["root"], source["root"]):
+                require(hidden(candidate["target"]), "A protected subtree has an alternate mounted destination")
+
+
+def supported_mask_sources(uid, gid):
+    # OS/layout metadata only. Neither a runner UID nor Root ownership is guessed for the hosted temporary root.
+    release = secure_chain("/etc/os-release")
+    fd = os.open(release, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0 and not info.st_mode & 0o022 and
+                info.st_size <= 4096)
+        data = os.read(fd, 4097)
+        require(len(data) == info.st_size and len(data) <= 4096)
+    finally:
+        os.close(fd)
+    release_fields = dict(line.split("=", 1) for line in data.decode("utf-8", "strict").splitlines()
+                          if line and not line.startswith("#") and "=" in line)
+    require(release_fields.get("ID", "").strip('"') == "ubuntu" and
+            release_fields.get("VERSION_ID", "").strip('"') == "24.04", "The native host layout is unsupported")
+    runner = pwd.getpwnam("runner")
+    require(integer(runner.pw_uid) and runner.pw_uid != uid)
+    mounts = mount_table()
+    refuse_nested_mask_mounts(mounts)
+    records = []
+    for target in MASKS:
+        info = os.lstat(target)
+        require(stat.S_ISDIR(info.st_mode) and os.path.realpath(target) == target)
+        if target == "/home/vector-agent":
+            require(info.st_uid == uid and info.st_gid == gid and not info.st_mode & 0o022)
+        elif target == HOST_TEMP:
+            require(info.st_uid == runner.pw_uid and not info.st_mode & 0o022)
+        else:
+            require(info.st_uid == info.st_gid == 0)
+        for parent in pathlib.Path(target).parents:
+            item = parent.lstat()
+            require(stat.S_ISDIR(item.st_mode) and item.st_uid in (0, runner.pw_uid) and
+                    not item.st_mode & 0o022 and os.path.realpath(parent) == str(parent))
+        containing = [row for row in mounts if beneath(target, row["target"])]
+        require(containing)
+        row = max(containing, key=lambda value: len(value["target"]))
+        require(row["filesystem"] == f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}")
+        source_root = os.path.normpath(os.path.join(row["root"], os.path.relpath(target, row["target"])))
+        records.append({"path": target, "device": info.st_dev, "inode": info.st_ino,
+                        "filesystem": row["filesystem"], "root": source_root})
+    refuse_mask_aliases(records, mounts)
+    return records
+
+
+def validate_masks(pid, start, uid, gid, records):
+    # Host Root observes only metadata/empty directory listings through its own proc. No handle reaches the model.
+    mask_records(records)
+    pin = os.pidfd_open(pid, 0)
+    try:
+        before = identity(pid, uid)
+        require(before and before["start"] == start and before["state"] not in ("Z", "X", "x"))
+        mounts = mount_table(pid)
+        # Repeat on the actual copied namespace before publication, without skipping any filesystem device.
+        refuse_nested_mask_mounts(mounts)
+        refuse_mask_aliases(records, mounts)
+        for record in records:
+            target = record["path"]
+            fd = os.open(f"/proc/{pid}/root" + target,
+                         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            try:
+                visible = os.fstat(fd)
+                # Covered old mounts can remain in mountinfo. Identify the actual visible mount by its device;
+                # an empty pinned root proves no old nested directory/mount is reachable through this view.
+                matching = [row for row in mounts if row["target"] == target and
+                            row["filesystem"] == f"{os.major(visible.st_dev)}:{os.minor(visible.st_dev)}"]
+                require(len(matching) == 1 and matching[0]["kind"] == "tmpfs" and matching[0]["root"] == "/" and
+                        matching[0]["readOnly"])
+                require(stat.S_ISDIR(visible.st_mode) and visible.st_uid == uid and visible.st_gid == gid and
+                        stat.S_IMODE(visible.st_mode) == 0o755 and
+                        (visible.st_dev, visible.st_ino) != (record["device"], record["inode"]) and
+                        matching[0]["filesystem"] == f"{os.major(visible.st_dev)}:{os.minor(visible.st_dev)}" and
+                        os.fstatvfs(fd).f_flag & os.ST_RDONLY and not os.listdir(fd))
+            finally:
+                os.close(fd)
+        after = identity(pid, uid)
+        require(after and after["start"] == start and after["state"] not in ("Z", "X", "x"))
+        poll = select.poll()
+        poll.register(pin, select.POLLIN)
+        require(not poll.poll(0))
+        protected_targets = [row["target"] for row in mounts if hidden(row["target"])]
+        require(len(protected_targets) <= 64 and len(json.dumps(protected_targets).encode("ascii")) <= 2048)
+        return protected_targets
+    finally:
+        os.close(pin)
+
+
 def prepare(uid, gid, container):
     require(os.geteuid() == 0 and sys.version_info >= (3, 12) and container in CONTAINERS)
     account = pwd.getpwnam("vector-agent")
@@ -902,7 +1059,9 @@ def prepare(uid, gid, container):
     value = {"v": 1, "container": container, "uid": uid, "gid": gid, "stage": stage,
              "scratch": container + "/tool-scratch", "directory": container + "/tool-namespaces",
              "socket": container + "/tool-namespaces/broker.sock", "nonce": os.urandom(16).hex()}
-    state = {"v": 1, "public": value, "phase": "recorded", "brokerPending": False, "runtimeImages": runtime_images()}
+    masks = supported_mask_sources(uid, gid)
+    state = {"v": 1, "public": value, "phase": "recorded", "brokerPending": False, "runtimeImages": runtime_images(),
+             "maskSources": masks}
     # The durable process-crash record precedes directory/child ownership. No power-loss claim is made.
     write_json(PRIVATE, state, 0o600)
     os.mkdir(value["directory"], 0o755)
@@ -917,7 +1076,9 @@ def prepare(uid, gid, container):
         "/usr/bin/setpriv", f"--reuid={uid}", f"--regid={gid}", "--clear-groups", "--no-new-privs", "--",
         "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "/usr/bin/bwrap", "--info-fd", str(info_fd),
         "--unshare-user", "--uid", "0", "--gid", "0", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-        "--ro-bind", "/", "/", "--bind", stage, stage, "--bind", value["scratch"], value["scratch"],
+        "--ro-bind", "/", "/",
+        *(item for target in MASKS for item in ("--tmpfs", target, "--remount-ro", target)),
+        "--bind", stage, stage, "--bind", value["scratch"], value["scratch"],
         "--dev", "/dev", "--proc", "/proc", "--cap-drop", "ALL", "--chdir", value["scratch"],
         "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", value["scratch"],
         "--", "/usr/bin/python3", "-I", "-S", SELF, "keeper", value["scratch"],
@@ -957,6 +1118,7 @@ def prepare(uid, gid, container):
         require(all(not any(field.startswith(("shared:", "master:", "propagate_from:"))
                             for field in line.split()[6:line.split().index("-")]) for line in mounts))
         require("ro" in next(line.split()[5] for line in mounts if line.split()[4] == "/").split(","))
+        validate_masks(pid, observed["start"], uid, gid, masks)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
         listener.bind(value["socket"])
         os.chown(value["socket"], 0, gid)

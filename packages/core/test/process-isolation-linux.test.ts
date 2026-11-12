@@ -19,6 +19,55 @@ const fixture = () => ({
 })
 const options = (cwd: string) => ({ platform: "linux" as const, parentPID: 4123, cwd })
 
+test("the first supported hosted temporary root is fixed, never selected by a caller", () => {
+  expect(LinuxIsolation.hostedTemporary("/home/runner/work/_temp")).toBe(LinuxIsolation.HOST_TEMP)
+  for (const value of [
+    undefined,
+    null,
+    7,
+    "/tmp",
+    "relative",
+    "/home/runner/work/_temp/",
+    "/home/runner/work/_temp/../other",
+    "/home/other/work/_temp",
+  ])
+    expect(() => LinuxIsolation.hostedTemporary(value)).toThrow(LinuxIsolation.Unavailable)
+})
+
+test("hidden roots never contain the installed entry, fixed broker or permitted external toolchain", () => {
+  expect(LinuxIsolation.MASKS).toEqual(["/home/vector-agent", "/tmp", "/var/tmp", "/run", "/home/runner/work/_temp"])
+  expect(Object.isFrozen(LinuxIsolation.MASKS)).toBe(true)
+  for (const file of [
+    LinuxIsolation.ENTRY,
+    "/usr/bin/python3",
+    "/usr/bin/node",
+    "/opt/hostedtoolcache/node/bin/node",
+    ...LinuxIsolation.CONTAINERS.map((container) => container + "/tool-namespaces/broker.sock"),
+  ])
+    expect(() => LinuxIsolation.assertUnmaskedRuntime(file)).not.toThrow()
+  for (const root of LinuxIsolation.MASKS)
+    for (const file of [root, root + "/runtime-or-data"])
+      expect(() => LinuxIsolation.assertUnmaskedRuntime(file)).toThrow(LinuxIsolation.Unavailable)
+})
+
+test("a protected nested filesystem is unsupported even when its outside alias uses another device", () => {
+  const mounts = [
+    { target: "/", device: "8:1" },
+    { target: "/tmp/private", device: "0:99" },
+    { target: "/mnt/leak", device: "0:99" },
+  ]
+  expect(() =>
+    LinuxIsolation.assertMaskMountTargets([...LinuxIsolation.MASKS, ...mounts.map((row) => row.target)]),
+  ).toThrow(LinuxIsolation.Unavailable)
+  // The unsupported target, rather than a comparison against the protected parent's device, drives refusal.
+  expect(() => LinuxIsolation.assertMaskMountTargets([...LinuxIsolation.MASKS, "/mnt/leak"])).not.toThrow()
+  for (const parent of LinuxIsolation.MASKS)
+    expect(() => LinuxIsolation.assertMaskMountTargets([...LinuxIsolation.MASKS, parent + "/nested"])).toThrow(
+      LinuxIsolation.Unavailable,
+    )
+  expect(() => LinuxIsolation.assertMaskMountTargets([])).toThrow(LinuxIsolation.Unavailable)
+})
+
 test("the fixed ABI keeps arbitrary command arguments behind its separator without executing or selecting a helper", () => {
   const spec = LinuxIsolation.parseSpec(fixture())
   const plan = LinuxIsolation.planLaunch(
