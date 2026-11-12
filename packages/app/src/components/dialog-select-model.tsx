@@ -28,6 +28,7 @@ import { useLanguage } from "@/context/language"
 import { decode64 } from "@/utils/base64"
 import { offInLocalProviders, type OffModel } from "@/features/local/local-model"
 import { useCodiumPurchase } from "@/components/codium-purchase"
+import { createPickerCurrent } from "./model-picker-state"
 import {
   brandProviderName,
   buildModelSections,
@@ -93,27 +94,33 @@ function createModelSections(input: {
       .filter((item) => input.model.visible({ modelID: item.id, providerID: item.provider.id }))
       .filter((item) => (provider ? item.provider.id === provider : true))
   })
-  const current = () => {
-    const value = input.model.current()
-    return value ? pickerModelKey(value) : undefined
-  }
-  const sections = createMemo(() =>
-    buildModelSections({
-      models: models(),
-      term: input.search(),
-      currentKey: current(),
-      recentKeys: input.model.recent?.().flatMap((item) => (item ? [pickerModelKey(item)] : [])),
-      now: input.now(),
+  const current = createPickerCurrent(() => input.model.current())
+  const sections = createMemo(() => {
+    const list = models()
+    const term = input.search()
+    const currentKey = current()
+    const recent = input.model.recent?.()
+    const recentKeys = recent?.flatMap((item) => (item ? [pickerModelKey(item)] : []))
+    const now = input.now()
+    return buildModelSections({
+      models: list,
+      term,
+      currentKey,
+      recentKeys,
+      now,
       popular: popularProviders,
       fixed: input.fixed,
-    }),
-  )
+    })
+  })
   const [open, setOpenSections] = createSignal(readOpenSections())
-  const views = createMemo(() =>
-    pickerSectionViews(sections(), open(), input.search()).map((view) =>
+  const views = createMemo(() => {
+    const expanded = open()
+    const grouped = sections()
+    const term = input.search()
+    return pickerSectionViews(grouped, expanded, term).map((view) =>
       input.fixed ? { ...view, toggle: false, open: true } : view,
-    ),
-  )
+    )
+  })
   // Navigation order is render order: every visible header and row, then Connect provider.
   const navigation = createMemo(() => {
     const visible = pickerNavigation(views())
@@ -216,7 +223,7 @@ function SectionToggle(props: {
       // A cancelled mousedown never moves focus; a cancelled pointerdown still can.
       onMouseDown={(event) => event.preventDefault()}
       onMouseMove={(event) => props.onHover(event)}
-      on:click={() => props.onToggle()}
+      onClick={() => props.onToggle()}
     >
       <span data-slot="model-row-icon" aria-hidden="true">
         <ProviderMark id={props.view.section.providerID} />
@@ -351,6 +358,8 @@ export function ModelSelectorPopoverV2(props: {
   triggerProps?: ModelSelectorTriggerProps
   /** Place a host dialog's popup above its layer, below a subsequently pushed dialog. */
   overlayZIndex?: number
+  /** Keep a dialog-hosted popup inside that dialog's focus and accessibility boundary. */
+  portalMount?: HTMLElement
   onClose?: () => void
   /** The list is the host's own, such as the models an external agent's CLI accepts, not Vector's providers: it
       keeps its order, every section stays open, and there is nothing to connect or refresh. */
@@ -475,7 +484,7 @@ export function ModelSelectorPopoverV2(props: {
       <MenuV2.Trigger as={props.triggerAs ?? "div"} {...props.triggerProps}>
         {props.children}
       </MenuV2.Trigger>
-      <MenuV2.Portal>
+      <MenuV2.Portal mount={props.portalMount}>
         <MenuV2.Content
           ref={(el: HTMLDivElement) => (contentRef = el)}
           style={props.overlayZIndex === undefined ? undefined : { "z-index": props.overlayZIndex }}

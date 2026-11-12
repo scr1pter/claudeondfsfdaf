@@ -12,6 +12,7 @@ import { modelDisplayName } from "@/utils/provider-brand"
 import { MIN_CONTEXT } from "@vectordevai/core/review/plan"
 import {
   readVectorScope,
+  vectorScopeDraft,
   vectorScopeKey,
   vectorScopeLocked,
   vectorScopePatch,
@@ -38,8 +39,13 @@ export function SettingsVectorScopeV2(props: {
     error: "",
     saved: false,
     overlayZIndex: undefined as number | undefined,
+    portalMount: undefined as HTMLElement | undefined,
   })
   onMount(() => {
+    // DialogV2 renders Kobalte.Content with this slot. Portalling inside
+    // it keeps both popups within the modal's focus and hide-outside scope.
+    const content = root?.closest<HTMLElement>('[data-slot="dialog-content"]')
+    if (content) setState("portalMount", content)
     const layer = root?.closest<HTMLElement>("[data-dialog-layer]")
     if (!layer) return
     // DialogProvider's actual layer is above ordinary body-portalled menus.
@@ -78,7 +84,9 @@ export function SettingsVectorScopeV2(props: {
     },
   }
   const change = (patch: Partial<VectorScopeSettings>) => {
-    if (!inactive()) setState({ draft: { ...state.draft, ...patch }, error: "", saved: false })
+    if (inactive()) return
+    const next = vectorScopeDraft(state.draft, patch)
+    if (next) setState({ draft: next, error: "", saved: false })
   }
   const apply = async () => {
     if (inactive() || !dirty()) return
@@ -147,6 +155,7 @@ export function SettingsVectorScopeV2(props: {
           <ModelSelectorPopoverV2
             model={picker}
             overlayZIndex={state.overlayZIndex}
+            portalMount={state.portalMount}
             triggerAs="button"
             triggerProps={{
               type: "button",
@@ -169,6 +178,7 @@ export function SettingsVectorScopeV2(props: {
           <SelectV2
             aria-label="VectorScope variant"
             overlayZIndex={state.overlayZIndex}
+            portalMount={state.portalMount}
             appearance="inline"
             disabled={inactive() || !state.draft.model}
             options={variants()}

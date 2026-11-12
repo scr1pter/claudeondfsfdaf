@@ -93,6 +93,8 @@ test("the owner saves a separate model, variant and disable setting only after c
   page,
 }, info) => {
   const app = await setup(page, engine({ status: { [rootID]: { type: "busy" } } }))
+  let pageErrors = 0
+  page.on("pageerror", () => pageErrors++)
   await catalog(page)
   await app.open()
   await openSettings(page)
@@ -104,11 +106,13 @@ test("the owner saves a separate model, variant and disable setting only after c
   await settings.getByRole("button", { name: "VectorScope model", exact: true }).click()
   const picker = page.locator(".vector-model-popover")
   await expect(picker).toBeVisible()
-  const anthropic = picker.locator("button[data-model-section-toggle]").filter({ hasText: "Anthropic" })
+  const anthropic = picker.getByRole("button", { name: "Anthropic, 1 model", exact: true })
   await expect(anthropic).toHaveAttribute("aria-expanded", "false")
   await anthropic.click()
   await expect(anthropic).toHaveAttribute("aria-expanded", "true")
-  const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
+  expect(pageErrors).toBe(0)
+  const chosen = picker.getByRole("menuitemradio", { name: /^Maker Text, Anthropic,/ })
+  await expect(chosen).toHaveAttribute("data-option-key", "anthropic:maker/text")
   await expect(chosen).toContainText("Maker Text")
   await chosen.click()
   await expect(settings.getByRole("button", { name: "VectorScope model", exact: true })).toContainText("Maker Text")
@@ -128,6 +132,7 @@ test("the owner saves a separate model, variant and disable setting only after c
     { agent: { vectorscope: { model: "anthropic/maker/text", variant: "high", disable: true } } },
   ])
   await expect(settings.getByRole("button", { name: "Save VectorScope settings", exact: true })).toBeDisabled()
+  expect(pageErrors).toBe(0)
   await page.screenshot({ path: info.outputPath("vectorscope-settings-saved.png") })
 })
 
