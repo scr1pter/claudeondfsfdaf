@@ -21,11 +21,24 @@ on:
       - package.json
       - packages/core/src/review/**
       - packages/core/src/github-agents.ts
+      - packages/core/src/process-isolation.ts
+      - packages/core/src/cross-spawn-spawner.ts
+      - packages/core/src/child-environment.ts
+      - packages/core/src/untrusted-git.ts
+      - packages/core/src/pty.ts
+      - packages/core/src/brain/document/ocr.ts
       - packages/core/src/free-models.ts
       - packages/core/src/share/transport.ts
       - packages/engine/src/cli/cmd/github*.ts
       - packages/engine/src/index.ts
       - packages/engine/src/tool/shell.ts
+      - packages/engine/src/tool/external-directory.ts
+      - packages/engine/src/tool/read.ts
+      - packages/engine/src/tool/glob.ts
+      - packages/engine/src/tool/grep.ts
+      - packages/engine/src/util/process.ts
+      - packages/engine/src/mcp/**
+      - packages/engine/src/lsp/launch.ts
       - packages/engine/script/stage-sandbox-probe.ts
       - packages/engine/src/provider/provider.ts
       - packages/engine/src/session/llm/request.ts
@@ -40,6 +53,7 @@ on:
       - packages/engine/test/tool/registry*.ts
       - packages/engine/test/session/retry.test.ts
       - packages/core/test/github-agents.test.ts
+      - packages/core/test/process-isolation.test.ts
       - packages/core/test/review/**
       - packages/core/test/child-environment.test.ts
       - packages/core/test/free-model-route.test.ts
@@ -172,7 +186,7 @@ jobs:
       - name: Run core GitHub tests
         if: ${{ !cancelled() }}
         working-directory: packages/core
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-agents.test.ts test/review/*.test.ts test/child-environment.test.ts test/free-model-route.test.ts test/public-session-share.test.ts
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-agents.test.ts test/process-isolation.test.ts test/review/*.test.ts test/child-environment.test.ts test/free-model-route.test.ts test/public-session-share.test.ts
 
   # The desktop runs the engine's Node bundle in Electron's utility process, while every engine test runs on Bun, so a
   # stray Bun API passes them all and still fails every desktop message. This boots the bundle under Node and sends

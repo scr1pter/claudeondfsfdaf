@@ -4,6 +4,7 @@ import path from "node:path"
 import type { Readable } from "node:stream"
 import { z } from "zod"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 
 const token = z
   .string()
@@ -233,7 +234,7 @@ async function* streamChunks(stream: Readable): AsyncGenerator<Uint8Array | stri
 }
 
 /** One holder per CLI process. Tests create a separate holder, never replace process.env or a global service. */
-export function createGithubSecrets() {
+export function createGithubSecrets(activateIsolation?: () => void) {
   let held: Channel | undefined
   let outputPattern: RegExp | undefined
   let authorized = false
@@ -289,6 +290,7 @@ export function createGithubSecrets() {
     // Capture authority once, before project/tool environments can change. Codium never permits the sudo exception.
     isolatedTools = parsed.data.runToken !== undefined || isolation === "pid"
     sessionProof = parsed.data.runToken !== undefined && isolation === "pid" && proof === "fd3"
+    if (isolatedTools) activateIsolation?.()
     held = parsed.data
   }
   return {
@@ -349,7 +351,7 @@ export function createGithubSecrets() {
   }
 }
 
-export const credentials = createGithubSecrets()
+export const credentials = createGithubSecrets(ProcessIsolation.requireIsolation)
 
 /**
  * Whether this process holds an own-key run's channel: loaded, with no run token (the loader refuses a run token on own

@@ -5,6 +5,7 @@ import { statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { untrustedChildEnvironment } from "./child-environment"
+import { ProcessIsolation } from "./process-isolation"
 
 // Read-only git in a working tree Vector may not trust. A repository's own .git/config can name programs that git runs
 // on reads: core.fsmonitor on anything that looks at the index, gpg.*.program when log.showSignature is on, hooks, a
@@ -62,10 +63,11 @@ export function run(
 ) {
   const git = program()
   if (!git) return Promise.resolve("")
+  const isolated = ProcessIsolation.launch(git, args(command), { cwd })
   return new Promise<string>((resolve) =>
     execFile(
-      git,
-      args(command),
+      isolated.file,
+      isolated.args,
       {
         cwd,
         env: { ...untrustedChildEnvironment(), GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },

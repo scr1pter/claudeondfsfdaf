@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { parentPort, type Worker } from "node:worker_threads"
 import type { BrainLimits } from "./limits"
+import { ProcessIsolation } from "../../process-isolation"
 
 // Explicit machine-level paths opt in to local OCR. Repository config and document content cannot select programs.
 // Rendering stays outside the hardened, text-only pdf.js reader; no PDF JavaScript, shell or remote OCR is used.
@@ -276,8 +277,9 @@ async function local(
 
 function run(executable: string, args: readonly string[], directory: string, signal: AbortSignal): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false)
+  const isolated = ProcessIsolation.launch(executable, args, { cwd: directory })
   return new Promise((resolve) => {
-    const child = spawn(executable, args, {
+    const child = spawn(isolated.file, isolated.args, {
       cwd: directory,
       windowsHide: true,
       shell: false,

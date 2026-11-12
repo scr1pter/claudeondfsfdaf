@@ -9,6 +9,7 @@ import { Config } from "./config"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { untrustedChildEnvironment } from "./child-environment"
+import { ProcessIsolation } from "./process-isolation"
 import { PtyID } from "./pty/schema"
 import { Shell } from "./shell"
 import { lazy } from "./util/lazy"
@@ -223,7 +224,8 @@ const layer = Layer.effect(
       }
       yield* Effect.logInfo("creating session", { id, cmd: command, args, cwd })
       const { spawn } = yield* Effect.promise(() => pty())
-      const proc = yield* Effect.sync(() => spawn(command, args, { name: "xterm-256color", cwd, env }))
+      const isolated = ProcessIsolation.launch(command, args, { cwd })
+      const proc = yield* Effect.sync(() => spawn(isolated.file, isolated.args, { name: "xterm-256color", cwd, env }))
       const info: Info = {
         id,
         title: input.title || `Terminal ${id.slice(-4)}`,

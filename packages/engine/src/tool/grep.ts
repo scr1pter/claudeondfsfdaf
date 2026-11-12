@@ -5,6 +5,7 @@ import { FSUtil } from "@vectordevai/core/fs-util"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { WebFence } from "@vectordevai/core/research/fence"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import DESCRIPTION from "./grep.txt"
 import * as Tool from "./tool"
 
@@ -42,6 +43,7 @@ export const GrepTool = Tool.define(
           const requested = path.isAbsolute(params.path ?? ins.directory)
             ? (params.path ?? ins.directory)
             : path.join(ins.directory, params.path ?? ".")
+          ProcessIsolation.assertToolPath(requested)
           // A guest family may not search a private task folder or a folder holding one, nor learn through a stat or an
           // ask whether one exists.
           if (ctx.assertReadable) yield* ctx.assertReadable({ files: [requested], recursive: true })

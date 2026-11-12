@@ -2,6 +2,7 @@ import { type ChildProcess } from "child_process"
 import type { Stream } from "node:stream"
 import launch from "cross-spawn"
 import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { buffer } from "node:stream/consumers"
 import { errorMessage } from "./error"
 
@@ -65,9 +66,10 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
   if (cmd.length === 0) throw new Error("Command is required")
   opts.abort?.throwIfAborted()
 
-  const proc = launch(cmd[0], cmd.slice(1), {
+  const isolated = ProcessIsolation.launch(cmd[0]!, cmd.slice(1), opts)
+  const proc = launch(isolated.file, isolated.args, {
     cwd: opts.cwd,
-    shell: opts.shell,
+    shell: isolated.shell,
     env:
       opts.env === null
         ? {}

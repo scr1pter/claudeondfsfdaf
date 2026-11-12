@@ -4,6 +4,7 @@ import { NonNegativeInt } from "@vectordevai/core/schema"
 import * as path from "path"
 import * as Tool from "./tool"
 import { FSUtil } from "@vectordevai/core/fs-util"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
@@ -255,6 +256,7 @@ export const ReadTool = Tool.define<
         filepath = FSUtil.normalizePath(filepath)
       }
       const title = path.relative(instance.worktree, filepath)
+      ProcessIsolation.assertToolPath(filepath)
       // A guest family may not probe a private task folder, even for whether a file exists. The runtime checks the
       // read targets again before the output reaches history or the model.
       yield* ctx.assertReadable?.({ files: [filepath] }) ?? Effect.void

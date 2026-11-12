@@ -6,7 +6,7 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { GithubSecrets } from "./github.secrets"
-import { GithubToolIsolation } from "./github.tool-isolation"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { GithubSessionProof } from "./github.session-proof"
 
 const execute = promisify(execFile)
@@ -499,11 +499,23 @@ export async function prepare(env: Env = process.env) {
   if ((await sudo([...asAgent, "/usr/bin/sudo", "-n", "true"], [0, 1])).code !== (state.sudo ? 0 : 1)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
   if (!state.sudo) {
-    GithubToolIsolation.assertBinary()
+    ProcessIsolation.assertBinary()
     if (
       (
         await sudo(
-          [...asAgent, GithubToolIsolation.BINARY, ...GithubToolIsolation.argumentsForTool("/bin/true", [], staged)],
+          [
+            ProcessIsolation.BINARY,
+            ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
+          ],
+          [0, 1],
+        )
+      ).code !== 0
+    )
+      throw refused()
+    if (
+      (
+        await sudo(
+          [...asAgent, ProcessIsolation.BINARY, ...ProcessIsolation.argumentsForTool("/bin/true", [], staged)],
           [0, 1],
         )
       ).code !== 0
@@ -576,7 +588,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
   )
     throw refused()
   if (hosted) {
-    if (!state!.sudo) GithubToolIsolation.assertBinary()
+    if (!state!.sudo) ProcessIsolation.assertBinary()
     await verifyContainer(state!.container, true)
     await placeholder(workspace)
   }
@@ -611,17 +623,16 @@ export async function run(args: readonly string[], env: Env = process.env) {
     await file.close()
   }
   const launcher = hosted ? "/usr/bin/sudo" : binary
-  const arguments_ = hosted
+  const inner = hosted
     ? [
-        "-n",
-        // sudo closes extra descriptors. This fixed bridge opens FD3 only after sudo, before the UID switch.
+        // sudo and bwrap close extra descriptors. Open FD3 only after both, before the UID switch.
         ...(proofPath
           ? [
               "/bin/bash",
               "--noprofile",
               "--norc",
               "-c",
-              'exec 3>"$1"; shift; exec "$@"',
+              'exec 3>"$1" || exit 1; shift; exec "$@"',
               "vector-session-proof",
               proofPath,
             ]
@@ -643,6 +654,14 @@ export async function run(args: readonly string[], env: Env = process.env) {
         ...args.slice(1),
       ]
     : args.slice(1)
+  const arguments_ = !hosted
+    ? inner
+    : [
+        "-n",
+        ...(state!.sudo
+          ? inner
+          : [ProcessIsolation.BINARY, ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), workspace)]),
+      ]
   return new Promise<number>((resolve, reject) => {
     const child = spawn(launcher, arguments_, {
       // GNU env changes to the staged directory only after setpriv. A mode-0700 checkout is owned by the agent.

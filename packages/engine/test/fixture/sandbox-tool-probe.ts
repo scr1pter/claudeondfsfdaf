@@ -21,7 +21,7 @@ export async function probeToolProcesses() {
   const { EgressGuard } = await import("@vectordevai/core/local-mode/guard")
   const network = EgressGuard.installStrict()
   try {
-    const { Effect, Layer } = await import("effect")
+    const { Effect, Layer, Cause, Exit } = await import("effect")
     const { LayerNode } = await import("@vectordevai/core/effect/layer-node")
     const { CrossSpawnSpawner } = await import("@vectordevai/core/cross-spawn-spawner")
     const { FSUtil } = await import("@vectordevai/core/fs-util")
@@ -33,6 +33,16 @@ export async function probeToolProcesses() {
     const { InstanceStore } = await import("../../src/project/instance-store")
     const { InstanceBootstrap } = await import("../../src/project/bootstrap-service")
     const { ShellTool } = await import("../../src/tool/shell")
+    const { ReadTool } = await import("../../src/tool/read")
+    const { GlobTool } = await import("../../src/tool/glob")
+    const { GrepTool } = await import("../../src/tool/grep")
+    const { Instruction } = await import("../../src/session/instruction")
+    const { LSP } = await import("../../src/lsp/lsp")
+    const { Ripgrep } = await import("@vectordevai/core/ripgrep")
+    const { Process } = await import("../../src/util/process")
+    const { LSPLaunch } = await import("../../src/lsp/launch")
+    const { localTransport } = await import("../../src/mcp/stdio")
+    const { ChildProcess, ChildProcessSpawner } = await import("effect/unstable/process")
     const { SessionID, MessageID } = await import("../../src/session/schema")
     // Only startup work unrelated to the shell is omitted; command preparation, permission flow and spawning are real.
     const layer = LayerNode.compile(
@@ -45,6 +55,9 @@ export async function probeToolProcesses() {
         Agent.node,
         RuntimeFlags.node,
         InstanceStore.node,
+        Instruction.node,
+        LSP.node,
+        Ripgrep.node,
       ]),
       [[InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })]],
     )
@@ -72,7 +85,7 @@ export async function probeToolProcesses() {
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     )
     let diagnostics = ""
-    dummy.stderr.on("data", (part: Buffer) => {
+    dummy.stderr!.on("data", (part: Buffer) => {
       diagnostics = (diagnostics + part.toString()).slice(-4096)
     })
     const closed = new Promise<void>((resolve) => dummy.once("exit", () => resolve()))
@@ -99,7 +112,7 @@ export async function probeToolProcesses() {
         ready.opened !== false
       )
         throw new Error("The disposable engine is not a matching uninspected user process")
-      const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),'SIGUSR1');sent=true}catch{}process.stdout.write(JSON.stringify({visible,sent,pid:process.pid,ppid:process.ppid}))`
+      const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),'SIGUSR1');sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};process.stdout.write(JSON.stringify(result))`
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
       const output = await Effect.runPromise(
         Effect.gen(function* () {
@@ -112,7 +125,6 @@ export async function probeToolProcesses() {
               return yield* tool.execute(
                 {
                   command: `${quote(node)} -e ${quote(code)} ${dummy.pid}`,
-                  description: "Check disposable tool process isolation",
                   timeout: 10000,
                 },
                 {
@@ -134,15 +146,138 @@ export async function probeToolProcesses() {
         }).pipe(Effect.scoped, Effect.provide(layer), Effect.timeout("20 seconds")),
       )
       const actual: unknown = JSON.parse(output.output)
-      if (
-        !actual ||
-        typeof actual !== "object" ||
-        !("visible" in actual) ||
-        actual.visible !== false ||
-        !("sent" in actual) ||
-        actual.sent !== false
+      function assertBlocked(value: unknown, label: string) {
+        if (
+          !value ||
+          typeof value !== "object" ||
+          !("visible" in value) ||
+          value.visible !== false ||
+          !("sent" in value) ||
+          value.sent !== false
+        )
+          throw new Error(`The ${label} can reach or signal the disposable engine`)
+      }
+      assertBlocked(actual, "actual ShellTool")
+      const utility = await Process.run([node, "-e", code, String(dummy.pid)])
+      if (utility.code !== 0) throw new Error("The shared utility launch failed")
+      assertBlocked(JSON.parse(utility.stdout.toString()), "shared utility launch")
+      const lsp = LSPLaunch.spawn(node, ["-e", code, String(dummy.pid)])
+      const lspOutput = new Promise<string>((resolve, reject) => {
+        const parts: Buffer[] = []
+        lsp.stdout.on("data", (part: Buffer) => parts.push(part))
+        lsp.once("error", reject)
+        lsp.once("close", (exit) =>
+          exit === 0 ? resolve(Buffer.concat(parts).toString()) : reject(new Error("LSP launch failed")),
+        )
+      })
+      try {
+        assertBlocked(JSON.parse(await lspOutput), "actual LSP launch")
+      } finally {
+        lsp.kill("SIGKILL")
+      }
+      const transport = await localTransport({
+        command: node,
+        args: [
+          "-e",
+          code.replace("JSON.stringify(result)", 'JSON.stringify({jsonrpc:"2.0",method:"probe",params:result})'),
+          String(dummy.pid),
+        ],
+        cwd: process.cwd(),
+        env: Object.fromEntries(
+          Object.entries(process.env).filter((item): item is [string, string] => item[1] !== undefined),
+        ),
+      })
+      let mcpTimer: ReturnType<typeof setTimeout> | undefined
+      const mcpOutput = new Promise<unknown>((resolve, reject) => {
+        mcpTimer = setTimeout(() => reject(new Error("MCP launch did not report")), 5000)
+        transport.onmessage = (message) => resolve("params" in message ? message.params : undefined)
+        transport.onerror = reject
+      })
+      try {
+        await transport.start()
+        assertBlocked(await mcpOutput, "actual MCP stdio transport")
+      } finally {
+        clearTimeout(mcpTimer)
+        await transport.close()
+      }
+      const backend = await Effect.runPromise(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+          return yield* spawner.string(ChildProcess.make(node, ["-e", code, String(dummy.pid)]))
+        }).pipe(Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.scoped, Effect.timeout("10 seconds")),
       )
-        throw new Error("The actual ShellTool can reach or signal the disposable engine")
+      assertBlocked(JSON.parse(backend), "formatter/shared Effect spawn backend")
+
+      const pseudo = ["/proc/self/fd/3", "/dev/fd/3", `/proc/${process.pid}/mem`]
+      for (const target of pseudo) {
+        const opened = await fs.open(target, "r").then(
+          async (file) => {
+            await file.close()
+            return true
+          },
+          () => false,
+        )
+        if (opened) throw new Error("The engine can still open its process filesystem")
+      }
+      const alias = path.join(process.cwd(), "probe-process-alias")
+      await fs.symlink("/proc/self/fd/3", alias)
+      let permissionAsks = 0
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* InstanceStore.Service
+          yield* store.provide(
+            { directory: process.cwd() },
+            Effect.gen(function* () {
+              const context = {
+                sessionID: SessionID.make("ses_tool_file_probe"),
+                messageID: MessageID.make("msg_tool_file_probe"),
+                callID: "file-probe",
+                agent: "build",
+                abort: new AbortController().signal,
+                messages: [],
+                metadata: () => Effect.void,
+                extra: { bypassCwdCheck: true },
+                ask: () =>
+                  Effect.sync(() => {
+                    permissionAsks++
+                  }),
+              }
+              const read = yield* ReadTool
+              const glob = yield* GlobTool
+              const grep = yield* GrepTool
+              const reader = yield* read.init()
+              const globber = yield* glob.init()
+              const searcher = yield* grep.init()
+              for (const target of [...pseudo, alias, "/sys/kernel"]) {
+                const outcome = yield* reader.execute({ filePath: target }, context).pipe(Effect.exit)
+                if (
+                  !Exit.isFailure(outcome) ||
+                  !Cause.pretty(outcome.cause).includes("GitHub agent tools cannot access kernel process files.")
+                )
+                  throw new Error("The actual Read tool did not enforce its non-bypassable kernel path refusal")
+              }
+              for (const tool of [
+                globber.execute({ path: "/proc", pattern: "*" }, context),
+                searcher.execute({ path: "/proc", pattern: "." }, context),
+              ]) {
+                const outcome = yield* tool.pipe(Effect.exit)
+                if (
+                  !Exit.isFailure(outcome) ||
+                  !Cause.pretty(outcome.cause).includes("GitHub agent tools cannot access kernel process files.")
+                )
+                  throw new Error("An actual filesystem search did not enforce its kernel path refusal")
+              }
+              if (permissionAsks !== 0) throw new Error("Kernel file refusal was bypassable by a permission grant")
+              const safe = path.join(process.cwd(), "probe-readable.txt")
+              yield* Effect.promise(() => fs.writeFile(safe, "ordinary repository read positive control\n"))
+              const ordinary = yield* reader.execute({ filePath: safe }, context)
+              if (!ordinary.output.includes("ordinary repository read positive control"))
+                throw new Error("The actual Read positive control failed")
+            }),
+          )
+        }).pipe(Effect.provide(layer), Effect.scoped, Effect.timeout("20 seconds")),
+      )
+      await fs.unlink(alias)
       const report = message("report")
       dummy.send("report")
       if ((await report).opened !== false) throw new Error("A tool activated the disposable engine inspector")
@@ -168,6 +303,12 @@ export async function probeToolProcesses() {
         inspectorStayedClosed: true,
         controlInspectorOpened: true,
         activeInspectorRefused: true,
+        utilityLaunch: true,
+        lspLaunch: true,
+        mcpLaunch: true,
+        effectLaunch: true,
+        engineProcHidden: true,
+        actualFileToolsRefused: true,
         dummyNode: ready.node,
         callerRuntime: process.versions.bun ? `bun-${process.versions.bun}` : `node-${process.versions.node}`,
       }

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { probeToolProcesses } from "./sandbox-tool-probe"
 
 const execute = promisify(execFile)
@@ -32,26 +33,26 @@ async function identity(pid: number) {
 }
 
 async function crashProtection() {
-  const limits = await fs.readFile("/proc/self/limits", "utf8")
-  const status = await fs.readFile("/proc/self/status", "utf8")
-  const core = (await fs.readFile("/proc/sys/kernel/core_pattern", "utf8")).trim()
-  const noNewPrivileges = /^NoNewPrivs:\s+1$/m.test(status)
-  if (core !== "/dev/null" || !/Max core file size\s+0\s+0\s+bytes/.test(limits) || !noNewPrivileges)
-    throw new Error("The crash/privilege controls are not effective in the child")
+  const controls = ProcessIsolation.launch(process.execPath, [self, "--crash-controls"])
+  const { core, noNewPrivileges } = JSON.parse((await execute(controls.file, controls.args)).stdout)
+  if (core !== "/dev/null" || noNewPrivileges !== true)
+    throw new Error("The inherited crash/privilege controls are not effective in the actual isolated child")
   const directory = path.join(process.cwd(), "probe-crash")
   await fs.mkdir(directory)
   const before: string[] = await fs.readdir("/var/crash").catch(() => [])
-  const child = spawn(process.execPath, [self, "--crash"], {
+  const isolated = ProcessIsolation.launch(process.execPath, [self, "--crash"], { cwd: directory })
+  const child = spawn(isolated.file, isolated.args, {
     cwd: directory,
     env: process.env,
     stdio: ["pipe", "ignore", "ignore"],
   })
-  const ended = new Promise<string | null>((resolve, reject) => {
+  const ended = new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
     child.once("error", reject)
-    child.once("exit", (_code, signal) => resolve(signal))
+    child.once("exit", (code, signal) => resolve({ code, signal }))
   })
   child.stdin.end(`probe-crash-${randomUUID()}`)
-  if ((await ended) !== "SIGABRT") throw new Error("The synthetic crash did not occur")
+  const aborted = await ended
+  if (aborted.signal !== "SIGABRT" && aborted.code !== 134) throw new Error("The synthetic crash did not occur")
   const generated = await fs.readdir(directory)
   const reports = (await fs.readdir("/var/crash").catch(() => [])).filter((name) => !before.includes(name))
   if (generated.length || reports.length) throw new Error("A crash artifact was created")
@@ -146,7 +147,17 @@ async function scan(parent: number) {
   }
 }
 
-if (process.argv[2] === "--crash") {
+if (process.argv[2] === "--crash-controls") {
+  const limits = await fs.readFile("/proc/self/limits", "utf8")
+  const status = await fs.readFile("/proc/self/status", "utf8")
+  if (!/Max core file size\s+0\s+0\s+bytes/.test(limits)) throw new Error("Missing inherited hard zero core limit")
+  console.log(
+    JSON.stringify({
+      core: (await fs.readFile("/proc/sys/kernel/core_pattern", "utf8")).trim(),
+      noNewPrivileges: /^NoNewPrivs:\s+1$/m.test(status),
+    }),
+  )
+} else if (process.argv[2] === "--crash") {
   const capture: Buffer[] = []
   for await (const chunk of process.stdin) capture.push(Buffer.from(chunk))
   if (!Buffer.concat(capture).toString("utf8").startsWith("probe-crash-"))
@@ -177,7 +188,13 @@ if (process.argv[2] === "--crash") {
     !report.toolProcess?.signalBlocked ||
     !report.toolProcess?.inspectorStayedClosed ||
     !report.toolProcess?.controlInspectorOpened ||
-    !report.toolProcess?.activeInspectorRefused
+    !report.toolProcess?.activeInspectorRefused ||
+    !report.toolProcess?.utilityLaunch ||
+    !report.toolProcess?.lspLaunch ||
+    !report.toolProcess?.mcpLaunch ||
+    !report.toolProcess?.effectLaunch ||
+    !report.toolProcess?.engineProcHidden ||
+    !report.toolProcess?.actualFileToolsRefused
   )
     throw new Error("Missing actual ShellTool process-isolation acceptance")
   if (
@@ -211,11 +228,13 @@ if (process.argv[2] === "--crash") {
     })
   )
     throw new Error("The staged checkout survived cleanup")
+  if (stage.detached.pid !== report.detached.pid || stage.detached.uid !== report.detached.uid)
+    throw new Error("The trusted detached-process observation changed")
   const current = await identity(report.detached.pid).catch(() => undefined)
   const status = await fs.readFile(`/proc/${report.detached.pid}/status`, "utf8").catch(() => "")
   if (
     current?.uid === report.detached.uid &&
-    current?.start === report.detached.start &&
+    current?.start === stage.detached.start &&
     status &&
     !/^State:\s+Z/m.test(status)
   )
@@ -277,11 +296,17 @@ if (process.argv[2] === "--crash") {
   if (!channel) throw new Error("The probe could not receive its private credential channel")
   const toolProcess = await probeToolProcesses()
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
-  const child = await execute(
-    "/bin/bash",
-    ["--noprofile", "--norc", "-c", 'exec "$1" "$2" --scan "$3"', "probe", process.execPath, self, String(process.pid)],
-    { timeout: 15_000 },
-  )
+  const scanner = ProcessIsolation.launch("/bin/bash", [
+    "--noprofile",
+    "--norc",
+    "-c",
+    'exec "$1" "$2" --scan "$3"',
+    "probe",
+    process.execPath,
+    self,
+    String(process.pid),
+  ])
+  const child = await execute(scanner.file, scanner.args, { timeout: 15_000 })
   const report = JSON.parse(child.stdout)
   const crash = await crashProtection()
   const detached = spawn(process.execPath, [self, "--detached"], {
@@ -299,7 +324,7 @@ if (process.argv[2] === "--crash") {
   })
   detached.stdout.destroy()
   detached.unref()
-  const detachedIdentity = await identity(detached.pid!)
+  const detachedIdentity = { pid: detached.pid!, uid: process.getuid?.() }
   await fs.mkdir("vector-out", { recursive: true })
   await fs.writeFile("vector-out/patch.diff", "", { mode: 0o600 })
   await fs.writeFile(

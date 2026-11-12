@@ -8,7 +8,10 @@ export const LIMIT = 256
 export const Proof = z
   .object({
     v: z.literal(1),
-    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    sha256: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
     bytes: z.number().int().positive().max(GithubAgents.PATCH_LIMITS.sessionBytes),
   })
   .strict()

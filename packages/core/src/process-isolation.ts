@@ -1,0 +1,112 @@
+import fs from "node:fs"
+import path from "node:path"
+
+export const BINARY = "/usr/bin/bwrap"
+export const REFUSAL = "The GitHub run cannot isolate its tool processes. The command is refused."
+let enabled = false
+
+/** Called once by the actual private-channel loader. There is deliberately no lowering/reset API. */
+export function requireIsolation() {
+  enabled = true
+}
+
+export function required() {
+  return enabled
+}
+
+export function assertBinary() {
+  if (process.platform !== "linux") throw new Error(REFUSAL)
+  const info = fs.lstatSync(BINARY, { throwIfNoEntry: false })
+  if (!info?.isFile() || info.uid !== 0 || info.mode & 0o022 || fs.realpathSync(BINARY) !== BINARY)
+    throw new Error(REFUSAL)
+}
+
+/** Files retain their existing Unix permissions. Only the trusted engine keeps a host PID; its proc mount is empty. */
+export function engineArguments(file: string, args: readonly string[], cwd: string) {
+  return [
+    "--die-with-parent",
+    "--bind",
+    "/",
+    "/",
+    "--tmpfs",
+    "/proc",
+    "--remount-ro",
+    "/proc",
+    // These capabilities exist only in the trusted root bridge before setpriv drops the UID and sets no-new-privs.
+    "--cap-add",
+    "CAP_SETUID",
+    "--cap-add",
+    "CAP_SETGID",
+    "--cap-add",
+    "CAP_DAC_OVERRIDE",
+    "--chdir",
+    cwd,
+    "--",
+    file,
+    ...args,
+  ]
+}
+
+export function argumentsForTool(file: string, args: readonly string[], cwd: string) {
+  return [
+    "--die-with-parent",
+    "--unshare-user",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--bind",
+    "/",
+    "/",
+    "--proc",
+    "/proc",
+    "--chdir",
+    cwd,
+    "--",
+    file,
+    ...args,
+  ]
+}
+
+export function launch(
+  file: string,
+  args: readonly string[],
+  options: { cwd?: string; shell?: boolean | string } = {},
+) {
+  if (!required()) return { file, args: [...args], shell: options.shell }
+  assertBinary()
+  const executable = typeof options.shell === "string" ? options.shell : options.shell ? "/bin/sh" : file
+  const argv = options.shell ? ["-c", [file, ...args].join(" ")] : args
+  return { file: BINARY, args: argumentsForTool(executable, argv, options.cwd ?? process.cwd()), shell: false }
+}
+
+const KERNEL = ["/proc", "/sys", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr"]
+
+/** Refuse kernel paths before a filesystem tool asks permission, including links that traverse a kernel alias. */
+export function assertToolPath(target: string) {
+  if (!required()) return
+  assertKernelPath(target)
+}
+
+export function assertKernelPath(target: string) {
+  let pending = path.resolve(target).split("/").filter(Boolean)
+  let current = "/"
+  let links = 0
+  while (pending.length) {
+    const candidate = path.join(current, pending.shift()!)
+    if (KERNEL.some((prefix) => candidate === prefix || candidate.startsWith(prefix + "/")))
+      throw new Error("GitHub agent tools cannot access kernel process files.")
+    const info = fs.lstatSync(candidate, { throwIfNoEntry: false })
+    if (!info?.isSymbolicLink()) {
+      current = candidate
+      continue
+    }
+    if (++links > 40) throw new Error("GitHub agent tools cannot resolve this file safely.")
+    pending = [
+      ...path.resolve(path.dirname(candidate), fs.readlinkSync(candidate)).split("/").filter(Boolean),
+      ...pending,
+    ]
+    current = "/"
+  }
+}
+
+export * as ProcessIsolation from "./process-isolation"

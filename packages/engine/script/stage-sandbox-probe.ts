@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 
 // CI-only packaging: include the actual ShellTool and its runtime assets in the immutable disposable probe.
 const engine = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+process.chdir(engine)
 const output = path.join(process.env.RUNNER_TEMP!, "vector-probe-tools")
 if (!process.env.RUNNER_TEMP || !path.isAbsolute(output)) throw new Error("Missing probe output directory")
 const result = await Bun.build({

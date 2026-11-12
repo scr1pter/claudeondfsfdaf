@@ -11,6 +11,7 @@ import { spawn } from "node:child_process"
 import { z } from "zod"
 import { Option, Schema } from "effect"
 import { GithubAgents } from "@vectordevai/core/github-agents"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { escapeVectorMarkers } from "@vectordevai/core/review/state"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { BODY_MAX_CHARS } from "./github.evidence"
@@ -728,8 +729,9 @@ function git(
   args: string[],
   options: { limit: number; input?: string | Uint8Array },
 ): Promise<{ output: Buffer; overflow: boolean }> {
+  const isolated = ProcessIsolation.launch("git", [...CONFIG, ...args], { cwd: repo.cwd })
   return new Promise((resolve, reject) => {
-    const child = spawn("git", [...CONFIG, ...args], {
+    const child = spawn(isolated.file, isolated.args, {
       cwd: repo.cwd,
       env: { ...environment(), ...(repo.index === undefined ? {} : { GIT_INDEX_FILE: repo.index }) },
       stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
