@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import { constants } from "node:fs"
 import path from "node:path"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -63,6 +64,47 @@ export async function probeToolProcesses() {
       [[InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })]],
     )
     const node = path.join(process.env.PATH!.split(path.delimiter)[0]!, "node")
+    const errorCode = (error: unknown) =>
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code.slice(0, 40)
+        : "UNKNOWN"
+    const ancestors = [process.cwd()]
+    for (let parent = path.dirname(process.cwd()); ; parent = path.dirname(parent)) {
+      ancestors.push(parent)
+      if (parent === path.dirname(parent)) break
+    }
+    const executable = {
+      chosen: node,
+      stat: await fs.stat(node).then(
+        (info) => ({ uid: info.uid, gid: info.gid, mode: (info.mode & 0o7777).toString(8) }),
+        (error: unknown) => ({ error: errorCode(error) }),
+      ),
+      canonical: await fs.realpath(node).then(
+        (value) => ({ path: value }),
+        (error: unknown) => ({ error: errorCode(error) }),
+      ),
+      execute: await fs.access(node, constants.X_OK).then(
+        () => true,
+        (error: unknown) => errorCode(error),
+      ),
+      runtime: process.execPath,
+      cwd: process.cwd(),
+      uid: process.getuid?.(),
+      gid: process.getgid?.(),
+      traversal: await Promise.all(
+        ancestors.map(async (directory) => ({
+          directory,
+          stat: await fs.stat(directory).then(
+            (info) => ({ uid: info.uid, gid: info.gid, mode: (info.mode & 0o7777).toString(8) }),
+            (error: unknown) => ({ error: errorCode(error) }),
+          ),
+          execute: await fs.access(directory, constants.X_OK).then(
+            () => true,
+            (error: unknown) => errorCode(error),
+          ),
+        })),
+      ),
+    }
     const dummy = spawn(
       node,
       [
@@ -90,14 +132,18 @@ export async function probeToolProcesses() {
     let probeError: unknown
     const lifecycle: {
       spawnError?: string
+      syscall?: string
+      path?: string
       exit?: { code: number | null; signal: string | null }
       closed: boolean
       disconnected: boolean
       term?: boolean
       kill?: boolean
     } = { closed: false, disconnected: false }
-    dummy.on("error", (error: Error & { code?: string }) => {
+    dummy.on("error", (error: Error & { code?: string; syscall?: string; path?: string }) => {
       lifecycle.spawnError = error.code ?? error.name
+      lifecycle.syscall = error.syscall?.slice(0, 240)
+      lifecycle.path = error.path?.slice(0, 240)
     })
     dummy.once("close", () => {
       lifecycle.closed = true
@@ -118,6 +164,7 @@ export async function probeToolProcesses() {
     const details = () =>
       JSON.stringify({
         phase,
+        executable,
         pid: dummy.pid,
         connected: dummy.connected,
         killed: dummy.killed,

@@ -156,6 +156,15 @@ jobs:
           }
           trap cleanup_profile EXIT
           # Read at most the fixed probe PIDs' denial events. Emit categories/counts only, never raw log text.
+          # This label has no executable attachment and was created exclusively by this disposable job.
+          # Read only its denied events, emit operation counts, and never print raw kernel records.
+          sudo -n journalctl --kernel --boot --no-pager --output=cat --lines=20 --grep='apparmor="DENIED".*profile="vector-isolation-diagnostic"' | awk '
+            /operation="exec"/ { execs++ }
+            /operation="file_mmap"/ { mmap++ }
+            /operation="capable"/ { capable++ }
+            /operation="file_inherit"/ { inherit++ }
+            /operation="open"/ { opens++ }
+            END { printf "Vector-label denied operations: exec=%d file_mmap=%d capable=%d file_inherit=%d open=%d\n", execs, mmap, capable, inherit, opens }' || test "${PIPESTATUS[0]}" = 1
           if [ -f "$RUNNER_TEMP/vector-aa-probe-pids.json" ]; then
             probe_pids="$(python3 -c 'import json,os; v=json.load(open(os.environ["RUNNER_TEMP"]+"/vector-aa-probe-pids.json")); assert len(v["pids"])==2 and all(type(p) is int and p>1 for p in v["pids"]); print("|".join(map(str,v["pids"])))')"
             sudo -n journalctl --kernel --boot --no-pager --output=cat --lines=20 --grep="apparmor=\"DENIED\".*pid=($probe_pids)( |$)" | awk '
