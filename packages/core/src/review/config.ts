@@ -3,6 +3,7 @@
 // request. Pure and browser-safe.
 
 import { minimatch } from "minimatch"
+export { instructionPathExcluded } from "./instruction-path"
 import { NOT_A_NAME, readZdrAttestation } from "./privacy"
 import {
   DEFAULT_REVIEW_CONFIG,
