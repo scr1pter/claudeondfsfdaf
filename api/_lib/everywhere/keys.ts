@@ -183,6 +183,12 @@ export const everywhereKeys = {
   seen: (accountId: string) => key("seen", account(accountId)),
   ticket: (hash: string) => key("ticket", matching(hash, TICKET_HASH)),
   jiraTask: (taskId: string) => key("jira", "task", freePart(taskId)),
+  jiraTaskDraft: (taskId: string) => key("jira", "draft", matching(taskId, UUID)),
+  jiraTasks: (installationKey: string) => key("jira", "tasks", installation(installationKey)),
+  jiraAccountTasks: (accountId: string) => key("jira", "tasks", account(accountId)),
+  jiraContext: (installationKey: string, userId: string, contextId: string) => key("jira", "context", installation(installationKey), user(installationKey, userId), matching(contextId, UUID)),
+  jiraMessage: (installationKey: string, userId: string, messageId: string) => key("jira", "message", installation(installationKey), user(installationKey, userId), matching(messageId, UUID)),
+  jiraRetry: (installationKey: string) => key("jira", "retry", installation(installationKey)),
   audit: (accountId: string) => key("audit", account(accountId)),
 } as const
 

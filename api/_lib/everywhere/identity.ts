@@ -701,6 +701,15 @@ export async function findLink(store: Store, installation: string, userId: strin
   return getJson(store, everywhereKeys.link(installation, checkUser(installation, userId)), decodeLink)
 }
 
+/** Exact server-read link proof for a native task write that must fence unlink or account erasure atomically. */
+export async function readLinkSnapshot(store: Store, installation: string, userId: string) {
+  const raw = await getValue(store, everywhereKeys.link(installation, checkUser(installation, userId)))
+  if (raw === undefined) return undefined
+  const record = decodeLink(parseStored(raw))
+  if (!record) throw storeUnavailable()
+  return { record, raw }
+}
+
 export type LinkView = {
   readonly installation: string
   readonly platform: PlatformId

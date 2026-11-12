@@ -7,6 +7,8 @@ import { createSlackAdapter, type SlackDeps } from "./slack/adapter.js"
 import { createSlackRoutes } from "./slack/routes.js"
 import { createLinearAdapter, type LinearDeps } from "./linear/adapter.js"
 import { createLinearWebhook } from "./linear/routes.js"
+import { createJiraAdapter } from "./jira/adapter.js"
+import { createJiraRoutes } from "./jira/a2a.js"
 import { everywhereStore } from "./store.js"
 
 export function productionPlatformDeps() {
@@ -16,7 +18,8 @@ export function productionPlatformDeps() {
 export function configuredPlatforms(deps: SlackDeps & Partial<Pick<LinearDeps, "privateResult" | "sleep">>): Platforms {
   const config = deps.config()
   return { ...(config.enabled && config.platforms.has("slack") && config.slack ? { slack: createSlackAdapter(deps) } : {}),
-    ...(config.enabled && config.platforms.has("linear") && config.linear ? { linear: createLinearAdapter(deps) } : {}) }
+    ...(config.enabled && config.platforms.has("linear") && config.linear ? { linear: createLinearAdapter(deps) } : {}),
+    ...(config.enabled && config.platforms.has("jira") && config.jira ? { jira: createJiraAdapter(deps).adapter } : {}) }
 }
 
 export function productionPlatforms(): Platforms {
@@ -33,3 +36,4 @@ export const productionJobEvents = createJobEvents(productionContext, production
 
 export const productionSlackRoutes = createSlackRoutes(productionPlatformDeps())
 export const productionLinearWebhook = createLinearWebhook(productionPlatformDeps())
+export const productionJiraRoutes = createJiraRoutes(productionPlatformDeps())

@@ -5,6 +5,7 @@ import { LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
 import { CREATE_JOB_SCRIPT, TRANSITION_SCRIPT } from "../../../../api/_lib/everywhere/jobs"
 import { COUNT_JOB_SCRIPT } from "../../../../api/_lib/everywhere/limits"
 import { REPLACE_NATIVE_RESERVATION_SCRIPT } from "../../../../api/_lib/everywhere/native-resource"
+import { ERASE_JIRA_TASK_SCRIPT, WRITE_JIRA_TASK_SCRIPT } from "../../../../api/_lib/everywhere/jira/task-store"
 import { SWAP_SCRIPT } from "../../../../api/_lib/everywhere/store"
 
 /*
@@ -51,6 +52,40 @@ export class FakeStore {
     [REPLACE_NATIVE_RESERVATION_SCRIPT, (keys, argv) => {
       if (this.run("GET", [keys[0]!]) !== argv[0]) return 0
       this.run("SET", [keys[0]!, argv[1]!, "PX", "30000"])
+      return 1
+    }],
+    [WRITE_JIRA_TASK_SCRIPT, (keys, argv) => {
+      if ((this.run("GET", [keys[1]!]) ?? "") !== argv[1]) return -1
+      if ((this.run("GET", [keys[0]!]) ?? "") !== argv[0]) return -2
+      if (keys[7] && (this.run("GET", [keys[7]]) ?? "") !== argv[12]) return -1
+      if (argv[7] === "create") {
+        if (this.run("EXISTS", [keys[5]!]) === 1) return -3
+        if ((this.run("GET", [keys[2]!]) ?? "") !== argv[8]) return -4
+      }
+      this.run("ZREMRANGEBYSCORE", [keys[3]!, "-inf", argv[6]!])
+      if (argv[7] === "create" && Number(this.run("ZCARD", [keys[3]!])) >= 2000) return -5
+      if (keys[6]) {
+        this.run("ZREMRANGEBYSCORE", [keys[6], "-inf", argv[6]!])
+        if (this.run("ZSCORE", [keys[6], argv[4]!]) === null && Number(this.run("ZCARD", [keys[6]])) >= 2000) return -5
+      }
+      this.run("SET", [keys[0]!, argv[2]!, "PX", argv[3]!])
+      if (argv[7] === "create") {
+        this.run("SET", [keys[2]!, argv[4]!, "PX", argv[3]!])
+        this.run("SET", [keys[5]!, argv[4]!, "PX", argv[3]!])
+      }
+      this.run("ZADD", [keys[3]!, argv[5]!, argv[4]!]); this.run("PEXPIRE", [keys[3]!, "172800000"])
+      if (keys[6]) { this.run("ZADD", [keys[6], argv[5]!, argv[4]!]); this.run("PEXPIRE", [keys[6], "172800000"]) }
+      if (argv[9] === "write") this.run("SET", [keys[4]!, argv[10]!, "PX", argv[11]!])
+      if (argv[9] === "delete") this.run("DEL", [keys[4]!])
+      return 1
+    }],
+    [ERASE_JIRA_TASK_SCRIPT, (keys, argv) => {
+      if (this.run("GET", [keys[0]!]) !== argv[0]) return 0
+      this.run("DEL", [keys[0]!, keys[1]!])
+      if (this.run("GET", [keys[2]!]) === argv[1]) this.run("DEL", [keys[2]!])
+      if (this.run("GET", [keys[4]!]) === argv[1]) this.run("DEL", [keys[4]!])
+      this.run("ZREM", [keys[3]!, argv[1]!])
+      if (keys[5]) this.run("ZREM", [keys[5], argv[1]!])
       return 1
     }],
     [LINK_TRIES_SCRIPT, (keys, argv) => this.tries(keys, argv)],

@@ -1,7 +1,8 @@
 import { ACCOUNT_ID_PATTERN, installationPlatform, type PlatformId } from "../../../packages/schema/src/everywhere.js"
 import { appendAudit, type AuditEvent, type ERASE_REASONS } from "./audit.js"
-import { PLACE_PATTERN, linkMember, parseLinkMember, readInstall, type InstallRecord } from "./identity.js"
+import { PLACE_PATTERN, installationAuthority, linkMember, parseLinkMember, readInstall, readInstallSnapshot, type InstallRecord } from "./identity.js"
 import { jobEraser } from "./jobs.js"
+import { eraseJiraTaskAccount, eraseJiraTaskInstallation } from "./jira/task-store.js"
 import { everywhereKeys, userIdValid } from "./keys.js"
 import { deleteKeys, everywhereStore, getValue, removeMembers, setMembers, type Store } from "./store.js"
 
@@ -69,16 +70,17 @@ export async function eraseInstallation(
   const platform = installationPlatform(installation)
   if (!platform) throw new RangeError("Not an installation key.")
   const deleted = options.deletedAccount?.toLowerCase()
-  const record = await readInstall(ctx.store, installation)
+  const snapshot = await readInstallSnapshot(ctx.store, installation)
+  const record = snapshot?.record
   if (record && ctx.revoke) await ctx.revoke(installation, record).catch(() => report("revoke"))
 
-  const first = await eraseContents(ctx, installation, platform, reason, deleted)
+  const first = await eraseContents(ctx, installation, platform, reason, deleted, snapshot && installationAuthority(snapshot))
   // The record last, with its place in the connector's index: from here on nothing new is linked, mapped or posted.
   await deleteKeys(ctx.store, everywhereKeys.install(installation))
   if (record) await removeMembers(ctx.store, everywhereKeys.installs(record.connector), installation)
   // Once more without the record, for anything a call that passed its installation check just before the record went
   // wrote while the steps above ran. It usually finds nothing.
-  const late = await eraseContents(ctx, installation, platform, reason, deleted)
+  const late = await eraseContents(ctx, installation, platform, reason, deleted, snapshot && installationAuthority(snapshot))
 
   if (record && record.connector !== deleted)
     await appendAudit(
@@ -97,8 +99,10 @@ async function eraseContents(
   platform: PlatformId,
   reason: EraseReason,
   deleted: string | undefined,
+  authority?: string,
 ): Promise<{ links: number; mappings: number }> {
   if (ctx.jobs) await ctx.jobs.installation(installation)
+  if (platform === "jira" && authority) await eraseJiraTaskInstallation(ctx.store, installation, authority)
 
   let links = 0
   const linkedKey = everywhereKeys.linked(installation)
@@ -167,6 +171,7 @@ export async function eraseEverywhereAccount(ctx: EraseContext, account: string)
   if (code !== undefined && /^[0-9a-f]{64}$/.test(code)) await deleteKeys(ctx.store, everywhereKeys.linkCode(code))
 
   if (ctx.jobs) await ctx.jobs.account(owner)
+  await eraseJiraTaskAccount(ctx.store, owner)
   await deleteKeys(
     ctx.store,
     linksKey,

@@ -222,3 +222,45 @@ Root batch052 passed every requested file separately using generated credentials
 API types passed in 1.29 seconds through the documented engine-package command. Web `bun typecheck` passed in 29 seconds: 240 files, zero errors and zero warnings. The final four native files took 0.04, 0.32, 0.13 and 0.42 seconds. These results close the earlier URL, refresh-race and fixture typing failures at this source; no assertion was removed to pass them. The source includes atomic terminal-owner replacement with its expiry, lost-response expiry recovery, and both credential rotation/401 negative cases with a successful current-token retry.
 
 Webhook's four local skips are two actual Redis cases and two hooks. Jobs skips seven Redis cases and two hooks; identity skips two Redis cases and two hooks. New installation/quota, native-resource create, reservation-replacement and cooldown scripts/races still require actual Redis on fresh exact-P2-head hosted CI. No local Redis, model, real platform, owner computer, registration or deployment was exercised. The package is ready for its scoped software commit, followed by VE-13 Jira and whole-P2 independent review/repair. Current native and owner surface/distribution/prerequisite ports remain explicitly gated.
+
+
+## VE-13 first full validation freeze (2026-11-12)
+
+VE-12 is committed as `cd4fcab18694a21abef50f5909db0a8a80df6723` using an ordinary commit with no hook override. Jira sources now include pinned native FIT/JWKS verification, explicit requester/user-token proof, bounded ADF reads, source-only Forge manifest/icon, A2A task admission/poll/cancel/input controls, scoped account/site linking, hard-expiring encrypted drafts, indexed static cleanup and shared/private delivery separation. Current official-doc differences and owner gates are in deviations and `integrations/jira-forge/README.md`.
+
+Root batch054 passed the first production API type preflight in 1.26 seconds. The candidate then received its planned semantic corrections: the fifty-minute text classifies persisted state before sweep, unknown business states retain a stable erase envelope, unconnected terminal controls are persisted, and a concurrent duplicate native message recovers the single admitted task. These changes and all five separately runnable `everywhere-jira-{fit,a2a,adf,render,manifest}.test.ts` files are frozen for the first full runtime check. The actual loopback fixture uses generated native RS256 keys and credentials under the fetch guard. No Jira runtime, fresh candidate typecheck or real Redis pass is claimed yet.
+
+The new task/draft installation/revision/link fence has deterministic negative/positive fixtures and a hosted-only Redis case. Root must run all five files separately plus API/web types and shared erase/identity/install/intake/jobs/Linear/Slack regressions. After scoped qualification, VE-13 needs its package commit, whole-P2 independent review and repairs, normal branch push and fresh hosted Lua/general checks. The approved shared installation-record deletion CAS repair is still owed; no main/PR/platform registration or deployment is part of this candidate.
+
+
+### VE-13 first full receipts and final Lua coverage follow-up
+
+The first full candidate passed every requested file separately under root's serialized runner:
+
+| File | Passed | Skipped locally | Assertions |
+| --- | ---: | ---: | ---: |
+| everywhere-jira-fit.test.ts | 4 | 0 | 26 |
+| everywhere-jira-a2a.test.ts | 19 | 3 | 216 |
+| everywhere-jira-adf.test.ts | 2 | 0 | 9 |
+| everywhere-jira-render.test.ts | 6 | 0 | 48 |
+| everywhere-jira-manifest.test.ts | 1 | 0 | 16 |
+| everywhere-erase.test.ts | 10 | 0 | 129 |
+| everywhere-identity.test.ts | 39 | 4 | 243 |
+| everywhere-install-api.test.ts | 15 | 0 | 116 |
+| everywhere-intake.test.ts | 8 | 0 | 68 |
+| everywhere-jobs.test.ts | 43 | 9 | 334 |
+| everywhere-linear-webhook.test.ts | 15 | 4 | 144 |
+| everywhere-slack-events.test.ts | 12 | 0 | 94 |
+
+API typecheck passed in 1.37 seconds. Web types passed in 26.87 seconds: 246 files, zero errors and zero warnings. These receipts qualify the unchanged production candidate's local software behavior, including the native fifty-minute, membership, one-context, stop, origin, opaque selection, replay, account-erasure and future-state cleanup cases. They do not qualify a platform or owner computer.
+
+A test-only coverage follow-up then extended the existing deterministic and hosted-only draft-fence fixture so it actually executes both new Lua scripts. It now checks stale-revision cleanup refusal, exact task-CAS refusal after a concurrent authorized update, and final current cleanup of task/draft/context plus both indexes. Production did not change. Root's Jira A2A and web-type rerun is pending for that last test delta before the package commit. The three A2A local skips are one actual Redis case and two hooks; no actual Redis proof has run locally. Jobs skips seven Redis cases plus two hooks, identity two plus two hooks, and Linear webhook two plus two hooks.
+
+
+## VE-13 final local checkpoint and whole-P2 review boundary
+
+Root batch056 passed the final test-only Jira A2A follow-up: **19 cases / 245 assertions**, with one Redis case and two hooks intentionally skipped locally, in 0.77 seconds. Web types passed again in 24.58 seconds: 246 files, zero errors and zero warnings. Production was unchanged from the first full candidate, whose other four native files, seven shared regressions and API types had passed. The new fixture now reaches both write and erase scripts; its actual Redis execution is still owed in hosted CI. The local result must not be described as real Redis proof.
+
+This qualifies the scoped Jira package for an ordinary commit, not a phase push or activation. An independent whole-P2 review is now reading the frozen source. It has confirmed additional cross-package authority gaps requiring a coherent repair before any P2 push: exact authorized installation snapshots must reach erasure; an active-to-closing CAS must precede cleanup and block every late admission; record/index writes must be atomic and preserve a newer grant; generic job admission must fence the exact person link and account closing state; destructive native control events need replay/generation protection; and name-only Linear mapping/selection cannot authorize a reused repository name. Durable account metadata writers, including audit, link-code/OAuth state and readiness, must respect account deletion. This branch does not contain the Codium tombstone implementation, so no existing global closing integration is claimed.
+
+Known findings remain open even though the local component checks passed. The coordinating agent explicitly holds the P2 push until complete authority-race closure and new exact-head hosted Lua/general checks. Owner app registration, actual grants, native payload/identity proof, private surfaces, runner prerequisites, deployment and release gates remain unchanged. No main push, PR, paid inference, production operation or owner-computer action occurred.
