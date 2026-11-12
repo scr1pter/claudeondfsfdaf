@@ -8,6 +8,7 @@ import {
   createSignal,
   createUniqueId,
   For,
+  getListener,
   getOwner,
   JSX,
   onCleanup,
@@ -101,6 +102,8 @@ function createModelSections(input: {
       each: number
       cleanup: number
       pending?: () => boolean
+      snapshots?: Map<number, () => unknown>
+      snapshot?: () => unknown
     }
   }
   const diagnostic: NonNullable<typeof host.scopePickerTrace> = (host.scopePickerTrace ??= {
@@ -143,6 +146,43 @@ function createModelSections(input: {
     owners.set(owner, next)
     return next
   }
+  // Retain bounded plain lifetime data before arming. A list disposed before
+  // the click would otherwise be invisible in the event-only console trace.
+  const lifetimes: {
+    sequence: number
+    kind: string
+    owner: number | null
+    listener: number | null
+    section?: string
+    cleaned: boolean
+    cleanupSequence?: number
+  }[] = []
+  let lifetimeSequence = 0
+  const lifetime = (kind: string, section?: string) => {
+    const record: (typeof lifetimes)[number] = {
+      sequence: ++lifetimeSequence,
+      kind,
+      owner: ownerID(getOwner()),
+      listener: ownerID(getListener()),
+      ...(section ? { section } : {}),
+      cleaned: false,
+    }
+    lifetimes.push(record)
+    if (lifetimes.length > 48) lifetimes.shift()
+    onCleanup(() => {
+      record.cleaned = true
+      record.cleanupSequence = ++lifetimeSequence
+    })
+  }
+  diagnostic.snapshots ??= new Map()
+  diagnostic.snapshots.set(instance, () => lifetimes.map((record) => ({ ...record })))
+  if (diagnostic.snapshots.size > 8) {
+    const first = diagnostic.snapshots.keys().next().value
+    if (first !== undefined) diagnostic.snapshots.delete(first)
+  }
+  diagnostic.snapshot = () =>
+    [...(diagnostic.snapshots ?? [])].map(([instance, snapshot]) => ({ instance, records: snapshot() }))
+  lifetime("model")
   const modelOwner = ownerID(getOwner())
   let modelDisposed = false
   onCleanup(() => {
@@ -173,6 +213,7 @@ function createModelSections(input: {
   )
   const [open, setOpenSections] = createSignal(readOpenSections())
   const views = createMemo(() => {
+    lifetime("views-evaluation")
     const owner = ownerID(getOwner())
     onCleanup(() => trace("views-owner-cleanup", { owner }))
     const expanded = open()
@@ -210,7 +251,7 @@ function createModelSections(input: {
     trace("reload", { before: [...open()], next: [...next] })
     setOpenSections(next)
   }
-  return { current, currentRow, sections, views, navigation, toggle, reload, trace, ownerID }
+  return { current, currentRow, sections, views, navigation, toggle, reload, trace, ownerID, lifetime }
 }
 
 /** Pointer highlight that follows real movement only. Rows render under a resting
@@ -460,6 +501,7 @@ export function ModelSelectorPopoverV2(props: {
   const sections = picker.sections
   // This replaces the existing For getter, reads the memo once and adds no reactive observer.
   const sectionViews = () => {
+    picker.lifetime("for-evaluation")
     const owner = picker.ownerID(getOwner())
     const next = picker.views()
     picker.trace("popover-for-each", { owner, sections: next.map((view) => [view.section.id, view.open]) })
@@ -612,6 +654,7 @@ export function ModelSelectorPopoverV2(props: {
               <Show when={sections().length > 0} fallback={<PickerEmpty term={store.search} />}>
                 <For each={sectionViews()}>
                   {(view) => {
+                    picker.lifetime("mapped-section", view.section.id)
                     const owner = picker.ownerID(getOwner())
                     picker.trace("popover-render", { owner, id: view.section.id, open: view.open })
                     onCleanup(() => picker.trace("popover-section-cleanup", { owner, id: view.section.id }))

@@ -124,7 +124,12 @@ test("the owner saves a separate model, variant and disable setting only after c
   await expect(anthropic).toHaveAttribute("aria-expanded", "false")
   await anthropic.evaluate((header) => {
     const key = "vector.model-picker.open-sections.v1"
-    const diagnostic = { nativeClicks: 0, writes: [] as string[], before: localStorage.getItem(key) }
+    const diagnostic = {
+      nativeClicks: 0,
+      writes: [] as string[],
+      before: localStorage.getItem(key),
+      lifetimeBefore: undefined as unknown,
+    }
     const trace = (
       globalThis as unknown as {
         scopePickerTrace?: {
@@ -136,6 +141,7 @@ test("the owner saves a separate model, variant and disable setting only after c
           each: number
           cleanup: number
           pending?: () => boolean
+          snapshot?: () => unknown
         }
       }
     ).scopePickerTrace
@@ -143,6 +149,7 @@ test("the owner saves a separate model, variant and disable setting only after c
     // Capture arms collection immediately before the real component click handler, after initial rendering.
     const click = () => {
       diagnostic.nativeClicks++
+      diagnostic.lifetimeBefore = trace.snapshot?.()
       Object.assign(trace, { armed: true, sequence: 0, toggle: 0, lifecycle: 0, render: 0, each: 0, cleanup: 0 })
     }
     const write = Storage.prototype.setItem
@@ -159,13 +166,18 @@ test("the owner saves a separate model, variant and disable setting only after c
         after: localStorage.getItem(key),
         headerConnected: header.isConnected,
         transitionPending: trace.pending?.(),
+        lifetimeAfter: trace.snapshot?.(),
       }
     }
   })
   await anthropic.click()
   console.log(
     "SCOPE_PICKER_CLICK_DIAGNOSTIC",
-    await page.evaluate(() => (window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic()),
+    JSON.stringify(
+      await page.evaluate(() =>
+        (window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic(),
+      ),
+    ),
   )
   await expect(anthropic)
     .toHaveAttribute("aria-expanded", "true")
