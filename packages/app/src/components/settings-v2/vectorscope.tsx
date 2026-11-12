@@ -26,51 +26,12 @@ export function SettingsVectorScopeV2(props: {
 }) {
   const models = useModels()
   const language = useLanguage()
-  // Temporary focused CI data. These plain records only observe reads already
-  // made by this host; the test snapshots them without subscribing to state.
-  const host = globalThis as typeof globalThis & {
-    scopeSettingsTrace?: { instances: number; snapshots: Map<number, () => unknown>; snapshot?: () => unknown }
-  }
-  const diagnostic: NonNullable<typeof host.scopeSettingsTrace> = (host.scopeSettingsTrace ??= {
-    instances: 0,
-    snapshots: new Map(),
-  })
-  const instance = ++diagnostic.instances
-  const counts = new Map<string, number>()
-  const inputs: { phase: string; value: unknown }[] = []
-  const identities = new WeakMap<object, number>()
-  let identitySequence = 0
-  const identity = (value: object | undefined) => {
-    if (!value) return undefined
-    const previous = identities.get(value)
-    if (previous !== undefined) return previous
-    const next = ++identitySequence
-    identities.set(value, next)
-    return next
-  }
-  const trace = (phase: string, value: unknown) => {
-    counts.set(phase, (counts.get(phase) ?? 0) + 1)
-    inputs.push({ phase, value })
-    if (inputs.length > 24) inputs.shift()
-  }
-  diagnostic.snapshots.set(instance, () => ({ counts: Object.fromEntries(counts), inputs: [...inputs] }))
-  if (diagnostic.snapshots.size > 8) {
-    const first = diagnostic.snapshots.keys().next().value
-    if (first !== undefined) diagnostic.snapshots.delete(first)
-  }
-  diagnostic.snapshot = () =>
-    [...diagnostic.snapshots].map(([instance, snapshot]) => ({ instance, records: snapshot() }))
   let root: HTMLDivElement | undefined
   let disposed = false
   onCleanup(() => {
     disposed = true
   })
-  const saved = createMemo(() => {
-    const config = props.config
-    const value = readVectorScope(config)
-    trace("saved", { config: identity(config), value: identity(value), ...value })
-    return value
-  })
+  const saved = createMemo(() => readVectorScope(props.config))
   const [state, setState] = createStore({
     draft: { model: "", variant: "", disabled: false } as VectorScopeSettings,
     base: "",
@@ -98,35 +59,17 @@ export function SettingsVectorScopeV2(props: {
   createEffect(
     on(saved, (value) => {
       if (!value || state.pending || (state.base && dirty())) return
-      trace("saved-synchronize", { value: identity(value), ...value })
       setState({ draft: value, base: vectorScopeKey(value) })
     }),
   )
-  const current = () => {
-    const list = models.list()
-    let draftIdentity: number | undefined
-    let requested: string | undefined
-    const value = list.find((model) => {
-      const key = `${model.provider.id}/${model.id}`
-      const draft = state.draft
-      requested = draft.model
-      draftIdentity = identity(draft)
-      return key === requested
-    })
-    trace("current", { list: identity(list), draft: draftIdentity, requested, selected: identity(value) })
-    return value
-  }
-  const variants = () => {
-    const options = [
-      { value: "", label: "Default" },
-      ...Object.keys(current()?.variants ?? {}).map((value) => ({ value, label: value })),
-      ...(state.draft.variant && !(state.draft.variant in (current()?.variants ?? {}))
-        ? [{ value: state.draft.variant, label: `Unavailable: ${state.draft.variant}` }]
-        : []),
-    ]
-    trace("variants", { options: identity(options), values: options.map((option) => option.value) })
-    return options
-  }
+  const current = () => models.list().find((model) => `${model.provider.id}/${model.id}` === state.draft.model)
+  const variants = () => [
+    { value: "", label: "Default" },
+    ...Object.keys(current()?.variants ?? {}).map((value) => ({ value, label: value })),
+    ...(state.draft.variant && !(state.draft.variant in (current()?.variants ?? {}))
+      ? [{ value: state.draft.variant, label: `Unavailable: ${state.draft.variant}` }]
+      : []),
+  ]
   const picker: ModelSelectorModelState = {
     list: () => models.list().filter((model) => model.capabilities.toolcall && model.limit.context >= MIN_CONTEXT),
     visible: models.visible,
@@ -141,17 +84,9 @@ export function SettingsVectorScopeV2(props: {
     },
   }
   const change = (patch: Partial<VectorScopeSettings>) => {
-    const blocked = inactive()
-    trace("change-request", { blocked, ...patch })
-    if (!blocked) {
-      const draft = state.draft
-      const previous = { ...draft }
-      const next = vectorScopeDraft(previous, patch)
-      trace("change", { draft: identity(draft), previous, next })
-      if (!next) return
-      trace("change-write", next)
-      setState({ draft: next, error: "", saved: false })
-    }
+    if (inactive()) return
+    const next = vectorScopeDraft(state.draft, patch)
+    if (next) setState({ draft: next, error: "", saved: false })
   }
   const apply = async () => {
     if (inactive() || !dirty()) return

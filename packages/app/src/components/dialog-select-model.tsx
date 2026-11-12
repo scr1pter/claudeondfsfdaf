@@ -8,13 +8,9 @@ import {
   createSignal,
   createUniqueId,
   For,
-  getListener,
-  getOwner,
   JSX,
-  onCleanup,
   onMount,
   Show,
-  useTransition,
   ValidComponent,
 } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -91,124 +87,12 @@ function createModelSections(input: {
   now: () => number
   fixed?: boolean
 }) {
-  // Temporary focused CI trace: observe state propagation without forcing a memo read or changing its behavior.
-  const host = globalThis as typeof globalThis & {
-    scopePickerTrace?: {
-      armed: boolean
-      instances: number
-      sequence: number
-      toggle: number
-      lifecycle: number
-      render: number
-      each: number
-      cleanup: number
-      pending?: () => boolean
-      snapshots?: Map<number, () => unknown>
-      snapshot?: () => unknown
-    }
-  }
-  const diagnostic: NonNullable<typeof host.scopePickerTrace> = (host.scopePickerTrace ??= {
-    armed: false,
-    instances: 0,
-    sequence: 0,
-    toggle: 0,
-    lifecycle: 0,
-    render: 0,
-    each: 0,
-    cleanup: 0,
-  })
-  // Keep the public accessor for event/test snapshots only; reading it in a computation would add an observer.
-  diagnostic.pending = useTransition()[0]
-  const instance = ++diagnostic.instances
-  const phases = new Map<string, number>()
-  const inputs: { phase: string; value: unknown }[] = []
-  const trace = (phase: string, value: unknown) => {
-    phases.set(phase, (phases.get(phase) ?? 0) + 1)
-    if (phase === "models" || phase === "sections" || phase === "views") {
-      inputs.push({ phase, value })
-      if (inputs.length > 24) inputs.shift()
-    }
-    const category = phase.endsWith("-cleanup")
-      ? "cleanup"
-      : phase === "popover-for-each"
-        ? "each"
-        : phase.startsWith("toggle-")
-          ? "toggle"
-          : phase === "views" || phase.endsWith("-render")
-            ? "render"
-            : "lifecycle"
-    const limit = category === "toggle" ? 8 : category === "render" ? 12 : category === "each" ? 16 : 24
-    if (!diagnostic.armed || diagnostic[category]++ >= limit) return
-    console.debug(
-      "SCOPE_PICKER_REACTIVITY",
-      JSON.stringify({ instance, sequence: ++diagnostic.sequence, phase, value }),
-    )
-  }
-  const owners = new WeakMap<object, number>()
-  let ownerSequence = 0
-  const ownerID = (owner: object | null) => {
-    if (!owner) return null
-    const previous = owners.get(owner)
-    if (previous !== undefined) return previous
-    const next = ++ownerSequence
-    owners.set(owner, next)
-    return next
-  }
-  // Retain bounded plain lifetime data before arming. A list disposed before
-  // the click would otherwise be invisible in the event-only console trace.
-  const lifetimes: {
-    sequence: number
-    kind: string
-    owner: number | null
-    listener: number | null
-    section?: string
-    cleaned: boolean
-    cleanupSequence?: number
-  }[] = []
-  let lifetimeSequence = 0
-  const lifetime = (kind: string, section?: string) => {
-    const record: (typeof lifetimes)[number] = {
-      sequence: ++lifetimeSequence,
-      kind,
-      owner: ownerID(getOwner()),
-      listener: ownerID(getListener()),
-      ...(section ? { section } : {}),
-      cleaned: false,
-    }
-    lifetimes.push(record)
-    if (lifetimes.length > 48) lifetimes.shift()
-    onCleanup(() => {
-      record.cleaned = true
-      record.cleanupSequence = ++lifetimeSequence
-    })
-  }
-  diagnostic.snapshots ??= new Map()
-  diagnostic.snapshots.set(instance, () => ({
-    phases: Object.fromEntries(phases),
-    inputs: inputs.map((record) => ({ ...record })),
-    lifetimes: lifetimes.map((record) => ({ ...record })),
-  }))
-  if (diagnostic.snapshots.size > 8) {
-    const first = diagnostic.snapshots.keys().next().value
-    if (first !== undefined) diagnostic.snapshots.delete(first)
-  }
-  diagnostic.snapshot = () =>
-    [...(diagnostic.snapshots ?? [])].map(([instance, snapshot]) => ({ instance, records: snapshot() }))
-  lifetime("model")
-  const modelOwner = ownerID(getOwner())
-  let modelDisposed = false
-  onCleanup(() => {
-    modelDisposed = true
-    trace("model-owner-cleanup", { owner: modelOwner })
-  })
   const models = createMemo(() => {
     const provider = input.provider()
-    const list = input.model.list()
-    const next = list
+    return input.model
+      .list()
       .filter((item) => input.model.visible({ modelID: item.id, providerID: item.provider.id }))
       .filter((item) => (provider ? item.provider.id === provider : true))
-    trace("models", { list: ownerID(list), provider, count: next.length })
-    return next
   })
   const current = createPickerCurrent(() => input.model.current())
   const sections = createMemo(() => {
@@ -218,7 +102,7 @@ function createModelSections(input: {
     const recent = input.model.recent?.()
     const recentKeys = recent?.flatMap((item) => (item ? [pickerModelKey(item)] : []))
     const now = input.now()
-    const next = buildModelSections({
+    return buildModelSections({
       models: list,
       term,
       currentKey,
@@ -227,36 +111,15 @@ function createModelSections(input: {
       popular: popularProviders,
       fixed: input.fixed,
     })
-    trace("sections", {
-      models: ownerID(list),
-      term,
-      currentKey,
-      recent: recent ? ownerID(recent) : null,
-      now,
-      count: next.length,
-    })
-    return next
   })
   const [open, setOpenSections] = createSignal(readOpenSections())
   const views = createMemo(() => {
-    lifetime("views-evaluation")
-    const owner = ownerID(getOwner())
-    onCleanup(() => trace("views-owner-cleanup", { owner }))
     const expanded = open()
     const grouped = sections()
     const term = input.search()
-    const next = pickerSectionViews(grouped, expanded, term).map((view) =>
+    return pickerSectionViews(grouped, expanded, term).map((view) =>
       input.fixed ? { ...view, toggle: false, open: true } : view,
     )
-    trace("views", {
-      owner,
-      inputSections: ownerID(grouped),
-      inputOpen: ownerID(expanded),
-      term,
-      open: [...expanded],
-      sections: next.map((view) => [view.section.id, view.open]),
-    })
-    return next
   })
   // Navigation order is render order: every visible header and row, then Connect provider.
   const navigation = createMemo(() => {
@@ -268,25 +131,12 @@ function createModelSections(input: {
   const currentRow = () => pickerCurrentRow(navigation(), current())
   const toggle = (id: string) => {
     const next = toggleOpenSection(open(), id)
-    trace("toggle-before", {
-      id,
-      modelOwner,
-      modelDisposed,
-      pending: diagnostic.pending?.(),
-      before: [...open()],
-      next: [...next],
-    })
     setOpenSections(next)
-    trace("toggle-after", { id, pending: diagnostic.pending?.(), open: [...open()] })
     writeOpenSections(next)
   }
   // Another picker may have opened or closed sections since this one last showed.
-  const reload = () => {
-    const next = readOpenSections()
-    trace("reload", { before: [...open()], next: [...next] })
-    setOpenSections(next)
-  }
-  return { current, currentRow, sections, views, navigation, toggle, reload, trace, ownerID, lifetime }
+  const reload = () => setOpenSections(readOpenSections())
+  return { current, currentRow, sections, views, navigation, toggle, reload }
 }
 
 /** Pointer highlight that follows real movement only. Rows render under a resting
@@ -536,14 +386,6 @@ export function ModelSelectorPopoverV2(props: {
     fixed: props.fixedCatalog,
   })
   const sections = picker.sections
-  // This replaces the existing For getter, reads the memo once and adds no reactive observer.
-  const sectionViews = () => {
-    picker.lifetime("for-evaluation")
-    const owner = picker.ownerID(getOwner())
-    const next = picker.views()
-    picker.trace("popover-for-each", { owner, sections: next.map((view) => [view.section.id, view.open]) })
-    return next
-  }
   const offInLocal = useOffInLocal()
   const keys = () => picker.navigation().keys
   const uid = createUniqueId()
@@ -569,7 +411,6 @@ export function ModelSelectorPopoverV2(props: {
     requestAnimationFrame(complete)
   }
   const setOpen = (open: boolean) => {
-    picker.trace("popover-open", { before: store.open, next: open })
     if (open) {
       // Account models can arrive after the list was first read, as when vectordev.ai answers a first Codium
       // catalog read slowly; opening the picker reads the list again so they show up.
@@ -689,12 +530,8 @@ export function ModelSelectorPopoverV2(props: {
           >
             <div data-slot="model-picker-list">
               <Show when={sections().length > 0} fallback={<PickerEmpty term={store.search} />}>
-                <For each={sectionViews()}>
+                <For each={picker.views()}>
                   {(view) => {
-                    picker.lifetime("mapped-section", view.section.id)
-                    const owner = picker.ownerID(getOwner())
-                    picker.trace("popover-render", { owner, id: view.section.id, open: view.open })
-                    onCleanup(() => picker.trace("popover-section-cleanup", { owner, id: view.section.id }))
                     const section = view.section
                     const rows = `${uid}-${section.id}`
                     return (
@@ -884,7 +721,6 @@ export const DialogSelectModelV2: Component<{ provider?: string; model?: ModelSt
             <Show when={sections().length > 0} fallback={<PickerEmpty term={search()} />}>
               <For each={picker.views()}>
                 {(view) => {
-                  picker.trace("dialog-render", { id: view.section.id, open: view.open })
                   const section = view.section
                   const rows = `${uid}-${section.id}`
                   return (

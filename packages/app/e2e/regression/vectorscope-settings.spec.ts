@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Request } from "@playwright/test"
+import { expect, test, type Locator, type Page } from "@playwright/test"
 import { reply } from "../utils/mock-server"
 import { port, provider, rootID, setup, type Setup } from "../utils/multiagent"
 
@@ -93,223 +93,31 @@ test("the owner saves a separate model, variant and disable setting only after c
   page,
 }, info) => {
   const app = await setup(page, engine({ status: { [rootID]: { type: "busy" } } }))
-  let phase = "before-app-open"
   let pageErrors = 0
-  let consoleErrors = 0
-  const errors: { type: string; phase: string; message: string; stack?: string }[] = []
-  const seenErrors = new Set<string>()
-  const recordError = (type: string, message: string, stack?: string) => {
-    const key = `${type}:${message}`
-    if (seenErrors.has(key) || errors.filter((record) => record.type === type).length >= 4) return
-    seenErrors.add(key)
-    const record = { type, phase, message: message.slice(0, 1_000), ...(stack ? { stack: stack.slice(0, 3_500) } : {}) }
-    errors.push(record)
-    console.log("SCOPE_PICKER_BROWSER_ERROR", JSON.stringify(record))
-  }
-  page.on("pageerror", (error) => {
-    pageErrors++
-    recordError("pageerror", error.message, error.stack)
-  })
-  const pendingRequests = new Map<Request, { method: string; url: string; status?: number; eventStream?: boolean }>()
-  page.on("request", (request) => {
-    const url = new URL(request.url())
-    pendingRequests.set(request, { method: request.method(), url: url.origin + url.pathname })
-  })
-  page.on("response", (response) => {
-    const pending = pendingRequests.get(response.request())
-    if (!pending) return
-    pending.status = response.status()
-    pending.eventStream = response.headers()["content-type"]?.includes("text/event-stream") ?? false
-  })
-  page.on("requestfinished", (request) => pendingRequests.delete(request))
-  page.on("requestfailed", (request) => pendingRequests.delete(request))
-  page.on("console", (message) => {
-    if (message.text().startsWith("SCOPE_PICKER_REACTIVITY")) console.log(message.text())
-    if (message.type() === "error") {
-      consoleErrors++
-      recordError("consoleerror", message.text())
-    }
-  })
-  const hostSnapshot = () =>
-    page.evaluate(() =>
-      (
-        globalThis as typeof globalThis & { scopeSettingsTrace?: { snapshot?: () => unknown } }
-      ).scopeSettingsTrace?.snapshot?.(),
-    )
+  page.on("pageerror", () => pageErrors++)
   await catalog(page)
   await app.open()
-  phase = "app-open"
-  console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
-  phase = "opening-settings"
   await openSettings(page)
   const settings = card(page)
   await expect(settings).toBeVisible()
-  phase = "settings-mounted"
-  console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
   await expect(settings.getByRole("button", { name: "VectorScope model", exact: true })).toContainText(
     "Unavailable: missing/old",
   )
-  phase = "opening-popup"
   await settings.getByRole("button", { name: "VectorScope model", exact: true }).click()
   const picker = page.locator(".vector-model-popover")
   await expect(picker).toBeVisible()
-  phase = "popup-open"
-  console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
-  const anthropic = picker.locator("button[data-model-section-toggle]").filter({ hasText: "Anthropic" })
+  const anthropic = picker.getByRole("button", { name: "Anthropic, 1 model", exact: true })
   await expect(anthropic).toHaveAttribute("aria-expanded", "false")
-  await anthropic.evaluate((header) => {
-    const key = "vector.model-picker.open-sections.v1"
-    const diagnostic = {
-      nativeClicks: 0,
-      writes: [] as string[],
-      before: localStorage.getItem(key),
-      lifetimeBefore: undefined as unknown,
-    }
-    const trace = (
-      globalThis as unknown as {
-        scopePickerTrace?: {
-          armed: boolean
-          sequence: number
-          toggle: number
-          lifecycle: number
-          render: number
-          each: number
-          cleanup: number
-          pending?: () => boolean
-          snapshot?: () => unknown
-        }
-      }
-    ).scopePickerTrace
-    if (!trace) throw new Error("The focused picker diagnostic hook is unavailable")
-    // Capture arms collection immediately before the real component click handler, after initial rendering.
-    const click = () => {
-      diagnostic.nativeClicks++
-      diagnostic.lifetimeBefore = trace.snapshot?.()
-      Object.assign(trace, { armed: true, sequence: 0, toggle: 0, lifecycle: 0, render: 0, each: 0, cleanup: 0 })
-    }
-    const write = Storage.prototype.setItem
-    header.addEventListener("click", click, true)
-    Storage.prototype.setItem = function (this: Storage, name, value) {
-      if (name === key) diagnostic.writes.push(value)
-      return write.call(this, name, value)
-    }
-    ;(window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic = () => {
-      header.removeEventListener("click", click, true)
-      Storage.prototype.setItem = write
-      return {
-        ...diagnostic,
-        after: localStorage.getItem(key),
-        headerConnected: header.isConnected,
-        transitionPending: trace.pending?.(),
-        lifetimeAfter: trace.snapshot?.(),
-      }
-    }
-  })
-  phase = "header-click"
   await anthropic.click()
-  console.log(
-    "SCOPE_PICKER_CLICK_DIAGNOSTIC",
-    JSON.stringify(
-      await page.evaluate(() =>
-        (window as unknown as { scopePickerDiagnostic: () => unknown }).scopePickerDiagnostic(),
-      ),
-    ),
-  )
-  await expect(anthropic)
-    .toHaveAttribute("aria-expanded", "true")
-    .finally(async () => {
-      console.log("SCOPE_PICKER_TRANSITION_DIAGNOSTIC", {
-        pending: await page.evaluate(() =>
-          (
-            globalThis as typeof globalThis & { scopePickerTrace?: { pending?: () => boolean } }
-          ).scopePickerTrace?.pending?.(),
-        ),
-        requests: [...pendingRequests.values()].slice(0, 30),
-      })
-      console.log("SCOPE_PICKER_BROWSER_ERRORS", JSON.stringify({ pageErrors, consoleErrors, errors }))
-      console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
-    })
+  await expect(anthropic).toHaveAttribute("aria-expanded", "true")
   expect(pageErrors).toBe(0)
-  const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
+  const chosen = picker.getByRole("menuitemradio", { name: /^Maker Text, Anthropic,/ })
+  await expect(chosen).toHaveAttribute("data-option-key", "anthropic:maker/text")
   await expect(chosen).toContainText("Maker Text")
   await chosen.click()
   await expect(settings.getByRole("button", { name: "VectorScope model", exact: true })).toContainText("Maker Text")
-  const variantSnapshot = async (stage: string) => {
-    try {
-      const snapshot = await page.evaluate(() => {
-        const state = (element: Element) => {
-          const style = getComputedStyle(element)
-          const rect = element.getBoundingClientRect()
-          return {
-            tag: element.tagName,
-            id: element.id.slice(0, 120),
-            role: element.getAttribute("role"),
-            expanded: element.getAttribute("aria-expanded"),
-            disabled: element.hasAttribute("disabled"),
-            ariaDisabled: element.getAttribute("aria-disabled"),
-            ariaHidden: element.getAttribute("aria-hidden"),
-            hidden: element.hasAttribute("hidden"),
-            inert: element.hasAttribute("inert"),
-            display: style.display,
-            visibility: style.visibility,
-            pointerEvents: style.pointerEvents,
-            zIndex: style.zIndex,
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          }
-        }
-        const ancestors = (element: Element) => {
-          const result = []
-          let parent = element.parentElement
-          while (parent && result.length < 8) {
-            result.push(state(parent))
-            parent = parent.parentElement
-          }
-          return result
-        }
-        const named = (element: Element) => {
-          const labelled = (element.getAttribute("aria-labelledby") ?? "")
-            .split(/\s+/)
-            .slice(0, 4)
-            .map((id) => document.getElementById(id)?.textContent ?? "")
-            .join(" ")
-          return {
-            ...state(element),
-            name: (element.getAttribute("aria-label") || labelled || element.textContent || "").trim().slice(0, 160),
-            ancestors: ancestors(element),
-          }
-        }
-        const trigger = document.querySelector('[data-component="vectorscope-settings"] [data-component="select-v2"]')
-        return {
-          trigger: trigger ? named(trigger) : undefined,
-          // DOM queries deliberately include roles hidden from Playwright's
-          // accessible lookup. Names and ancestry stay bounded fixture data.
-          roles: [...document.querySelectorAll('[role="listbox"], [role="option"]')].slice(0, 16).map(named),
-          portals: [...document.querySelectorAll('[data-slot="select-v2-content"]')].slice(0, 4).map(named),
-          host: (
-            globalThis as typeof globalThis & { scopeSettingsTrace?: { snapshot?: () => unknown } }
-          ).scopeSettingsTrace?.snapshot?.(),
-        }
-      })
-      console.log("SCOPE_VARIANT_POPUP_DIAGNOSTIC", JSON.stringify({ stage, snapshot }))
-    } catch (error) {
-      console.log("SCOPE_VARIANT_POPUP_DIAGNOSTIC", {
-        stage,
-        unavailable: error instanceof Error ? error.message.slice(0, 300) : "Page unavailable",
-      })
-    }
-  }
   await settings.locator('[data-component="select-v2"]').click()
-  // Keep a pre-wait snapshot too: the enclosing test deadline may expire
-  // together with the ordinary click, leaving no page for its failure handler.
-  await variantSnapshot("after-trigger-click")
-  await page
-    .getByRole("option", { name: "high", exact: true })
-    .click()
-    .catch(async (error: unknown) => {
-      await variantSnapshot("high-option-failed")
-      throw error
-    })
+  await page.getByRole("option", { name: "high", exact: true }).click()
   await disableReviews(settings)
   expect(app.capture.config).toEqual([])
   await settings.getByRole("button", { name: "Save VectorScope settings", exact: true }).click()
