@@ -28,6 +28,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskClaims } from "@/task/claims"
 import { TaskPlace } from "@/task/place"
+import { FileLock } from "@/tool/file-lock"
 import { SessionPrompt } from "@/session/prompt"
 import type { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
@@ -399,10 +400,21 @@ const transfers: {
   childKey: string
   parentProvider: boolean
   childProvider?: boolean
+  childConfigTrusted?: boolean
+  childSnapshotTrusted?: boolean
+  childKeyActual?: string
   childInstance?: { directory: string; worktree: string; project: ProjectV2.ID }
+}[] = []
+const configReads: {
+  directory: string
+  worktree: string
+  project: ProjectV2.ID
+  provider: boolean
+  trusted: boolean
 }[] = []
 beforeEach(() => {
   transfers.length = 0
+  configReads.length = 0
 })
 
 // Observe the actual transfer and the actual child's config read while its checkout still exists. Failed launches
@@ -444,15 +456,37 @@ const observedConfig = Layer.effect(
         Effect.gen(function* () {
           const info = yield* original.get()
           const instance = yield* InstanceRef
-          const transfer = instance && transfers.find((entry) => path.relative(entry.child, instance.directory) === "")
+          const transfer =
+            instance && transfers.find((entry) => FileLock.key(entry.child) === FileLock.key(instance.directory))
+          if (
+            instance &&
+            transfers.length &&
+            configReads.length < 10 &&
+            !configReads.some((read) => read.directory === instance.directory)
+          )
+            configReads.push({
+              directory: instance.directory,
+              worktree: instance.worktree,
+              project: instance.project.id,
+              provider: info.provider?.lmstudio?.models?.["test-model"] !== undefined,
+              trusted: (yield* original.trust()).trusted,
+            })
           if (transfer && instance) {
             transfer.childProvider = info.provider?.lmstudio?.models?.["test-model"] !== undefined
+            transfer.childConfigTrusted = (yield* original.trust()).trusted
+            const actual = yield* Effect.promise(() =>
+              WorkspaceTrust.snapshot(instance.worktree, [path.join(instance.directory, "vector.json")]),
+            )
+            transfer.childSnapshotTrusted = (yield* Effect.promise(() =>
+              WorkspaceTrust.status(Global.Path.state, actual),
+            )).trusted
+            transfer.childKeyActual = WorkspaceTrust.contentKey(actual)
             transfer.childInstance = {
               directory: instance.directory,
               worktree: instance.worktree,
               project: instance.project.id,
             }
-            expect(path.relative(transfer.child, instance.worktree)).toBe("")
+            expect(FileLock.key(transfer.child)).toBe(FileLock.key(instance.worktree))
             expect(instance.project.id).toBe(transfer.project)
             expect(transfer.childProvider, JSON.stringify(transfer)).toBe(true)
           }
@@ -602,6 +636,7 @@ isolated.instance(
         state: fixed?.run?.result?.state,
         output: fixed?.output,
         transfers,
+        configReads,
         ...(fixed?.run?.result?.state === "completed" ? {} : yield* launchFacts(directory, project)),
       }).toMatchObject({ state: "completed" })
       expect(transfers).toHaveLength(1)
@@ -611,6 +646,8 @@ isolated.instance(
         childTrusted: true,
         parentProvider: true,
         childProvider: true,
+        childConfigTrusted: true,
+        childSnapshotTrusted: true,
       })
       expect(transfers[0]!.parentKey).toBe(transfers[0]!.childKey)
       expect(fixed?.run?.result?.findings.map((item) => item.status)).toEqual(["fixing"])
