@@ -86,24 +86,71 @@ export async function probeToolProcesses() {
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     )
+    let phase = "ready"
+    let probeError: unknown
+    const lifecycle: {
+      spawnError?: string
+      exit?: { code: number | null; signal: string | null }
+      closed: boolean
+      disconnected: boolean
+      term?: boolean
+      kill?: boolean
+    } = { closed: false, disconnected: false }
+    dummy.on("error", (error: Error & { code?: string }) => {
+      lifecycle.spawnError = error.code ?? error.name
+    })
+    dummy.once("close", () => {
+      lifecycle.closed = true
+    })
+    dummy.once("disconnect", () => {
+      lifecycle.disconnected = true
+    })
     let diagnostics = ""
     dummy.stderr!.on("data", (part: Buffer) => {
       diagnostics = (diagnostics + part.toString()).slice(-4096)
     })
-    const closed = new Promise<void>((resolve) => dummy.once("exit", () => resolve()))
+    const closed = new Promise<void>((resolve) =>
+      dummy.once("exit", (code, signal) => {
+        lifecycle.exit = { code, signal }
+        resolve()
+      }),
+    )
+    const details = () =>
+      JSON.stringify({
+        phase,
+        pid: dummy.pid,
+        connected: dummy.connected,
+        killed: dummy.killed,
+        ...lifecycle,
+        stderr: diagnostics
+          .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+          .replace(/[\r\n\t]+/g, " ")
+          .slice(-800),
+      })
     const message = (kind: string) =>
       new Promise<Record<string, unknown>>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          dummy.off("message", receive)
-          reject(new Error("Disposable engine did not acknowledge the probe"))
-        }, 5000)
-        const receive = (value: unknown) => {
-          if (!value || typeof value !== "object" || !("kind" in value) || value.kind !== kind) return
+        const cleanup = () => {
           clearTimeout(timer)
           dummy.off("message", receive)
+          dummy.off("error", failed)
+          dummy.off("exit", failed)
+          dummy.off("disconnect", failed)
+        }
+        const failed = () => {
+          cleanup()
+          reject(new Error(`Disposable engine did not acknowledge ${kind}: ${details()}`))
+        }
+        const timer = setTimeout(failed, 5000)
+        const receive = (value: unknown) => {
+          if (!value || typeof value !== "object" || !("kind" in value) || value.kind !== kind) return
+          cleanup()
           resolve(value as Record<string, unknown>)
         }
         dummy.on("message", receive)
+        dummy.once("error", failed)
+        dummy.once("exit", failed)
+        dummy.once("disconnect", failed)
+        if (lifecycle.spawnError || lifecycle.exit || lifecycle.disconnected) failed()
       })
     try {
       const ready = await message("ready")
@@ -114,6 +161,7 @@ export async function probeToolProcesses() {
         ready.opened !== false
       )
         throw new Error("The disposable engine is not a matching uninspected user process")
+      phase = "loader-positive-control"
       const loaderMarker = path.join(root, "loader-constructor")
       const loaderEnv = {
         LD_PRELOAD: "/opt/vector-probe-loader.so",
@@ -129,12 +177,14 @@ export async function probeToolProcesses() {
         await new Promise((resolve) => setTimeout(resolve, 10))
       if (!diagnostics.includes("Debugger listening"))
         throw new Error("The preload constructor did not signal the disposable target")
+      phase = "loader-inspector-close"
       const loaderClosed = message("close")
       dummy.send("close")
       if ((await loaderClosed).opened !== false)
         throw new Error("The disposable inspector did not close after its loader control")
       diagnostics = ""
       await fs.unlink(loaderMarker)
+      phase = "loader-refusals"
       const refusedLoader = (error: unknown) =>
         error instanceof Error && error.message.includes("native loader environment")
       if (!(await Process.run([node, "-e", "0"], { env: loaderEnv }).then(() => false, refusedLoader)))
@@ -163,11 +213,13 @@ export async function probeToolProcesses() {
         throw new Error("The shared Effect launcher accepted a native preload")
       if (await fs.stat(loaderMarker).catch(() => undefined))
         throw new Error("A refused native loader constructor executed")
+      phase = "loader-report"
       const loaderReport = message("report")
       dummy.send("report")
       if ((await loaderReport).opened !== false) throw new Error("A refused loader signalled the disposable engine")
       const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),'SIGUSR1');sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};process.stdout.write(JSON.stringify(result))`
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+      phase = "actual-shell-tool"
       const output = await Effect.runPromise(
         Effect.gen(function* () {
           const store = yield* InstanceStore.Service
@@ -212,6 +264,7 @@ export async function probeToolProcesses() {
           throw new Error(`The ${label} can reach or signal the disposable engine`)
       }
       assertBlocked(actual, "actual ShellTool")
+      phase = "actual-utility-launch"
       const utility = await Process.run(
         [
           node,
@@ -225,6 +278,7 @@ export async function probeToolProcesses() {
       assertBlocked(JSON.parse(utility.stdout.toString()), "shared utility launch")
       if (JSON.parse(utility.stdout.toString()).ordinary !== "ordinary environment positive control")
         throw new Error("The ordinary child environment was not preserved")
+      phase = "actual-lsp-launch"
       const lsp = LSPLaunch.spawn(node, ["-e", code, String(dummy.pid)])
       const lspOutput = new Promise<string>((resolve, reject) => {
         const parts: Buffer[] = []
@@ -239,6 +293,7 @@ export async function probeToolProcesses() {
       } finally {
         lsp.kill("SIGKILL")
       }
+      phase = "actual-mcp-launch"
       const transport = await localTransport({
         command: node,
         args: [
@@ -264,6 +319,7 @@ export async function probeToolProcesses() {
         clearTimeout(mcpTimer)
         await transport.close()
       }
+      phase = "actual-effect-launch"
       const backend = await Effect.runPromise(
         Effect.gen(function* () {
           const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -283,6 +339,7 @@ export async function probeToolProcesses() {
         )
         if (opened) throw new Error("The engine can still open its process filesystem")
       }
+      phase = "actual-file-tools"
       const alias = path.join(process.cwd(), "probe-process-alias")
       await fs.symlink("/proc/self/fd/3", alias)
       let permissionAsks = 0
@@ -344,16 +401,19 @@ export async function probeToolProcesses() {
         }).pipe(Effect.provide(layer), Effect.scoped, Effect.timeout("20 seconds")),
       )
       await fs.unlink(alias)
+      phase = "tool-inspector-report"
       const report = message("report")
       dummy.send("report")
       if ((await report).opened !== false) throw new Error("A tool activated the disposable engine inspector")
       // Positive control: the same-UID fixture parent can signal it; this proves the target/observer are operational.
+      phase = "parent-inspector-positive-control"
       dummy.kill("SIGUSR1")
       const until = Date.now() + 5000
       while (!diagnostics.includes("Debugger listening") && Date.now() < until)
         await new Promise((resolve) => setTimeout(resolve, 10))
       if (!diagnostics.includes("Debugger listening"))
         throw new Error("The inspector positive control did not activate")
+      phase = "active-inspector-guard"
       const guarded = message("guard")
       dummy.send("guard")
       const guard = await guarded
@@ -381,17 +441,29 @@ export async function probeToolProcesses() {
         dummyNode: ready.node,
         callerRuntime: process.versions.bun ? `bun-${process.versions.bun}` : `node-${process.versions.node}`,
       }
+    } catch (error) {
+      probeError = error
+      throw error
     } finally {
-      dummy.kill("SIGTERM")
-      const kill = setTimeout(() => dummy.kill("SIGKILL"), 1000)
+      lifecycle.term = dummy.kill("SIGTERM")
+      const kill = setTimeout(() => {
+        lifecycle.kill = dummy.kill("SIGKILL")
+      }, 1000)
       let timeout: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([
           closed,
           new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error("The disposable engine did not stop")), 2000)
+            timeout = setTimeout(() => reject(new Error(`The disposable engine did not stop: ${details()}`)), 2000)
           }),
         ])
+      } catch (cleanupError) {
+        if (probeError !== undefined)
+          throw new AggregateError(
+            [probeError, cleanupError],
+            "The disposable tool probe failed and its child cleanup was not proven",
+          )
+        throw cleanupError
       } finally {
         clearTimeout(kill)
         clearTimeout(timeout)
