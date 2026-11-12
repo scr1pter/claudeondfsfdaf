@@ -471,7 +471,8 @@ isolated.instance(
       const fixAsks = yield* answering(send("Fix the last() finding in a worktree."), "connect_write")
       expect(fixAsks).toHaveLength(1)
       const fixed = (yield* connectCalls(requester.id))[1]
-      expect(fixed?.run?.result?.state).toBe("completed")
+      // The output carries the fix child's own error, so a failed launch says why.
+      expect({ state: fixed?.run?.result?.state, output: fixed?.output }).toMatchObject({ state: "completed" })
       expect(fixed?.run?.result?.findings.map((item) => item.status)).toEqual(["fixing"])
       const childID = fixed!.run!.result!.sessions[0]!
       children.push(childID)

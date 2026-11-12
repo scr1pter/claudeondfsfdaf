@@ -57,6 +57,9 @@ afterEach(disposeAllInstances)
 
 type Ask = Parameters<Tool.Context["ask"]>[0]
 
+// A link to a folder. Windows makes it a directory entry that unlink and rm may refuse; rmdir removes just the link.
+const unlinkDirectoryLink = (link: string) => fs.unlink(link).catch(() => fs.rmdir(link))
+
 // What the fakes do in the current test.
 const script: {
   /** Cost kinds by model name; "local" when unnamed. */
@@ -1136,7 +1139,7 @@ describe("a review through connect", () => {
         yield* git(directory, "checkout", "-q", "--", ".")
 
         // `.vector` leads out of the repository: the changes cannot edit what lies there.
-        yield* Effect.promise(() => fs.rm(path.join(directory, ".vector")))
+        yield* Effect.promise(() => unlinkDirectoryLink(path.join(directory, ".vector")))
         yield* Effect.promise(() => fs.symlink(outside, path.join(directory, ".vector")))
         yield* git(directory, "add", "-A")
         yield* git(directory, "commit", "-q", "-m", "settings outside")
@@ -1145,7 +1148,7 @@ describe("a review through connect", () => {
         yield* write(outside, { "review.md": "Outside rules.\n" })
         expect(yield* VectorScopeAdapter.drifted(service, directory, later)).toEqual([])
         // Replacing that link with a folder of rules in the repository edits every settings path beneath it.
-        yield* Effect.promise(() => fs.rm(path.join(directory, ".vector")))
+        yield* Effect.promise(() => unlinkDirectoryLink(path.join(directory, ".vector")))
         yield* write(directory, { ".vector/review.md": "Inside rules.\n" })
         expect(yield* VectorScopeAdapter.drifted(service, directory, later)).toEqual([
           ".vector/review.json",
