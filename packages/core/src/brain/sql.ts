@@ -322,6 +322,8 @@ export const BrainWorkflowRunTable = sqliteTable(
     signal: text().$type<"recovered" | "judged" | "judge-fail" | "check-fail">(),
     // Unknown unless every step of the run was priced; unknown is never zero.
     cost_usd: real(),
+    // Relative catalog-weighted usage, only when every recorded step ran on Codium with a known weight.
+    codium_units: real(),
     cost_kinds: text({ mode: "json" }).$type<Partial<Record<CostKind, number>>>().notNull(),
     steps: integer().notNull(),
     unpriced_steps: integer().notNull(),

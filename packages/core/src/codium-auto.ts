@@ -9,6 +9,31 @@ import { ModelPlanStatus } from "./model-plan-status"
 
 const ROLES = ["floor", "default", "ceiling"] as const
 export type Role = (typeof ROLES)[number]
+export type Suggestion = { readonly instead: string; readonly model: string; readonly saving: number }
+export type Usage = {
+  readonly providerID: string
+  readonly modelID: string
+  readonly input: number
+  readonly output: number
+  readonly reasoning: number
+  readonly cacheRead: number
+}
+
+/** Private relative usage, never currency or a displayed token allowance. Unknown steps make the total unknown. */
+export function units(catalog: ModelPlans.Catalog, steps: readonly Usage[]) {
+  if (!steps.length) return undefined
+  const values = steps.map((step) => {
+    const weight = catalog.models.find((model) => model.id === step.modelID)?.weight
+    if (step.providerID !== ModelPlanStatus.PROVIDER_ID || weight === undefined || !Number.isFinite(weight) || weight <= 0)
+      return undefined
+    const tokens = [step.input, step.output, step.reasoning, step.cacheRead]
+    if (tokens.some((value) => !Number.isFinite(value) || value < 0)) return undefined
+    return weight * (step.input + step.output + step.reasoning + 0.1 * step.cacheRead)
+  })
+  if (values.some((value) => value === undefined)) return undefined
+  const total = values.reduce<number>((sum, value) => sum + value!, 0)
+  return Number.isFinite(total) && total > 0 ? total : undefined
+}
 
 // A chat or light message starts on the floor, a standard task on the default, a thorough one on the ceiling.
 const START: Record<Tier, Role> = { chat: "floor", light: "floor", standard: "default", thorough: "ceiling" }
@@ -21,7 +46,7 @@ export const WINDOW_SHARE = 0.8
  * holds the context within WINDOW_SHARE; when none does, the role with the largest window. Never a locked, manual-only
  * or unlisted model, and never Auto itself; undefined when the catalog offers no Auto.
  */
-export function resolve(input: { catalog: ModelPlans.Catalog; tier: Tier; contextTokens: number }) {
+export function resolve(input: { catalog: ModelPlans.Catalog; tier: Tier; contextTokens: number; learned?: readonly Suggestion[] }) {
   const auto = input.catalog.models.find((model) => model.id === ModelPlanStatus.AUTO_ID)?.auto
   if (!auto) return undefined
   const models = ROLES.flatMap((role) => {
@@ -33,7 +58,12 @@ export function resolve(input: { catalog: ModelPlans.Catalog; tier: Tier; contex
   const fits = models
     .slice(start === -1 ? -1 : start)
     .find((item) => input.contextTokens <= item.model.contextLength * WINDOW_SHARE)
-  return (fits ?? models.toSorted((a, b) => b.model.contextLength - a.model.contextLength)[0])?.model
+  const baseline = (fits ?? models.toSorted((a, b) => b.model.contextLength - a.model.contextLength)[0])?.model
+  if (!baseline) return undefined
+  // Suggestions are only candidates: the current account catalog and this request's context remain authoritative.
+  const learned = input.learned?.find((item) => item.instead === baseline.id && Number.isFinite(item.saving) && item.saving >= 0.2 &&
+    models.some(({ model }) => model.id === item.model && input.contextTokens <= model.contextLength * WINDOW_SHARE))
+  return learned ? models.find(({ model }) => model.id === learned.model)!.model : baseline
 }
 
 /**
@@ -56,4 +86,11 @@ function usable(catalog: ModelPlans.Catalog, id: string) {
   return catalog.models.find(
     (model) => model.id === id && model.id !== ModelPlanStatus.AUTO_ID && !model.locked && !model.manualOnly,
   )
+}
+
+/** A saved first-party playbook resolves its role against the current account's Auto pointers. */
+export function role(catalog: ModelPlans.Catalog, role: Role) {
+  if (!catalog.enabled || !catalog.plan) return undefined
+  const auto = catalog.models.find((model) => model.id === ModelPlanStatus.AUTO_ID)?.auto
+  return auto ? usable(catalog, auto[role]) : undefined
 }

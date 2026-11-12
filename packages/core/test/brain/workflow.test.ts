@@ -71,6 +71,20 @@ const advise = (
     ...patch,
   })
 
+test("Auto compares complete Codium arms by private relative usage and proven outcomes", () => {
+  const codium = { providerID: "vector-plan", costUsd: undefined, costKinds: { codium: 4 }, unpricedSteps: 4 }
+  const base = many(80, { ...codium, modelID: "middle", codiumUnits: 1000 })
+  const cheap = many(80, { ...codium, modelID: "floor", codiumUnits: 700 })
+  const pick = (rows: BrainWorkflow.Observation[]) => BrainWorkflow.autoSuggestions(BrainWorkflow.stats(rows, NOW))
+  expect(pick([...base, ...cheap])).toEqual([{ instead: "middle", model: "floor", saving: 0.30000000000000004 }])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, partial: true }))])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, codiumUnits: undefined }))])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, costKinds: { codium: 3, unknown: 1 } }))])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, outcome: "fail" as const }))])).toEqual([])
+  expect(pick([...base, ...cheap.slice(0, 5)])).toEqual([])
+  expect(pick([...base, ...cheap.map((row) => ({ ...row, effort: "default" }))])).toEqual([])
+})
+
 describe("BrainWorkflow.stats", () => {
   test("weighs runs by age, bounds the pass rate from below and counts the share that was checked", () => {
     const [arm] = BrainWorkflow.stats(

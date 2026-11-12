@@ -58,6 +58,7 @@ export type Observation = {
   readonly signal?: "recovered" | "judged" | "judge-fail" | "check-fail"
   /** Unknown unless every step was priced. */
   readonly costUsd?: number
+  readonly codiumUnits?: number
   readonly costKinds: Readonly<Partial<Record<CostKind, number>>>
   readonly steps: number
   readonly unpricedSteps: number
@@ -96,6 +97,8 @@ export type ArmStats = {
   /** Mean dollars over priced runs whose subagents had all finished. */
   readonly costUsd?: number
   readonly pricedWeight: number
+  readonly codiumUnits?: number
+  readonly codiumWeight?: number
   /** Codium across all observed steps, including helpers on a different provider. */
   readonly codium?: "only" | "mixed"
   /** Some own spend is unpriced, even if other observations have a dollar average. */
@@ -129,6 +132,25 @@ export type Insights = {
   }[]
 }
 
+/** Public views do not expose relative Codium weights or reconstruct a token allowance from them. */
+export function displayStats(stats: ArmStats): ArmStats {
+  const { codiumUnits: _units, codiumWeight: _weight, ...display } = stats
+  const source = codium(stats)
+  if (!source) return display
+  const { tokens: _tokens, costUsd, ...without } = display
+  return { ...without, codium: source, ...(source === "mixed" && costUsd !== undefined ? { costUsd } : {}) }
+}
+
+export function displayInsights(insights: Insights): Insights {
+  const advice = (value: Advice | undefined) => value && ({ ...value,
+    basis: { chosen: displayStats(value.basis.chosen), instead: displayStats(value.basis.instead) },
+  })
+  return { ...insights, tiers: insights.tiers.map((tier) => ({ ...tier, arms: tier.arms.map(displayStats),
+    ...(tier.advice ? { advice: advice(tier.advice) } : {}),
+    ...(tier.wouldAdvise ? { wouldAdvise: advice(tier.wouldAdvise) } : {}),
+  })) }
+}
+
 /** Each arm's weighted runs, pass rate and cost. Runs someone chose the effort of, or that read the web, are left out. */
 export function stats(rows: readonly Observation[], now: number): ArmStats[] {
   return [...Map.groupBy(rows.filter(counted), (row) => JSON.stringify(armOf(row))).values()].map((group) =>
@@ -137,6 +159,30 @@ export function stats(rows: readonly Observation[], now: number): ArmStats[] {
       group.map((row) => ({ row, weight: BrainCredit.factor(now - row.at) })),
     ),
   )
+}
+
+/** Role changes compare like-for-like arms; mixed, unfinished or unweighted work cannot earn one. */
+export function autoSuggestions(arms: readonly ArmStats[]) {
+  return arms.flatMap((instead) =>
+    arms
+      .filter((chosen) =>
+        chosen.arm.providerID === instead.arm.providerID &&
+        Billing.isCodium(chosen.arm.providerID) &&
+        chosen.arm.modelID !== instead.arm.modelID &&
+        chosen.arm.effortTier === instead.arm.effortTier &&
+        chosen.arm.effort === instead.arm.effort &&
+        chosen.arm.split === instead.arm.split &&
+        chosen.arm.subagentModel === instead.arm.subagentModel &&
+        chosen.codium === "only" && instead.codium === "only" &&
+        wins(chosen, instead, false),
+      )
+      .map((chosen) => ({
+        instead: instead.arm.modelID,
+        model: chosen.arm.modelID,
+        saving: 1 - chosen.codiumUnits! / instead.codiumUnits!,
+      })),
+  ).filter((item) => Number.isFinite(item.saving) && item.saving >= 1 - CHEAPER)
+    .toSorted((a, b) => b.saving - a.saving || a.model.localeCompare(b.model))
 }
 
 /**
@@ -252,6 +298,7 @@ export interface Interface {
     input: Omit<Parameters<typeof advise>[0], "stats" | "explore">,
   ) => Effect.Effect<Advice | undefined>
   readonly insights: (place: Brain.Place) => Effect.Effect<Insights>
+  readonly autoModels?: (place: Brain.Place, tier: TaskSize.Tier) => Effect.Effect<ReturnType<typeof autoSuggestions>>
   /** Forgets the repository's runs, or one size's. */
   readonly reset: (place: Brain.Place, input?: { readonly tier?: TaskSize.Tier }) => Effect.Effect<number>
 }
@@ -297,6 +344,11 @@ function make(db: BrainDatabase.Database, brain: Brain.Interface, ready: Effect.
       observation.unpricedSteps === 0 &&
       Object.entries(observation.costKinds).every(([kind, steps]) => kind === "priced" || !steps)
     const cost = priced ? observation.costUsd : undefined
+    const units = observation.steps > 0 && !observation.partial &&
+      Object.entries(observation.costKinds).filter(([, count]) => count).every(([kind]) => kind === "codium") &&
+      observation.costKinds.codium === observation.steps &&
+      observation.codiumUnits !== undefined && Number.isFinite(observation.codiumUnits) && observation.codiumUnits > 0
+      ? observation.codiumUnits : undefined
     const now = Date.now()
     yield* db
       .transaction((tx) =>
@@ -325,7 +377,8 @@ function make(db: BrainDatabase.Database, brain: Brain.Interface, ready: Effect.
             // A request run more than once at different settings is no evidence for either.
             effort: known && known.effort !== observation.effort ? "mixed" : observation.effort,
             effort_source:
-              known && known.effort_source !== observation.effortSource ? ("mixed" as const) : observation.effortSource,
+              known && (known.effort_source !== observation.effortSource || known.model_id !== observation.modelID ||
+                known.provider_id !== observation.providerID) ? ("mixed" as const) : observation.effortSource,
             subagents: (known?.subagents ?? 0) + observation.subagents,
             subagent_model:
               known?.subagent_model && observation.subagentModel && known.subagent_model !== observation.subagentModel
@@ -341,6 +394,9 @@ function make(db: BrainDatabase.Database, brain: Brain.Interface, ready: Effect.
                 : known.cost_usd + cost
               : (cost ?? null),
             cost_kinds: add(known?.cost_kinds ?? {}, observation.costKinds),
+            codium_units: known
+              ? known.codium_units === null || units === undefined ? null : known.codium_units + units
+              : units ?? null,
             steps: (known?.steps ?? 0) + observation.steps,
             unpriced_steps: (known?.unpriced_steps ?? 0) + observation.unpricedSteps,
             tokens_input: (known?.tokens_input ?? 0) + observation.tokens.input,
@@ -482,7 +538,12 @@ function make(db: BrainDatabase.Database, brain: Brain.Interface, ready: Effect.
     return rows.length
   })
 
-  return { record, reverted, advice, insights, reset }
+  const autoModels = Effect.fn("BrainWorkflow.autoModels")(function* (place: Brain.Place, tier: TaskSize.Tier) {
+    yield* ready
+    if ((yield* brain.learnSettings()).workflow !== "apply") return []
+    return autoSuggestions(stats(yield* rowsOf(place, tier), Date.now()))
+  })
+  return { record, reverted, advice, insights, reset, autoModels }
 }
 
 function counted(row: Observation) {
@@ -524,6 +585,10 @@ function summary(arm: Arm, items: readonly Weighed[]): ArmStats {
   const pricedWeight = sum(priced, () => 1)
   const whole = items.filter((item) => !item.row.partial)
   const wholeWeight = sum(whole, () => 1)
+  const weighted = whole.filter(({ row }) => row.codiumUnits !== undefined &&
+    row.steps > 0 && row.costKinds.codium === row.steps &&
+    Object.entries(row.costKinds).every(([kind, count]) => kind === "codium" || !count))
+  const codiumWeight = sum(weighted, () => 1)
   const sources = items.map(({ row }) => {
     const counted = Object.entries(row.costKinds).filter(([, count]) => count > 0)
     return {
@@ -542,6 +607,7 @@ function summary(arm: Arm, items: readonly Weighed[]): ArmStats {
     checkedShare: weight > 0 ? signal / weight : 0,
     ...(pricedWeight > 0 ? { costUsd: sum(priced, (item) => item.row.costUsd!) / pricedWeight } : {}),
     pricedWeight,
+    ...(codiumWeight > 0 ? { codiumUnits: sum(weighted, ({ row }) => row.codiumUnits!) / codiumWeight, codiumWeight } : {}),
     ...(kinds.includes("codium") ? { codium: kinds.every((kind) => kind === "codium") ? "only" : "mixed" } : {}),
     ...(kinds.includes("codium") &&
     sources.some(
@@ -576,6 +642,7 @@ function merge(arm: Arm, items: readonly ArmStats[]): ArmStats {
   const tokened = items.filter((item) => item.tokens !== undefined)
   const tokenWeight = tokened.reduce((total, item) => total + item.weight, 0)
   const sources = items.map(codium)
+  const codiumWeight = add((item) => item.codiumWeight ?? 0)
   return {
     arm,
     rows: add((item) => item.rows),
@@ -585,6 +652,10 @@ function merge(arm: Arm, items: readonly ArmStats[]): ArmStats {
     checkedShare: weight > 0 ? signal / weight : 0,
     ...(pricedWeight > 0 ? { costUsd: add((item) => (item.costUsd ?? 0) * item.pricedWeight) / pricedWeight } : {}),
     pricedWeight,
+    ...(codiumWeight > 0 ? {
+      codiumUnits: add((item) => (item.codiumUnits ?? 0) * (item.codiumWeight ?? 0)) / codiumWeight,
+      codiumWeight,
+    } : {}),
     ...(sources.some(Boolean) ? { codium: sources.every((source) => source === "only") ? "only" : "mixed" } : {}),
     ...(sources.some(Boolean) &&
     items.some((item) => item.ownUnpriced || (!codium(item) && item.pricedWeight < item.weight))
@@ -601,6 +672,10 @@ function wins(chosen: ArmStats, instead: ArmStats, tokens: boolean) {
   if (chosen.signal < MIN_RUNS || instead.signal < MIN_RUNS) return false
   if (chosen.lower === undefined || instead.passRate === undefined) return false
   if (chosen.lower < instead.passRate - MARGIN || chosen.checkedShare < instead.checkedShare - MARGIN) return false
+  if (chosen.codium === "only" && instead.codium === "only" &&
+    (chosen.codiumWeight ?? 0) >= PRICED_WEIGHT && (instead.codiumWeight ?? 0) >= PRICED_WEIGHT &&
+    chosen.codiumUnits !== undefined && instead.codiumUnits !== undefined)
+    return chosen.codiumUnits <= CHEAPER * instead.codiumUnits
   if (
     chosen.costUsd !== undefined &&
     instead.costUsd !== undefined &&
@@ -684,6 +759,7 @@ function toObservation(row: typeof BrainWorkflowRunTable.$inferSelect): Observat
     outcome: row.outcome,
     ...(row.signal ? { signal: row.signal } : {}),
     ...(row.cost_usd !== null ? { costUsd: row.cost_usd } : {}),
+    ...(row.codium_units !== null ? { codiumUnits: row.codium_units } : {}),
     costKinds: row.cost_kinds,
     steps: row.steps,
     unpricedSteps: row.unpriced_steps,
