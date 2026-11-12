@@ -75,3 +75,31 @@ waits for production baseline run `43144814717`, dispatched at
 `693e86d042bdf7ce92d086c02cbcf986800e55b4`; a queued run is not a measurement.
 Full VS-08 public adapters and VS-09 onward remain unfinished. No quality,
 performance or release-readiness claim follows from these foundation checks.
+
+## Posting completeness and repository notes
+
+The VS-11 posting prerequisite keeps the existing depth-three/session-200 limits
+and refuses a contributor family that exceeds either. A failed child lookup is
+no longer interpreted as an empty family. The memory API maps a bounded-family
+refusal to its existing HTTP 400 error; learned-skill sharing returns its existing
+refused result before any write. Root's checks pass: lineage 4 tests/8 assertions
+and the actual memory API 4/14. No model call or additional review fan-out is added.
+
+VS-32b's pure posting plan passes 4 tests/41 assertions. Not-reviewed and policy
+skips never create PR review objects. Only the explicit incomplete gate adds the
+constant bot marker, and only when inline findings exist. It is not wired into
+@vector's publisher here.
+
+The bounded `ReviewContext.dismissals` reader is prepared for repository-scoped
+owner review notes. It excludes personal/private, held, proposed, stale,
+superseded, unrelated and agent-made entries, applies the existing outward screen
+and returns at most ten untrusted-comment records within 400 tokens. It creates
+no suppressive team pattern or global rule. Its 3 tests/8 assertions pass. The
+test-only Brain `files()` trap throws if the reader ever reaches personal memory
+files. The corrected engine package typecheck is pending.
+
+Connected-workspace consumer wiring waits for the actual branch merges under the
+updated workstream sequence. No feature branch has been merged into main here.
+The next service checks add an authority-alias regression (a caller mutating its
+read-denial array during model setup) and cancellation before model setup. Both
+fixes are implemented, but their new tests are pending the serial root runner.

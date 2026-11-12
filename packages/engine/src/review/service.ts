@@ -24,25 +24,40 @@ export function execute<RunR, ModelR>(input: Input, deps: LocalReviewDeps<RunR, 
       }
       return refused
     }
+    // Callers may retain their objects while model setup yields. Keep the admitted
+    // target and restrictive read authority fixed for the whole invocation.
+    const request: ReviewInvocation = {
+      ...invocation,
+      target: { ...invocation.target },
+      ...(invocation.readDenies ? { readDenies: [...invocation.readDenies] } : {}),
+    }
+    if (stopSignal?.aborted) {
+      const stopped: Result = {
+        exitCode: 2,
+        error: "The review was cancelled before it started.",
+        verdict: reviewVerdict({ kind: "failure", stage: "start" }),
+      }
+      return stopped
+    }
     const { executeLocalReview } = yield* Effect.promise(() => import("@/cli/cmd/review"))
     const result: LocalReviewResult = yield* executeLocalReview(
       {
-        directory: input.directory,
-        ...(input.target.base ? { base: input.target.base } : {}),
-        ...(input.target.kind === "working-tree" ? { uncommitted: true } : {}),
-        ...(input.target.kind === "staged" ? { staged: true } : {}),
-        ...(input.model ? { model: input.model } : {}),
-        ...(input.maxCost ? { maxCost: input.maxCost } : {}),
+        directory: request.directory,
+        ...(request.target.base ? { base: request.target.base } : {}),
+        ...(request.target.kind === "working-tree" ? { uncommitted: true } : {}),
+        ...(request.target.kind === "staged" ? { staged: true } : {}),
+        ...(request.model ? { model: request.model } : {}),
+        ...(request.maxCost ? { maxCost: request.maxCost } : {}),
         checks: false,
         post: false,
         full: true,
         json: true,
         context: {
-          ...(input.parentID ? { parentID: SessionID.make(input.parentID) } : {}),
-          expectedHead: input.target.head,
-          settingsRef: input.settingsRef,
+          ...(request.parentID ? { parentID: SessionID.make(request.parentID) } : {}),
+          expectedHead: request.target.head,
+          settingsRef: request.settingsRef,
           stateless: true,
-          ...(input.readDenies ? { readDenies: input.readDenies } : {}),
+          ...(request.readDenies ? { readDenies: request.readDenies } : {}),
           ...(stopSignal ? { stopSignal } : {}),
         },
       },

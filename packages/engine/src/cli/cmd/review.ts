@@ -475,6 +475,8 @@ export function executeLocalReview<RunR, ModelR>(
           : undefined
 
     // 7. The review.
+    if (options.context?.stopSignal?.aborted)
+      return yield* new LocalReviewError({ message: "The review was cancelled before it started." })
     if (options.context && (yield* commitOf(git, root, "HEAD")) !== options.context.expectedHead)
       return yield* new LocalReviewError({ message: "The review head changed before the review could start." })
     say(`Reviewing ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)

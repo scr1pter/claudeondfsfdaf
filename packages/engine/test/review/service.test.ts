@@ -101,6 +101,46 @@ const request = (repo: { directory: string; base: string; head: string }): Input
 })
 
 describe("shared review service", () => {
+  it.live("keeps admitted read denials when the caller mutates its array during model setup", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const run = adapter()
+      const readDenies = ["private.ts"]
+      const result = yield* execute(
+        { ...request(repo), readDenies },
+        {
+          ...run.deps,
+          resolveModel: (input) =>
+            Effect.gen(function* () {
+              readDenies.length = 0
+              return yield* run.deps.resolveModel(input)
+            }),
+        },
+      )
+      expect(result.verdict.verdict).toBe("incomplete")
+      expect(run.calls[0]!.readDenies).toEqual(["private.ts"])
+      expect(yield* Effect.promise(() => run.calls[0]!.knownPath("private.ts"))).toBe(false)
+    }),
+  )
+
+  it.live("an already-cancelled invocation starts no model setup or reviewer", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const run = adapter()
+      const controller = new AbortController()
+      controller.abort()
+      const result = yield* execute(
+        { ...request(repo), stopSignal: controller.signal },
+        {
+          ...run.deps,
+          resolveModel: () => Effect.die("cancelled invocation resolved a model"),
+        },
+      )
+      expect(result.exitCode).toBe(2)
+      expect(result.error).toContain("cancelled")
+      expect(run.calls).toEqual([])
+    }),
+  )
   it.live("uses pinned settings and parent placement without GitHub or durable branch state", () =>
     Effect.gen(function* () {
       const repo = yield* fixture
