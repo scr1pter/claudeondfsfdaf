@@ -2,14 +2,19 @@
 // "Set up automatic reviews" commits the same file, so both build it here. Pure, so the tests can parse the YAML and
 // run the script.
 
+import { parse, stringify } from "yaml"
+import semver from "semver"
+import { GithubAgents } from "../github-agents"
 import release from "../../../desktop/package.json"
 import { DEFAULT_MENTIONS, parseReviewCommand } from "./command"
 import { PAUSED_LABEL } from "./skip"
 import { PublicSession } from "@vectordevai/schema/public-session"
+import { validCron } from "./schedule"
 
-export const WORKFLOW_FILE = ".github/workflows/vector.yml"
+export { WORKFLOW_FILE } from "../github-agents"
 export const CLI_PACKAGE = "@vectordevai/cli"
-// Written into every job as VECTOR_WORKFLOW_VERSION; the CLI asks for a reinstall when a workflow's differs.
+// Written into every job as VECTOR_WORKFLOW_VERSION; the CLI asks for a reinstall when a workflow's differs. It stays
+// "2" while the CLI and the desktop install this v2 workflow; GithubAgents.WORKFLOW_VERSION is the v3 builder's.
 export const GITHUB_WORKFLOW_VERSION = "2"
 
 export interface WorkflowOptions {
@@ -222,7 +227,7 @@ export function buildWorkflowYaml(opts: WorkflowOptions): string {
     "      - name: Review",
     "        run: vector github review",
     "        env:",
-    `          VECTOR_WORKFLOW_VERSION: "${GITHUB_WORKFLOW_VERSION}"`,
+    '          VECTOR_WORKFLOW_VERSION: "2"',
     "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     ...(elevated ? [`          VECTOR_GITHUB_AUTH: "${opts.auth}"`] : []),
     "          VECTOR_CLI_TOKEN: ${{ secrets.VECTOR_CLI_TOKEN }}",
@@ -283,7 +288,7 @@ export function buildWorkflowYaml(opts: WorkflowOptions): string {
     "      - name: Run Vector",
     "        run: vector github run",
     "        env:",
-    `          VECTOR_WORKFLOW_VERSION: "${GITHUB_WORKFLOW_VERSION}"`,
+    '          VECTOR_WORKFLOW_VERSION: "2"',
     "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     "          VECTOR_CLI_TOKEN: ${{ secrets.VECTOR_CLI_TOKEN }}",
     '          VECTOR_DISABLE_USAGE: "1" # CI jobs are not a person using Vector',
@@ -348,4 +353,526 @@ export function buildWorkflowYaml(opts: WorkflowOptions): string {
 
 function formatAmount(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Math.round(value * 100) / 100)
+}
+
+export interface AgentsWorkflowOptions {
+  mode: "codium" | "own-key"
+  provider: string
+  model: string
+  keys: readonly string[]
+  autoReview: boolean
+  publishAuth?: "github" | "app"
+  share?: boolean
+  monthlyUsd?: number
+  version: string
+  handle?: string
+  schedules?: readonly { id: string; cron: string; prompt: string }[]
+}
+
+// A JSON value inside YAML must keep this escape until the CLI's JSON.parse, not merely until YAML decoding.
+function workflowJson(value: unknown) {
+  return JSON.stringify(value).replace(/\$/g, "\\u0024")
+}
+
+function workflowOptions(value: unknown): AgentsWorkflowOptions {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid workflow options")
+  const opts = value as AgentsWorkflowOptions
+  const fields = [
+    "mode",
+    "provider",
+    "model",
+    "keys",
+    "autoReview",
+    "publishAuth",
+    "share",
+    "monthlyUsd",
+    "version",
+    "handle",
+    "schedules",
+  ]
+  const name = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$(?![\s\S])/
+  if (
+    Object.keys(opts).some((key) => !fields.includes(key)) ||
+    !["codium", "own-key"].includes(opts.mode) ||
+    typeof opts.provider !== "string" ||
+    !name.test(opts.provider) ||
+    typeof opts.model !== "string" ||
+    !name.test(opts.model) ||
+    typeof opts.autoReview !== "boolean" ||
+    typeof opts.version !== "string" ||
+    (opts.publishAuth !== undefined && !["github", "app"].includes(opts.publishAuth)) ||
+    (opts.share !== undefined && typeof opts.share !== "boolean") ||
+    (opts.monthlyUsd !== undefined && (!Number.isFinite(opts.monthlyUsd) || opts.monthlyUsd < 0)) ||
+    (opts.handle !== undefined &&
+      (typeof opts.handle !== "string" ||
+        !GithubAgents.slugFromInstallUrl(`https://github.com/apps/${opts.handle}/installations/new`)))
+  )
+    throw new Error("Invalid workflow options")
+  if (
+    !Array.isArray(opts.keys) ||
+    new Set(opts.keys).size !== opts.keys.length ||
+    opts.keys.some(
+      (key) =>
+        typeof key !== "string" ||
+        !/^[A-Z_][A-Z0-9_]{0,99}$(?![\s\S])/.test(key) ||
+        /^(?:VECTOR_|GITHUB_|ACTIONS_|RUNNER_|REVIEW_|NODE_|NPM_|BUN_|BASH_|GIT_|LD_|DYLD_)/.test(key) ||
+        [
+          "PATH",
+          "HOME",
+          "SHELL",
+          "ENV",
+          "BASH_ENV",
+          "SHELLOPTS",
+          "PS4",
+          "CDPATH",
+          "IFS",
+          "MENTIONS",
+          "MODEL",
+          "SHARE",
+          "CI",
+          "USE_GITHUB_TOKEN",
+          "REVIEW_MAX_COST_USD_PER_MONTH",
+        ].includes(key),
+    )
+  )
+    throw new Error("Invalid provider secret name")
+  if (opts.mode === "codium" && (opts.share || opts.autoReview || opts.keys.length))
+    throw new Error("Codium workflows cannot share publicly, auto-review, or contain provider secrets")
+  if (
+    opts.schedules !== undefined &&
+    (!Array.isArray(opts.schedules) ||
+      opts.schedules.length > 20 ||
+      opts.schedules.some(
+        (schedule) =>
+          !schedule ||
+          typeof schedule !== "object" ||
+          Object.keys(schedule).some((key) => !["id", "cron", "prompt"].includes(key)) ||
+          typeof schedule.id !== "string" ||
+          !/^[A-Za-z0-9_-]{1,64}$(?![\s\S])/.test(schedule.id) ||
+          typeof schedule.cron !== "string" ||
+          !/^[0-9*,/\-]+(?: [0-9*,/\-]+){4}$(?![\s\S])/.test(schedule.cron) ||
+          !validCron(schedule.cron) ||
+          schedule.cron.length > 100 ||
+          typeof schedule.prompt !== "string" ||
+          schedule.prompt.length > 100_000,
+      ) ||
+      new Set(opts.schedules.map((schedule) => schedule.cron)).size !== opts.schedules.length ||
+      new Set(opts.schedules.map((schedule) => schedule.id)).size !== opts.schedules.length)
+  )
+    throw new Error("Invalid workflow schedules")
+  if (
+    new TextEncoder().encode(
+      workflowJson(Object.fromEntries((opts.schedules ?? []).map(({ cron, id, prompt }) => [cron, { id, prompt }]))),
+    ).length > 120_000
+  )
+    throw new Error("Workflow schedules exceed the safe environment size limit")
+  return { ...opts, publishAuth: opts.publishAuth ?? "github" }
+}
+
+export function readWorkflowOptions(yaml: string): AgentsWorkflowOptions | undefined {
+  const header = yaml.split(/\r?\n/, 1)[0]
+  if (!header?.startsWith("# vector-workflow: ")) return
+  try {
+    return workflowOptions(JSON.parse(header.slice("# vector-workflow: ".length)))
+  } catch {
+    return
+  }
+}
+
+// Kept separate from the installed v2 route until its callers migrate. Only trusted, validated options are embedded;
+// event bodies and dispatch inputs are read from context at runtime, never interpolated into script source.
+export function buildAgentsRouteScript(options: AgentsWorkflowOptions): string {
+  const opts = workflowOptions(options)
+  const script = `// Generated by Vector. Authorization comes from current permissions, never author_association.
+const parseReviewCommand = ${parseReviewCommand.toString()}
+const mentions = ${workflowJson(GithubAgents.mentions(opts.handle))}
+const handle = ${workflowJson(opts.handle ?? "")}
+const mode = ${workflowJson(opts.mode)}
+const crons = ${workflowJson(opts.schedules?.map((schedule) => schedule.cron) ?? [])}
+const PAUSED = ${workflowJson(PAUSED_LABEL)}
+const { owner, repo } = context.repo
+const payload = context.payload
+const WRITERS = ["admin", "maintain", "write"]
+const ASSOCIATES = ["OWNER", "MEMBER", "COLLABORATOR"]
+const threadPattern = ${GithubAgents.THREAD_PATTERN.toString()}
+function output(kind, pr = "", ref = context.sha, thread = "", app = false) {
+  if (kind !== "none" && !threadPattern.test(String(thread))) kind = "none"
+  for (const [key, value] of Object.entries({kind, pr: pr ? String(pr) : "", ref: ref || "", thread: String(thread), app: String(app)})) core.setOutput(key, value)
+}
+async function writer(user) {
+  if (!user || user.type !== "User" || !user.login) return false
+  try {
+    const { data } = await github.rest.repos.getCollaboratorPermissionLevel({owner, repo, username: user.login})
+    return WRITERS.includes(data.role_name) || WRITERS.includes(data.permission)
+  } catch { return false }
+}
+async function pullRef(number, task) {
+  const { data: pull } = await github.rest.pulls.get({owner, repo, pull_number: number})
+  const same = pull.head.repo && pull.head.repo.id === pull.base.repo.id
+  if (task) return same ? pull.head.sha : undefined
+  if (same) return pull.head.sha
+  try {
+    const { data } = await github.rest.repos.compareCommitsWithBasehead({owner, repo, basehead: pull.base.sha + "..." + pull.head.sha, per_page: 1})
+    if (data.merge_base_commit && data.merge_base_commit.sha) return data.merge_base_commit.sha
+  } catch {}
+  return pull.base.sha
+}
+if (context.eventName === "schedule") {
+  if (!crons.includes(payload.schedule)) return output("none")
+  const thread = "schedule-" + require("node:crypto").createHash("sha256").update(payload.schedule).digest("hex").slice(0, 8)
+  return output("task", "", context.sha, thread)
+}
+if (context.eventName === "workflow_dispatch") {
+  const input = payload.inputs || {}
+  const sender = payload.sender
+  const bot = sender && (sender.type === "Bot" || /\\[bot\\]$/.test(sender.login || ""))
+  if (bot && (mode !== "codium" || !handle || sender.login !== handle + "[bot]" || typeof input.ticket !== "string" || !input.ticket.trim())) return output("none")
+  if (!bot && !await writer(sender)) return output("none")
+  const command = input.mode || "task"
+  if (bot && command !== "task") return output("none")
+  if (command === "bind") return output("bind", "", context.sha, "dispatch-" + context.runId)
+  if (command === "task") return output("task", "", context.sha, "dispatch-" + context.runId)
+  if (command !== "review" || !/^[1-9]\\d{0,9}$/.test(input.pr || "")) return output("none")
+  return output("review", input.pr, await pullRef(Number(input.pr), false), input.pr, true)
+}
+const issue = context.eventName === "issues"
+const reviewComment = context.eventName === "pull_request_review_comment"
+if (!issue && !reviewComment && context.eventName !== "issue_comment") return output("none")
+const author = issue ? payload.issue : payload.comment
+if (!author || !author.user || author.user.type !== "User") return output("none")
+const number = reviewComment ? payload.pull_request.number : payload.issue.number
+const pr = reviewComment || !!payload.issue.pull_request
+const kind = parseReviewCommand(issue ? (author.title || "") + "\\n" + (author.body || "") : author.body || "", mentions).kind
+if (kind === "none" || kind === "dismiss" || (!pr && kind !== "task")) return output("none")
+async function react(content) {
+  try {
+    if (issue) await github.rest.reactions.createForIssue({owner, repo, issue_number: number, content})
+    else if (reviewComment) await github.rest.reactions.createForPullRequestReviewComment({owner, repo, comment_id: author.id, content})
+    else await github.rest.reactions.createForIssueComment({owner, repo, comment_id: author.id, content})
+  } catch {}
+}
+async function refuse() {
+  if (ASSOCIATES.includes(author.author_association)) await react("confused")
+  return output("none")
+}
+if (issue && (!Number.isSafeInteger(author.user.id) || author.user.id <= 0 || !payload.sender || author.user.id !== payload.sender.id)) return refuse()
+if (!await writer(author.user)) return refuse()
+if (kind === "pause" || kind === "resume") {
+  if (kind === "pause") await github.rest.issues.addLabels({owner, repo, issue_number: number, labels: [PAUSED]})
+  else {
+    try { await github.rest.issues.removeLabel({owner, repo, issue_number: number, name: PAUSED}) }
+    catch (error) { if (error.status !== 404) throw error }
+  }
+  await react("+1")
+  return output("control", number, context.sha, number)
+}
+const ref = pr ? await pullRef(number, kind === "task") : context.sha
+if (!ref) return refuse()
+await react("eyes")
+return output(kind, number, ref, number, !reviewComment)
+`
+  if (script.includes("${{")) throw new Error("The route script contains an Actions expression")
+  return script
+}
+
+type WorkflowStep = {
+  id?: string
+  name?: string
+  uses?: string
+  run?: string
+  if?: string
+  shell?: string
+  "working-directory"?: string
+  "continue-on-error"?: boolean
+  with?: Record<string, string | number | boolean>
+  env?: Record<string, string>
+}
+
+export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
+  const opts = workflowOptions(options)
+  const cli = opts.version
+  if (semver.valid(cli) !== cli || semver.lt(cli, GithubAgents.MIN_AGENTS_CLI))
+    throw new Error(`GitHub agents require CLI ${GithubAgents.MIN_AGENTS_CLI} or newer`)
+  const codium = opts.mode === "codium"
+  const mentions = GithubAgents.mentions(opts.handle)
+  const base = { VECTOR_WORKFLOW_VERSION: GithubAgents.WORKFLOW_VERSION }
+  const shell =
+    "env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}"
+  const setup: WorkflowStep = { uses: "actions/setup-node@v4", with: { "node-version": 20 } }
+  const install: WorkflowStep = {
+    name: "Install Vector",
+    run: `npm install -g ${CLI_PACKAGE}@${cli} --prefer-offline --no-audit --no-fund`,
+  }
+  const restore: WorkflowStep = {
+    uses: "actions/cache/restore@v4",
+    with: { path: "~/.npm", key: `vector-cli-${cli}-\${{ runner.os }}` },
+  }
+  const mintEnv = {
+    ...base,
+    VECTOR_MODE: opts.mode,
+    VECTOR_THREAD: "${{ needs.route.outputs.thread }}",
+    VECTOR_TICKET: "${{ inputs.ticket }}",
+    VECTOR_COMMENT_ID: "${{ github.event.comment.id }}",
+    VECTOR_PR: "${{ needs.route.outputs.pr }}",
+  }
+  const checkout = (depth: number, mint: boolean): WorkflowStep => ({
+    uses: "actions/checkout@v4",
+    ...(mint ? { if: "steps.mint.outputs.status == 'ok'" } : {}),
+    with: { ref: "${{ needs.route.outputs.ref }}", "fetch-depth": depth, "persist-credentials": false },
+  })
+  const schedules = workflowJson(
+    Object.fromEntries((opts.schedules ?? []).map(({ cron, id, prompt }) => [cron, { id, prompt }])),
+  )
+  const common = {
+    ...base,
+    VECTOR_MODE: opts.mode,
+    GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
+    VECTOR_DISABLE_USAGE: "1",
+    VECTOR_PURE: "1",
+    MENTIONS: mentions.join(","),
+    VECTOR_THREAD: "${{ needs.route.outputs.thread }}",
+  }
+  const agentEnv = {
+    ...common,
+    VECTOR_PROMPT: "${{ inputs.prompt }}",
+    VECTOR_SCHEDULE_PROMPTS: schedules,
+    SHARE: String(opts.share === true),
+    ...(codium
+      ? {
+          MODEL: "${{ vars.VECTOR_MODEL || 'vector-plan' }}",
+          VECTOR_DISABLE_PROJECT_CONFIG: "1",
+        }
+      : {
+          MODEL: `${opts.provider}/${opts.model}`,
+          VECTOR_CLI_TOKEN: "${{ secrets.VECTOR_CLI_TOKEN }}",
+          VECTOR_SECRET_ENV_NAMES: opts.keys.join(","),
+          ...(opts.share ? { VECTOR_SHARE_CONSENT: String(PublicSession.CONSENT_VERSION) } : {}),
+          ...Object.fromEntries(opts.keys.map((key) => [key, `\${{ secrets.${key} }}`])),
+        }),
+  }
+  const agentSteps: WorkflowStep[] = [
+    setup,
+    restore,
+    install,
+    ...(codium ? [{ id: "mint", run: "vector github mint --purpose task", env: mintEnv }] : []),
+    checkout(0, codium),
+    {
+      id: "sandbox",
+      run: "vector github sandbox prepare",
+      if: `runner.environment == 'github-hosted'${codium ? " && steps.mint.outputs.status == 'ok'" : ""}`,
+      env: {
+        ...base,
+        VECTOR_MODE: opts.mode,
+        ...(codium ? {} : { VECTOR_AGENT_SUDO: "${{ vars.VECTOR_AGENT_SUDO }}" }),
+      },
+    },
+    {
+      id: "agent",
+      run: "vector github sandbox run -- vector github run --phase agent",
+      ...(codium ? { if: "steps.mint.outputs.status == 'ok'" } : {}),
+      shell,
+      env: agentEnv,
+    },
+    {
+      id: "sandbox_finish",
+      run: "vector github sandbox finish",
+      if: "always()",
+      env: { ...base, VECTOR_MODE: opts.mode },
+    },
+    {
+      uses: "actions/upload-artifact@v4",
+      if: "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+      with: {
+        path: "${{ runner.temp }}/vector-out/",
+        name: "vector-run-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": GithubAgents.BUNDLE_DAYS,
+      },
+    },
+    ...(codium
+      ? [
+          {
+            uses: "actions/upload-artifact@v4",
+            if: "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+            with: {
+              path: "${{ runner.temp }}/vector-session/",
+              name: "vector-session-${{ needs.route.outputs.thread }}",
+              "retention-days": GithubAgents.SESSION_DAYS,
+              "if-no-files-found": "ignore",
+            },
+          },
+        ]
+      : []),
+  ]
+  const review = codium
+    ? {
+        needs: "route",
+        if: "needs.route.outputs.kind == 'review' || needs.route.outputs.kind == 'review-full'",
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": GithubAgents.TIMEOUT_MIN.review,
+        permissions: { contents: "read", "pull-requests": "write", issues: "write", "id-token": "write" },
+        concurrency: { group: "vector-review-${{ needs.route.outputs.pr }}", "cancel-in-progress": false },
+        steps: [
+          setup,
+          restore,
+          install,
+          { id: "mint", run: "vector github mint --purpose review", env: mintEnv },
+          checkout(1, true),
+          {
+            run: "vector github review",
+            if: "steps.mint.outputs.status == 'ok'",
+            shell,
+            env: {
+              ...common,
+              VECTOR_REVIEW_PR: "${{ needs.route.outputs.pr }}",
+              VECTOR_REVIEW_REF: "${{ needs.route.outputs.ref }}",
+              MODEL: "${{ vars.VECTOR_MODEL || 'vector-plan' }}",
+              VECTOR_DISABLE_PROJECT_CONFIG: "1",
+              VECTOR_CONFIG_CONTENT: '{"lsp":false,"formatter":false,"snapshot":false}',
+            },
+          },
+        ],
+      }
+    : (
+        parse(buildWorkflowYaml({ ...opts, auth: "github", version: cli })) as {
+          jobs: { review: { steps: WorkflowStep[] } }
+        }
+      ).jobs.review
+  review.steps.forEach((step: WorkflowStep) => {
+    if (!step.env) return
+    step.env.VECTOR_WORKFLOW_VERSION = GithubAgents.WORKFLOW_VERSION
+    if (!codium) {
+      step.env.MENTIONS = mentions.join(",")
+      step.env.VECTOR_SECRET_ENV_NAMES = opts.keys.join(",")
+    }
+  })
+  const matched = (body: string) => mentions.map((mention) => `contains(${body}, '${mention}')`).join(" || ")
+  return (
+    `# vector-workflow: ${workflowJson(opts)}\n` +
+    stringify(
+      {
+        name: "vector",
+        permissions: {},
+        on: {
+          issue_comment: { types: ["created"] },
+          pull_request_review_comment: { types: ["created"] },
+          issues: { types: ["opened"] },
+          ...(opts.autoReview
+            ? { pull_request: { types: ["opened", "synchronize", "reopened", "ready_for_review"] } }
+            : {}),
+          ...(opts.schedules?.length ? { schedule: opts.schedules.map(({ cron }) => ({ cron })) } : {}),
+          workflow_dispatch: {
+            inputs: {
+              mode: { type: "choice", options: ["task", "review", "bind"], default: "task" },
+              ...Object.fromEntries(
+                ["prompt", "pr", "code", "ticket"].map((key) => [key, { type: "string", required: false }]),
+              ),
+            },
+          },
+        },
+        jobs: {
+          route: {
+            if: `github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'issues' && github.event.issue.user.type != 'Bot' && (${matched("github.event.issue.body")} || ${matched("github.event.issue.title")})) || ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') && github.event.comment.user.type != 'Bot' && (${matched("github.event.comment.body")}))`,
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": GithubAgents.TIMEOUT_MIN.route,
+            env: base,
+            permissions: { contents: "read", issues: "write", "pull-requests": "write" },
+            concurrency: {
+              group: `vector-route-\${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.issue.author_association) && github.run_id || (github.event.comment.user.id || github.event.issue.user.id || github.run_id) }}`,
+              "cancel-in-progress": false,
+            },
+            outputs: Object.fromEntries(
+              ["kind", "pr", "ref", "thread", "app"].map((key) => [key, `\${{ steps.route.outputs.${key} }}`]),
+            ),
+            steps: [{ id: "route", uses: "actions/github-script@v7", with: { script: buildAgentsRouteScript(opts) } }],
+          },
+          agent: {
+            name: GithubAgents.JOB.agent,
+            needs: "route",
+            if: "needs.route.outputs.kind == 'task'",
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": codium ? GithubAgents.TIMEOUT_MIN.codiumAgent : GithubAgents.TIMEOUT_MIN.ownKeyAgent,
+            env: base,
+            permissions: {
+              contents: "read",
+              issues: "read",
+              "pull-requests": "read",
+              actions: "read",
+              ...(codium ? { "id-token": "write" } : {}),
+            },
+            concurrency: {
+              group:
+                "${{ github.event_name == 'schedule' && format('vector-schedule-{0}', needs.route.outputs.thread) || format('vector-{0}-{1}', needs.route.outputs.thread, github.event.comment.id || github.run_id) }}",
+              "cancel-in-progress": false,
+            },
+            outputs: codium
+              ? { status: "${{ steps.mint.outputs.status }}", rid: "${{ steps.mint.outputs.rid }}" }
+              : { status: "ok" },
+            steps: agentSteps,
+          },
+          publish: {
+            name: GithubAgents.JOB.publish,
+            needs: ["route", "agent"],
+            if: "always() && needs.route.outputs.kind == 'task'",
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": GithubAgents.TIMEOUT_MIN.publish,
+            env: base,
+            permissions: {
+              contents: "write",
+              "pull-requests": "write",
+              issues: "write",
+              ...(opts.autoReview ? { actions: "write" } : {}),
+              ...(opts.publishAuth === "app" ? { "id-token": "write" } : {}),
+            },
+            steps: [
+              setup,
+              install,
+              checkout(0, false),
+              {
+                uses: "actions/download-artifact@v4",
+                "continue-on-error": true,
+                with: {
+                  name: "vector-run-${{ github.run_id }}-${{ github.run_attempt }}",
+                  path: "${{ runner.temp }}/vector-bundle",
+                },
+              },
+              {
+                run: "vector github publish",
+                "working-directory": "${{ runner.temp }}",
+                env: {
+                  ...common,
+                  VECTOR_REPO_DIR: "${{ github.workspace }}",
+                  VECTOR_BUNDLE_DIR: "${{ runner.temp }}/vector-bundle",
+                  VECTOR_ROUTE_KIND: "${{ needs.route.outputs.kind }}",
+                  VECTOR_ROUTE_PR: "${{ needs.route.outputs.pr }}",
+                  VECTOR_ROUTE_REF: "${{ needs.route.outputs.ref }}",
+                  VECTOR_AGENT_STATUS: codium ? "${{ needs.agent.outputs.status }}" : "ok",
+                  VECTOR_RUN_ID: codium ? "${{ needs.agent.outputs.rid }}" : "",
+                  VECTOR_GITHUB_AUTH: opts.publishAuth ?? "github",
+                  VECTOR_SCHEDULE_PROMPTS: schedules,
+                  VECTOR_DISABLE_PROJECT_CONFIG: "1",
+                  ...(opts.autoReview ? { VECTOR_REVIEW_AUTO: "1" } : {}),
+                },
+              },
+            ],
+          },
+          bind: {
+            name: GithubAgents.JOB.bind,
+            needs: "route",
+            if: "needs.route.outputs.kind == 'bind'",
+            "runs-on": "ubuntu-latest",
+            "timeout-minutes": GithubAgents.TIMEOUT_MIN.bind,
+            env: base,
+            permissions: { "id-token": "write" },
+            steps: [
+              setup,
+              install,
+              { run: "vector github bind", env: { ...base, VECTOR_BIND_CODE: "${{ inputs.code }}" } },
+            ],
+          },
+          review: { ...review, name: GithubAgents.JOB.review, env: base },
+        },
+      },
+      { lineWidth: 0, singleQuote: true, aliasDuplicateObjects: false },
+    )
+  )
 }

@@ -1,11 +1,14 @@
 // The route job's script, taken from the generated workflow and run with fake `github`, `context` and `core` objects,
 // the way actions/github-script runs it.
 
+import { createHash } from "node:crypto"
 import { describe, expect, test } from "bun:test"
-import { parseReviewCommand } from "@vectordevai/core/review/command"
-import { buildWorkflowYaml } from "@vectordevai/core/review/workflow"
+import { GithubAgents } from "@vectordevai/core/github-agents"
+import { parseReviewCommand, type ReviewCommandKind } from "@vectordevai/core/review/command"
+import { buildAgentsWorkflow, buildWorkflowYaml } from "@vectordevai/core/review/workflow"
+import { MENTION_CASES } from "../../../core/test/review/mention-cases"
 
-type Script = (github: unknown, context: unknown, core: unknown) => Promise<void>
+type Script = (github: unknown, context: unknown, core: unknown, require?: unknown) => Promise<void>
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...args: string[]) => Script
 
 const MENTIONS = ["/vector", "/vx"]
@@ -13,7 +16,8 @@ const HEAD = "a".repeat(40)
 const BASE = "b".repeat(40)
 const MERGE_BASE = "c".repeat(40)
 
-function script(app = false): string {
+// Built for each call, since the script differs with the App opt-in and with the mentions.
+function routeJob(app = false, mentions?: readonly string[]) {
   const yaml = buildWorkflowYaml({
     provider: "openai",
     model: "gpt-4.1",
@@ -21,13 +25,19 @@ function script(app = false): string {
     autoReview: true,
     version: "1.17.14",
     ...(app ? { auth: "auto" as const } : {}),
+    ...(mentions ? { mentions } : {}),
   })
-  const workflow = Bun.YAML.parse(yaml) as { jobs: { route: { steps: { with: { script: string } }[] } } }
-  return workflow.jobs.route.steps[0]!.with.script
+  const workflow = Bun.YAML.parse(yaml) as {
+    jobs: { route: { if: string; steps: { with: { script: string } }[] } }
+  }
+  return workflow.jobs.route
 }
 
 interface Options {
+  v3?: boolean
+  ownKey?: boolean
   app?: boolean
+  mentions?: readonly string[]
   permission?: string
   role?: string
   permissionStatus?: number
@@ -68,6 +78,7 @@ function fakeGithub(options: Options = {}) {
         })),
       },
       reactions: {
+        createForIssue: record("react.issue-body"),
         createForIssueComment: record("react.issue"),
         createForPullRequestReviewComment: record("react.review"),
       },
@@ -96,11 +107,16 @@ async function route(context: object, options: Options = {}) {
       outputs["failed"] = message
     },
   }
-  await new AsyncFunction("github", "context", "core", script(options.app))(
-    github,
-    { repo: { owner: "o", repo: "r" }, ...context },
-    core,
-  )
+  await new AsyncFunction(
+    "github",
+    "context",
+    "core",
+    "require",
+    (options.v3 ? agentsRouteJob(options.ownKey) : routeJob(options.app, options.mentions)).steps[0]!.with.script,
+  )(github, { repo: { owner: "o", repo: "r" }, sha: BASE, runId: 123, ...context }, core, (id: string) => {
+    expect(id).toBe("node:crypto")
+    return { createHash }
+  })
   return { outputs, calls }
 }
 
@@ -141,6 +157,59 @@ const CORPUS = [
   "/vector fix the flaky test",
   "no command here",
 ]
+
+// What the route job does for each kind the parser reads. A refused mention, like a dismissal, costs no API call.
+const NONE = { kind: "none", pr: "", ref: "" }
+const ROUTED: Record<ReviewCommandKind, { outputs: Record<string, string>; methods: string[] }> = {
+  review: { outputs: { kind: "review", pr: "7", ref: HEAD }, methods: ["permission", "pulls.get"] },
+  "review-full": { outputs: { kind: "review-full", pr: "7", ref: HEAD }, methods: ["permission", "pulls.get"] },
+  task: { outputs: { kind: "task", pr: "7", ref: "" }, methods: ["permission"] },
+  pause: { outputs: NONE, methods: ["permission", "labels.add", "react.issue"] },
+  resume: { outputs: NONE, methods: ["permission", "labels.remove", "react.issue"] },
+  dismiss: { outputs: NONE, methods: [] },
+  none: { outputs: NONE, methods: [] },
+}
+
+// The workflow built for a table row: the default mentions, or GithubAgents.mentions(slug) baked in.
+function mentionsFor(slug: string | undefined) {
+  return slug === undefined ? undefined : GithubAgents.mentions(slug)
+}
+
+describe("the shared mention table", () => {
+  test("the generated route script reads every body as core's parser does", async () => {
+    for (const [body, kind, slug] of MENTION_CASES) {
+      expect({ body, slug, kind: parseReviewCommand(body, GithubAgents.mentions(slug)).kind }).toEqual({
+        body,
+        slug,
+        kind,
+      })
+      const { outputs, calls } = await route(issueComment(body), { mentions: mentionsFor(slug) })
+      expect({ body, slug, outputs, methods: calls.map((call) => call.method) }).toEqual({
+        body,
+        slug,
+        ...ROUTED[kind],
+      })
+    }
+  })
+
+  // Actions starts the route job only when the comment contains one of the mentions, ignoring case, so the filter
+  // must never drop a comment the script would act on.
+  test("the route job's contains() filter lets through every body the script reads a mention in", () => {
+    const filtered = (slug: string | undefined) =>
+      Array.from(
+        routeJob(false, mentionsFor(slug)).if.matchAll(/contains\(github\.event\.comment\.body, '([^']*)'\)/g),
+        (match) => match[1]!.toLowerCase(),
+      )
+    expect(filtered(undefined)).toEqual(GithubAgents.mentions())
+    expect(filtered("vector-fixture")).toEqual(GithubAgents.mentions("vector-fixture"))
+    for (const [body, , slug] of MENTION_CASES.filter((row) => row[1] !== "none"))
+      expect({ body, slug, passes: filtered(slug).some((mention) => body.toLowerCase().includes(mention)) }).toEqual({
+        body,
+        slug,
+        passes: true,
+      })
+  })
+})
 
 describe("the route script", () => {
   test("its outputs agree with core's parseReviewCommand for every command in the corpus", async () => {
@@ -245,4 +314,181 @@ test("App opt-in rejects fork tasks before an OIDC-enabled job and routes fork r
   expect(own.outputs).toMatchObject({ kind: "review", app: "true", ref: HEAD })
   const unsupported = await route(reviewComment("/vector review"), { app: true })
   expect(unsupported.outputs).toMatchObject({ kind: "review", app: "false" })
+})
+
+function agentsRouteJob(ownKey = false) {
+  return (
+    Bun.YAML.parse(
+      buildAgentsWorkflow({
+        mode: ownKey ? "own-key" : "codium",
+        provider: "vector",
+        model: "vector-plan",
+        keys: [],
+        autoReview: false,
+        version: GithubAgents.MIN_AGENTS_CLI,
+        handle: "vector-dev",
+        schedules: [{ id: "daily", cron: "17 9 * * 1-5", prompt: "fix bugs" }],
+      }),
+    ) as {
+      jobs: {
+        route: {
+          if: string
+          concurrency: { group: string; "cancel-in-progress": boolean }
+          steps: { with: { script: string } }[]
+        }
+      }
+    }
+  ).jobs.route
+}
+function openedIssue(
+  options: { author?: number; sender?: number; association?: string; title?: string; body?: string } = {},
+) {
+  return {
+    eventName: "issues",
+    payload: {
+      sender: { id: options.sender ?? 4, login: "alice", type: "User" },
+      issue: {
+        number: 17,
+        title: options.title ?? "bug",
+        body: options.body ?? "@vector-dev fix this",
+        user: { id: options.author ?? 4, login: "alice", type: "User" },
+        author_association: options.association ?? "NONE",
+      },
+    },
+  }
+}
+function dispatch(mode: string, input: Record<string, string> = {}, user = { id: 4, login: "alice", type: "User" }) {
+  return { eventName: "workflow_dispatch", payload: { inputs: { mode, ...input }, sender: user } }
+}
+
+describe("v3 route", () => {
+  test("issues bind the author to the sender and require fresh writer access", async () => {
+    const accepted = await route(openedIssue(), { v3: true })
+    expect(accepted.outputs).toEqual({ kind: "task", pr: "17", ref: BASE, thread: "17", app: "true" })
+    expect(accepted.calls.map((call) => call.method)).toEqual(["permission", "react.issue-body"])
+    expect(accepted.calls.at(-1)!.args.content).toBe("eyes")
+    for (const context of [openedIssue({ sender: 5 }), openedIssue({ author: 5 })]) {
+      const result = await route(context, { v3: true })
+      expect(result.outputs.kind).toBe("none")
+      expect(result.calls).toEqual([])
+    }
+    for (const permission of ["read", "triage", "none"]) {
+      const result = await route(openedIssue(), { v3: true, permission })
+      expect(result.outputs.kind).toBe("none")
+      expect(result.calls.map((call) => call.method)).toEqual(["permission"])
+    }
+    expect((await route(openedIssue(), { v3: true, permissionStatus: 403 })).outputs.kind).toBe("none")
+    expect((await route(openedIssue({ author: 0, sender: 0 }), { v3: true })).outputs.kind).toBe("none")
+    expect(
+      (await route(openedIssue({ title: "@vector-dev fix bug", body: "details" }), { v3: true })).outputs.kind,
+    ).toBe("task")
+    expect(agentsRouteJob().if).toContain("github.event.issue.title")
+    expect((await route(openedIssue({ body: "@vector-dev review" }), { v3: true })).outputs.kind).toBe("none")
+  })
+
+  test("refusals react only to associated authors without granting them authority", async () => {
+    for (const association of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "NONE"]) {
+      const result = await route(openedIssue({ association }), { v3: true, permission: "read" })
+      expect(result.outputs.kind).toBe("none")
+      const reaction = result.calls.find((call) => call.method === "react.issue-body")
+      expect(reaction?.args.content).toBe(
+        ["OWNER", "MEMBER", "COLLABORATOR"].includes(association) ? "confused" : undefined,
+      )
+    }
+    expect(agentsRouteJob().concurrency["cancel-in-progress"]).toBe(false)
+    expect(agentsRouteJob().concurrency.group).toContain(
+      "github.event.comment.author_association || github.event.issue.author_association",
+    )
+    expect(agentsRouteJob().concurrency.group).toContain(
+      "github.event.comment.user.id || github.event.issue.user.id || github.run_id",
+    )
+  })
+
+  test("comment PR tasks pin the current head and refuse forks", async () => {
+    for (const context of [issueComment("@vector-dev fix tests"), reviewComment("@vector-dev fix tests")]) {
+      const result = await route(context, { v3: true })
+      expect(result.outputs.kind).toBe("task")
+      expect(result.outputs.ref).toBe(HEAD)
+      expect(result.outputs.thread).toBe(context.eventName === "issue_comment" ? "7" : "8")
+      expect(result.calls.map((call) => call.method)).toEqual([
+        "permission",
+        "pulls.get",
+        context.eventName === "issue_comment" ? "react.issue" : "react.review",
+      ])
+      expect(result.calls.at(-1)!.args.content).toBe("eyes")
+      expect((await route(context, { v3: true, fork: true })).outputs.kind).toBe("none")
+      expect((await route(context, { v3: true, permission: "triage" })).outputs.kind).toBe("none")
+    }
+    expect((await route(issueComment("/vs fix issue", { pr: false }), { v3: true })).outputs.ref).toBe(BASE)
+    expect((await route(issueComment("/vs review"), { v3: true, fork: true })).outputs.ref).toBe(MERGE_BASE)
+  })
+
+  test("manual dispatches route task/review/bind and require a current human writer", async () => {
+    const task = await route(dispatch("task", { prompt: "$(touch bad)\n${{ secrets.X }}" }), { v3: true })
+    expect(task.outputs).toEqual({ kind: "task", pr: "", ref: BASE, thread: "dispatch-123", app: "false" })
+    expect((await route(dispatch("bind", { code: "private" }), { v3: true })).outputs.kind).toBe("bind")
+    expect((await route(dispatch("review", { pr: "9" }), { v3: true })).outputs).toEqual({
+      kind: "review",
+      pr: "9",
+      ref: HEAD,
+      thread: "9",
+      app: "true",
+    })
+    for (const pr of ["", "0", "-1", "1e2", "1;bad"])
+      expect((await route(dispatch("review", { pr }), { v3: true })).outputs.kind).toBe("none")
+    expect((await route(dispatch("task"), { v3: true, permission: "read" })).outputs.kind).toBe("none")
+    expect((await route(dispatch("unknown"), { v3: true })).outputs.kind).toBe("none")
+  })
+
+  test("only the configured dispatch bot with a nonempty ticket reaches admission", async () => {
+    for (const login of ["vector-dev[bot]", "github-actions[bot]", "vector-dev-other[bot]", "Copilot"]) {
+      const user = { id: 600, login, type: "Bot" }
+      for (const ticket of ["", " ", "vtk_fixture"]) {
+        const result = await route(dispatch("task", { ticket }, user), { v3: true, permission: "read" })
+        expect(result.outputs.kind).toBe(login === "vector-dev[bot]" && ticket === "vtk_fixture" ? "task" : "none")
+        expect(result.calls).toEqual([])
+      }
+    }
+    expect(
+      (
+        await route(dispatch("bind", { ticket: "vtk_fixture" }, { id: 600, login: "vector-dev[bot]", type: "Bot" }), {
+          v3: true,
+        })
+      ).outputs.kind,
+    ).toBe("none")
+    expect((await route(issueComment("@vector-dev fix it", { type: "Bot" }), { v3: true })).outputs.kind).toBe("none")
+    expect(
+      (
+        await route(dispatch("task", { ticket: "vtk_fixture" }, { id: 600, login: "vector-dev[bot]", type: "Bot" }), {
+          v3: true,
+          ownKey: true,
+        })
+      ).outputs.kind,
+    ).toBe("none")
+  })
+
+  test("schedules use the configured cron's stable hashed thread, never prompt data", async () => {
+    const result = await route({ eventName: "schedule", payload: { schedule: "17 9 * * 1-5" } }, { v3: true })
+    expect(result.outputs.kind).toBe("task")
+    expect(result.outputs.thread).toBe(
+      "schedule-" + createHash("sha256").update("17 9 * * 1-5").digest("hex").slice(0, 8),
+    )
+    expect(GithubAgents.THREAD_PATTERN.test(result.outputs.thread!)).toBe(true)
+    expect(result.outputs.ref).toBe(BASE)
+    expect(result.calls).toEqual([])
+    expect((await route({ eventName: "schedule", payload: { schedule: "unknown" } }, { v3: true })).outputs.kind).toBe(
+      "none",
+    )
+  })
+
+  test("control commands remain writer-only and queued jobs receive no executable input", async () => {
+    for (const verb of ["pause", "resume"]) {
+      const result = await route(issueComment(`@vector-dev ${verb}`), { v3: true })
+      expect(result.outputs.kind).toBe("control")
+      expect(result.calls.at(-1)!.args.content).toBe("+1")
+    }
+    expect((await route(issueComment("/vector dismiss ignore"), { v3: true })).calls).toEqual([])
+    expect(agentsRouteJob().steps[0]!.with.script).not.toContain("${{")
+    expect((await route({ ...dispatch("task"), runId: "123\nref=evil" }, { v3: true })).outputs.kind).toBe("none")
+  })
 })

@@ -3,6 +3,7 @@ import { isPoolPurpose, validRunId, type PoolPurpose } from "./codium-pool.js"
 import { modelPlanRequireMarkedTokens, modelPlansMinClient } from "./model-plan-config.js"
 import { ApiError, type ApiRequest } from "./http.js"
 import { requireUnrevokedAccount, requireUnrevokedCliToken } from "./revocation.js"
+import { cloudAgentsRunVerifier } from "./cloud-agents-run-token.js"
 
 export type ModelPlanCaller = {
   account: { id: string }
@@ -74,6 +75,8 @@ const runVerifiers = createRunVerifierRegistry()
 export function registerRunVerifier(prefix: RunPrefix, verify: RunVerifier) {
   runVerifiers.register(prefix, verify)
 }
+
+registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)
 
 /** Client hints only choose protocol compatibility. They never establish identity, tier or spending authority. */
 export function requireModelPlanClient(request: Pick<ApiRequest, "headers">) {

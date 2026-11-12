@@ -1,4 +1,5 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
@@ -7,6 +8,7 @@ import { WorkflowTool } from "./workflow"
 import { WorkflowRuns } from "@/orchestration/runs"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
+import { McpCatalog } from "@/mcp/catalog"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
 import { TerminalTool } from "./terminal"
@@ -113,6 +115,48 @@ export function isBuiltinTask(tool: Tool.Def) {
 
 export function isBuiltinPatch(tool: Tool.Def) {
   return builtinPatches.has(tool)
+}
+
+/**
+ * On GitHub Actions no tool that drives the user's browser, the Vector Cloud bridge or a computer is offered, whatever
+ * bridge variables are set (INV-S13). Read on every call, so a registry built before the variable was set is filtered
+ * too. MCP tools never pass through the registry: SessionTools.resolve asks `actionsWithheldMcpTool` of each one.
+ */
+export function actionsWithheld(id: string) {
+  return GithubAgents.onActionsRunner(process.env) && GithubAgents.withheldOnActions(id)
+}
+
+/**
+ * Of the connected MCP `servers`, those a run on GitHub Actions withholds whole, with their tools, resources and
+ * instructions (INV-S13): each whose own name, or the name of a tool it lists, is computer use. Such a server's
+ * resources (a screenshot, say) and instructions reach the model too, and its other tools act on the same computer. A
+ * server that only shares a bridged tool's name (a `browser` server) is not computer use, so its tools, resources and
+ * instructions stay together. `keys` are tool keys (`McpCatalog.toolName`) of any of the servers. Read on every call, as
+ * `actionsWithheld` is. SessionTools.resolve leaves these servers' tools out and keeps them from the resource tools, and
+ * SystemPrompt.mcp leaves out their instructions.
+ */
+export function actionsWithheldServers(servers: readonly string[], keys: readonly string[]) {
+  if (!GithubAgents.onActionsRunner(process.env)) return []
+  return servers.filter((name) => {
+    const server = McpCatalog.sanitize(name)
+    // A key does not say where the server's name ends, so a server `a` beside an `a_computer` that lists a tool is
+    // withheld too.
+    return (
+      GithubAgents.computerUse(server) ||
+      keys.some((key) => key.startsWith(`${server}_`) && GithubAgents.computerUse(key.slice(server.length + 1)))
+    )
+  })
+}
+
+/**
+ * Whether a run on GitHub Actions withholds the MCP tool `key`: an id `actionsWithheld` withholds, or a tool of one of
+ * the `withheld` servers (`actionsWithheldServers`), found by its prefix.
+ */
+export function actionsWithheldMcpTool(key: string, withheld: readonly string[]) {
+  return (
+    GithubAgents.onActionsRunner(process.env) &&
+    (GithubAgents.withheldOnActions(key) || withheld.some((name) => key.startsWith(`${McpCatalog.sanitize(name)}_`)))
+  )
 }
 
 type State = {
@@ -368,7 +412,7 @@ const layer = Layer.effect(
 
     const all: Interface["all"] = Effect.fn("ToolRegistry.all")(function* () {
       const s = yield* InstanceState.get(state)
-      return [...s.builtin, ...s.custom] as Tool.Def[]
+      return [...s.builtin, ...s.custom].filter((tool) => !actionsWithheld(tool.id)) as Tool.Def[]
     })
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {

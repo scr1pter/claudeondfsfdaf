@@ -4,16 +4,84 @@ import { effectCmd } from "../effect-cmd"
 import { githubShareConsent, prepareGithubEnvironment } from "./github.environment"
 import type { PublicSession } from "@vectordevai/schema/public-session"
 import { TASK_MENTIONS, mentionsFrom, routeGithubEvent } from "./github.route"
+import { GithubSecrets } from "./github.secrets"
 
 export { extractResponseText, formatPromptTooLargeError, parseGitHubRemote } from "./github.shared"
 
 export const GithubInstallCommand = effectCmd({
   command: "install",
   describe: "install the GitHub agent",
-  handler: () =>
+  builder: (yargs) =>
+    yargs
+      .option("own-key", { type: "boolean", describe: "Use your own model key" })
+      .option("codium", { type: "boolean", hidden: true })
+      .conflicts("own-key", "codium")
+      .option("schedule", {
+        type: "array",
+        string: true,
+        describe: 'Repeat with a JSON schedule: {"id":"daily","cron":"17 9 * * *","prompt":"Maintain this repository"}',
+      }),
+  handler: (args) =>
     Effect.gen(function* () {
       const { githubInstall } = yield* Effect.promise(() => import("./github.handler"))
-      return yield* githubInstall()
+      return yield* githubInstall({
+        ownKey: args["own-key"],
+        codium: args.codium,
+        schedule: args.schedule?.map(String),
+      })
+    }),
+})
+
+export const GithubMintCommand = effectCmd({
+  command: "mint",
+  describe: "authorize a Codium GitHub Actions run",
+  builder: (yargs) => yargs.option("purpose", { choices: ["task", "review"] as const, demandOption: true }),
+  instance: false,
+  handler: (args) =>
+    Effect.gen(function* () {
+      const { mintRunToken } = yield* Effect.promise(() => import("./github.cloud"))
+      return yield* Effect.promise(() => mintRunToken({ purpose: args.purpose }))
+    }),
+})
+
+export const GithubBindCommand = effectCmd({
+  command: "bind",
+  describe: "bind this GitHub Actions repository to Vector",
+  instance: false,
+  handler: () =>
+    Effect.gen(function* () {
+      const { bindRepository } = yield* Effect.promise(() => import("./github.cloud"))
+      process.exitCode = yield* Effect.promise(() => bindRepository())
+    }),
+})
+
+export const GithubPublishCommand = effectCmd({
+  command: "publish",
+  describe: "publish a validated GitHub agent result",
+  instance: false,
+  handler: () =>
+    Effect.gen(function* () {
+      const { githubPublish } = yield* Effect.promise(() => import("./github.publish"))
+      return yield* githubPublish()
+    }),
+})
+
+export const GithubSandboxCommand = effectCmd({
+  command: "sandbox <action>",
+  describe: "isolate a GitHub Actions agent and collect its bundle",
+  builder: (yargs) =>
+    yargs
+      .positional("action", { choices: ["prepare", "run", "finish"] as const, demandOption: true })
+      .parserConfiguration({ "populate--": true }),
+  instance: false,
+  handler: (args) =>
+    Effect.gen(function* () {
+      const sandbox = yield* Effect.promise(() => import("./github.sandbox"))
+      if (args.action === "run") {
+        process.exitCode = yield* Effect.promise(() => sandbox.run(args["--"] ?? []))
+        return
+      }
+      return yield* Effect.promise(() => (args.action === "prepare" ? sandbox.prepare() : sandbox.finish()))
     }),
 })
 
@@ -32,8 +100,33 @@ export const GithubRunCommand = effectCmd({
       .option("token", {
         type: "string",
         describe: "GitHub personal access token (github_pat_********)",
-      }),
+      })
+      .option("phase", {
+        choices: ["agent"] as const,
+        describe: "run the v3 agent job's phase, inside `vector github sandbox run`",
+      })
+      // A mock event or token never reaches the agent phase: it reads only the Actions event and the secret channel.
+      .conflicts("phase", ["event", "token"]),
   instance: (args) => {
+    // The agent phase loads no project, configuration or plugin unless the channel's credentials are in memory. A Codium
+    // run's engine starts only with the run token the account gate authorized, and index.ts has already set VECTOR_PURE
+    // and VECTOR_DISABLE_PROJECT_CONFIG for it, so no repository plugin or configuration loads; Codium never shares
+    // (2.13). Own-key consent is read from the holder: the loader has already taken VECTOR_CLI_TOKEN out of the
+    // environment.
+    if (args.phase === "agent") {
+      if (!GithubSecrets.credentials.loaded()) return false
+      if (process.env.VECTOR_MODE === "codium") return GithubSecrets.credentials.runToken() !== undefined
+      if (process.env.VECTOR_MODE !== "own-key") return false
+      sharing.set(
+        args,
+        githubShareConsent({
+          SHARE: process.env.SHARE,
+          VECTOR_SHARE_CONSENT: process.env.VECTOR_SHARE_CONSENT,
+          VECTOR_CLI_TOKEN: GithubSecrets.credentials.cliToken(),
+        }),
+      )
+      return true
+    }
     sharing.set(args, githubShareConsent(process.env))
     const warning = prepareGithubEnvironment(process.env, false)
     if (warning) console.warn(warning)
@@ -41,6 +134,29 @@ export const GithubRunCommand = effectCmd({
   },
   handler: (args) =>
     Effect.gen(function* () {
+      if (args.phase === "agent") {
+        const { AGENT_NEEDS_CHANNEL, UNKNOWN_MODE, githubAgentPhase } = yield* Effect.promise(
+          () => import("./github.agent"),
+        )
+        // The same checks as the instance rule, which started no instance for these.
+        const mode = process.env.VECTOR_MODE
+        const refused = !GithubSecrets.credentials.loaded()
+          ? AGENT_NEEDS_CHANNEL
+          : mode === "codium" && GithubSecrets.credentials.runToken() === undefined
+            ? GithubSecrets.CODIUM_UNAUTHORIZED
+            : mode !== "codium" && mode !== "own-key"
+              ? UNKNOWN_MODE
+              : undefined
+        if (refused) {
+          console.error(refused)
+          process.exitCode = 1
+          return
+        }
+        const result = yield* githubAgentPhase({ share: mode === "own-key" ? sharing.get(args) : undefined })
+        // Nothing comes back when SIGINT or SIGTERM ended the phase, which then set 130 or 143.
+        if (result) process.exitCode = result.exitCode
+        return
+      }
       const { githubRun, githubEventContext } = yield* Effect.promise(() => import("./github.handler"))
       // Reviews have their own job, so the event is routed before any task work starts.
       const context = githubEventContext(args)
@@ -84,6 +200,14 @@ export const GithubCommand = cmd({
   command: "github",
   describe: "manage GitHub agent",
   builder: (yargs) =>
-    yargs.command(GithubInstallCommand).command(GithubRunCommand).command(GithubReviewCommand).demandCommand(),
+    yargs
+      .command(GithubInstallCommand)
+      .command(GithubRunCommand)
+      .command(GithubReviewCommand)
+      .command(GithubMintCommand)
+      .command(GithubBindCommand)
+      .command(GithubPublishCommand)
+      .command(GithubSandboxCommand)
+      .demandCommand(),
   async handler() {},
 })
