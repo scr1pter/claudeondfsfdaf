@@ -35,6 +35,40 @@ export const DISMISSAL_BY = ["w", "a"] as const
 export type DismissalBy = (typeof DISMISSAL_BY)[number]
 export const DISMISSAL_WHY = ["fp", "wontfix", "thumbs", "resolved", "cmd"] as const
 export type DismissalWhy = (typeof DISMISSAL_WHY)[number]
+// Exact reply phrases only. Quoted examples, negation and marker-shaped text are not evidence of a writer's intent.
+// No caller uses this classifier until the owner-repository precision check qualifies it (VS-35b).
+export const DISMISSAL_PHRASES = [
+  { why: "fp", phrases: ["false positive", "not a bug", "incorrect"] },
+  { why: "wontfix", phrases: ["won't fix", "wontfix", "will not fix"] },
+] as const
+
+export function dismissalWhy(reply: string, by?: DismissalBy): DismissalWhy | undefined {
+  if (by !== "w") return undefined
+  const phrase = reply.trim().toLowerCase().replace(/[.!]$/, "").trim().replace(/\s+/g, " ")
+  return DISMISSAL_PHRASES.find((entry) => entry.phrases.some((value) => value === phrase))?.why
+}
+
+// Conservative demotion only: fewer than 20% of at least five observed findings were fixed. This is a candidate
+// health signal, not approval, suppression authority or a reason to promote any rule. Source is retained for audit.
+export const RULE_HEALTH_MIN_OUTCOMES = 5
+export const RULE_HEALTH_MIN_FIXED_RATE = 0.2
+
+export function ruleHealth(
+  rule: { id: string; source?: string },
+  outcomes: readonly { ruleId: string; fixed: boolean }[],
+) {
+  const observed = outcomes.filter(
+    (outcome) => outcome.ruleId === rule.id && (outcome.fixed === true || outcome.fixed === false),
+  )
+  const fixed = observed.filter((outcome) => outcome.fixed).length
+  const demoted = observed.length >= RULE_HEALTH_MIN_OUTCOMES && fixed / observed.length < RULE_HEALTH_MIN_FIXED_RATE
+  return {
+    ...rule,
+    action: demoted ? ("demote" as const) : ("none" as const),
+    outcomes: observed.length,
+    fixed,
+  }
+}
 // A salted hash of the dismissing login: lowercase hex, at least 12 characters (48 bits) so writers do not collide.
 const DISMISSAL_HASH = /^[0-9a-f]{12,64}$/
 
@@ -55,6 +89,7 @@ export const TEAM_EXCLUSIONS = [
   "bot-push",
   "bulk-resolve",
   "security", // a security pattern never becomes team memory
+  "wontfix", // only when the caller opts into excluding accepted defects from suppression
 ] as const
 export type TeamExclusion = (typeof TEAM_EXCLUSIONS)[number]
 
@@ -80,6 +115,7 @@ export interface GuardedTeamInput {
   botPushes?: readonly { pr: number; at: number }[] // pushes by a bot login, at the push's own time
   own?: readonly string[] // the dismissal-marker hashes of Vector's own logins
   max?: number // at most this many patterns, 30 when absent
+  excludeWontfix?: boolean // VS-35b, unset preserves the exact guarded-memory result
 }
 
 // Only guardedMemory makes one: the key is not exported, so a legacy TeamPattern[] (teamPatterns' unfiltered,
@@ -250,6 +286,7 @@ function exclusion(dismissal: TeamDismissal, bulk: boolean, input: GuardedTeamIn
   if (pushes.some((push) => push.pr === dismissal.pr && !(Math.abs(push.at - at) > BOT_PUSH_MS))) return "bot-push"
   if (bulk) return "bulk-resolve"
   if (dismissal.pattern.category === "security") return "security"
+  if (input.excludeWontfix === true && marker.why === "wontfix") return "wontfix"
   return undefined
 }
 

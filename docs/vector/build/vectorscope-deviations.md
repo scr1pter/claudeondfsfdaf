@@ -15887,3 +15887,44 @@ did not exist yet: VS-24c landed the constant `CALIBRATED_OUTPUT_PER_STEP`
     engine `processor.ts:377`) and as Anthropic does (addendum B §1.3).
   - Windows CI, until it is dispatched.
   - No paid run, no model request and no workflow dispatch.
+
+## 2026-11-12 · VS-35b independent source package
+
+The current owner instruction authorizes finishing unfinished VectorScope
+software, beyond the VS-10 adapter. `vectorscope-remaining.md` inventories every
+VS-01–49 package and separates deterministic software from paid/quality,
+resource, merge and rollout gates. The native supervisor owns the private Git
+read repair, and another agent owns the App adapter. This pure package proceeds
+independently of those changes and the still-unbuilt VS-22d/37c/38a measurements;
+no runner starts consuming it out of the addendum's intended integration order.
+
+Scope is Core `review/team.ts` and its focused test. `dismissalWhy` uses a fixed
+table of six exact phrases, normalizes case/space and one final period or
+exclamation mark, and accepts only an externally established `by=w` role.
+Negations, questions, quoted/example text, forged markers and mixed intent are
+unrecognized rather than inferred. Only existing `fp`/`wontfix` tokens can be
+returned. This narrower full-reply match is intentional: the package has no
+owner-repository precision sample and must not infer a suppressive instruction
+from incidental wording. It remains uncalled and unqualified for activation
+until the sample's 0.9 precision gate is met.
+
+`guardedMemory` adds optional `excludeWontfix`, unset at every existing callsite.
+When enabled, `wontfix` is excluded last, so old reason precedence is unchanged.
+The exclusion vocabulary gains `wontfix`; zero-count reasons are omitted as
+before. An accepted defect therefore cannot provide the second eligible writer
+for an `fp` pattern under this option. No `ReviewConfig` parsing, marker write,
+Brain proposal, prompt or selection behavior is activated.
+
+`ruleHealth` is an audit signal, with only `demote` and `none` actions. At least
+five matching outcomes are necessary; "rarely fixed" is defined conservatively
+as fewer than twenty percent fixed. This numeric threshold fills the spec's
+unspecified rate and is not a measured quality claim. A no-action result never
+restores an existing demotion, and no action changes the finding never-suppress
+gate. The rule ID, optional source and counts survive without mutating input.
+
+The default/desktop/replay behavior is unchanged because no runtime caller uses
+either new helper and the new option is unset. No new replay variant is needed;
+`engine:team-guarded` remains pending the original VS-35 wiring and its distinct
+desktop difference. Source pin moves; revision remains 1 because no default
+changes. Tests/types/pin validation are pending root at this source checkpoint.
+No paid evaluation, publishing, live provider or production readiness is claimed.

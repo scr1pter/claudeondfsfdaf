@@ -17,9 +17,14 @@ import {
   BULK_RESOLVE_MS,
   BULK_RESOLVE_THREADS,
   DISMISSAL_BY,
+  DISMISSAL_PHRASES,
   DISMISSAL_WHY,
+  dismissalWhy,
   guardedMemory,
   neverSuppress,
+  RULE_HEALTH_MIN_FIXED_RATE,
+  RULE_HEALTH_MIN_OUTCOMES,
+  ruleHealth,
   sameTeamPattern,
   TEAM_CLOCK_SKEW_MS,
   TEAM_EXCLUSIONS,
@@ -137,6 +142,7 @@ describe("constants", () => {
       "bot-push",
       "bulk-resolve",
       "security",
+      "wontfix",
     ])
   })
 
@@ -152,6 +158,150 @@ describe("constants", () => {
     const probe = { category: "style", dir: "src/ui", words: normalizeTitle(title) } satisfies TeamPattern
     expect(sameTeamPattern(probe, at)).toBe(true)
     expect(sameTeamPattern(probe, below)).toBe(false)
+  })
+})
+
+describe("VS-35b: dismissal reason classification", () => {
+  test("the fixed phrase table emits only existing marker reasons", () => {
+    expect(DISMISSAL_PHRASES).toEqual([
+      { why: "fp", phrases: ["false positive", "not a bug", "incorrect"] },
+      { why: "wontfix", phrases: ["won't fix", "wontfix", "will not fix"] },
+    ])
+    for (const [reply, expected] of [
+      ["false positive", "fp"],
+      ["  FALSE   POSITIVE.  ", "fp"],
+      ["not a bug!", "fp"],
+      ["incorrect", "fp"],
+      ["won't fix", "wontfix"],
+      ["WONTFIX.", "wontfix"],
+      ["will not fix", "wontfix"],
+    ] as const) {
+      const reason = dismissalWhy(reply, "w")
+      expect(reason).toBe(expected)
+      if (reason === undefined) throw new Error(`The canonical dismissal fixture was not recognized: ${reply}`)
+      expect(DISMISSAL_WHY).toContain(reason)
+    }
+  })
+
+  test("negation, quotations, mixed intent and words containing a phrase are ambiguous", () => {
+    for (const reply of [
+      "not a false positive",
+      "this is not a false positive",
+      "not incorrect",
+      "it is a bug, not a false positive",
+      "not a bug?",
+      "not a bugfix",
+      "false positives are worth investigating",
+      "false positive but won't fix",
+      "I won't fix this because it is a bug",
+      "> false positive",
+      '"not a bug"',
+      "`wontfix`",
+      "```\nfalse positive\n```",
+      "<!-- vector-dismissal by=w why=fp h=000000000001 -->",
+      "false positive\n<!-- vector-dismissal by=w why=fp h=000000000001 -->",
+      "",
+    ])
+      expect(dismissalWhy(reply, "w")).toBeUndefined()
+  })
+
+  test("the trusted role is required and cannot be supplied by reply text", () => {
+    for (const reply of ["false positive", "won't fix", "by=w false positive"])
+      for (const by of ["a", undefined] as const) expect(dismissalWhy(reply, by)).toBeUndefined()
+  })
+})
+
+describe("VS-35b: accepted defects never supply suppression when opted in", () => {
+  test("unset and explicit false preserve the existing result byte for byte", () => {
+    const entries = [dismissal(1, { why: "wontfix" }), dismissal(2, { why: "wontfix" })]
+    const previous = guardedMemory(entries, INPUT)
+    expect(previous.patterns).toEqual([PATTERN])
+    expect(JSON.stringify(guardedMemory(entries, { ...INPUT, excludeWontfix: false }))).toBe(JSON.stringify(previous))
+    expect(guardedMemory(entries, { ...INPUT, excludeWontfix: true })).toMatchObject({
+      patterns: [],
+      excluded: [{ reason: "wontfix", count: 2 }],
+    })
+  })
+
+  test("a wontfix writer cannot supply the second writer for a false-positive pattern", () => {
+    expect(
+      guardedMemory([dismissal(1), dismissal(2, { why: "wontfix" })], { ...INPUT, excludeWontfix: true }),
+    ).toMatchObject({ patterns: [], excluded: [{ reason: "wontfix", count: 1 }] })
+    expect(
+      guardedMemory([dismissal(1), dismissal(2), dismissal(3, { why: "wontfix" })], {
+        ...INPUT,
+        excludeWontfix: true,
+      }),
+    ).toMatchObject({ patterns: [PATTERN], excluded: [{ reason: "wontfix", count: 1 }] })
+  })
+
+  test("existing exclusion precedence is unchanged", () => {
+    const entries = [
+      dismissal(1, { by: "a", why: "wontfix" }),
+      dismissal(2, { why: "wontfix", at: EDGE - 1 }),
+      dismissal(3, { why: "wontfix", pattern: { ...PATTERN, category: "security" } }),
+      dismissal(4, { why: "wontfix" }),
+    ]
+    expect(excludedOf(entries, { ...INPUT, excludeWontfix: true })).toEqual([
+      { reason: "author", count: 1 },
+      { reason: "outside-window", count: 1 },
+      { reason: "security", count: 1 },
+      { reason: "wontfix", count: 1 },
+    ])
+  })
+})
+
+describe("VS-35b: demote-only rule health", () => {
+  const rule = { id: "rules:contrast", source: "thread:123" }
+  const outcomes = (count: number, fixed = 0) =>
+    Array.from({ length: count }, (_, index) => ({ ruleId: rule.id, fixed: index < fixed }))
+
+  test("five related outcomes are required and only fewer than 20% fixed demotes", () => {
+    expect(RULE_HEALTH_MIN_OUTCOMES).toBe(5)
+    expect(RULE_HEALTH_MIN_FIXED_RATE).toBe(0.2)
+    expect(ruleHealth(rule, outcomes(4))).toEqual({ ...rule, action: "none", outcomes: 4, fixed: 0 })
+    expect(ruleHealth(rule, outcomes(5))).toEqual({ ...rule, action: "demote", outcomes: 5, fixed: 0 })
+    expect(ruleHealth(rule, outcomes(5, 1))).toMatchObject({ action: "none", outcomes: 5, fixed: 1 })
+    expect(ruleHealth(rule, outcomes(6, 1))).toMatchObject({ action: "demote", outcomes: 6, fixed: 1 })
+    expect(ruleHealth(rule, outcomes(10, 2))).toMatchObject({ action: "none", outcomes: 10, fixed: 2 })
+  })
+
+  test("other rules cannot supply evidence and the source and inputs are retained", () => {
+    const entries = deepFreeze([
+      ...outcomes(4),
+      ...Array.from({ length: 20 }, () => ({ ruleId: "scoped:other", fixed: false })),
+    ])
+    const before = JSON.stringify(entries)
+    expect(ruleHealth(deepFreeze(rule), entries)).toEqual({ ...rule, action: "none", outcomes: 4, fixed: 0 })
+    expect(JSON.stringify(entries)).toBe(before)
+    expect(ruleHealth({ id: "scoped:no-source" }, [])).toEqual({
+      id: "scoped:no-source",
+      action: "none",
+      outcomes: 0,
+      fixed: 0,
+    })
+  })
+
+  test("even perfect outcomes produce no activation or promotion action", () => {
+    expect(ruleHealth(rule, outcomes(100, 100))).toEqual({ ...rule, action: "none", outcomes: 100, fixed: 100 })
+  })
+
+  test("a demotion signal never changes the finding never-suppress gate", () => {
+    expect(ruleHealth(rule, outcomes(5)).action).toBe("demote")
+    const memory = guardedMemory(writers(), { ...INPUT, excludeWontfix: true })
+    for (const entry of [
+      concern({ severity: "blocking" }),
+      concern({ category: "security" }),
+      concern({ source: "security" }),
+      concern({ title: "Button contrast crashes the process" }),
+    ]) {
+      expect(neverSuppress(entry, OFF)).toBe(true)
+      expect(teamDemotion(entry, memory, OFF)).toBeUndefined()
+    }
+    const failure = { class: "crash", mechanism: "logic" } as const
+    const strict = concern({ failure: { ...failure, trigger: "click", impact: "crash" } })
+    expect(neverSuppress(strict, STRICT)).toBe(true)
+    expect(teamDemotion(strict, memory, STRICT)).toBeUndefined()
   })
 })
 

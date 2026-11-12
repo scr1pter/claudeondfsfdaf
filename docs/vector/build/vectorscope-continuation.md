@@ -485,3 +485,35 @@ the qualified private command-free Git read port before activation. That repair
 is owned by the native supervisor and has not been integrated or qualified here.
 Whole VS-10 acceptance, the picker browser fix, final App measurements, paid
 quality evaluation, public parity and release/default rollout remain open.
+
+## Remaining package inventory and VS-35b source checkpoint
+
+`vectorscope-remaining.md` maps every package VS-01 through VS-49 against the
+current source, separating built foundations from actual integration and
+acceptance. The current owner instruction authorizes unfinished software beyond
+VS-10. External paid quality, named resources, branch interfaces and release
+inputs remain gates on their own actions, not a reason to stop unrelated builds.
+
+The next independent source package is addendum B's VS-35b in Core `team.ts`.
+The uncalled classifier recognizes only six exact normalized reply phrases,
+requires the trusted non-author writer role, and refuses negated, quoted,
+marker-shaped and mixed replies. Its result never grants a role or writes a
+memory. The new guarded-memory `excludeWontfix` option is unset by all callers;
+when true it excludes accepted-but-unfixed defects after every previous
+exclusion, without changing the old output when unset.
+
+`ruleHealth` returns a demotion action only after at least five matching rule
+outcomes and fewer than twenty percent fixed. The spec leaves "rarely fixed"
+unnumbered; this conservative candidate threshold is explicit and tested. The
+other result is no action, so it cannot reactivate or promote a previously
+demoted rule. It preserves the source reference and counts, never changes the
+never-suppress finding gate, and is not connected to selection or Brain.
+
+Focused tests cover actual phrase classification, adversarial text/role refusal,
+old-output equality, two-writer eligibility, exclusion precedence, exact health
+thresholds, other-rule isolation, source retention, no promotion and the
+never-suppress finding rules. Runtime/types/pin checks are pending the
+coordinator; no pass is claimed yet. Classifier activation still requires the
+owner-repository precision sample (at least 0.9) and VS-35's guarded writer and
+pending-owner-approval path. No prompt, renderer, publisher or default changes
+are included.
