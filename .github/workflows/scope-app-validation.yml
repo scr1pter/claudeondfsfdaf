@@ -59,9 +59,9 @@ jobs:
       - name: Check the real Solid reactive controller in CI
         working-directory: packages/app
         run: bun test --isolate --conditions=browser --preload ./happydom.ts ./test-browser/vectorscope-local.test.ts --timeout 30000
-      - name: Run twenty local review UI regressions
+      - name: Run local review and memory UI regressions
         working-directory: packages/app
-        run: bunx playwright test e2e/regression/vectorscope-local.spec.ts e2e/regression/vectorscope-local-app.spec.ts --project chromium --workers 1 --retries 0
+        run: bunx playwright test e2e/regression/vectorscope-local.spec.ts e2e/regression/vectorscope-local-app.spec.ts e2e/regression/vectorscope-memory.spec.ts --project chromium --workers 1 --retries 0
         env:
           CI: true
           PLAYWRIGHT_WORKERS: "1"
