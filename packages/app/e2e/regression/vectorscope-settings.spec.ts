@@ -93,15 +93,16 @@ test("the owner saves a separate model, variant and disable setting only after c
   page,
 }, info) => {
   const app = await setup(page, engine({ status: { [rootID]: { type: "busy" } } }))
+  let phase = "before-app-open"
   let pageErrors = 0
   let consoleErrors = 0
-  const errors: { type: string; message: string; stack?: string }[] = []
+  const errors: { type: string; phase: string; message: string; stack?: string }[] = []
   const seenErrors = new Set<string>()
   const recordError = (type: string, message: string, stack?: string) => {
     const key = `${type}:${message}`
     if (seenErrors.has(key) || errors.filter((record) => record.type === type).length >= 4) return
     seenErrors.add(key)
-    const record = { type, message: message.slice(0, 1_000), ...(stack ? { stack: stack.slice(0, 3_500) } : {}) }
+    const record = { type, phase, message: message.slice(0, 1_000), ...(stack ? { stack: stack.slice(0, 3_500) } : {}) }
     errors.push(record)
     console.log("SCOPE_PICKER_BROWSER_ERROR", JSON.stringify(record))
   }
@@ -129,17 +130,31 @@ test("the owner saves a separate model, variant and disable setting only after c
       recordError("consoleerror", message.text())
     }
   })
+  const hostSnapshot = () =>
+    page.evaluate(() =>
+      (
+        globalThis as typeof globalThis & { scopeSettingsTrace?: { snapshot?: () => unknown } }
+      ).scopeSettingsTrace?.snapshot?.(),
+    )
   await catalog(page)
   await app.open()
+  phase = "app-open"
+  console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
+  phase = "opening-settings"
   await openSettings(page)
   const settings = card(page)
   await expect(settings).toBeVisible()
+  phase = "settings-mounted"
+  console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
   await expect(settings.getByRole("button", { name: "VectorScope model", exact: true })).toContainText(
     "Unavailable: missing/old",
   )
+  phase = "opening-popup"
   await settings.getByRole("button", { name: "VectorScope model", exact: true }).click()
   const picker = page.locator(".vector-model-popover")
   await expect(picker).toBeVisible()
+  phase = "popup-open"
+  console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
   const anthropic = picker.locator("button[data-model-section-toggle]").filter({ hasText: "Anthropic" })
   await expect(anthropic).toHaveAttribute("aria-expanded", "false")
   await anthropic.evaluate((header) => {
@@ -190,6 +205,7 @@ test("the owner saves a separate model, variant and disable setting only after c
       }
     }
   })
+  phase = "header-click"
   await anthropic.click()
   console.log(
     "SCOPE_PICKER_CLICK_DIAGNOSTIC",
@@ -211,6 +227,7 @@ test("the owner saves a separate model, variant and disable setting only after c
         requests: [...pendingRequests.values()].slice(0, 30),
       })
       console.log("SCOPE_PICKER_BROWSER_ERRORS", JSON.stringify({ pageErrors, consoleErrors, errors }))
+      console.log("SCOPE_SETTINGS_HOST", JSON.stringify({ phase, records: await hostSnapshot() }))
     })
   expect(pageErrors).toBe(0)
   const chosen = picker.locator('[data-option-key="anthropic:maker/text"]')
