@@ -1,5 +1,9 @@
 import fs from "node:fs"
 import path from "node:path"
+import { isMainThread } from "node:worker_threads"
+import { LinuxIsolation } from "./process-isolation/linux"
+import { LinuxIsolationBuild } from "./process-isolation/build"
+import { ProcessIsolationRuntime } from "./process-isolation/runtime"
 
 export const BINARY = "/usr/bin/bwrap"
 export const REFUSAL = "The GitHub run cannot isolate its tool processes. The command is refused."
@@ -23,6 +27,43 @@ export function requireIsolation() {
 
 export function required() {
   return enabled
+}
+
+/** Immutable implementation selection only; private-channel authority still comes exclusively from its loader. */
+export function nativeBuild() {
+  return Object.freeze({ enabled: LinuxIsolationBuild.enabled, entrySHA: LinuxIsolationBuild.entrySHA })
+}
+
+function assertNativeCompartment() {
+  // A Worker's module-local required flag cannot stand in for its holder's authority. Until a trusted bridge
+  // exists, native CI builds refuse process creation in that compartment even when its local flag is false.
+  if (LinuxIsolationBuild.enabled && !isMainThread) throw new LinuxIsolation.Unavailable()
+}
+
+export interface CommandOptions extends ProcessIsolationRuntime.Options {}
+export interface CommandPlan {
+  readonly file: string
+  readonly args: readonly string[]
+  readonly options: Readonly<{ cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean | string }>
+  readonly isolation: "plain" | "legacy" | "native"
+  readonly cancellation: "process-group" | "native-owner"
+}
+
+/** Additive only: the shared spawner is not migrated by this inactive Core foundation checkpoint. */
+export function commandPlan(file: string, args: readonly string[], options: CommandOptions): CommandPlan {
+  assertNativeCompartment()
+  if (!required() || !LinuxIsolationBuild.enabled) {
+    const selected = launch(file, args, options)
+    return Object.freeze({
+      file: selected.file,
+      args: Object.freeze([...selected.args]),
+      options: Object.freeze({ cwd: options.cwd, env: options.env, shell: selected.shell }),
+      isolation: required() ? "legacy" : "plain",
+      cancellation: "process-group",
+    })
+  }
+  assertLoaderEnvironment(options.env ?? process.env)
+  return ProcessIsolationRuntime.plan(LinuxIsolationBuild.entrySHA, file, args, options)
 }
 
 /** The actual private-channel loader makes this process-long authority monotonic; configuration cannot lower it. */
@@ -255,7 +296,10 @@ export function launch(
   args: readonly string[],
   options: { cwd?: string; shell?: boolean | string; env?: NodeJS.ProcessEnv } = {},
 ) {
+  assertNativeCompartment()
   if (!required()) return { file, args: [...args], shell: options.shell }
+  // Native CI cannot let an unmigrated adapter choose the legacy wrapper. Only commandPlan may select native.
+  if (LinuxIsolationBuild.enabled) throw new LinuxIsolation.Unavailable()
   assertLoaderEnvironment(options.env ?? process.env)
   assertBinary()
   const executable = typeof options.shell === "string" ? options.shell : options.shell ? "/bin/sh" : file
