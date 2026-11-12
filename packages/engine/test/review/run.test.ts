@@ -4,6 +4,7 @@ import path from "path"
 import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
 import { Database } from "@vectordevai/core/database/database"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Global } from "@vectordevai/core/global"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { SessionProjector } from "@vectordevai/core/session/projector"
@@ -67,15 +68,17 @@ import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { Format } from "../../src/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { InstanceState } from "@/effect/instance-state"
 import { Review } from "../../src/review/run"
 import { ReviewService } from "../../src/review/service"
+import { ReviewLocalRun } from "../../src/review/local-run"
 import { SessionID } from "../../src/session/schema"
-import { TestInstance, trustWorkspace } from "../fixture/fixture"
+import { TestInstance, trustWorkspace, reloadInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
-import { resolveReviewModel } from "../../src/review/model"
+import { resolveReviewModel, type ResolveInput } from "../../src/review/model"
 
 // Review.run against the fake LLM. Requests are matched by the prompt they answer, since the review and security
 // sessions run in parallel.
@@ -157,6 +160,7 @@ const root = LayerNode.group([
   MCP.node,
   FSUtil.node,
   BackgroundJob.node,
+  BackgroundJobStore.node,
   SessionStatus.node,
   SessionRunState.node,
   Database.node,
@@ -1339,6 +1343,108 @@ describe("Review.run", () => {
         expect((yield* llm.hits).filter(REVIEW)).toHaveLength(2)
         expect(Date.now() - started).toBeLessThan(20_000)
       }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the durable local runner preserves actual provider output and stops its factory without a finalizer",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        yield* ownerSettings({ agent: { vectorscope: { model: "lmstudio/test-model" } } })
+        const files = yield* FSUtil.Service
+        const git = yield* Git.Service
+        const sessions = yield* Session.Service
+        const jobs = yield* BackgroundJob.Service
+        const status = yield* SessionStatus.Service
+        const runGit = (args: string[]) =>
+          git.run(args, { cwd: directory }).pipe(
+            Effect.map((result) => {
+              expect(result.exitCode).toBe(0)
+              return result.text().trim()
+            }),
+          )
+        yield* files.writeWithDirs(
+          path.join(directory, ".vector/review.json"),
+          JSON.stringify({ security: "off", verify: "off" }),
+        )
+        yield* files.writeWithDirs(
+          path.join(directory, "src/list.ts"),
+          "export function last(items: number[]) {\n  return items[items.length - 1]\n}\n",
+        )
+        yield* runGit(["add", "."])
+        yield* runGit(["commit", "-m", "local review base"])
+        const head = yield* runGit(["rev-parse", "HEAD"])
+        yield* files.writeWithDirs(path.join(directory, "src/list.ts"), LIST_SOURCE)
+        const settings = yield* Config.Service
+        // Adding review.json changes the trust snapshot created by useServer.
+        // Prove the real veto, then approve/reload the complete owned fixture;
+        // never hide model refusal behind a synthetic resolver or fallback.
+        expect((yield* settings.trust()).trusted).toBe(false)
+        expect((yield* settings.get()).provider?.lmstudio).toBeUndefined()
+        yield* settings.approve()
+        yield* reloadInstance({ directory })
+        expect((yield* settings.trust()).trusted).toBe(true)
+        expect((yield* settings.get()).provider?.lmstudio?.options?.baseURL).toBe(llm.url)
+        const provider = yield* Provider.Service
+        expect((yield* provider.getModel(ref.providerID, ref.modelID)).id).toBe(ref.modelID)
+        const parent = yield* sessions.create({ title: "Local review owner" }, "owner")
+        const source = {
+          sessionID: parent.id,
+          directory,
+          worktree: directory,
+          permission: [{ permission: "*", pattern: "*", action: "allow" as const }],
+        }
+        const runs = yield* ReviewLocalRun.make({
+          runReview: Review.run,
+          resolveModel: (input: ResolveInput) =>
+            Effect.gen(function* () {
+              expect((yield* InstanceState.context).directory).toBe(directory)
+              expect(input.identity).toBe(VECTORSCOPE_AGENT)
+              expect((yield* settings.trust()).trusted).toBe(true)
+              expect((yield* settings.get()).provider?.lmstudio?.options?.baseURL).toBe(llm.url)
+              expect((yield* provider.getModel(ref.providerID, ref.modelID).pipe(Effect.orDie)).id).toBe(ref.modelID)
+              return yield* resolveReviewModel(input)
+            }),
+        })
+        const request = { requestID: "actual_provider_complete", target: { kind: "working-tree" as const, head } }
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", report([finding()]))
+            .usage({ input: 120, output: 30 }),
+        )
+        const started = yield* runs.start(request, source)
+        yield* jobs.wait({ id: started.runID })
+        const finished = yield* runs.get(parent.id, started.runID)
+        expect(finished.error).toBeUndefined()
+        expect(finished.status).toBe("completed")
+        const result = JSON.parse(finished.artifact!.json)
+        expect(result.outcome.selection.inline).toHaveLength(1)
+        expect(result.outcome.cost.input).toBe(120)
+        expect(result.outcome.cost.output).toBe(30)
+        expect(result.outcome.sessions).toHaveLength(1)
+        const helper = yield* sessions.get(SessionID.make(result.outcome.sessions[0]))
+        expect(helper.parentID).toBe(started.runID)
+        expect(helper.internal).toBe(`${PINNED_SESSION_PREFIX}review`)
+        expect(yield* modelRequests(llm)).toHaveLength(1)
+        expect((yield* runs.start(request, source)).runID).toBe(started.runID)
+        expect(yield* modelRequests(llm)).toHaveLength(1)
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().hang())
+        const running = yield* runs.start({ ...request, requestID: "actual_provider_stopped" }, source)
+        yield* llm.wait(1)
+        const stopped = yield* runs.stop(parent.id, running.runID)
+        expect(stopped.status).toBe("cancelled")
+        const partial = JSON.parse(stopped.artifact!.json)
+        expect(partial.outcome.partial).toBe("timeout")
+        expect(partial.verdict.verdict).toBe("incomplete")
+        expect((yield* status.list()).size).toBe(0)
+        expect(yield* modelRequests(llm)).toHaveLength(1)
+        expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
+        expect((yield* runs.get(parent.id, started.runID)).artifact).toEqual(finished.artifact)
+      }),
+    { git: true },
     TIMEOUT,
   )
 
