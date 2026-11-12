@@ -13,6 +13,8 @@ export const ENGINE_PRIVATE_DIRECTORIES = Object.freeze([
 ])
 const ENGINE_CONTAINERS = ["/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox"]
 let enabled = false
+const externalCode = new WeakSet<object>()
+const guardedExternalCode = new WeakSet<object>()
 
 /** Called once by the actual private-channel loader. There is deliberately no lowering/reset API. */
 export function requireIsolation() {
@@ -21,6 +23,124 @@ export function requireIsolation() {
 
 export function required() {
   return enabled
+}
+
+/** The actual private-channel loader makes this process-long authority monotonic; configuration cannot lower it. */
+export function assertExternalCodeAllowed() {
+  if (enabled) throw new Error("GitHub credential holders cannot load external executable modules.")
+}
+
+/** Restrictive provenance survives SDK/language caches; there is deliberately no unmark/reset operation. */
+export function markExternalCode<T>(value: T): T {
+  if (value !== null && (typeof value === "object" || typeof value === "function")) externalCode.add(value)
+  return value
+}
+
+export function isExternalCode(value: unknown) {
+  return value !== null && (typeof value === "object" || typeof value === "function") && externalCode.has(value)
+}
+
+export function assertExternalValueAllowed(value: unknown) {
+  if (isExternalCode(value)) assertExternalCodeAllowed()
+}
+
+/** Protect retained executable handles too, including metadata getters and methods captured before activation. */
+export function guardExternalObject<T extends object>(value: T): T {
+  if (!isExternalCode(value)) return value
+  assertExternalCodeAllowed()
+  if (guardedExternalCode.has(value)) return value
+  // Snapshot the language handle's shape with guarded accessors. This also preserves Proxy invariants when a
+  // consumer freezes the facade or the source model already has nonconfigurable methods/getters.
+  const prototype = Reflect.getPrototypeOf(value)
+  const target: T = Object.create(
+    prototype === null || prototype === Object.prototype ? prototype : guardExternalObject(markExternalCode(prototype)),
+  )
+  const methods = new WeakMap<object, (...args: unknown[]) => unknown>()
+  const read = (key: PropertyKey) => {
+    assertExternalCodeAllowed()
+    const item = Reflect.get(value, key, value)
+    if (typeof item !== "function") return item
+    const cached = methods.get(item)
+    if (cached) return cached
+    const method = (...args: unknown[]) => {
+      assertExternalCodeAllowed()
+      const result = Reflect.apply(item, value, args)
+      assertExternalCodeAllowed()
+      return result
+    }
+    methods.set(item, method)
+    return method
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)!
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get: () => read(key),
+      ...(("value" in descriptor ? descriptor.writable : descriptor.set)
+        ? {
+            set(this: object, next: unknown) {
+              assertExternalCodeAllowed()
+              // A compiled fitted model derives from this facade; assigning its wrappers must not overwrite the SDK.
+              if (this !== guarded) {
+                Object.defineProperty(this, key, { configurable: true, enumerable: true, writable: true, value: next })
+                return
+              }
+              if (!Reflect.set(value, key, next, value))
+                throw new TypeError(`Cannot assign model property ${String(key)}`)
+            },
+          }
+        : {}),
+    })
+  }
+  const guarded = new Proxy(target, {
+    get: (_target, key, receiver) => {
+      assertExternalCodeAllowed()
+      return Object.hasOwn(target, key) ? Reflect.get(target, key, receiver) : read(key)
+    },
+    has: (_target, key) => {
+      assertExternalCodeAllowed()
+      return Reflect.has(target, key)
+    },
+    ownKeys: () => {
+      assertExternalCodeAllowed()
+      return Reflect.ownKeys(target)
+    },
+    getOwnPropertyDescriptor: (_target, key) => {
+      assertExternalCodeAllowed()
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+    getPrototypeOf: () => {
+      assertExternalCodeAllowed()
+      return Reflect.getPrototypeOf(target)
+    },
+    set: (_target, key, next, receiver) => {
+      assertExternalCodeAllowed()
+      return Reflect.set(target, key, next, receiver)
+    },
+    deleteProperty: (_target, key) => {
+      assertExternalCodeAllowed()
+      return Reflect.deleteProperty(target, key)
+    },
+    defineProperty: (_target, key, descriptor) => {
+      assertExternalCodeAllowed()
+      return Reflect.defineProperty(target, key, descriptor)
+    },
+    setPrototypeOf: (_target, prototype) => {
+      assertExternalCodeAllowed()
+      return Reflect.setPrototypeOf(target, prototype)
+    },
+    isExtensible: () => {
+      assertExternalCodeAllowed()
+      return Reflect.isExtensible(target)
+    },
+    preventExtensions: () => {
+      assertExternalCodeAllowed()
+      return Reflect.preventExtensions(target)
+    },
+  })
+  guardedExternalCode.add(guarded)
+  return markExternalCode(guarded)
 }
 
 export function assertBinary() {
