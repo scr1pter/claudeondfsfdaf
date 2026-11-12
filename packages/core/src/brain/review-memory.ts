@@ -49,6 +49,8 @@ export type Entry = Draft & {
   createdAt: number
   updatedAt: number
 }
+// A server-derived namespace identifier, not authority: both trusted ports must independently bind it to the current physical repository.
+export type Place = Brain.Place & { readonly scope: string }
 export type State = { enabled: boolean; generation: number }
 export type Failure =
   | "invalid"
@@ -64,6 +66,7 @@ const fail = (reason: Failure): Result<never> => ({ ok: false, reason })
 const success = <A>(value: A): Result<A> => ({ ok: true, value })
 export type OwnerRequest = {
   repository: string
+  scope: string
   operation: "inspect" | "configure" | "record" | "approve" | "forget" | "erase" | "erase-review"
   digest: string
   payload: unknown // exact bounded snapshot to display/approve; not raw model/session context
@@ -74,7 +77,7 @@ export interface Authority {
     use: (principal: string) => Effect.Effect<Result<A>>,
   ) => Effect.Effect<Result<A>>
   readonly source: <A>(
-    request: Source & { repository: string },
+    request: Source & { repository: string; scope: string },
     use: () => Effect.Effect<Result<A>>,
   ) => Effect.Effect<Result<A>>
 }
@@ -84,33 +87,21 @@ export const unavailable: Authority = Object.freeze({
 })
 export interface Interface {
   readonly inspect: (
-    place: Brain.Place,
+    place: Place,
     options?: { offset?: number; limit?: number },
   ) => Effect.Effect<Result<State & { entries: Entry[] }>>
-  readonly configure: (
-    place: Brain.Place,
-    input: { expected: number; enabled: boolean },
-  ) => Effect.Effect<Result<State>>
-  readonly record: (place: Brain.Place, input: Draft & { expected: number }) => Effect.Effect<Result<Entry>>
-  readonly propose: (
-    place: Brain.Place,
-    input: Draft & { expected: number; source: Source },
-  ) => Effect.Effect<Result<Entry>>
-  readonly approve: (place: Brain.Place, input: { expected: number; id: string }) => Effect.Effect<Result<Entry>>
-  readonly forget: (place: Brain.Place, input: { expected: number; id: string }) => Effect.Effect<Result<State>>
-  readonly erase: (place: Brain.Place, input: { expected: number }) => Effect.Effect<Result<State>>
-  readonly eraseReview: (
-    place: Brain.Place,
-    input: { expected: number; source: Source },
-  ) => Effect.Effect<Result<State>>
+  readonly configure: (place: Place, input: { expected: number; enabled: boolean }) => Effect.Effect<Result<State>>
+  readonly record: (place: Place, input: Draft & { expected: number }) => Effect.Effect<Result<Entry>>
+  readonly propose: (place: Place, input: Draft & { expected: number; source: Source }) => Effect.Effect<Result<Entry>>
+  readonly approve: (place: Place, input: { expected: number; id: string }) => Effect.Effect<Result<Entry>>
+  readonly forget: (place: Place, input: { expected: number; id: string }) => Effect.Effect<Result<State>>
+  readonly erase: (place: Place, input: { expected: number }) => Effect.Effect<Result<State>>
+  readonly eraseReview: (place: Place, input: { expected: number; source: Source }) => Effect.Effect<Result<State>>
   readonly context: (
-    place: Brain.Place,
+    place: Place,
     input: { source: Source; files: readonly string[] },
   ) => Effect.Effect<Result<State & { entries: Pick<Entry, "id" | "kind" | "text" | "reason" | "citations">[] }>>
-  readonly current: (
-    place: Brain.Place,
-    input: { source: Source; generation: number },
-  ) => Effect.Effect<Result<boolean>>
+  readonly current: (place: Place, input: { source: Source; generation: number }) => Effect.Effect<Result<boolean>>
 }
 export class Service extends Context.Service<Service, Interface>()("@vector/ReviewMemory") {}
 export const layerWith = (authority: Authority) =>
@@ -125,41 +116,40 @@ export const layer = layerWith(unavailable)
 
 function make(db: BrainDatabase.Database, authority: Authority): Interface {
   const owner = <A>(
-    place: Brain.Place,
+    place: Place,
     operation: OwnerRequest["operation"],
     payload: unknown,
     use: (principal: string) => Effect.Effect<Result<A>>,
   ) => {
     if (!repository(place)) return Effect.succeed(fail("invalid"))
-    const snapshot = Object.freeze({ repository: place.repository, operation, payload })
+    const snapshot = Object.freeze({ repository: place.repository, scope: place.scope, operation, payload })
     return authority.owner({ ...snapshot, digest: digest(snapshot) }, (principal) =>
       typeof principal === "string" && /^[A-Za-z0-9:_-]{1,256}$/.test(principal)
         ? use(principal)
         : Effect.succeed(fail("denied")),
     )
   }
-  const source = <A>(place: Brain.Place, input: Source, use: () => Effect.Effect<Result<A>>) => {
+  const source = <A>(place: Place, input: Source, use: () => Effect.Effect<Result<A>>) => {
     if (!repository(place) || !sourceValue(input)) return Effect.succeed(fail("invalid"))
-    return authority.source(Object.freeze({ repository: place.repository, ...input }), use)
+    return authority.source(Object.freeze({ repository: place.repository, scope: place.scope, ...input }), use)
   }
   // Reconciliation and the read/write share one SQLite transaction on EVERY boundary, including warmed services.
-  const within = <A>(
-    place: Brain.Place,
-    use: (tx: ReviewStore.Handle, state: State) => Effect.Effect<Result<A>, unknown>,
-  ) =>
+  const within = <A>(place: Place, use: (tx: ReviewStore.Handle, state: State) => Effect.Effect<Result<A>, unknown>) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          if (!(yield* ReviewStore.state(tx, place.repository))) return fail("stale")
-          yield* ReviewStore.reconcile(tx, place.repository)
-          const state = yield* ReviewStore.state(tx, place.repository)
+          if (!(yield* ReviewStore.state(tx, place.repository, place.scope))) return fail("stale")
+          yield* ReviewStore.reconcile(tx, place.repository, place.scope)
+          const state = yield* ReviewStore.state(tx, place.repository, place.scope)
           if (!state) return fail("stale")
           return yield* use(tx, state)
         }),
       )
       .pipe(Effect.orDie)
-  const resultState = (tx: ReviewStore.Handle, place: Brain.Place) =>
-    ReviewStore.state(tx, place.repository).pipe(Effect.map((state) => (state ? success(state) : fail("stale"))))
+  const resultState = (tx: ReviewStore.Handle, place: Place) =>
+    ReviewStore.state(tx, place.repository, place.scope).pipe(
+      Effect.map((state) => (state ? success(state) : fail("stale"))),
+    )
 
   const inspect: Interface["inspect"] = (place, options = {}) => {
     const offset = options.offset ?? 0
@@ -176,13 +166,18 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
     return owner(place, "inspect", { offset, limit }, () =>
       within(place, (tx) =>
         Effect.gen(function* () {
-          yield* ReviewStore.register(tx, place.repository)
-          const state = yield* ReviewStore.state(tx, place.repository)
+          yield* ReviewStore.register(tx, place.repository, place.scope)
+          const state = yield* ReviewStore.state(tx, place.repository, place.scope)
           if (!state) return fail("stale")
           const rows = yield* tx
             .select()
             .from(BrainReviewMemoryTable)
-            .where(eq(BrainReviewMemoryTable.repository_id, place.repository))
+            .where(
+              and(
+                eq(BrainReviewMemoryTable.repository_id, place.repository),
+                eq(BrainReviewMemoryTable.scope_id, place.scope),
+              ),
+            )
             .orderBy(desc(BrainReviewMemoryTable.updated_at), BrainReviewMemoryTable.id)
             .limit(limit)
             .offset(offset)
@@ -208,15 +203,19 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
           if (place.held && captured.enabled) return fail("denied")
           // First inspect with authenticated owner authority, then approve this exact generation. A missing old-build
           // erase witness is not restored by a delayed enable approval itself.
-          if (!(yield* ReviewStore.marked(tx, place.repository))) return fail("stale")
-          yield* ReviewStore.advance(tx, place.repository, captured.enabled)
+          if (
+            !(yield* ReviewStore.marked(tx, place.repository)) ||
+            !(yield* ReviewStore.marked(tx, place.repository, place.scope))
+          )
+            return fail("stale")
+          yield* ReviewStore.advance(tx, place.repository, place.scope, captured.enabled)
           if (!captured.enabled) yield* ReviewStore.revoke(tx, place.repository)
           return yield* resultState(tx, place)
         }),
       ),
     )
   }
-  const save = (place: Brain.Place, input: unknown, proposed: boolean) => {
+  const save = (place: Place, input: unknown, proposed: boolean) => {
     if (
       !keys(
         input,
@@ -251,13 +250,19 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
           const rows = yield* tx
             .select({ id: BrainReviewMemoryTable.id })
             .from(BrainReviewMemoryTable)
-            .where(eq(BrainReviewMemoryTable.repository_id, place.repository))
+            .where(
+              and(
+                eq(BrainReviewMemoryTable.repository_id, place.repository),
+                eq(BrainReviewMemoryTable.scope_id, place.scope),
+              ),
+            )
             .limit(LIMIT.records)
           if (rows.length >= LIMIT.records) return fail("limit")
           const now = Date.now()
           const row: typeof BrainReviewMemoryTable.$inferInsert = {
             id: `vr_${randomUUID()}`,
             repository_id: place.repository,
+            scope_id: place.scope,
             kind: draft.kind,
             status: proposed ? "proposed" : "active",
             visibility: draft.visibility,
@@ -275,7 +280,7 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
             updated_at: now,
           }
           const saved = yield* tx.insert(BrainReviewMemoryTable).values(row).returning().get()
-          yield* ReviewStore.advance(tx, place.repository)
+          yield* ReviewStore.advance(tx, place.repository, place.scope)
           return success(entryValue(saved)!)
         }),
       )
@@ -296,7 +301,10 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
               .from(BrainReviewMemoryTable)
               .where(
                 and(
-                  eq(BrainReviewMemoryTable.repository_id, place.repository),
+                  and(
+                    eq(BrainReviewMemoryTable.repository_id, place.repository),
+                    eq(BrainReviewMemoryTable.scope_id, place.scope),
+                  ),
                   eq(BrainReviewMemoryTable.id, captured.id),
                 ),
               )
@@ -325,7 +333,10 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
                 .from(BrainReviewMemoryTable)
                 .where(
                   and(
-                    eq(BrainReviewMemoryTable.repository_id, place.repository),
+                    and(
+                      eq(BrainReviewMemoryTable.repository_id, place.repository),
+                      eq(BrainReviewMemoryTable.scope_id, place.scope),
+                    ),
                     eq(BrainReviewMemoryTable.id, captured.id),
                   ),
                 )
@@ -337,7 +348,10 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
                 .set({ status: "active", approved_by: principal, approved_at: Date.now(), updated_at: Date.now() })
                 .where(
                   and(
-                    eq(BrainReviewMemoryTable.repository_id, place.repository),
+                    and(
+                      eq(BrainReviewMemoryTable.repository_id, place.repository),
+                      eq(BrainReviewMemoryTable.scope_id, place.scope),
+                    ),
                     eq(BrainReviewMemoryTable.id, captured.id),
                     eq(BrainReviewMemoryTable.status, "proposed"),
                   ),
@@ -345,7 +359,7 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
                 .returning()
                 .all()
               if (rows.length !== 1) return fail("stale")
-              yield* ReviewStore.advance(tx, place.repository)
+              yield* ReviewStore.advance(tx, place.repository, place.scope)
               return success(entryValue(rows[0])!)
             }),
           ),
@@ -365,14 +379,17 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
             .delete(BrainReviewMemoryTable)
             .where(
               and(
-                eq(BrainReviewMemoryTable.repository_id, place.repository),
+                and(
+                  eq(BrainReviewMemoryTable.repository_id, place.repository),
+                  eq(BrainReviewMemoryTable.scope_id, place.scope),
+                ),
                 eq(BrainReviewMemoryTable.id, captured.id),
               ),
             )
             .returning({ id: BrainReviewMemoryTable.id })
             .all()
           if (!removed.length) return fail("not-found")
-          yield* ReviewStore.advance(tx, place.repository)
+          yield* ReviewStore.advance(tx, place.repository, place.scope)
           yield* ReviewStore.revoke(tx, place.repository)
           return yield* resultState(tx, place)
         }),
@@ -386,7 +403,7 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
       within(place, (tx, state) =>
         Effect.gen(function* () {
           if (state.generation !== captured.expected) return fail("stale")
-          yield* ReviewStore.eraseScope(tx, [place.repository])
+          yield* ReviewStore.eraseNamespace(tx, place.repository, place.scope)
           return yield* resultState(tx, place)
         }),
       ),
@@ -402,7 +419,7 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
         within(place, (tx, state) =>
           Effect.gen(function* () {
             if (state.generation !== captured.expected) return fail("stale")
-            yield* ReviewStore.eraseSession(tx, place.repository, provenance.reviewID)
+            yield* ReviewStore.eraseSession(tx, place.repository, provenance.reviewID, place.scope)
             return yield* resultState(tx, place)
           }),
         ),
@@ -430,7 +447,10 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
             .from(BrainReviewMemoryTable)
             .where(
               and(
-                eq(BrainReviewMemoryTable.repository_id, place.repository),
+                and(
+                  eq(BrainReviewMemoryTable.repository_id, place.repository),
+                  eq(BrainReviewMemoryTable.scope_id, place.scope),
+                ),
                 eq(BrainReviewMemoryTable.status, "active"),
                 eq(BrainReviewMemoryTable.visibility, "repository"),
               ),
@@ -489,10 +509,11 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
   }
 }
 
-function placeValue(place: Brain.Place): Brain.Place {
+function placeValue(place: Place): Place {
   // No ambient file source survives this boundary, and a caller cannot retarget a suspended owner/source callback.
   return Object.freeze({
     repository: typeof place?.repository === "string" ? place.repository : "",
+    scope: typeof place?.scope === "string" ? place.scope : "",
     held: place?.held !== false,
     root: "",
     sources: Object.freeze([]),
@@ -583,8 +604,8 @@ function sourceValue(input: unknown): Source | undefined {
     return
   return Object.freeze({ parentID: input.parentID, reviewID: input.reviewID, head: input.head })
 }
-function repository(place: Brain.Place) {
-  return !!place && identifier(place.repository) && place.repository !== ""
+function repository(place: Place) {
+  return !!place && identifier(place.repository) && place.repository !== "" && ReviewStore.scopeValue(place.scope)
 }
 function identifier(input: unknown): input is string {
   return typeof input === "string" && /^[A-Za-z0-9:_-]{1,256}$/.test(input)

@@ -9,6 +9,7 @@ import { ReviewMemory } from "../../src/brain/review-memory"
 import { ReviewStore } from "../../src/brain/review-store"
 import {
   BrainReviewMemoryStateTable,
+  BrainReviewMemoryScopeStateTable,
   BrainReviewMemoryTable,
   BrainTombstoneTable,
   BrainEventTable,
@@ -33,7 +34,12 @@ function value<A>(result: ReviewMemory.Result<A>): A {
   if (!result.ok) throw new Error(result.reason)
   return result.value
 }
-type Setup = { brain: Brain.Interface; memory: ReviewMemory.Interface; db: BrainDatabase.Database; place: Brain.Place }
+type Setup = {
+  brain: Brain.Interface
+  memory: ReviewMemory.Interface
+  db: BrainDatabase.Database
+  place: ReviewMemory.Place
+}
 const authority: ReviewMemory.Authority = {
   owner: (_request, use) => use("owner_1"),
   source: (request, use) =>
@@ -62,7 +68,7 @@ async function open<A>(
         brain: yield* Brain.Service,
         memory: yield* ReviewMemory.Service,
         db: (yield* BrainDatabase.Service).db,
-        place: { repository: "repo-a", root: directory, sources: [], held: false },
+        place: { repository: "repo-a", scope: "physical-a", root: directory, sources: [], held: false },
       })
     }).pipe(Effect.provide(layer)),
   )
@@ -131,6 +137,7 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
                 state: yield* setup.db.select().from(BrainStateTable),
                 reviews: yield* setup.db.select().from(BrainReviewMemoryTable),
                 reviewState: yield* setup.db.select().from(BrainReviewMemoryStateTable),
+                reviewScopes: yield* setup.db.select().from(BrainReviewMemoryScopeStateTable),
               }
             })
           const before = yield* snapshot()
@@ -160,7 +167,9 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
         expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
         expect((yield* setup.db.select().from(BrainEvidenceTable)).some((row) => row.entry_id === only.id)).toBe(false)
         expect(
-          (yield* setup.db.select().from(BrainTombstoneTable)).some((row) => row.norm_hash !== ReviewStore.MARKER),
+          (yield* setup.db.select().from(BrainTombstoneTable)).some(
+            (row) => row.norm_hash !== ReviewStore.MARKER && !row.norm_hash.startsWith(ReviewStore.SCOPE_MARKER),
+          ),
         ).toBe(true)
       }),
     )
@@ -480,12 +489,16 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
           const pending = Effect.runPromise(effect)
           yield* Effect.promise(() => start)
           mutable.repository = "repo-b"
+          mutable.scope = "physical-b"
           finish()
           expect(value(yield* Effect.promise(() => pending)).enabled).toBe(true)
           const rows = yield* setup.db.select().from(BrainReviewMemoryStateTable)
           expect(rows.toSorted((a, b) => a.repository_id.localeCompare(b.repository_id))).toEqual([
             { repository_id: ReviewStore.GLOBAL, enabled: false, generation: 0 },
-            { repository_id: "repo-a", enabled: true, generation: 1 },
+            { repository_id: "repo-a", enabled: false, generation: 0 },
+          ])
+          expect(yield* setup.db.select().from(BrainReviewMemoryScopeStateTable)).toEqual([
+            { repository_id: "repo-a", scope_id: "physical-a", enabled: true, generation: 1 },
           ])
         }),
       {
@@ -493,6 +506,7 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
         owner: (request, use) =>
           Effect.gen(function* () {
             expect(request.repository).toBe("repo-a")
+            expect(request.scope).toBe("physical-a")
             if (request.operation === "configure") {
               arrived()
               yield* Effect.promise(() => wait)

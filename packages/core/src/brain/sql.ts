@@ -137,6 +137,8 @@ export const BrainReviewMemoryTable = sqliteTable(
   {
     id: text().primaryKey(),
     repository_id: text().notNull(),
+    // NULL is legacy, physically unbound data. It is never adopted by a newly opened clone.
+    scope_id: text(),
     kind: text().$type<ReviewMemory.Kind>().notNull(),
     status: text().$type<"proposed" | "active">().notNull(),
     visibility: text().$type<"private" | "repository">().notNull(),
@@ -157,6 +159,7 @@ export const BrainReviewMemoryTable = sqliteTable(
     index("brain_review_memory_repository_idx").on(table.repository_id, table.status),
     index("brain_review_memory_parent_idx").on(table.repository_id, table.parent_session_id),
     index("brain_review_memory_session_idx").on(table.repository_id, table.review_session_id),
+    index("brain_review_memory_scope_idx").on(table.repository_id, table.scope_id, table.status),
   ],
 )
 
@@ -166,6 +169,18 @@ export const BrainReviewMemoryStateTable = sqliteTable("brain_review_memory_stat
   enabled: integer({ mode: "boolean" }).notNull().default(false),
   generation: integer().notNull().default(0),
 })
+
+// Physical namespaces share a real ProjectID's erase epoch, but never its consent or enabled state.
+export const BrainReviewMemoryScopeStateTable = sqliteTable(
+  "brain_review_memory_scope_state",
+  {
+    repository_id: text().notNull(),
+    scope_id: text().notNull(),
+    enabled: integer({ mode: "boolean" }).notNull().default(false),
+    generation: integer().notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.repository_id, table.scope_id] })],
+)
 
 export const BrainStateTable = sqliteTable("brain_state", {
   repository_id: text().primaryKey(),

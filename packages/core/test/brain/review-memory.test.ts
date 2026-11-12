@@ -37,7 +37,7 @@ type Setup = {
   brain: Brain.Interface
   memory: ReviewMemory.Interface
   db: BrainDatabase.Database
-  place: Brain.Place
+  place: ReviewMemory.Place
   calls: ReviewMemory.OwnerRequest[]
 }
 
@@ -73,7 +73,7 @@ async function run<A>(body: (setup: Setup) => Effect.Effect<A, unknown>, selecte
         brain: yield* Brain.Service,
         memory: yield* ReviewMemory.Service,
         db: (yield* BrainDatabase.Service).db,
-        place: { repository: "repo-a", root: tmp.path, sources: [], held: false },
+        place: { repository: "repo-a", scope: "physical-a", root: tmp.path, sources: [], held: false },
         calls,
       })
     }).pipe(Effect.provide(layer)),
@@ -270,12 +270,14 @@ describe("isolated review memory, actual SQLite", () => {
           yield* setup.memory.approve(setup.place, { expected: current.generation, id: pending.id }),
         )
         const approval = setup.calls.find((request) => request.operation === "approve")!
+        expect(approval.scope).toBe(setup.place.scope)
         expect(approval.payload).toEqual({ expected: current.generation, id: pending.id, entry: pending })
         expect(approval.digest).toBe(
           `sha256:${createHash("sha256")
             .update(
               JSON.stringify({
                 repository: approval.repository,
+                scope: approval.scope,
                 operation: approval.operation,
                 payload: approval.payload,
               }),
@@ -407,11 +409,13 @@ describe("isolated review memory, actual SQLite", () => {
         const state = yield* enable(setup)
         value(yield* setup.memory.record(setup.place, { ...draft(), expected: state.generation }))
         const request = setup.calls.find((request) => request.operation === "record")!
+        expect(request.scope).toBe(setup.place.scope)
         expect(request.digest).toBe(
           `sha256:${createHash("sha256")
             .update(
               JSON.stringify({
                 repository: request.repository,
+                scope: request.scope,
                 operation: request.operation,
                 payload: request.payload,
               }),
