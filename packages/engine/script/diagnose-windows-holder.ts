@@ -26,8 +26,14 @@ const profile = Object.fromEntries(
 )
 const source = WindowsHolder.script
   .replace("try { Add-Type", "[Console]::Error.WriteLine('VECTOR_HOLDER_PHASE host'); try { Add-Type")
-  .replace("var stream=Console.OpenStandardInput();", 'Console.Error.WriteLine("VECTOR_HOLDER_PHASE configuration"); var stream=Console.OpenStandardInput();')
-  .replace("var json=new JavaScriptSerializer();", 'Console.Error.WriteLine("VECTOR_HOLDER_PHASE decoded"); var json=new JavaScriptSerializer();')
+  .replace(
+    "var stream=Console.OpenStandardInput();",
+    'Console.Error.WriteLine("VECTOR_HOLDER_PHASE configuration"); var stream=Console.OpenStandardInput();',
+  )
+  .replace(
+    "var json=new JavaScriptSerializer();",
+    'Console.Error.WriteLine("VECTOR_HOLDER_PHASE decoded"); var json=new JavaScriptSerializer();',
+  )
   .replace("job=CreateJobObjectW", 'Console.Error.WriteLine("VECTOR_HOLDER_PHASE job"); job=CreateJobObjectW')
   .replace("Check(CreateProcessW", 'Console.Error.WriteLine("VECTOR_HOLDER_PHASE payload"); Check(CreateProcessW')
 const args = WindowsHolder.argumentsForHolder()
@@ -55,82 +61,84 @@ function variable(key: string) {
 }
 
 function observe(env: NodeJS.ProcessEnv) {
-  return new Promise<{ phase: string; ready: boolean; closed: boolean; proven: boolean; timedOut: boolean }>((resolve) => {
-    const state = { phase: "spawn", ready: false, closed: false, proven: false, timedOut: false }
-    const child = spawn(powershell, args, {
-      cwd: path.win32.join(root!, "System32"),
-      env,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    const timer = setTimeout(() => {
-      state.timedOut = true
-      child.kill()
-    }, 15_000)
-    const closeTimer = setTimeout(() => {
-      child.stdin.destroy()
-      child.stdout.destroy()
-      child.stderr.destroy()
-      resolve(state)
-    }, 20_000)
-    child.stdin.on("error", () => {})
-    child.stdout.resume()
-    let pending = ""
-    let bytes = 0
-    child.stderr.on("data", (chunk: Buffer) => {
-      bytes += chunk.length
-      if (bytes > 16_384) {
-        state.phase = "status-bound"
+  return new Promise<{ phase: string; ready: boolean; closed: boolean; proven: boolean; timedOut: boolean }>(
+    (resolve) => {
+      const state = { phase: "spawn", ready: false, closed: false, proven: false, timedOut: false }
+      const child = spawn(powershell, args, {
+        cwd: path.win32.join(root!, "System32"),
+        env,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      })
+      const timer = setTimeout(() => {
+        state.timedOut = true
         child.kill()
-        return
-      }
-      pending += chunk.toString("utf8")
-      for (;;) {
-        const end = pending.indexOf("\n")
-        if (end < 0) return
-        const line = pending.slice(0, end).replace(/\r$/, "")
-        pending = pending.slice(end + 1)
-        if (/^VECTOR_HOLDER_PHASE (host|configuration|decoded|job|payload)$/.test(line)) {
-          state.phase = line.slice(20)
-          continue
-        }
-        if (!line.startsWith("VECTOR_SHELL/1 ")) {
-          state.phase = "invalid-status"
+      }, 15_000)
+      const closeTimer = setTimeout(() => {
+        child.stdin.destroy()
+        child.stdout.destroy()
+        child.stderr.destroy()
+        resolve(state)
+      }, 20_000)
+      child.stdin.on("error", () => {})
+      child.stdout.resume()
+      let pending = ""
+      let bytes = 0
+      child.stderr.on("data", (chunk: Buffer) => {
+        bytes += chunk.length
+        if (bytes > 16_384) {
+          state.phase = "status-bound"
           child.kill()
           return
         }
-        try {
-          const value: unknown = JSON.parse(line.slice(15))
-          if (!value || typeof value !== "object" || !("type" in value)) throw new Error("Invalid status")
-          if (value.type === "ready") {
-            state.ready = true
-            state.phase = "ready"
-            // Never acknowledge/resume the payload: EOF must clean up the suspended process instead.
-            child.stdin.end()
+        pending += chunk.toString("utf8")
+        for (;;) {
+          const end = pending.indexOf("\n")
+          if (end < 0) return
+          const line = pending.slice(0, end).replace(/\r$/, "")
+          pending = pending.slice(end + 1)
+          if (/^VECTOR_HOLDER_PHASE (host|configuration|decoded|job|payload)$/.test(line)) {
+            state.phase = line.slice(20)
+            continue
           }
-          if (value.type === "error" && "terminationProven" in value) state.proven = value.terminationProven === true
-        } catch {
-          state.phase = "invalid-status"
-          child.kill()
+          if (!line.startsWith("VECTOR_SHELL/1 ")) {
+            state.phase = "invalid-status"
+            child.kill()
+            return
+          }
+          try {
+            const value: unknown = JSON.parse(line.slice(15))
+            if (!value || typeof value !== "object" || !("type" in value)) throw new Error("Invalid status")
+            if (value.type === "ready") {
+              state.ready = true
+              state.phase = "ready"
+              // Never acknowledge/resume the payload: EOF must clean up the suspended process instead.
+              child.stdin.end()
+            }
+            if (value.type === "error" && "terminationProven" in value) state.proven = value.terminationProven === true
+          } catch {
+            state.phase = "invalid-status"
+            child.kill()
+          }
         }
-      }
-    })
-    child.once("error", () => {
-      state.phase = "spawn-error"
-    })
-    child.once("close", () => {
-      state.closed = true
-      clearTimeout(timer)
-      clearTimeout(closeTimer)
-      resolve(state)
-    })
-    child.stdin.write(
-      JSON.stringify({
-        file: path.win32.join(root!, "System32", "cmd.exe"),
-        commandLine: "cmd.exe /d /s /c exit 19",
-        cwd: directory,
-        env: minimal,
-      }) + "\n",
-    )
-  })
+      })
+      child.once("error", () => {
+        state.phase = "spawn-error"
+      })
+      child.once("close", () => {
+        state.closed = true
+        clearTimeout(timer)
+        clearTimeout(closeTimer)
+        resolve(state)
+      })
+      child.stdin.write(
+        JSON.stringify({
+          file: path.win32.join(root!, "System32", "cmd.exe"),
+          commandLine: "cmd.exe /d /s /c exit 19",
+          cwd: directory,
+          env: minimal,
+        }) + "\n",
+      )
+    },
+  )
 }
