@@ -184,7 +184,7 @@ describe("@vector CI lane", () => {
     const workflow = await lane()
     expect(Object.keys(workflow.on).sort()).toEqual(["pull_request", "push", "workflow_dispatch"])
     // A path filter or an ignore list here would leave a package's commit with no CI at all.
-    expect(workflow.on.push).toEqual({ branches: ["vector-at-mention"] })
+    expect(workflow.on.push).toEqual({ branches: ["vector-at-mention", "build-integrate"] })
     // No other workflow runs the web GitHub tests, so every hosted API module they load (http, abuse, persistent-store
     // as well as github-*), the lockfile that pins jose and the Bun version in package.json start the lane on a pull
     // request. api/** takes in the contract's four api/ entries.
@@ -206,6 +206,9 @@ describe("@vector CI lane", () => {
         "packages/engine/src/session/retry.ts",
         "packages/engine/test/session/retry.test.ts",
         "packages/desktop/src/main/github-*.ts",
+        "packages/web/test/account-github-agents.test.ts",
+        "packages/web/src/components/marketing/account/GithubAgents.tsx",
+        "packages/web/src/components/marketing/account/github-agents.css",
         ".github/workflows/vector-at-mention.yml",
       ]),
     )
@@ -256,6 +259,11 @@ describe("@vector CI lane", () => {
     const image = workflow.jobs.api?.services?.valkey?.image
     expect(image).toMatch(/@sha256:[a-f0-9]{64}$/)
     expect(image).toBe(free.jobs.integration?.services?.valkey?.image)
+    // The journey and atomic binding tests must execute against disposable Redis, not pass through skips.
+    const checks = steps(workflow).filter(({ step }) => step.run?.includes("test/cloud-agents-*.test.ts"))
+    expect(checks).toHaveLength(1)
+    expect(checks[0]?.job).toBe("api")
+    expect(checks[0]?.step.env?.VECTOR_TEST_REDIS_URL).toBe("redis://127.0.0.1:6379")
   })
 
   test("the lane keeps every check the contract names", async () => {
@@ -270,6 +278,7 @@ describe("@vector CI lane", () => {
         ["packages/web", "test/github-app.test.ts"],
         ["packages/web", "test/github-app-api.test.ts"],
         ["packages/web", "test/cloud-agents-*.test.ts"],
+        ["packages/web", "test/account-github-agents.test.ts"],
         ["packages/engine", "test/cli/github*.test.ts"],
         ["packages/engine", "test/tool/registry*.test.ts"],
         ["packages/engine", "test/session/retry.test.ts"],

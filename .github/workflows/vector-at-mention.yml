@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - vector-at-mention
+      - build-integrate
   pull_request:
     # No other workflow runs the web GitHub tests, and they load shared api/_lib modules (http, abuse, persistent-store)
     # and jose, so any hosted API change, the lockfile and the Bun version in package.json start the lane. api/** takes
@@ -31,6 +32,9 @@ on:
       - packages/desktop/src/main/github-*.ts
       - packages/web/test/github-*.ts
       - packages/web/test/cloud-agents-*.ts
+      - packages/web/test/account-github-agents.test.ts
+      - packages/web/src/components/marketing/account/GithubAgents.tsx
+      - packages/web/src/components/marketing/account/github-agents.css
       - packages/engine/test/cli/github*.ts
       - packages/engine/test/lib/research.ts
       - packages/engine/test/fixture/sandbox-*.ts
@@ -103,7 +107,7 @@ jobs:
         working-directory: packages/web
         env:
           VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-oidc.test.ts test/github-app.test.ts test/github-app-api.test.ts test/cloud-agents-*.test.ts
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-oidc.test.ts test/github-app.test.ts test/github-app-api.test.ts test/cloud-agents-*.test.ts test/account-github-agents.test.ts
 
       # The repo-root test/ suite is not a workspace; these files cover the hosted API's module loading and CLI tokens.
       - name: Run hosted API tests
