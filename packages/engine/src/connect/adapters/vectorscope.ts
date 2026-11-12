@@ -853,7 +853,10 @@ export const drifted = Effect.fnUntraced(function* (git: Git.Interface, root: st
   if (!base) return [...files]
   const edited: string[] = []
   for (const [index, item] of seen.entries()) {
-    const then = base[index]!
+    const found = base[index]!
+    // A link out of the repository at `from` that git read as no file (`ledOutAt`) is a link out all the same.
+    const then: BaseFile =
+      found.kind === "missing" && (yield* ledOutAt(git, root, from, item.file)) ? { kind: "outside" } : found
     if (item.now !== undefined && item.where === undefined) edited.push(item.file)
     else if (then.kind === "blob") {
       if (item.now === undefined || !sameText(item.now, then.bytes)) edited.push(item.file)
@@ -861,8 +864,7 @@ export const drifted = Effect.fnUntraced(function* (git: Git.Interface, root: st
       // Out of the repository at `from`: fine while it still leads out.
       const now = item.now === undefined ? outside(yield* Effect.promise(() => resolved(item.full))) : item.where
       if (now !== true) edited.push(item.file)
-    } else if (item.now !== undefined && !(item.where === true && (yield* ledOutAt(git, root, from, item.file))))
-      edited.push(item.file)
+    } else if (item.now !== undefined) edited.push(item.file)
   }
   return edited
 })

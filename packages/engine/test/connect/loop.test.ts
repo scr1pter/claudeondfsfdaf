@@ -395,28 +395,44 @@ const isolated = testEffect(
   ),
 )
 
-// What a failed worktree launch needs explained: whether the parent and the child's checkout are trusted, and whether
-// the two snapshots of vector.json read the same.
-const launchFacts = (directory: string, project: string, child: string | undefined) =>
+// What a failed worktree launch needs explained: whether the parent is trusted, which workspaces the trust store
+// holds, and for each task checkout of this project what it holds, whether it is trusted, and whether its vector.json
+// reads as the parent's.
+const launchFacts = (directory: string, project: string) =>
   Effect.promise(async () => {
-    const work = child ? path.join(Global.Path.data, "task-worktree", project, child) : undefined
     const snap = (root: string) => WorkspaceTrust.snapshot(root, [path.join(root, "vector.json")])
     const trusted = (root: string) =>
       snap(root).then(
         async (value) => (await WorkspaceTrust.status(Global.Path.state, value)).trusted,
         (cause) => String(cause),
       )
+    const same = (root: string) =>
+      Promise.all([snap(directory), snap(root)]).then(
+        ([left, right]) => WorkspaceTrust.contentKey(left) === WorkspaceTrust.contentKey(right),
+        (cause) => String(cause),
+      )
+    const home = path.join(Global.Path.data, "task-worktree", project)
+    const names = await fs.readdir(home).catch(() => [] as string[])
     return {
       parentTrusted: await trusted(directory),
-      worktree: work,
-      worktreeFiles: work ? await fs.readdir(work).catch((cause) => String(cause)) : undefined,
-      worktreeTrusted: work ? await trusted(work) : undefined,
-      sameContent: work
-        ? await Promise.all([snap(directory), snap(work)]).then(
-            ([left, right]) => WorkspaceTrust.contentKey(left) === WorkspaceTrust.contentKey(right),
-            (cause) => String(cause),
-          )
-        : undefined,
+      trustStore: await fs.readFile(path.join(Global.Path.state, "workspace-trust.json"), "utf8").then(
+        (text) =>
+          Object.values((JSON.parse(text) as { workspaces?: Record<string, { path?: string }> }).workspaces ?? {}).map(
+            (item) => item.path,
+          ),
+        (cause) => String(cause),
+      ),
+      worktrees: await Promise.all(
+        names.map(async (name) => {
+          const work = path.join(home, name)
+          return {
+            work,
+            files: await fs.readdir(work).catch((cause) => String(cause)),
+            trusted: await trusted(work),
+            sameContent: await same(work),
+          }
+        }),
+      ),
     }
   })
 
@@ -501,9 +517,7 @@ isolated.instance(
       expect({
         state: fixed?.run?.result?.state,
         output: fixed?.output,
-        ...(fixed?.run?.result?.state === "completed"
-          ? {}
-          : yield* launchFacts(directory, project, fixed?.run?.result?.sessions[0])),
+        ...(fixed?.run?.result?.state === "completed" ? {} : yield* launchFacts(directory, project)),
       }).toMatchObject({ state: "completed" })
       expect(fixed?.run?.result?.findings.map((item) => item.status)).toEqual(["fixing"])
       const childID = fixed!.run!.result!.sessions[0]!
