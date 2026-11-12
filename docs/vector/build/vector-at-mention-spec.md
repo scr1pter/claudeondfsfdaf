@@ -1938,6 +1938,20 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
   - **The next run** lists `GET /repos/{o}/{r}/actions/artifacts?name=vector-session-<thread>` newest first, with the read-only `GITHUB_TOKEN` (`actions: read`), downloads the newest, decrypts it and imports the session.
   - **Failure is never fatal:** a missing artifact, a decrypt or import failure falls back to thread context.
   - **B08 hook:** the manifest's `files[]` is where Codium's B08 adds Brain files for owner-started desktop runs.
+  - **B08 source authority:** new upload/start/read routes stay off unless `VECTOR_GITHUB_BRAIN_ENABLED` is explicitly `true`, the canonical source allowance is active, and `github-agents` plus `brain-cloud` are listed. Upload/start requires a marked desktop credential, account/token revocation checks, current binder ownership, default-branch and repository-visibility verification. The browser approves exact local bytes before encrypting; Vector stores bounded opaque ciphertext plus a wrapped content key for at most two hours, never decrypts the payload, and erases both after account revocation. The authorized GitHub run verifies digest/schema/current public-repository policy after decryption. Initial approved `brain/bundle.json` is immutable. Fresh model drafts use a separate bounded `brain/proposals.json`, with authenticated repository/thread/run origin and no forged desktop approval; the desktop imports these only as unapproved, unpinned proposals.
+  - **Brain history restriction:** an artifact carrying Brain or proposal provenance cannot restore its full session into a repository/comment/schedule run. Restoration needs current live owner-desktop attachment authority for the exact same approved plaintext digest, repository, audience and current visibility binding. A new approval for different bytes is insufficient. Otherwise the whole session falls back to the GitHub thread, since stripping only initial memory text would leave derived assistant text behind.
+  - **Owner result read:** completed runs use a separate account-owner authority, never a settled `vrt_` grant. The implementation paths are `api/_lib/cloud-agents-owner-artifact.ts` and `POST /api/cloud-agents/owner-artifact-key`, with this contract:
+
+    ```ts
+    type OwnerArtifactReadInput = { rid: string; artifactId: string }
+    type OwnerArtifactReadKey = {
+      key: string; keyId: string; repositoryId: string; thread: string
+      rid: string; artifactId: string; publicRepository: boolean
+    }
+    ```
+
+    A marked desktop owner explicitly clicks to read a result. The server checks account/token revocation, the actual private run record's account/repository/generation/thread/source, the current binding and fresh GitHub repository writer permission. It verifies only GitHub metadata for the exact artifact id, expected conversation name, owning repository and matching actual workflow run. Body-supplied threads, generations, accounts, repositories, URLs and extra fields are refused. No server fetches or decrypts the artifact payload. The trusted desktop downloads from GitHub, authenticates/decrypts locally, checks current repository visibility and stages only the proposal file through the local owner-only Brain importer. This response grants no model/run/billing authority. Both the endpoint and UI remain off until integration review; there is no automatic result download/import.
+    GitHub artifacts retain the existing seven-day expiry and private run records the existing ninety-day retention. Expired/deleted artifacts, account revocation/erasure, unbind/rebind/generation changes or loss of repository access refuse new key reads. Revocation cannot retract a key or plaintext the owner already downloaded; GitHub retains its own ciphertext until its artifact expiry or deletion.
 - **Tests:**
   - round trip;
   - a wrong key, a rebind (new generation), a tampered file or mismatched authenticated data → fallback;
