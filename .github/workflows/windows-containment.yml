@@ -38,7 +38,7 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
       - name: Locate PowerShell startup failure without printing environment values
-        timeout-minutes: 3
+        timeout-minutes: 6
         working-directory: packages/engine
         run: bun script/diagnose-windows-holder.ts
       - name: Run real Windows process ownership and termination cases
