@@ -221,7 +221,7 @@ const STRUCTURE_TAG =
  */
 export const SCOPE = "vector.review"
 
-export type Scope = { paths: string[]; trust: Trust; instructions?: "provided" }
+export type Scope = { paths: string[]; trust: Trust; instructions?: "provided"; restrictedReads?: true }
 
 const MAX_SCOPE_PATHS = 300
 
@@ -234,6 +234,7 @@ export function scopeOf(metadata: Record<string, unknown> | undefined): Scope | 
     paths: paths.filter((item): item is string => typeof item === "string").slice(0, MAX_SCOPE_PATHS),
     trust: "trust" in value && value.trust === "trusted" ? "trusted" : "untrusted",
     ...("instructions" in value && value.instructions === "provided" ? { instructions: "provided" as const } : {}),
+    ...("restrictedReads" in value && value.restrictedReads === true ? { restrictedReads: true as const } : {}),
   }
 }
 

@@ -9,6 +9,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
+import { scopeOf } from "@vectordevai/core/review/prompt"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -159,6 +160,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const inFamily = TaskClaims.familyOf(audience, input.session.id)
 
   const subagentTitle = SubagentLifecycle.read(input.session)?.title
+  const first = input.messages.find((message) => message.info.role === "user")
+  const reviewScope = first?.parts
+    .flatMap((part) => (part.type === "text" ? [scopeOf(part.metadata)] : []))
+    .find(Boolean)
+  // Set by the engine-owned review invocation, never by a tool's model arguments.
+  // It only tightens listing output; read permission remains independently enforced.
+  const restrictedReadListing =
+    input.session.internal?.startsWith("vectorscope.") && (!reviewScope || reviewScope.restrictedReads === true)
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
     parentID: input.session.parentID,
@@ -167,6 +176,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     callID: options.toolCallId,
     extra: {
       model: input.model,
+      ...(restrictedReadListing ? { restrictedReadListing: true } : {}),
       // Whether the model may train on prompts, for tools that keep the owner's personal memory away from such a model.
       mayTrain: freeModelMayTrain(input.model),
       personal: input.personal === true,

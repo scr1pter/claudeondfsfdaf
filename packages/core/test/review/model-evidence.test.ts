@@ -48,6 +48,14 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // verdict.ts and format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
+  "packages/engine/src/review/read-authority.ts",
+  "packages/engine/src/review/service.ts",
+  "packages/engine/src/cli/cmd/review.ts",
+  "packages/engine/src/session/tools.ts",
+  "packages/engine/src/tool/grep.ts",
+  "packages/engine/src/tool/glob.ts",
+  "packages/engine/src/tool/read.ts",
+  "packages/engine/src/tool/external-directory.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
   "packages/core/src/review/plan.ts",
   "packages/core/src/review/pack.ts",

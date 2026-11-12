@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import fs from "node:fs/promises"
 import path from "path"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
@@ -63,6 +64,7 @@ import { Truncate } from "@/tool/truncate"
 import { Format } from "../../src/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Review } from "../../src/review/run"
+import { ReviewService } from "../../src/review/service"
 import { SessionID } from "../../src/session/schema"
 import { TestInstance, trustWorkspace } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -1317,6 +1319,189 @@ describe("Review.run", () => {
         const permission = yield* Permission.Service
         expect(yield* permission.list()).toEqual([])
         for (const body of yield* modelRequests(llm)) expect(toolNames(body)).not.toContain("bash")
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "nested service placement roots relative denials in the actual tool worktree",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const files = yield* FSUtil.Service
+        const git = yield* Git.Service
+        const runGit = (args: string[]) =>
+          git.run(args, { cwd: directory }).pipe(
+            Effect.tap((result) => Effect.sync(() => expect(result.exitCode).toBe(0))),
+            Effect.map((result) => result.text().trim()),
+          )
+        const privateFile = path.join(directory, "private/sensitive.txt")
+        const nested = path.join(directory, "nested")
+        yield* files.writeWithDirs(privateFile, "original\n")
+        yield* files.writeWithDirs(path.join(nested, "private/sensitive.txt"), "VISIBLE_NESTED_DECOY\n")
+        yield* runGit(["add", "."])
+        yield* runGit(["commit", "-m", "review base"])
+        const base = yield* runGit(["rev-parse", "HEAD"])
+        yield* files.writeWithDirs(privateFile, "WITHHELD_NESTED_SERVICE\n")
+        yield* files.writeWithDirs(path.join(directory, "src/list.ts"), `${LIST_SOURCE}\n// visible change\n`)
+        yield* runGit(["add", "."])
+        yield* runGit(["commit", "-m", "review changes"])
+        const head = yield* runGit(["rev-parse", "HEAD"])
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: "private/sensitive.txt" }))
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: "nested/private/sensitive.txt" }))
+        yield* llm.pushMatch(REVIEW, reply().tool("glob", { pattern: "*", path: path.dirname(privateFile) }))
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: path.dirname(privateFile) }))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+        const result = yield* ReviewService.execute(
+          {
+            version: 1,
+            mode: "review",
+            directory: nested,
+            target: { kind: "branch", base, head },
+            settingsRef: base,
+            model: "lmstudio/test-model",
+            readDenies: ["private/*"],
+          },
+          {
+            resolveModel: resolveReviewModel,
+            runReview: Review.run,
+            confirm: async () => false,
+            stdout: async () => {},
+            stderr: () => {},
+            posting: async () => {
+              throw new Error("The stateless review cannot post")
+            },
+          },
+        )
+        expect(result.exitCode).toBe(0)
+        expect(result.verdict.verdict).toBe("incomplete")
+        expect(result.outcome?.unreviewed).toContain("private/sensitive.txt")
+        expect(result.outcome?.sessions).toHaveLength(1)
+        const sessions = yield* Session.Service
+        const tools = (yield* sessions.messages({ sessionID: SessionID.make(result.outcome!.sessions[0]!) }))
+          .flatMap((message) => message.parts)
+          .flatMap((part) => (part.type === "tool" && part.tool !== "StructuredOutput" ? [part] : []))
+        expect(tools.map((part) => part.state.status)).toEqual(["error", "completed", "completed", "completed"])
+        expect(JSON.stringify(tools)).toContain("VISIBLE_NESTED_DECOY")
+        for (const part of tools.slice(2))
+          if (part.state.status === "completed") expect(part.state.output).not.toContain("sensitive.txt")
+        expect(JSON.stringify(yield* modelRequests(llm))).not.toContain("WITHHELD_NESTED_SERVICE")
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a resolver-time symlink retarget cannot release the admitted canonical read denial",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const files = yield* FSUtil.Service
+        const git = yield* Git.Service
+        const runGit = (args: string[]) =>
+          git.run(args, { cwd: directory }).pipe(
+            Effect.tap((result) => Effect.sync(() => expect(result.exitCode).toBe(0))),
+            Effect.map((result) => result.text().trim()),
+          )
+        const secretA = path.join(directory, "secret-a/sensitive.txt")
+        const secretB = path.join(directory, "secret-b/sensitive.txt")
+        const link = path.join(directory, "secret-link")
+        yield* files.writeWithDirs(secretA, "original-a\n")
+        yield* files.writeWithDirs(secretB, "WITHHELD_RETARGET_B\n")
+        yield* runGit(["add", "."])
+        yield* runGit(["commit", "-m", "review base"])
+        const base = yield* runGit(["rev-parse", "HEAD"])
+        yield* files.writeWithDirs(secretA, "WITHHELD_ADMITTED_CANONICAL_A\n")
+        yield* files.writeWithDirs(path.join(directory, "src/list.ts"), `${LIST_SOURCE}\n// visible change\n`)
+        yield* runGit(["add", "."])
+        yield* runGit(["commit", "-m", "review changes"])
+        const head = yield* runGit(["rev-parse", "HEAD"])
+        yield* Effect.promise(() =>
+          fs.symlink(path.dirname(secretA), link, process.platform === "win32" ? "junction" : "dir"),
+        )
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: secretA }))
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: path.join(link, "sensitive.txt") }))
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: path.dirname(secretA) }))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+        const result = yield* ReviewService.execute(
+          {
+            version: 1,
+            mode: "review",
+            directory,
+            target: { kind: "branch", base, head },
+            settingsRef: base,
+            model: "lmstudio/test-model",
+            readDenies: [path.join(link, "sensitive.txt")],
+          },
+          {
+            resolveModel: (request) =>
+              Effect.gen(function* () {
+                yield* Effect.promise(() => fs.unlink(link))
+                yield* Effect.promise(() =>
+                  fs.symlink(path.dirname(secretB), link, process.platform === "win32" ? "junction" : "dir"),
+                )
+                return yield* resolveReviewModel(request)
+              }),
+            runReview: Review.run,
+            confirm: async () => false,
+            stdout: async () => {},
+            stderr: () => {},
+            posting: async () => {
+              throw new Error("The stateless review cannot post")
+            },
+          },
+        )
+        expect(result.exitCode).toBe(0)
+        expect(result.verdict.verdict).toBe("incomplete")
+        expect(result.outcome?.unreviewed).toContain("secret-a/sensitive.txt")
+        expect(result.outcome?.sessions).toHaveLength(1)
+        const sessions = yield* Session.Service
+        const tools = (yield* sessions.messages({ sessionID: SessionID.make(result.outcome!.sessions[0]!) }))
+          .flatMap((message) => message.parts)
+          .flatMap((part) => (part.type === "tool" && part.tool === "read" ? [part] : []))
+        expect(tools.map((part) => part.state.status)).toEqual(["error", "error", "completed"])
+        expect(JSON.stringify(tools)).not.toContain("WITHHELD_ADMITTED_CANONICAL_A")
+        expect(JSON.stringify(yield* modelRequests(llm))).not.toContain("WITHHELD_ADMITTED_CANONICAL_A")
+        expect(JSON.stringify(yield* modelRequests(llm))).not.toContain("WITHHELD_RETARGET_B")
+        const directoryRead = tools[2]
+        if (directoryRead?.state.status === "completed")
+          expect(directoryRead.state.output).not.toContain("sensitive.txt")
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
+  it.instance(
+    "an absolute requester denial survives actual helper Read, Grep and Glob resource names",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const fs = yield* FSUtil.Service
+        const protectedFile = path.join(directory, "private.txt")
+        yield* fs.writeWithDirs(protectedFile, "VECTOR_AUTHORITY_MARKER WITHHELD_REVIEW_CONTENT\n")
+        yield* fs.writeWithDirs(path.join(directory, "visible.txt"), "VECTOR_AUTHORITY_MARKER VISIBLE_REVIEW_CONTENT\n")
+        yield* llm.pushMatch(REVIEW, reply().tool("read", { filePath: "private.txt" }))
+        yield* llm.pushMatch(REVIEW, reply().tool("grep", { pattern: "VECTOR_AUTHORITY_MARKER", path: directory }))
+        yield* llm.pushMatch(REVIEW, reply().tool("glob", { pattern: "*.txt", path: directory }))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([])))
+        const outcome = yield* Review.run(input(directory, { readDenies: [protectedFile] }))
+        const sessions = yield* Session.Service
+        const tools = (yield* sessions.messages({ sessionID: SessionID.make(outcome.sessions[0]!) }))
+          .flatMap((message) => message.parts)
+          .flatMap((part) => (part.type === "tool" ? [part] : []))
+        expect(tools.find((part) => part.tool === "read")?.state.status).toBe("error")
+        const grep = tools.find((part) => part.tool === "grep")
+        expect(grep?.state.status).toBe("completed")
+        if (grep?.state.status === "completed") expect(grep.state.output).toContain("VISIBLE_REVIEW_CONTENT")
+        const glob = tools.find((part) => part.tool === "glob")
+        expect(glob?.state.status).toBe("completed")
+        if (glob?.state.status === "completed") {
+          expect(glob.state.output).toContain("visible.txt")
+          expect(glob.state.output).not.toContain("private.txt")
+        }
+        expect(JSON.stringify(yield* modelRequests(llm))).not.toContain("WITHHELD_REVIEW_CONTENT")
+        const permission = yield* Permission.Service
+        expect(yield* permission.list()).toEqual([])
       }),
     TIMEOUT,
   )

@@ -2,10 +2,13 @@
 // before the existing local pipeline runs; this does not create a second loop.
 
 import { Effect } from "effect"
+import path from "node:path"
 import { invocationProblems, type ReviewInvocation } from "@vectordevai/core/review/invocation"
 import { reviewVerdict, type VerdictResult } from "@vectordevai/core/review/verdict"
 import { SessionID } from "@/session/schema"
+import { Git } from "@/git"
 import type { LocalReviewDeps, LocalReviewResult } from "@/cli/cmd/review"
+import { readAuthority } from "./read-authority"
 
 export type Input = ReviewInvocation & { stopSignal?: AbortSignal }
 export interface Result extends LocalReviewResult {
@@ -39,6 +42,32 @@ export function execute<RunR, ModelR>(input: Input, deps: LocalReviewDeps<RunR, 
       }
       return stopped
     }
+    // Relative read resources name the tool worktree, even when the requested
+    // directory is nested inside it. Resolve that trusted placement before
+    // admitting canonical facts; a missing placement never guesses an origin.
+    const git = yield* Git.Service
+    const placement = request.readDenies?.length
+      ? yield* git.run(["rev-parse", "--show-toplevel"], { cwd: request.directory })
+      : undefined
+    const worktree = placement?.text().trim()
+    if (placement && (placement.exitCode !== 0 || !worktree || !path.isAbsolute(worktree))) {
+      const refused: Result = {
+        exitCode: 2,
+        error: "Cannot resolve the review worktree for read authority.",
+        verdict: reviewVerdict({ kind: "failure", stage: "config" }),
+      }
+      return refused
+    }
+    const readRoot = request.readRoot ?? worktree
+    // Later adapter/model setup may add aliases, but cannot replace these paths.
+    const admittedReads =
+      worktree && request.readDenies?.length
+        ? readAuthority(request.readDenies, {
+            directory: worktree,
+            worktree,
+            ...(readRoot ? { readRoot } : {}),
+          })
+        : undefined
     const { executeLocalReview } = yield* Effect.promise(() => import("@/cli/cmd/review"))
     const result: LocalReviewResult = yield* executeLocalReview(
       {
@@ -58,6 +87,8 @@ export function execute<RunR, ModelR>(input: Input, deps: LocalReviewDeps<RunR, 
           settingsRef: request.settingsRef,
           stateless: true,
           ...(request.readDenies ? { readDenies: request.readDenies } : {}),
+          ...(readRoot ? { readRoot } : {}),
+          ...(admittedReads ? { admittedReads } : {}),
           ...(stopSignal ? { stopSignal } : {}),
         },
       },

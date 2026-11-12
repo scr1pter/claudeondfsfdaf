@@ -9,6 +9,7 @@ export interface ReviewInvocation {
   settingsRef: string
   parentID?: string
   readDenies?: readonly string[]
+  readRoot?: string // trusted placement the requester read-denial paths came from
   model?: string
   maxCost?: number
 }
@@ -22,6 +23,7 @@ const KEYS = new Set([
   "settingsRef",
   "parentID",
   "readDenies",
+  "readRoot",
   "model",
   "maxCost",
 ])
@@ -60,6 +62,13 @@ export function invocationProblems(input: ReviewInvocation): string[] {
   )
     problems.push("model")
   if (input.maxCost !== undefined && (!Number.isFinite(input.maxCost) || input.maxCost <= 0)) problems.push("maxCost")
+  if (
+    input.readRoot !== undefined &&
+    (typeof input.readRoot !== "string" ||
+      !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(input.readRoot) ||
+      input.readRoot.includes("\0"))
+  )
+    problems.push("readRoot")
   if (
     input.readDenies !== undefined &&
     (!Array.isArray(input.readDenies) ||

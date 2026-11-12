@@ -88,3 +88,29 @@ export function readPatterns(worktree: string, target: string) {
   const real = path.relative(FSUtil.realpath(worktree), FSUtil.realpath(target))
   return requested === real ? [requested] : [requested, real]
 }
+
+/** Restricted review listings expose only resources without an explicit read denial. */
+export function filterReadListing<T>(
+  ctx: Tool.Context,
+  worktree: string,
+  entries: readonly T[],
+  target: (entry: T) => string,
+) {
+  if (ctx.extra?.restrictedReadListing !== true) return Effect.succeed(entries)
+  if (!ctx.deniedResources)
+    return Effect.die(new Error("This restricted review cannot inspect file listing permissions."))
+  const candidates = entries.map((entry) => ({
+    entry,
+    resources: readPatterns(worktree, target(entry)).map((resource) => resource.replaceAll("\\", "/")),
+  }))
+  return ctx
+    .deniedResources({ permission: "read", patterns: [...new Set(candidates.flatMap((entry) => entry.resources))] })
+    .pipe(
+      Effect.map((refused) => {
+        const denied = new Set(refused)
+        return candidates
+          .filter((entry) => !entry.resources.some((resource) => denied.has(resource)))
+          .map((entry) => entry.entry)
+      }),
+    )
+}

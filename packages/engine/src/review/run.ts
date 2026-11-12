@@ -91,6 +91,8 @@ import { Session } from "@/session/session"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Truncate } from "@/tool/truncate"
 import { EffectBridge } from "@/effect/bridge"
+import { InstanceState } from "@/effect/instance-state"
+import { readAuthority, type ReadAuthority } from "./read-authority"
 import type { ResolvedModel } from "./model"
 
 export interface RunInput {
@@ -122,6 +124,9 @@ export interface RunInput {
   allowDirs?: string[]
   checks?: boolean
   readDenies?: readonly string[]
+  readRoot?: string
+  /** Frozen internal authority admitted before asynchronous adapter setup. */
+  admittedReads?: ReadAuthority
   instructionsFromContext?: true
   /** An owning cloud run can stop every specialist without discarding completed reports. */
   stopSignal?: AbortSignal
@@ -275,12 +280,21 @@ export const run: (
     allowDirs: input.allowDirs,
     checks: input.checks,
     truncateGlob: input.trust === "untrusted" ? undefined : Truncate.GLOB,
-    readDenies: input.readDenies,
+    readDenies: input.admittedReads
+      ? input.admittedReads.patternsFor((yield* InstanceState.context).worktree)
+      : input.readDenies?.length
+        ? readAuthority(input.readDenies, {
+            directory: input.directory,
+            worktree: (yield* InstanceState.context).worktree,
+            ...(input.readRoot ? { readRoot: input.readRoot } : {}),
+          }).patterns
+        : undefined,
   })
   const reviewed = {
     paths: input.files.map((file) => file.path),
     trust: input.trust,
     ...(input.instructionsFromContext ? { instructions: "provided" as const } : {}),
+    ...(input.admittedReads?.patterns.length || input.readDenies?.length ? { restrictedReads: true as const } : {}),
   }
   const tracks = new Map<string, Track>()
   const reservations = new Map<Name, { turn: number; finalize: number }>()

@@ -103,3 +103,70 @@ updated workstream sequence. No feature branch has been merged into main here.
 The next service checks add an authority-alias regression (a caller mutating its
 read-denial array during model setup) and cancellation before model setup. Both
 fixes are implemented, but their new tests are pending the serial root runner.
+
+## Recorded production baseline and read-resource review
+
+The production UI baseline now has an actual successful metrics job:
+`43144814717` / `130940045774` at
+`693e86d042bdf7ce92d086c02cbcf986800e55b4`. Nine navigation cases pass (three
+flows, three repetitions), with zero retries and no observed blank/unknown
+samples. The coordinator retained the official decoded log and parsed summary
+under `/tmp/vector-build-validation/scope-ui-baseline*`. Artifact ZIP and CPU
+manifest verification remain unavailable. The overall workflow's old-source unit
+failure is separate; this establishes neither green integration CI nor a
+performance comparison. A final comparison remains owed after session changes.
+
+Independent review found a P1 before service activation: payload filtering tested
+absolute caller denials, while tool permission checks used worktree-relative
+resource names. The candidate fix uses one engine authority projector for both
+payload decisions and actual helper permission rules. Requested and canonical
+destinations, symlink spellings and worktree-relative resources remain denied.
+An optional trusted `readRoot` records where the caller's denials originated, so
+an isolated Git worktree inherits those paths without guessing from basenames.
+Future server adapters must derive that origin from the requester placement.
+
+Read already checks requested and canonical file names. Grep now retains both
+names per candidate. Restricted review listings filter hard-denied resources;
+ordinary Glob keeps its existing ask and listing behavior. The restriction is
+server context derived from engine-owned review metadata, never a model tool
+argument, and cannot grant a denied content read. Unknown review metadata is
+conservative, and a restricted embedder without an inspector refuses its listing.
+
+The candidate includes actual Read/Grep/Glob cases over symlinked and nested roots,
+a real Git worktree, ordinary-listing compatibility and missing-inspector refusal,
+plus a genuine `Review.run` fake-provider tool sequence. These checks and the
+expanded source pin are pending root validation; no activation or P1 closure is
+claimed yet. Ambient instruction isolation remains a subsequent required change.
+
+## Read-authority repair accepted before activation
+
+The coordinator's fourth independent source review found no concrete remaining
+read-authority bypass after the absolute/relative, resolver-time symlink retarget,
+and nested-directory repairs. Canonical denial destinations now freeze once the
+trusted Git worktree is known, before adapter/model setup. Relative resources use
+that actual tool worktree rather than a nested requested directory. An explicit
+requester `readRoot` remains server-derived for isolated-worktree projection.
+Adapters retain the frozen absolute destinations, and the helper runner only adds
+its actual relative aliases; a retarget cannot discard the original destination.
+
+Restricted Glob and Read directory listings share the same alias-aware hard-deny
+filter. Read filename suggestions also use it. The flag is server context; normal
+Read/Glob asks and listings keep their established behavior. A restricted runtime
+without a permission inspector refuses the listing.
+
+Root's batch 013 passes the two genuine service-to-provider regressions (nested
+placement and resolver-time retarget), 2 tests/30 assertions; actual read-authority
+cases 6/52; actual Git service cases 7/34; existing Read 45/106, Grep 19/62 and Glob
+2/6; core invocation 3/28 and model evidence 30/393. Those runtime receipts cover
+source pin `f877a57b9b71813c`. The final change only narrows the optional context
+access for TypeScript; its engine typecheck passes at pin `14996e077e0e17c3` in
+`scope-engine-p1-final-types.log`. The coordinator retains all receipts under
+`/tmp/vector-build-validation`. No full-workflow, performance or paid-model claim
+is made.
+
+This closes the reviewed read-authority P1 before activation. The service remains
+unwired. Pinned instruction isolation is the next boundary: ambient Brain digests,
+review recall and implicit Read instruction attachments must not accompany its
+provided base context. Bound helpers must refuse compaction or lost context
+rather than silently restore ambient instructions. Legacy reviews retain their
+existing instruction and compaction behavior.

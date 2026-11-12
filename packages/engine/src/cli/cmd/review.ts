@@ -78,8 +78,9 @@ import type { ReviewModel, ResolvedModel } from "@/review/model"
 import type { Review } from "@/review/run"
 import { ReviewSource } from "@/review/source"
 import { Process } from "@/util/process"
-import { Wildcard } from "@/util/wildcard"
 import type { SessionID } from "@/session/schema"
+import { InstanceRef } from "@/effect/instance-ref"
+import { readAuthority, type ReadAuthority } from "@/review/read-authority"
 import { UI } from "../ui"
 import { effectCmd } from "../effect-cmd"
 import type { ReviewGitHub, ReviewGitHubOptions } from "./github.review-api"
@@ -123,6 +124,8 @@ export interface LocalReviewOptions {
     settingsRef: string
     stateless: true
     readDenies?: readonly string[]
+    readRoot?: string
+    admittedReads?: ReadAuthority
     stopSignal?: AbortSignal
   }
 }
@@ -226,10 +229,17 @@ export function executeLocalReview<RunR, ModelR>(
       return yield* new LocalReviewError({
         message: "The pinned review settings commit is not available in this repository.",
       })
-    const denied = (file: string) =>
-      options.context?.readDenies?.some(
-        (pattern) => Wildcard.match(file, pattern) || Wildcard.match(path.join(root, file), pattern),
-      ) === true
+    const readDenies = options.context?.admittedReads?.absolute ?? options.context?.readDenies
+    const authority = options.context?.admittedReads?.absolute.includes("*")
+      ? options.context.admittedReads
+      : readDenies?.length
+        ? readAuthority(readDenies, {
+            directory: root,
+            worktree: (yield* InstanceRef)?.worktree ?? root,
+            ...(options.context?.readRoot ? { readRoot: options.context.readRoot } : {}),
+          })
+        : undefined
+    const denied = (file: string) => authority?.denied(file) === true
     if (denied(REVIEW_CONFIG_PATH))
       return yield* new LocalReviewError({ message: "This conversation cannot read the review settings." })
     const branch = yield* git.branch(root)
@@ -485,6 +495,8 @@ export function executeLocalReview<RunR, ModelR>(
       ...(options.context?.parentID ? { parentID: options.context.parentID } : {}),
       ...(options.context?.stopSignal ? { stopSignal: options.context.stopSignal } : {}),
       ...(options.context?.readDenies ? { readDenies: options.context.readDenies } : {}),
+      ...(options.context?.readRoot ? { readRoot: options.context.readRoot } : {}),
+      ...(authority ? { admittedReads: authority } : {}),
       ...(options.context ? { instructionsFromContext: true } : {}),
       trigger: "local",
       trust,

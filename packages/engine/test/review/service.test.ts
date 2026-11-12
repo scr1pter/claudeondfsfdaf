@@ -101,6 +101,29 @@ const request = (repo: { directory: string; base: string; head: string }): Input
 })
 
 describe("shared review service", () => {
+  it.live("retains requester read authority when the review runs in a real Git worktree", () =>
+    Effect.gen(function* () {
+      const repo = yield* fixture
+      const directory = yield* tmpdirScoped()
+      yield* git(repo.directory, "worktree", "add", "--detach", directory, repo.head)
+      const run = adapter()
+      const result = yield* execute(
+        {
+          ...request(repo),
+          directory,
+          readRoot: repo.directory,
+          readDenies: [path.join(repo.directory, "private.ts")],
+        },
+        run.deps,
+      )
+      expect(run.calls[0]!.directory).toBe(directory)
+      expect(run.calls[0]!.readRoot).toBe(repo.directory)
+      expect(run.calls[0]!.files.map((file) => file.path)).toEqual(["visible.ts"])
+      expect(yield* Effect.promise(() => run.calls[0]!.knownPath("private.ts"))).toBe(false)
+      expect(result.verdict.verdict).toBe("incomplete")
+    }),
+  )
+
   it.live("keeps admitted read denials when the caller mutates its array during model setup", () =>
     Effect.gen(function* () {
       const repo = yield* fixture

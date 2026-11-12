@@ -4,7 +4,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { WebFence } from "@vectordevai/core/research/fence"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryEffect, readPatterns } from "./external-directory"
 import DESCRIPTION from "./grep.txt"
 import * as Tool from "./tool"
 
@@ -83,7 +83,7 @@ export const GrepTool = Tool.define(
               ? [
                   {
                     file: `./${path.basename(search)}`,
-                    resource: path.relative(ins.worktree, search).replaceAll("\\", "/"),
+                    resources: readPatterns(ins.worktree, search).map((resource) => resource.replaceAll("\\", "/")),
                   },
                 ]
               : (yield* ripgrep.find({
@@ -93,20 +93,22 @@ export const GrepTool = Tool.define(
                   limit: Number.MAX_SAFE_INTEGER,
                 })).map((entry) => ({
                   file: `./${entry.path}`,
-                  resource: path.relative(ins.worktree, path.resolve(cwd, entry.path)).replaceAll("\\", "/"),
+                  resources: readPatterns(ins.worktree, path.resolve(cwd, entry.path)).map((resource) =>
+                    resource.replaceAll("\\", "/"),
+                  ),
                 }))
-          const read = { permission: "read", patterns: candidates.map((entry) => entry.resource) }
+          const read = { permission: "read", patterns: [...new Set(candidates.flatMap((entry) => entry.resources))] }
           // The runtime supplies its actual agent/session deny ceiling. Embedders
           // without inspection still authorize the whole batch before any content is read.
           const denied =
             info.type === "Directory" && ctx.deniedResources
               ? new Set(yield* ctx.deniedResources(read))
               : new Set<string>()
-          const admitted = candidates.filter((entry) => !denied.has(entry.resource))
+          const admitted = candidates.filter((entry) => !entry.resources.some((resource) => denied.has(resource)))
           if (!admitted.length) return empty
           yield* ctx.ask({
             ...read,
-            patterns: admitted.map((entry) => entry.resource),
+            patterns: [...new Set(admitted.flatMap((entry) => entry.resources))],
             always: ["*"],
             metadata: { path: params.path, include: params.include },
           })

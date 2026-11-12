@@ -12,6 +12,7 @@ const invocation: ReviewInvocation = {
 describe("review invocation", () => {
   test("accepts a local request with no GitHub identity or network prerequisite", () => {
     expect(invocationProblems(invocation)).toEqual([])
+    expect(invocationProblems({ ...invocation, readRoot: "/original-checkout" })).toEqual([])
     expect(invocationProblems({ ...invocation, readDenies: ["private/*", "*.env"], maxCost: 0.5 })).toEqual([])
     expect(
       invocationProblems({ ...invocation, target: { kind: "branch", head: "a".repeat(64), base: "b".repeat(64) } }),
@@ -37,6 +38,8 @@ describe("review invocation", () => {
       expect(invocationProblems({ ...invocation, maxCost })).toContain("maxCost")
     for (const readDenies of [[""], ["bad\0path"], ["a".repeat(4_097)], Array(1_001).fill("*")])
       expect(invocationProblems({ ...invocation, readDenies })).toContain("readDenies")
+    for (const readRoot of ["", "relative/root", "bad\0root"])
+      expect(invocationProblems({ ...invocation, readRoot })).toContain("readRoot")
     expect(
       invocationProblems({ ...invocation, target: { ...invocation.target, config: {} } } as ReviewInvocation),
     ).toContain("target.field:config")
