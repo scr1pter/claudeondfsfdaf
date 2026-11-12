@@ -32,6 +32,8 @@ if set(os.environ) - {"PATH", "LC_ALL", "LC_CTYPE"}:
 allowed = {"/usr/lib/python312.zip", "/usr/lib/python3.12", "/usr/lib/python3.12/lib-dynload"}
 if set(sys.path) - allowed:
     os._exit(125)
+if "_struct" not in sys.builtin_module_names:
+    os._exit(125)
 import ctypes
 libc = ctypes.CDLL(None, use_errno=True)
 libc.close_range.argtypes = (ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
@@ -481,6 +483,12 @@ const exists = (file: string, check: Check) =>
 const absent = async (file: string, check: Check) => {
   requireValue(!(await exists(file, check)))
 }
+/** Stock noble compiles _struct into the already-bound interpreter/libpython image. Only _ctypes is dynamic. */
+export function extensionProfile(extensions: readonly string[], arch: "x64" | "arm64") {
+  const expected = `/usr/lib/python3.12/lib-dynload/_ctypes.cpython-312-${arch === "x64" ? "x86_64" : "aarch64"}-linux-gnu.so`
+  requireValue(extensions.length === 1 && extensions[0] === expected)
+  return expected
+}
 async function getpathOverrides(file: string, check: Check) {
   // CPython3.12 Modules/getpath.py: command-line isolation cannot disable ._pth, pyvenv or build discovery.
   await absent(file + "._pth", check)
@@ -553,7 +561,7 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
   requireValue((await immutable("/usr/lib/python3.12/os.py", check)).info.isFile())
   requireValue((await immutable("/usr/lib/python3.12/lib-dynload", check)).info.isDirectory())
   await walk("/usr/lib/python3.12")
-  requireValue(extensions.length === 2)
+  const extension = extensionProfile(extensions, arch)
   const libraries = new Set<string>()
   const verify = async (file: string): Promise<void> => {
     check()
@@ -592,7 +600,7 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
     }
   }
   await verify(PYTHON)
-  for (const extension of extensions) await verify(extension)
+  await verify(extension)
   check()
   return executable
 }

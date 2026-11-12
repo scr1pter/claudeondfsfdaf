@@ -321,6 +321,23 @@ test("exact immutable package membership and installed-file digest bind the inte
     expect(() => DirectoryIdentityReader.packageImage(list, sums, "/usr/bin/custom-python", image)).toThrow()
   }
 })
+test("the exact stock noble extension profile requires native ctypes while struct stays in the bound image", () => {
+  const x64 = "/usr/lib/python3.12/lib-dynload/_ctypes.cpython-312-x86_64-linux-gnu.so",
+    arm64 = "/usr/lib/python3.12/lib-dynload/_ctypes.cpython-312-aarch64-linux-gnu.so",
+    struct = "/usr/lib/python3.12/lib-dynload/_struct.cpython-312-x86_64-linux-gnu.so"
+  expect(DirectoryIdentityReader.extensionProfile([x64], "x64")).toBe(x64)
+  expect(DirectoryIdentityReader.extensionProfile([arm64], "arm64")).toBe(arm64)
+  for (const profile of [
+    [],
+    [arm64],
+    [x64, x64],
+    [x64, struct],
+    [struct],
+    [x64.replace("/usr/lib/", "/usr/local/lib/")],
+  ])
+    expect(() => DirectoryIdentityReader.extensionProfile(profile, "x64")).toThrow()
+  expect(() => DirectoryIdentityReader.extensionProfile([x64], "arm64")).toThrow()
+})
 // Root runs only these contract cases locally. Actual execution is manual CI-only; this test switch grants no runtime authority.
 const ci = test.skipIf(process.env.VECTOR_DIRECTORY_IDENTITY_CI !== "1" || process.platform !== "linux")
 const WRAPPER = String.raw`import os, sys, resource
