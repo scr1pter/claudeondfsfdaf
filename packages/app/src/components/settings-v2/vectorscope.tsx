@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, on, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, on, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Config } from "@vectordevai/sdk/v2/client"
 import { Button } from "@vectordevai/ui/button"
@@ -25,6 +25,7 @@ export function SettingsVectorScopeV2(props: {
 }) {
   const models = useModels()
   const language = useLanguage()
+  let root: HTMLDivElement | undefined
   let disposed = false
   onCleanup(() => {
     disposed = true
@@ -36,6 +37,15 @@ export function SettingsVectorScopeV2(props: {
     pending: false,
     error: "",
     saved: false,
+    overlayZIndex: undefined as number | undefined,
+  })
+  onMount(() => {
+    const layer = root?.closest<HTMLElement>("[data-dialog-layer]")
+    if (!layer) return
+    // DialogProvider's actual layer is above ordinary body-portalled menus.
+    // Keep these popups above that dialog and below the next pushed layer.
+    const zIndex = Number(getComputedStyle(layer).zIndex)
+    if (Number.isFinite(zIndex)) setState("overlayZIndex", zIndex + 1)
   })
   const dirty = () => vectorScopeKey(state.draft) !== state.base
   const locked = () => vectorScopeLocked(props.config?.locked ?? [])
@@ -98,6 +108,7 @@ export function SettingsVectorScopeV2(props: {
   }
   return (
     <div
+      ref={root}
       class="settings-v2-card settings-v2-card--wide"
       data-component="vectorscope-settings"
       aria-busy={state.pending}
@@ -135,6 +146,7 @@ export function SettingsVectorScopeV2(props: {
           </div>
           <ModelSelectorPopoverV2
             model={picker}
+            overlayZIndex={state.overlayZIndex}
             triggerAs="button"
             triggerProps={{
               type: "button",
@@ -156,6 +168,7 @@ export function SettingsVectorScopeV2(props: {
           </div>
           <SelectV2
             aria-label="VectorScope variant"
+            overlayZIndex={state.overlayZIndex}
             appearance="inline"
             disabled={inactive() || !state.draft.model}
             options={variants()}
