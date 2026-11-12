@@ -1034,6 +1034,45 @@ describe("Review.run", () => {
   )
 
   it.instance(
+    "a cloud stop denies an initial request without starting a specialist or finalizer",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const controller = new AbortController()
+        controller.abort()
+        const outcome = yield* Review.run(input(directory, { stopSignal: controller.signal, checks: false }))
+        expect(yield* modelRequests(llm)).toEqual([])
+        expect(outcome.partial).toBe("timeout")
+        expect(outcome.specialists).toEqual([{ name: "review", status: "stopped", steps: 0, detail: "timeout" }])
+        expect(outcome.unreviewed).toEqual(["src/list.ts"])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a cloud stop cancels an in-flight specialist and starts no finalizer or follow-up model call",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const status = yield* SessionStatus.Service
+        const controller = new AbortController()
+        yield* llm.pushMatch(REVIEW, reply().hang())
+        const fiber = yield* Review.run(input(directory, { stopSignal: controller.signal, checks: false })).pipe(
+          Effect.forkChild,
+        )
+        yield* llm.wait(1)
+        controller.abort()
+        const outcome = yield* Fiber.join(fiber)
+        expect((yield* status.list()).size).toBe(0)
+        expect(outcome.partial).toBe("timeout")
+        expect(outcome.selection.inline).toEqual([])
+        expect(yield* modelRequests(llm)).toHaveLength(1)
+        expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(0)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
     "cancels the owned runner before releasing an externally interrupted review",
     () =>
       Effect.gen(function* () {

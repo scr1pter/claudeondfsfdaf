@@ -51,6 +51,14 @@ const checks = reviewPermissionRules({ checks: true, truncateGlob })
 const all = (rules: Rule[]) => [...agent, ...rules]
 
 describe("reviewPermissionRules", () => {
+  test("keeps requester read denials after every reviewer allow", () => {
+    const restricted = reviewPermissionRules({ readDenies: ["private/*", "*.env.example"] })
+    expect(evaluate("read", "private/key.ts", agent, restricted)).toBe("deny")
+    expect(evaluate("read", ".env.example", agent, restricted)).toBe("deny")
+    expect(evaluate("read", "src/index.ts", agent, restricted)).toBe("allow")
+    expect(evaluate("StructuredOutput", "*", agent, restricted)).toBe("allow")
+    expect(reviewPermissionRules({ readDenies: [] })).toEqual(reviewPermissionRules({}))
+  })
   test("re-allows StructuredOutput after the agent's deny", () => {
     expect(evaluate("StructuredOutput", "*", agent)).toBe("deny")
     expect(evaluate("StructuredOutput", "*", agent, plain)).toBe("allow")

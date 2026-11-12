@@ -82,6 +82,7 @@ export function reviewPermissionRules(input: {
   allowDirs?: string[]
   checks?: boolean
   truncateGlob?: string
+  readDenies?: readonly string[]
 }): PermissionV1.Rule[] {
   const rule = (permission: string, pattern: string, action: PermissionV1.Rule["action"]): PermissionV1.Rule => ({
     permission,
@@ -112,5 +113,6 @@ export function reviewPermissionRules(input: {
         ]
       : []),
     rule("StructuredOutput", "*", "allow"),
+    ...(input.readDenies ?? []).map((pattern) => rule("read", pattern, "deny")),
   ]
 }

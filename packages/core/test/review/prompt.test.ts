@@ -496,6 +496,15 @@ describe("How the owner reviews", () => {
       trust: "trusted",
     })
     expect(scopeOf({ [SCOPE]: { paths: "a.ts", trust: "yes" } })).toEqual({ paths: [], trust: "untrusted" })
+    expect(scopeOf({ [SCOPE]: { paths: [], trust: "trusted", instructions: "provided" } })).toEqual({
+      paths: [],
+      trust: "trusted",
+      instructions: "provided",
+    })
+    expect(scopeOf({ [SCOPE]: { paths: [], trust: "trusted", instructions: "working" } })).toEqual({
+      paths: [],
+      trust: "trusted",
+    })
     expect(scopeOf({})).toBeUndefined()
     expect(scopeOf(undefined)).toBeUndefined()
   })

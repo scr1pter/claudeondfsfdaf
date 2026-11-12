@@ -45,3 +45,33 @@ pending the coordinator's serial validation; this paragraph claims no CI pass.
 Dataset adjudication, funded quality runs, owner-attested destinations, named MCP
 resources, published CLI compatibility and production release approval remain
 explicit external prerequisites. Source presence is not release readiness.
+
+## Shared invocation checkpoint (VS-08 foundation)
+
+The browser-safe invocation contract rejects execution/publishing fields, moving
+refs, unsupported target kinds and malformed budget/read-denial inputs. The
+engine service reuses `executeLocalReview`; it adds no second review loop or
+GitHub start route. Local review needs no GitHub identity. Every request uses an
+exact settings commit, a stateless branch review, no checks and no posting. A
+provided cost ceiling can only tighten the pinned settings' positive ceiling.
+The local HEAD is checked before setup and again after asynchronous setup.
+
+Parent placement and cancellation are forwarded to the existing runner. Denied
+paths are removed before payload/context collection and from known-path answers,
+and remain denied in reviewer tool rules. Withheld changed files make coverage
+incomplete. The @vector lane's optional stop signal cancels owned specialists and
+refuses later provider/finalizer admission without discarding completed reports.
+
+The coordinator's serial local checks pass: invocation 3 tests/24 assertions,
+permission 15/191, prompt 47/274, model evidence 30/393, actual-git service 4/23.
+Their working-tree scope is recorded in
+`/tmp/vector-build-validation/results.jsonl`. Package typechecks and wider runner
+regressions remain pending. The source pin is `cf1b9f52a4e0337f`.
+
+This service is not wired to a public route or desktop execution. Its metadata
+requests pinned-context instruction handling, but the session prompt boundary
+must still suppress ambient working-tree instruction files before use. That edit
+waits for production baseline run `43144814717`, dispatched at
+`693e86d042bdf7ce92d086c02cbcf986800e55b4`; a queued run is not a measurement.
+Full VS-08 public adapters and VS-09 onward remain unfinished. No quality,
+performance or release-readiness claim follows from these foundation checks.

@@ -1183,7 +1183,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           ]
         : []),
       ...(config.modelEvidence === "warn"
-        ? evidenceNotes({ config, model, configured, agentModel, triage, served: identities, input })
+        ? evidenceNotes({ config, model, configured, agentModel, triage, served: new Set(identities), input })
         : []),
     ],
     context: {

@@ -78,6 +78,8 @@ import type { ReviewModel, ResolvedModel } from "@/review/model"
 import type { Review } from "@/review/run"
 import { ReviewSource } from "@/review/source"
 import { Process } from "@/util/process"
+import { Wildcard } from "@/util/wildcard"
+import type { SessionID } from "@/session/schema"
 import { UI } from "../ui"
 import { effectCmd } from "../effect-cmd"
 import type { ReviewGitHub, ReviewGitHubOptions } from "./github.review-api"
@@ -114,6 +116,15 @@ export interface LocalReviewOptions {
   checks?: boolean
   full?: boolean
   env?: Record<string, string | undefined> // REVIEW_* overrides; process.env by default
+  // Internal service context, never parsed from CLI flags or repository settings.
+  context?: {
+    parentID?: SessionID
+    expectedHead: string
+    settingsRef: string
+    stateless: true
+    readDenies?: readonly string[]
+    stopSignal?: AbortSignal
+  }
 }
 
 // A pull request's text from `gh pr view`. Its author wrote it, so it only ever goes in the prompt's untrusted blocks.
@@ -207,6 +218,20 @@ export function executeLocalReview<RunR, ModelR>(
       return yield* new LocalReviewError({
         message: "This repository has no commits yet, so there is nothing to compare.",
       })
+    if (options.context && current !== options.context.expectedHead)
+      return yield* new LocalReviewError({
+        message: "The review head changed. Start a new review of the current changes.",
+      })
+    if (options.context && (yield* commitOf(git, root, options.context.settingsRef)) !== options.context.settingsRef)
+      return yield* new LocalReviewError({
+        message: "The pinned review settings commit is not available in this repository.",
+      })
+    const denied = (file: string) =>
+      options.context?.readDenies?.some(
+        (pattern) => Wildcard.match(file, pattern) || Wildcard.match(path.join(root, file), pattern),
+      ) === true
+    if (denied(REVIEW_CONFIG_PATH))
+      return yield* new LocalReviewError({ message: "This conversation cannot read the review settings." })
     const branch = yield* git.branch(root)
     const trust = options.pr === undefined ? ("trusted" as const) : ("untrusted" as const)
     const pull =
@@ -221,21 +246,34 @@ export function executeLocalReview<RunR, ModelR>(
 
     // 2. Settings: your working tree for your own changes, the base for a pull request.
     const setting = (file: string) =>
-      trust === "trusted" ? readWorkingFile(root, file) : readBlob(git, root, base!.sha, file)
+      denied(file)
+        ? Effect.succeed(undefined)
+        : options.context
+          ? readBlob(git, root, options.context.settingsRef, file)
+          : trust === "trusted"
+            ? readWorkingFile(root, file)
+            : readBlob(git, root, base!.sha, file)
     const parsed = parseReviewConfig({ json: yield* setting(REVIEW_CONFIG_PATH), env, trigger: "local" })
     for (const warning of parsed.warnings) say(`Warning: ${warning}`)
-    const config = withFlags(parsed.config, options)
+    const config = withFlags(
+      parsed.config,
+      options.context && options.maxCost !== undefined && parsed.config.maxCostUsd > 0
+        ? { ...options, maxCost: Math.min(options.maxCost, parsed.config.maxCostUsd) }
+        : options,
+    )
     let rulesText: string | undefined
     for (const file of REVIEW_RULES_PATHS) rulesText ??= yield* setting(file)
     const rules = parseReviewRules(rulesText ?? "")
     if (rules.truncated) say("Warning: .vector/review.md is over 16 KB; only the first 16 KB is used.")
     const attributesText = yield* setting(".gitattributes")
     const attributes = attributesText ? parseGitAttributes(attributesText) : undefined
-    const ignored = (file: string) => classifyPath(file, { config, attributes }) !== undefined
+    const ignored = (file: string) => denied(file) || classifyPath(file, { config, attributes }) !== undefined
 
     // 3. What changed. Only a branch keeps "since last review" state, in the repository's git directory.
     const statePath =
-      !worktree && options.pr === undefined && branch ? yield* localStatePath(git, root, branch) : undefined
+      !options.context?.stateless && !worktree && options.pr === undefined && branch
+        ? yield* localStatePath(git, root, branch)
+        : undefined
     const stored = statePath && !options.full ? yield* readLocalState(statePath) : undefined
     const saved = stored?.state
     const range: Range =
@@ -325,7 +363,13 @@ export function executeLocalReview<RunR, ModelR>(
     }
 
     // 4. What to review: path rules first, then generated-file headers, which count only when the base agrees.
-    const classified = classifyFiles(range.files, { config, attributes })
+    const withheld = range.files.filter(
+      (file) => denied(file.path) || (file.oldPath !== undefined && denied(file.oldPath)),
+    )
+    const classified = classifyFiles(
+      range.files.filter((file) => !withheld.includes(file)),
+      { config, attributes },
+    )
     const readHead = (file: string) =>
       range.worktree === "uncommitted"
         ? readWorkingFile(root, file)
@@ -339,6 +383,10 @@ export function executeLocalReview<RunR, ModelR>(
     })
     const review = headers.review
     const skipped: SkippedFile[] = [...classified.skipped, ...headers.skipped]
+    if (!review.length && withheld.length)
+      return yield* new LocalReviewError({
+        message: "The changed files are outside this conversation's read access; no review ran.",
+      })
     if (!review.length) return yield* early(noteNothingToReview(), open)
 
     // 5. The model, and what running tests on this branch would mean.
@@ -393,6 +441,7 @@ export function executeLocalReview<RunR, ModelR>(
       files: review,
       ignore: [...(config.ignoreDefaults ? DEFAULT_IGNORES.map((rule) => rule.glob) : []), ...config.ignore],
       ignored,
+      ...(options.context ? { instructions: setting } : {}),
     })
     // The specs the change touches, with drift flags, so the reviewer can tell when it breaks one.
     const requirements = deps.requirements
@@ -407,9 +456,10 @@ export function executeLocalReview<RunR, ModelR>(
             files: review,
           })
         : undefined
-    const knownPath = range.worktree
+    const known = range.worktree
       ? (file: string) => Promise.resolve(inTree(root, file))
       : yield* ReviewSource.knownPath({ directory: root, rev: range.head })
+    const knownPath = options.context ? (file: string) => (denied(file) ? Promise.resolve(false) : known(file)) : known
     const commits = yield* subjects(git, root, range.mergeBase, range.head)
     const pr: PromptInput["pr"] | undefined =
       options.pr !== undefined
@@ -425,9 +475,15 @@ export function executeLocalReview<RunR, ModelR>(
           : undefined
 
     // 7. The review.
+    if (options.context && (yield* commitOf(git, root, "HEAD")) !== options.context.expectedHead)
+      return yield* new LocalReviewError({ message: "The review head changed before the review could start." })
     say(`Reviewing ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
-    const reviewed = yield* deps.runReview({
+    const result = yield* deps.runReview({
       directory: root,
+      ...(options.context?.parentID ? { parentID: options.context.parentID } : {}),
+      ...(options.context?.stopSignal ? { stopSignal: options.context.stopSignal } : {}),
+      ...(options.context?.readDenies ? { readDenies: options.context.readDenies } : {}),
+      ...(options.context ? { instructionsFromContext: true } : {}),
       trigger: "local",
       trust,
       base: range.mergeBase,
@@ -456,8 +512,15 @@ export function executeLocalReview<RunR, ModelR>(
         if (event.type === "specialist") say(`  ${event.name}: ${event.status}`)
       },
       baseRef: target.baseRef,
-      rulesSource: trust === "trusted" ? "working tree" : "base branch",
+      rulesSource: options.context || trust !== "trusted" ? "base branch" : "working tree",
     })
+    const reviewed = withheld.length
+      ? {
+          ...result,
+          unreviewed: [...new Set([...result.unreviewed, ...withheld.map((file) => file.path)])],
+          notes: [...result.notes, "Some changed files were not reviewed because this conversation cannot read them."],
+        }
+      : result
     const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify")
     if (!reviewers.some((entry) => entry.status !== "failed")) {
       const detail = (reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no report").replace(

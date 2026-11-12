@@ -221,7 +221,7 @@ const STRUCTURE_TAG =
  */
 export const SCOPE = "vector.review"
 
-export type Scope = { paths: string[]; trust: Trust }
+export type Scope = { paths: string[]; trust: Trust; instructions?: "provided" }
 
 const MAX_SCOPE_PATHS = 300
 
@@ -233,6 +233,7 @@ export function scopeOf(metadata: Record<string, unknown> | undefined): Scope | 
   return {
     paths: paths.filter((item): item is string => typeof item === "string").slice(0, MAX_SCOPE_PATHS),
     trust: "trust" in value && value.trust === "trusted" ? "trusted" : "untrusted",
+    ...("instructions" in value && value.instructions === "provided" ? { instructions: "provided" as const } : {}),
   }
 }
 
@@ -494,7 +495,8 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
         ),
       ),
     )
-  if (input.requirements?.trim()) out.push(wrapUntrusted("linked_requirements", clip(input.requirements.trim(), MAX_REQUIREMENT_CHARS)))
+  if (input.requirements?.trim())
+    out.push(wrapUntrusted("linked_requirements", clip(input.requirements.trim(), MAX_REQUIREMENT_CHARS)))
   const history = (input.history ?? []).filter((entry) => entry.text.trim()).slice(0, MAX_HISTORY_FILES)
   if (history.length)
     out.push(
