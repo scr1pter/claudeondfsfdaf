@@ -169,12 +169,9 @@ async function assertReadOnlyEngine(scope: { checkout: string; canary: string })
     () => fs.writeFile("/usr/libexec/vector-namespace-probe/future-step.mjs", "console.log('poisoned-next-step')\n"),
     () => fs.writeFile(`${ProcessIsolation.ENGINE_HOME}/namespace-home-poison-${process.pid}`, "poisoned home\n"),
     () => fs.writeFile(`/tmp/namespace-host-tmp-poison-${process.pid}`, "poisoned host temporary\n"),
-    // Never write/truncate the real runtime, even if an old boundary accidentally allows this open.
-    async () => {
-      const opened = await fs.open(process.execPath, constants.O_WRONLY)
-      await opened.close()
-    },
   ]
+  // Linux may report ETXTBSY before testing an executing ELF's mount. The host independently checks the exact
+  // runtime mount through the verified engine PID/root and actual exe handles; no live ELF is opened for writing.
   for (const [index, attempt] of attempts.entries()) {
     try {
       await attempt()

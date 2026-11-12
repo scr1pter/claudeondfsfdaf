@@ -18,6 +18,40 @@ const futureFiles = [
     source: "import { value } from './future-step-dependency.mjs'; console.log(value)\n",
   },
 ]
+// Fixed root-only read of metadata on the exact engine process and the host-captured canonical Node path.
+// fstatvfs uses the opened path's resolved mount, including an overmount below the otherwise read-only root.
+const runtimeMountObservation = [
+  "import json, os, pathlib, sys",
+  "pid, start, uid, runtime = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4]",
+  "if os.geteuid() != 0 or pid <= 1 or uid <= 0 or not start.isdigit() or len(start) > 32 or not runtime.startswith('/'):",
+  "    raise RuntimeError('Invalid fixed runtime metadata request')",
+  "def check():",
+  "    text = pathlib.Path(f'/proc/{pid}/stat').read_text()",
+  "    fields = text[text.rindex(')') + 2:].split()",
+  "    status = pathlib.Path(f'/proc/{pid}/status').read_text()",
+  "    users = next(line for line in status.splitlines() if line.startswith('Uid:')).split()[1:]",
+  "    if fields[19] != start or fields[0] == 'Z' or len(users) != 4 or any(int(value) != uid for value in users):",
+  "        raise RuntimeError('The verified engine identity changed')",
+  "pin = os.pidfd_open(pid, 0)",
+  "try:",
+  "    check()",
+  "    target = os.open(f'/proc/{pid}/root' + runtime, os.O_PATH | os.O_CLOEXEC)",
+  "    executable = os.open(f'/proc/{pid}/exe', os.O_PATH | os.O_CLOEXEC)",
+  "    try:",
+  "        info = os.fstat(target)",
+  "        actual = os.fstat(executable)",
+  "        value = {'v': 1, 'device': str(info.st_dev), 'inode': str(info.st_ino),",
+  "                 'exactExecutable': (info.st_dev, info.st_ino) == (actual.st_dev, actual.st_ino),",
+  "                 'runtimeReadOnly': bool(os.fstatvfs(target).f_flag & os.ST_RDONLY),",
+  "                 'executableReadOnly': bool(os.fstatvfs(executable).f_flag & os.ST_RDONLY)}",
+  "        check()",
+  "        print(json.dumps(value, separators=(',', ':')))",
+  "    finally:",
+  "        os.close(executable)",
+  "        os.close(target)",
+  "finally:",
+  "    os.close(pin)",
+].join("\n")
 const containers = ["/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox"]
 type Identity = { pid: number; start: string; uid: number; group: number; state: string; namespacePids: number[] }
 type Round = {
@@ -272,6 +306,9 @@ async function main() {
     )
   }
   await brokerLive()
+  const runtimePath = await fs.realpath(process.execPath)
+  const runtime = await fs.stat(runtimePath, { bigint: true })
+  requireValue(runtime.isFile(), "The host could not capture its trusted Node runtime identity")
   // DAC intentionally permits the agent to alter these synthetic dependencies. Only the RO mount may deny writes.
   for (const file of futureFiles) {
     const source = path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", file.name)
@@ -388,6 +425,38 @@ async function main() {
           value.proof.inode === String(proof.ino),
         "The engine FD3 is not the actual sandbox proof descriptor",
       )
+      const engine = baseline.find((entry) => entry.pid === value.pid)
+      requireValue(engine, "The runtime observation has no captured engine identity")
+      const actual = await execute(
+        "/usr/bin/sudo",
+        [
+          "-n",
+          "/usr/bin/python3",
+          "-I",
+          "-S",
+          "-c",
+          runtimeMountObservation,
+          String(engine.pid),
+          engine.start,
+          String(uid),
+          runtimePath,
+        ],
+        { timeout: 5000, maxBuffer: 1024, env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } },
+      )
+      const mount: unknown = JSON.parse(actual.stdout)
+      requireValue(
+        record(mount) &&
+          mount.v === 1 &&
+          mount.device === String(runtime.dev) &&
+          mount.inode === String(runtime.ino) &&
+          mount.exactExecutable === true &&
+          mount.runtimeReadOnly === true &&
+          mount.executableReadOnly === true,
+        "The exact credential-holding runtime is not on a read-only engine mount",
+      )
+      const after = await identity(engine.pid, uid)
+      requireValue(after && after.state !== "Z" && same(engine, after), "The observed runtime process changed identity")
+      console.log(JSON.stringify({ event: "namespace-engine-runtime-mount", v: 1, readOnly: true }))
       await acknowledge(observer, 0, "baseline")
       return
     }
@@ -545,6 +614,7 @@ async function main() {
       emptyEngineProc: true,
       loaderRejected: true,
       engineReadOnlyObserved: true,
+      runtimeReadOnlyObserved: true,
       allGroupsStoppedBeforeUidSweep: true,
       normal: 1,
       earlyCancellations: 4,
@@ -563,6 +633,7 @@ async function main() {
         engineReadOnlyQualified: false,
         actualToolSeamsQualified: false,
         engineReadOnlyObserved: true,
+        runtimeReadOnlyObserved: true,
       }),
     )
   } finally {
@@ -589,6 +660,7 @@ async function finalAssertion() {
       report.emptyEngineProc === true &&
       report.loaderRejected === true &&
       report.engineReadOnlyObserved === true &&
+      report.runtimeReadOnlyObserved === true &&
       report.allGroupsStoppedBeforeUidSweep === true &&
       report.normal === 1 &&
       report.earlyCancellations === 4 &&
