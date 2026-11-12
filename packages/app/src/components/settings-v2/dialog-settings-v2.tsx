@@ -19,6 +19,7 @@ import { SettingsSubagentsV2 } from "./subagents"
 import { SettingsSpendLimitsV2 } from "./spend-limits"
 import { SettingsMemoryV2 } from "./memory"
 import { SettingsLocalV2 } from "./local"
+import { SettingsGithubAgentsV2 } from "./github-agents"
 import { SettingsKeybinds } from "../settings-keybinds"
 import { spendLimitsApi } from "@/features/economics/spend-limits-api"
 import {
@@ -93,6 +94,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "memory")
       return <SettingsMemoryV2 repositoryPath={props.repositoryPath} sessionDirectory={props.sessionDirectory} />
     if (item === "local") return <SettingsLocalV2 />
+    if (item === "github") return <SettingsGithubAgentsV2 repositoryPath={props.repositoryPath} />
     if (item === "providers") return <SettingsProvidersV2 />
     if (item === "models") return <SettingsModelsV2 />
     if (item === "servers") return <SettingsServersV2 />

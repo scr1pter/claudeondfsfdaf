@@ -3,7 +3,7 @@ import { filterSettingsGroups, isSettingsTab, settingsGroups, settingsItemCount 
 
 describe("settings registry", () => {
   test("keeps every settings page reachable", () => {
-    expect(settingsItemCount(settingsGroups)).toBe(15)
+    expect(settingsItemCount(settingsGroups)).toBe(16)
     expect(settingsGroups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
       "account",
       "general",
@@ -11,6 +11,7 @@ describe("settings registry", () => {
       "local",
       "usage",
       "spend",
+      "github",
       "subagents",
       "providers",
       "models",
@@ -125,5 +126,11 @@ describe("settings registry", () => {
   test("validates tab values before navigation", () => {
     expect(isSettingsTab("providers")).toBe(true)
     expect(isSettingsTab("canvas")).toBe(false)
+  })
+
+  test("finds GitHub bindings, Actions and scheduled runs", () => {
+    for (const query of ["github", "actions", "repository bindings", "run in github", "scheduled runs"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["github"])
+    expect(isSettingsTab("github")).toBe(true)
   })
 })

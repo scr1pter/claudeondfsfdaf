@@ -245,7 +245,7 @@ export function GithubDeviceSignIn(props: {
         <Show when={props.workflow}>
           <div class="max-w-[360px] text-12-regular text-text-weak">
             GitHub also asks to let Vector change workflow files. Approve it so Vector can open the pull request that
-            adds automatic reviews.
+            sets up this repository's workflow.
           </div>
         </Show>
         <Button type="button" onClick={() => void openVerification()}>

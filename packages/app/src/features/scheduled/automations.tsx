@@ -1,5 +1,9 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { Portal } from "solid-js/web"
+import { createStore } from "solid-js/store"
+import { cronFor } from "@vectordevai/core/review/schedule"
+import { ACTIONS_COPY, agentsApi, agentsView } from "@/features/github-agents/agents-model"
+import { useAgentsStatus } from "@/features/github-agents/use-status"
 import {
   automationTargetResults,
   buildAutomationInput,
@@ -8,6 +12,7 @@ import {
   describeMissedRuns,
   describeRecurrence,
   sortAutomations,
+  supportsGithubSchedule,
   SUGGESTIONS,
   type AutomationInput,
   type AutomationRecord,
@@ -158,9 +163,9 @@ export function Automations(props: {
               Work Vector repeats without you
             </h1>
             <p class="mt-3 max-w-[640px] text-[15px] leading-[1.6] text-white/60">
-              An automation is one task Vector runs again and again on a schedule. Write the task, pick the
-              repositories it runs in — and in each one whether it starts a new session or continues one you already
-              have — then choose how often it repeats.
+              An automation is one task Vector runs again and again on a schedule. Write the task, pick the repositories
+              it runs in — and in each one whether it starts a new session or continues one you already have — then
+              choose how often it repeats.
             </p>
 
             <Show when={props.loadError}>
@@ -433,6 +438,7 @@ function AutomationForm(props: {
     props.focusedRepository ? { [props.focusedRepository]: { directory: props.focusedRepository, sessionId: "" } } : {},
   )
   const [submitting, setSubmitting] = createSignal(false)
+  const [github, setGithub] = createStore<{ enabled: boolean; error?: string; url?: string }>({ enabled: false })
 
   const drafts = createMemo(() =>
     props.repositories.map((repository) => ({
@@ -447,6 +453,31 @@ function AutomationForm(props: {
       new Date(),
     ),
   )
+  const directory = createMemo(() => {
+    const selected = drafts().filter((target) => target.enabled)
+    return supportsGithubSchedule(kind(), selected) ? selected[0].directory : undefined
+  })
+  const remote = useAgentsStatus(directory)
+  const githubAvailable = createMemo(() => {
+    const status = remote.state.status
+    return (
+      !!directory() &&
+      !!status &&
+      agentsView(status).kind === "ready" &&
+      status.canDispatch &&
+      agentsView(status).scheduled
+    )
+  })
+  const cron = createMemo(() => {
+    const result = built()
+    return result.ok ? cronFor(result.input.recurrence, Intl.DateTimeFormat().resolvedOptions().timeZone) : undefined
+  })
+  createEffect(() => {
+    directory()
+    kind()
+    githubAvailable()
+    setGithub({ enabled: false, error: undefined, url: undefined })
+  })
 
   const toggle = (repository: string) => {
     const next = { ...selection() }
@@ -475,6 +506,40 @@ function AutomationForm(props: {
     event.preventDefault()
     const result = built()
     if (!result.ok || submitting()) return
+    if (github.enabled) {
+      const api = agentsApi()
+      const cwd = directory()
+      const schedule = cron()
+      const status = remote.state.status
+      if (!api || !cwd || !schedule || !status || !githubAvailable()) return
+      const existing = status.options?.schedules ?? []
+      if (existing.length >= 20 || existing.some((entry) => entry.cron === schedule.cron)) {
+        setGithub(
+          "error",
+          "This workflow already has this UTC schedule or has reached its schedule limit. Review its existing schedules in Settings > GitHub.",
+        )
+        return
+      }
+      setSubmitting(true)
+      setGithub({ error: undefined, url: undefined })
+      await api
+        .schedules({
+          cwd,
+          schedules: [
+            ...existing,
+            { id: `automation-${crypto.randomUUID()}`, cron: schedule.cron, prompt: result.input.prompt },
+          ],
+        })
+        .then((value) => {
+          if (cwd === directory()) setGithub("url", value.url)
+        })
+        .catch(() => {
+          if (cwd === directory())
+            setGithub("error", "Could not open the schedule update pull request. Check GitHub before trying again.")
+        })
+      setSubmitting(false)
+      return
+    }
     setSubmitting(true)
     await props.onCreate(result.input)
     setSubmitting(false)
@@ -615,6 +680,56 @@ function AutomationForm(props: {
         </div>
       </div>
 
+      <Show when={githubAvailable()}>
+        <div class="mt-5 space-y-2 text-[12.5px] text-white/65">
+          <label class="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={github.enabled}
+              disabled={submitting()}
+              onChange={(event) =>
+                setGithub({ enabled: event.currentTarget.checked, error: undefined, url: undefined })
+              }
+            />
+            <span>
+              Run in GitHub Actions when this computer is off<span class="block text-white/40">{ACTIONS_COPY}</span>
+            </span>
+          </label>
+          <Show when={github.enabled}>
+            <p>
+              This opens a workflow update pull request. Merge it to enable the schedule; no local automation is
+              created.
+            </p>
+            <Show when={cron()}>
+              {(schedule) => (
+                <p>
+                  <code>{schedule().cron}</code> (UTC). {schedule().note}
+                </p>
+              )}
+            </Show>
+            <p>
+              GitHub schedules are best effort. In public repositories, GitHub disables schedules after 60 days without
+              activity.
+            </p>
+            <Show when={remote.state.status?.publicRepository}>
+              <p>This repository is public: its Actions logs are public.</p>
+            </Show>
+          </Show>
+        </div>
+      </Show>
+      <Show when={github.error}>
+        <p class="mt-3 text-rose-200" role="alert">
+          {github.error}
+        </p>
+      </Show>
+      <Show when={github.url}>
+        <p class="mt-3 text-emerald-200" role="status">
+          <a class="underline" href={github.url} target="_blank" rel="noopener noreferrer">
+            Open schedule update pull request
+          </a>
+          . Merge it on the default branch to apply the schedule.
+        </p>
+      </Show>
       <div class="mt-4 flex items-center justify-between gap-3">
         <span class="text-[12.5px] text-white/40">{summary()}</span>
         <div class="flex shrink-0 gap-2">
@@ -627,10 +742,12 @@ function AutomationForm(props: {
           </button>
           <button
             type="submit"
-            disabled={!built().ok || submitting()}
+            disabled={
+              !built().ok || submitting() || (github.enabled && (!cron() || !githubAvailable() || !!github.url))
+            }
             class="rounded-full bg-white/[0.12] px-4 py-1.5 text-[13px] font-medium text-white transition enabled:hover:bg-white/[0.18] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {submitting() ? "Creating…" : "Create automation"}
+            {submitting() ? "Creating…" : github.enabled ? "Open schedule update pull request" : "Create automation"}
           </button>
         </div>
       </div>
