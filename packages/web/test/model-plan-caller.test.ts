@@ -385,7 +385,7 @@ describe("run verifier domains", () => {
   })
   test.each(["vrt_fixture.signature", "vht_fixture.signature"])(
     "actual %s runs enter only chat/models, never account or billing endpoints",
-    async (token) => {
+    async (token: string) => {
       if (token.startsWith("vrt_")) {
         const at = Date.now()
         token = mintRunToken({

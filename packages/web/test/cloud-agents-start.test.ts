@@ -338,7 +338,11 @@ function integrationTests() {
       if (!won.ok) throw new Error("Fixture could not prepare")
       expect(f.github.state.dispatches).toEqual([])
       const results = await Promise.all([won.dispatch(), won.dispatch(), won.dispatch()])
-      expect(results).toEqual(Array.from({ length: 3 }, () => ({ ok: true, dispatchedAt: f.policy.now })))
+      expect(results).toEqual([
+        { ok: true, dispatchedAt: f.policy.now },
+        { ok: true, dispatchedAt: f.policy.now },
+        { ok: true, dispatchedAt: f.policy.now },
+      ])
       expect(f.github.state.dispatches).toHaveLength(1)
       expect(await won.cancel()).toBe(false)
       expect(await persistentStore(["EXISTS", `vector:cloud-agents:ticket:${won.ticketHash}`])).toBe(1)
@@ -568,7 +572,7 @@ function integrationTests() {
     const f = await fixture()
     try {
       if (!f.policy.allowance.active) throw new Error("fixture allowance")
-      f.policy.allowance.limits.atOnce = 1
+      f.policy.allowance = { ...f.policy.allowance, limits: { ...f.policy.allowance.limits, atOnce: 1 } }
       await f.start()
       const first = await f.mint({ ticket: f.ticket() })
       expect(first.status).toBe(200)
