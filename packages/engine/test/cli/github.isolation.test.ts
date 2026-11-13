@@ -53,6 +53,11 @@ test("fixed mask predicate stages survive private projection without exposing ho
     "prepare-mask-runner-identity",
     "prepare-mask-mount-table",
     "prepare-mask-nested",
+    "prepare-mask-home-nested",
+    "prepare-mask-tmp-nested",
+    "prepare-mask-var-tmp-nested",
+    "prepare-mask-run-nested",
+    "prepare-mask-host-temp-nested",
     "prepare-mask-home-target-owner",
     "prepare-mask-home-target-mode",
     "prepare-mask-tmp-target-type",
@@ -90,10 +95,20 @@ test("mask diagnostic vocabulary rejects paths, invented predicates and wrong or
     "prepare-mask-host-temp-parent-private",
     "prepare-mask-tmp-target-mode",
     "prepare-mask-run-target-mode",
+    "prepare-mask-guest-nested",
+    "prepare-mask-/run/private-nested",
+    "prepare-mask-run-nested:private-value",
   ])
     expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
   for (const origin of ["control", "client", "transport"])
     expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, origin }), "prepare")).toEqual([])
+  for (const origin of ["control", "client", "transport"])
+    expect(
+      GithubIsolation.decodeFailureRecords(
+        failureBytes({ ...entry, origin, stage: "prepare-mask-run-nested" }),
+        "prepare",
+      ),
+    ).toEqual([])
   expect(
     GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, mode: "0755", owner: "private" }), "prepare"),
   ).toEqual([])

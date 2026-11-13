@@ -122,6 +122,7 @@ const FAILURE_STAGES = {
     "prepare-mask-aliases",
     // The fixed mask/step product carries no path or host metadata. Keep it aligned with entry.py.
     ...["home", "tmp", "var-tmp", "run", "host-temp"].flatMap((mask) => [
+      `prepare-mask-${mask}-nested`,
       ...[
         "target-stat",
         "target-type",
