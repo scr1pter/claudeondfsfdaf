@@ -1012,11 +1012,15 @@ def supported_mask_sources(uid, gid):
     require(integer(runner.pw_uid) and runner.pw_uid != uid)
     _DIAGNOSTIC_STAGE = "prepare-mask-mount-table"
     mounts = mount_table()
-    _DIAGNOSTIC_STAGE = "prepare-mask-nested"
-    refuse_nested_mask_mounts(mounts)
-    records = []
     # These labels are fixed metadata categories, never path strings supplied by a caller.
     labels = {"/home/vector-agent":"home", "/tmp":"tmp", "/var/tmp":"var-tmp", "/run":"run", HOST_TEMP:"host-temp"}
+    _DIAGNOSTIC_STAGE = "prepare-mask-nested"
+    for target in MASKS:
+        if any(row["target"] != target and beneath(row["target"], target) for row in mounts):
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{labels[target]}-nested"
+            break
+    refuse_nested_mask_mounts(mounts)
+    records = []
     for target in MASKS:
         label = labels[target]
         _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-stat"
