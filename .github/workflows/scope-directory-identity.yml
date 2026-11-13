@@ -68,6 +68,9 @@ jobs:
       - name: Check review-memory source and deletion boundaries
         working-directory: packages/engine
         run: bun test test/review/memory-boundary.test.ts --timeout 60000
+      - name: Check inactive exact committed outcome evidence
+        working-directory: packages/engine
+        run: bun test test/review/memory-outcome.test.ts --timeout 60000
       - name: Check review and session lifecycle
         working-directory: packages/engine
         run: bun test test/review/local-run.test.ts --timeout 60000
