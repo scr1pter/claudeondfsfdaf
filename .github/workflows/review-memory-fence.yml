@@ -8,6 +8,8 @@ on:
       - packages/core/src/review/memory-fence*
       - packages/core/test/review/model-attempt.test.ts
       - packages/core/test/review/memory-fence.test.ts
+      - packages/core/src/share/archive.ts
+      - packages/core/test/share/archive-memory-fence.test.ts
       - packages/core/src/database/migration/**
       - packages/core/src/database/migration.gen.ts
       - packages/core/src/database/schema.gen.ts
@@ -46,6 +48,9 @@ jobs:
       - name: Check archive compatibility without activating memory
         working-directory: packages/core
         run: bun test test/share/archive-learned.test.ts --timeout 60000
+      - name: Check fenced archive snapshots and captured selection
+        working-directory: packages/core
+        run: bun test test/share/archive-memory-fence.test.ts --timeout 60000
       - name: Check normal migration generation
         working-directory: packages/core
         run: bun script/migration.ts --check
