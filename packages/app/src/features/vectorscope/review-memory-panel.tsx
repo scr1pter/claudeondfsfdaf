@@ -110,6 +110,10 @@ export function ReviewMemoryView(props: {
     const value = preview()
     return value?.operation === "approve" ? value : undefined
   }
+  const reopen = () => {
+    const value = preview()
+    return value?.operation === "reopen" ? value : undefined
+  }
   const forget = () => {
     const value = preview()
     return value?.operation === "forget" ? value : undefined
@@ -292,6 +296,15 @@ export function ReviewMemoryView(props: {
                           Preview approving outcome
                         </Button>
                       </Show>
+                      <Show when={entry.origin === "review" && entry.kind === "outcome" && entry.status === "active"}>
+                        <Button
+                          variant="secondary"
+                          disabled={!canPrepare()}
+                          onClick={() => props.controller.selectReopen(entry.id)}
+                        >
+                          Reopen approved outcome
+                        </Button>
+                      </Show>
                       <Button
                         variant="secondary"
                         disabled={!canPrepare()}
@@ -300,6 +313,41 @@ export function ReviewMemoryView(props: {
                         Preview forgetting entry
                       </Button>
                     </div>
+                    <Show when={props.state.reopening?.id === entry.id}>
+                      <section aria-label="Reopen this outcome" class="space-y-3 rounded-lg border p-3">
+                        <p>
+                          Explain why you want to reconsider this approved outcome. Confirmation will move it back to
+                          awaiting approval.
+                        </p>
+                        <label class="block space-y-1">
+                          <span class="text-sm">Your reason for reopening</span>
+                          <textarea
+                            aria-label="Reason to reopen outcome"
+                            class="w-full rounded border bg-transparent p-2 text-sm"
+                            rows={3}
+                            maxLength={ReviewMemoryControl.LIMIT.reason}
+                            readOnly={!canPrepare()}
+                            value={props.state.reopening?.reason ?? ""}
+                            onInput={(event) => props.controller.editReopen(event.currentTarget.value)}
+                          />
+                        </label>
+                        <div class="flex gap-2">
+                          <Button
+                            disabled={!canPrepare() || !props.state.reopening?.reason.trim()}
+                            onClick={() => void props.controller.prepareReopen()}
+                          >
+                            Preview reopening outcome
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={!canPrepare()}
+                            onClick={() => props.controller.cancelReopen()}
+                          >
+                            Cancel reopening
+                          </Button>
+                        </div>
+                      </section>
+                    </Show>
                   </article>
                 )}
               </For>
@@ -373,6 +421,47 @@ export function ReviewMemoryView(props: {
                 <>
                   <p>Approve this complete proposed outcome for later repository reviews.</p>
                   <EntryText entry={current().payload.entry} />
+                </>
+              )}
+            </Show>
+            <Show when={reopen()}>
+              {(current) => (
+                <>
+                  <section aria-label="Original approved outcome" class="space-y-3">
+                    <h3 class="font-medium">Original approved outcome</h3>
+                    <EntryText entry={current().payload.entry} />
+                    <details class="space-y-1 text-xs">
+                      <summary>Original approval details</summary>
+                      <p>
+                        Entry: <code>{current().payload.entry.id}</code>
+                      </p>
+                      <p>Kind: {current().payload.entry.kind}</p>
+                      <p>Origin: {current().payload.entry.origin}</p>
+                      <p>Status: {current().payload.entry.status}</p>
+                      <p>Visibility: {current().payload.entry.visibility}</p>
+                      <p>
+                        Approved by: <code>{current().payload.entry.approvedBy}</code>
+                      </p>
+                      <p>
+                        Approved at: <code>{current().payload.entry.approvedAt}</code>
+                      </p>
+                      <p>
+                        Created at: <code>{current().payload.entry.createdAt}</code>
+                      </p>
+                      <p>
+                        Updated at: <code>{current().payload.entry.updatedAt}</code>
+                      </p>
+                    </details>
+                  </section>
+                  <section aria-label="New human reason" class="space-y-2">
+                    <h3 class="font-medium">Your reason for reopening</h3>
+                    <p class="whitespace-pre-wrap break-words">{current().payload.reason}</p>
+                  </section>
+                  <p>
+                    Confirmation removes approval from this same outcome. It stays out of review context until you
+                    approve it again. Your reason replaces its stored reason; the earlier reason is shown here for this
+                    confirmation.
+                  </p>
                 </>
               )}
             </Show>
