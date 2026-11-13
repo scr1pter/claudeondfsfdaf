@@ -59,12 +59,27 @@ jobs:
       - name: Check review memory controller actions
         working-directory: packages/app
         run: bun test --isolate --preload ./happydom.ts src/features/vectorscope/review-memory.test.ts
+      - name: Check the generated SDK owner transport
+        working-directory: packages/app
+        run: bun test --isolate --preload ./happydom.ts src/features/vectorscope/review-memory-transport.test.ts
+      - name: Check connected owner proof retirement
+        working-directory: packages/app
+        run: bun test --isolate --preload ./happydom.ts src/features/vectorscope/review-memory-connected-panel.test.ts
+      - name: Check software capability decoding
+        working-directory: packages/app
+        run: bun test --isolate --preload ./happydom.ts src/features/background-tasks/engine-capabilities.test.ts
+      - name: Check App types
+        working-directory: packages/app
+        run: bun typecheck
+      - name: Check regression source types
+        working-directory: packages/app
+        run: bun run typecheck:e2e
       - name: Check the real Solid reactive controller in CI
         working-directory: packages/app
         run: bun test --isolate --conditions=browser --preload ./happydom.ts ./test-browser/vectorscope-local.test.ts --timeout 30000
       - name: Run local review and memory UI regressions
         working-directory: packages/app
-        run: bunx playwright test e2e/regression/vectorscope-local.spec.ts e2e/regression/vectorscope-local-app.spec.ts e2e/regression/vectorscope-memory.spec.ts --project chromium --workers 1 --retries 0
+        run: bunx playwright test e2e/regression/vectorscope-local.spec.ts e2e/regression/vectorscope-local-app.spec.ts e2e/regression/vectorscope-memory.spec.ts e2e/regression/vectorscope-memory-connected.spec.ts --project chromium --workers 1 --retries 0
         env:
           CI: true
           PLAYWRIGHT_WORKERS: "1"
