@@ -58,6 +58,11 @@ export function make(db: Database.Interface["db"]): Interface {
   })
 }
 
+/** Read only inside the caller's actual transaction, sharing its serialization snapshot. */
+export function read(tx: Transaction, sessionID: SessionSchema.ID): Effect.Effect<boolean, Refused> {
+  return protect(history(tx, sessionID))
+}
+
 function protect<A>(effect: Effect.Effect<A, unknown>): Effect.Effect<A, Refused> {
   return effect.pipe(
     Effect.catchCause((cause) => (Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.fail(refused()))),

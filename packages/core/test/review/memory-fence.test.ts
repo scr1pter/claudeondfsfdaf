@@ -48,6 +48,31 @@ function failure<A>(effect: Effect.Effect<A, ReviewMemoryFence.Refused>) {
 }
 
 describe("permanent refusal-only review memory history fences", () => {
+  it.effect("the transaction read port shares the caller's snapshot and performs no registration or mutation", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const fence = ReviewMemoryFence.make(database.db)
+      yield* node(database.db, id("transaction"))
+      yield* database.db.transaction((tx) =>
+        Effect.gen(function* () {
+          expect(yield* ReviewMemoryFence.read(tx, id("transaction"))).toBe(false)
+          expect(yield* tx.all(sql`SELECT * FROM review_memory_fence`)).toEqual([])
+          yield* failure(ReviewMemoryFence.read(tx, id("unregistered_transaction")))
+          expect(yield* tx.all(sql`SELECT * FROM review_memory_fence`)).toEqual([])
+        }),
+      )
+      yield* fence.mark(id("transaction"))
+      yield* database.db.transaction((tx) =>
+        Effect.gen(function* () {
+          expect(yield* ReviewMemoryFence.read(tx, id("transaction"))).toBe(true)
+          expect(yield* tx.all(sql`SELECT * FROM review_memory_fence`)).toEqual([
+            { session_id: id("transaction"), version: 1 },
+          ])
+        }),
+      )
+    }),
+  )
+
   it.effect("mark is idempotent, stores no content or authority, and has no session foreign key", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
