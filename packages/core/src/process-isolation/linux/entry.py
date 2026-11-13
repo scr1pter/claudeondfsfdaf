@@ -985,45 +985,78 @@ def refuse_mask_aliases(records, mounts):
 
 def supported_mask_sources(uid, gid):
     # OS/layout metadata only. Neither a runner UID nor Root ownership is guessed for the hosted temporary root.
+    global _DIAGNOSTIC_STAGE
+    _DIAGNOSTIC_STAGE = "prepare-mask-os-chain"
     release = secure_chain("/etc/os-release")
+    _DIAGNOSTIC_STAGE = "prepare-mask-os-open"
     fd = os.open(release, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
+        _DIAGNOSTIC_STAGE = "prepare-mask-os-stat"
         info = os.fstat(fd)
         require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0 and not info.st_mode & 0o022 and
                 info.st_size <= 4096)
+        _DIAGNOSTIC_STAGE = "prepare-mask-os-read"
         data = os.read(fd, 4097)
         require(len(data) == info.st_size and len(data) <= 4096)
     finally:
         os.close(fd)
+    _DIAGNOSTIC_STAGE = "prepare-mask-os-decode"
     release_fields = dict(line.split("=", 1) for line in data.decode("utf-8", "strict").splitlines()
                           if line and not line.startswith("#") and "=" in line)
+    _DIAGNOSTIC_STAGE = "prepare-mask-os-version"
     require(release_fields.get("ID", "").strip('"') == "ubuntu" and
             release_fields.get("VERSION_ID", "").strip('"') == "24.04", "The native host layout is unsupported")
+    _DIAGNOSTIC_STAGE = "prepare-mask-runner-lookup"
     runner = pwd.getpwnam("runner")
+    _DIAGNOSTIC_STAGE = "prepare-mask-runner-identity"
     require(integer(runner.pw_uid) and runner.pw_uid != uid)
+    _DIAGNOSTIC_STAGE = "prepare-mask-mount-table"
     mounts = mount_table()
+    _DIAGNOSTIC_STAGE = "prepare-mask-nested"
     refuse_nested_mask_mounts(mounts)
     records = []
+    # These labels are fixed metadata categories, never path strings supplied by a caller.
+    labels = {"/home/vector-agent":"home", "/tmp":"tmp", "/var/tmp":"var-tmp", "/run":"run", HOST_TEMP:"host-temp"}
     for target in MASKS:
+        label = labels[target]
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-stat"
         info = os.lstat(target)
-        require(stat.S_ISDIR(info.st_mode) and os.path.realpath(target) == target)
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-type"
+        require(stat.S_ISDIR(info.st_mode))
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-canonical"
+        require(os.path.realpath(target) == target)
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-owner"
         if target == "/home/vector-agent":
-            require(info.st_uid == uid and info.st_gid == gid and not info.st_mode & 0o022)
+            require(info.st_uid == uid and info.st_gid == gid)
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-mode"
+            require(not info.st_mode & 0o022)
         elif target == HOST_TEMP:
-            require(info.st_uid == runner.pw_uid and not info.st_mode & 0o022)
+            require(info.st_uid == runner.pw_uid)
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-target-mode"
+            require(not info.st_mode & 0o022)
         else:
             require(info.st_uid == info.st_gid == 0)
         for parent in pathlib.Path(target).parents:
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-stat"
             item = parent.lstat()
-            require(stat.S_ISDIR(item.st_mode) and item.st_uid in (0, runner.pw_uid) and
-                    not item.st_mode & 0o022 and os.path.realpath(parent) == str(parent))
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-type"
+            require(stat.S_ISDIR(item.st_mode))
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-owner"
+            require(item.st_uid in (0, runner.pw_uid))
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-mode"
+            require(not item.st_mode & 0o022)
+            _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-parent-canonical"
+            require(os.path.realpath(parent) == str(parent))
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-mount-present"
         containing = [row for row in mounts if beneath(target, row["target"])]
         require(containing)
         row = max(containing, key=lambda value: len(value["target"]))
+        _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-mount-device"
         require(row["filesystem"] == f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}")
         source_root = os.path.normpath(os.path.join(row["root"], os.path.relpath(target, row["target"])))
         records.append({"path": target, "device": info.st_dev, "inode": info.st_ino,
                         "filesystem": row["filesystem"], "root": source_root})
+    _DIAGNOSTIC_STAGE = "prepare-mask-aliases"
     refuse_mask_aliases(records, mounts)
     return records
 
