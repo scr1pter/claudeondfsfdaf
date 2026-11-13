@@ -33,6 +33,284 @@ const PROFILE_SHA = digest(PROFILE)
 const PARENTS = ["/", "/usr", "/usr/libexec", "/etc", "/etc/apparmor.d"] as const
 const BASE = "/usr/libexec/vector-sandbox"
 const REFUSAL = "The trusted Linux runner adapter refused its fixed installation or lifetime contract."
+const FAILURE_PREFIX = "VECTOR_NATIVE_CONTROL_FAILURE "
+const OPERATIONS = ["install", "prepare", "inspect", "cleanup", "unknown"] as const
+const FAILURE_CLASSES = [
+  "RuntimeError",
+  "PermissionError",
+  "FileNotFoundError",
+  "ProcessLookupError",
+  "NotADirectoryError",
+  "FileExistsError",
+  "BlockingIOError",
+  "OSError",
+  "ValueError",
+  "KeyError",
+  "IndexError",
+  "TypeError",
+  "AssertionError",
+  "TimeoutExpired",
+  "TimeoutError",
+  "CalledProcessError",
+  "JSONDecodeError",
+  "UnicodeDecodeError",
+  "BrokenPipeError",
+  "EOFError",
+  "OverflowError",
+  "SpawnError",
+  "IOError",
+  "OutputBound",
+  "ChildExit",
+  "DecodeError",
+  "Unknown",
+] as const
+const FAILURE_ERRNOS = [
+  "EPERM",
+  "EACCES",
+  "ENOENT",
+  "ENOTDIR",
+  "ELOOP",
+  "EEXIST",
+  "EBUSY",
+  "EAGAIN",
+  "EINVAL",
+  "EBADF",
+  "ESRCH",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENOSYS",
+  "EOPNOTSUPP",
+  "ENOMEM",
+  "EMFILE",
+  "ENFILE",
+  "EROFS",
+  "EOVERFLOW",
+  "EIO",
+  "ENOSPC",
+] as const
+const FAILURE_SIGNALS = [
+  "SIGHUP",
+  "SIGINT",
+  "SIGQUIT",
+  "SIGILL",
+  "SIGABRT",
+  "SIGBUS",
+  "SIGFPE",
+  "SIGKILL",
+  "SIGSEGV",
+  "SIGPIPE",
+  "SIGTERM",
+  "SIGXCPU",
+  "SIGXFSZ",
+  "SIGSYS",
+] as const
+const FAILURE_STAGES = {
+  entry: [
+    "entry-start",
+    "prepare-input",
+    "prepare-masks",
+    "prepare-images",
+    "prepare-record",
+    "prepare-keeper-start",
+    "prepare-keeper-wait",
+    "prepare-keeper-identity",
+    "prepare-namespaces",
+    "prepare-mounts",
+    "prepare-mask-proof",
+    "prepare-endpoint",
+    "prepare-broker-start",
+    "prepare-broker-ready",
+    "prepare-broker-adopt",
+    "prepare-publish",
+    "cleanup-input",
+    "cleanup-quiesce",
+    "cleanup-uid-stop",
+    "cleanup-broker-stop",
+    "cleanup-images",
+    "cleanup-proof",
+    "cleanup-receipt",
+  ],
+  control: [
+    "control-start",
+    "control-input",
+    "control-parents",
+    "control-executables",
+    "install-input",
+    "install-files",
+    "control-lock",
+    "control-receipt",
+    "control-files",
+    "policy-load",
+    "policy-proof",
+    "native-prepare",
+    "native-state",
+    "native-public",
+    "live-processes",
+    "live-namespaces",
+    "live-endpoint",
+    "live-client",
+    "live-final",
+    "native-cleanup",
+    "cleanup-receipt",
+    "cleanup-state",
+    "control-output",
+  ],
+  client: [
+    "client-start",
+    "client-input",
+    "client-source",
+    "client-request",
+    "client-masks",
+    "client-capabilities",
+    "client-identity",
+    "client-admission",
+    "client-close",
+    "client-output",
+  ],
+  transport: ["spawn", "stdin", "timeout", "stdout-bound", "stderr-bound", "close", "decode"],
+} as const
+export interface FailureRecord {
+  readonly v: 1
+  readonly event: "native-control-failure"
+  readonly origin: keyof typeof FAILURE_STAGES
+  readonly operation: (typeof OPERATIONS)[number]
+  readonly stage: string
+  readonly class: (typeof FAILURE_CLASSES)[number]
+  readonly errno: (typeof FAILURE_ERRNOS)[number] | null
+  readonly exit: number | null
+  readonly signal: (typeof FAILURE_SIGNALS)[number] | null
+}
+export interface FailureCause {
+  readonly v: 1
+  readonly event: "native-control-failure"
+  readonly records: readonly FailureRecord[]
+}
+function member<const T extends readonly string[]>(items: T, value: unknown): value is T[number] {
+  return typeof value === "string" && items.some((item) => item === value)
+}
+function failureObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+function failureData(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {
+  if (!failureObject(value)) return
+  const names = Reflect.ownKeys(value)
+  if (names.length !== keys.length || !names.every((name) => typeof name === "string" && keys.includes(name))) return
+  const result: Record<string, unknown> = {}
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) return
+    // Create own data slots, so neither a source getter nor an inherited setter can participate in projection.
+    Object.defineProperty(result, key, { value: descriptor.value, enumerable: true })
+  }
+  return result
+}
+function failureArray(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return
+  const descriptor = Object.getOwnPropertyDescriptor(value, "length")
+  if (!descriptor || !Object.hasOwn(descriptor, "value")) return
+  const length: unknown = descriptor.value
+  if (typeof length !== "number" || !Number.isInteger(length) || length < 1 || length > 4) return
+  const names = Reflect.ownKeys(value)
+  if (
+    names.length !== length + 1 ||
+    !names.every(
+      (name) => name === "length" || (typeof name === "string" && /^(0|[1-3])$/.test(name) && Number(name) < length),
+    )
+  )
+    return
+  const result: unknown[] = []
+  for (let index = 0; index < length; index++) {
+    const item = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!item || !Object.hasOwn(item, "value")) return
+    result.push(item.value)
+  }
+  return result
+}
+function failureRecord(value: unknown): FailureRecord | undefined {
+  const keys = ["v", "event", "origin", "operation", "stage", "class", "errno", "exit", "signal"]
+  const row = failureData(value, keys)
+  if (!row) return
+  if (
+    row.v !== 1 ||
+    row.event !== "native-control-failure" ||
+    !member(["entry", "control", "client", "transport"] as const, row.origin) ||
+    !member(OPERATIONS, row.operation) ||
+    !member(FAILURE_STAGES[row.origin], row.stage) ||
+    !member(FAILURE_CLASSES, row.class) ||
+    (row.errno !== null && !member(FAILURE_ERRNOS, row.errno)) ||
+    (row.exit !== null &&
+      (typeof row.exit !== "number" || !Number.isInteger(row.exit) || row.exit < 0 || row.exit > 255)) ||
+    (row.signal !== null && !member(FAILURE_SIGNALS, row.signal))
+  )
+    return
+  return {
+    v: 1,
+    event: "native-control-failure",
+    origin: row.origin,
+    operation: row.operation,
+    stage: row.stage,
+    class: row.class,
+    errno: row.errno,
+    exit: row.exit,
+    signal: row.signal,
+  }
+}
+/** Passive error metadata only. Unrecognized bytes/fields are never forwarded and never change admission. */
+export function decodeFailureRecords(
+  bytes: Uint8Array,
+  operation: (typeof OPERATIONS)[number],
+): readonly FailureRecord[] {
+  if (bytes.byteLength > 4096) return []
+  try {
+    const result: FailureRecord[] = []
+    for (const line of new TextDecoder("utf-8", { fatal: true }).decode(bytes).split("\n")) {
+      if (!line.startsWith(FAILURE_PREFIX)) continue
+      const row = failureRecord(JSON.parse(line.slice(FAILURE_PREFIX.length)))
+      if (
+        !row ||
+        row.origin === "transport" ||
+        row.operation !== operation ||
+        result.some((previous) => previous.origin === row.origin) ||
+        result.length >= 3
+      )
+        return []
+      result.push(row)
+    }
+    return result
+  } catch {
+    return []
+  }
+}
+/** Project only the bounded, exact error cause; never expose message/stack/argv from an arbitrary exception. */
+export function failureMetadata(error: unknown): FailureCause | undefined {
+  try {
+    if (!(error instanceof Error)) return
+    const property = Object.getOwnPropertyDescriptor(error, "cause")
+    if (!property || !Object.hasOwn(property, "value")) return
+    const cause: unknown = property.value
+    const value = failureData(cause, ["v", "event", "records"])
+    if (!value || value.v !== 1 || value.event !== "native-control-failure") return
+    const rows = failureArray(value.records)
+    if (!rows) return
+    const checked: FailureRecord[] = [],
+      origins = new Set<FailureRecord["origin"]>()
+    for (let index = 0; index < rows.length; index++) {
+      const row = failureRecord(rows[index])
+      if (
+        !row ||
+        (index === 0 && row.origin !== "transport") ||
+        origins.has(row.origin) ||
+        (index > 0 && row.operation !== checked[0].operation)
+      )
+        return
+      origins.add(row.origin)
+      checked.push(row)
+    }
+    return { v: 1, event: "native-control-failure", records: checked }
+  } catch {
+    return
+  }
+}
 
 export interface Asset {
   readonly v: 1
@@ -125,10 +403,39 @@ export function validState(value: unknown) {
   }
 }
 
+// These enum-only hooks never format an exception message, traceback, argv, environment or metadata body.
+const FAILURE_PYTHON =
+  `DIAGNOSTIC_CLASSES = ${JSON.stringify(FAILURE_CLASSES)}\nDIAGNOSTIC_ERRNOS = ${JSON.stringify(FAILURE_ERRNOS)}\n` +
+  String.raw`
+import errno, json, sys
+DIAGNOSTIC_ORIGIN = "control"
+DIAGNOSTIC_OPERATION = "unknown"
+DIAGNOSTIC_STAGE = "control-start"
+def diagnostic_failure(kind, error, trace):
+    try:
+        name = type(error).__name__
+        number = getattr(error,"errno",None)
+        code = errno.errorcode.get(number) if type(number) is int else None
+        result = getattr(error,"returncode",None)
+        signals = {1:"SIGHUP",2:"SIGINT",3:"SIGQUIT",4:"SIGILL",6:"SIGABRT",7:"SIGBUS",8:"SIGFPE",9:"SIGKILL",
+                   11:"SIGSEGV",13:"SIGPIPE",15:"SIGTERM",24:"SIGXCPU",25:"SIGXFSZ",31:"SIGSYS"}
+        value = {"v":1,"event":"native-control-failure","origin":DIAGNOSTIC_ORIGIN,
+                 "operation":DIAGNOSTIC_OPERATION if DIAGNOSTIC_OPERATION in ("install","prepare","inspect","cleanup") else "unknown",
+                 "stage":DIAGNOSTIC_STAGE,"class":name if name in DIAGNOSTIC_CLASSES else "Unknown",
+                 "errno":code if code in DIAGNOSTIC_ERRNOS else None,
+                 "exit":result if type(result) is int and 0 <= result <= 255 else None,
+                 "signal":signals.get(-result) if type(result) is int and result < 0 else None}
+        encoded = "VECTOR_NATIVE_CONTROL_FAILURE " + json.dumps(value,separators=(",",":")) + "\n"
+        if len(encoded.encode("ascii")) <= 1024: sys.stderr.write(encoded); sys.stderr.flush()
+    except BaseException: pass
+sys.excepthook = diagnostic_failure
+`
+
 // Fixed root control program. The sole stdin payload is the build-embedded asset; command paths are never inputs.
 // Its lock is held across prepare/inspect/cleanup. A busy/missing/partial owner refuses, never adopts or retries.
 const CONTROL =
   `PROFILE = ${JSON.stringify(PROFILE)}\n` +
+  FAILURE_PYTHON +
   String.raw`
 import array, fcntl, hashlib, json, os, pathlib, select, stat, subprocess, sys
 ROOT = "/usr/libexec/vector-sandbox/v1"
@@ -198,14 +505,21 @@ def native_state():
     return value
 # A separate fixed, secret-free client runs as the disposable agent, because the broker intentionally refuses Root.
 # It compiles only digest-verified production source bytes, closes every received handle, and never enters it.
-CLIENT = r'''
+CLIENT = r'''` +
+  FAILURE_PYTHON +
+  String.raw`
+DIAGNOSTIC_ORIGIN = "client"
+DIAGNOSTIC_STAGE = "client-start"
 import ctypes, errno, hashlib, json, os, pathlib, stat, sys
 from types import SimpleNamespace
 sys.dont_write_bytecode = True
 def need(ok):
     if not ok: raise RuntimeError("Fixed status asset refused")
 entry = "/usr/libexec/vector-sandbox/v1/entry.py"
-need(len(sys.argv) == 2 and len(sys.argv[1]) == 64 and all(c in "0123456789abcdef" for c in sys.argv[1]))
+DIAGNOSTIC_STAGE = "client-input"
+need(len(sys.argv) == 3 and len(sys.argv[1]) == 64 and all(c in "0123456789abcdef" for c in sys.argv[1]) and sys.argv[2] in ("prepare","inspect"))
+DIAGNOSTIC_OPERATION = sys.argv[2]
+DIAGNOSTIC_STAGE = "client-source"
 need(os.path.realpath(entry) == entry)
 for parent in pathlib.Path(entry).parents:
     info = parent.lstat()
@@ -228,23 +542,30 @@ finally: os.close(source)
 namespace = {"__name__":"vector_native_status","__file__":entry}
 exec(compile(code,entry,"exec",dont_inherit=True),namespace)
 native = SimpleNamespace(**namespace)
+DIAGNOSTIC_STAGE = "client-request"
 request = json.loads(sys.stdin.buffer.read(65537).decode("utf-8","strict"))
 need(type(request) is dict and set(request) == {"public","maskSources"})
 public = native.validate_spec(request["public"])
+DIAGNOSTIC_STAGE = "client-masks"
 protected_targets = native.validate_masks(public["keeper"]["pid"],public["keeper"]["start"],public["uid"],public["gid"],request["maskSources"])
+DIAGNOSTIC_STAGE = "client-capabilities"
 for capability in range(64):
     if native.LIBC.prctl(24, capability, 0, 0, 0) != 0:
         native.require(ctypes.get_errno() == errno.EINVAL)
 native.require(native.LIBC.prctl(47,4,0,0,0) == 0 and native.LIBC.prctl(38,1,0,0,0) == 0)
+DIAGNOSTIC_STAGE = "client-identity"
 os.setgroups([])
 os.setresgid(public["gid"],public["gid"],public["gid"])
 os.setresuid(public["uid"],public["uid"],public["uid"])
 native.require(os.getgroups() == [] and os.getuid() == public["uid"] and os.getgid() == public["gid"])
 native.assert_capabilities_dropped()
+DIAGNOSTIC_STAGE = "client-admission"
 descriptors = native.receive_namespaces(public)
+DIAGNOSTIC_STAGE = "client-close"
 try: native.require(len(descriptors) == 3)
 finally:
     for descriptor in descriptors.values(): os.close(descriptor)
+DIAGNOSTIC_STAGE = "client-output"
 print(json.dumps({"v":1,"event":"broker-live","nonce":public["nonce"],"masks":True,
                   "protectedMountTargets":protected_targets}),flush=True)
 '''
@@ -268,13 +589,16 @@ def endpoint(public):
          item.st_uid == 0 and item.st_gid == gid and stat.S_IMODE(item.st_mode) == 0o660 and
          item.st_dev == public["socketIdentity"]["device"] and item.st_ino == public["socketIdentity"]["inode"])
 def live(public, mask_sources):
+    global DIAGNOSTIC_STAGE
     descriptors = []
     try:
+        DIAGNOSTIC_STAGE = "live-processes"
         # Pin first. Reused PID paths cannot pass the final poll of the original process identity.
         for row in (public["keeper"],public["broker"]): descriptors.append(os.pidfd_open(row["pid"],0))
         identity(public["keeper"],uid,gid); identity(public["broker"],0,0)
         namespace_fds = {}
         try:
+            DIAGNOSTIC_STAGE = "live-namespaces"
             kinds = {"user":0x10000000,"mnt":0x00020000,"pid":0x20000000}
             for kind, number in kinds.items():
                 fd = os.open(f"/proc/{public['keeper']['pid']}/ns/{kind}",os.O_RDONLY | os.O_CLOEXEC)
@@ -290,9 +614,11 @@ def live(public, mask_sources):
                 finally: os.close(owner_fd)
             need(proc_text(public["keeper"]["pid"],"uid_map").split() == ["0",str(uid),"1"] and
                  proc_text(public["keeper"]["pid"],"gid_map").split() == ["0",str(gid),"1"])
+            DIAGNOSTIC_STAGE = "live-endpoint"
             endpoint(public)
-            probe = subprocess.run([python,"-I","-S","-B","-c",CLIENT,asset_sha],input=json.dumps({"public":public,"maskSources":mask_sources}).encode("ascii"),
-                                   stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=True,timeout=3,
+            DIAGNOSTIC_STAGE = "live-client"
+            probe = subprocess.run([python,"-I","-S","-B","-c",CLIENT,asset_sha,operation],input=json.dumps({"public":public,"maskSources":mask_sources}).encode("ascii"),
+                                   stdout=subprocess.PIPE,stderr=sys.stderr,check=True,timeout=3,
                                    env=ENV,close_fds=True)
             need(len(probe.stdout) <= 4096)
             proof = json.loads(probe.stdout.decode("ascii","strict"))
@@ -300,6 +626,7 @@ def live(public, mask_sources):
                  proof["v"] == 1 and proof["event"] == "broker-live" and proof["nonce"] == public["nonce"] and
                  proof["masks"] is True and type(proof["protectedMountTargets"]) is list and
                  len(proof["protectedMountTargets"]) <= 64)
+            DIAGNOSTIC_STAGE = "live-final"
             endpoint(public)
             identity(public["keeper"],uid,gid); identity(public["broker"],0,0)
             for fd in descriptors:
@@ -310,19 +637,24 @@ def live(public, mask_sources):
             for fd in namespace_fds.values(): os.close(fd)
     finally:
         for fd in descriptors: os.close(fd)
+DIAGNOSTIC_STAGE = "control-input"
 need(os.geteuid() == 0 and sys.version_info >= (3,12) and len(sys.argv) == 8)
 operation, uid, gid, container, nonce, asset_sha, profile_sha = sys.argv[1:]
+DIAGNOSTIC_OPERATION = operation
 uid, gid = int(uid), int(gid)
 need(operation in ("install","prepare","inspect","cleanup") and 0 < uid <= 2147483647 and 0 < gid <= 2147483647)
 need(container in ("/mnt/vector-agent-sandbox","/var/lib/vector-agent-sandbox","/home/vector-agent-sandbox"))
 need(len(nonce) == 32 and len(asset_sha) == len(profile_sha) == 64 and
      all(c in "0123456789abcdef" for c in nonce + asset_sha + profile_sha))
 need(sha(PROFILE.encode("utf-8")) == profile_sha)
+DIAGNOSTIC_STAGE = "control-parents"
 for parent in ("/","/usr","/usr/libexec","/etc","/etc/apparmor.d"): secure(parent,0o755,True)
+DIAGNOSTIC_STAGE = "control-executables"
 python = executable("/usr/bin/python3")
 parser = executable("/usr/sbin/apparmor_parser")
 expected = {"v":1,"uid":uid,"gid":gid,"container":container,"nonce":nonce,"assetSHA":asset_sha,"profileSHA":profile_sha}
 if operation == "install":
+    DIAGNOSTIC_STAGE = "install-input"
     data = sys.stdin.buffer.read(262145)
     need(len(data) <= 262144)
     asset = json.loads(data.decode("utf-8","strict"))
@@ -330,6 +662,7 @@ if operation == "install":
     code = asset["entry"].encode("utf-8","strict")
     need(0 < len(code) <= 131072 and sha(code) == asset["sha256"] == asset_sha)
     need(not os.path.lexists(BASE) and not os.path.lexists(POLICY) and not loaded())
+    DIAGNOSTIC_STAGE = "install-files"
     os.mkdir(BASE,0o755); os.chmod(BASE,0o755)
     os.mkdir(ROOT,0o755); os.chmod(ROOT,0o755)
     os.mkdir(PRIVATE,0o700); os.chmod(PRIVATE,0o700)
@@ -337,6 +670,7 @@ if operation == "install":
     record({**expected,"phase":"files"},True)
     write(ENTRY,code,0o444)
     write(POLICY,PROFILE.encode("utf-8"),0o444)
+DIAGNOSTIC_STAGE = "control-lock"
 secure(BASE,0o755,True); secure(ROOT,0o755,True); secure(PRIVATE,0o700,True)
 lock = os.open(LOCK,os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
 try:
@@ -344,49 +678,63 @@ try:
     need(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0 and info.st_nlink == 1 and
          stat.S_IMODE(info.st_mode) == 0o600)
     fcntl.flock(lock,fcntl.LOCK_EX | fcntl.LOCK_NB)
+    DIAGNOSTIC_STAGE = "control-receipt"
     installation = json.loads(read(INSTALL,0o600,4096).decode("ascii","strict"))
     need(set(installation) == set(expected) | {"phase"} and all(installation[key] == item for key,item in expected.items()))
+    DIAGNOSTIC_STAGE = "control-files"
     need(sha(read(ENTRY,0o444,131072)) == asset_sha and sha(read(POLICY,0o444,4096)) == profile_sha)
     if operation == "install":
         need(installation["phase"] == "files" and not loaded())
+        DIAGNOSTIC_STAGE = "policy-load"
         subprocess.run([parser,"--add",POLICY],check=True,timeout=5,env=ENV,
-                       stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True)
+                       stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=sys.stderr,close_fds=True)
+        DIAGNOSTIC_STAGE = "policy-proof"
         need(loaded() == ["vector-sandbox-v1 (enforce)"])
         installation["phase"] = "installed"; record(installation)
+        DIAGNOSTIC_STAGE = "control-output"
         print(json.dumps({"v":1,"event":"installed","installNonce":nonce,"assetSHA":asset_sha,"profileSHA":profile_sha}),flush=True)
     else:
+        DIAGNOSTIC_STAGE = "policy-proof"
         need(loaded() == ["vector-sandbox-v1 (enforce)"])
         if operation == "prepare":
             need(installation["phase"] == "installed")
             installation["phase"] = "preparing"; record(installation)
             # The trusted setup child retains this secret-free lifetime lock if its controller dies. Its own
             # keeper/broker close_fds/pass_fds omit the lock, so cleanup cannot overtake still-running setup.
+            DIAGNOSTIC_STAGE = "native-prepare"
             subprocess.run([python,"-I","-S",ENTRY,"prepare",str(uid),str(gid),container],
                            check=True,timeout=45,env=ENV,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL,close_fds=True,pass_fds=(lock,))
+                           stderr=sys.stderr,close_fds=True,pass_fds=(lock,))
+        DIAGNOSTIC_STAGE = "native-state"
         value = native_state()
         if operation in ("prepare","inspect"):
             need(installation["phase"] == ("preparing" if operation == "prepare" else "ready") and
                  value["phase"] == "adopted" and value["brokerPending"] is False)
+            DIAGNOSTIC_STAGE = "native-public"
             public = json.loads(read(ROOT + "/run.json",0o444,65536).decode("utf-8","strict"))
             need(public == value["public"])
             proof = live(public, value["maskSources"])
             if operation == "prepare": installation["phase"] = "ready"; record(installation)
+            DIAGNOSTIC_STAGE = "control-output"
             print(json.dumps({"v":1,"event":"ready","installNonce":nonce,"assetSHA":asset_sha,"public":public,
                               "live":proof}),flush=True)
         else:
             need(installation["phase"] in ("preparing","ready"))
+            DIAGNOSTIC_STAGE = "native-cleanup"
             result = subprocess.run([python,"-I","-S",ENTRY,"cleanup"],check=True,timeout=15,env=ENV,
-                                    stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+                                    stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=sys.stderr,
                                     close_fds=True,pass_fds=(lock,))
+            DIAGNOSTIC_STAGE = "cleanup-receipt"
             need(len(result.stdout) <= 4096)
             receipt = json.loads(result.stdout.decode("ascii","strict"))
             need(receipt == {"v":1,"event":"isolation-stopped","uidStoppedBeforeBroker":True,
                              "brokerStopped":True,"nonce":value["public"]["nonce"]})
+            DIAGNOSTIC_STAGE = "cleanup-state"
             after = native_state()
             need(after["phase"] == "broker-stopped" and after["public"] == value["public"] and
                  not os.path.lexists(ROOT + "/run.json"))
             installation["phase"] = "stopped"; record(installation)
+            DIAGNOSTIC_STAGE = "control-output"
             print(json.dumps({"v":1,"event":"stopped","installNonce":nonce,"assetSHA":asset_sha,
                               "namespaceNonce":receipt["nonce"],"uidStoppedBeforeBroker":True,"brokerStopped":True}),flush=True)
 finally: os.close(lock)
@@ -607,13 +955,55 @@ async function inspect(name: string): Promise<Metadata | undefined> {
   }
 }
 
+function executionFailure(
+  invocation: Invocation,
+  stage: (typeof FAILURE_STAGES.transport)[number],
+  stderr: Uint8Array,
+  code?: number | null,
+  signal?: string | null,
+  error?: unknown,
+) {
+  const candidate = invocation.args[6]
+  const operation = member(OPERATIONS, candidate) ? candidate : "unknown"
+  const classes: Record<(typeof FAILURE_STAGES.transport)[number], FailureRecord["class"]> = {
+    spawn: "SpawnError",
+    stdin: "IOError",
+    timeout: "TimeoutExpired",
+    "stdout-bound": "OutputBound",
+    "stderr-bound": "OutputBound",
+    close: "ChildExit",
+    decode: "DecodeError",
+  }
+  const property = failureObject(error) ? Object.getOwnPropertyDescriptor(error, "code") : undefined
+  const errno: unknown = property && Object.hasOwn(property, "value") ? property.value : null
+  const transport: FailureRecord = {
+    v: 1,
+    event: "native-control-failure",
+    origin: "transport",
+    operation,
+    stage,
+    class: classes[stage],
+    errno: member(FAILURE_ERRNOS, errno) ? errno : null,
+    exit: typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 255 ? code : null,
+    signal: member(FAILURE_SIGNALS, signal) ? signal : null,
+  }
+  const cause: FailureCause = {
+    v: 1,
+    event: "native-control-failure",
+    records: [transport, ...decodeFailureRecords(stderr, operation)],
+  }
+  return new Error(REFUSAL, { cause })
+}
+
 function execute(invocation: Invocation): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(invocation.file, [...invocation.args], { env: invocation.env, stdio: ["pipe", "pipe", "pipe"] })
     const output: Buffer[] = []
+    const stderr = Buffer.alloc(4096)
     let size = 0
+    let stderrSize = 0
     let failed = false
-    const fail = () => {
+    const fail = (stage: (typeof FAILURE_STAGES.transport)[number], error?: unknown) => {
       if (failed) return
       failed = true
       clearTimeout(timer)
@@ -621,34 +1011,47 @@ function execute(invocation: Invocation): Promise<string> {
       child.stdin.destroy()
       child.stdout.destroy()
       child.stderr.destroy()
-      reject(new Error(REFUSAL))
+      reject(executionFailure(invocation, stage, stderr.subarray(0, stderrSize), null, null, error))
     }
-    const timer = setTimeout(fail, invocation.timeout)
+    const timer = setTimeout(() => fail("timeout"), invocation.timeout)
     child.stdout.on("data", (chunk: Buffer) => {
-      size += chunk.length
+      if (failed) return
+      size = Math.min(invocation.maxOutput + 1, size + chunk.length)
       if (size > invocation.maxOutput) {
-        fail()
+        fail("stdout-bound")
         return
       }
       output.push(chunk)
     })
-    // Root/native diagnostics are intentionally never forwarded: only bounded fixed receipts leave this port.
+    // Drain the same private pipe continuously. Retain at most its final 4KiB, with the original combined output
+    // limit and timeout unchanged. Only strict enum records can leave on an Error.cause; raw bytes never leave.
     child.stderr.on("data", (chunk: Buffer) => {
-      size += chunk.length
-      if (size > invocation.maxOutput) fail()
+      if (failed) return
+      if (chunk.length >= stderr.length) {
+        chunk.copy(stderr, 0, chunk.length - stderr.length)
+        stderrSize = stderr.length
+      } else {
+        const drop = Math.max(0, stderrSize + chunk.length - stderr.length)
+        if (drop) stderr.copy(stderr, 0, drop, stderrSize)
+        chunk.copy(stderr, stderrSize - drop)
+        stderrSize = stderrSize - drop + chunk.length
+      }
+      size = Math.min(invocation.maxOutput + 1, size + chunk.length)
+      if (size > invocation.maxOutput) fail("stderr-bound")
     })
-    child.on("error", fail)
-    child.stdin.on("error", fail)
-    child.on("close", (code) => {
+    child.on("error", (error) => fail("spawn", error))
+    child.stdin.on("error", (error) => fail("stdin", error))
+    child.on("close", (code, signal) => {
       clearTimeout(timer)
-      if (failed || code !== 0) {
-        reject(new Error(REFUSAL))
+      if (failed) return
+      if (code !== 0) {
+        reject(executionFailure(invocation, "close", stderr.subarray(0, stderrSize), code, signal))
         return
       }
       try {
         resolve(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(output)))
       } catch {
-        reject(new Error(REFUSAL))
+        reject(executionFailure(invocation, "decode", stderr.subarray(0, stderrSize), code, signal))
       }
     })
     child.stdin.end(invocation.input)

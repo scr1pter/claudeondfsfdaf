@@ -15,6 +15,194 @@ const asset = () => ({
 })
 const scope = { uid: 1002, gid: 1002, container: LinuxIsolation.CONTAINERS[0] }
 
+const failureRecord = (): GithubIsolation.FailureRecord => ({
+  v: 1,
+  event: "native-control-failure",
+  origin: "entry",
+  operation: "prepare",
+  stage: "prepare-keeper-wait",
+  class: "PermissionError",
+  errno: "EPERM",
+  exit: 125,
+  signal: null,
+})
+const failureBytes = (value: unknown) => Buffer.from("VECTOR_NATIVE_CONTROL_FAILURE " + JSON.stringify(value) + "\n")
+test("private native diagnostics project only strict operation, phase and error enums", () => {
+  const entry = failureRecord()
+  const outer: GithubIsolation.FailureRecord = {
+    ...entry,
+    origin: "control",
+    stage: "native-prepare",
+    class: "CalledProcessError",
+    errno: null,
+  }
+  const privateText = "private-path /owner/secret; stdin=synthetic-private-token; source=never-forward\n"
+  const found = GithubIsolation.decodeFailureRecords(
+    Buffer.concat([Buffer.from(privateText), failureBytes(entry), failureBytes(outer)]),
+    "prepare",
+  )
+  expect(found).toEqual([entry, outer])
+  expect(JSON.stringify(found)).not.toContain("synthetic-private-token")
+  expect(JSON.stringify(found)).not.toContain("/owner/")
+})
+test("malformed, overbound, cross-operation or secret-bearing diagnostic records never leave stderr", () => {
+  const ordinary = failureRecord()
+  for (const value of [
+    { ...ordinary, message: "synthetic-private-token" },
+    { ...ordinary, argv: ["private"] },
+    { ...ordinary, environment: { secret: "private" } },
+    { ...ordinary, nonce: "a".repeat(32) },
+    { ...ordinary, source: "private source" },
+    { ...ordinary, class: "PrivateExceptionName" },
+    { ...ordinary, errno: "/owner/private" },
+    { ...ordinary, exit: -1 },
+    { ...ordinary, exit: 256 },
+    { ...ordinary, exit: 1.5 },
+    { ...ordinary, signal: "private" },
+    { ...ordinary, operation: "cleanup" },
+    { ...ordinary, stage: "/owner/private" },
+    { ...ordinary, origin: "transport", stage: "close" },
+    { ...ordinary, origin: "client" },
+  ])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(value), "prepare")).toEqual([])
+  expect(
+    GithubIsolation.decodeFailureRecords(Buffer.concat([failureBytes(ordinary), failureBytes(ordinary)]), "prepare"),
+  ).toEqual([])
+  expect(GithubIsolation.decodeFailureRecords(Buffer.alloc(4097, 65), "prepare")).toEqual([])
+  expect(GithubIsolation.decodeFailureRecords(Buffer.from([0xff]), "prepare")).toEqual([])
+  expect(GithubIsolation.decodeFailureRecords(Buffer.from("VECTOR_NATIVE_CONTROL_FAILURE {\n"), "prepare")).toEqual([])
+})
+test("controller metadata never reads an exception message, stack or an accessor cause", () => {
+  const record = failureRecord()
+  const transport: GithubIsolation.FailureRecord = {
+    ...record,
+    origin: "transport",
+    stage: "close",
+    class: "ChildExit",
+    errno: null,
+    exit: 1,
+  }
+  const cause: GithubIsolation.FailureCause = { v: 1, event: "native-control-failure", records: [transport, record] }
+  const error = new Error("synthetic-private-message", { cause })
+  expect(GithubIsolation.failureMetadata(error)).toEqual(cause)
+  expect(JSON.stringify(GithubIsolation.failureMetadata(error))).not.toContain("synthetic-private")
+  let accessed = false
+  Object.defineProperty(error, "cause", {
+    get() {
+      accessed = true
+      throw new Error("private getter")
+    },
+  })
+  expect(GithubIsolation.failureMetadata(error)).toBeUndefined()
+  expect(accessed).toBe(false)
+  expect(GithubIsolation.failureMetadata(new Error("private", { cause: { ...cause, raw: "private" } }))).toBeUndefined()
+  expect(
+    GithubIsolation.failureMetadata(
+      new Error("private", { cause: { ...cause, records: [...cause.records, { ...record, body: "private" }] } }),
+    ),
+  ).toBeUndefined()
+  expect(
+    GithubIsolation.failureMetadata(new Error("private", { cause: { ...cause, records: [record] } })),
+  ).toBeUndefined()
+  expect(
+    GithubIsolation.failureMetadata(
+      new Error("private", { cause: { ...cause, records: [transport, record, record] } }),
+    ),
+  ).toBeUndefined()
+  expect(
+    GithubIsolation.failureMetadata(
+      new Error("private", { cause: { ...cause, records: [transport, { ...record, operation: "cleanup" }] } }),
+    ),
+  ).toBeUndefined()
+  expect(
+    GithubIsolation.failureMetadata(
+      new Error("private", { cause: { ...cause, records: Array.from({ length: 5 }, failureRecord) } }),
+    ),
+  ).toBeUndefined()
+})
+
+test("nested changing diagnostic getters are rejected without exposing their second private value", () => {
+  const transport: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    origin: "transport",
+    stage: "close",
+    class: "ChildExit",
+  }
+  let stageReads = 0,
+    recordsReads = 0
+  const changing = { ...failureRecord() }
+  Object.defineProperty(changing, "stage", {
+    get() {
+      stageReads++
+      return stageReads === 1 ? "prepare-keeper-wait" : "synthetic-private-getter-value"
+    },
+  })
+  expect(
+    GithubIsolation.failureMetadata(
+      new Error("private", { cause: { v: 1, event: "native-control-failure", records: [transport, changing] } }),
+    ),
+  ).toBeUndefined()
+  expect(stageReads).toBe(0)
+  const cause = { v: 1, event: "native-control-failure" }
+  Object.defineProperty(cause, "records", {
+    get() {
+      recordsReads++
+      return [transport, failureRecord()]
+    },
+  })
+  expect(GithubIsolation.failureMetadata(new Error("private", { cause }))).toBeUndefined()
+  expect(recordsReads).toBe(0)
+})
+test("diagnostic array indices are data snapshots and overridden mapping code is never called", () => {
+  const transport: GithubIsolation.FailureRecord = {
+    ...failureRecord(),
+    origin: "transport",
+    stage: "close",
+    class: "ChildExit",
+  }
+  const rows = [transport, failureRecord()]
+  let indexReads = 0,
+    mapReads = 0
+  Object.defineProperty(rows, "1", {
+    get() {
+      indexReads++
+      return { ...failureRecord(), stage: "synthetic-private-index" }
+    },
+  })
+  expect(
+    GithubIsolation.failureMetadata(
+      new Error("private", { cause: { v: 1, event: "native-control-failure", records: rows } }),
+    ),
+  ).toBeUndefined()
+  expect(indexReads).toBe(0)
+  const mapped = [transport, failureRecord()]
+  Object.defineProperty(mapped, "map", {
+    get() {
+      mapReads++
+      throw new Error("synthetic-private-map")
+    },
+  })
+  expect(
+    GithubIsolation.failureMetadata(
+      new Error("private", { cause: { v: 1, event: "native-control-failure", records: mapped } }),
+    ),
+  ).toBeUndefined()
+  expect(mapReads).toBe(0)
+  const inherited = [transport, failureRecord()]
+  Object.setPrototypeOf(inherited, {
+    map() {
+      mapReads++
+      return [{ ...failureRecord(), stage: "synthetic-private-map" }]
+    },
+  })
+  const projected = GithubIsolation.failureMetadata(
+    new Error("private", { cause: { v: 1, event: "native-control-failure", records: inherited } }),
+  )
+  expect(projected?.records).toEqual([transport, failureRecord()])
+  expect(JSON.stringify(projected)).not.toContain("synthetic-private")
+  expect(mapReads).toBe(0)
+})
+
 test("build coherence accepts only matching immutable source or bundled selections", () => {
   const embedded = asset()
   expect(() =>
@@ -301,6 +489,24 @@ test("a lost or malformed installation response cannot advance to native prepare
   expect(calls).toHaveLength(1)
   expect(calls[0]?.args[6]).toBe("install")
   expect(f.operations).toEqual([])
+})
+
+test("a diagnostic failure record is never a successful native installation or cleanup receipt", async () => {
+  for (const operation of ["install", "cleanup"]) {
+    const f = fixture()
+    const intent = f.adapter.intent(scope)
+    const ready = operation === "cleanup" ? await f.adapter.prepare(intent) : undefined
+    f.hooks.reply = (called, result) =>
+      called === operation ? { v: 1, event: "native-control-failure", records: [failureRecord()] } : result
+    let admitted = false
+    await expect(
+      (ready ? f.adapter.cleanup(ready) : f.adapter.prepare(intent)).then(() => {
+        admitted = true
+      }),
+    ).rejects.toThrow()
+    expect(admitted).toBe(false)
+    expect(f.operations).toEqual(operation === "install" ? ["install"] : ["install", "prepare", "cleanup"])
+  }
 })
 
 test("structural adopted JSON alone cannot substitute for live process, namespace, socket and broker admission proof", async () => {
