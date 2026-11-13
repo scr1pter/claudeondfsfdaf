@@ -1,0 +1,84 @@
+name: VectorScope owner review memory UI
+"on":
+  push:
+    branches:
+      - build-scope-owner
+permissions:
+  contents: read
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+jobs:
+  settings:
+    name: VectorScope local review (linux)
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: ubuntu-24.04
+    runs-on: ${{ matrix.settings.host }}
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15"
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile --ignore-scripts
+      - name: Read Playwright version
+        id: playwright-version
+        run: 'version=$(node -e ''console.log(require("./package.json").workspaces.catalog["@playwright/test"])'')
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          '
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+      - name: Install Playwright system dependencies
+        if: runner.os == 'Linux'
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+      - name: Check review memory controller actions
+        working-directory: packages/app
+        run: bun test --isolate --preload ./happydom.ts src/features/vectorscope/review-memory.test.ts
+      - name: Check the real Solid reactive controller in CI
+        working-directory: packages/app
+        run: bun test --isolate --conditions=browser --preload ./happydom.ts ./test-browser/vectorscope-local.test.ts --timeout 30000
+      - name: Run local review and memory UI regressions
+        working-directory: packages/app
+        run: bunx playwright test e2e/regression/vectorscope-local.spec.ts e2e/regression/vectorscope-local-app.spec.ts e2e/regression/vectorscope-memory.spec.ts --project chromium --workers 1 --retries 0
+        env:
+          CI: true
+          PLAYWRIGHT_WORKERS: "1"
+        timeout-minutes: 30
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vectorscope-local-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: "packages/app/e2e/test-results
+
+            packages/app/e2e/playwright-report
+
+            "
+    timeout-minutes: 30
