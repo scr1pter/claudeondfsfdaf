@@ -68,7 +68,7 @@ const success = <A>(value: A): Result<A> => ({ ok: true, value })
 export type OwnerRequest = {
   repository: string
   scope: string
-  operation: "inspect" | "configure" | "record" | "approve" | "forget" | "erase" | "erase-review"
+  operation: "inspect" | "configure" | "record" | "approve" | "reopen" | "forget" | "erase" | "erase-review"
   digest: string
   payload: unknown // exact bounded snapshot to display/approve; not raw model/session context
 }
@@ -95,6 +95,10 @@ export interface Interface {
   readonly record: (place: Place, input: Draft & { expected: number }) => Effect.Effect<Result<Entry>>
   readonly propose: (place: Place, input: Draft & { expected: number; source: Source }) => Effect.Effect<Result<Entry>>
   readonly approve: (place: Place, input: { expected: number; id: string }) => Effect.Effect<Result<Entry>>
+  readonly reopen: (
+    place: Place,
+    input: { expected: number; id: string; reason: string },
+  ) => Effect.Effect<Result<Entry>>
   readonly forget: (place: Place, input: { expected: number; id: string }) => Effect.Effect<Result<State>>
   readonly erase: (place: Place, input: { expected: number }) => Effect.Effect<Result<State>>
   readonly eraseReview: (place: Place, input: { expected: number; source: Source }) => Effect.Effect<Result<State>>
@@ -388,6 +392,102 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
       )
     })
   }
+  const reopen: Interface["reopen"] = (place, input) => {
+    if (
+      !keys(input, ["expected", "id", "reason"]) ||
+      !generation(input.expected) ||
+      !identifier(input.id) ||
+      !safeText(input.reason, LIMIT.reason)
+    )
+      return Effect.succeed(fail("invalid"))
+    const captured = Object.freeze({ expected: input.expected, id: input.id, reason: input.reason })
+    return Effect.gen(function* () {
+      // Show the entire original approved entry before asking for an explicit human revision. No SQL/source lock
+      // survives that wait; the original source and exact row are checked again at the short commit boundary.
+      const found = yield* owner(place, "inspect", captured, () =>
+        within(place, (tx, state) =>
+          Effect.gen(function* () {
+            if (state.generation !== captured.expected) return fail("stale")
+            const row = yield* tx
+              .select()
+              .from(BrainReviewMemoryTable)
+              .where(
+                and(
+                  eq(BrainReviewMemoryTable.repository_id, place.repository),
+                  eq(BrainReviewMemoryTable.scope_id, place.scope),
+                  eq(BrainReviewMemoryTable.id, captured.id),
+                ),
+              )
+              .get()
+            const entry = row ? entryValue(row) : undefined
+            return entry?.source && entry.origin === "review" && entry.kind === "outcome" && entry.status === "active"
+              ? success({ entry: Object.freeze(entry), fingerprint: digest(row) })
+              : fail("not-found")
+          }),
+        ),
+      )
+      if (!found.ok) return found
+      const snapshot = found.value.entry
+      const provenance = snapshot.source
+      if (!provenance) return fail("not-found")
+      const preview = Object.freeze({ ...captured, entry: snapshot })
+      return yield* owner(place, "reopen", preview, () =>
+        source(place, provenance, () =>
+          within(place, (tx, state) =>
+            Effect.gen(function* () {
+              if (state.generation !== captured.expected) return fail("stale")
+              if (place.held) return fail("denied")
+              const current = yield* tx
+                .select()
+                .from(BrainReviewMemoryTable)
+                .where(
+                  and(
+                    eq(BrainReviewMemoryTable.repository_id, place.repository),
+                    eq(BrainReviewMemoryTable.scope_id, place.scope),
+                    eq(BrainReviewMemoryTable.id, captured.id),
+                  ),
+                )
+                .get()
+              if (
+                !current ||
+                current.status !== "active" ||
+                current.origin !== "review" ||
+                current.kind !== "outcome" ||
+                digest(current) !== found.value.fingerprint
+              )
+                return fail("stale")
+              const rows = yield* tx
+                .update(BrainReviewMemoryTable)
+                .set({
+                  status: "proposed",
+                  reason: captured.reason,
+                  approved_by: null,
+                  approved_at: null,
+                  updated_at: Date.now(),
+                })
+                .where(
+                  and(
+                    eq(BrainReviewMemoryTable.repository_id, place.repository),
+                    eq(BrainReviewMemoryTable.scope_id, place.scope),
+                    eq(BrainReviewMemoryTable.id, captured.id),
+                    eq(BrainReviewMemoryTable.status, "active"),
+                    eq(BrainReviewMemoryTable.origin, "review"),
+                    eq(BrainReviewMemoryTable.kind, "outcome"),
+                  ),
+                )
+                .returning()
+                .all()
+              if (rows.length !== 1) return fail("stale")
+              // Reopening withdraws approved context even while the namespace is disabled; it never re-enables it.
+              yield* ReviewStore.advance(tx, place.repository, place.scope)
+              yield* ReviewStore.revoke(tx, place.repository)
+              return success(entryValue(rows[0])!)
+            }),
+          ),
+        ),
+      )
+    })
+  }
   const forget: Interface["forget"] = (place, input) => {
     if (!keys(input, ["expected", "id"]) || !generation(input.expected) || !identifier(input.id))
       return Effect.succeed(fail("invalid"))
@@ -522,6 +622,7 @@ function make(db: BrainDatabase.Database, authority: Authority): Interface {
     record: (place, input) => save(placeValue(place), input, false),
     propose: (place, input) => save(placeValue(place), input, true),
     approve: (place, input) => approve(placeValue(place), input),
+    reopen: (place, input) => reopen(placeValue(place), input),
     forget: (place, input) => forget(placeValue(place), input),
     erase: (place, input) => erase(placeValue(place), input),
     eraseReview: (place, input) => eraseReview(placeValue(place), input),
