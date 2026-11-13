@@ -45,6 +45,59 @@ test("private native diagnostics project only strict operation, phase and error 
   expect(JSON.stringify(found)).not.toContain("synthetic-private-token")
   expect(JSON.stringify(found)).not.toContain("/owner/")
 })
+test("fixed mask predicate stages survive private projection without exposing host layout", () => {
+  for (const stage of [
+    "prepare-mask-os-chain",
+    "prepare-mask-os-decode",
+    "prepare-mask-os-version",
+    "prepare-mask-runner-identity",
+    "prepare-mask-mount-table",
+    "prepare-mask-nested",
+    "prepare-mask-home-target-owner",
+    "prepare-mask-home-target-mode",
+    "prepare-mask-tmp-target-type",
+    "prepare-mask-var-tmp-target-canonical",
+    "prepare-mask-run-parent-stat",
+    "prepare-mask-run-parent-type",
+    "prepare-mask-run-parent-owner",
+    "prepare-mask-host-temp-parent-mode",
+    "prepare-mask-host-temp-parent-canonical",
+    "prepare-mask-host-temp-target-mode",
+    "prepare-mask-host-temp-mount-present",
+    "prepare-mask-host-temp-mount-device",
+    "prepare-mask-aliases",
+  ]) {
+    const entry = { ...failureRecord(), stage, class: "RuntimeError" as const, errno: null, exit: null }
+    const transport: GithubIsolation.FailureRecord = {
+      ...entry,
+      origin: "transport",
+      stage: "close",
+      class: "ChildExit",
+      exit: 1,
+    }
+    expect(GithubIsolation.decodeFailureRecords(failureBytes(entry), "prepare")).toEqual([entry])
+    const cause: GithubIsolation.FailureCause = { v: 1, event: "native-control-failure", records: [transport, entry] }
+    expect(GithubIsolation.failureMetadata(new Error("private host metadata", { cause }))).toEqual(cause)
+  }
+})
+test("mask diagnostic vocabulary rejects paths, invented predicates and wrong origins", () => {
+  const entry = { ...failureRecord(), stage: "prepare-mask-host-temp-parent-mode" }
+  for (const stage of [
+    "prepare-mask-guest-parent-mode",
+    "prepare-mask-/home/private-parent-mode",
+    "prepare-mask-host-temp-parent-mode:0755",
+    "prepare-mask-host-temp-parent-mode\nprivate-value",
+    "prepare-mask-host-temp-parent-private",
+    "prepare-mask-tmp-target-mode",
+    "prepare-mask-run-target-mode",
+  ])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, stage }), "prepare")).toEqual([])
+  for (const origin of ["control", "client", "transport"])
+    expect(GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, origin }), "prepare")).toEqual([])
+  expect(
+    GithubIsolation.decodeFailureRecords(failureBytes({ ...entry, mode: "0755", owner: "private" }), "prepare"),
+  ).toEqual([])
+})
 test("malformed, overbound, cross-operation or secret-bearing diagnostic records never leave stderr", () => {
   const ordinary = failureRecord()
   for (const value of [
