@@ -489,7 +489,104 @@ async function witnessDirectory() {
 }
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 const unsupportedObserver = (text: string) => text.split(/\r?\n/).some((line) => /^strace:[^\r\n]*seccomp/i.test(line))
+const fdPhases = [
+  "bootstrap",
+  "init",
+  "write",
+  "index",
+  "commit",
+  "open",
+  "pressure",
+  "pressure-read",
+  "restore",
+  "recovery",
+  "close",
+  "receipt",
+]
+const fdClasses = [
+  "ReadOnlyGitUnavailable",
+  "AssertionError",
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "SystemError",
+  "Unknown",
+]
+const fdCodes = [
+  "READ_ONLY_GIT_UNAVAILABLE",
+  "ERR_ASSERTION",
+  "EMFILE",
+  "ENFILE",
+  "ENOMEM",
+  "EAGAIN",
+  "ENOENT",
+  "EBADF",
+  "EPERM",
+  "EACCES",
+  "ERR_WORKER_INIT_FAILED",
+  "Unknown",
+]
+const fdBoundaries = [
+  "config",
+  "head",
+  "index-read",
+  "index-empty",
+  "index-write",
+  "manifest",
+  "integrity",
+  "status",
+  "deadline",
+  "runtime",
+  "identity",
+  "cleanup",
+  "Unknown",
+]
+function fdDiagnostic(text: string) {
+  const match = /^VECTOR_GIT_FD_DIAGNOSTIC (\{[^\r\n]{1,768}\})$/m.exec(text)
+  if (!match) return
+  try {
+    const value: unknown = JSON.parse(match[1]!)
+    if (
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value) ||
+      JSON.stringify(value) !== match[1] ||
+      Object.keys(value).length !== 5 ||
+      !["phase", "class", "code", "boundary", "errno"].every((key) => Object.hasOwn(value, key)) ||
+      !("phase" in value) ||
+      typeof value.phase !== "string" ||
+      !fdPhases.includes(value.phase) ||
+      !("class" in value) ||
+      typeof value.class !== "string" ||
+      !fdClasses.includes(value.class) ||
+      !("code" in value) ||
+      typeof value.code !== "string" ||
+      !fdCodes.includes(value.code) ||
+      !("boundary" in value) ||
+      typeof value.boundary !== "string" ||
+      !fdBoundaries.includes(value.boundary) ||
+      !("errno" in value) ||
+      !(
+        value.errno === "Unknown" ||
+        (typeof value.errno === "number" && Number.isSafeInteger(value.errno) && Math.abs(value.errno) <= 4095)
+      )
+    )
+      return
+    return {
+      stage: "git-fd-" + value.phase,
+      class: value.class,
+      code: value.code,
+      boundary: value.boundary,
+      errno: value.errno,
+    }
+  } catch {
+    return
+  }
+}
 function diagnostic(text: string) {
+  const fd = fdDiagnostic(text)
+  if (fd) return fd
   if (unsupportedObserver(text)) return { stage: "strace-filter", class: "Unsupported", code: "SECCOMP_UNAVAILABLE" }
   const fixtures = new Map([
     ["Missing CI fixture inputs", "fixture-input"],
@@ -604,6 +701,32 @@ test("CI failure diagnostics expose only fixed metadata and never echo stderr pa
     code: "Unknown",
   })
   const secret = "PRIVATE_VALUE_THAT_MUST_NEVER_BE_LOGGED"
+  const metadata = {
+    phase: "open",
+    class: "ReadOnlyGitUnavailable",
+    code: "READ_ONLY_GIT_UNAVAILABLE",
+    boundary: "config",
+    errno: "Unknown",
+  }
+  const marker = "VECTOR_GIT_FD_DIAGNOSTIC " + JSON.stringify(metadata)
+  expect(fdDiagnostic(marker)).toEqual({
+    stage: "git-fd-open",
+    class: metadata.class,
+    code: metadata.code,
+    boundary: metadata.boundary,
+    errno: metadata.errno,
+  })
+  expect(fdDiagnostic("20 | const source = " + marker)).toBeUndefined()
+  for (const changed of [
+    { ...metadata, phase: secret },
+    { ...metadata, class: secret },
+    { ...metadata, code: secret },
+    { ...metadata, boundary: secret },
+    { ...metadata, errno: secret },
+    { ...metadata, path: secret },
+  ])
+    expect(fdDiagnostic("VECTOR_GIT_FD_DIAGNOSTIC " + JSON.stringify(changed))).toBeUndefined()
+  expect(JSON.stringify(diagnostic(marker + "\n" + secret))).not.toContain(secret)
   expect(JSON.stringify(diagnostic(secret.repeat(100)))).not.toContain(secret)
   expect(diagnostic(secret)).toEqual({ stage: "runtime-fixture", class: "Unknown", code: "Unknown" })
   for (const message of [
@@ -829,34 +952,70 @@ import path from "node:path"
 import assert from "node:assert/strict"
 import {execFileSync} from "node:child_process"
 import {ReadOnlyGit} from ${JSON.stringify(path.resolve(import.meta.dir, "../src/read-only-git.ts"))}
+const fdState={phase:"bootstrap"}
+try {
 const directory=process.argv[2]
 if(!directory||!process.getuid?.()) throw new Error("This control requires an actual nonroot process")
+fdState.phase="init"
 fs.mkdirSync(directory)
 const env={PATH:"/usr/bin:/bin",HOME:directory,GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"}
 const git=(args)=>execFileSync("/usr/bin/git",["-C",directory,...args],{env,stdio:"ignore"})
 git(["init","-q"])
+fdState.phase="write"
 fs.writeFileSync(path.join(directory,"probe.txt"),"owned fixture\\n")
+fdState.phase="index"
 git(["add","probe.txt"])
+fdState.phase="commit"
 git(["-c","user.name=Fixture","-c","user.email=fixture@vector.test","-c","commit.gpgsign=false","commit","-q","-m","Fixture"])
+fdState.phase="open"
 const repository=await ReadOnlyGit.open({directory,gitDirectory:path.join(directory,".git"),commonDirectory:path.join(directory,".git")})
 const held=[]
 let refused=false
 try {
+  fdState.phase="pressure"
   try {for(;;)held.push(fs.openSync("/dev/null","r"))}
   catch(error){assert.equal(error.code,"EMFILE")}
   assert.ok(held.length>16)
   const spare=held.pop()
   if(spare===undefined)throw new Error("Missing actual spare descriptor")
   fs.closeSync(spare)
+  fdState.phase="pressure-read"
   try {await repository.read({kind:"object",action:"size",revision:"HEAD",file:"probe.txt"})}
   catch(error){assert.ok(error instanceof ReadOnlyGit.Unavailable);refused=true}
-} finally {for(const fd of held)fs.closeSync(fd)}
+} finally {const originalPhase=fdState.phase;fdState.phase="restore";for(const fd of held)fs.closeSync(fd);fdState.phase=originalPhase}
 assert.equal(refused,true)
+fdState.phase="recovery"
 const recovered=await repository.read({kind:"object",action:"size",revision:"HEAD",file:"probe.txt"})
 assert.equal(recovered.code,0)
+fdState.phase="close"
 await repository.close()
 assert.equal(repository.isOpen(),false)
+fdState.phase="receipt"
 process.stdout.write(JSON.stringify({refused:true,recovered:true,closed:true})+"\\n")
+} catch(error) {
+  const classes=new Set(["AssertionError","Error","TypeError","RangeError","SyntaxError","SystemError"])
+  const codes=new Set(["READ_ONLY_GIT_UNAVAILABLE","ERR_ASSERTION","EMFILE","ENFILE","ENOMEM","EAGAIN","ENOENT","EBADF","EPERM","EACCES","ERR_WORKER_INIT_FAILED"])
+  const boundaries=new Map([
+    ["Git configuration could not be parsed","config"],
+    ["the captured HEAD is not an available commit object","head"],
+    ["split, sparse or invalid index is unsupported","index-read"],
+    ["private index could not be initialized","index-empty"],
+    ["private index entries could not be restored","index-write"],
+    ["the expanded object manifest is unavailable","manifest"],
+    ["the private Git object graph failed integrity verification","integrity"],
+    ["private worktree status could not be read","status"],
+    ["Git exceeded its execution bound","deadline"],
+    ["Git inspection was cancelled or expired","deadline"],
+    ["the fixed Git verifier runtime is unavailable","runtime"],
+    ["the fixed Git verifier runtime changed","runtime"],
+    ["this host has no supported unprivileged Git verifier","identity"],
+    ["Git cleanup remains unconfirmed; private resources are retained","cleanup"]
+  ])
+  const name=error?.constructor?.name
+  const metadata={phase:fdState.phase,class:error instanceof ReadOnlyGit.Unavailable?"ReadOnlyGitUnavailable":classes.has(name)?name:"Unknown",code:codes.has(error?.code)?error.code:"Unknown",boundary:boundaries.get(error?.reason)??"Unknown",errno:typeof error?.errno==="number"&&Number.isSafeInteger(error.errno)&&Math.abs(error.errno)<=4095?error.errno:"Unknown"}
+  process.stderr.write("VECTOR_GIT_FD_DIAGNOSTIC "+JSON.stringify(metadata)+"\\n")
+  process.exitCode=1
+}
 `,
       )
       const built = await Bun.build({
