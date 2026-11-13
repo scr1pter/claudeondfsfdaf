@@ -14881,6 +14881,332 @@
         ]
       }
     },
+    "/experimental/review-memory": {
+      "get": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.inspect",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewMemoryControl.Inspect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlInspect"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only bounded read in the engine's verified physical repository. Does not start a review.",
+        "summary": "Read this repository's review memory",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.inspect({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/review-memory/prepare": {
+      "post": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.prepare",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewMemoryControl.Preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Prepare one exact, short-lived approval. Preparing does not apply the change.",
+        "summary": "Preview an owner review-memory change",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewMemoryControlPrepare"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.prepare({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/review-memory/confirm": {
+      "post": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.confirm",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewMemoryControl.ConfirmationResult",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlConfirmationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Single-use confirmation, bound to fresh owner and repository authority. Read back after a lost response.",
+        "summary": "Confirm one exact review-memory preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewMemoryControlConfirmation"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.confirm({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/review-memory/previews/{previewId}": {
+      "delete": {
+        "tags": ["review-memory"],
+        "operationId": "reviewMemory.discard",
+        "parameters": [
+          {
+            "name": "previewId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewMemoryApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewMemoryApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Retire this owner's exact preview without applying a change or altering stored memory.",
+        "summary": "Discard an owned review-memory preview",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.reviewMemory.discard({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/permission": {
       "get": {
         "tags": ["permission"],
@@ -36709,6 +37035,9 @@
           },
           "vectorscopeRuns": {
             "type": "boolean"
+          },
+          "vectorscopeReviewMemoryControls": {
+            "type": "boolean"
           }
         },
         "required": ["backgroundSubagents"],
@@ -42108,6 +42437,31 @@
               "corrupt",
               "permissions",
               "stale"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid",
+              "denied",
+              "unavailable",
+              "limit",
+              "stale",
+              "used",
+              "expired",
+              "disabled",
+              "not-found",
+              "source-unavailable"
             ]
           },
           "message": {
@@ -51145,6 +51499,893 @@
         },
         "required": ["runs"],
         "additionalProperties": false
+      },
+      "ReviewMemoryControlID": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9:_-]{1,256}$"
+      },
+      "ReviewMemoryControlScope": {
+        "type": "string",
+        "pattern": "^vrs1_[0-9a-f]{64}$"
+      },
+      "ReviewMemoryControlGeneration": {
+        "type": "integer",
+        "minimum": 0,
+        "exclusiveMaximum": 9007199254740991
+      },
+      "ReviewMemoryControlHead": {
+        "type": "string",
+        "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+      },
+      "ReviewMemoryControlCitation": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "line": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 10000000
+          },
+          "head": {
+            "$ref": "#/components/schemas/ReviewMemoryControlHead"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": ["path", "line", "head", "quote"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlTimestamp": {
+        "type": "integer",
+        "minimum": 0,
+        "exclusiveMaximum": 9007199254740991
+      },
+      "ReviewMemoryControlOwnerEntry": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "approvedBy": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "approvedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMaximum": 9007199254740991,
+            "exclusiveMinimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["preference", "check"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["owner"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active"]
+          }
+        },
+        "required": [
+          "text",
+          "paths",
+          "citations",
+          "reason",
+          "visibility",
+          "id",
+          "createdAt",
+          "updatedAt",
+          "approvedBy",
+          "approvedAt",
+          "kind",
+          "origin",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlSource": {
+        "type": "object",
+        "properties": {
+          "parentID": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "reviewID": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "head": {
+            "$ref": "#/components/schemas/ReviewMemoryControlHead"
+          }
+        },
+        "required": ["parentID", "reviewID", "head"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlProposedEntry": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["outcome"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["proposed"]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSource"
+          }
+        },
+        "required": [
+          "text",
+          "paths",
+          "citations",
+          "reason",
+          "visibility",
+          "id",
+          "createdAt",
+          "updatedAt",
+          "kind",
+          "origin",
+          "status",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlApprovedEntry": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "approvedBy": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "approvedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMaximum": 9007199254740991,
+            "exclusiveMinimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["outcome"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["review"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active"]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSource"
+          }
+        },
+        "required": [
+          "text",
+          "paths",
+          "citations",
+          "reason",
+          "visibility",
+          "id",
+          "createdAt",
+          "updatedAt",
+          "approvedBy",
+          "approvedAt",
+          "kind",
+          "origin",
+          "status",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlEntry": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlOwnerEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlProposedEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlApprovedEntry"
+          }
+        ]
+      },
+      "ReviewMemoryControlInspect": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "state": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "generation": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlEntry"
+                },
+                "maxItems": 50
+              }
+            },
+            "required": ["enabled", "generation", "entries"],
+            "additionalProperties": false
+          },
+          "next": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMaximum": 9007199254740991,
+            "maximum": 200
+          }
+        },
+        "required": ["repository", "scope", "state"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlConfigure": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["configure"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["action", "expected", "enabled"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlRecord": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+            },
+            "maxItems": 8
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "repository"]
+          },
+          "action": {
+            "type": "string",
+            "enum": ["record"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["preference", "check"]
+          }
+        },
+        "required": ["text", "paths", "citations", "reason", "visibility", "action", "expected", "kind"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlApprove": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["approve"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          }
+        },
+        "required": ["action", "expected", "id"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlReopen": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["reopen"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          }
+        },
+        "required": ["action", "expected", "id", "reason"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlForget": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["forget"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          }
+        },
+        "required": ["action", "expected", "id"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlErase": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["erase"]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          }
+        },
+        "required": ["action", "expected"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlCommand": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlConfigure"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlRecord"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlApprove"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlReopen"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlForget"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlErase"
+          }
+        ]
+      },
+      "ReviewMemoryControlPrepare": {
+        "type": "object",
+        "properties": {
+          "expectedScope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "command": {
+            "$ref": "#/components/schemas/ReviewMemoryControlCommand"
+          }
+        },
+        "required": ["expectedScope", "command"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlPreviewID": {
+        "type": "string",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+        "format": "uuid"
+      },
+      "ReviewMemoryControlSha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "ReviewMemoryControlConfigurePreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["configure"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": ["expected", "enabled"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlRecordPreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["record"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "minItems": 1,
+                "maxItems": 16
+              },
+              "citations": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewMemoryControlCitation"
+                },
+                "maxItems": 8
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "visibility": {
+                "type": "string",
+                "enum": ["private", "repository"]
+              },
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["preference", "check"]
+              }
+            },
+            "required": ["text", "paths", "citations", "reason", "visibility", "expected", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlApprovePreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["approve"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "id": {
+                "$ref": "#/components/schemas/ReviewMemoryControlID"
+              },
+              "entry": {
+                "$ref": "#/components/schemas/ReviewMemoryControlProposedEntry"
+              }
+            },
+            "required": ["expected", "id", "entry"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlForgetPreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["forget"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "id": {
+                "$ref": "#/components/schemas/ReviewMemoryControlID"
+              }
+            },
+            "required": ["expected", "id"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlErasePreview": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/ReviewMemoryControlID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewMemoryControlScope"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["erase"]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              }
+            },
+            "required": ["expected"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlPreview": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlConfigurePreview"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlRecordPreview"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlApprovePreview"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "previewId": {
+                "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+              },
+              "sha256": {
+                "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+              },
+              "expiresAt": {
+                "$ref": "#/components/schemas/ReviewMemoryControlTimestamp"
+              },
+              "repository": {
+                "$ref": "#/components/schemas/ReviewMemoryControlID"
+              },
+              "scope": {
+                "$ref": "#/components/schemas/ReviewMemoryControlScope"
+              },
+              "expected": {
+                "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+              },
+              "operation": {
+                "type": "string",
+                "enum": ["reopen"]
+              },
+              "payload": {
+                "type": "object",
+                "properties": {
+                  "expected": {
+                    "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+                  },
+                  "id": {
+                    "$ref": "#/components/schemas/ReviewMemoryControlID"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "pattern": "\\S"
+                  },
+                  "entry": {
+                    "$ref": "#/components/schemas/ReviewMemoryControlApprovedEntry"
+                  }
+                },
+                "required": ["expected", "id", "reason", "entry"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["previewId", "sha256", "expiresAt", "repository", "scope", "expected", "operation", "payload"],
+            "additionalProperties": false
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlForgetPreview"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlErasePreview"
+          }
+        ]
+      },
+      "ReviewMemoryControlConfirmation": {
+        "type": "object",
+        "properties": {
+          "previewId": {
+            "$ref": "#/components/schemas/ReviewMemoryControlPreviewID"
+          },
+          "approvedSha256": {
+            "$ref": "#/components/schemas/ReviewMemoryControlSha256"
+          }
+        },
+        "required": ["previewId", "approvedSha256"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlState": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/ReviewMemoryControlGeneration"
+          }
+        },
+        "required": ["enabled", "generation"],
+        "additionalProperties": false
+      },
+      "ReviewMemoryControlConfirmationResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlState"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewMemoryControlEntry"
+          }
+        ]
       },
       "PublicSessionConsent": {
         "type": "object",
@@ -61963,6 +63204,9 @@
     },
     {
       "name": "review"
+    },
+    {
+      "name": "review-memory"
     },
     {
       "name": "permission",
