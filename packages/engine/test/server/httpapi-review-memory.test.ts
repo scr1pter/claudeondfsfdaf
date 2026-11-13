@@ -2,7 +2,7 @@ import { NodeHttpServer, NodeHttpServerRequest, NodeServices } from "@effect/pla
 import { afterAll, describe, expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import path from "node:path"
-import { sql } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { Context, Deferred, Effect, Exit, Layer, Option, Result, Schema, Scope } from "effect"
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -11,6 +11,7 @@ import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { ReviewMemory } from "@vectordevai/core/brain/review-memory"
 import { ReviewStore } from "@vectordevai/core/brain/review-store"
 import { ReviewWitness } from "@vectordevai/core/brain/review-witness"
+import { BrainEntryTable, BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
@@ -172,6 +173,9 @@ type Setup = {
   start: (drop?: Deferred.Deferred<void>) => ReturnType<typeof listen>
   scope: string
   memory: ReviewMemory.Interface
+  brain: BrainDatabase.Database
+  db: Database.Interface["db"]
+  lifecycle: ReviewLifecycle.Interface
   place: ReviewMemory.Place
   instance: InstanceContext
   restart: () => void
@@ -287,6 +291,9 @@ async function run(body: (setup: Setup) => Effect.Effect<void, unknown, Scope.Sc
         }
         yield* body({
           memory,
+          brain: brain.db,
+          db: database.db,
+          lifecycle,
           place,
           instance,
           scope: physical.binding.scope,
@@ -332,8 +339,257 @@ const prepare = (
   )
 const inspect = (http: Effect.Success<ReturnType<typeof listen>>) =>
   http("GET").pipe(Effect.flatMap((response) => json(response, ReviewMemoryControl.Inspect)))
+const apply = (http: Effect.Success<ReturnType<typeof listen>>, preview: ReviewMemoryControl.Preview) =>
+  http("POST", `${root}/confirm`, confirmation(preview)).pipe(
+    Effect.flatMap((response) => json(response, ReviewMemoryControl.ConfirmationResult)),
+  )
+const approvedOutcome = (setup: Setup, http: Effect.Success<ReturnType<typeof listen>>) =>
+  Effect.gen(function* () {
+    const initial = yield* inspect(http)
+    const enable = yield* prepare(http, setup.scope, {
+      action: "configure",
+      expected: initial.state.generation,
+      enabled: true,
+    })
+    yield* apply(http, enable)
+    yield* setup.admitSource()
+    const before = yield* inspect(http)
+    const pending = value(
+      yield* setup.memory
+        .propose(setup.place, {
+          expected: before.state.generation,
+          source,
+          kind: "outcome",
+          text: "Keep the guarded HTTP lookup.",
+          paths: ["src/a.ts"],
+          citations: [{ path: "src/a.ts", line: 1, head: source.head, quote: "return []" }],
+          reason: "The original HTTP reviewed rationale.",
+          visibility: "repository",
+        })
+        .pipe(Effect.provideService(InstanceRef, setup.instance)),
+    )
+    const proposed = yield* inspect(http)
+    const preview = yield* prepare(http, setup.scope, {
+      action: "approve",
+      expected: proposed.state.generation,
+      id: pending.id,
+    })
+    const entry = Schema.decodeUnknownSync(ReviewMemoryControl.ApprovedEntry)(yield* apply(http, preview))
+    return { entry, read: yield* inspect(http) }
+  })
+const reopenReason = "The owner found a missing HTTP input case and asks to reassess this outcome."
 
 describe("unregistered review-memory HTTP candidate", () => {
+  test("owner HTTP reopens only the sealed approved outcome and a separate human reason; guest/forwarded requests reveal nothing and cannot consume it", async () => {
+    await run((setup) =>
+      Effect.gen(function* () {
+        const http = yield* setup.start()
+        const active = yield* approvedOutcome(setup, http)
+        const rows = yield* setup.brain.select().from(BrainReviewMemoryTable)
+        const command: ReviewMemoryControl.Reopen = {
+          action: "reopen",
+          expected: active.read.state.generation,
+          id: active.entry.id,
+          reason: reopenReason,
+        }
+        const preview = yield* prepare(http, setup.scope, command)
+        if (preview.operation !== "reopen") throw new Error("Missing full HTTP reopen preview")
+        expect(preview.payload).toEqual({
+          expected: command.expected,
+          id: active.entry.id,
+          reason: reopenReason,
+          entry: active.entry,
+        })
+        expect((yield* inspect(http)).state).toEqual(active.read.state)
+        expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toEqual(rows)
+        for (const [headers, expected] of [
+          [{}, 401],
+          [guestHeaders, 403],
+          [forwardedHeaders, 403],
+        ] as const) {
+          for (const [route, body] of [
+            [`${root}/prepare`, { expectedScope: setup.scope, command }],
+            [`${root}/confirm`, confirmation(preview)],
+          ] as const) {
+            const refused = yield* http("POST", route, body, headers)
+            expect(refused.status).toBe(expected)
+            const text = yield* call(() => refused.text())
+            for (const privateText of [
+              setup.scope,
+              preview.sha256,
+              active.entry.text,
+              active.entry.reason,
+              reopenReason,
+            ])
+              expect(text).not.toContain(privateText)
+          }
+        }
+        expect(
+          (yield* http("POST", `${root}/confirm`, { ...confirmation(preview), reason: "A replacement reason." }))
+            .status,
+        ).toBe(400)
+        expect((yield* inspect(http)).state).toEqual(active.read.state)
+        const proposed = Schema.decodeUnknownSync(ReviewMemoryControl.ProposedEntry)(yield* apply(http, preview))
+        expect(proposed).toMatchObject({
+          id: active.entry.id,
+          status: "proposed",
+          text: active.entry.text,
+          source,
+          citations: active.entry.citations,
+          reason: reopenReason,
+          createdAt: active.entry.createdAt,
+        })
+        expect(proposed).not.toHaveProperty("approvedBy")
+        expect(proposed).not.toHaveProperty("approvedAt")
+        const current = yield* inspect(http)
+        expect(current.state.generation).toBe(active.read.state.generation + 1)
+        expect(current.state.entries).toEqual([proposed])
+        const retry = yield* http("POST", `${root}/confirm`, confirmation(preview))
+        expect(retry.status).toBe(400)
+        expect(Schema.decodeUnknownSync(ReviewMemoryApiError)(yield* call(() => retry.json())).code).toBe("used")
+        const approve = yield* prepare(http, setup.scope, {
+          action: "approve",
+          expected: current.state.generation,
+          id: proposed.id,
+        })
+        expect(yield* apply(http, approve)).toMatchObject({
+          id: active.entry.id,
+          status: "active",
+          source,
+          reason: reopenReason,
+          citations: active.entry.citations,
+        })
+      }),
+    )
+  })
+
+  test("a lost reopen HTTP success is reconciled as the same pending row, and the used receipt never repeats the withdrawal", async () => {
+    await run((setup) =>
+      Effect.gen(function* () {
+        const first = yield* setup.start()
+        const active = yield* approvedOutcome(setup, first)
+        yield* first.close()
+        const committed = yield* Deferred.make<void>()
+        const http = yield* setup.start(committed)
+        const preview = yield* prepare(http, setup.scope, {
+          action: "reopen",
+          expected: active.read.state.generation,
+          id: active.entry.id,
+          reason: reopenReason,
+        })
+        const lost = yield* http("POST", `${root}/confirm`, confirmation(preview)).pipe(Effect.result)
+        expect(Result.isFailure(lost)).toBe(true)
+        yield* Deferred.await(committed).pipe(Effect.timeout("2 seconds"))
+        const current = yield* inspect(http)
+        expect(current.state.generation).toBe(active.read.state.generation + 1)
+        expect(current.state.entries).toHaveLength(1)
+        expect(current.state.entries[0]).toMatchObject({
+          id: active.entry.id,
+          status: "proposed",
+          reason: reopenReason,
+          text: active.entry.text,
+          citations: active.entry.citations,
+          source,
+        })
+        expect(current.state.entries[0]).not.toHaveProperty("approvedBy")
+        const retry = yield* http("POST", `${root}/confirm`, confirmation(preview))
+        expect(retry.status).toBe(400)
+        expect(Schema.decodeUnknownSync(ReviewMemoryApiError)(yield* call(() => retry.json())).code).toBe("used")
+        expect((yield* inspect(http)).state).toEqual(current.state)
+        expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toHaveLength(1)
+      }),
+    )
+  })
+
+  for (const mode of ["parent", "review", "legacy", "consent"] as const)
+    test(`reopen HTTP cannot restore the original outcome after ${mode} changes before confirmation`, async () => {
+      await run((setup) =>
+        Effect.gen(function* () {
+          const http = yield* setup.start()
+          const active = yield* approvedOutcome(setup, http)
+          const preview = yield* prepare(http, setup.scope, {
+            action: "reopen",
+            expected: active.read.state.generation,
+            id: active.entry.id,
+            reason: reopenReason,
+          })
+          if (mode === "parent" || mode === "review") {
+            const id = mode === "parent" ? parentID : reviewID
+            yield* setup.lifecycle.deleting(id, setup.db.delete(SessionTable).where(eq(SessionTable.id, id)).run())
+          }
+          if (mode === "legacy") {
+            const saved = yield* ReviewRequestStore.make(setup.db).sourceSnapshot(parentID, reviewID)
+            const pair = saved?.sourceBinding?.witnesses
+            if (!pair) throw new Error("Missing original saved Main witnesses")
+            // Relevant old sole-session marker removal, with no new review deletion hook.
+            yield* setup.brain.delete(BrainEntryTable).where(eq(BrainEntryTable.id, pair.review)).run()
+          }
+          if (mode === "consent") {
+            const disable = yield* prepare(http, setup.scope, {
+              action: "configure",
+              expected: active.read.state.generation,
+              enabled: false,
+            })
+            yield* apply(http, disable)
+            const disabled = yield* inspect(http)
+            const enable = yield* prepare(http, setup.scope, {
+              action: "configure",
+              expected: disabled.state.generation,
+              enabled: true,
+            })
+            yield* apply(http, enable)
+          }
+          const rejected = yield* http("POST", `${root}/confirm`, confirmation(preview))
+          expect(rejected.status).toBe(400)
+          expect(Schema.decodeUnknownSync(ReviewMemoryApiError)(yield* call(() => rejected.json())).code).toBe("stale")
+          const current = yield* inspect(http)
+          expect(current.state.entries).toEqual(mode === "consent" ? [active.entry] : [])
+          const retry = yield* http("POST", `${root}/confirm`, confirmation(preview))
+          expect(retry.status).toBe(400)
+          expect(Schema.decodeUnknownSync(ReviewMemoryApiError)(yield* call(() => retry.json())).code).toBe("used")
+          expect((yield* inspect(http)).state).toEqual(current.state)
+          if (mode !== "consent") expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toEqual([])
+        }),
+      )
+    })
+
+  test("reopen HTTP rejects extra authority/source fields and stale handles without changing the approved row", async () => {
+    await run((setup) =>
+      Effect.gen(function* () {
+        const http = yield* setup.start()
+        const active = yield* approvedOutcome(setup, http)
+        const command: ReviewMemoryControl.Reopen = {
+          action: "reopen",
+          expected: active.read.state.generation,
+          id: active.entry.id,
+          reason: reopenReason,
+        }
+        for (const field of ["source", "entry", "witnesses", "approved", "approvedBy", "fingerprint", "root"])
+          expect(
+            (yield* http("POST", `${root}/prepare`, {
+              expectedScope: setup.scope,
+              command: { ...command, [field]: "forged" },
+            })).status,
+          ).toBe(400)
+        for (const reason of ["", " ", "x".repeat(ReviewMemoryControl.LIMIT.reason + 1)])
+          expect(
+            (yield* http("POST", `${root}/prepare`, { expectedScope: setup.scope, command: { ...command, reason } }))
+              .status,
+          ).toBe(400)
+        const pending = yield* prepare(http, setup.scope, command)
+        yield* http.close()
+        setup.restart()
+        const restarted = yield* setup.start()
+        const rejected = yield* restarted("POST", `${root}/confirm`, confirmation(pending))
+        expect(rejected.status).toBe(400)
+        expect(Schema.decodeUnknownSync(ReviewMemoryApiError)(yield* call(() => rejected.json())).code).toBe(
+          "unavailable",
+        )
+        expect((yield* inspect(restarted)).state).toEqual(active.read.state)
+      }),
+    )
+  })
+
   test("bare owner GET omits absent selectors while explicit bounded pagination retains its strict contract", async () => {
     await run((setup) =>
       Effect.gen(function* () {
