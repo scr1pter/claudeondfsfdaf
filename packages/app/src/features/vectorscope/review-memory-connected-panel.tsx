@@ -63,15 +63,23 @@ export function reviewMemoryConnection(input: {
   }
   const update = async (next: ReviewMemoryConnectionSource, force = false) => {
     if (disposed || (!force && selected && same(selected, next))) return
+    const rebind = !unlisten || selected?.identity !== next.identity
     retire()
-    unlisten?.()
     const captured = Object.freeze({ ...next })
     selected = captured
-    unlisten = captured.listen((type) => {
-      if (!["server.connected", "global.disposed", "server.instance.disposed"].includes(type)) return
-      // Retire private text and abort old reads synchronously, before fresh owner verification starts.
-      void update(input.source(), true)
-    })
+    if (rebind) {
+      unlisten?.()
+      unlisten = captured.listen((type) => {
+        if (!["server.connected", "global.disposed", "server.instance.disposed"].includes(type)) return
+        // Retire synchronously, but never remove/add subscriptions during the emitter's live Set iteration.
+        // A source change/disposal before the microtask invalidates this recheck; it cannot revive an old epoch.
+        retire()
+        const retiredEpoch = epoch
+        queueMicrotask(() => {
+          if (!disposed && epoch === retiredEpoch) void update(input.source(), true)
+        })
+      })
+    }
     if (!eligible(captured)) {
       input.changed(
         undefined,

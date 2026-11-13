@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
 import type { ReviewMemorySelection } from "./review-memory"
 import { reviewMemoryConnection, type ReviewMemoryConnectionSource } from "./review-memory-connected-panel"
@@ -7,7 +8,9 @@ const scope = `vrs1_${"1".repeat(64)}`
 function fixture() {
   const calls: string[] = []
   const trace: string[] = []
-  const events = new Set<(type: string) => void>()
+  const events = createGlobalEmitter<{ global: { type: string } }>()
+  const dispatch: { current?: { deliveries: number }; listeners: number } = { listeners: 0 }
+  const proofs: (() => void)[] = []
   const config = { enabled: true, capability: true, owner: true }
   const hold: { entered?: () => void; answer?: Promise<Response> } = {}
   const client = createVectorClient({
@@ -40,9 +43,16 @@ function fixture() {
     capability: true,
     healthy: true,
     listen: (listener) => {
-      events.add(listener)
+      dispatch.listeners++
+      const unsubscribe = events.listen((event) => {
+        // Keep the real emitter's live iteration. Bound a regression's repeated callback so it fails instead of
+        // trapping the test worker in an infinite synchronous dispatch, as the original production bug did.
+        if (dispatch.current && ++dispatch.current.deliveries > 4) throw new Error("Repeated live event dispatch")
+        listener(event.details.type)
+      })
       return () => {
-        events.delete(listener)
+        unsubscribe()
+        dispatch.listeners--
       }
     },
   }
@@ -51,6 +61,7 @@ function fixture() {
     source: () => source,
     changed: (value) => {
       updates.push(value)
+      if (value) for (const proof of proofs.splice(0)) proof()
     },
   })
   return {
@@ -65,13 +76,58 @@ function fixture() {
       source = { ...source, ...value }
     },
     event: (type: string) => {
-      for (const listener of [...events]) listener(type)
+      const receipt = { deliveries: 0 }
+      dispatch.current = receipt
+      try {
+        events.emit("global", { type })
+        return receipt.deliveries
+      } finally {
+        dispatch.current = undefined
+      }
     },
-    listeners: () => events.size,
+    nextProof: () => new Promise<void>((resolve) => proofs.push(resolve)),
+    listeners: () => dispatch.listeners,
   }
 }
 
 describe("real review-memory connection coordinator", () => {
+  test("one actual live-emitter reconnect is finite, retires immediately and performs one fresh verification without rebinding", async () => {
+    const f = fixture()
+    await f.connection.update(f.source())
+    const before = f.calls.length
+    const proof = f.nextProof()
+    const retired: string[] = []
+    f.connection.events.listen(() => retired.push("retired"))
+    expect(f.event("server.connected")).toBe(1)
+    expect(retired[0]).toBe("retired")
+    expect(f.updates.at(-1)).toBeUndefined()
+    expect(f.calls).toHaveLength(before)
+    await proof
+    expect(f.calls).toHaveLength(before + 3)
+    expect(f.listeners()).toBe(1)
+    expect(f.updates.at(-1)?.owner).toBe("owner")
+    f.connection.dispose()
+    expect(f.listeners()).toBe(0)
+  })
+
+  test("a queued reconnect verification cannot run after disposal or a newer blocked source epoch", async () => {
+    for (const mode of ["dispose", "source"] as const) {
+      const f = fixture()
+      await f.connection.update(f.source())
+      const before = f.calls.length
+      expect(f.event("global.disposed")).toBe(1)
+      if (mode === "dispose") f.connection.dispose()
+      if (mode === "source") {
+        f.patch({ healthy: false })
+        await f.connection.update(f.source())
+      }
+      await Promise.resolve()
+      expect(f.calls).toHaveLength(before)
+      expect(f.updates.at(-1)).toBeUndefined()
+      f.connection.dispose()
+    }
+  })
+
   test("missing opt-in, software capability, health or directory sends no request and never produces owner proof", async () => {
     for (const blocked of [{ enabled: false }, { capability: false }, { healthy: false }, { directory: "" }]) {
       const f = fixture()
