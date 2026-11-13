@@ -208,6 +208,8 @@ local.each(["commit", "tree", "blob"])("forged named loose %s bytes never reach 
   } else body[body.length - 2] = body[body.length - 2] === 120 ? 121 : 120
   const forged = Buffer.concat([Buffer.from(`${kind} ${body.length}\0`), body])
   expect(forged.equals(original)).toBe(false)
+  // The fixture owner may corrupt only this disposable Git-created object.
+  await fs.chmod(object, 0o600)
   await fs.writeFile(object, deflateSync(forged))
   // Ordinary Git type/size reads accept the path's claimed identity. Our gate must authenticate the whole chain.
   expect((await f.git(["cat-file", "-t", oid])).stdout.trim()).toBe(kind)
@@ -243,6 +245,7 @@ local("packed corruption refuses while a clean private packed graph preserves ex
   const pack = path.join(f.gitDirectory, "objects/pack", packs[0]!)
   const bytes = await fs.readFile(pack)
   bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1
+  await fs.chmod(pack, 0o600)
   await fs.writeFile(pack, bytes)
   await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
 })
@@ -857,11 +860,10 @@ local("the scoped typed port covers review collection and refuses option-shaped 
     expect(
       (await repository.read({ kind: "batch-files", revision: "HEAD", files: ["probe.txt"] })).bytes.toString(),
     ).toContain("saved contents")
-    expect(
-      (
-        await repository.read({ kind: "grep", revision: "HEAD", symbol: "saved", excludes: ["**/ignored/**"] })
-      ).bytes.toString(),
-    ).toContain("probe.txt")
+    const grep = await repository.read({ kind: "grep", revision: "HEAD", symbol: "saved", excludes: ["**/ignored/**"] })
+    expect(grep.code).toBe(0)
+    expect(grep.bytes.toString()).toContain("probe.txt")
+    expect(grep.bytes.toString()).toContain("saved contents")
     expect((await repository.read({ kind: "history", revision: "HEAD", file: "probe.txt" })).code).toBe(0)
     expect(
       (

@@ -1610,6 +1610,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           requireValue((operation.excludes?.length ?? 0) <= 256, "grep exclude count exceeds its bound")
           return run([
             "grep",
+            "--threads=1",
             "-n",
             "-w",
             "-F",
