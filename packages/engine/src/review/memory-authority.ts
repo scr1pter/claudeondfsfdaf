@@ -8,6 +8,7 @@ import { HttpServerRequest } from "effect/unstable/http"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { BrainPaths } from "@vectordevai/core/brain/paths"
 import { ReviewMemory } from "@vectordevai/core/brain/review-memory"
+import { ReviewWitness } from "@vectordevai/core/brain/review-witness"
 import { decodeLocalResult } from "@vectordevai/core/review/local-result"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -156,6 +157,8 @@ export function make(input: {
                 SessionID.make(request.reviewID),
               )
               if (!snapshot || snapshot.request.target.head !== request.head) return refused("source-unavailable")
+              const witnesses = snapshot.sourceBinding?.witnesses
+              if (!witnesses) return refused("source-unavailable")
               const admitted = yield* ReviewMemoryScope.verify(snapshot.sourceBinding)
               if (admitted.binding.scope !== request.scope) return refused("source-unavailable")
               const rows = yield* input.database
@@ -210,7 +213,15 @@ export function make(input: {
                   return refused("source-unavailable")
               }
               if (!(yield* unchanged(captured))) return refused("source-unavailable")
-              return yield* use()
+              const proof = ReviewWitness.proof({
+                repository,
+                scope: request.scope,
+                parentID: parent.id,
+                reviewID: review.id,
+                head: request.head,
+                witnesses,
+              })
+              return proof ? yield* use(proof) : refused("source-unavailable")
             }),
           )
           .pipe(Effect.orElseSucceed(() => refused("source-unavailable")))

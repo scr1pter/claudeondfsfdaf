@@ -6,6 +6,8 @@ import { Brain } from "../../src/brain/brain"
 import { BrainDatabase } from "../../src/brain/database"
 import { BrainRevocation } from "../../src/brain/revocation"
 import { ReviewMemory } from "../../src/brain/review-memory"
+import { ReviewWitness } from "../../src/brain/review-witness"
+import { ReviewStore } from "../../src/brain/review-store"
 import { BrainReviewMemoryStateTable, BrainReviewMemoryTable } from "../../src/brain/sql"
 import { eq } from "drizzle-orm"
 import { Global } from "../../src/global"
@@ -29,6 +31,25 @@ const feedback = (): ReviewMemory.Draft => ({
   text: "An early return avoids an invalid lookup.",
   reason: "Confirmed for this finding only.",
 })
+// Fixed private test authority only; production IDs come from the winning Main INSERT, not request JSON.
+const witness = (request: ReviewMemory.Source & { repository: string; scope: string }): ReviewWitness.Proof => ({
+  ...request,
+  witnesses: {
+    version: 1,
+    parent: `vrw1_${createHash("sha256")
+      .update(
+        JSON.stringify([request.repository, request.scope, request.parentID, request.reviewID, request.head, "parent"]),
+      )
+      .digest("hex")
+      .slice(0, 32)}`,
+    review: `vrw1_${createHash("sha256")
+      .update(
+        JSON.stringify([request.repository, request.scope, request.parentID, request.reviewID, request.head, "review"]),
+      )
+      .digest("hex")
+      .slice(0, 32)}`,
+  },
+})
 function value<A>(result: ReviewMemory.Result<A>): A {
   if (!result.ok) throw new Error(result.reason)
   return result.value
@@ -39,6 +60,7 @@ type Setup = {
   db: BrainDatabase.Database
   place: ReviewMemory.Place
   calls: ReviewMemory.OwnerRequest[]
+  registrations: Set<string>
 }
 
 // Trusted test ports deliberately exercise policy/storage only; they do not qualify the absent owner UI or Engine
@@ -55,7 +77,7 @@ async function run<A>(body: (setup: Setup) => Effect.Effect<A, unknown>, selecte
     },
     source: (request, use) =>
       request.parentID === source.parentID && request.reviewID === source.reviewID && request.head === source.head
-        ? use()
+        ? use(witness(request))
         : Effect.succeed({ ok: false, reason: "source-unavailable" }),
   }
   const layer = Layer.mergeAll(Brain.layer, ReviewMemory.layerWith(authority)).pipe(
@@ -75,6 +97,7 @@ async function run<A>(body: (setup: Setup) => Effect.Effect<A, unknown>, selecte
         db: (yield* BrainDatabase.Service).db,
         place: { repository: "repo-a", scope: "physical-a", root: tmp.path, sources: [], held: false },
         calls,
+        registrations: new Set(),
       })
     }).pipe(Effect.provide(layer)),
   )
@@ -83,7 +106,14 @@ async function run<A>(body: (setup: Setup) => Effect.Effect<A, unknown>, selecte
 const enable = (setup: Setup, place = setup.place) =>
   Effect.gen(function* () {
     const state = value(yield* setup.memory.inspect(place))
-    return value(yield* setup.memory.configure(place, { expected: state.generation, enabled: true }))
+    const enabled = value(yield* setup.memory.configure(place, { expected: state.generation, enabled: true }))
+    const proof = witness({ repository: place.repository, scope: place.scope, ...source })
+    const key = JSON.stringify(proof)
+    if (!setup.registrations.has(key)) {
+      setup.registrations.add(key)
+      expect(yield* ReviewStore.registerSource(setup.db, proof)).toBe(true)
+    }
+    return enabled
   })
 
 function pausedApproval() {
@@ -108,7 +138,7 @@ function pausedApproval() {
       }),
     source: (request, use) =>
       request.parentID === source.parentID && request.reviewID === source.reviewID && request.head === source.head
-        ? use()
+        ? use(witness(request))
         : Effect.succeed({ ok: false, reason: "source-unavailable" }),
   }
   return { ports, entered, release: () => release(), captured }
@@ -184,7 +214,7 @@ describe("isolated review memory, actual SQLite", () => {
             const generations = yield* setup.db.select().from(BrainReviewMemoryStateTable)
             ask.release()
             expect(yield* Effect.promise(() => waiting)).toEqual({ ok: false, reason: "stale" })
-            expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual(rows)
+            expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual(column === "source" ? [] : rows)
             expect(yield* setup.db.select().from(BrainReviewMemoryStateTable)).toEqual(generations)
             expect(rows[0].status).toBe("proposed")
             expect(rows[0].approved_by).toBeNull()
@@ -211,7 +241,7 @@ describe("isolated review memory, actual SQLite", () => {
           expect(yield* setup.brain.eraseSession(setup.place, source.reviewID)).toBe(1)
           const generations = yield* setup.db.select().from(BrainReviewMemoryStateTable)
           ask.release()
-          expect(yield* Effect.promise(() => waiting)).toEqual({ ok: false, reason: "stale" })
+          expect(yield* Effect.promise(() => waiting)).toEqual({ ok: false, reason: "source-unavailable" })
           expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
           expect(yield* setup.db.select().from(BrainReviewMemoryStateTable)).toEqual(generations)
         }),
@@ -373,9 +403,9 @@ describe("isolated review memory, actual SQLite", () => {
   })
 
   test("Brain eraseSession covers approved outcomes and citations for either parent or review; repository/all erase cover every namespace", async () => {
-    await run((setup) =>
-      Effect.gen(function* () {
-        for (const sessionID of [source.parentID, source.reviewID]) {
+    for (const sessionID of [source.parentID, source.reviewID])
+      await run((setup) =>
+        Effect.gen(function* () {
           const state = yield* enable(setup)
           const pending = value(
             yield* setup.memory.propose(setup.place, { ...feedback(), source, expected: state.generation }),
@@ -384,19 +414,27 @@ describe("isolated review memory, actual SQLite", () => {
           value(yield* setup.memory.approve(setup.place, { expected: before.generation, id: pending.id }))
           expect(yield* setup.brain.eraseSession(setup.place, sessionID)).toBe(1)
           expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
-        }
+          expect(yield* setup.memory.context(setup.place, { source, files: ["src/a.ts"] })).toEqual({
+            ok: false,
+            reason: "source-unavailable",
+          })
+        }),
+      )
+    await run((setup) =>
+      Effect.gen(function* () {
         const state = yield* enable(setup)
-        yield* setup.memory.record(setup.place, { ...draft(), expected: state.generation })
+        value(yield* setup.memory.record(setup.place, { ...draft(), expected: state.generation }))
         expect(yield* setup.brain.erase(setup.place, "personal")).toBe(0)
         expect(value(yield* setup.memory.inspect(setup.place)).entries).toHaveLength(1)
-        expect(yield* setup.brain.erase(setup.place, "repository")).toBe(1)
+        // The old generic removed-count includes the two fixed metadata rows; no count parity is claimed.
+        expect(yield* setup.brain.erase(setup.place, "repository")).toBe(3)
         const erased = value(yield* setup.memory.inspect(setup.place))
         expect(erased.enabled).toBe(false)
         expect(erased.entries).toEqual([])
         const other = { ...setup.place, repository: "repo-b" }
         const enabled = yield* enable(setup, other)
-        yield* setup.memory.record(other, { ...draft(), expected: enabled.generation })
-        expect(yield* setup.brain.erase(setup.place, "all")).toBe(1)
+        value(yield* setup.memory.record(other, { ...draft(), expected: enabled.generation }))
+        expect(yield* setup.brain.erase(setup.place, "all")).toBe(3)
         expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
         expect(value(yield* setup.memory.inspect(other)).enabled).toBe(false)
       }),

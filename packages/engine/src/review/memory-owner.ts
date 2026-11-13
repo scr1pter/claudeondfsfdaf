@@ -123,6 +123,8 @@ export function make(input: {
         })
       case "approve":
         return input.memory.approve(place, { expected: command.expected, id: command.id })
+      case "reopen":
+        return input.memory.reopen(place, { expected: command.expected, id: command.id, reason: command.reason })
       case "forget":
         return input.memory.forget(place, { expected: command.expected, id: command.id })
       case "erase":

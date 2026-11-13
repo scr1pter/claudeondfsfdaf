@@ -5,6 +5,7 @@ import path from "path"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
 import { Database } from "@vectordevai/core/database/database"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Global } from "@vectordevai/core/global"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -170,6 +171,7 @@ const root = LayerNode.group([
   SessionStatus.node,
   SessionRunState.node,
   Database.node,
+  BrainDatabase.node,
   EventV2Bridge.node,
   Question.node,
   Todo.node,

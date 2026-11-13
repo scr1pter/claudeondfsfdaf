@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect"
 import { ReviewMemoryControl } from "@vectordevai/schema/review-memory"
 
-/** Bound later to the normally generated client; this port never supplies owner authority. */
+/** Bound by the generated-client adapter; this port never supplies owner authority or model consumption. */
 export interface ReviewMemoryTransport {
   inspect(input: ReviewMemoryControl.InspectInput, signal: AbortSignal): Promise<ReviewMemoryControl.Inspect>
   prepare(input: ReviewMemoryControl.Prepare, signal: AbortSignal): Promise<ReviewMemoryControl.Preview>
@@ -50,6 +50,7 @@ export interface ReviewMemoryViewState {
   preview?: ReviewMemoryControl.Preview
   retry?: ReviewMemoryControl.Confirmation
   draft: ReviewMemoryDraft
+  reopening?: { id: string; reason: string }
   approved: boolean
   retryApproved: boolean
   offset: number
@@ -58,6 +59,7 @@ export interface ReviewMemoryViewState {
 export type ReviewMemoryIntent =
   | { action: "configure"; enabled: boolean }
   | Omit<ReviewMemoryControl.Record, "expected">
+  | Omit<ReviewMemoryControl.Reopen, "expected">
   | { action: "approve" | "forget"; id: string }
   | { action: "erase" }
 
@@ -100,6 +102,8 @@ const same = (left: ReviewMemorySelection, right: ReviewMemorySelection) =>
   left.connected === right.connected &&
   left.capability === right.capability &&
   left.api === right.api
+const reopenable = (entry: ReviewMemoryControl.Entry | undefined): entry is ReviewMemoryControl.ApprovedEntry =>
+  entry?.origin === "review" && entry.kind === "outcome" && entry.status === "active"
 const exactPreview = (
   preview: ReviewMemoryControl.Preview,
   request: ReviewMemoryControl.Prepare,
@@ -132,6 +136,12 @@ const exactPreview = (
     )
   if (preview.operation === "approve" && command.action === "approve")
     return preview.payload.id === command.id && preview.payload.entry.id === command.id
+  if (preview.operation === "reopen" && command.action === "reopen")
+    return (
+      preview.payload.id === command.id &&
+      preview.payload.entry.id === command.id &&
+      preview.payload.reason === command.reason
+    )
   if (preview.operation === "forget" && command.action === "forget") return preview.payload.id === command.id
   return preview.operation === "erase" && command.action === "erase"
 }
@@ -219,6 +229,7 @@ export function reviewMemoryController(input: {
       approved: false,
       retryApproved: false,
       draft: draft(),
+      reopening: undefined,
       message:
         "This approval expired. Read the current state before preparing another change; an earlier uncertain result is not attributed.",
     })
@@ -237,19 +248,33 @@ export function reviewMemoryController(input: {
     const operation = begin("reading")
     if (!operation) return
     const retry = state.retry
+    const previous = state.read
+    const reopening = state.preview ? undefined : state.reopening
+    const pendingDraft = state.preview ? draft() : state.draft
     if (!retry) {
       timerEpoch++
       cancelExpiry?.()
       cancelExpiry = undefined
       expires = 0
     }
-    emit({ read: undefined, preview: undefined, approved: false, retryApproved: false, draft: draft(), offset })
+    // A same-owner GET does not discard an unsubmitted human edit or unmount its focused input. Current authority
+    // retirement and failed reads still clear all plaintext; a new generation cannot inherit the old reason.
+    emit({ preview: undefined, approved: false, retryApproved: false, draft: pendingDraft, reopening, offset })
     try {
       const current = await read(operation.signal, offset)
       if (!operation.current() || !accept(current)) return
       const retained = retry && expires > clock.now() ? retry : undefined
+      const unchanged =
+        previous?.repository === current.repository &&
+        previous.scope === current.scope &&
+        previous.state.generation === current.state.generation
       emit({
         retry: retained,
+        draft: unchanged ? pendingDraft : draft(),
+        reopening:
+          unchanged && reopening && reopenable(current.state.entries.find((entry) => entry.id === reopening.id))
+            ? reopening
+            : undefined,
         message: retained
           ? "Current state was read. It does not prove whether the uncertain confirmation committed. No action was resent."
           : "",
@@ -274,6 +299,8 @@ export function reviewMemoryController(input: {
     !unavailable(scope)
   const prepare = async (intent: ReviewMemoryIntent) => {
     if (!canPrepare() || !state.read) return
+    if (intent.action === "reopen" && !reopenable(state.read.state.entries.find((entry) => entry.id === intent.id)))
+      return
     const repository = state.read.repository
     const displayedScope = state.read.scope
     const generation = state.read.state.generation
@@ -295,7 +322,16 @@ export function reviewMemoryController(input: {
       if (fresh.repository !== repository || fresh.scope !== displayedScope || fresh.state.generation !== generation) {
         emit({
           draft: draft(),
+          reopening: undefined,
           message: "Review memory changed. Inspect the refreshed entries before preparing another change.",
+        })
+        return
+      }
+      const command = request.command
+      if (command.action === "reopen" && !reopenable(fresh.state.entries.find((entry) => entry.id === command.id))) {
+        emit({
+          reopening: undefined,
+          message: "This outcome is no longer approved. Inspect its current state before preparing another change.",
         })
         return
       }
@@ -303,7 +339,7 @@ export function reviewMemoryController(input: {
       if (!operation.current()) return
       if (!exactPreview(preview, request, repository) || preview.expiresAt <= clock.date())
         throw new Error("The exact preview could not be verified.")
-      emit({ preview, draft: draft(), approved: false, retryApproved: false })
+      emit({ preview, draft: draft(), reopening: undefined, approved: false, retryApproved: false })
       arm(preview)
     } catch (cause) {
       if (!operation.current()) return
@@ -334,6 +370,7 @@ export function reviewMemoryController(input: {
       read: undefined,
       preview: undefined,
       draft: draft(),
+      reopening: undefined,
       approved: false,
       retryApproved: false,
       retry: undefined,
@@ -356,6 +393,25 @@ export function reviewMemoryController(input: {
             (preview.operation === "approve" && (result.origin !== "review" || result.id !== preview.payload.id))
           )
             throw new Error("The confirmation response did not match the approved change.")
+        } else if (preview.operation === "reopen") {
+          const original = preview.payload.entry
+          if (
+            !("id" in result) ||
+            result.status !== "proposed" ||
+            result.origin !== "review" ||
+            result.kind !== "outcome" ||
+            result.id !== original.id ||
+            result.text !== original.text ||
+            result.reason !== preview.payload.reason ||
+            result.visibility !== original.visibility ||
+            result.createdAt !== original.createdAt ||
+            result.source.parentID !== original.source.parentID ||
+            result.source.reviewID !== original.source.reviewID ||
+            result.source.head !== original.source.head ||
+            JSON.stringify(result.paths) !== JSON.stringify(original.paths) ||
+            JSON.stringify(result.citations) !== JSON.stringify(original.citations)
+          )
+            throw new Error("The confirmation response did not match the outcome being reopened.")
         } else if (
           !("generation" in result) ||
           result.generation !== preview.expected + 1 ||
@@ -415,7 +471,7 @@ export function reviewMemoryController(input: {
     if (!preview || state.busy) return
     const operation = begin("discarding")
     if (!operation) return
-    emit({ preview: undefined, approved: false, draft: draft() })
+    emit({ preview: undefined, approved: false, draft: draft(), reopening: undefined })
     cancelExpiry?.()
     timerEpoch++
     cancelExpiry = undefined
@@ -445,6 +501,23 @@ export function reviewMemoryController(input: {
     retry: () => confirm(true),
     discard,
     canPrepare,
+    selectReopen: (id: string) => {
+      if (
+        !canPrepare() ||
+        state.reopening?.id === id ||
+        !reopenable(state.read?.state.entries.find((entry) => entry.id === id))
+      )
+        return
+      emit({ reopening: { id, reason: "" } })
+    },
+    editReopen: (reason: string) => {
+      if (!canPrepare() || !state.reopening || reason.length > ReviewMemoryControl.LIMIT.reason) return
+      emit({ reopening: { ...state.reopening, reason } })
+    },
+    cancelReopen: () => {
+      if (canPrepare()) emit({ reopening: undefined })
+    },
+    prepareReopen: () => (state.reopening ? prepare({ action: "reopen", ...state.reopening }) : Promise.resolve()),
     editDraft: (patch: Partial<ReviewMemoryDraft>) => {
       if (!canPrepare()) return
       const next = { ...state.draft, ...patch }

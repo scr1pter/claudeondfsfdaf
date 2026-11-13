@@ -163,6 +163,30 @@ export const BrainReviewMemoryTable = sqliteTable(
   ],
 )
 
+// Immutable source identities only. Text remains in brain_review_memory, and
+// old session-memory erasers invalidate these sources by removing their two
+// reserved generic metadata witnesses.
+export const BrainReviewMemorySourceTable = sqliteTable(
+  "brain_review_memory_source",
+  {
+    repository_id: text().notNull(),
+    scope_id: text().notNull(),
+    review_session_id: text().notNull(),
+    parent_session_id: text().notNull(),
+    source_head: text().notNull(),
+    parent_marker_id: text().notNull(),
+    review_marker_id: text().notNull(),
+    state: text().$type<"active" | "retired">().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.repository_id, table.scope_id, table.review_session_id] }),
+    uniqueIndex("brain_review_memory_source_parent_marker_idx").on(table.parent_marker_id),
+    uniqueIndex("brain_review_memory_source_review_marker_idx").on(table.review_marker_id),
+    index("brain_review_memory_source_parent_idx").on(table.repository_id, table.parent_session_id),
+    index("brain_review_memory_source_review_idx").on(table.repository_id, table.review_session_id),
+  ],
+)
+
 // Content-free generations survive erasure and are never reset; absence means disabled, never implicit consent.
 export const BrainReviewMemoryStateTable = sqliteTable("brain_review_memory_state", {
   repository_id: text().primaryKey(),

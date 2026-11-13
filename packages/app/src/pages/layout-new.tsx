@@ -161,6 +161,11 @@ type ParallelAgentRuntime = AgentRuntime
 const LocalReviewPanel = lazy(() =>
   import("@/features/vectorscope/local-review-panel").then((module) => ({ default: module.LocalReviewPanel })),
 )
+const ReviewMemoryConnectedPanel = lazy(() =>
+  import("@/features/vectorscope/review-memory-connected-panel").then((module) => ({
+    default: module.ReviewMemoryConnectedPanel,
+  })),
+)
 
 const ExternalAgentWorkspace = lazy(() =>
   import("@/features/agents/external-agent-workspace").then((module) => ({ default: module.ExternalAgentWorkspace })),
@@ -6922,7 +6927,9 @@ export default function NewLayout(props: ParentProps) {
         onClose={() => setPullRequestsOpen(false)}
         factoryLocal={serverSync().globalConfig()?.experimental?.vectorscope === true}
         localReview={
-          serverSync().capabilities().vectorscopeRuns
+          serverSync().capabilities().vectorscopeRuns ||
+          (serverSync().capabilities().vectorscopeReviewMemoryControls &&
+            serverSync().globalConfig()?.experimental?.vectorscope === true)
             ? () => (
                 <Suspense
                   fallback={
@@ -6931,10 +6938,20 @@ export default function NewLayout(props: ParentProps) {
                     </p>
                   }
                 >
-                  <LocalReviewPanel
-                    parentID={activeWorkspaceScope().parentSessionId}
-                    directory={activeWorkspaceScope().sourcePath}
-                  />
+                  <Show when={serverSync().capabilities().vectorscopeRuns}>
+                    <LocalReviewPanel
+                      parentID={activeWorkspaceScope().parentSessionId}
+                      directory={activeWorkspaceScope().sourcePath}
+                    />
+                  </Show>
+                  <Show
+                    when={
+                      serverSync().capabilities().vectorscopeReviewMemoryControls &&
+                      serverSync().globalConfig()?.experimental?.vectorscope === true
+                    }
+                  >
+                    <ReviewMemoryConnectedPanel directory={activeWorkspaceScope().sourcePath} />
+                  </Show>
                 </Suspense>
               )
             : undefined

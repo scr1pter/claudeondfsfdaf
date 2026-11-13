@@ -537,6 +537,18 @@ import type {
   ReviewListData,
   ReviewListErrors,
   ReviewListResponses,
+  ReviewMemoryConfirmData,
+  ReviewMemoryConfirmErrors,
+  ReviewMemoryConfirmResponses,
+  ReviewMemoryDiscardData,
+  ReviewMemoryDiscardErrors,
+  ReviewMemoryDiscardResponses,
+  ReviewMemoryInspectData,
+  ReviewMemoryInspectErrors,
+  ReviewMemoryInspectResponses,
+  ReviewMemoryPrepareData,
+  ReviewMemoryPrepareErrors,
+  ReviewMemoryPrepareResponses,
   ReviewStartData,
   ReviewStartErrors,
   ReviewStartResponses,
@@ -3846,6 +3858,69 @@ export class Review2 extends HeyApiClient {
   }
 }
 
+export class ReviewMemory extends HeyApiClient {
+  /**
+   * Read this repository's review memory
+   *
+   * Owner-only bounded read in the engine's verified physical repository. Does not start a review.
+   */
+  public inspect<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryInspectData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ReviewMemoryInspectResponses, ReviewMemoryInspectErrors, ThrowOnError>({
+      url: "/experimental/review-memory",
+      ...options,
+    })
+  }
+
+  /**
+   * Preview an owner review-memory change
+   *
+   * Prepare one exact, short-lived approval. Preparing does not apply the change.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryPrepareData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ReviewMemoryPrepareResponses, ReviewMemoryPrepareErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/prepare",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Confirm one exact review-memory preview
+   *
+   * Single-use confirmation, bound to fresh owner and repository authority. Read back after a lost response.
+   */
+  public confirm<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryConfirmData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ReviewMemoryConfirmResponses, ReviewMemoryConfirmErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/confirm",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Discard an owned review-memory preview
+   *
+   * Retire this owner's exact preview without applying a change or altering stored memory.
+   */
+  public discard<ThrowOnError extends boolean = false>(options: Options<ReviewMemoryDiscardData, ThrowOnError>) {
+    return (options.client ?? this.client).delete<
+      ReviewMemoryDiscardResponses,
+      ReviewMemoryDiscardErrors,
+      ThrowOnError
+    >({ url: "/experimental/review-memory/previews/{previewId}", ...options })
+  }
+}
+
 export class Permission extends HeyApiClient {
   /**
    * List pending permissions
@@ -5918,6 +5993,11 @@ export class VectorClient extends HeyApiClient {
   private _review?: Review2
   get review(): Review2 {
     return (this._review ??= new Review2({ client: this.client }))
+  }
+
+  private _reviewMemory?: ReviewMemory
+  get reviewMemory(): ReviewMemory {
+    return (this._reviewMemory ??= new ReviewMemory({ client: this.client }))
   }
 
   private _permission?: Permission

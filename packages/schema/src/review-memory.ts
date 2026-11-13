@@ -138,6 +138,14 @@ export const Approve = Schema.Struct({ action: Schema.Literal("approve"), expect
 })
 export interface Approve extends Schema.Schema.Type<typeof Approve> {}
 
+export const Reopen = Schema.Struct({
+  action: Schema.Literal("reopen"),
+  expected: Generation,
+  id: ID,
+  reason: text(LIMIT.reason).check(Schema.isPattern(/\S/)),
+}).annotate({ identifier: "ReviewMemoryControl.Reopen", parseOptions: strict })
+export interface Reopen extends Schema.Schema.Type<typeof Reopen> {}
+
 export const Forget = Schema.Struct({ action: Schema.Literal("forget"), expected: Generation, id: ID }).annotate({
   identifier: "ReviewMemoryControl.Forget",
   parseOptions: strict,
@@ -150,7 +158,7 @@ export const Erase = Schema.Struct({ action: Schema.Literal("erase"), expected: 
 })
 export interface Erase extends Schema.Schema.Type<typeof Erase> {}
 
-export const Command = Schema.Union([Configure, Record, Approve, Forget, Erase]).annotate({
+export const Command = Schema.Union([Configure, Record, Approve, Reopen, Forget, Erase]).annotate({
   identifier: "ReviewMemoryControl.Command",
 })
 export type Command = typeof Command.Type
@@ -215,6 +223,26 @@ export const ApprovePreview = Schema.Struct({
 }).annotate({ identifier: "ReviewMemoryControl.ApprovePreview", parseOptions: strict })
 export interface ApprovePreview extends Schema.Schema.Type<typeof ApprovePreview> {}
 
+export const ReopenPreview = Schema.Struct({
+  ...preview,
+  operation: Schema.Literal("reopen"),
+  payload: Schema.Struct({
+    ...Struct.omit(Reopen.fields, ["action"]),
+    entry: ApprovedEntry,
+  }).annotate({ parseOptions: strict }),
+})
+  // Effect attaches annotations after .check() to the last filter; keep the public identifier on the record AST.
+  .annotate({ identifier: "ReviewMemoryControl.ReopenPreview", parseOptions: strict })
+  .check(
+    Schema.makeFilter(
+      (value: { expected: Generation; payload: { expected: Generation; id: ID; entry: ApprovedEntry } }) =>
+        value.expected === value.payload.expected && value.payload.id === value.payload.entry.id,
+      { description: "The displayed generation and selected ID match the complete original approved outcome." },
+    ),
+  )
+  .annotate({ parseOptions: strict })
+export interface ReopenPreview extends Schema.Schema.Type<typeof ReopenPreview> {}
+
 export const ForgetPreview = Schema.Struct({
   ...preview,
   operation: Schema.Literal("forget"),
@@ -233,6 +261,7 @@ export const Preview = Schema.Union([
   ConfigurePreview,
   RecordPreview,
   ApprovePreview,
+  ReopenPreview,
   ForgetPreview,
   ErasePreview,
 ]).annotate({ identifier: "ReviewMemoryControl.Preview" })

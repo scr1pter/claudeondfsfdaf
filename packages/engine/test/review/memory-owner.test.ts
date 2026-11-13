@@ -9,7 +9,9 @@ import { HttpServerRequest } from "effect/unstable/http"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { ReviewMemory } from "@vectordevai/core/brain/review-memory"
-import { BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
+import { ReviewStore } from "@vectordevai/core/brain/review-store"
+import { ReviewWitness } from "@vectordevai/core/brain/review-witness"
+import { BrainEntryTable, BrainReviewMemorySourceTable, BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
@@ -70,6 +72,7 @@ type Setup = {
   trust: { fingerprint: string; held: boolean; before?: () => Effect.Effect<void> }
   restart: () => ReviewMemoryOwner.Interface
   timers: { run: () => void; size: () => number }
+  admitSource: () => Effect.Effect<void, unknown>
 }
 const prepare = (setup: Setup, command: unknown) =>
   setup.controls.prepare({ expectedScope: setup.place.scope, command })
@@ -166,11 +169,32 @@ async function run(body: (setup: Setup) => Effect.Effect<void, unknown>) {
           },
         })
         .run()
-      const identity = { parentID, runID: reviewID, requestID: request.requestID, ownerNonce: randomUUID() }
-      yield* requests.reserve({ ...identity, request, owner, sourceBinding: physical.binding })
-      yield* requests.attach(identity)
-      yield* requests.begin(identity)
-      yield* requests.finish(identity)
+      let sourceAttempted = false
+      const admitSource = () =>
+        Effect.gen(function* () {
+          if (sourceAttempted) throw new Error("The fixture source cannot be registered again")
+          sourceAttempted = true
+          const identity = { parentID, runID: reviewID, requestID: request.requestID, ownerNonce: randomUUID() }
+          const reservation = yield* requests.reserve({ ...identity, request, owner, sourceBinding: physical.binding })
+          const witnesses = reservation.row.sourceBinding?.witnesses
+          const proof = witnesses
+            ? ReviewWitness.proof({
+                repository,
+                scope: physical.binding.scope,
+                parentID,
+                reviewID,
+                head: source.head,
+                witnesses,
+              })
+            : undefined
+          if (!reservation.claimed || !proof || !(yield* requests.attach(identity)))
+            throw new Error("Missing fresh fixture source")
+          // Explicit fixture admission AFTER owner enable, never a lazy source/read callback.
+          if (!(yield* ReviewStore.registerSource(database.db, proof)))
+            throw new Error("Fixture source was not enabled")
+          if (!(yield* requests.begin(identity))) throw new Error("Fixture source did not begin")
+          yield* requests.finish(identity)
+        })
       yield* Effect.gen(function* () {
         const lifecycle = yield* ReviewLifecycle.Service
         const authority = ReviewMemoryAuthority.make({ database: db, requests, lifecycle, settings })
@@ -201,6 +225,7 @@ async function run(body: (setup: Setup) => Effect.Effect<void, unknown>) {
           clock,
           trust,
           timers,
+          admitSource,
           restart: () => {
             instances.forEach((item) => item.dispose())
             return create()
@@ -251,8 +276,300 @@ const preference = (expected: number) => ({
   reason: "Owner preference",
   visibility: "repository",
 })
+const approvedOutcome = (setup: Setup) =>
+  Effect.gen(function* () {
+    yield* enable(setup)
+    yield* setup.admitSource()
+    const before = yield* setup.controls.inspect()
+    const pending = value(
+      yield* setup.memory.propose(setup.place, {
+        expected: before.state.generation,
+        source,
+        kind: "outcome",
+        text: "A guarded lookup avoided an invalid read.",
+        paths: ["src/a.ts"],
+        citations: [{ path: "src/a.ts", line: 1, head: source.head, quote: "return []" }],
+        reason: "The original reviewed rationale.",
+        visibility: "repository",
+      }),
+    )
+    const proposed = yield* setup.controls.inspect()
+    const preview = yield* prepare(setup, { action: "approve", expected: proposed.state.generation, id: pending.id })
+    const entry = Schema.decodeUnknownSync(ReviewMemoryControl.ApprovedEntry)(
+      yield* setup.controls.confirm(confirmation(preview)),
+    )
+    return { entry, read: yield* setup.controls.inspect() }
+  })
+const reopenReason = "The owner found a missing input case and asks to reassess this outcome."
 
 describe("prepared owner controls for isolated review memory (inactive internal ports)", () => {
+  test("reopen seals the full original outcome and human reason, makes no preparation write, and consumes concurrent confirmation once", async () => {
+    await run((setup) =>
+      owned(
+        Effect.gen(function* () {
+          const active = yield* approvedOutcome(setup)
+          const rows = yield* setup.brain.select().from(BrainReviewMemoryTable)
+          const markers = yield* setup.brain.select().from(BrainEntryTable)
+          const sources = yield* setup.brain.select().from(BrainReviewMemorySourceTable)
+          const command = {
+            action: "reopen",
+            expected: active.read.state.generation,
+            id: active.entry.id,
+            reason: reopenReason,
+          }
+          const preview = yield* prepare(setup, command)
+          if (preview.operation !== "reopen") throw new Error("Missing complete reopen preview")
+          expect(preview.payload).toEqual({
+            expected: command.expected,
+            id: active.entry.id,
+            reason: reopenReason,
+            entry: active.entry,
+          })
+          expect(preview.payload.entry.reason).not.toBe(preview.payload.reason)
+          expect(Object.isFrozen(preview.payload.entry)).toBe(true)
+          expect(Object.isFrozen(preview.payload.entry.source)).toBe(true)
+          expect(Object.isFrozen(preview.payload.entry.citations[0])).toBe(true)
+          expect((yield* setup.controls.inspect()).state).toEqual(active.read.state)
+          expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toEqual(rows)
+          command.id = "vr_other"
+          command.reason = "An unrelated later request."
+          const outsider = yield* owned(setup.controls.confirm(confirmation(preview)), "other-owner").pipe(
+            Effect.result,
+          )
+          expect(Result.isFailure(outsider) && outsider.failure.code).toBe("unavailable")
+          const results = yield* Effect.all(
+            [
+              setup.controls.confirm(confirmation(preview)).pipe(Effect.result),
+              setup.controls.confirm(confirmation(preview)).pipe(Effect.result),
+            ],
+            { concurrency: "unbounded" },
+          )
+          expect(results.filter(Result.isSuccess)).toHaveLength(1)
+          expect(results.filter(Result.isFailure)).toHaveLength(1)
+          const current = yield* setup.controls.inspect()
+          expect(current.state.generation).toBe(active.read.state.generation + 1)
+          expect(current.state.entries).toHaveLength(1)
+          expect(current.state.entries[0]).toMatchObject({
+            id: active.entry.id,
+            status: "proposed",
+            reason: reopenReason,
+            text: active.entry.text,
+            source,
+            citations: active.entry.citations,
+            createdAt: active.entry.createdAt,
+          })
+          expect(current.state.entries[0]).not.toHaveProperty("approvedBy")
+          expect(current.state.entries[0]).not.toHaveProperty("approvedAt")
+          expect(value(yield* setup.memory.context(setup.place, { source, files: ["src/a.ts"] })).entries).toEqual([])
+          expect(yield* setup.brain.select().from(BrainEntryTable)).toEqual(markers)
+          expect(yield* setup.brain.select().from(BrainReviewMemorySourceTable)).toEqual(sources)
+          const replay = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+          expect(Result.isFailure(replay) && replay.failure.code).toBe("used")
+          const approve = yield* prepare(setup, {
+            action: "approve",
+            expected: current.state.generation,
+            id: active.entry.id,
+          })
+          const approved = yield* setup.controls.confirm(confirmation(approve))
+          expect(approved).toMatchObject({
+            id: active.entry.id,
+            status: "active",
+            source,
+            reason: reopenReason,
+            citations: active.entry.citations,
+          })
+        }),
+      ),
+    )
+  })
+
+  for (const change of [
+    { label: "body", fields: { body: "Changed while the human read the original outcome." } },
+    { label: "original rationale", fields: { reason: "A changed original rationale." } },
+    { label: "original approval", fields: { approved_by: "changed-owner" } },
+  ])
+    test(`reopen refuses and retires a confirmation after the ${change.label} changes at the same generation`, async () => {
+      await run((setup) =>
+        owned(
+          Effect.gen(function* () {
+            const active = yield* approvedOutcome(setup)
+            const preview = yield* prepare(setup, {
+              action: "reopen",
+              expected: active.read.state.generation,
+              id: active.entry.id,
+              reason: reopenReason,
+            })
+            const original = (yield* setup.brain.select().from(BrainReviewMemoryTable))[0]
+            if (!original) throw new Error("Missing original outcome row")
+            yield* setup.brain
+              .update(BrainReviewMemoryTable)
+              .set(change.fields)
+              .where(eq(BrainReviewMemoryTable.id, active.entry.id))
+              .run()
+            const changed = yield* setup.brain.select().from(BrainReviewMemoryTable)
+            const rejected = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+            expect(Result.isFailure(rejected) && rejected.failure.code).toBe("stale")
+            expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toEqual(changed)
+            expect((yield* setup.controls.inspect()).state.generation).toBe(active.read.state.generation)
+            yield* setup.brain
+              .update(BrainReviewMemoryTable)
+              .set({ body: original.body, reason: original.reason, approved_by: original.approved_by })
+              .where(eq(BrainReviewMemoryTable.id, active.entry.id))
+              .run()
+            const replay = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+            expect(Result.isFailure(replay) && replay.failure.code).toBe("used")
+            expect((yield* setup.controls.inspect()).state.entries).toEqual([active.entry])
+          }),
+        ),
+      )
+    })
+
+  for (const mode of ["digest", "expiry", "trust", "directory", "generation"] as const)
+    test(`reopen confirmation refuses a changed ${mode} and cannot be revived`, async () => {
+      await run((setup) =>
+        owned(
+          Effect.gen(function* () {
+            const active = yield* approvedOutcome(setup)
+            const preview = yield* prepare(setup, {
+              action: "reopen",
+              expected: active.read.state.generation,
+              id: active.entry.id,
+              reason: reopenReason,
+            })
+            const confirm = confirmation(preview)
+            if (mode === "digest") confirm.approvedSha256 = "0".repeat(64)
+            if (mode === "expiry") setup.clock.value += ReviewMemoryOwner.LIMIT.ttl + 1
+            if (mode === "trust") setup.trust.fingerprint = "changed"
+            if (mode === "generation") {
+              const disable = yield* prepare(setup, {
+                action: "configure",
+                expected: active.read.state.generation,
+                enabled: false,
+              })
+              yield* setup.controls.confirm(confirmation(disable))
+              const disabled = yield* setup.controls.inspect()
+              const enable = yield* prepare(setup, {
+                action: "configure",
+                expected: disabled.state.generation,
+                enabled: true,
+              })
+              yield* setup.controls.confirm(confirmation(enable))
+            }
+            const nested = path.join(setup.instance.directory, "reopen-nested")
+            if (mode === "directory") yield* Effect.promise(() => fs.mkdir(nested))
+            const rejected = yield* setup.controls
+              .confirm(confirm)
+              .pipe(
+                Effect.provideService(
+                  InstanceRef,
+                  mode === "directory" ? { ...setup.instance, directory: nested } : setup.instance,
+                ),
+                Effect.result,
+              )
+            expect(Result.isFailure(rejected) && rejected.failure.code).toBe(mode === "expiry" ? "expired" : "stale")
+            setup.trust.fingerprint = "fixture"
+            const replay = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+            expect(Result.isFailure(replay) && replay.failure.code).toBe(mode === "expiry" ? "unavailable" : "used")
+            expect((yield* setup.controls.inspect()).state.entries).toEqual([active.entry])
+          }),
+        ),
+      )
+    })
+
+  for (const mode of ["parent", "review", "legacy-parent", "legacy-review"] as const)
+    test(`reopen never recreates an approved outcome or source after ${mode} erasure`, async () => {
+      await run((setup) =>
+        owned(
+          Effect.gen(function* () {
+            const active = yield* approvedOutcome(setup)
+            const preview = yield* prepare(setup, {
+              action: "reopen",
+              expected: active.read.state.generation,
+              id: active.entry.id,
+              reason: reopenReason,
+            })
+            const saved = yield* ReviewRequestStore.make(setup.db).sourceSnapshot(parentID, reviewID)
+            const pair = saved?.sourceBinding?.witnesses
+            if (!pair) throw new Error("Missing original saved Main witnesses")
+            if (mode === "parent" || mode === "review") {
+              const id = mode === "parent" ? parentID : reviewID
+              yield* setup.lifecycle.deleting(id, setup.db.delete(SessionTable).where(eq(SessionTable.id, id)).run())
+            }
+            if (mode === "legacy-parent" || mode === "legacy-review")
+              // Relevant older ordinary sole-session removal, intentionally without the new ReviewStore erase hook.
+              yield* setup.brain
+                .delete(BrainEntryTable)
+                .where(eq(BrainEntryTable.id, mode === "legacy-parent" ? pair.parent : pair.review))
+                .run()
+            const rejected = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+            expect(Result.isFailure(rejected) && rejected.failure.code).toBe("stale")
+            expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toEqual([])
+            const after = yield* setup.controls.inspect()
+            const replay = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+            expect(Result.isFailure(replay) && replay.failure.code).toBe("used")
+            expect((yield* setup.controls.inspect()).state).toEqual(after.state)
+            if (mode === "legacy-parent" || mode === "legacy-review") {
+              expect((yield* setup.brain.select().from(BrainReviewMemorySourceTable))[0].state).toBe("retired")
+              expect(
+                (yield* ReviewRequestStore.make(setup.db).sourceSnapshot(parentID, reviewID))?.sourceBinding?.witnesses,
+              ).toEqual(pair)
+              expect(
+                yield* setup.brain
+                  .select()
+                  .from(BrainEntryTable)
+                  .where(eq(BrainEntryTable.id, mode === "legacy-parent" ? pair.parent : pair.review)),
+              ).toEqual([])
+            }
+          }),
+        ),
+      )
+    })
+
+  test("reopen rechecks original Main source authority even when its Brain row and generation are unchanged", async () => {
+    await run((setup) =>
+      owned(
+        Effect.gen(function* () {
+          const active = yield* approvedOutcome(setup)
+          const preview = yield* prepare(setup, {
+            action: "reopen",
+            expected: active.read.state.generation,
+            id: active.entry.id,
+            reason: reopenReason,
+          })
+          const saved = yield* setup.db.select().from(SessionTable).where(eq(SessionTable.id, reviewID)).get()
+          const record = saved ? ReviewLocalRun.readRecord(saved.metadata?.[ReviewLocalRun.FIELD]) : undefined
+          if (!saved || !record) throw new Error("Missing genuine original Main review record")
+          const original = yield* setup.brain.select().from(BrainReviewMemoryTable)
+          yield* setup.db
+            .update(SessionTable)
+            .set({
+              metadata: {
+                ...saved.metadata,
+                [ReviewLocalRun.FIELD]: {
+                  ...record,
+                  request: { ...record.request, target: { ...record.request.target, head: "b".repeat(40) } },
+                },
+              },
+            })
+            .where(eq(SessionTable.id, reviewID))
+            .run()
+          const rejected = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+          expect(Result.isFailure(rejected) && rejected.failure.code).toBe("source-unavailable")
+          expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toEqual(original)
+          expect((yield* setup.controls.inspect()).state).toEqual(active.read.state)
+          yield* setup.db
+            .update(SessionTable)
+            .set({ metadata: saved.metadata })
+            .where(eq(SessionTable.id, reviewID))
+            .run()
+          const replay = yield* setup.controls.confirm(confirmation(preview)).pipe(Effect.result)
+          expect(Result.isFailure(replay) && replay.failure.code).toBe("used")
+          expect((yield* setup.controls.inspect()).state).toEqual(active.read.state)
+        }),
+      ),
+    )
+  })
+
   test("prepare checks the displayed physical scope inside the service before reading or preparing another namespace", async () => {
     await run((setup) =>
       owned(
@@ -572,6 +889,7 @@ describe("prepared owner controls for isolated review memory (inactive internal 
       owned(
         Effect.gen(function* () {
           yield* enable(setup)
+          yield* setup.admitSource()
           let read = yield* setup.controls.inspect()
           const proposal = value(
             yield* setup.memory.propose(setup.place, {
@@ -630,6 +948,7 @@ describe("prepared owner controls for isolated review memory (inactive internal 
       owned(
         Effect.gen(function* () {
           yield* enable(setup)
+          yield* setup.admitSource()
           let read = yield* setup.controls.inspect()
           const proposal = value(
             yield* setup.memory.propose(setup.place, {
@@ -658,6 +977,153 @@ describe("prepared owner controls for isolated review memory (inactive internal 
           expect(
             (yield* setup.brain.select().from(BrainReviewMemoryTable).all()).some((row) => row.id === proposal.id),
           ).toBe(false)
+        }),
+      ),
+    )
+  })
+
+  test("a legacy marker deletion reaches the actual saved Main proof without lazy registration or generation churn", async () => {
+    await run((setup) =>
+      owned(
+        Effect.gen(function* () {
+          yield* enable(setup)
+          yield* setup.admitSource()
+          const before = value(yield* setup.memory.context(setup.place, { source, files: ["src/a.ts"] }))
+          expect(value(yield* setup.memory.current(setup.place, { source, generation: before.generation }))).toBe(true)
+          const snapshot = yield* ReviewRequestStore.make(setup.db).sourceSnapshot(parentID, reviewID)
+          const pair = snapshot?.sourceBinding?.witnesses
+          if (!pair) throw new Error("Missing genuine saved Main witnesses")
+          // The relevant old ordinary erase operation, with no new review erasure hook.
+          yield* setup.brain.delete(BrainEntryTable).where(eq(BrainEntryTable.id, pair.parent)).run()
+          expect(yield* setup.memory.current(setup.place, { source, generation: before.generation })).toEqual({
+            ok: false,
+            reason: "source-unavailable",
+          })
+          const after = yield* setup.controls.inspect()
+          expect(after.state.generation).toBeGreaterThan(before.generation)
+          expect((yield* setup.brain.select().from(BrainReviewMemorySourceTable))[0].state).toBe("retired")
+          expect(yield* setup.memory.context(setup.place, { source, files: ["src/a.ts"] })).toEqual({
+            ok: false,
+            reason: "source-unavailable",
+          })
+          expect((yield* setup.controls.inspect()).state.generation).toBe(after.state.generation)
+          expect(
+            (yield* ReviewRequestStore.make(setup.db).sourceSnapshot(parentID, reviewID))?.sourceBinding?.witnesses,
+          ).toEqual(pair)
+          expect(yield* setup.brain.select().from(BrainEntryTable).where(eq(BrainEntryTable.id, pair.parent))).toEqual(
+            [],
+          )
+        }),
+      ),
+    )
+  })
+
+  test("zero-row source deletion discovers the old registered repository after the Main project metadata moves", async () => {
+    await run((setup) =>
+      owned(
+        Effect.gen(function* () {
+          yield* enable(setup)
+          yield* setup.admitSource()
+          expect(yield* setup.brain.select().from(BrainReviewMemoryTable)).toEqual([])
+          expect(yield* setup.brain.select().from(BrainEntryTable)).toHaveLength(2)
+          // Persisted legacy placement changed; the genuine closing session is in
+          // the new project, while its zero-content source ledger retains the old one.
+          const moved = Project.ID.make("moved-memory-fixture")
+          yield* setup.db.run(
+            sql`INSERT INTO project (id, worktree, sandboxes, time_created, time_updated) VALUES (${moved}, ${setup.instance.directory}, '[]', 1, 1)`,
+          )
+          yield* setup.db.update(SessionTable).set({ project_id: moved }).where(eq(SessionTable.id, parentID)).run()
+          yield* setup.lifecycle.deleting(
+            parentID,
+            setup.db.delete(SessionTable).where(eq(SessionTable.id, parentID)).run(),
+          )
+          expect(yield* setup.brain.select().from(BrainEntryTable)).toEqual([])
+          expect((yield* setup.brain.select().from(BrainReviewMemorySourceTable))[0]).toMatchObject({
+            repository_id: repository,
+            state: "retired",
+          })
+          expect(yield* setup.db.select().from(SessionTable).where(eq(SessionTable.id, parentID)).get()).toBeUndefined()
+        }),
+      ),
+    )
+  })
+
+  test("the combined content and zero-row source repository cap refuses before any Brain mutation", async () => {
+    await run((setup) =>
+      owned(
+        Effect.gen(function* () {
+          yield* enable(setup)
+          yield* setup.admitSource()
+          // Coherent empty namespaces avoid a false pass from unrelated corrupt
+          // scope validation. Each query remains<=200; their union with the genuine
+          // source is201, so only the combined authority bound should refuse.
+          yield* setup.brain.transaction((tx) =>
+            Effect.gen(function* () {
+              for (let index = 0; index < 200; index++) {
+                const selected = `overflow_repo_${index}`
+                const scope = `overflow_scope_${index}`
+                yield* ReviewStore.register(tx, selected, scope)
+                if (index < 100)
+                  yield* tx
+                    .insert(BrainReviewMemoryTable)
+                    .values({
+                      id: `overflow_content_${index}`,
+                      repository_id: selected,
+                      scope_id: scope,
+                      kind: "outcome",
+                      status: "proposed",
+                      visibility: "repository",
+                      body: "Retained fixture excerpt",
+                      paths: ["src/a.ts"],
+                      citations: [],
+                      reason: "Legacy provenance fixture",
+                      parent_session_id: parentID,
+                      review_session_id: `ses_overflow_content_${index}`,
+                      source_head: source.head,
+                      origin: "review",
+                      created_at: 1,
+                      updated_at: 1,
+                    })
+                    .run()
+                if (index >= 100)
+                  yield* tx
+                    .insert(BrainReviewMemorySourceTable)
+                    .values({
+                      repository_id: selected,
+                      scope_id: scope,
+                      parent_session_id: parentID,
+                      review_session_id: `ses_overflow_source_${index}`,
+                      source_head: source.head,
+                      parent_marker_id: `vrw1_${(index * 2).toString(16).padStart(32, "0")}`,
+                      review_marker_id: `vrw1_${(index * 2 + 1).toString(16).padStart(32, "0")}`,
+                      state: "retired",
+                    })
+                    .run()
+              }
+            }),
+          )
+          const snapshot = () =>
+            Effect.gen(function* () {
+              const tables = yield* setup.brain.all<{ name: string }>(
+                sql`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
+              )
+              return yield* Effect.forEach(tables, (table) =>
+                setup.brain
+                  .all(sql`SELECT * FROM ${sql.identifier(table.name)}`)
+                  .pipe(
+                    Effect.map((rows) => ({ table: table.name, rows: rows.map((row) => JSON.stringify(row)).sort() })),
+                  ),
+              )
+            })
+          const before = yield* snapshot()
+          const result = yield* setup.lifecycle
+            .deleting(parentID, setup.db.delete(SessionTable).where(eq(SessionTable.id, parentID)).run())
+            .pipe(Effect.result)
+          expect(Result.isFailure(result)).toBe(true)
+          expect(yield* snapshot()).toEqual(before)
+          expect((yield* setup.db.select().from(SessionTable).where(eq(SessionTable.id, parentID)).get())?.id).toBe(
+            parentID,
+          )
         }),
       ),
     )

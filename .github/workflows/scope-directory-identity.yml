@@ -2,13 +2,18 @@ name: VectorScope repository identity
 
 on:
   push:
-    branches: [build-scope]
+    branches: [build-scope, build-scope-witness, build-scope-owner, build-scope-joined]
     paths:
       - .github/workflows/scope-directory-identity.yml
       - packages/core/src/directory-identity.ts
       - packages/core/src/read-only-git.ts
       - packages/core/src/review/**
+      - packages/core/src/brain/review-memory.ts
+      - packages/core/test/brain/review-memory-reopen.test.ts
+      - packages/schema/src/review-memory.ts
+      - packages/schema/test/review-memory.test.ts
       - packages/core/test/directory-identity.test.ts
+      - packages/core/test/read-only-git.test.ts
       - packages/core/test/fixture/directory-identity.ts
       - packages/engine/src/review/**
       - packages/engine/test/review/**
@@ -54,6 +59,15 @@ jobs:
       - name: Check Core types
         working-directory: packages/core
         run: bun typecheck
+      - name: Check strict owner action wire contracts
+        working-directory: packages/schema
+        run: bun test test/review-memory.test.ts
+      - name: Check Schema types
+        working-directory: packages/schema
+        run: bun typecheck
+      - name: Check atomic owner reopening and rollback
+        working-directory: packages/core
+        run: bun test test/brain/review-memory-reopen.test.ts --timeout 60000
       - name: Check read-only Git source leases
         working-directory: packages/core
         run: bun test test/read-only-git.test.ts --timeout 60000
@@ -62,6 +76,18 @@ jobs:
       - name: Check immutable review source bindings
         working-directory: packages/core
         run: bun test test/review/source-binding.test.ts --timeout 60000
+      - name: Check real Main and Brain erasure witnesses
+        working-directory: packages/core
+        run: bun test test/brain/review-witness.test.ts --timeout 60000
+      - name: Check repository review memory storage
+        working-directory: packages/core
+        run: bun test test/brain/review-memory.test.ts --timeout 60000
+      - name: Check older memory erasure compatibility
+        working-directory: packages/core
+        run: bun test test/brain/review-memory-older-builds.test.ts --timeout 60000
+      - name: Check physical namespace migration and clone separation
+        working-directory: packages/core
+        run: bun test test/brain/review-memory-scope.test.ts --timeout 60000
       - name: Check physical folder identity and replacement refusal
         working-directory: packages/engine
         run: bun test test/review/memory-scope.test.ts --timeout 60000
@@ -77,6 +103,24 @@ jobs:
       - name: Check owner consent and service lifetime
         working-directory: packages/engine
         run: bun test test/review/memory-owner.test.ts --timeout 60000
+      - name: Check registered public owner API inventory
+        working-directory: packages/engine
+        run: bun test test/server/httpapi-public-openapi.test.ts
+      - name: Check actual default runtime controls capability
+        working-directory: packages/engine
+        run: bun test test/server/httpapi-experimental.test.ts -t "combined server advertises owner memory controls"
+      - name: Check owner route authentication
+        working-directory: packages/server
+        run: bun test src/auth.test.ts
+      - name: Check matched-route authorization
+        working-directory: packages/server
+        run: bun test src/middleware/authorization.test.ts
+      - name: Check Server types
+        working-directory: packages/server
+        run: bun typecheck
+      - name: Check generated SDK types
+        working-directory: packages/sdk/js
+        run: bun typecheck
       - name: Check real HTTP authorization and lost-response recovery
         working-directory: packages/engine
         run: bun test test/server/httpapi-review-memory.test.ts --timeout 60000

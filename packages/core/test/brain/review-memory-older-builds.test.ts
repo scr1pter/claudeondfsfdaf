@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import path from "node:path"
 import { and, eq, sql } from "drizzle-orm"
 import { Effect, Exit, Layer } from "effect"
@@ -6,6 +7,7 @@ import { Brain } from "../../src/brain/brain"
 import { BrainDatabase } from "../../src/brain/database"
 import { BrainRevocation } from "../../src/brain/revocation"
 import { ReviewMemory } from "../../src/brain/review-memory"
+import { ReviewWitness } from "../../src/brain/review-witness"
 import { ReviewStore } from "../../src/brain/review-store"
 import {
   BrainReviewMemoryStateTable,
@@ -30,6 +32,25 @@ const draft: ReviewMemory.Draft = {
   citations: [{ path: "src/a.ts", line: 1, head: source.head, quote: "return []" }],
   visibility: "repository",
 }
+// Fixed private test authority only; production IDs come from the winning Main INSERT, not request JSON.
+const witness = (request: ReviewMemory.Source & { repository: string; scope: string }): ReviewWitness.Proof => ({
+  ...request,
+  witnesses: {
+    version: 1,
+    parent: `vrw1_${createHash("sha256")
+      .update(
+        JSON.stringify([request.repository, request.scope, request.parentID, request.reviewID, request.head, "parent"]),
+      )
+      .digest("hex")
+      .slice(0, 32)}`,
+    review: `vrw1_${createHash("sha256")
+      .update(
+        JSON.stringify([request.repository, request.scope, request.parentID, request.reviewID, request.head, "review"]),
+      )
+      .digest("hex")
+      .slice(0, 32)}`,
+  },
+})
 function value<A>(result: ReviewMemory.Result<A>): A {
   if (!result.ok) throw new Error(result.reason)
   return result.value
@@ -44,7 +65,7 @@ const authority: ReviewMemory.Authority = {
   owner: (_request, use) => use("owner_1"),
   source: (request, use) =>
     request.parentID === source.parentID && request.reviewID === source.reviewID && request.head === source.head
-      ? use()
+      ? use(witness(request))
       : Effect.succeed({ ok: false, reason: "source-unavailable" }),
 }
 async function open<A>(
@@ -77,6 +98,12 @@ const learn = (setup: Setup) =>
   Effect.gen(function* () {
     const before = value(yield* setup.memory.inspect(setup.place))
     const state = value(yield* setup.memory.configure(setup.place, { expected: before.generation, enabled: true }))
+    expect(
+      yield* ReviewStore.registerSource(
+        setup.db,
+        witness({ repository: setup.place.repository, scope: setup.place.scope, ...source }),
+      ),
+    ).toBe(true)
     const pending = value(yield* setup.memory.propose(setup.place, { ...draft, source, expected: state.generation }))
     const recorded = value(yield* setup.memory.inspect(setup.place))
     value(yield* setup.memory.approve(setup.place, { expected: recorded.generation, id: pending.id }))
@@ -141,7 +168,7 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
               }
             })
           const before = yield* snapshot()
-          expect(before.entries).toHaveLength(1)
+          expect(before.entries).toHaveLength(3)
           expect(before.reviews).toHaveLength(1)
           expect(Exit.isFailure(yield* Effect.exit(setup.brain.eraseSession(setup.place, source.reviewID)))).toBe(true)
           expect(yield* snapshot()).toEqual(before)
@@ -337,7 +364,10 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
           .where(eq(BrainTombstoneTable.repository_id, setup.place.repository))
           .run()
         expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toHaveLength(1)
-        expect(value(yield* setup.memory.current(setup.place, { source, generation: before.generation }))).toBe(false)
+        expect(yield* setup.memory.current(setup.place, { source, generation: before.generation })).toEqual({
+          ok: false,
+          reason: "source-unavailable",
+        })
         expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
         const after = value(yield* setup.memory.inspect(setup.place))
         expect(after).toMatchObject({ enabled: false, entries: [] })
@@ -345,7 +375,7 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
         expect(yield* BrainRevocation.revision(setup.db, setup.place.repository)).toBeGreaterThan(revision)
         expect(yield* setup.memory.propose(setup.place, { ...draft, source, expected: before.generation })).toEqual({
           ok: false,
-          reason: "stale",
+          reason: "source-unavailable",
         })
         const again = value(yield* setup.memory.inspect(setup.place))
         expect(again.generation).toBe(after.generation)
@@ -377,7 +407,7 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
         expect(enabled.generation).toBeGreaterThan(state.generation)
         expect(yield* setup.memory.propose(setup.place, { ...draft, source, expected: generation })).toEqual({
           ok: false,
-          reason: "stale",
+          reason: "source-unavailable",
         })
       }),
     )
@@ -395,11 +425,11 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
     })
     const ports: ReviewMemory.Authority = {
       ...authority,
-      source: (_request, use) =>
+      source: (request, use) =>
         Effect.gen(function* () {
           notify()
           yield* Effect.promise(() => gate)
-          return yield* use()
+          return yield* use(witness(request))
         }),
     }
     await open(
@@ -411,13 +441,19 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
           const state = value(
             yield* setup.memory.configure(setup.place, { expected: initial.generation, enabled: true }),
           )
+          expect(
+            yield* ReviewStore.registerSource(
+              setup.db,
+              witness({ repository: setup.place.repository, scope: setup.place.scope, ...source }),
+            ),
+          ).toBe(true)
           const pending = Effect.runPromise(
             setup.memory.propose(setup.place, { ...draft, source, expected: state.generation }),
           )
           yield* Effect.promise(() => entered)
           expect(yield* setup.brain.eraseSession(setup.place, source.parentID)).toBe(0)
           release()
-          expect(yield* Effect.promise(() => pending)).toEqual({ ok: false, reason: "stale" })
+          expect(yield* Effect.promise(() => pending)).toEqual({ ok: false, reason: "source-unavailable" })
           expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
           const after = value(yield* setup.memory.inspect(setup.place))
           expect(after.generation).toBeGreaterThan(state.generation)
@@ -464,7 +500,7 @@ describe("review memory erase compatibility and suspended writers, actual SQLite
             .where(eq(BrainTombstoneTable.repository_id, setup.place.repository))
             .run()
           release()
-          expect(yield* Effect.promise(() => pending)).toEqual({ ok: false, reason: "stale" })
+          expect(yield* Effect.promise(() => pending)).toEqual({ ok: false, reason: "source-unavailable" })
           expect(yield* setup.db.select().from(BrainReviewMemoryTable)).toEqual([])
           expect((yield* setup.db.select().from(BrainReviewMemoryStateTable))[0].enabled).toBe(false)
         }),

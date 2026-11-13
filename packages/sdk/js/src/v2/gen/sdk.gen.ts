@@ -404,6 +404,17 @@ import type {
   ReviewGetResponses,
   ReviewListErrors,
   ReviewListResponses,
+  ReviewMemoryConfirmErrors,
+  ReviewMemoryConfirmResponses,
+  ReviewMemoryControlConfirmation,
+  ReviewMemoryControlPrepare,
+  ReviewMemoryControlPreviewId,
+  ReviewMemoryDiscardErrors,
+  ReviewMemoryDiscardResponses,
+  ReviewMemoryInspectErrors,
+  ReviewMemoryInspectResponses,
+  ReviewMemoryPrepareErrors,
+  ReviewMemoryPrepareResponses,
   ReviewRunStart,
   ReviewStartErrors,
   ReviewStartResponses,
@@ -7532,6 +7543,156 @@ export class Review2 extends HeyApiClient {
   }
 }
 
+export class ReviewMemory extends HeyApiClient {
+  /**
+   * Read this repository's review memory
+   *
+   * Owner-only bounded read in the engine's verified physical repository. Does not start a review.
+   */
+  public inspect<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      offset?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "offset" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ReviewMemoryInspectResponses, ReviewMemoryInspectErrors, ThrowOnError>({
+      url: "/experimental/review-memory",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Preview an owner review-memory change
+   *
+   * Prepare one exact, short-lived approval. Preparing does not apply the change.
+   */
+  public prepare<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      reviewMemoryControlPrepare?: ReviewMemoryControlPrepare
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewMemoryControlPrepare", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewMemoryPrepareResponses, ReviewMemoryPrepareErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/prepare",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Confirm one exact review-memory preview
+   *
+   * Single-use confirmation, bound to fresh owner and repository authority. Read back after a lost response.
+   */
+  public confirm<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      reviewMemoryControlConfirmation?: ReviewMemoryControlConfirmation
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewMemoryControlConfirmation", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewMemoryConfirmResponses, ReviewMemoryConfirmErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/confirm",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Discard an owned review-memory preview
+   *
+   * Retire this owner's exact preview without applying a change or altering stored memory.
+   */
+  public discard<ThrowOnError extends boolean = false>(
+    parameters: {
+      previewId: ReviewMemoryControlPreviewId
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "previewId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      ReviewMemoryDiscardResponses,
+      ReviewMemoryDiscardErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/review-memory/previews/{previewId}",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Permission extends HeyApiClient {
   /**
    * List pending permissions
@@ -12077,6 +12238,11 @@ export class VectorClient extends HeyApiClient {
   private _review?: Review2
   get review(): Review2 {
     return (this._review ??= new Review2({ client: this.client }))
+  }
+
+  private _reviewMemory?: ReviewMemory
+  get reviewMemory(): ReviewMemory {
+    return (this._reviewMemory ??= new ReviewMemory({ client: this.client }))
   }
 
   private _permission?: Permission

@@ -1,8 +1,14 @@
 import { createHash, randomUUID } from "node:crypto"
 import { and, eq, sql } from "drizzle-orm"
-import { Deferred, Effect, Exit, Option, Result, Schema, Semaphore } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Result, Schema, Semaphore } from "effect"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
+import { BrainPaths } from "@vectordevai/core/brain/paths"
+import { ReviewStore } from "@vectordevai/core/brain/review-store"
+import { ReviewWitness } from "@vectordevai/core/brain/review-witness"
 import { Database } from "@vectordevai/core/database/database"
+import { FSUtil } from "@vectordevai/core/fs-util"
+import { Project } from "@vectordevai/core/project"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { decodeLocalResult } from "@vectordevai/core/review/local-result"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
@@ -18,6 +24,7 @@ import { Session } from "@/session/session"
 import { ReviewLocalAdmission } from "./local-admission"
 import { ReviewService } from "./service"
 import { ReviewLifecycle } from "./lifecycle"
+import { ReviewMemoryScope } from "./memory-scope"
 
 export const MARKER = `${PINNED_SESSION_PREFIX}run`
 export const FIELD = "vectorscopeLocalRun"
@@ -65,6 +72,7 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
     const jobs = yield* BackgroundJob.Service
     const store = yield* BackgroundJobStore.Service
     const database = yield* Database.Service
+    const brain = yield* BrainDatabase.Service
     const requests = yield* ReviewRequestStore.Service
     const lifecycle = yield* ReviewLifecycle.Service
     const lock = yield* Semaphore.make(1)
@@ -296,7 +304,7 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
                   code: "unavailable",
                   message: "The local review reservation changed before execution.",
                 })
-              return { run }
+              return { run, binding: reservation.row.sourceBinding }
             }),
           )
           if ("existing" in prepared) {
@@ -308,6 +316,99 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
             return prepared.existing
           }
           const { run } = prepared
+          const identity = { parentID, requestID: request.requestID, ownerNonce, runID: run.id }
+          const binding = prepared.binding
+          if (binding?.witnesses) {
+            const parent = yield* sessions.get(parentID).pipe(
+              Effect.mapError(
+                () =>
+                  new Error({
+                    code: "unavailable",
+                    message: "The review conversation changed before memory registration.",
+                  }),
+              ),
+            )
+            const repository =
+              run.projectID === Project.ID.global ? BrainPaths.folderKey(binding.directory) : run.projectID
+            // Eligibility is a read only decision before any registration
+            // attempt. Default-off runs never gain memory on a later retry.
+            const eligible = yield* ReviewStore.state(brain.db, repository, binding.scope).pipe(
+              Effect.catchCause((cause) => (Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(undefined))),
+            )
+            if (eligible?.enabled) {
+              if (current.abort.signal.aborted) return yield* Effect.interrupt
+              const stopped = Effect.callback<never>((resume) => {
+                const stop = () => resume(Effect.interrupt)
+                if (current.abort.signal.aborted) return stop()
+                current.abort.signal.addEventListener("abort", stop, { once: true })
+                return Effect.sync(() => current.abort.signal.removeEventListener("abort", stop))
+              })
+              // A filesystem/helper wait holds no lifecycle lock. Deletion can
+              // close the source and abort this exact verification operation.
+              const verified = yield* ReviewMemoryScope.verify(binding).pipe(
+                Effect.raceFirst(stopped),
+                Effect.mapError(
+                  () =>
+                    new Error({
+                      code: "unavailable",
+                      message: "The review memory source changed before registration.",
+                    }),
+                ),
+              )
+              const proof = ReviewWitness.proof({
+                repository,
+                scope: verified.binding.scope,
+                parentID,
+                reviewID: run.id,
+                head: request.target.head,
+                witnesses: binding.witnesses,
+              })
+              if (
+                !proof ||
+                verified.metadata.head !== request.target.head ||
+                parent.projectID !== run.projectID ||
+                parent.parentID ||
+                parent.internal ||
+                FSUtil.realpath(parent.directory) !== verified.binding.directory ||
+                FSUtil.realpath(run.directory) !== verified.binding.directory
+              )
+                return yield* new Error({
+                  code: "unavailable",
+                  message: "The review memory source no longer matches its conversation.",
+                })
+              yield* lifecycle.within(
+                parentID,
+                run.id,
+              )(
+                Effect.gen(function* () {
+                  if (current.abort.signal.aborted || !(yield* requests.ready(identity)))
+                    return yield* new Error({
+                      code: "unavailable",
+                      message: "The review conversation closed before memory registration.",
+                    })
+                  const registered = yield* ReviewStore.registerSource(brain.db, proof).pipe(
+                    Effect.catchCause((cause) =>
+                      Cause.hasInterrupts(cause)
+                        ? Effect.interrupt
+                        : Effect.fail(
+                            new Error({
+                              code: "unavailable",
+                              message: "The review memory registration could not be confirmed.",
+                            }),
+                          ),
+                    ),
+                  )
+                  // A failed/unknown commit never falls through into paid work.
+                  // Its fixed Main reservation is settled by setup's finalizer.
+                  if (!registered || current.abort.signal.aborted || !(yield* requests.ready(identity)))
+                    return yield* new Error({
+                      code: "unavailable",
+                      message: "The review memory registration is unavailable.",
+                    })
+                }),
+              )
+            }
+          }
           active.set(run.id, current)
           const go = yield* Deferred.make<void>()
           const completed: { artifact?: ReviewRun.Artifact } = {}
@@ -345,7 +446,6 @@ export const make = <RunR, ModelR>(pipeline: Pick<LocalReviewDeps<RunR, ModelR>,
             Effect.provide(context),
             Effect.onInterrupt(() => Effect.sync(() => current.abort.abort())),
           )
-          const identity = { parentID, requestID: request.requestID, ownerNonce, runID: run.id }
           yield* lifecycle.within(
             parentID,
             run.id,

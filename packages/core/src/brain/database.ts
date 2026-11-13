@@ -26,6 +26,7 @@ import workflow from "./migration/20261211000000_workflow"
 import researchClaims from "./migration/20261212000000_research_claims"
 import reviewMemory from "./migration/20261213000000_review_memory"
 import reviewMemoryScope from "./migration/20261214000000_review_memory_scope"
+import reviewMemorySource from "./migration/20261215000000_review_memory_source"
 
 // brain.db, opened once per process and shared by everything that reads or writes the brain: memory entries, and the
 // documents and records Vector reads into it. One connection means one writer per process, which SQLite wants, and
@@ -69,6 +70,7 @@ export const layerFor = (file: string) =>
         researchClaims,
         reviewMemory,
         reviewMemoryScope,
+        reviewMemorySource,
       ])
       // SQLite gives the -wal and -shm files the database's own mode, but on the first open they exist before this.
       if (file !== ":memory:" && process.platform !== "win32")

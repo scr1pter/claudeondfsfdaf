@@ -42,6 +42,22 @@ const stored: ReviewMemoryControl.OwnerEntry = {
   approvedBy: "owner_local",
   approvedAt: 2,
 }
+const approved: ReviewMemoryControl.ApprovedEntry = {
+  ...proposed,
+  id: "approved_outcome",
+  text: "PRIVATE_APPROVED_OUTCOME",
+  reason: "PRIVATE_ORIGINAL_OUTCOME_REASON",
+  status: "active",
+  approvedBy: "owner_local",
+  approvedAt: 2,
+}
+const reopeningReason = "PRIVATE_HUMAN_REASON: an explicit request to reassess this outcome."
+const pendingOutcome = (reason = reopeningReason): ReviewMemoryControl.ProposedEntry => ({
+  ...proposed,
+  id: approved.id,
+  text: approved.text,
+  reason,
+})
 function fixture(extra: Partial<ReviewMemoryTransport> = {}, selection: Partial<ReviewMemorySelection> = {}) {
   const calls = {
     reads: [] as ReviewMemoryControl.InspectInput[],
@@ -65,7 +81,8 @@ function fixture(extra: Partial<ReviewMemoryTransport> = {}, selection: Partial<
     },
     prepare: async (input) => {
       calls.prepares.push(structuredClone(input))
-      const { action, ...payload } = input.command
+      const command = input.command
+      const { action, ...payload } = command
       return Schema.decodeUnknownSync(ReviewMemoryControl.Preview)({
         previewId: previewID,
         sha256: digest,
@@ -74,11 +91,29 @@ function fixture(extra: Partial<ReviewMemoryTransport> = {}, selection: Partial<
         scope: snapshot.scope,
         expected: input.command.expected,
         operation: action,
-        payload: action === "approve" ? { ...payload, entry: proposed } : payload,
+        payload:
+          action === "approve"
+            ? { ...payload, entry: proposed }
+            : command.action === "reopen"
+              ? { ...payload, entry: snapshot.state.entries.find((entry) => entry.id === command.id) }
+              : payload,
       })
     },
     confirm: async (input) => {
       calls.confirms.push(structuredClone(input))
+      const command = calls.prepares.at(-1)?.command
+      if (command?.action === "reopen") {
+        const pending = pendingOutcome(command.reason)
+        snapshot = {
+          ...snapshot,
+          state: {
+            ...snapshot.state,
+            generation: snapshot.state.generation + 1,
+            entries: snapshot.state.entries.map((entry) => (entry.id === pending.id ? pending : entry)),
+          },
+        }
+        return pending
+      }
       snapshot = {
         ...snapshot,
         state: { ...snapshot.state, generation: snapshot.state.generation + 1, enabled: false },
@@ -138,8 +173,264 @@ function fixture(extra: Partial<ReviewMemoryTransport> = {}, selection: Partial<
     },
   }
 }
+function outcome(extra: Partial<ReviewMemoryTransport> = {}, selection: Partial<ReviewMemorySelection> = {}) {
+  const f = fixture(extra, selection)
+  f.set({ ...f.snapshot(), state: { ...f.snapshot().state, entries: [stored, proposed, approved] } })
+  return f
+}
 
 describe("inactive repository review-memory App controller", () => {
+  test("reopening is a separate explicit bounded human edit for an active review outcome, never an owner entry or pending result", async () => {
+    const f = outcome()
+    await f.controller.refresh()
+    f.controller.editDraft({ text: "PRIVATE_NEW_OWNER_DRAFT", reason: "PRIVATE_OWNER_DRAFT_REASON" })
+    for (const id of [stored.id, proposed.id, "missing"]) {
+      f.controller.selectReopen(id)
+      expect(f.state().reopening).toBeUndefined()
+      await f.controller.prepare({ action: "reopen", id, reason: reopeningReason })
+    }
+    expect(f.calls.prepares).toEqual([])
+    f.controller.selectReopen(approved.id)
+    expect(f.state().reopening).toEqual({ id: approved.id, reason: "" })
+    f.controller.editReopen(reopeningReason)
+    f.controller.editReopen("x".repeat(ReviewMemoryControl.LIMIT.reason + 1))
+    expect(f.state().reopening?.reason).toBe(reopeningReason)
+    expect(f.state().draft.text).toBe("PRIVATE_NEW_OWNER_DRAFT")
+    expect(f.state().draft.reason).toBe("PRIVATE_OWNER_DRAFT_REASON")
+    f.controller.cancelReopen()
+    expect(f.state().reopening).toBeUndefined()
+    expect(f.state().draft.text).toBe("PRIVATE_NEW_OWNER_DRAFT")
+    f.controller.selectReopen(approved.id)
+    f.controller.editReopen(" ")
+    await f.controller.prepareReopen()
+    expect(f.calls.prepares).toEqual([])
+    f.controller.editReopen(reopeningReason)
+    const published = f.state().reopening
+    if (!published) throw new Error("Missing human reopen edit")
+    published.reason = "An untrusted view mutation."
+    await f.controller.prepareReopen()
+    expect(f.calls.prepares).toEqual([
+      { expectedScope: scope, command: { action: "reopen", expected: 0, id: approved.id, reason: reopeningReason } },
+    ])
+    const preview = f.state().preview
+    if (preview?.operation !== "reopen") throw new Error("Missing full original outcome preview")
+    expect(preview.payload).toEqual({ expected: 0, id: approved.id, reason: reopeningReason, entry: approved })
+    expect(f.state().reopening).toBeUndefined()
+    expect(f.state().approved).toBe(false)
+    await f.controller.confirm()
+    expect(f.calls.confirms).toEqual([])
+    f.controller.approve(true)
+    await f.controller.confirm()
+    expect(f.calls.confirms).toEqual([{ previewId: previewID, approvedSha256: digest }])
+    const pending = f.state().read?.state.entries.find((entry) => entry.id === approved.id)
+    expect(pending).toEqual(pendingOutcome())
+    expect(pending).not.toHaveProperty("approvedBy")
+    expect(pending).not.toHaveProperty("approvedAt")
+    expect(f.state().retry).toBeUndefined()
+    expect(f.calls.prepares).toHaveLength(1)
+    f.controller.dispose()
+  })
+
+  test("same-owner/scope/generation refresh preserves unsubmitted reason and draft; changed generation or eligibility clears the reason", async () => {
+    const f = outcome()
+    await f.controller.refresh()
+    f.controller.editDraft({ text: "PRIVATE_OWNER_DRAFT" })
+    f.controller.selectReopen(approved.id)
+    f.controller.editReopen(reopeningReason)
+    await f.controller.refresh()
+    expect(f.state().reopening).toEqual({ id: approved.id, reason: reopeningReason })
+    expect(f.state().draft.text).toBe("PRIVATE_OWNER_DRAFT")
+    expect(f.calls.prepares).toEqual([])
+    f.set({ ...f.snapshot(), state: { ...f.snapshot().state, generation: 1 } })
+    await f.controller.refresh()
+    expect(f.state().reopening).toBeUndefined()
+    expect(f.state().draft.text).toBe("")
+    f.controller.selectReopen(approved.id)
+    f.controller.editReopen(reopeningReason)
+    f.set({ ...f.snapshot(), state: { ...f.snapshot().state, entries: [stored, proposed] } })
+    await f.controller.refresh()
+    expect(f.state().reopening).toBeUndefined()
+    expect(f.calls.prepares).toEqual([])
+    f.controller.dispose()
+  })
+
+  test("reopening while memory is disabled withdraws approval without preparing an enable or automatic reapproval", async () => {
+    const f = outcome()
+    f.set({ ...f.snapshot(), state: { ...f.snapshot().state, enabled: false } })
+    await f.controller.refresh()
+    f.controller.selectReopen(approved.id)
+    f.controller.editReopen(reopeningReason)
+    await f.controller.prepareReopen()
+    f.controller.approve(true)
+    await f.controller.confirm()
+    expect(f.calls.prepares.map((request) => request.command.action)).toEqual(["reopen"])
+    expect(f.state().read?.state.enabled).toBe(false)
+    expect(f.state().read?.state.entries.find((entry) => entry.id === approved.id)?.status).toBe("proposed")
+    f.controller.dispose()
+  })
+
+  test("every owner epoch/authority dimension clears an unsubmitted human reason and selection", async () => {
+    for (const changed of [
+      { identity: {} },
+      { server: "other" },
+      { directory: "/other" },
+      { epoch: 1 },
+      { owner: "guest" as const },
+      { connected: false },
+      { capability: false },
+    ]) {
+      const f = outcome()
+      await f.controller.refresh()
+      f.controller.selectReopen(approved.id)
+      f.controller.editReopen(reopeningReason)
+      f.controller.update({ ...f.selected, ...changed })
+      expect(f.state().reopening).toBeUndefined()
+      expect(JSON.stringify(f.state())).not.toContain("PRIVATE_")
+      expect(f.calls.prepares).toEqual([])
+      expect(f.calls.confirms).toEqual([])
+      f.controller.dispose()
+    }
+    const f = outcome()
+    await f.controller.refresh()
+    f.controller.selectReopen(approved.id)
+    f.controller.editReopen(reopeningReason)
+    f.controller.retire()
+    expect(f.state().reopening).toBeUndefined()
+    expect(JSON.stringify(f.controller.state())).not.toContain("PRIVATE_")
+    f.controller.dispose()
+  })
+
+  test("reopen refuses a preview with another reason or target and refuses an incompatible pending response without painting it", async () => {
+    for (const wrong of ["reason", "target"] as const) {
+      const f = outcome({
+        prepare: async () => ({
+          previewId: previewID,
+          sha256: digest,
+          expiresAt: 1_120_000,
+          repository: "repo",
+          scope,
+          expected: 0,
+          operation: "reopen",
+          payload: {
+            expected: 0,
+            id: wrong === "target" ? "another_outcome" : approved.id,
+            reason: wrong === "reason" ? "Unrequested reason." : reopeningReason,
+            entry: wrong === "target" ? { ...approved, id: "another_outcome" } : approved,
+          },
+        }),
+      })
+      await f.controller.refresh()
+      f.controller.selectReopen(approved.id)
+      f.controller.editReopen(reopeningReason)
+      await f.controller.prepareReopen()
+      expect(f.state().preview).toBeUndefined()
+      expect(f.state().reopening).toBeUndefined()
+      expect(f.calls.confirms).toEqual([])
+      expect(JSON.stringify(f.state())).not.toContain("PRIVATE_")
+      f.controller.dispose()
+    }
+    for (const changed of [
+      { source: { ...approved.source, head: "b".repeat(40) } },
+      { text: "A replacement body." },
+      { reason: "A replacement reason." },
+      { citations: [] },
+    ]) {
+      const f = outcome({ confirm: async () => ({ ...pendingOutcome(), ...changed }) })
+      await f.controller.refresh()
+      f.controller.selectReopen(approved.id)
+      f.controller.editReopen(reopeningReason)
+      await f.controller.prepareReopen()
+      f.controller.approve(true)
+      await f.controller.confirm()
+      expect(f.state().retry).toEqual({ previewId: previewID, approvedSha256: digest })
+      expect(f.state().read).toBeUndefined()
+      expect(f.state().reopening).toBeUndefined()
+      expect(JSON.stringify(f.state())).not.toContain("PRIVATE_")
+      f.controller.dispose()
+    }
+  })
+
+  test("lost reopen success clears reason and original text; GET and used retry never prepare or approve another action", async () => {
+    const f = outcome({
+      confirm: async (input) => {
+        f.calls.confirms.push(input)
+        if (f.calls.confirms.length > 1) throw new ReviewMemoryRequestError("used")
+        f.set({
+          ...f.snapshot(),
+          state: { ...f.snapshot().state, generation: 1, entries: [stored, proposed, pendingOutcome()] },
+        })
+        throw new Error("An uncertain transport result.")
+      },
+    })
+    await f.controller.refresh()
+    f.controller.selectReopen(approved.id)
+    f.controller.editReopen(reopeningReason)
+    await f.controller.prepareReopen()
+    f.controller.approve(true)
+    await f.controller.confirm()
+    expect(f.state().reopening).toBeUndefined()
+    expect(f.state().read).toBeUndefined()
+    expect(JSON.stringify(f.state())).not.toContain("PRIVATE_")
+    await f.controller.refresh()
+    expect(f.state().read?.state.entries.find((entry) => entry.id === approved.id)?.status).toBe("proposed")
+    expect(f.state().message).toContain("does not prove")
+    await f.controller.prepareReopen()
+    await f.controller.retry()
+    expect(f.calls.confirms).toHaveLength(1)
+    f.controller.approveRetry(true)
+    await f.controller.retry()
+    expect(f.calls.confirms).toEqual([f.calls.confirms[0], f.calls.confirms[0]])
+    expect(f.calls.prepares).toHaveLength(1)
+    expect(f.state().retry).toBeUndefined()
+    expect(f.snapshot().state.generation).toBe(1)
+    f.controller.dispose()
+  })
+
+  test("late reopen preparation, expiry and unmount cannot restore a cleared human edit or consent", async () => {
+    const pending = Promise.withResolvers<ReviewMemoryControl.Preview>()
+    const entered = Promise.withResolvers<void>()
+    const f = outcome({
+      prepare: async () => {
+        entered.resolve()
+        return pending.promise
+      },
+    })
+    await f.controller.refresh()
+    f.controller.selectReopen(approved.id)
+    f.controller.editReopen(reopeningReason)
+    const preparing = f.controller.prepareReopen()
+    await entered.promise
+    f.controller.retire()
+    pending.resolve({
+      previewId: previewID,
+      sha256: digest,
+      expiresAt: 1_120_000,
+      repository: "repo",
+      scope,
+      expected: 0,
+      operation: "reopen",
+      payload: { expected: 0, id: approved.id, reason: reopeningReason, entry: approved },
+    })
+    await preparing
+    expect(f.state().preview).toBeUndefined()
+    expect(f.state().reopening).toBeUndefined()
+    expect(JSON.stringify(f.state())).not.toContain("PRIVATE_")
+    f.controller.dispose()
+    const g = outcome()
+    await g.controller.refresh()
+    g.controller.selectReopen(approved.id)
+    g.controller.editReopen(reopeningReason)
+    await g.controller.prepareReopen()
+    g.controller.approve(true)
+    g.advance(ReviewMemoryControl.LIMIT.ttl + 1)
+    expect(g.state().preview).toBeUndefined()
+    expect(g.state().reopening).toBeUndefined()
+    await g.controller.confirm()
+    expect(g.calls.confirms).toEqual([])
+    g.controller.dispose()
+    expect(JSON.stringify(g.controller.state())).not.toContain("PRIVATE_")
+  })
+
   test("an owned read never prepares or confirms, and a fresh exact preview still needs explicit unchecked consent", async () => {
     const f = fixture()
     await f.controller.refresh()

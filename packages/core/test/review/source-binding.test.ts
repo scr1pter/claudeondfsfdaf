@@ -71,9 +71,13 @@ describe("private immutable winning review source binding", () => {
       Effect.gen(function* () {
         const { db, store, identity } = yield* fixture
         const original = binding()
-        const expected = structuredClone(original)
         const first = yield* store.reserve({ ...identity, request, owner, sourceBinding: original })
         expect(first.claimed).toBe(true)
+        const pair = first.row.sourceBinding?.witnesses
+        if (!pair) throw new Error("The winning private reservation has no witnesses")
+        expect(Schema.is(ReviewSourceBinding.Witnesses)(pair)).toBe(true)
+        expect(pair.parent).not.toBe(pair.review)
+        const expected = { ...structuredClone(original), witnesses: pair }
         expect(first.row.sourceBinding).toEqual(expected)
         original.commonIdentity.ino = "999"
         original.scope = `vrs1_${"b".repeat(64)}`
@@ -91,6 +95,32 @@ describe("private immutable winning review source binding", () => {
         expect(retry.row.sourceBinding).toEqual(expected)
         expect((yield* store.sourceSnapshot(parentID, runID))?.sourceBinding).toEqual(expected)
         expect(yield* db.select().from(ReviewRequestTable).all()).toEqual(before)
+      }),
+    )
+  })
+
+  test("public requests cannot choose witness IDs and private admission cannot reuse supplied pairs", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, store, identity } = yield* fixture
+        const pair: ReviewSourceBinding.Witnesses = {
+          version: 1,
+          parent: `vrw1_${"1".repeat(32)}`,
+          review: `vrw1_${"2".repeat(32)}`,
+        }
+        expect(Option.isNone(Schema.decodeUnknownOption(ReviewRun.Start)({ ...request, witnesses: pair }))).toBe(true)
+        for (const invalid of [
+          { ...pair, review: pair.parent },
+          { ...pair, parent: pair.parent.toUpperCase() },
+          { ...pair, approved: true },
+        ])
+          expect(Option.isNone(Schema.decodeUnknownOption(ReviewSourceBinding.Witnesses)(invalid))).toBe(true)
+        const before = yield* db.select().from(ReviewRequestTable)
+        const refused = yield* store
+          .reserve({ ...identity, request, owner, sourceBinding: { ...binding(), witnesses: pair } })
+          .pipe(Effect.result)
+        expect(Result.isFailure(refused) && refused.failure.code).toBe("invalid")
+        expect(yield* db.select().from(ReviewRequestTable)).toEqual(before)
       }),
     )
   })

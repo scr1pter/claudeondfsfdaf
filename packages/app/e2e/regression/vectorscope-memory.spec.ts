@@ -35,6 +35,16 @@ const stored: ReviewMemoryControl.OwnerEntry = {
   approvedBy: "owner_local",
   approvedAt: 2,
 }
+const approved: ReviewMemoryControl.ApprovedEntry = {
+  ...proposed,
+  id: "approved_outcome",
+  text: "PRIVATE_APPROVED_OUTCOME",
+  reason: "PRIVATE_ORIGINAL_OUTCOME_REASON",
+  status: "active",
+  approvedBy: "owner_local",
+  approvedAt: 2,
+}
+const reopeningReason = "PRIVATE_HUMAN_REOPEN_REASON: reconsider the empty-input case."
 function pause() {
   const entered = Promise.withResolvers<void>()
   const released = Promise.withResolvers<void>()
@@ -47,11 +57,15 @@ function pause() {
     },
   }
 }
-async function engine(page: Page, options: { enabled?: boolean; loseConfirm?: boolean } = {}) {
+async function engine(page: Page, options: { enabled?: boolean; loseConfirm?: boolean; approved?: boolean } = {}) {
   const snapshot: ReviewMemoryControl.Inspect = {
     repository: "repo",
     scope,
-    state: { enabled: options.enabled ?? true, generation: 0, entries: [stored, proposed] },
+    state: {
+      enabled: options.enabled ?? true,
+      generation: 0,
+      entries: options.approved ? [stored, proposed, approved] : [stored, proposed],
+    },
   }
   const state = {
     snapshot,
@@ -91,7 +105,8 @@ async function engine(page: Page, options: { enabled?: boolean; loseConfirm?: bo
       state.prepares.push(input)
       if (input.expectedScope !== state.snapshot.scope || input.command.expected !== state.snapshot.state.generation)
         return route.fulfill({ status: 400, json: { code: "stale" } })
-      const { action, ...payload } = input.command
+      const command = input.command
+      const { action, ...payload } = command
       const preview = Schema.decodeUnknownSync(ReviewMemoryControl.Preview)({
         previewId: randomUUID(),
         sha256: "3".repeat(64),
@@ -100,7 +115,10 @@ async function engine(page: Page, options: { enabled?: boolean; loseConfirm?: bo
         scope: state.snapshot.scope,
         expected: input.command.expected,
         operation: action,
-        payload: action === "approve" ? { ...payload, entry: proposed } : payload,
+        payload:
+          command.action === "approve" || command.action === "reopen"
+            ? { ...payload, entry: state.snapshot.state.entries.find((entry) => entry.id === command.id) }
+            : payload,
       })
       state.previews.set(preview.previewId, preview)
       const hold = state.holdPrepare
@@ -153,6 +171,31 @@ async function engine(page: Page, options: { enabled?: boolean; loseConfirm?: bo
         }
         result = entry
       }
+      if (preview.operation === "reopen") {
+        const original = preview.payload.entry
+        const entry: ReviewMemoryControl.ProposedEntry = {
+          id: original.id,
+          kind: "outcome",
+          origin: "review",
+          status: "proposed",
+          text: original.text,
+          paths: original.paths,
+          citations: original.citations,
+          reason: preview.payload.reason,
+          visibility: original.visibility,
+          source: original.source,
+          createdAt: original.createdAt,
+          updatedAt: Date.now(),
+        }
+        state.snapshot = {
+          ...state.snapshot,
+          state: {
+            ...state.snapshot.state,
+            entries: state.snapshot.state.entries.map((value) => (value.id === original.id ? entry : value)),
+          },
+        }
+        result = entry
+      }
       if (preview.operation === "forget") {
         const id = preview.payload.id
         state.snapshot = {
@@ -190,17 +233,159 @@ const approve = async (page: Page) => {
   await preview.getByRole("button", { name: "Confirm this change", exact: true }).click()
 }
 
+test("reopening displays the complete original approval and a distinct human reason, then leaves the same row pending until another explicit approval", async ({
+  page,
+}) => {
+  const state = await engine(page, { approved: true })
+  await open(page)
+  const entry = panel(page).getByRole("article", { name: `Memory entry ${approved.id}`, exact: true })
+  await expect(panel(page).getByRole("button", { name: "Reopen approved outcome", exact: true })).toHaveCount(1)
+  await expect(
+    panel(page)
+      .getByRole("article", { name: `Memory entry ${stored.id}`, exact: true })
+      .getByRole("button", { name: "Reopen approved outcome", exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    panel(page)
+      .getByRole("article", { name: `Memory entry ${proposed.id}`, exact: true })
+      .getByRole("button", { name: "Reopen approved outcome", exact: true }),
+  ).toHaveCount(0)
+  await entry.getByRole("button", { name: "Reopen approved outcome", exact: true }).click()
+  const reason = entry.getByRole("textbox", { name: "Reason to reopen outcome", exact: true })
+  await expect(reason).toHaveValue("")
+  await expect(entry.getByRole("button", { name: "Preview reopening outcome", exact: true })).toBeDisabled()
+  await reason.fill(reopeningReason)
+  expect(state.prepares).toHaveLength(0)
+  await entry.getByRole("button", { name: "Preview reopening outcome", exact: true }).click()
+  const preview = panel(page).getByRole("region", { name: "Exact memory change preview", exact: true })
+  const original = preview.getByRole("region", { name: "Original approved outcome", exact: true })
+  await expect(original).toContainText(approved.text)
+  await expect(original).toContainText(approved.reason)
+  await expect(original).toContainText(approved.source.parentID)
+  await expect(original).toContainText(approved.source.reviewID)
+  await expect(original).toContainText(approved.source.head)
+  await expect(original).toContainText(approved.citations[0].quote)
+  await original.getByText("Original approval details", { exact: true }).click()
+  await expect(original).toContainText(approved.approvedBy)
+  await expect(original).toContainText(`Created at: ${approved.createdAt}`)
+  await expect(preview.getByRole("region", { name: "New human reason", exact: true })).toContainText(reopeningReason)
+  await expect(panel(page).locator("img[src='/private-image']")).toHaveCount(0)
+  expect(state.confirms).toHaveLength(0)
+  await approve(page)
+  await expect(entry).toContainText("Awaiting approval")
+  await expect(entry.getByRole("button", { name: "Reopen approved outcome", exact: true })).toHaveCount(0)
+  await expect(entry.getByRole("button", { name: "Preview approving outcome", exact: true })).toBeVisible()
+  expect(state.prepares.map((input) => input.command.action)).toEqual(["reopen"])
+  expect(state.snapshot.state.entries.find((value) => value.id === approved.id)).toMatchObject({
+    id: approved.id,
+    status: "proposed",
+    reason: reopeningReason,
+    source: approved.source,
+    text: approved.text,
+  })
+  expect(state.snapshot.state.entries.find((value) => value.id === approved.id)).not.toHaveProperty("approvedBy")
+  await entry.getByRole("button", { name: "Preview approving outcome", exact: true }).click()
+  await approve(page)
+  await expect(entry).toContainText("Approved")
+  expect(state.prepares.map((input) => input.command.action)).toEqual(["reopen", "approve"])
+  expect(state.snapshot.state.entries).toHaveLength(3)
+})
+
+test("unsubmitted reopening stays separate from the new-entry draft and survives a same-generation refresh with input focus", async ({
+  page,
+}) => {
+  const state = await engine(page, { approved: true })
+  await open(page)
+  const ownerDraft = panel(page).getByRole("textbox", { name: "Memory entry text", exact: true })
+  await ownerDraft.fill("PRIVATE_UNSUBMITTED_OWNER_DRAFT")
+  const entry = panel(page).getByRole("article", { name: `Memory entry ${approved.id}`, exact: true })
+  await entry.getByRole("button", { name: "Reopen approved outcome", exact: true }).click()
+  const reason = entry.getByRole("textbox", { name: "Reason to reopen outcome", exact: true })
+  await reason.fill(reopeningReason)
+  await entry.getByRole("button", { name: "Cancel reopening", exact: true }).click()
+  await expect(ownerDraft).toHaveValue("PRIVATE_UNSUBMITTED_OWNER_DRAFT")
+  await entry.getByRole("button", { name: "Reopen approved outcome", exact: true }).click()
+  await expect(reason).toHaveValue("")
+  await reason.fill(reopeningReason)
+  await reason.focus()
+  const before = state.reads
+  // Programmatic refresh does not move browser focus, as an unrelated owner GET would not.
+  await panel(page)
+    .getByRole("button", { name: "Refresh current memory", exact: true })
+    .evaluate((button) => {
+      if (!(button instanceof HTMLButtonElement)) throw new Error("Missing refresh button")
+      button.click()
+    })
+  await expect.poll(() => state.reads).toBe(before + 1)
+  await expect(entry.getByRole("button", { name: "Preview reopening outcome", exact: true })).toBeEnabled()
+  await expect(reason).toHaveValue(reopeningReason)
+  await expect(reason).toBeFocused()
+  await expect(ownerDraft).toHaveValue("PRIVATE_UNSUBMITTED_OWNER_DRAFT")
+  state.snapshot = { ...state.snapshot, state: { ...state.snapshot.state, generation: 1 } }
+  await panel(page).getByRole("button", { name: "Refresh current memory", exact: true }).click()
+  await expect(reason).toHaveCount(0)
+  expect(state.prepares).toHaveLength(0)
+  expect(state.confirms).toHaveLength(0)
+})
+
+test("lost reopen confirmation clears human text and only an explicit same-receipt retry follows the pending owner GET", async ({
+  page,
+}) => {
+  const state = await engine(page, { approved: true, loseConfirm: true })
+  await open(page)
+  const entry = panel(page).getByRole("article", { name: `Memory entry ${approved.id}`, exact: true })
+  await entry.getByRole("button", { name: "Reopen approved outcome", exact: true }).click()
+  await entry.getByRole("textbox", { name: "Reason to reopen outcome", exact: true }).fill(reopeningReason)
+  await entry.getByRole("button", { name: "Preview reopening outcome", exact: true }).click()
+  await approve(page)
+  await expect(panel(page).getByRole("region", { name: "Uncertain memory confirmation", exact: true })).toBeVisible()
+  await expect(panel(page)).not.toContainText("PRIVATE_")
+  await panel(page).getByRole("button", { name: "Refresh current memory", exact: true }).click()
+  await expect(entry).toContainText("Awaiting approval")
+  expect(state.prepares).toHaveLength(1)
+  expect(state.confirms).toHaveLength(1)
+  await panel(page).getByRole("checkbox", { name: "Retry only the change I already approved", exact: true }).check()
+  await panel(page).getByRole("button", { name: "Retry same confirmation", exact: true }).click()
+  await expect(panel(page)).toContainText("already consumed")
+  expect(state.confirms).toEqual([state.confirms[0], state.confirms[0]])
+  expect(state.prepares).toHaveLength(1)
+  expect(state.snapshot.state.generation).toBe(1)
+  expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain("PRIVATE_")
+})
+
+test("owner retirement during delayed reopen preparation clears the human reason and cannot repaint its old preview", async ({
+  page,
+}) => {
+  const state = await engine(page, { approved: true })
+  await open(page)
+  const entry = panel(page).getByRole("article", { name: `Memory entry ${approved.id}`, exact: true })
+  await entry.getByRole("button", { name: "Reopen approved outcome", exact: true }).click()
+  await entry.getByRole("textbox", { name: "Reason to reopen outcome", exact: true }).fill(reopeningReason)
+  const hold = pause()
+  state.holdPrepare = hold
+  await entry.getByRole("button", { name: "Preview reopening outcome", exact: true }).click()
+  await hold.entered
+  await page.getByRole("button", { name: "Guest connection", exact: true }).click()
+  hold.release()
+  await expect(panel(page)).not.toContainText("PRIVATE_")
+  await expect(panel(page).getByRole("textbox", { name: "Reason to reopen outcome", exact: true })).toHaveCount(0)
+  await expect(panel(page).getByRole("region", { name: "Exact memory change preview", exact: true })).toHaveCount(0)
+  expect(state.confirms).toHaveLength(0)
+})
+
 test("default-off memory needs explicit preview/consent, then owner preferences work without GitHub", async ({
   page,
 }) => {
   const state = await engine(page, { enabled: false })
   await open(page)
   await expect(
-    panel(page).getByText("Review memory is off. Stored entries are not used by reviews.", { exact: true }),
+    panel(page).getByText("Use in supported reviews is off. Stored entries are not included in reviews yet.", {
+      exact: true,
+    }),
   ).toBeVisible()
   expect(state.prepares).toHaveLength(0)
   expect(state.confirms).toHaveLength(0)
-  await panel(page).getByRole("button", { name: "Preview enabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview allowing review use", exact: true }).click()
   expect(state.confirms).toHaveLength(0)
   await approve(page)
   await expect(panel(page).getByRole("textbox", { name: "Memory entry text", exact: true })).toBeEnabled()
@@ -296,12 +481,12 @@ test("observed physical scope change clears old content and cannot retarget an i
     scope: `vrs1_${"2".repeat(64)}`,
     state: { enabled: false, generation: 0, entries: [] },
   }
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await expect(panel(page)).toContainText("scope changed")
   await expect(panel(page)).not.toContainText("PRIVATE_")
   expect(state.prepares).toHaveLength(0)
   await panel(page).getByRole("button", { name: "Refresh current memory", exact: true }).click()
-  await expect(panel(page)).toContainText("Review memory is off")
+  await expect(panel(page)).toContainText("Use in supported reviews is off")
   expect(state.confirms).toHaveLength(0)
 })
 
@@ -312,7 +497,7 @@ test("actual Solid store reconciliation cannot hide a fresh generation change or
   await open(page)
   await expect(panel(page)).toContainText("PRIVATE_STORED_TEXT")
   state.snapshot = { ...state.snapshot, state: { ...state.snapshot.state, generation: 1 } }
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await expect(panel(page)).toContainText("Review memory changed")
   await expect(panel(page).getByRole("region", { name: "Exact memory change preview" })).toHaveCount(0)
   expect(state.prepares).toHaveLength(0)
@@ -335,7 +520,7 @@ test("generic selection changes and cold remount cannot turn a retired owner pro
   expect(state.reads).toBe(reads)
   await page.getByRole("button", { name: "Fresh owner connection", exact: true }).click()
   await expect(panel(page)).toContainText("Selected local repository: /other")
-  await expect(panel(page)).toContainText("Review memory is off")
+  await expect(panel(page)).toContainText("Use in supported reviews is off")
   await expect(panel(page)).not.toContainText("PRIVATE_")
   expect(state.prepares).toHaveLength(0)
   expect(state.confirms).toHaveLength(0)
@@ -346,7 +531,7 @@ test("lost confirmation clears private text, refresh sends no action and explici
 }) => {
   const state = await engine(page, { loseConfirm: true })
   await open(page)
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await approve(page)
   await expect(panel(page).getByRole("region", { name: "Uncertain memory confirmation" })).toBeVisible()
   await expect(panel(page)).not.toContainText("PRIVATE_")
@@ -355,7 +540,7 @@ test("lost confirmation clears private text, refresh sends no action and explici
   await expect(panel(page)).toContainText("does not prove")
   expect(state.prepares).toHaveLength(1)
   expect(state.confirms).toHaveLength(1)
-  await expect(panel(page).getByRole("button", { name: "Preview enabling memory", exact: true })).toBeDisabled()
+  await expect(panel(page).getByRole("button", { name: "Preview allowing review use", exact: true })).toBeDisabled()
   const retry = panel(page).getByRole("button", { name: "Retry same confirmation", exact: true })
   await expect(retry).toBeDisabled()
   await panel(page).getByRole("checkbox", { name: "Retry only the change I already approved", exact: true }).check()
@@ -369,7 +554,7 @@ test("lost confirmation clears private text, refresh sends no action and explici
 test("new service rejects an old approval without silently preparing or applying another one", async ({ page }) => {
   const state = await engine(page)
   await open(page)
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await expect(panel(page).getByRole("region", { name: "Exact memory change preview" })).toBeVisible()
   state.previews.clear()
   await approve(page)
@@ -414,7 +599,7 @@ test("navigation and close retire delayed preparation and leave no private text 
 test("an already sent confirmation cannot repaint a guest view when its old response returns", async ({ page }) => {
   const state = await engine(page)
   await open(page)
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   const hold = pause()
   state.holdConfirm = hold
   await approve(page)

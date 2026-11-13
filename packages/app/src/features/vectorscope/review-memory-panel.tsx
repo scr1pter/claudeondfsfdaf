@@ -14,7 +14,7 @@ export interface ReviewMemoryEvents {
   listen(changed: () => void): () => void
 }
 
-/** Candidate only: no production mount, generated-client binding, or capability registration. */
+/** Owner data controls, mounted once through the connected adapter. Model consumption remains unavailable. */
 export function ReviewMemoryPanel(props: { selection: ReviewMemorySelection; events?: ReviewMemoryEvents }) {
   const [state, setState] = createStore({ value: emptyReviewMemory() })
   const controller = reviewMemoryController({
@@ -110,6 +110,10 @@ export function ReviewMemoryView(props: {
     const value = preview()
     return value?.operation === "approve" ? value : undefined
   }
+  const reopen = () => {
+    const value = preview()
+    return value?.operation === "reopen" ? value : undefined
+  }
   const forget = () => {
     const value = preview()
     return value?.operation === "forget" ? value : undefined
@@ -124,8 +128,8 @@ export function ReviewMemoryView(props: {
       <div>
         <h2 class="text-[19px] font-semibold">Review memory for this repository</h2>
         <p class="mt-2 text-sm text-[color:var(--vx-text-subtle)]">
-          Stored by this engine. Preferences, checks and approved outcomes can guide later reviews in this verified
-          repository. No GitHub sign-in is required.
+          Store and manage repository preferences, checks and approved review outcomes on this engine. Stored entries
+          are not included in reviews yet. No GitHub sign-in is required.
         </p>
       </div>
       <Show when={props.state.message}>
@@ -168,15 +172,15 @@ export function ReviewMemoryView(props: {
             </details>
             <p role="status">
               {read().state.enabled
-                ? "Review memory is enabled."
-                : "Review memory is off. Stored entries are not used by reviews."}
+                ? "Use of approved entries in supported reviews is allowed. Stored entries are not included in reviews yet."
+                : "Use in supported reviews is off. Stored entries are not included in reviews yet."}
             </p>
             <div class="flex flex-wrap gap-2">
               <Button
                 disabled={!canPrepare()}
                 onClick={() => void props.controller.prepare({ action: "configure", enabled: !read().state.enabled })}
               >
-                {read().state.enabled ? "Preview disabling memory" : "Preview enabling memory"}
+                {read().state.enabled ? "Preview disallowing review use" : "Preview allowing review use"}
               </Button>
               <Button
                 variant="secondary"
@@ -280,8 +284,8 @@ export function ReviewMemoryView(props: {
                     <EntryText entry={entry} />
                     <p class="text-xs">
                       {entry.visibility === "private"
-                        ? "Private: excluded from review context."
-                        : "Available to repository reviews when enabled."}
+                        ? "Private entry, excluded from supported reviews."
+                        : "Repository entry. Stored entries are not included in reviews yet."}
                     </p>
                     <div class="flex gap-2">
                       <Show when={entry.status === "proposed"}>
@@ -292,6 +296,15 @@ export function ReviewMemoryView(props: {
                           Preview approving outcome
                         </Button>
                       </Show>
+                      <Show when={entry.origin === "review" && entry.kind === "outcome" && entry.status === "active"}>
+                        <Button
+                          variant="secondary"
+                          disabled={!canPrepare()}
+                          onClick={() => props.controller.selectReopen(entry.id)}
+                        >
+                          Reopen approved outcome
+                        </Button>
+                      </Show>
                       <Button
                         variant="secondary"
                         disabled={!canPrepare()}
@@ -300,6 +313,41 @@ export function ReviewMemoryView(props: {
                         Preview forgetting entry
                       </Button>
                     </div>
+                    <Show when={props.state.reopening?.id === entry.id}>
+                      <section aria-label="Reopen this outcome" class="space-y-3 rounded-lg border p-3">
+                        <p>
+                          Explain why you want to reconsider this approved outcome. Confirmation will move it back to
+                          awaiting approval.
+                        </p>
+                        <label class="block space-y-1">
+                          <span class="text-sm">Your reason for reopening</span>
+                          <textarea
+                            aria-label="Reason to reopen outcome"
+                            class="w-full rounded border bg-transparent p-2 text-sm"
+                            rows={3}
+                            maxLength={ReviewMemoryControl.LIMIT.reason}
+                            readOnly={!canPrepare()}
+                            value={props.state.reopening?.reason ?? ""}
+                            onInput={(event) => props.controller.editReopen(event.currentTarget.value)}
+                          />
+                        </label>
+                        <div class="flex gap-2">
+                          <Button
+                            disabled={!canPrepare() || !props.state.reopening?.reason.trim()}
+                            onClick={() => void props.controller.prepareReopen()}
+                          >
+                            Preview reopening outcome
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={!canPrepare()}
+                            onClick={() => props.controller.cancelReopen()}
+                          >
+                            Cancel reopening
+                          </Button>
+                        </div>
+                      </section>
+                    </Show>
                   </article>
                 )}
               </For>
@@ -350,8 +398,8 @@ export function ReviewMemoryView(props: {
               {(current) => (
                 <p>
                   {current().payload.enabled
-                    ? "Enable review memory for this repository."
-                    : "Disable review memory for this repository. Stored entries remain available to manage."}
+                    ? "Allow approved entries from this repository in supported reviews. Stored entries are not included in reviews yet."
+                    : "Disallow use of stored entries in reviews. Stored entries remain available to manage. Stored entries are not included in reviews yet."}
                 </p>
               )}
             </Show>
@@ -361,8 +409,8 @@ export function ReviewMemoryView(props: {
                   <p>
                     New owner {current().payload.kind}.{" "}
                     {current().payload.visibility === "private"
-                      ? "Store privately, excluded from reviews."
-                      : "Available to this repository’s reviews when enabled."}
+                      ? "Store privately, excluded from supported reviews."
+                      : "Store as an approved repository entry. Stored entries are not included in reviews yet."}
                   </p>
                   <EntryText entry={current().payload} />
                 </>
@@ -371,8 +419,52 @@ export function ReviewMemoryView(props: {
             <Show when={approve()}>
               {(current) => (
                 <>
-                  <p>Approve this complete proposed outcome for later repository reviews.</p>
+                  <p>
+                    Approve this complete proposed outcome for use in supported reviews when allowed by your repository
+                    setting. Stored entries are not included in reviews yet.
+                  </p>
                   <EntryText entry={current().payload.entry} />
+                </>
+              )}
+            </Show>
+            <Show when={reopen()}>
+              {(current) => (
+                <>
+                  <section aria-label="Original approved outcome" class="space-y-3">
+                    <h3 class="font-medium">Original approved outcome</h3>
+                    <EntryText entry={current().payload.entry} />
+                    <details class="space-y-1 text-xs">
+                      <summary>Original approval details</summary>
+                      <p>
+                        Entry: <code>{current().payload.entry.id}</code>
+                      </p>
+                      <p>Kind: {current().payload.entry.kind}</p>
+                      <p>Origin: {current().payload.entry.origin}</p>
+                      <p>Status: {current().payload.entry.status}</p>
+                      <p>Visibility: {current().payload.entry.visibility}</p>
+                      <p>
+                        Approved by: <code>{current().payload.entry.approvedBy}</code>
+                      </p>
+                      <p>
+                        Approved at: <code>{current().payload.entry.approvedAt}</code>
+                      </p>
+                      <p>
+                        Created at: <code>{current().payload.entry.createdAt}</code>
+                      </p>
+                      <p>
+                        Updated at: <code>{current().payload.entry.updatedAt}</code>
+                      </p>
+                    </details>
+                  </section>
+                  <section aria-label="New human reason" class="space-y-2">
+                    <h3 class="font-medium">Your reason for reopening</h3>
+                    <p class="whitespace-pre-wrap break-words">{current().payload.reason}</p>
+                  </section>
+                  <p>
+                    Confirmation removes approval from this same outcome. It must be approved again to be eligible for
+                    supported reviews when review use is allowed. Stored entries are not included in reviews yet. Your
+                    reason replaces its stored reason; the earlier reason is shown here for this confirmation.
+                  </p>
                 </>
               )}
             </Show>

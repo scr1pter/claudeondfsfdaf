@@ -1,6 +1,7 @@
 import { and, desc, eq, lt, or, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FSUtil } from "@vectordevai/core/fs-util"
@@ -185,6 +186,7 @@ export const node = LayerNode.make({
     Agent.node,
     Git.node,
     Database.node,
+    BrainDatabase.node,
     BackgroundJob.node,
     BackgroundJobStore.node,
     ReviewRequestStore.node,

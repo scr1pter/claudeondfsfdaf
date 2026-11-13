@@ -21,6 +21,7 @@ export const FLAGS = [
   "backgroundShells",
   "vectorscopeSettings",
   "vectorscopeRuns",
+  "vectorscopeReviewMemoryControls",
 ] as const
 
 export type EngineFlag = (typeof FLAGS)[number]

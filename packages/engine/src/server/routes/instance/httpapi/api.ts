@@ -24,6 +24,7 @@ import { ProviderApi } from "./groups/provider"
 import { PtyApi, PtyConnectApi } from "./groups/pty"
 import { QuestionApi } from "./groups/question"
 import { ReviewApi } from "./groups/review"
+import { ReviewMemoryControlApi } from "./groups/review-memory"
 import { SessionApi } from "./groups/session"
 import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
@@ -76,6 +77,7 @@ export const InstanceHttpApi = HttpApi.make("vector-instance")
   .addHttpApi(PtyApi)
   .addHttpApi(QuestionApi)
   .addHttpApi(ReviewApi)
+  .addHttpApi(ReviewMemoryControlApi)
   .addHttpApi(PermissionApi)
   .addHttpApi(ProviderApi)
   .addHttpApi(SessionApi)
