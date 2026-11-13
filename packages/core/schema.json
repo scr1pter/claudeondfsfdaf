@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "9b320725-d13b-49da-ba09-914cf41305be",
+  "id": "1ca7c9b6-2b60-408d-af63-ecbc415e1100",
   "prevIds": [
-    "146d5c74-9159-496c-9a18-f67500e03017"
+    "9b320725-d13b-49da-ba09-914cf41305be"
   ],
   "ddl": [
     {
@@ -16,6 +16,10 @@
     },
     {
       "name": "data_migration",
+      "entityType": "tables"
+    },
+    {
+      "name": "review_memory_fence",
       "entityType": "tables"
     },
     {
@@ -417,6 +421,26 @@
       "name": "time_completed",
       "entityType": "columns",
       "table": "data_migration"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "review_memory_fence"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "1",
+      "generated": null,
+      "name": "version",
+      "entityType": "columns",
+      "table": "review_memory_fence"
     },
     {
       "type": "text",
@@ -2643,6 +2667,15 @@
       "nameExplicit": false,
       "name": "data_migration_pk",
       "table": "data_migration",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "review_memory_fence_pk",
+      "table": "review_memory_fence",
       "entityType": "pks"
     },
     {
