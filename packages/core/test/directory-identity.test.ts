@@ -321,6 +321,110 @@ test("exact immutable package membership and installed-file digest bind the inte
     expect(() => DirectoryIdentityReader.packageImage(list, sums, "/usr/bin/custom-python", image)).toThrow()
   }
 })
+test("the exact stock noble extension profile requires native ctypes while struct stays in the bound image", () => {
+  const x64 = "/usr/lib/python3.12/lib-dynload/_ctypes.cpython-312-x86_64-linux-gnu.so",
+    arm64 = "/usr/lib/python3.12/lib-dynload/_ctypes.cpython-312-aarch64-linux-gnu.so",
+    struct = "/usr/lib/python3.12/lib-dynload/_struct.cpython-312-x86_64-linux-gnu.so"
+  expect(DirectoryIdentityReader.extensionProfile([x64], "x64")).toBe(x64)
+  expect(DirectoryIdentityReader.extensionProfile([arm64], "arm64")).toBe(arm64)
+  for (const profile of [
+    [],
+    [arm64],
+    [x64, x64],
+    [x64, struct],
+    [struct],
+    [x64.replace("/usr/lib/", "/usr/local/lib/")],
+  ])
+    expect(() => DirectoryIdentityReader.extensionProfile(profile, "x64")).toThrow()
+  expect(() => DirectoryIdentityReader.extensionProfile([x64], "arm64")).toThrow()
+})
+function traceMask(text: string) {
+  const names = new Map([
+    ["STATX_TYPE", 1],
+    ["STATX_MODE", 2],
+    ["STATX_NLINK", 4],
+    ["STATX_UID", 8],
+    ["STATX_GID", 16],
+    ["STATX_ATIME", 32],
+    ["STATX_MTIME", 64],
+    ["STATX_CTIME", 128],
+    ["STATX_INO", 256],
+    ["STATX_SIZE", 512],
+    ["STATX_BLOCKS", 1024],
+    ["STATX_BTIME", 2048],
+    ["STATX_MNT_ID", 4096],
+    ["STATX_DIOALIGN", 8192],
+    ["STATX_BASIC_STATS", 0x7ff],
+    ["STATX_ALL", 0xfff],
+  ])
+  let result = 0
+  const seen = new Set<string>()
+  for (const token of text.split("|").map((value) => value.trim())) {
+    if (!token || seen.has(token)) return
+    seen.add(token)
+    const value = names.get(token) ?? (/^(?:0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$/.test(token) ? Number(token) : undefined)
+    if (value === undefined || !Number.isInteger(value) || value < 0 || value > 0xffffffff) return
+    result = (result | value) >>> 0
+  }
+  return result
+}
+function traceProof(text: string, birth: boolean) {
+  let close: number | undefined
+  const lines = text.split("\n")
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    if (/^close_range\(4, (?:4294967295|~0U), 0\)\s+= 0$/.test(line)) close = index
+    const call = /^statx\(3, "", ([^,]+), ([^,]+), \{stx_mask=([^,}]+),.*\}\)\s+= 0$/.exec(line)
+    if (!call || close === undefined || close >= index) continue
+    const flags = call[1].split("|").map((flag) => flag.trim())
+    if (
+      !flags.includes("AT_EMPTY_PATH") ||
+      new Set(flags).size !== flags.length ||
+      flags.some((flag) => flag !== "AT_EMPTY_PATH" && flag !== "AT_STATX_SYNC_AS_STAT") ||
+      traceMask(call[2]) !== DirectoryIdentityReader.MASK
+    )
+      continue
+    const mask = traceMask(call[3])
+    if (mask === undefined || (mask & 0x101) !== 0x101 || ((mask & 0x800) !== 0) !== birth) continue
+    return { close, statx: index, mask }
+  }
+}
+test("actual strace statx flags preserve exact same-FD empty-path and capability semantics", () => {
+  const close = "close_range(4, 4294967295, 0) = 0\n",
+    call =
+      'statx(3, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_BTIME, {stx_mask=STATX_ALL|STATX_MNT_ID, stx_blksize=4096}) = 0'
+  for (const flags of ["AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH", "AT_EMPTY_PATH|AT_STATX_SYNC_AS_STAT", "AT_EMPTY_PATH"])
+    expect(traceProof(close + call.replace("AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH", flags), true)).toEqual({
+      close: 0,
+      statx: 1,
+      mask: 0x1fff,
+    })
+  expect(
+    traceProof(close + call.replace("STATX_ALL|STATX_MNT_ID", "STATX_BASIC_STATS|STATX_MNT_ID"), false)?.mask,
+  ).toBe(0x17ff)
+  expect(traceProof(close.replace("4294967295", "~0U") + call, true)?.mask).toBe(0x1fff)
+  expect(traceProof(close + call.replace("STATX_ALL|STATX_MNT_ID", "0x1fff"), true)?.mask).toBe(0x1fff)
+  for (const broken of [
+    call + "\n" + close,
+    close.replace("= 0", "= -1 EPERM (Operation not permitted)") + call,
+    close.replace("close_range(4", "close_range(5") + call,
+    close + call.replace("statx(3", "statx(4"),
+    close + call.replace('3, ""', '3, "foreign"'),
+    ...[
+      "AT_STATX_SYNC_AS_STAT",
+      "AT_STATX_FORCE_SYNC|AT_EMPTY_PATH",
+      "AT_STATX_DONT_SYNC|AT_EMPTY_PATH",
+      "AT_EMPTY_PATH|AT_NO_AUTOMOUNT",
+    ].map((flags) => close + call.replace("AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH", flags)),
+    close + call.replace("STATX_TYPE|STATX_INO|STATX_BTIME", "STATX_TYPE|STATX_INO"),
+    close + call.replace("STATX_ALL|STATX_MNT_ID", "STATX_INO|STATX_BTIME"),
+    close + call.replace("STATX_ALL|STATX_MNT_ID", "STATX_BASIC_STATS|STATX_MNT_ID"),
+    close + call.replace("STATX_ALL|STATX_MNT_ID", "STATX_UNKNOWN"),
+    close + call.replace("= 0", "= -1 ENOSYS (Function not implemented)"),
+  ])
+    expect(traceProof(broken, true)).toBeUndefined()
+  expect(traceProof(close + call, false)).toBeUndefined()
+})
 // Root runs only these contract cases locally. Actual execution is manual CI-only; this test switch grants no runtime authority.
 const ci = test.skipIf(process.env.VECTOR_DIRECTORY_IDENTITY_CI !== "1" || process.platform !== "linux")
 const WRAPPER = String.raw`import os, sys, resource
@@ -794,14 +898,14 @@ for (const name of ["node", "bun"] as const)
             .map((file) => fs.readFile(path.join(temporary.path, file), "utf8")),
         )
         if (scenario === "positive" || scenario === "unsupported") {
-          const helper = traces.find(
-            (text) =>
-              /close_range\(4, (?:4294967295|~0U), 0\)\s+= 0/.test(text) && /statx\(3, "", AT_EMPTY_PATH/.test(text),
-          )
+          const helper = traces.flatMap((text) => {
+            const proof = traceProof(text, scenario === "positive")
+            return proof ? [proof] : []
+          })[0]
           expect(helper).toBeDefined()
           if (!helper) throw new Error("Missing actual fixed helper syscall witness")
-          expect(helper.indexOf("close_range(4,")).toBeLessThan(helper.indexOf("statx(3,"))
-          if (scenario === "unsupported") expect(helper).not.toMatch(/stx_mask=[^}]*STATX_BTIME/)
+          expect(helper.close).toBeLessThan(helper.statx)
+          expect(helper.mask & DirectoryIdentityReader.MASK).toBe(scenario === "positive" ? 0x901 : 0x101)
         }
         if (scenario === "cancel-preflight") expect(result).toMatchObject({ observedChild: false })
         if (scenario === "metadata-race") expect(result).toMatchObject({ observedChild: true, rejected: true })
