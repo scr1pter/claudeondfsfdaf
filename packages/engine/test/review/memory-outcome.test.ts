@@ -5,13 +5,14 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { deflateSync } from "node:zlib"
 import { eq, sql } from "drizzle-orm"
-import { Deferred, Effect, Fiber, Layer, Result } from "effect"
+import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { BrainReviewMemoryTable } from "@vectordevai/core/brain/sql"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { Project } from "@vectordevai/core/project"
+import { decodeLocalResult } from "@vectordevai/core/review/local-result"
 import { ReviewRequestStore } from "@vectordevai/core/review/request-store"
 import { ReviewRequestTable } from "@vectordevai/core/review/request.sql"
 import type { ReviewSourceBinding } from "@vectordevai/core/review/source-binding"
@@ -91,6 +92,7 @@ function artifact(head: string, patch: Partial<Finding> = {}, summary = "Bounded
   const verdict = reviewVerdict({ kind: "outcome", outcome })
   const value = ReviewLocalRun.encodeArtifact({
     exitCode: verdict.verdict === "clean-complete" ? 0 : 1,
+    target: { kind: "uncommitted", label: "uncommitted changes", baseRef: "HEAD", mergeBase: head, head },
     outcome,
     verdict,
   })
@@ -219,6 +221,20 @@ const failure = <A>(value: Result.Result<A, ReviewMemoryOutcome.Refused>) => {
 }
 
 describe("inactive exact committed-head outcome collector", () => {
+  test("the canonical outcome fixture retains its resolved target and missing or changed targets refuse", () => {
+    const head = "a".repeat(40)
+    const expected = { kind: "working-tree" as const, head }
+    const value = artifact(head)
+    const decoded = decodeLocalResult(Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(value.json), expected)
+    expect(decoded?.outcome?.head).toBe(head)
+    expect(decoded?.target).toMatchObject({ kind: "uncommitted", head, mergeBase: head })
+    if (!decoded?.target || !decoded.outcome) throw new Error("Missing canonical fixture result")
+    const { target, ...missing } = decoded
+    expect(decodeLocalResult(missing, expected)).toBeUndefined()
+    expect(decodeLocalResult({ ...decoded, target: { ...target, kind: "staged" } }, expected)).toBeUndefined()
+    expect(decodeLocalResult({ ...decoded, target: { ...target, head: "b".repeat(40) } }, expected)).toBeUndefined()
+  })
+
   local(
     "real pinned evidence binds source, physical scope, selected finding and full artifact without proposing memory",
     async () => {
