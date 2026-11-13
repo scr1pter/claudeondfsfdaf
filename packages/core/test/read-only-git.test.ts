@@ -17,6 +17,77 @@ afterEach(async () => {
 const local = process.platform === "linux" ? test : test.skip
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
 
+const usage = (references: boolean) =>
+  Buffer.from(
+    [
+      "usage: git fsck [--strict] [--full] [--cache]",
+      "    --[no-]strict        enable strict checking",
+      "    --[no-]full          consider all object storage",
+      "    --[no-]cache         include index roots",
+      "    --no-reflogs         omit reflog roots",
+      "    --no-dangling        omit dangling notices",
+      "    --no-progress        omit progress",
+      "    --no-name-objects    omit object names",
+      ...(references ? ["    --[no-]references    check the references database"] : []),
+      "",
+    ].join("\n"),
+  )
+test("fsck supports only known versions with matching advertised full graph and reference capabilities", () => {
+  for (const version of ["2.43.0", "2.49.1"])
+    expect(ReadOnlyGit.fsckProfile(Buffer.from(`git version ${version}\n`), usage(false))).toEqual({
+      references: false,
+    })
+  for (const version of ["2.50.0", "2.56.0", "2.56.1"])
+    expect(ReadOnlyGit.fsckProfile(Buffer.from(`git version ${version}\n`), usage(true))).toEqual({ references: true })
+  for (const version of ["2.42.0", "2.57.0", "3.0.0", "2.56.1.vendor", "2.056.1", "2.56.1\nextra"])
+    expect(() => ReadOnlyGit.fsckProfile(Buffer.from(`git version ${version}\n`), usage(true))).toThrow(
+      ReadOnlyGit.Unavailable,
+    )
+  expect(() => ReadOnlyGit.fsckProfile(Buffer.from("git version 2.43.0\n"), usage(true))).toThrow(
+    ReadOnlyGit.Unavailable,
+  )
+  expect(() => ReadOnlyGit.fsckProfile(Buffer.from("git version 2.56.1\n"), usage(false))).toThrow(
+    ReadOnlyGit.Unavailable,
+  )
+  for (const option of ["strict", "full", "cache", "no-reflogs", "no-dangling", "no-progress", "no-name-objects"]) {
+    const help = Buffer.from(
+      usage(true)
+        .toString()
+        .split("\n")
+        .filter((line) => !line.startsWith(`    --${option} `) && !line.startsWith(`    --[no-]${option} `))
+        .join("\n"),
+    )
+    expect(() => ReadOnlyGit.fsckProfile(Buffer.from("git version 2.56.1\n"), help)).toThrow(ReadOnlyGit.Unavailable)
+  }
+  expect(() => ReadOnlyGit.fsckProfile(Buffer.from("git version 2.56.1\n"), Buffer.alloc(16385))).toThrow(
+    ReadOnlyGit.Unavailable,
+  )
+})
+test("skipping a separate ref database verifier requires an empty private detached reference shape", () => {
+  const head = "a".repeat(40)
+  const refs: string[] = []
+  const snapshot = { head: Buffer.from(head + "\n"), refs, packed: false, reftable: false }
+  expect(() => ReadOnlyGit.privateRefShape(snapshot, head)).not.toThrow()
+  for (const change of [
+    { refs: ["heads"] },
+    { packed: true },
+    { reftable: true },
+    { head: Buffer.from("ref: refs/heads/main\n") },
+    { head: Buffer.from("b".repeat(40) + "\n") },
+  ])
+    expect(() => ReadOnlyGit.privateRefShape({ ...snapshot, ...change }, head)).toThrow(ReadOnlyGit.Unavailable)
+})
+test("private native diagnostics recognize only exact content-free error classes", () => {
+  expect(ReadOnlyGit.commandReason("error: cannot fork() for refs: Resource temporarily unavailable")).toBe("refs-fork")
+  expect(ReadOnlyGit.commandReason("error: unknown option `no-references'")).toBe("unsupported-argument")
+  for (const value of [
+    "error: private/path contains body",
+    "12 | error: cannot fork() for refs: Resource temporarily unavailable",
+    "OWNER_PRIVATE_SNIPPET",
+  ])
+    expect(ReadOnlyGit.commandReason(value)).toBe("Unknown")
+})
+
 test("object manifest bounds each expanded object, total bytes and actual object count", () => {
   const line = (id: number, size = 1) => `${id.toString(16).padStart(40, "0")} blob ${size}\n`
   expect(ReadOnlyGit.objectManifest(Buffer.from(line(1) + line(2, 2)))).toEqual({ objects: 2, bytes: 3 })
@@ -142,7 +213,17 @@ local.each(["commit", "tree", "blob"])("forged named loose %s bytes never reach 
   expect((await f.git(["cat-file", "-t", oid])).stdout.trim()).toBe(kind)
   expect((await f.git(["cat-file", "-s", oid])).stdout.trim()).toBe(String(body.length))
   expect((await f.raw(["cat-file", kind, oid])).stdout).toEqual(body)
-  await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+  const refused = await ReadOnlyGit.open(f.input).catch((error: unknown) => error)
+  expect(refused).toBeInstanceOf(ReadOnlyGit.Unavailable)
+  if (!(refused instanceof ReadOnlyGit.Unavailable)) throw new Error("Forged object reached a consumer")
+  const diagnostic = refused.cause
+  expect(Object.isFrozen(diagnostic)).toBe(true)
+  if (!diagnostic || typeof diagnostic !== "object") throw new Error("Missing bounded integrity diagnostic")
+  expect(Object.keys(diagnostic).sort()).toEqual(["command", "exit", "reason", "signal", "stderr", "stdout"])
+  expect("command" in diagnostic && diagnostic.command).toBe("integrity")
+  expect("exit" in diagnostic && typeof diagnostic.exit === "number" && diagnostic.exit > 0).toBe(true)
+  for (const privateValue of [f.directory, f.gitDirectory, oid, body.toString("hex")])
+    expect(JSON.stringify(diagnostic)).not.toContain(privateValue)
   expect(await f.calls()).toBe(0)
 })
 
@@ -239,6 +320,157 @@ local("a partial-clone configuration cannot permit promised missing objects or l
 })
 
 const integrityCI = test.skipIf(process.env.VECTOR_READONLY_GIT_INTEGRITY_CI !== "1" || process.platform !== "linux")
+
+integrityCI(
+  "modern reference verification forks are refused while full detached-object verification stays mandatory",
+  async () => {
+    const f = await fixture()
+    const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    await fs.writeFile(path.join(f.gitDirectory, "HEAD"), head + "\n")
+    await fs.rm(path.join(f.gitDirectory, "refs"), { recursive: true })
+    await fs.mkdir(path.join(f.gitDirectory, "refs"))
+    const image = await DirectoryIdentityReader.pythonImage(performance.now() + 10000)
+    if (!image) throw new Error("Missing actual fixed runtime proof")
+    const run = async (args: string[]) => {
+      expect(await image.validate(performance.now() + 10000)).toBe(true)
+      expect(image.isOpen()).toBe(true)
+      return new Promise<{ code: number; bytes: Buffer; known: string }>((resolve, reject) => {
+        const output: Buffer[] = [],
+          error: Buffer[] = []
+        let failed = false,
+          size = 0
+        const child = spawn(
+          DirectoryIdentityReader.PYTHON,
+          ["-I", "-S", "-c", ReadOnlyGit.PROCESS_SOURCE, "/usr/bin/git", ...args],
+          {
+            cwd: f.base,
+            env: {
+              PATH: "/usr/bin:/bin",
+              HOME: f.base,
+              GIT_CONFIG_NOSYSTEM: "1",
+              GIT_CONFIG_GLOBAL: os.devNull,
+              LC_ALL: "C",
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+            shell: false,
+          },
+        )
+        child.once("error", () => {
+          failed = true
+        })
+        child.once("close", (code, killed) => {
+          clearTimeout(timer)
+          if (failed || killed || code === null) {
+            reject(new Error("Actual fixed verifier child failed"))
+            return
+          }
+          const known =
+            Buffer.concat(error)
+              .toString()
+              .split(/\r?\n/)
+              .map(ReadOnlyGit.commandReason)
+              .find((value) => value !== "Unknown") ?? "Unknown"
+          resolve({ code, bytes: Buffer.concat(output), known })
+        })
+        const timer = setTimeout(() => {
+          failed = true
+          child.kill("SIGKILL")
+        }, 10000)
+        const collect = (sink: Buffer[], chunk: Buffer) => {
+          size += chunk.length
+          if (size > 16384) {
+            failed = true
+            child.kill("SIGKILL")
+            return
+          }
+          sink.push(chunk)
+        }
+        child.stdout?.on("data", (chunk: Buffer) => collect(output, chunk))
+        child.stderr?.on("data", (chunk: Buffer) => collect(error, chunk))
+        if (!child.stdout || !child.stderr) {
+          failed = true
+          child.kill("SIGKILL")
+        }
+      })
+    }
+    try {
+      const base = [
+        "--no-pager",
+        `--git-dir=${f.gitDirectory}`,
+        `--work-tree=${f.directory}`,
+        "-c",
+        "core.commitGraph=false",
+        "-c",
+        "core.multiPackIndex=false",
+      ]
+      const version = await run(["--version"])
+      expect(version.code).toBe(0)
+      const help = await run([...base, "fsck", "-h"])
+      expect([0, 129]).toContain(help.code)
+      const profile = ReadOnlyGit.fsckProfile(version.bytes, help.bytes)
+      const full = [
+        ...base,
+        "fsck",
+        "--strict",
+        "--full",
+        "--cache",
+        "--no-reflogs",
+        "--no-dangling",
+        "--no-progress",
+        "--no-name-objects",
+      ]
+      const normal = await run(full)
+      if (profile.references) {
+        expect(normal.code).toBe(8)
+        expect(normal.known).toBe("refs-fork")
+      } else expect(normal.code).toBe(0)
+      const verified = await run([...full, ...(profile.references ? ["--no-references"] : [])])
+      expect(verified.code).toBe(0)
+      const repository = await ReadOnlyGit.open(f.input)
+      try {
+        expect(
+          (await repository.read({ kind: "object", action: "blob", revision: "HEAD", file: "probe.txt" })).bytes,
+        ).toEqual(Buffer.from("saved contents\n"))
+      } finally {
+        await repository.close()
+      }
+    } finally {
+      image.close()
+    }
+  },
+  30000,
+)
+
+integrityCI.each(["loose", "packed", "reftable", "head"])(
+  "unsupported private %s reference data refuses before a consumer",
+  async (kind) => {
+    const f = await fixture()
+    const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    const prefix = path.join(await fs.realpath(os.tmpdir()), "vector-readonly-git-")
+    const original = fs.opendir
+    let injected = false
+    fs.opendir = async (...args) => {
+      const directory = await fs.realpath(args[0])
+      if (!injected && directory.startsWith(prefix) && directory.endsWith(path.join("git", "refs"))) {
+        injected = true
+        if (kind === "loose") await fs.writeFile(path.join(directory, "unexpected"), head + "\n")
+        if (kind === "packed")
+          await fs.writeFile(path.join(path.dirname(directory), "packed-refs"), head + " refs/heads/unexpected\n")
+        if (kind === "reftable") await fs.mkdir(path.join(path.dirname(directory), "reftable"))
+        if (kind === "head")
+          await fs.writeFile(path.join(path.dirname(directory), "HEAD"), "ref: refs/heads/unexpected\n")
+      }
+      return original(...args)
+    }
+    try {
+      await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+      expect(injected).toBe(true)
+    } finally {
+      fs.opendir = original
+    }
+  },
+  30000,
+)
 
 function signal() {
   let resolve = () => {}

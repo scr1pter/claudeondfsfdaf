@@ -104,6 +104,76 @@ export function objectManifest(bytes: Buffer) {
   return { objects: seen.size, bytes: total }
 }
 
+/** Availability profile only. The real fixed command supplies these bytes; caller data cannot select verifier flags. */
+export function fsckProfile(version: Buffer, help: Buffer) {
+  requireValue(
+    version.length <= 256 && help.length > 0 && help.length <= 16 * 1024,
+    "Git verifier capability is unsupported",
+  )
+  const release = /^git version 2\.(4[3-9]|5[0-6])\.(0|[1-9][0-9]{0,3})\n$/.exec(version.toString("utf8"))
+  const usage = help.toString("utf8")
+  requireValue(
+    release && Buffer.from(usage).equals(help) && usage.startsWith("usage: git fsck "),
+    "Git verifier capability is unsupported",
+  )
+  const option = (name: string) => new RegExp(`(?:^|\\n)[ \\t]+--(?:\\[no-\\])?${name}(?:[ \\t]|$)`).test(usage)
+  requireValue(
+    ["strict", "full", "cache", "no-reflogs", "no-dangling", "no-progress", "no-name-objects"].every((name) => {
+      const base = name.startsWith("no-") ? name.slice(3) : name
+      return option(name) || option(base)
+    }),
+    "Git verifier capability is unsupported",
+  )
+  const references = option("references")
+  requireValue(references === Number(release[1]) >= 50, "Git verifier version and capability do not match")
+  return Object.freeze({ references })
+}
+
+/** The production caller reads these selectors from its pinned PRIVATE store, not from an owner's live refs. */
+export function privateRefShape(
+  snapshot: { head: Buffer; refs: readonly string[]; packed: boolean; reftable: boolean },
+  expected: string,
+) {
+  requireValue(
+    /^[0-9a-f]{40}$/.test(expected) &&
+      snapshot.head.equals(Buffer.from(expected + "\n")) &&
+      snapshot.refs.length === 0 &&
+      !snapshot.packed &&
+      !snapshot.reftable,
+    "the private reference database is not an empty detached snapshot",
+  )
+}
+
+export function commandReason(line: string) {
+  if (/^error: cannot fork\(\) for refs: Resource temporarily unavailable$/.test(line)) return "refs-fork" as const
+  if (/^error: unknown option `(?:no-)?references'$/.test(line)) return "unsupported-argument" as const
+  if (/^fatal: (?:Out of memory|mmap failed): Cannot allocate memory$/.test(line)) return "memory" as const
+  return "Unknown" as const
+}
+type CommandDiagnostic = Readonly<{
+  command: "version" | "capability" | "configuration" | "integrity" | "manifest" | "index" | "read"
+  exit: number | null
+  signal: "none" | "SIGKILL" | "SIGTERM" | "SIGXCPU" | "SIGABRT" | "SIGSEGV" | "SIGBUS" | "other"
+  stdout: number
+  stderr: number
+  reason:
+    | "none"
+    | "refs-fork"
+    | "unsupported-argument"
+    | "memory"
+    | "Unknown"
+    | "output-limit"
+    | "expired"
+    | "spawn-error"
+    | "pipe-error"
+}>
+const commandDiagnostics = new WeakMap<{ code: number; bytes: Buffer }, CommandDiagnostic>()
+function requireCommand(result: { code: number; bytes: Buffer }, codes: readonly number[], reason: string) {
+  if (codes.includes(result.code)) return
+  const cause = commandDiagnostics.get(result)
+  throw new Unavailable(reason, cause ? { cause } : undefined)
+}
+
 let executing = false
 const waiting = new Set<() => void>()
 async function admit(expires: number, signal: AbortSignal) {
@@ -153,8 +223,11 @@ const BOOL = new Map([
 
 export class Unavailable extends Error {
   readonly code = "READ_ONLY_GIT_UNAVAILABLE"
-  constructor(readonly reason: string) {
-    super(`Read-only Git inspection is unavailable: ${reason}.`)
+  constructor(
+    readonly reason: string,
+    options?: { cause: CommandDiagnostic },
+  ) {
+    super(`Read-only Git inspection is unavailable: ${reason}.`, options)
   }
 }
 
@@ -335,6 +408,45 @@ async function readOpened(opened: FileHandle, limit: number, context?: Operation
   return result.subarray(0, size)
 }
 
+async function privateReferences(file: string, expected: string, context: Operation) {
+  const root = await pin(file, context)
+  try {
+    const references = await openWithin(root, "refs", constants.O_RDONLY | constants.O_DIRECTORY, false, context)
+    try {
+      const directory = await acquire(context, () => fs.opendir(`/proc/self/fd/${references.fd}`))
+      try {
+        const first = await step(context, () => directory.read())
+        const exists = async (name: string) => {
+          const item = await openWithin(root, name, constants.O_RDONLY, false, context).catch(
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === "ENOENT") return
+              throw error
+            },
+          )
+          if (!item) return false
+          await releaseResource(context, item)
+          return true
+        }
+        privateRefShape(
+          {
+            head: (await read(root, "HEAD", 4096, false, context))!,
+            refs: first ? [first.name] : [],
+            packed: await exists("packed-refs"),
+            reftable: await exists("reftable"),
+          },
+          expected,
+        )
+      } finally {
+        await releaseResource(context, directory)
+      }
+    } finally {
+      await releaseResource(context, references)
+    }
+  } finally {
+    await releaseResource(context, root)
+  }
+}
+
 async function executable(excluded: string[], context?: Operation) {
   const names = process.platform === "win32" ? ["git.com", "git.exe"] : ["git"]
   for (const entry of (process.env.PATH ?? process.env.Path ?? "").split(path.delimiter)) {
@@ -412,6 +524,19 @@ async function makeCommands(
   ) => {
     requireValue(directory === cwd || inside(cwd, directory), "Git's private working directory is unavailable")
     const expires = Math.min(context.expires, performance.now() + INTEGRITY.milliseconds)
+    const stage: CommandDiagnostic["command"] = args.includes("--version")
+      ? "version"
+      : args.includes("fsck")
+        ? args.includes("-h")
+          ? "capability"
+          : "integrity"
+        : args.includes("config")
+          ? "configuration"
+          : args.includes("--batch-all-objects")
+            ? "manifest"
+            : args.includes("read-tree") || args.includes("update-index") || args.includes("ls-files")
+              ? "index"
+              : "read"
     const check = () => {
       context.check()
       requireValue(
@@ -431,6 +556,11 @@ async function makeCommands(
         let excessive = false
         let stopped = false
         let failed = false
+        let failure: "none" | "spawn-error" | "pipe-error" = "none"
+        let stdout = 0,
+          stderr = 0
+        let stderrTail = ""
+        let stderrReason: ReturnType<typeof commandReason> | "none" = "none"
         let timer: ReturnType<typeof setTimeout> | undefined
         const child = spawn(DirectoryIdentityReader.PYTHON, ["-I", "-S", "-c", PROCESS_SOURCE, file, ...args], {
           cwd: directory,
@@ -442,6 +572,7 @@ async function makeCommands(
         // EMFILE/ENFILE may return a ChildProcess with no pipes and queue its error. Own error/close FIRST.
         child.once("error", () => {
           failed = true
+          failure = "spawn-error"
         })
         child.once("close", (code, killed) => {
           clearTimeout(timer)
@@ -451,9 +582,32 @@ async function makeCommands(
           } catch {
             failed = true
           }
+          if (stderrTail && stderrReason === "none") stderrReason = commandReason(stderrTail)
+          const metadata: CommandDiagnostic = Object.freeze({
+            command: stage,
+            exit: code !== null && Number.isInteger(code) && code >= 0 && code <= 255 ? code : null,
+            signal:
+              killed === null
+                ? "none"
+                : ((["SIGKILL", "SIGTERM", "SIGXCPU", "SIGABRT", "SIGSEGV", "SIGBUS"] as const).find(
+                    (value) => value === killed,
+                  ) ?? "other"),
+            stdout: Math.min(stdout, maximum + 1),
+            stderr: Math.min(stderr, maximum + 1),
+            reason:
+              failure !== "none"
+                ? failure
+                : excessive
+                  ? "output-limit"
+                  : stopped || signal.aborted || performance.now() >= expires
+                    ? "expired"
+                    : stderrReason,
+          })
           if (failed || stopped || excessive || killed || code === null)
-            return reject(new Unavailable("Git exceeded its execution bound"))
-          resolve({ code, bytes: Buffer.concat(chunks) })
+            return reject(new Unavailable("Git exceeded its execution bound", { cause: metadata }))
+          const result = { code, bytes: Buffer.concat(chunks) }
+          commandDiagnostics.set(result, metadata)
+          resolve(result)
         })
         const stop = () => {
           stopped = true
@@ -475,24 +629,42 @@ async function makeCommands(
         }
         child.stdin?.on("error", () => {
           failed = true
+          failure = "pipe-error"
           stop()
         })
         child.stdout?.on("error", () => {
           failed = true
+          failure = "pipe-error"
           stop()
         })
         child.stderr?.on("error", () => {
           failed = true
+          failure = "pipe-error"
           stop()
         })
         child.stdout?.on("data", (chunk: Buffer) => {
+          stdout += chunk.byteLength
           count(chunk)
           if (!excessive) chunks.push(chunk)
         })
         // Repository-controlled diagnostics can contain private config values; never copy them into an error or log.
-        child.stderr?.on("data", count)
+        child.stderr?.on("data", (chunk: Buffer) => {
+          stderr += chunk.byteLength
+          count(chunk)
+          if (excessive) return
+          const lines = (stderrTail + chunk.toString("utf8")).split("\n")
+          const tail = lines.pop() ?? ""
+          for (const line of lines) {
+            const known = commandReason(line.replace(/\r$/, ""))
+            if (known !== "Unknown") stderrReason = known
+            else if (stderrReason === "none") stderrReason = "Unknown"
+          }
+          stderrTail = tail.length <= 1024 ? tail : ""
+          if (tail.length > 1024 && stderrReason === "none") stderrReason = "Unknown"
+        })
         if (!child.stdin || !child.stdout || !child.stderr) {
           failed = true
+          failure = "pipe-error"
           stop()
           return
         }
@@ -500,6 +672,7 @@ async function makeCommands(
           child.stdin.end(input)
         } catch {
           failed = true
+          failure = "pipe-error"
           stop()
         }
       })
@@ -1217,6 +1390,20 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     }
     await objects(commonHandle, path.join(privateGit, "objects"), startup)
     const args = ["--no-pager", "--no-optional-locks", `--git-dir=${privateGit}`, `--work-tree=${root}`]
+    const version = await command(["--no-pager", "--version"], undefined, 256)
+    requireCommand(version, [0], "Git verifier version is unsupported")
+    // Short usage is a fixed builtin parse, not --help/man/pager. Both known legacy129 and modern0 are bounded.
+    const help = await command([...args, "fsck", "-h"], undefined, 16 * 1024)
+    requireCommand(help, [0, 129], "Git verifier capability is unsupported")
+    const profile = (() => {
+      try {
+        return fsckProfile(version.bytes, help.bytes)
+      } catch (error) {
+        if (!(error instanceof Unavailable)) throw error
+        const cause = commandDiagnostics.get(help)
+        throw new Unavailable(error.reason, cause ? { cause } : undefined)
+      }
+    })()
     const commitType = await command([...args, "cat-file", "-t", capturedHead])
     requireValue(
       commitType.code === 0 && commitType.bytes.equals(Buffer.from("commit\n")),
@@ -1259,6 +1446,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     )
     requireValue(manifest.code === 0, "the expanded object manifest is unavailable")
     objectManifest(manifest.bytes)
+    await privateReferences(privateGit, capturedHead, startup)
     const integrity = await command(
       [
         ...args,
@@ -1270,11 +1458,14 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         "--no-dangling",
         "--no-progress",
         "--no-name-objects",
+        // Since Git2.50 this separate PRIVATE ref-DB check forks. No live refs were imported, while snapshot_refs,
+        // full object hashing/connectivity and the detached HEAD/index/shallow roots remain checked by fsck.
+        ...(profile.references ? ["--no-references"] : []),
       ],
       undefined,
       INTEGRITY.output,
     )
-    requireValue(integrity.code === 0, "the private Git object graph failed integrity verification")
+    requireCommand(integrity, [0], "the private Git object graph failed integrity verification")
     const unchanged = async (context: Operation) => {
       context.check()
       const after = (await read(gitHandle, "index", LIMIT.index, false, context))!
