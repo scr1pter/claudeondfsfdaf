@@ -96,6 +96,24 @@ const resolveModel = () =>
     costKind: "local" as const,
   })
 
+// These lifecycle assertions begin at the genuine reviewer callback, after six bounded physical Git checks.
+// The generic two-second helper is not a setup-performance requirement. A terminal setup still fails immediately.
+function runnerReady<A>(entered: Deferred.Deferred<A>, runID: SessionID, message: string) {
+  return Effect.gen(function* () {
+    const jobs = yield* BackgroundJob.Service
+    const terminal = jobs.wait({ id: runID }).pipe(
+      Effect.flatMap(() =>
+        Effect.gen(function* () {
+          const ready = yield* Deferred.poll(entered)
+          if (Option.isSome(ready)) return yield* ready.value
+          return yield* Effect.fail(new Error(`${message}: the background job settled before its callback`))
+        }),
+      ),
+    )
+    return yield* awaitWithTimeout(Effect.raceFirst(Deferred.await(entered), terminal), message, "5 seconds")
+  })
+}
+
 // Explicit owner-enabled Core fixture; the runner must independently verify the
 // actual saved Main binding and register only its first attached winner.
 const enableMemory = Effect.fnUntraced(function* (repo: Effect.Success<typeof fixture>) {
@@ -485,7 +503,7 @@ describe("durable server-owned local review runs", () => {
         const requestScope = yield* Scope.make()
         yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
         const started = yield* runs.start(repo.request, repo.source).pipe(Scope.provide(requestScope))
-        const input = yield* awaitWithTimeout(Deferred.await(entered), "The shared review did not start")
+        const input = yield* runnerReady(entered, started.runID, "The shared review did not start")
         yield* Scope.close(requestScope, Exit.void)
         expect((yield* runs.get(repo.parent.id, started.runID)).status).toBe("running")
         expect((yield* runs.start(repo.request, repo.source)).runID).toBe(started.runID)
@@ -558,9 +576,9 @@ describe("durable server-owned local review runs", () => {
           { concurrency: "unbounded" },
         )
         expect(duplicate[0].runID).toBe(duplicate[1].runID)
-        yield* awaitWithTimeout(Deferred.await(entered), "First review did not start")
+        yield* runnerReady(entered, duplicate[0].runID, "First review did not start")
         const second = yield* runs.start({ ...repo.request, requestID: "request_local_2" }, repo.source)
-        yield* awaitWithTimeout(Deferred.await(both), "Second review did not start")
+        yield* runnerReady(both, second.runID, "Second review did not start")
         const stopped = yield* runs.stop(repo.parent.id, duplicate[0].runID)
         expect(stopped.status).toBe("cancelled")
         expect(stopped.canStop).toBe(false)
@@ -633,7 +651,7 @@ describe("durable server-owned local review runs", () => {
         expect(accepted.length).toBeGreaterThanOrEqual(1)
         expect(new Set(accepted.map((run) => run.runID)).size).toBe(1)
         for (const result of starts) if (Result.isFailure(result)) expect(result.failure.code).toBe("unavailable")
-        yield* awaitWithTimeout(Deferred.await(entered), "The single admitted review did not start")
+        yield* runnerReady(entered, accepted[0]!.runID, "The single admitted review did not start")
         expect(calls).toBe(1)
         const joined = yield* second.start(repo.request, repo.source)
         expect(joined.runID).toBe(accepted[0]!.runID)
@@ -681,7 +699,7 @@ describe("durable server-owned local review runs", () => {
             }),
         })
         const started = yield* runs.start(repo.request, repo.source)
-        yield* awaitWithTimeout(Deferred.await(entered), "Review did not start")
+        yield* runnerReady(entered, started.runID, "Review did not start")
         const stopped = yield* runs.stop(repo.parent.id, started.runID)
         expect(stopped.status).toBe("cancelled")
         expect(stopped.artifact).toBeUndefined()
