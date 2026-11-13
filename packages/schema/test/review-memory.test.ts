@@ -44,6 +44,12 @@ const approved: ReviewMemoryControl.ApprovedEntry = {
   approvedBy: "http-owner:actor",
   approvedAt: 3,
 }
+const reopen: ReviewMemoryControl.Reopen = {
+  action: "reopen",
+  expected: 4,
+  id: approved.id,
+  reason: "The owner found a missing input case and asks to reassess this outcome.",
+}
 const common = {
   previewId: "01234567-89ab-4cde-8fab-0123456789ab",
   sha256: "c".repeat(64),
@@ -56,6 +62,7 @@ const previews: ReviewMemoryControl.Preview[] = [
   { ...common, operation: "configure", payload: { expected: 4, enabled: true } },
   { ...common, operation: "record", payload: { ...draft, expected: 4, kind: "check" } },
   { ...common, operation: "approve", payload: { expected: 4, id: proposed.id, entry: proposed } },
+  { ...common, operation: "reopen", payload: { expected: 4, id: approved.id, reason: reopen.reason, entry: approved } },
   { ...common, operation: "forget", payload: { expected: 4, id: owner.id } },
   { ...common, operation: "erase", payload: { expected: 4 } },
 ]
@@ -65,6 +72,116 @@ describe("review-memory public wire contracts", () => {
     const direct = await import("../src/review-memory")
     expect(ReviewMemoryControl.Prepare).toBe(direct.Prepare)
     expect(ReviewMemoryControl.Preview).toBe(direct.Preview)
+    expect(ReviewMemoryControl.Reopen).toBe(direct.Reopen)
+    expect(ReviewMemoryControl.ReopenPreview).toBe(direct.ReopenPreview)
+  })
+
+  test("reopen requires a bounded nonblank human reason and rejects caller-supplied authority or replacement provenance", () => {
+    const decode = Schema.decodeUnknownOption(ReviewMemoryControl.Prepare)
+    const valid = { expectedScope: scope, command: reopen }
+    expect(Schema.decodeUnknownSync(ReviewMemoryControl.Prepare)(valid)).toEqual(valid)
+    for (const reason of ["A", "x".repeat(ReviewMemoryControl.LIMIT.reason), "  Keep the exact human wording.\n"])
+      expect(Schema.decodeUnknownSync(ReviewMemoryControl.Reopen)({ ...reopen, reason }).reason).toBe(reason)
+    for (const reason of [
+      "",
+      " ",
+      "\t\r\n",
+      "\u00a0\ufeff",
+      "x".repeat(ReviewMemoryControl.LIMIT.reason + 1),
+      undefined,
+      null,
+      false,
+    ])
+      expect(Option.isNone(decode({ ...valid, command: { ...reopen, reason } }))).toBe(true)
+    for (const field of [
+      "source",
+      "witnesses",
+      "fingerprint",
+      "entry",
+      "owner",
+      "approved",
+      "approvedBy",
+      "approvedAt",
+      "repository",
+      "scope",
+      "root",
+    ])
+      expect(Option.isNone(decode({ ...valid, command: { ...reopen, [field]: "forged" } }))).toBe(true)
+    for (const command of [
+      { ...reopen, expected: -1 },
+      { ...reopen, expected: Number.MAX_SAFE_INTEGER },
+      { ...reopen, expected: 0.5 },
+      { ...reopen, id: "with spaces" },
+      { ...reopen, id: "x".repeat(257) },
+      { expected: 4, id: approved.id, reason: reopen.reason },
+    ])
+      expect(Option.isNone(decode({ ...valid, command }))).toBe(true)
+  })
+
+  test("reopen previews retain the complete original active review outcome separately from the new human reason", () => {
+    const original: ReviewMemoryControl.ReopenPreview = {
+      ...common,
+      operation: "reopen",
+      payload: { expected: reopen.expected, id: reopen.id, reason: reopen.reason, entry: approved },
+    }
+    const wire = Schema.fromJsonString(ReviewMemoryControl.ReopenPreview)
+    expect(Schema.decodeUnknownSync(wire)(Schema.encodeSync(wire)(original))).toEqual(original)
+    expect(original.payload.entry.reason).not.toBe(original.payload.reason)
+    const decode = Schema.decodeUnknownOption(ReviewMemoryControl.Preview)
+    for (const entry of [
+      undefined,
+      owner,
+      proposed,
+      { ...approved, kind: "check" },
+      { ...approved, origin: "owner" },
+      { ...approved, text: undefined },
+      { ...approved, reason: undefined },
+      { ...approved, source: undefined },
+      { ...approved, approvedBy: undefined },
+      { ...approved, approvedAt: undefined },
+      { ...approved, createdAt: undefined },
+      { ...approved, updatedAt: undefined },
+      { ...approved, source: { ...approved.source, head: "b".repeat(39) } },
+      { ...approved, source: { ...approved.source, witnesses: { version: 1, parent: "forged", review: "forged" } } },
+      { ...approved, citations: [{ ...citation, quote: undefined }] },
+      { ...approved, citations: [{ ...citation, root: "/unrelated" }] },
+    ])
+      expect(Option.isNone(decode({ ...original, payload: { ...original.payload, entry } }))).toBe(true)
+    for (const field of ["source", "witnesses", "fingerprint", "owner", "approved"])
+      expect(Option.isNone(decode({ ...original, payload: { ...original.payload, [field]: "forged" } }))).toBe(true)
+    expect(Option.isNone(decode({ ...original, payload: { ...original.payload, reason: " " } }))).toBe(true)
+    const result = Schema.decodeUnknownOption(ReviewMemoryControl.ConfirmationResult)
+    expect(Option.isSome(result({ ...proposed, reason: reopen.reason }))).toBe(true)
+    expect(Option.isNone(result({ ...proposed, reason: reopen.reason, approvedBy: approved.approvedBy }))).toBe(true)
+  })
+
+  test("reopen preview generation and selected ID match the original row at both direct and union boundaries", () => {
+    const original: ReviewMemoryControl.ReopenPreview = {
+      ...common,
+      operation: "reopen",
+      payload: { expected: reopen.expected, id: reopen.id, reason: reopen.reason, entry: approved },
+    }
+    for (const decode of [
+      Schema.decodeUnknownOption(ReviewMemoryControl.ReopenPreview),
+      Schema.decodeUnknownOption(ReviewMemoryControl.Preview),
+    ]) {
+      expect(Option.isSome(decode(original))).toBe(true)
+      for (const invalid of [
+        { ...original, expected: common.expected + 1 },
+        { ...original, payload: { ...original.payload, expected: common.expected + 1 } },
+        { ...original, payload: { ...original.payload, id: "vr_other" } },
+        { ...original, payload: { ...original.payload, entry: { ...approved, id: "vr_other" } } },
+      ])
+        expect(Option.isNone(decode(invalid))).toBe(true)
+    }
+  })
+
+  test("reopen schemas retain unique namespaced identifiers", () => {
+    const contracts = [ReviewMemoryControl.Reopen, ReviewMemoryControl.ReopenPreview]
+    expect(contracts.map((contract) => contract.ast.annotations?.identifier)).toEqual([
+      "ReviewMemoryControl.Reopen",
+      "ReviewMemoryControl.ReopenPreview",
+    ])
   })
 
   test("prepare requires the displayed scope and rejects extra authority at every request depth", () => {
