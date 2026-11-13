@@ -379,11 +379,13 @@ test("default-off memory needs explicit preview/consent, then owner preferences 
   const state = await engine(page, { enabled: false })
   await open(page)
   await expect(
-    panel(page).getByText("Review memory is off. Stored entries are not used by reviews.", { exact: true }),
+    panel(page).getByText("Use in supported reviews is off. Stored entries are not included in reviews yet.", {
+      exact: true,
+    }),
   ).toBeVisible()
   expect(state.prepares).toHaveLength(0)
   expect(state.confirms).toHaveLength(0)
-  await panel(page).getByRole("button", { name: "Preview enabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview allowing review use", exact: true }).click()
   expect(state.confirms).toHaveLength(0)
   await approve(page)
   await expect(panel(page).getByRole("textbox", { name: "Memory entry text", exact: true })).toBeEnabled()
@@ -479,12 +481,12 @@ test("observed physical scope change clears old content and cannot retarget an i
     scope: `vrs1_${"2".repeat(64)}`,
     state: { enabled: false, generation: 0, entries: [] },
   }
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await expect(panel(page)).toContainText("scope changed")
   await expect(panel(page)).not.toContainText("PRIVATE_")
   expect(state.prepares).toHaveLength(0)
   await panel(page).getByRole("button", { name: "Refresh current memory", exact: true }).click()
-  await expect(panel(page)).toContainText("Review memory is off")
+  await expect(panel(page)).toContainText("Use in supported reviews is off")
   expect(state.confirms).toHaveLength(0)
 })
 
@@ -495,7 +497,7 @@ test("actual Solid store reconciliation cannot hide a fresh generation change or
   await open(page)
   await expect(panel(page)).toContainText("PRIVATE_STORED_TEXT")
   state.snapshot = { ...state.snapshot, state: { ...state.snapshot.state, generation: 1 } }
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await expect(panel(page)).toContainText("Review memory changed")
   await expect(panel(page).getByRole("region", { name: "Exact memory change preview" })).toHaveCount(0)
   expect(state.prepares).toHaveLength(0)
@@ -518,7 +520,7 @@ test("generic selection changes and cold remount cannot turn a retired owner pro
   expect(state.reads).toBe(reads)
   await page.getByRole("button", { name: "Fresh owner connection", exact: true }).click()
   await expect(panel(page)).toContainText("Selected local repository: /other")
-  await expect(panel(page)).toContainText("Review memory is off")
+  await expect(panel(page)).toContainText("Use in supported reviews is off")
   await expect(panel(page)).not.toContainText("PRIVATE_")
   expect(state.prepares).toHaveLength(0)
   expect(state.confirms).toHaveLength(0)
@@ -529,7 +531,7 @@ test("lost confirmation clears private text, refresh sends no action and explici
 }) => {
   const state = await engine(page, { loseConfirm: true })
   await open(page)
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await approve(page)
   await expect(panel(page).getByRole("region", { name: "Uncertain memory confirmation" })).toBeVisible()
   await expect(panel(page)).not.toContainText("PRIVATE_")
@@ -538,7 +540,7 @@ test("lost confirmation clears private text, refresh sends no action and explici
   await expect(panel(page)).toContainText("does not prove")
   expect(state.prepares).toHaveLength(1)
   expect(state.confirms).toHaveLength(1)
-  await expect(panel(page).getByRole("button", { name: "Preview enabling memory", exact: true })).toBeDisabled()
+  await expect(panel(page).getByRole("button", { name: "Preview allowing review use", exact: true })).toBeDisabled()
   const retry = panel(page).getByRole("button", { name: "Retry same confirmation", exact: true })
   await expect(retry).toBeDisabled()
   await panel(page).getByRole("checkbox", { name: "Retry only the change I already approved", exact: true }).check()
@@ -552,7 +554,7 @@ test("lost confirmation clears private text, refresh sends no action and explici
 test("new service rejects an old approval without silently preparing or applying another one", async ({ page }) => {
   const state = await engine(page)
   await open(page)
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   await expect(panel(page).getByRole("region", { name: "Exact memory change preview" })).toBeVisible()
   state.previews.clear()
   await approve(page)
@@ -597,7 +599,7 @@ test("navigation and close retire delayed preparation and leave no private text 
 test("an already sent confirmation cannot repaint a guest view when its old response returns", async ({ page }) => {
   const state = await engine(page)
   await open(page)
-  await panel(page).getByRole("button", { name: "Preview disabling memory", exact: true }).click()
+  await panel(page).getByRole("button", { name: "Preview disallowing review use", exact: true }).click()
   const hold = pause()
   state.holdConfirm = hold
   await approve(page)

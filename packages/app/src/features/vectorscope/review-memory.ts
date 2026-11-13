@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect"
 import { ReviewMemoryControl } from "@vectordevai/schema/review-memory"
 
-/** Bound later to the normally generated client; this port never supplies owner authority. */
+/** Bound by the generated-client adapter; this port never supplies owner authority or model consumption. */
 export interface ReviewMemoryTransport {
   inspect(input: ReviewMemoryControl.InspectInput, signal: AbortSignal): Promise<ReviewMemoryControl.Inspect>
   prepare(input: ReviewMemoryControl.Prepare, signal: AbortSignal): Promise<ReviewMemoryControl.Preview>

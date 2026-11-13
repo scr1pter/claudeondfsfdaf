@@ -39,6 +39,7 @@ describe("engine capabilities", () => {
       sessionStop: true,
       vectorscopeSettings: true,
       vectorscopeRuns: true,
+      vectorscopeReviewMemoryControls: true,
       taskPromote: "true",
       taskResume: 1,
       workflows: false,
@@ -48,6 +49,12 @@ describe("engine capabilities", () => {
     expect(parsed.sessionStop).toBe(true)
     expect(parsed.vectorscopeSettings).toBe(true)
     expect(parsed.vectorscopeRuns).toBe(true)
+    expect(parsed.vectorscopeReviewMemoryControls).toBe(true)
+    for (const value of [undefined, null, false, 1, "true", {}, []])
+      expect(parseCapabilities({ vectorscopeReviewMemoryControls: value }).vectorscopeReviewMemoryControls).toBe(false)
+    expect(
+      parseCapabilities({ vectorscopeRuns: true, vectorscopeSettings: true }).vectorscopeReviewMemoryControls,
+    ).toBe(false)
     expect(parseCapabilities({ vectorscopeRuns: "true" }).vectorscopeRuns).toBe(false)
     expect(parseCapabilities({ vectorscopeSettings: true }).vectorscopeRuns).toBe(false)
     expect(parsed.taskPromote).toBe(false)
