@@ -96,6 +96,24 @@ jobs:
       - name: Check owner consent and service lifetime
         working-directory: packages/engine
         run: bun test test/review/memory-owner.test.ts --timeout 60000
+      - name: Check registered public owner API inventory
+        working-directory: packages/engine
+        run: bun test test/server/httpapi-public-openapi.test.ts
+      - name: Check actual default runtime controls capability
+        working-directory: packages/engine
+        run: bun test test/server/httpapi-experimental.test.ts -t "combined server advertises owner memory controls"
+      - name: Check owner route authentication
+        working-directory: packages/server
+        run: bun test src/auth.test.ts
+      - name: Check matched-route authorization
+        working-directory: packages/server
+        run: bun test src/middleware/authorization.test.ts
+      - name: Check Server types
+        working-directory: packages/server
+        run: bun typecheck
+      - name: Check generated SDK types
+        working-directory: packages/sdk/js
+        run: bun typecheck
       - name: Check real HTTP authorization and lost-response recovery
         working-directory: packages/engine
         run: bun test test/server/httpapi-review-memory.test.ts --timeout 60000
