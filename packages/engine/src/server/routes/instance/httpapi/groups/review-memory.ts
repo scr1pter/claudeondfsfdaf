@@ -43,8 +43,8 @@ const page = Schema.Struct({
   ),
 }).annotate({ parseOptions: { onExcessProperty: "error" } })
 
-// This unregistered fragment shares the eventual instance API's identity. It
-// can be exercised independently without registering routes or owner services.
+// The owner data-control group is registered in the instance API. Its shared identity also permits focused
+// HTTP authority tests without constructing unrelated endpoint services; it does not advertise model consumption.
 export const ReviewMemoryControlApi = HttpApi.make("vector-instance")
   .add(
     HttpApiGroup.make("review-memory")

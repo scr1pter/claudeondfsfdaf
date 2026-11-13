@@ -5,7 +5,7 @@ import path from "node:path"
 import { eq, sql } from "drizzle-orm"
 import { Context, Deferred, Effect, Exit, Layer, Option, Result, Schema, Scope } from "effect"
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
 import { ReviewMemory } from "@vectordevai/core/brain/review-memory"
@@ -34,11 +34,12 @@ import { ReviewMemoryOwner } from "@/review/memory-owner"
 import { ReviewMemoryScope } from "@/review/memory-scope"
 import { ServerAuth } from "@/server/auth"
 import { Session } from "@/session/session"
-import { ReviewMemoryApiError, ReviewMemoryControlApi } from "@/server/routes/instance/httpapi/groups/review-memory"
+import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
+import { ReviewMemoryApiError } from "@/server/routes/instance/httpapi/groups/review-memory"
 import { reviewMemoryHandlers } from "@/server/routes/instance/httpapi/handlers/review-memory"
 import { authorizationLayer } from "@/server/routes/instance/httpapi/middleware/authorization"
 import { InstanceContextMiddleware } from "@/server/routes/instance/httpapi/middleware/instance-context"
-import { schemaErrorLayer } from "@/server/routes/instance/httpapi/middleware/schema-error"
+import { SchemaErrorMiddleware, schemaErrorLayer } from "@/server/routes/instance/httpapi/middleware/schema-error"
 import {
   WorkspaceRouteContext,
   WorkspaceRoutingMiddleware,
@@ -74,8 +75,11 @@ const value = <A>(result: ReviewMemory.Result<A>) => {
 
 // Real HTTP/auth/owner/Core/source/SQLite are under test. Only instance selection
 // is a fixed fixture binder: arbitrary request directories cannot create an
-// InstanceRef. Full production routing/registry assembly remains unregistered.
+// InstanceRef. Extract the actual registered group to keep unrelated services out of this focused authority test.
 function listen(controls: ReviewMemoryOwner.Interface, instance: InstanceContext, drop?: Deferred.Deferred<void>) {
+  const registered = InstanceHttpApi.groups["review-memory"]
+  if (registered.identifier !== "review-memory") throw new Error("The owner control group is not registered")
+  const api = HttpApi.make("vector-instance").add(registered).middleware(SchemaErrorMiddleware)
   const context = Layer.succeed(
     InstanceContextMiddleware,
     InstanceContextMiddleware.of((effect) => effect.pipe(Effect.provideService(InstanceRef, instance))),
@@ -129,7 +133,7 @@ function listen(controls: ReviewMemoryOwner.Interface, instance: InstanceContext
     const server = yield* Layer.build(
       Layer.fresh(
         HttpRouter.serve(
-          HttpApiBuilder.layer(ReviewMemoryControlApi).pipe(
+          HttpApiBuilder.layer(api).pipe(
             Layer.provide(Layer.fresh(reviewMemoryHandlers)),
             Layer.provide([context, routing, authorizationLayer, schemaErrorLayer]),
             Layer.provide(Layer.succeed(ReviewMemoryOwner.Service, controls)),
@@ -379,7 +383,7 @@ const approvedOutcome = (setup: Setup, http: Effect.Success<ReturnType<typeof li
   })
 const reopenReason = "The owner found a missing HTTP input case and asks to reassess this outcome."
 
-describe("unregistered review-memory HTTP candidate", () => {
+describe("registered review-memory owner HTTP group", () => {
   test("owner HTTP reopens only the sealed approved outcome and a separate human reason; guest/forwarded requests reveal nothing and cannot consume it", async () => {
     await run((setup) =>
       Effect.gen(function* () {

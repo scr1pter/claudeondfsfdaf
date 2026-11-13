@@ -14,6 +14,7 @@ import { BackgroundJob } from "@/background/job"
 import { TaskManager } from "@/task/manager"
 import { WorkflowOwner } from "@/orchestration/owner"
 import { ReviewOwner } from "@/review/owner"
+import { ReviewMemoryOwner } from "@/review/memory-owner"
 import { TaskNotify } from "@/task/notify"
 import { TaskLimits } from "@/task/limits"
 import { TaskRecovery } from "@/task/recovery"
@@ -110,6 +111,7 @@ import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
 import { reviewHandlers } from "./handlers/review"
+import { reviewMemoryHandlers } from "./handlers/review-memory"
 import { teamsHandlers } from "./handlers/teams"
 import { Teams } from "@vectordevai/core/teams"
 import { VectorTeams } from "@/teams"
@@ -189,6 +191,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     configHandlers,
     experimentalHandlers,
     reviewHandlers,
+    reviewMemoryHandlers,
     fileHandlers,
     instanceHandlers,
     localHandlers,
@@ -291,6 +294,7 @@ const app = LayerNode.group([
   TaskManager.node,
   WorkflowOwner.node,
   ReviewOwner.node,
+  ReviewMemoryOwner.node,
   TaskNotify.node,
   TaskLimits.node,
   TaskRecovery.node,

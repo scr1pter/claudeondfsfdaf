@@ -3,9 +3,10 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { ForbiddenError } from "@vectordevai/protocol/errors"
 import { RequestOwner } from "@vectordevai/server/request-owner"
 import { ReviewMemoryOwner } from "@/review/memory-owner"
-import { ReviewMemoryApiError, ReviewMemoryControlApi } from "../groups/review-memory"
+import { InstanceHttpApi } from "../api"
+import { ReviewMemoryApiError } from "../groups/review-memory"
 
-export const reviewMemoryHandlers = HttpApiBuilder.group(ReviewMemoryControlApi, "review-memory", (handlers) =>
+export const reviewMemoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "review-memory", (handlers) =>
   Effect.gen(function* () {
     const memory = yield* ReviewMemoryOwner.Service
     const owner = Effect.gen(function* () {
