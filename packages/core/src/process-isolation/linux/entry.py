@@ -48,6 +48,38 @@ LIBC.prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ul
 LIBC.prctl.restype = ctypes.c_int
 LIBC.renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
 LIBC.renameat2.restype = ctypes.c_int
+_DIAGNOSTIC_STAGE = "entry-start"
+
+
+def control_failure(error):
+    # Only fixed Root setup/cleanup operations expose enums. Command, broker and keeper failures retain
+    # the existing generic message; never format exception args, messages, filenames, argv or state here.
+    operation = "prepare" if len(sys.argv) == 5 and sys.argv[1] == "prepare" else (
+        "cleanup" if sys.argv[1:] == ["cleanup"] else None)
+    if operation is None:
+        os.write(2, b"The fixed Linux isolation boundary refused this operation.\n")
+        return
+    classes = {"RuntimeError", "PermissionError", "FileNotFoundError", "ProcessLookupError", "NotADirectoryError",
+               "FileExistsError", "BlockingIOError", "OSError", "ValueError", "KeyError", "IndexError",
+               "TypeError", "AssertionError", "TimeoutExpired", "TimeoutError", "CalledProcessError", "JSONDecodeError",
+               "UnicodeDecodeError", "BrokenPipeError", "EOFError", "OverflowError"}
+    names = {"EPERM", "EACCES", "ENOENT", "ENOTDIR", "ELOOP", "EEXIST", "EBUSY", "EAGAIN", "EINVAL", "EBADF",
+             "ESRCH", "EPIPE", "ETIMEDOUT", "ENOSYS", "EOPNOTSUPP", "ENOMEM", "EMFILE", "ENFILE", "EROFS",
+             "EOVERFLOW", "EIO", "ENOSPC"}
+    kind = type(error).__name__
+    number = getattr(error, "errno", None)
+    code = errno.errorcode.get(number) if type(number) is int else None
+    result = getattr(error, "returncode", None)
+    signals = {1:"SIGHUP", 2:"SIGINT", 3:"SIGQUIT", 4:"SIGILL", 6:"SIGABRT", 7:"SIGBUS", 8:"SIGFPE",
+               9:"SIGKILL", 11:"SIGSEGV", 13:"SIGPIPE", 15:"SIGTERM", 24:"SIGXCPU", 25:"SIGXFSZ", 31:"SIGSYS"}
+    record = {"v":1, "event":"native-control-failure", "origin":"entry", "operation":operation,
+              "stage":_DIAGNOSTIC_STAGE, "class":kind if kind in classes else "Unknown",
+              "errno":code if code in names else None,
+              "exit":result if type(result) is int and 0 <= result <= 255 else None,
+              "signal":signals.get(-result) if type(result) is int and result < 0 else None}
+    encoded = ("VECTOR_NATIVE_CONTROL_FAILURE " + json.dumps(record, separators=(",", ":")) + "\n").encode("ascii")
+    if len(encoded) <= 1024:
+        os.write(2, encoded)
 
 
 def require(condition, message="The fixed Linux isolation contract was refused"):
@@ -1039,6 +1071,8 @@ def validate_masks(pid, start, uid, gid, records):
 
 
 def prepare(uid, gid, container):
+    global _DIAGNOSTIC_STAGE
+    _DIAGNOSTIC_STAGE = "prepare-input"
     require(os.geteuid() == 0 and sys.version_info >= (3, 12) and container in CONTAINERS)
     account = pwd.getpwnam("vector-agent")
     require(integer(uid) and integer(gid) and account.pw_uid == uid and account.pw_gid == gid)
@@ -1059,10 +1093,13 @@ def prepare(uid, gid, container):
     value = {"v": 1, "container": container, "uid": uid, "gid": gid, "stage": stage,
              "scratch": container + "/tool-scratch", "directory": container + "/tool-namespaces",
              "socket": container + "/tool-namespaces/broker.sock", "nonce": os.urandom(16).hex()}
+    _DIAGNOSTIC_STAGE = "prepare-masks"
     masks = supported_mask_sources(uid, gid)
+    _DIAGNOSTIC_STAGE = "prepare-images"
     state = {"v": 1, "public": value, "phase": "recorded", "brokerPending": False, "runtimeImages": runtime_images(),
              "maskSources": masks}
     # The durable process-crash record precedes directory/child ownership. No power-loss claim is made.
+    _DIAGNOSTIC_STAGE = "prepare-record"
     write_json(PRIVATE, state, 0o600)
     os.mkdir(value["directory"], 0o755)
     os.chmod(value["directory"], 0o755)
@@ -1083,6 +1120,7 @@ def prepare(uid, gid, container):
         "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", value["scratch"],
         "--", "/usr/bin/python3", "-I", "-S", SELF, "keeper", value["scratch"],
     ]
+    _DIAGNOSTIC_STAGE = "prepare-keeper-start"
     try:
         process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=log_fd, stderr=log_fd,
                                    close_fds=True, pass_fds=(info_fd,), start_new_session=True,
@@ -1090,7 +1128,9 @@ def prepare(uid, gid, container):
     finally:
         os.close(info_fd)
         os.close(log_fd)
+    _DIAGNOSTIC_STAGE = "prepare-keeper-wait"
     ready = wait_json(value["scratch"] + "/keeper-ready.json", uid, process)
+    _DIAGNOSTIC_STAGE = "prepare-keeper-identity"
     details = read_json(info_path)
     require(type(details) is dict and integer(details.get("child-pid")))
     observed = identity(details["child-pid"], uid)
@@ -1109,16 +1149,20 @@ def prepare(uid, gid, container):
     descriptors = {kind: os.open(f"/proc/{pid}/ns/{kind}", os.O_RDONLY | os.O_CLOEXEC) for kind in KINDS}
     listener = None
     try:
+        _DIAGNOSTIC_STAGE = "prepare-namespaces"
         validate_descriptors(value, descriptors)
         enter = ["/usr/bin/nsenter", f"--mount=/proc/self/fd/{descriptors['mnt']}",
                  f"--pid=/proc/self/fd/{descriptors['pid']}", "--"]
+        _DIAGNOSTIC_STAGE = "prepare-mounts"
         fixed([*enter, "/usr/bin/mount", "--make-rprivate", "/"],
               pass_fds=(descriptors["mnt"], descriptors["pid"]), stdout=subprocess.DEVNULL)
         mounts = pathlib.Path(f"/proc/{pid}/mountinfo").read_text().splitlines()
         require(all(not any(field.startswith(("shared:", "master:", "propagate_from:"))
                             for field in line.split()[6:line.split().index("-")]) for line in mounts))
         require("ro" in next(line.split()[5] for line in mounts if line.split()[4] == "/").split(","))
+        _DIAGNOSTIC_STAGE = "prepare-mask-proof"
         validate_masks(pid, observed["start"], uid, gid, masks)
+        _DIAGNOSTIC_STAGE = "prepare-endpoint"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
         listener.bind(value["socket"])
         os.chown(value["socket"], 0, gid)
@@ -1130,6 +1174,7 @@ def prepare(uid, gid, container):
         save_state(state)
         log_fd = os.open(value["directory"] + "/broker.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         parent = os.getpid()
+        _DIAGNOSTIC_STAGE = "prepare-broker-start"
         try:
             service = subprocess.Popen([
                 "/usr/bin/python3", "-I", "-S", SELF, "broker", str(parent), str(listener.fileno()),
@@ -1145,11 +1190,14 @@ def prepare(uid, gid, container):
         state["brokerPending"] = False
         save_state(state)
         expected = {"v": 1, "pid": service.pid, "nonce": value["nonce"]}
+        _DIAGNOSTIC_STAGE = "prepare-broker-ready"
         require(wait_json(value["directory"] + "/broker-ready.json", 0, service) == expected)
+        _DIAGNOSTIC_STAGE = "prepare-broker-adopt"
         write_json(value["directory"] + "/broker-adopt.json", {"v": 1, "nonce": value["nonce"]}, 0o600)
         require(wait_json(value["directory"] + "/broker-adopted.json", 0, service) == expected)
         state["phase"] = "adopted"
         save_state(state)
+        _DIAGNOSTIC_STAGE = "prepare-publish"
         write_json(SPEC, validate_spec(value), 0o444)
     finally:
         if listener is not None:
@@ -1159,6 +1207,8 @@ def prepare(uid, gid, container):
 
 
 def cleanup():
+    global _DIAGNOSTIC_STAGE
+    _DIAGNOSTIC_STAGE = "cleanup-input"
     require(os.geteuid() == 0)
     state = read_state()
     value = state["public"]
@@ -1169,6 +1219,7 @@ def cleanup():
     if os.path.isdir(value["directory"]):
         secure_chain(value["directory"])
         fixed(["/usr/bin/chmod", "0700", "--", value["directory"]], stdout=subprocess.DEVNULL)
+    _DIAGNOSTIC_STAGE = "cleanup-quiesce"
     broker_fd = None
     failed = state["brokerPending"] or state["phase"] not in ("adopted", "quiesced", "uid-stopped", "broker-stopped")
     if not os.path.lexists(SPEC):
@@ -1189,6 +1240,7 @@ def cleanup():
             failed = True
     elif state["phase"] not in ("recorded", "keeper-ready"):
         failed = True
+    _DIAGNOSTIC_STAGE = "cleanup-uid-stop"
     deadline = time.monotonic() + 2
     while True:
         living = False
@@ -1213,6 +1265,7 @@ def cleanup():
         time.sleep(0.01)
     state["phase"] = "uid-stopped"
     save_state(state)
+    _DIAGNOSTIC_STAGE = "cleanup-broker-stop"
     if broker_fd is not None:
         try:
             current = identity(value["broker"]["pid"], 0)
@@ -1231,9 +1284,11 @@ def cleanup():
         require(expected and stat.S_ISSOCK(info.st_mode) and info.st_uid == 0 and
                 info.st_dev == expected["device"] and info.st_ino == expected["inode"])
         os.unlink(value["socket"])
+    _DIAGNOSTIC_STAGE = "cleanup-images"
     for name, digest in state["runtimeImages"].items():
         secure_chain(name)
         require(image_digest(name) == digest)
+    _DIAGNOSTIC_STAGE = "cleanup-proof"
     require(not failed, "Broker adoption/identity/admission stop was not proved; artifacts are refused")
     state["phase"] = "broker-stopped"
     save_state(state)
@@ -1241,6 +1296,7 @@ def cleanup():
     if os.path.lexists(SPEC):
         require(validate_spec(read_json(SPEC)) == validate_spec(value))
         os.unlink(SPEC)
+    _DIAGNOSTIC_STAGE = "cleanup-receipt"
     print(json.dumps({"v": 1, "event": "isolation-stopped", "uidStoppedBeforeBroker": True,
                       "brokerStopped": True, "nonce": value["nonce"]}, separators=(",", ":")), flush=True)
 
@@ -1285,7 +1341,10 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except BaseException:
+    except BaseException as error:
         # Do not print model argv, environment, metadata or credential-bearing parent diagnostics.
-        os.write(2, b"The fixed Linux isolation boundary refused this operation.\n")
+        try:
+            control_failure(error)
+        except BaseException:
+            pass
         os._exit(125)
