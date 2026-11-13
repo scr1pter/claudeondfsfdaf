@@ -1,0 +1,145 @@
+name: Genuine native Shell seam
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [build-native-shell]
+    paths:
+      - .github/workflows/native-shell.yml
+      - packages/engine/test/fixture/native-shell-*.ts
+      - packages/engine/test/fixture/native-shell-ci/**
+      - packages/core/src/directory-identity.ts
+      - packages/core/src/process-isolation/**
+      - packages/core/src/cross-spawn-spawner.ts
+      - packages/engine/src/cli/cmd/github.isolation.ts
+      - script/linux-isolation-asset.ts
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  shell:
+    name: Shell seam (${{ matrix.runtime }}, ${{ matrix.mode }}, ${{ matrix.family }})
+    if: github.ref == 'refs/heads/build-native-shell'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [node, bun]
+        mode: [own-key, codium]
+        family: [baseline, engine-death]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout reviewed CI source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      # These exact two setup actions are the declared runtime provenance boundary, before any payload/dependency code.
+      - name: Setup exact trusted Node image
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15.0"
+      - name: Setup exact trusted Bun image
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.3.14"
+      - name: Capture pinned-action runtime bytes in the immutable Root control tree
+        run: |
+          set -euo pipefail
+          test "$RUNNER_TEMP" = /home/runner/work/_temp
+          native_shell_node=$(node --input-type=module -e 'import fs from "node:fs"; process.stdout.write(fs.realpathSync(process.execPath))')
+          native_shell_bun=$(bun -e 'import fs from "node:fs"; process.stdout.write(fs.realpathSync(process.execPath))')
+          bun build --target=node --format=esm packages/engine/test/fixture/native-shell-ci/manage.ts --outfile "$RUNNER_TEMP/native-shell-bootstrap.mjs"
+          bun build --target=node --format=esm packages/engine/test/fixture/native-shell-ci/provision.ts --outfile "$RUNNER_TEMP/native-shell-provision.mjs"
+          sudo -n /usr/bin/env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_TEMP="$RUNNER_TEMP" \
+            "$native_shell_node" "$RUNNER_TEMP/native-shell-provision.mjs" "$native_shell_node" "$native_shell_bun" "$GITHUB_SHA"
+          echo /usr/libexec/vector-native-shell-control/runtime >> "$GITHUB_PATH"
+      - name: Install build dependencies before the metadata/profile gate
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap apparmor-utils
+          bun install --frozen-lockfile --ignore-scripts
+          bun run script/prepare-gitlab.ts
+          bun run --cwd packages/core fix-node-pty
+      - name: Check CI control policy
+        working-directory: packages/engine
+        run: bun test test/fixture/native-shell-ci/policy.test.ts
+      - name: Compile all actual fixtures, guarded controller, Reader and worker with one native plugin
+        id: build
+        run: bun run packages/engine/test/fixture/native-shell-ci/build.ts --isolation-ci
+      - name: Install complete immutable fixture and control inventories
+        id: install
+        run: |
+          sudo -n /usr/bin/env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_TEMP="$RUNNER_TEMP" \
+            /usr/libexec/vector-native-shell-control/runtime/node /usr/libexec/vector-native-shell-control/bootstrap.mjs \
+            install '${{ steps.build.outputs.receipt_sha256 }}' '${{ matrix.runtime }}' '${{ matrix.mode }}' '${{ matrix.family }}'
+      - name: Create a fresh real Git fixture without deleting the source checkout
+        run: /usr/libexec/vector-native-shell-control/runtime/node /usr/libexec/vector-native-shell-control/manage.mjs workspace
+      - name: Require actual same-host stock metadata/profile proof under both copied runtimes
+        id: preflight
+        run: |
+          set -euo pipefail
+          /usr/libexec/vector-native-shell/runtime/node /usr/libexec/vector-native-shell-control/preflight.mjs
+          if [ '${{ matrix.runtime }}' = bun ]; then
+            /usr/libexec/vector-native-shell/runtime/bun /usr/libexec/vector-native-shell-control/preflight.mjs
+          else
+            /usr/libexec/vector-native-shell-control/runtime/bun /usr/libexec/vector-native-shell-control/preflight.mjs
+          fi
+      # No apt/runtime/Python mutation after the actual positive gate. The real adapter owns its production profile.
+      - name: Actual native prepare without SUDO mode or diagnostic profile
+        id: prepare
+        env:
+          VECTOR_MODE: ${{ matrix.mode }}
+        run: |
+          GITHUB_WORKSPACE=/home/runner/work/vector-native-shell-checkout \
+            /usr/libexec/vector-native-shell-control/vector github sandbox prepare
+      - name: Seed declared synthetic post-prepare controls and exact manifest
+        run: |
+          sudo -n /usr/bin/env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_TEMP="$RUNNER_TEMP" \
+            /usr/libexec/vector-native-shell-control/runtime/node /usr/libexec/vector-native-shell-control/manage.mjs manifest
+      - name: Independently verify every installed byte before Host loading
+        run: /usr/libexec/vector-native-shell-control/runtime/node /usr/libexec/vector-native-shell-control/manage.mjs verify
+      - name: Actual ShellTool and command lifecycle witness before any UID sweep
+        id: host
+        run: |
+          env -i PATH=/usr/libexec/vector-native-shell/runtime:/usr/bin:/bin HOME=/home/runner \
+            GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_TEMP=/home/runner/work/_temp \
+            GITHUB_WORKSPACE=/home/runner/work/vector-native-shell-checkout GITHUB_EVENT_PATH="$GITHUB_EVENT_PATH" \
+            VECTOR_MODE='${{ matrix.mode }}' \
+            /usr/libexec/vector-native-shell/runtime/node /usr/libexec/vector-native-shell/host.mjs
+      - name: Always finish the exact owned native operation; missing state is refused
+        id: finish
+        if: always() && steps.prepare.outcome != 'skipped' && steps.install.outcome == 'success'
+        continue-on-error: true
+        working-directory: ${{ runner.temp }}
+        env:
+          VECTOR_MODE: ${{ matrix.mode }}
+        run: |
+          GITHUB_WORKSPACE=/home/runner/work/vector-native-shell-checkout \
+            /usr/libexec/vector-native-shell-control/vector github sandbox finish
+      - name: Preserve every earlier failure and cleanup uncertainty
+        if: always() && steps.install.outcome == 'success'
+        working-directory: ${{ runner.temp }}
+        run: |
+          /usr/libexec/vector-native-shell-control/runtime/node /usr/libexec/vector-native-shell-control/manage.mjs assert \
+            '${{ steps.preflight.outcome }}' '${{ steps.prepare.outcome }}' '${{ steps.host.outcome }}' '${{ steps.finish.outcome }}'
+      - name: Retain bounded public receipts
+        if: always() && steps.install.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-shell-${{ matrix.runtime }}-${{ matrix.mode }}-${{ matrix.family }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            /usr/libexec/vector-native-shell-control/receipt.json
+            /usr/libexec/vector-native-shell-control/provision.json
+            /usr/libexec/vector-native-shell/installed.json
+            /usr/libexec/vector-native-shell/manifest.json
+            /home/runner/work/_temp/native-shell-${{ matrix.runtime }}-${{ matrix.mode }}-${{ matrix.family }}.json
