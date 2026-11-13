@@ -427,6 +427,40 @@ test("actual strace statx flags preserve exact same-FD empty-path and capability
 })
 // Root runs only these contract cases locally. Actual execution is manual CI-only; this test switch grants no runtime authority.
 const ci = test.skipIf(process.env.VECTOR_DIRECTORY_IDENTITY_CI !== "1" || process.platform !== "linux")
+
+test("a cancelled, expired or invalid image-lease request refuses before runtime discovery", async () => {
+  const cancelled = new AbortController()
+  cancelled.abort()
+  expect(await DirectoryIdentityReader.pythonImage(performance.now() + 10_000, cancelled.signal)).toBeUndefined()
+  expect(await DirectoryIdentityReader.pythonImage(performance.now() - 1)).toBeUndefined()
+  expect(await DirectoryIdentityReader.pythonImage(NaN)).toBeUndefined()
+})
+
+ci(
+  "an image lease is scope-local, freshly checked for each launch and permanently retired on close",
+  async () => {
+    const cancelled = new AbortController()
+    const image = await DirectoryIdentityReader.pythonImage(performance.now() + 10_000, cancelled.signal)
+    expect(image).toBeDefined()
+    if (!image) throw new Error("Actual installed runtime did not qualify")
+    try {
+      expect(image.isOpen()).toBe(true)
+      expect(await image.validate(performance.now() + 10_000)).toBe(true)
+      expect(await image.validate(performance.now() - 1)).toBe(false)
+      const aborted = new AbortController()
+      aborted.abort()
+      expect(await image.validate(performance.now() + 10_000, aborted.signal)).toBe(false)
+      cancelled.abort()
+      expect(image.isOpen()).toBe(false)
+      expect(await image.validate(performance.now() + 10_000)).toBe(false)
+    } finally {
+      image.close()
+    }
+    expect(image.isOpen()).toBe(false)
+    expect(await image.validate(performance.now() + 10_000)).toBe(false)
+  },
+  30_000,
+)
 const WRAPPER = String.raw`import os, sys, resource
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 4096))
 secret = os.open(sys.argv[1], os.O_RDONLY)
@@ -780,6 +814,88 @@ async function run(
     )
   return { code, output }
 }
+
+for (const name of ["node", "bun"] as const)
+  test.skipIf(process.env.VECTOR_READONLY_GIT_INTEGRITY_CI !== "1" || process.platform !== "linux")(
+    `actual ${name} parent FD exhaustion refuses safely after native spawn failure and recovers its admission`,
+    async () => {
+      await using temporary = await witnessDirectory()
+      const entry = path.join(temporary.path, "exhaustion.ts")
+      await fs.writeFile(
+        entry,
+        `
+import fs from "node:fs"
+import path from "node:path"
+import assert from "node:assert/strict"
+import {execFileSync} from "node:child_process"
+import {ReadOnlyGit} from ${JSON.stringify(path.resolve(import.meta.dir, "../src/read-only-git.ts"))}
+const directory=process.argv[2]
+if(!directory||!process.getuid?.()) throw new Error("This control requires an actual nonroot process")
+fs.mkdirSync(directory)
+const env={PATH:"/usr/bin:/bin",HOME:directory,GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"}
+const git=(args)=>execFileSync("/usr/bin/git",["-C",directory,...args],{env,stdio:"ignore"})
+git(["init","-q"])
+fs.writeFileSync(path.join(directory,"probe.txt"),"owned fixture\\n")
+git(["add","probe.txt"])
+git(["-c","user.name=Fixture","-c","user.email=fixture@vector.test","-c","commit.gpgsign=false","commit","-q","-m","Fixture"])
+const repository=await ReadOnlyGit.open({directory,gitDirectory:path.join(directory,".git"),commonDirectory:path.join(directory,".git")})
+const held=[]
+let refused=false
+try {
+  try {for(;;)held.push(fs.openSync("/dev/null","r"))}
+  catch(error){assert.equal(error.code,"EMFILE")}
+  assert.ok(held.length>16)
+  const spare=held.pop()
+  if(spare===undefined)throw new Error("Missing actual spare descriptor")
+  fs.closeSync(spare)
+  try {await repository.read({kind:"object",action:"size",revision:"HEAD",file:"probe.txt"})}
+  catch(error){assert.ok(error instanceof ReadOnlyGit.Unavailable);refused=true}
+} finally {for(const fd of held)fs.closeSync(fd)}
+assert.equal(refused,true)
+const recovered=await repository.read({kind:"object",action:"size",revision:"HEAD",file:"probe.txt"})
+assert.equal(recovered.code,0)
+await repository.close()
+assert.equal(repository.isOpen(),false)
+process.stdout.write(JSON.stringify({refused:true,recovered:true,closed:true})+"\\n")
+`,
+      )
+      const built = await Bun.build({
+        entrypoints: [entry],
+        target: "node",
+        outdir: temporary.path,
+        naming: "exhaustion.mjs",
+      })
+      expect(built.success).toBe(true)
+      const runtime = Bun.which(name)
+      if (!runtime) throw new Error("Missing actual CI runtime")
+      const trace = path.join(temporary.path, "exhaustion.trace")
+      const result = await run(
+        [
+          "strace",
+          "--seccomp-bpf",
+          "-f",
+          "-s",
+          "96",
+          "-e",
+          "trace=pipe,pipe2,socketpair,execve",
+          "-o",
+          trace,
+          "/usr/bin/prlimit",
+          "--nofile=128:128",
+          await fs.realpath(runtime),
+          path.join(temporary.path, "exhaustion.mjs"),
+          path.join(temporary.path, "repository"),
+        ],
+        { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+        { directory: temporary.path },
+      )
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.output)).toEqual({ refused: true, recovered: true, closed: true })
+      expect(await fs.readFile(trace, "utf8")).toMatch(/(?:pipe2?|socketpair)(?:\(| resumed>)[^\n]*EMFILE/)
+    },
+    30_000,
+  )
+
 for (const name of ["node", "bun"] as const)
   for (const scenario of [
     "positive",
@@ -1005,6 +1121,79 @@ const rootCI = test.skipIf(
     process.env.VECTOR_DIRECTORY_IDENTITY_ROOT_CI !== "1" ||
     process.platform !== "linux",
 )
+
+const CACHE_LEASE_NAMESPACE = String.raw`import os, sys, ctypes
+libc=ctypes.CDLL(None,use_errno=True)
+libc.unshare.argtypes=(ctypes.c_int,)
+libc.mount.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p)
+if os.geteuid()!=0 or libc.unshare(0x20000)!=0 or libc.mount(None,b"/",None,0x4000|0x40000,None)!=0:
+    os._exit(125)
+os.execve(sys.argv[1],sys.argv[1:],{"PATH":"/usr/bin:/bin","LC_ALL":"C"})
+`
+for (const name of ["node", "bun"] as const)
+  test.skipIf(
+    process.env.VECTOR_READONLY_GIT_INTEGRITY_CI !== "1" ||
+      process.env.VECTOR_DIRECTORY_IDENTITY_ROOT_CI !== "1" ||
+      process.platform !== "linux",
+  )(
+    `an actual ${name} cache rebind in a private mount namespace retires the parsed image graph before another launch`,
+    async () => {
+      await using temporary = await witnessDirectory()
+      const entry = path.join(temporary.path, "cache-lease.ts")
+      await fs.writeFile(
+        entry,
+        `
+import fs from "node:fs/promises"
+import assert from "node:assert/strict"
+import {execFileSync} from "node:child_process"
+import {DirectoryIdentityReader} from ${JSON.stringify(path.resolve(import.meta.dir, "../src/directory-identity.ts"))}
+const image=await DirectoryIdentityReader.pythonImage(performance.now()+10000)
+assert.ok(image)
+try {
+  assert.equal(await image.validate(performance.now()+10000),true)
+  const before=await fs.stat("/etc/ld.so.cache",{bigint:true})
+  const bytes=await fs.readFile("/etc/ld.so.cache")
+  await fs.writeFile(process.argv[2],bytes,{mode:0o644,flag:"wx"})
+  execFileSync("/usr/bin/python3",["-I","-S","-c",${JSON.stringify(String.raw`import os,sys,ctypes
+libc=ctypes.CDLL(None,use_errno=True)
+libc.mount.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p)
+if libc.mount(os.fsencode(sys.argv[1]),b"/etc/ld.so.cache",None,0x1000,None)!=0:
+    os._exit(125)
+`)},process.argv[2]],{env:{PATH:"/usr/bin:/bin",LC_ALL:"C"},stdio:"ignore"})
+  const after=await fs.stat("/etc/ld.so.cache",{bigint:true})
+  assert.ok(before.dev!==after.dev||before.ino!==after.ino)
+  assert.ok((await fs.readFile("/etc/ld.so.cache")).equals(bytes))
+  assert.equal(await image.validate(performance.now()+10000),false)
+  process.stdout.write(JSON.stringify({initial:true,changed:true,refused:true})+"\\n")
+}finally{image.close()}
+`,
+      )
+      expect(
+        (await Bun.build({ entrypoints: [entry], target: "node", outdir: temporary.path, naming: "cache-lease.mjs" }))
+          .success,
+      ).toBe(true)
+      const runtime = Bun.which(name)
+      if (!runtime) throw new Error("Missing actual CI runtime")
+      const result = await run(
+        [
+          "/usr/bin/python3",
+          "-I",
+          "-S",
+          "-c",
+          CACHE_LEASE_NAMESPACE,
+          await fs.realpath(runtime),
+          path.join(temporary.path, "cache-lease.mjs"),
+          path.join(temporary.path, "cache-replacement"),
+        ],
+        { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+        { directory: temporary.path, root: true },
+      )
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.output)).toEqual({ initial: true, changed: true, refused: true })
+    },
+    30_000,
+  )
+
 for (const name of ["node", "bun"] as const)
   for (const poison of [
     "binary",

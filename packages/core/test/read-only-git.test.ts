@@ -2,18 +2,38 @@ import { afterEach, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
+import { deflateSync, inflateSync } from "node:zlib"
+import { DirectoryIdentityReader } from "../src/directory-identity"
 import { ReadOnlyGit } from "../src/read-only-git"
 
-// Every executable configured below belongs to this disposable fixture. It can only increment its counter and echo
-// Git's input; no test touches a platform, credentials, an owner's checkout or the running application.
+// Repository-configured executables belong to the disposable fixture and only count/echo Git input.
+// Actual Git/runtime/resource controls are CI-only; no test touches credentials or an owner's checkout.
 const temporary: string[] = []
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((file) => fs.rm(file, { recursive: true, force: true })))
 })
 const local = process.platform === "linux" ? test : test.skip
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
+
+test("object manifest bounds each expanded object, total bytes and actual object count", () => {
+  const line = (id: number, size = 1) => `${id.toString(16).padStart(40, "0")} blob ${size}\n`
+  expect(ReadOnlyGit.objectManifest(Buffer.from(line(1) + line(2, 2)))).toEqual({ objects: 2, bytes: 3 })
+  for (const value of [
+    "",
+    line(1).trimEnd(),
+    line(1) + line(1),
+    line(1, ReadOnlyGit.INTEGRITY.objectBytes + 1),
+    line(1).replace("blob", "unknown"),
+    line(1).replace("blob 1", "blob 01"),
+    line(1).replace("blob 1", "blob -1"),
+    line(1).replace("blob 1", "blob 999999999999999"),
+    Array.from({ length: 17 }, (_, id) => line(id, ReadOnlyGit.INTEGRITY.objectBytes)).join(""),
+    Array.from({ length: ReadOnlyGit.INTEGRITY.objects + 1 }, (_, id) => line(id)).join(""),
+  ])
+    expect(() => ReadOnlyGit.objectManifest(Buffer.from(value))).toThrow(ReadOnlyGit.Unavailable)
+})
 
 async function fixture(attributes = "probe.txt filter=fixture\n") {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "vector-readonly-fixture-")))
@@ -66,6 +86,8 @@ async function fixture(attributes = "probe.txt filter=fixture\n") {
     counter,
     command,
     git,
+    raw: (args: string[]) =>
+      promisify(execFile)("git", args, { cwd: directory, env, timeout: 10_000, encoding: "buffer" }),
     input,
     calls: async () => (await fs.readFile(counter, "utf8").catch(() => "")).split("\n").filter(Boolean).length,
     changed: async (byte: string, seconds: number) => {
@@ -98,6 +120,344 @@ local("private lifetime becomes closed synchronously and cannot be reset by its 
     await (closing ?? repository.close())
   }
 })
+
+local.each(["commit", "tree", "blob"])("forged named loose %s bytes never reach a private consumer", async (kind) => {
+  const f = await fixture()
+  const revision = kind === "commit" ? "HEAD" : kind === "tree" ? "HEAD^{tree}" : "HEAD:probe.txt"
+  const oid = (await f.git(["rev-parse", revision])).stdout.trim()
+  const object = path.join(f.gitDirectory, "objects", oid.slice(0, 2), oid.slice(2))
+  const original = inflateSync(await fs.readFile(object))
+  const boundary = original.indexOf(0)
+  expect(boundary).toBeGreaterThan(0)
+  const body = Buffer.from(original.subarray(boundary + 1))
+  if (kind === "tree") {
+    const name = body.indexOf(Buffer.from("probe.txt"))
+    expect(name).toBeGreaterThanOrEqual(0)
+    body[name] = "q".charCodeAt(0)
+  } else body[body.length - 2] = body[body.length - 2] === 120 ? 121 : 120
+  const forged = Buffer.concat([Buffer.from(`${kind} ${body.length}\0`), body])
+  expect(forged.equals(original)).toBe(false)
+  await fs.writeFile(object, deflateSync(forged))
+  // Ordinary Git type/size reads accept the path's claimed identity. Our gate must authenticate the whole chain.
+  expect((await f.git(["cat-file", "-t", oid])).stdout.trim()).toBe(kind)
+  expect((await f.git(["cat-file", "-s", oid])).stdout.trim()).toBe(String(body.length))
+  expect((await f.raw(["cat-file", kind, oid])).stdout).toEqual(body)
+  await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+  expect(await f.calls()).toBe(0)
+})
+
+local("packed corruption refuses while a clean private packed graph preserves exact content", async () => {
+  const f = await fixture()
+  await f.git(["gc", "--prune=now", "--quiet"])
+  const repository = await ReadOnlyGit.open(f.input)
+  try {
+    expect(
+      (await repository.read({ kind: "object", action: "blob", revision: "HEAD", file: "probe.txt" })).bytes,
+    ).toEqual(Buffer.from("saved contents\n"))
+  } finally {
+    await repository.close()
+  }
+  const packs = (await fs.readdir(path.join(f.gitDirectory, "objects/pack"))).filter((name) => name.endsWith(".pack"))
+  expect(packs.length).toBe(1)
+  const pack = path.join(f.gitDirectory, "objects/pack", packs[0]!)
+  const bytes = await fs.readFile(pack)
+  bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1
+  await fs.writeFile(pack, bytes)
+  await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+})
+
+local("declared loose-object allocation amplification refuses within the limited verifier", async () => {
+  const f = await fixture()
+  const positive = await ReadOnlyGit.open(f.input)
+  await positive.close()
+  const oid = "f".repeat(40)
+  const directory = path.join(f.gitDirectory, "objects", oid.slice(0, 2))
+  await fs.mkdir(directory, { recursive: true })
+  await fs.writeFile(path.join(directory, oid.slice(2)), deflateSync(Buffer.from("tree 1099511627776\0x")))
+  await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+  // A failed verifier releases its bounded engine admission and leaves the owner checkout intact.
+  await fs.rm(path.join(directory, oid.slice(2)))
+  const repository = await ReadOnlyGit.open(f.input)
+  await repository.close()
+  expect((await f.git(["status", "--porcelain"])).stdout).toBe("")
+})
+
+local("a genuine local shallow boundary preserves readable head content without fetching parents", async () => {
+  const f = await fixture()
+  await f.git([
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--allow-empty",
+    "--quiet",
+    "-m",
+    "Second fixture head",
+  ])
+  const directory = path.join(f.base, "shallow")
+  await f.git(["clone", "--quiet", "--depth=1", `file://${f.directory}`, directory], f.base)
+  const repository = await ReadOnlyGit.open({
+    directory,
+    gitDirectory: path.join(directory, ".git"),
+    commonDirectory: path.join(directory, ".git"),
+  })
+  try {
+    expect(repository.shallow).toBe(true)
+    expect(
+      (await repository.read({ kind: "object", action: "blob", revision: "HEAD", file: "probe.txt" })).bytes,
+    ).toEqual(Buffer.from("saved contents\n"))
+  } finally {
+    await repository.close()
+  }
+})
+
+local("a missing ordinary parent is never treated as an inferred shallow boundary", async () => {
+  const f = await fixture()
+  const parent = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  await f.git([
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--allow-empty",
+    "--quiet",
+    "-m",
+    "Second fixture head",
+  ])
+  await fs.rm(path.join(f.gitDirectory, "objects", parent.slice(0, 2), parent.slice(2)))
+  await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+})
+
+local("a partial-clone configuration cannot permit promised missing objects or lazy fetch", async () => {
+  const f = await fixture()
+  await f.git(["config", "core.repositoryformatversion", "1"])
+  await f.git(["config", "extensions.partialClone", "fixture-no-network"])
+  await expect(ReadOnlyGit.open(f.input)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+  expect(await f.calls()).toBe(0)
+})
+
+const integrityCI = test.skipIf(process.env.VECTOR_READONLY_GIT_INTEGRITY_CI !== "1" || process.platform !== "linux")
+
+function signal() {
+  let resolve = () => {}
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+async function bounded<A>(promise: Promise<A>, message: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), 5_000)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+integrityCI.each(["close", "cancel"])(
+  "%s joins the actual held copy before disposing private storage",
+  async (kind) => {
+    const f = await fixture()
+    const controller = new AbortController()
+    const repository = await ReadOnlyGit.open(f.input, { signal: controller.signal })
+    const target = path.join(f.directory, "new", "untracked.txt")
+    await fs.mkdir(path.dirname(target))
+    await fs.writeFile(target, "actual bounded copy\n")
+    const identity = await fs.stat(target, { bigint: true })
+    const prefix = path.join(await fs.realpath(os.tmpdir()), "vector-readonly-git-")
+    const entered = signal(),
+      proceed = signal(),
+      joined = signal()
+    const events: string[] = []
+    const originalOpen = fs.open,
+      originalRm = fs.rm
+    let temporary: string | undefined
+    let closing: Promise<void> | undefined
+    // Only actual handles for this unique disposable source are wrapped. All reads/bytes/authority are genuine.
+    fs.open = async (...args) => {
+      const handle = await originalOpen(...args)
+      try {
+        const info = await handle.stat({ bigint: true })
+        if (typeof args[0] === "string" && args[0].startsWith(prefix))
+          temporary = prefix + args[0].slice(prefix.length).split(path.sep)[0]
+        if (info.dev === identity.dev && info.ino === identity.ino) {
+          const read = handle.read.bind(handle),
+            close = handle.close.bind(handle)
+          Object.defineProperty(handle, "read", {
+            value: async (buffer: Buffer, offset: number, length: number, position: number) => {
+              const result = await read(buffer, offset, length, position)
+              events.push("actual-read")
+              entered.resolve()
+              await proceed.promise
+              events.push("released-read")
+              return result
+            },
+          })
+          Object.defineProperty(handle, "close", {
+            value: async () => {
+              await close()
+              events.push("source-handle-closed")
+            },
+          })
+        }
+        return handle
+      } catch (error) {
+        await handle.close()
+        throw error
+      }
+    }
+    fs.rm = async (...args) => {
+      if (args[0] === temporary) events.push("storage-disposal")
+      return originalRm(...args)
+    }
+    try {
+      const pending = repository.read({ kind: "added-diff", file: "new/untracked.txt" })
+      const outcome = pending.then(
+        () => {
+          events.push("read-settled")
+          return undefined
+        },
+        (error: unknown) => {
+          events.push("read-settled")
+          return error
+        },
+      )
+      await bounded(entered.promise, "Actual copy did not reach its held pread")
+      const nativeThen = pending.then
+      // Observe the real Promise.allSettled ownership edge, not a timed !isDone/scheduler guess.
+      Object.defineProperty(pending, "then", {
+        configurable: true,
+        value: function <TResult1 = Awaited<typeof pending>, TResult2 = never>(
+          fulfilled?: ((value: Awaited<typeof pending>) => TResult1 | PromiseLike<TResult1>) | null,
+          rejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+        ): Promise<TResult1 | TResult2> {
+          Object.defineProperty(pending, "then", { configurable: true, value: nativeThen })
+          joined.resolve()
+          return pending.then<TResult1, TResult2>(fulfilled, rejected)
+        },
+      })
+      if (kind === "cancel") {
+        controller.abort()
+        expect(repository.isOpen()).toBe(false)
+      }
+      closing = repository.close().then(() => {
+        events.push("close-settled")
+      })
+      expect(repository.isOpen()).toBe(false)
+      await bounded(joined.promise, "Close did not join the actual whole-copy promise")
+      if (!temporary) throw new Error("Actual copy never acquired private storage")
+      expect((await fs.stat(temporary)).isDirectory()).toBe(true)
+      proceed.resolve()
+      expect(await bounded(outcome, "Cancelled actual copy did not settle")).toBeInstanceOf(ReadOnlyGit.Unavailable)
+      await bounded(closing, "Close did not finish after the actual copy finalized")
+      expect(events.indexOf("source-handle-closed")).toBeLessThan(events.indexOf("read-settled"))
+      expect(events.indexOf("read-settled")).toBeLessThan(events.indexOf("storage-disposal"))
+      expect(events.indexOf("storage-disposal")).toBeLessThan(events.indexOf("close-settled"))
+      await expect(fs.stat(temporary)).rejects.toMatchObject({ code: "ENOENT" })
+      await expect(
+        repository.read({ kind: "object", action: "size", revision: "HEAD", file: "probe.txt" }),
+      ).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+    } finally {
+      proceed.resolve()
+      fs.open = originalOpen
+      fs.rm = originalRm
+      await (closing ?? repository.close())
+      if (temporary) await originalRm(temporary, { recursive: true, force: true })
+    }
+  },
+  30_000,
+)
+
+integrityCI(
+  "the fixed launcher proves no-fork limits, closes high FDs and refuses root identity",
+  async () => {
+    const image = await DirectoryIdentityReader.pythonImage(performance.now() + 10_000)
+    expect(image).toBeDefined()
+    if (!image) throw new Error("Missing actual fixed runtime image")
+    try {
+      expect(await image.validate(performance.now() + 10_000)).toBe(true)
+      const high = await fs.open(os.devNull, "r")
+      const stdio: ("ignore" | "pipe" | number)[] = ["ignore", "pipe", "ignore"]
+      while (stdio.length < 1024) stdio.push("ignore")
+      stdio.push(high.fd)
+      const run = (args: string[]) =>
+        new Promise<{ code: number | null; bytes: Buffer }>((resolve, reject) => {
+          const child = spawn(DirectoryIdentityReader.PYTHON, args, {
+            env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+            stdio,
+            shell: false,
+          })
+          if (!child.stdout) throw new Error("Missing actual launcher stdout")
+          const output: Buffer[] = []
+          child.stdout.on("data", (chunk: Buffer) => output.push(chunk))
+          const timer = setTimeout(() => child.kill("SIGKILL"), 10_000)
+          let failed = false
+          child.once("error", () => {
+            failed = true
+          })
+          child.once("close", (code) => {
+            clearTimeout(timer)
+            if (failed) reject(new Error("Actual launcher child could not start"))
+            else resolve({ code, bytes: Buffer.concat(output) })
+          })
+        })
+      try {
+        // First prove the same high descriptor mapping really reaches an ordinary trusted child.
+        const positive = await run(["-I", "-S", "-c", "import os; os.fstat(1024); os.write(1,b'inherited\\n')"])
+        expect(positive).toEqual({ code: 0, bytes: Buffer.from("inherited\n") })
+        const result = await run([
+          "-I",
+          "-S",
+          "-c",
+          ReadOnlyGit.PROCESS_SOURCE,
+          DirectoryIdentityReader.PYTHON,
+          "-I",
+          "-S",
+          "-c",
+          String.raw`import os, ctypes
+libc=ctypes.CDLL(None, use_errno=True)
+class Limit(ctypes.Structure):
+    _fields_=[("soft",ctypes.c_ulong),("hard",ctypes.c_ulong)]
+for key,value in ((9,536870912),(0,8),(4,0),(7,64),(6,0)):
+    r=Limit()
+    assert libc.getrlimit(key,ctypes.byref(r))==0 and r.soft==value and r.hard==value
+assert libc.prctl(39,0,0,0,0)==1
+try:
+    bytearray(1073741824)
+    os._exit(4)
+except MemoryError:
+    pass
+try:
+    os.fstat(1024)
+    os._exit(2)
+except OSError:
+    pass
+try:
+    os.fork()
+    os._exit(3)
+except OSError as e:
+    assert e.errno==11
+os.write(1,b"bounded\n")
+`,
+        ])
+        if (process.getuid?.() === 0) expect(result).toEqual({ code: 125, bytes: Buffer.alloc(0) })
+        else expect(result).toEqual({ code: 0, bytes: Buffer.from("bounded\n") })
+      } finally {
+        await high.close()
+      }
+    } finally {
+      image.close()
+    }
+  },
+  30_000,
+)
 
 local.each(["clean", "process"])(
   "private status never executes an active %s filter or read-side programs",

@@ -16,6 +16,127 @@ const LIMIT = {
   objects: 1024 * 1024 * 1024,
   files: 50_000,
 }
+export const INTEGRITY = Object.freeze({
+  addressSpace: 512 * 1024 * 1024,
+  cpu: 8,
+  descriptors: 64,
+  objects: 50_000,
+  objectBytes: 64 * 1024 * 1024,
+  totalBytes: 1024 * 1024 * 1024,
+  output: 4 * 1024 * 1024,
+  milliseconds: 10_000,
+  opening: 30_000,
+  waiting: 8,
+})
+// The image is acquired from DirectoryIdentityReader's actual fixed distro/runtime proof. This literal never
+// forks, imports subprocess/resource, selects tools from PATH, or interprets stdin. All limits precede Git exec.
+export const PROCESS_SOURCE = String.raw`import os, sys
+try:
+    if sys.platform != "linux" or sys.version_info[:2] != (3, 12) or sys.byteorder != "little" or not sys.flags.isolated or not sys.flags.no_site or sys.prefix != "/usr" or sys.exec_prefix != "/usr":
+        os._exit(125)
+    if set(sys.path) - {"/usr/lib/python312.zip", "/usr/lib/python3.12", "/usr/lib/python3.12/lib-dynload"}:
+        os._exit(125)
+    if len(sys.argv) < 3 or not os.path.isabs(sys.argv[1]) or len(sys.argv) > 100016:
+        os._exit(125)
+    if len(set(os.getresuid())) != 1 or os.getuid() == 0 or len(set(os.getresgid())) != 1:
+        os._exit(125)
+    if "_struct" not in sys.builtin_module_names:
+        os._exit(125)
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    for name, module in tuple(sys.modules.items()):
+        origin = getattr(module, "__file__", None)
+        if origin and not os.path.realpath(origin).startswith("/usr/lib/python3.12/"):
+            os._exit(125)
+    libc.close_range.argtypes = (ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
+    libc.close_range.restype = ctypes.c_int
+    if libc.close_range(3, 0xffffffff, 0) != 0:
+        os._exit(125)
+    class Header(ctypes.Structure):
+        _fields_ = [("version", ctypes.c_uint32), ("pid", ctypes.c_int)]
+    class Caps(ctypes.Structure):
+        _fields_ = [("effective", ctypes.c_uint32), ("permitted", ctypes.c_uint32), ("inheritable", ctypes.c_uint32)]
+    header = Header(0x20080522, 0)
+    caps = (Caps * 2)()
+    libc.capset.argtypes = (ctypes.POINTER(Header), ctypes.POINTER(Caps))
+    libc.capget.argtypes = (ctypes.POINTER(Header), ctypes.POINTER(Caps))
+    libc.capset.restype = libc.capget.restype = ctypes.c_int
+    libc.prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong)
+    libc.prctl.restype = ctypes.c_int
+    if libc.capset(ctypes.byref(header), caps) != 0 or libc.capget(ctypes.byref(header), caps) != 0 or any(c.effective or c.permitted or c.inheritable for c in caps):
+        os._exit(125)
+    if libc.prctl(47, 4, 0, 0, 0) != 0 or libc.prctl(38, 1, 0, 0, 0) != 0 or libc.prctl(39, 0, 0, 0, 0) != 1:
+        os._exit(125)
+    class Limit(ctypes.Structure):
+        _fields_ = [("soft", ctypes.c_ulong), ("hard", ctypes.c_ulong)]
+    if ctypes.sizeof(ctypes.c_ulong) != 8:
+        os._exit(125)
+    libc.setrlimit.argtypes = (ctypes.c_int, ctypes.POINTER(Limit))
+    libc.getrlimit.argtypes = (ctypes.c_int, ctypes.POINTER(Limit))
+    libc.setrlimit.restype = libc.getrlimit.restype = ctypes.c_int
+    for resource, value in ((9, 536870912), (0, 8), (4, 0), (7, 64), (6, 0)):
+        expected = Limit(value, value)
+        actual = Limit()
+        if libc.setrlimit(resource, ctypes.byref(expected)) != 0 or libc.getrlimit(resource, ctypes.byref(actual)) != 0 or actual.soft != value or actual.hard != value:
+            os._exit(125)
+    os.execve(sys.argv[1], sys.argv[1:], dict(os.environ))
+except BaseException:
+    os._exit(125)
+`
+
+/** Object headers bound availability, not integrity; only a successful later full fsck authenticates their content. */
+export function objectManifest(bytes: Buffer) {
+  requireValue(bytes.length > 0 && bytes.length <= INTEGRITY.output, "object manifest exceeds its bound")
+  const text = bytes.toString("utf8")
+  requireValue(Buffer.from(text).equals(bytes) && text.endsWith("\n"), "object manifest is malformed")
+  const seen = new Set<string>()
+  let total = 0
+  for (const line of text.slice(0, -1).split("\n")) {
+    const match = /^([0-9a-f]{40}) (blob|tree|commit|tag) (0|[1-9][0-9]{0,12})$/.exec(line)
+    requireValue(match && !seen.has(match[1]!), "object manifest is malformed")
+    seen.add(match[1]!)
+    const size = Number(match[3])
+    requireValue(
+      seen.size <= INTEGRITY.objects && size <= INTEGRITY.objectBytes && (total += size) <= INTEGRITY.totalBytes,
+      "expanded object snapshot exceeds its bound",
+    )
+  }
+  return { objects: seen.size, bytes: total }
+}
+
+let executing = false
+const waiting = new Set<() => void>()
+async function admit(expires: number, signal: AbortSignal) {
+  requireValue(!signal.aborted && performance.now() < expires, "Git inspection was cancelled or expired")
+  if (executing) {
+    requireValue(waiting.size < INTEGRITY.waiting, "Git inspection is busy")
+    await new Promise<void>((resolve, reject) => {
+      const clean = () => {
+        clearTimeout(timer)
+        signal.removeEventListener("abort", cancel)
+        waiting.delete(wake)
+      }
+      const wake = () => {
+        clean()
+        resolve()
+      }
+      const cancel = () => {
+        clean()
+        reject(new Unavailable("Git inspection was cancelled or expired"))
+      }
+      const timer = setTimeout(cancel, Math.max(0, expires - performance.now()))
+      waiting.add(wake)
+      signal.addEventListener("abort", cancel, { once: true })
+      if (signal.aborted) cancel()
+    })
+  }
+  executing = true
+  return () => {
+    const next = waiting.values().next().value
+    if (next) next()
+    else executing = false
+  }
+}
 const CONFIG =
   "^(core\\.(repositoryformatversion|autocrlf|eol|filemode|symlinks|ignorecase|precomposeunicode|sparsecheckout|sparsecheckoutcone)|extensions\\..*|include\\.path|includeif\\..*\\.path)$"
 const BOOL = new Map([
@@ -50,92 +171,158 @@ function inside(root: string, file: string) {
   return relative === "" || (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative))
 }
 
-async function directory(file: string) {
-  const real = await fs.realpath(file)
-  requireValue((await fs.lstat(real)).isDirectory(), "invalid metadata directory")
+interface Resource {
+  close: () => Promise<void>
+}
+interface Operation {
+  readonly expires: number
+  readonly signal: AbortSignal
+  readonly check: () => void
+  readonly resources: Set<Resource>
+  readonly unsafe: () => void
+}
+type Command = (
+  args: string[],
+  input?: Buffer,
+  maximum?: number,
+  directory?: string,
+) => Promise<{ code: number; bytes: Buffer }>
+const retained = new Set<{ temporary?: string; resources: Set<Resource> }>()
+async function step<A>(context: Operation | undefined, action: () => Promise<A>) {
+  context?.check()
+  const value = await action()
+  context?.check()
+  return value
+}
+async function releaseResource(context: Operation | undefined, resource: Resource) {
+  try {
+    await resource.close()
+  } catch (error) {
+    context?.unsafe()
+    throw error
+  }
+  context?.resources.delete(resource)
+}
+async function acquire<A extends Resource>(context: Operation | undefined, action: () => Promise<A>) {
+  context?.check()
+  const resource = await action()
+  context?.resources.add(resource)
+  try {
+    context?.check()
+    return resource
+  } catch (error) {
+    await releaseResource(context, resource)
+    throw error
+  }
+}
+
+async function directory(file: string, context?: Operation) {
+  const real = await step(context, () => fs.realpath(file))
+  requireValue((await step(context, () => fs.lstat(real))).isDirectory(), "invalid metadata directory")
   return real
 }
 
 // Linux directory descriptors pin each ancestor. No repository path component is followed as a symlink.
-async function openWithin(root: FileHandle, name: string, flags: number, trusted = false) {
+async function openWithin(root: FileHandle, name: string, flags: number, trusted = false, context?: Operation) {
+  context?.check()
   const parts = name.split("/")
   requireValue(
     parts.every((part) => part && part !== "." && part !== ".."),
     "invalid metadata path",
   )
   const parents: FileHandle[] = []
+  let selected: FileHandle | undefined
   let parent = root
   try {
-    if (trusted) requireValue(await trustedOwner(parent), "Git toolchain ancestry is writable")
-    for (const component of parts.slice(0, -1)) {
-      parent = await fs.open(
-        `/proc/self/fd/${parent.fd}/${component}`,
-        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    try {
+      if (trusted) requireValue(await trustedOwner(parent, context), "Git toolchain ancestry is writable")
+      for (const component of parts.slice(0, -1)) {
+        parent = await acquire(context, () =>
+          fs.open(
+            `/proc/self/fd/${parent.fd}/${component}`,
+            constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+          ),
+        )
+        parents.push(parent)
+        if (trusted) requireValue(await trustedOwner(parent, context), "Git toolchain ancestry is writable")
+      }
+      selected = await acquire(context, () =>
+        fs.open(`/proc/self/fd/${parent.fd}/${parts.at(-1)}`, flags | constants.O_NOFOLLOW | constants.O_NONBLOCK),
       )
-      parents.push(parent)
-      if (trusted) requireValue(await trustedOwner(parent), "Git toolchain ancestry is writable")
+      return selected
+    } finally {
+      await Promise.all(parents.map((handle) => releaseResource(context, handle)))
     }
-    return await fs.open(
-      `/proc/self/fd/${parent.fd}/${parts.at(-1)}`,
-      flags | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    )
-  } finally {
-    await Promise.all(parents.map((handle) => handle.close()))
+  } catch (error) {
+    if (selected) await releaseResource(context, selected)
+    throw error
   }
 }
 
-async function trustedOwner(handle: FileHandle) {
-  const info = await handle.stat()
+async function trustedOwner(handle: FileHandle, context?: Operation) {
+  const info = await step(context, () => handle.stat())
   return info.uid === 0 && (info.mode & 0o6022) === 0
 }
 
-async function trustedProgram(file: string) {
-  const anchor = await fs.open("/", constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+async function trustedProgram(file: string, context?: Operation) {
+  const anchor = await acquire(context, () =>
+    fs.open("/", constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW),
+  )
   try {
-    const opened = await openWithin(anchor, file.slice(1), constants.O_RDONLY, true)
+    const opened = await openWithin(anchor, file.slice(1), constants.O_RDONLY, true, context)
     try {
-      return (await opened.stat()).isFile() && (await trustedOwner(opened))
+      return (await step(context, () => opened.stat())).isFile() && (await trustedOwner(opened, context))
     } finally {
-      await opened.close()
+      await releaseResource(context, opened)
     }
   } finally {
-    await anchor.close()
+    await releaseResource(context, anchor)
   }
 }
 
-async function pin(file: string) {
-  const anchor = await fs.open("/", constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+async function pin(file: string, context?: Operation) {
+  const anchor = await acquire(context, () =>
+    fs.open("/", constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW),
+  )
   try {
-    return await openWithin(anchor, file.slice(1), constants.O_RDONLY | constants.O_DIRECTORY)
+    return await openWithin(anchor, file.slice(1), constants.O_RDONLY | constants.O_DIRECTORY, false, context)
   } finally {
-    await anchor.close()
+    await releaseResource(context, anchor)
   }
 }
 
-async function read(root: FileHandle, file: string, limit: number, optional = false): Promise<Buffer | undefined> {
-  const opened = await openWithin(root, file, constants.O_RDONLY).catch((error: NodeJS.ErrnoException) => {
-    if (optional && error.code === "ENOENT") return
-    throw error
-  })
+async function read(
+  root: FileHandle,
+  file: string,
+  limit: number,
+  optional = false,
+  context?: Operation,
+): Promise<Buffer | undefined> {
+  const opened = await openWithin(root, file, constants.O_RDONLY, false, context).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (optional && error.code === "ENOENT") return
+      throw error
+    },
+  )
   if (!opened) return
   try {
-    return await readOpened(opened, limit)
+    return await readOpened(opened, limit, context)
   } finally {
-    await opened.close()
+    await releaseResource(context, opened)
   }
 }
 
-async function readOpened(opened: FileHandle, limit: number) {
-  const before = await opened.stat({ bigint: true })
+async function readOpened(opened: FileHandle, limit: number, context?: Operation) {
+  const before = await step(context, () => opened.stat({ bigint: true }))
   requireValue(before.isFile() && before.size <= BigInt(limit), "nonregular or oversized metadata")
   const result = Buffer.alloc(Number(before.size) + 1)
   let size = 0
   while (size < result.byteLength) {
-    const part = await opened.read(result, size, result.byteLength - size, size)
+    const part = await step(context, () => opened.read(result, size, result.byteLength - size, size))
     if (!part.bytesRead) break
     size += part.bytesRead
   }
-  const after = await opened.stat({ bigint: true })
+  const after = await step(context, () => opened.stat({ bigint: true }))
   requireValue(
     size === Number(before.size) &&
       before.size === after.size &&
@@ -148,19 +335,19 @@ async function readOpened(opened: FileHandle, limit: number) {
   return result.subarray(0, size)
 }
 
-async function executable(excluded: string[]) {
+async function executable(excluded: string[], context?: Operation) {
   const names = process.platform === "win32" ? ["git.com", "git.exe"] : ["git"]
   for (const entry of (process.env.PATH ?? process.env.Path ?? "").split(path.delimiter)) {
     const root = entry.trim().replace(/^"(.*)"$/, "$1")
     if (!path.isAbsolute(root)) continue
     for (const name of names) {
-      const candidate = await fs.realpath(path.join(root, name)).catch(() => undefined)
+      const candidate = await step(context, () => fs.realpath(path.join(root, name))).catch(() => undefined)
       if (!candidate || excluded.some((directory) => inside(directory, candidate))) continue
-      const info = await fs.stat(candidate)
+      const info = await step(context, () => fs.stat(candidate))
       if (!info.isFile()) continue
-      if (!(await trustedProgram(candidate).catch(() => false))) continue
+      if (!(await trustedProgram(candidate, context).catch(() => false))) continue
       if (
-        !(await fs.access(candidate, constants.X_OK).then(
+        !(await step(context, () => fs.access(candidate, constants.X_OK)).then(
           () => true,
           () => false,
         ))
@@ -190,51 +377,155 @@ function environment(temporary: string, executable: string) {
     GIT_ATTR_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
     GIT_NO_LAZY_FETCH: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
     GIT_OPTIONAL_LOCKS: "0",
   }
 }
 
-async function command(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, input?: Buffer) {
-  return new Promise<{ code: number; bytes: Buffer }>((resolve, reject) => {
-    const child = spawn(file, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
-    const chunks: Buffer[] = []
-    let size = 0
-    let excessive = false
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL")
-    }, 10_000)
-    child.stdin.on("error", () => {})
-    child.stdout.on("data", (chunk: Buffer) => {
-      size += chunk.byteLength
-      if (size > LIMIT.index) {
-        excessive = true
-        child.kill("SIGKILL")
-        return
-      }
-      chunks.push(chunk)
-    })
-    // Repository-controlled diagnostics can contain private config values; never copy them into an error or log.
-    child.stderr.resume()
-    child.once("error", () => {
-      clearTimeout(timer)
-      reject(new Unavailable("Git could not start"))
-    })
-    child.once("close", (code, signal) => {
-      clearTimeout(timer)
-      if (excessive || signal || code === null) return reject(new Unavailable("Git exceeded its execution bound"))
-      resolve({ code, bytes: Buffer.concat(chunks) })
-    })
-    child.stdin.end(input)
-  })
+async function makeCommands(
+  file: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  opening: Operation,
+  isOpen: () => boolean,
+) {
+  requireValue(
+    typeof process.getuid === "function" && process.getuid() !== 0 && process.getuid() === process.geteuid?.(),
+    "this host has no supported unprivileged Git verifier",
+  )
+  const signal = opening.signal
+  const image = await DirectoryIdentityReader.pythonImage(opening.expires, signal)
+  requireValue(image, "the fixed Git verifier runtime is unavailable")
+  try {
+    opening.check()
+  } catch (error) {
+    image.close()
+    throw error
+  }
+  const pending = new Set<Promise<unknown>>()
+  const execute = async (
+    context: Operation,
+    args: string[],
+    input?: Buffer,
+    maximum = LIMIT.index,
+    directory = cwd,
+  ) => {
+    requireValue(directory === cwd || inside(cwd, directory), "Git's private working directory is unavailable")
+    const expires = Math.min(context.expires, performance.now() + INTEGRITY.milliseconds)
+    const check = () => {
+      context.check()
+      requireValue(
+        !signal.aborted && isOpen() && image.isOpen() && performance.now() < expires,
+        "Git inspection was cancelled or expired",
+      )
+    }
+    check()
+    const release = await admit(expires, signal)
+    try {
+      check()
+      requireValue(await image.validate(expires, signal), "the fixed Git verifier runtime changed")
+      check() // No await separates final live-view/image/deadline proof from fixed spawn.
+      return await new Promise<{ code: number; bytes: Buffer }>((resolve, reject) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        let excessive = false
+        let stopped = false
+        let failed = false
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const child = spawn(DirectoryIdentityReader.PYTHON, ["-I", "-S", "-c", PROCESS_SOURCE, file, ...args], {
+          cwd: directory,
+          env,
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+          shell: false,
+        })
+        // EMFILE/ENFILE may return a ChildProcess with no pipes and queue its error. Own error/close FIRST.
+        child.once("error", () => {
+          failed = true
+        })
+        child.once("close", (code, killed) => {
+          clearTimeout(timer)
+          signal.removeEventListener("abort", stop)
+          try {
+            check()
+          } catch {
+            failed = true
+          }
+          if (failed || stopped || excessive || killed || code === null)
+            return reject(new Unavailable("Git exceeded its execution bound"))
+          resolve({ code, bytes: Buffer.concat(chunks) })
+        })
+        const stop = () => {
+          stopped = true
+          try {
+            child.kill("SIGKILL")
+          } catch {
+            failed = true
+          }
+        }
+        timer = setTimeout(stop, Math.max(0, expires - performance.now()))
+        signal.addEventListener("abort", stop, { once: true })
+        if (signal.aborted) stop()
+        const count = (chunk: Buffer) => {
+          size += chunk.byteLength
+          if (size > maximum) {
+            excessive = true
+            stop()
+          }
+        }
+        child.stdin?.on("error", () => {
+          failed = true
+          stop()
+        })
+        child.stdout?.on("error", () => {
+          failed = true
+          stop()
+        })
+        child.stderr?.on("error", () => {
+          failed = true
+          stop()
+        })
+        child.stdout?.on("data", (chunk: Buffer) => {
+          count(chunk)
+          if (!excessive) chunks.push(chunk)
+        })
+        // Repository-controlled diagnostics can contain private config values; never copy them into an error or log.
+        child.stderr?.on("data", count)
+        if (!child.stdin || !child.stdout || !child.stderr) {
+          failed = true
+          stop()
+          return
+        }
+        try {
+          child.stdin.end(input)
+        } catch {
+          failed = true
+          stop()
+        }
+      })
+    } finally {
+      release()
+    }
+  }
+  return {
+    command: (context: Operation, args: string[], input?: Buffer, maximum?: number, directory?: string) => {
+      // Track the complete operation, including admission/preflight, until its sole native PID is reaped.
+      const operation = execute(context, [...args], input, maximum, directory)
+      pending.add(operation)
+      void operation.finally(() => pending.delete(operation)).catch(() => {})
+      return operation
+    },
+    close: async () => {
+      image.close()
+      await Promise.allSettled([...pending])
+    },
+  }
 }
 
-async function configuration(file: string, data: Buffer | undefined, temporary: string, env: NodeJS.ProcessEnv) {
+async function configuration(command: Command, data: Buffer | undefined) {
   if (!data) return new Map<string, string>()
   const result = await command(
-    file,
     ["--no-pager", "config", "--file", "-", "--no-includes", "--null", "--get-regexp", CONFIG],
-    temporary,
-    env,
     data,
   )
   requireValue(result.code === 0 || result.code === 1, "Git configuration could not be parsed")
@@ -266,8 +557,8 @@ async function configuration(file: string, data: Buffer | undefined, temporary: 
   return values
 }
 
-async function head(git: FileHandle, common: FileHandle, captured?: Buffer) {
-  const value = metadataLine(captured ?? (await read(git, "HEAD", 4096))!)
+async function head(git: FileHandle, common: FileHandle, captured?: Buffer, context?: Operation) {
+  const value = metadataLine(captured ?? (await read(git, "HEAD", 4096, false, context))!)
   requireValue(value === value.trim(), "HEAD contains unsupported whitespace")
   if (/^[0-9a-f]{40}$/.test(value)) return value
   requireValue(value.startsWith("ref: refs/heads/"), "HEAD is neither a commit nor a branch")
@@ -284,86 +575,104 @@ async function head(git: FileHandle, common: FileHandle, captured?: Buffer) {
       ref.split("/").every((part) => part && !part.startsWith(".") && !part.endsWith(".lock")),
     "invalid branch reference",
   )
-  const loose = await read(common, ref, 4096, true)
+  const loose = await read(common, ref, 4096, true, context)
   if (loose) {
     const oid = metadataLine(loose)
     requireValue(/^[0-9a-f]{40}$/.test(oid), "symbolic or non-SHA1 branch reference is unsupported")
     return oid
   }
-  const packed = (await read(common, "packed-refs", LIMIT.refs, true))?.toString("utf8") ?? ""
+  const packed = (await read(common, "packed-refs", LIMIT.refs, true, context))?.toString("utf8") ?? ""
   const matches = packed.split("\n").filter((line) => line.slice(41) === ref)
   requireValue(matches.length === 1 && /^[0-9a-f]{40} /.test(matches[0]!), "the captured branch has no unique commit")
   return matches[0]!.slice(0, 40)
 }
 
-async function objects(common: FileHandle, target: string) {
-  const source = await openWithin(common, "objects", constants.O_RDONLY | constants.O_DIRECTORY)
+async function objects(common: FileHandle, target: string, context: Operation) {
+  const source = await openWithin(common, "objects", constants.O_RDONLY | constants.O_DIRECTORY, false, context)
   try {
     requireValue(
-      !(await read(source, "info/alternates", LIMIT.config, true)),
+      !(await read(source, "info/alternates", LIMIT.config, true, context)),
       "alternate object stores are unsupported",
     )
-    await fs.mkdir(target, { mode: 0o700 })
+    await step(context, () => fs.mkdir(target, { mode: 0o700 }))
     let count = 0
     let seen = 0
     let bytes = 0n
-    const listing = await fs.opendir(`/proc/self/fd/${source.fd}`)
-    for await (const fan of listing) {
-      requireValue(++seen <= LIMIT.files, "object directory listing exceeds its bound")
-      if (!/^[0-9a-f]{2}$/.test(fan.name) && fan.name !== "pack") continue
-      requireValue(fan.isDirectory() && !fan.isSymbolicLink(), "linked object directories are unsupported")
-      const location = await openWithin(source, fan.name, constants.O_RDONLY | constants.O_DIRECTORY)
-      try {
-        await fs.mkdir(path.join(target, fan.name), { mode: 0o700 })
-        const entries = await fs.opendir(`/proc/self/fd/${location.fd}`)
-        for await (const item of entries) {
-          requireValue(++seen <= LIMIT.files, "object directory listing exceeds its bound")
-          const allowed =
-            fan.name === "pack"
-              ? /^pack-[0-9a-f]{40}\.(pack|idx|rev|bitmap)$/.test(item.name)
-              : /^[0-9a-f]{38}$/.test(item.name)
-          if (!allowed) continue
-          requireValue(item.isFile() && !item.isSymbolicLink(), "linked Git objects are unsupported")
-          const opened = await openWithin(location, item.name, constants.O_RDONLY)
+    const listing = await acquire(context, () => fs.opendir(`/proc/self/fd/${source.fd}`))
+    try {
+      for (;;) {
+        const fan = await step(context, () => listing.read())
+        if (!fan) break
+        requireValue(++seen <= LIMIT.files, "object directory listing exceeds its bound")
+        if (!/^[0-9a-f]{2}$/.test(fan.name) && fan.name !== "pack") continue
+        requireValue(fan.isDirectory() && !fan.isSymbolicLink(), "linked object directories are unsupported")
+        const location = await openWithin(source, fan.name, constants.O_RDONLY | constants.O_DIRECTORY, false, context)
+        try {
+          await step(context, () => fs.mkdir(path.join(target, fan.name), { mode: 0o700 }))
+          const entries = await acquire(context, () => fs.opendir(`/proc/self/fd/${location.fd}`))
           try {
-            const before = await opened.stat({ bigint: true })
-            requireValue(
-              before.isFile() && ++count <= LIMIT.files && (bytes += before.size) <= BigInt(LIMIT.objects),
-              "object snapshot exceeds its bound",
-            )
-            await copyOpened(opened, path.join(target, fan.name, item.name), before.size)
+            for (;;) {
+              const item = await step(context, () => entries.read())
+              if (!item) break
+              requireValue(++seen <= LIMIT.files, "object directory listing exceeds its bound")
+              const allowed =
+                fan.name === "pack"
+                  ? /^pack-[0-9a-f]{40}\.(pack|idx|rev|bitmap)$/.test(item.name)
+                  : /^[0-9a-f]{38}$/.test(item.name)
+              if (!allowed) continue
+              requireValue(item.isFile() && !item.isSymbolicLink(), "linked Git objects are unsupported")
+              const opened = await openWithin(location, item.name, constants.O_RDONLY, false, context)
+              try {
+                const before = await step(context, () => opened.stat({ bigint: true }))
+                requireValue(
+                  before.isFile() && ++count <= LIMIT.files && (bytes += before.size) <= BigInt(LIMIT.objects),
+                  "object snapshot exceeds its bound",
+                )
+                await copyOpened(opened, path.join(target, fan.name, item.name), before.size, context)
+              } finally {
+                await releaseResource(context, opened)
+              }
+            }
           } finally {
-            await opened.close()
+            await releaseResource(context, entries)
           }
+        } finally {
+          await releaseResource(context, location)
         }
-      } finally {
-        await location.close()
       }
+    } finally {
+      await releaseResource(context, listing)
     }
   } finally {
-    await source.close()
+    await releaseResource(context, source)
   }
 }
 
-async function copyOpened(opened: FileHandle, target: string, bound: bigint) {
-  const before = await opened.stat({ bigint: true })
+async function copyOpened(opened: FileHandle, target: string, bound: bigint, context: Operation) {
+  const before = await step(context, () => opened.stat({ bigint: true }))
   requireValue(before.isFile() && before.size <= bound, "source file is nonregular or oversized")
-  const output = await fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600)
+  const output = await acquire(context, () =>
+    fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600),
+  )
   try {
     const buffer = Buffer.alloc(64 * 1024)
     let position = 0
     while (position < Number(before.size)) {
-      const part = await opened.read(buffer, 0, Math.min(buffer.length, Number(before.size) - position), position)
+      const part = await step(context, () =>
+        opened.read(buffer, 0, Math.min(buffer.length, Number(before.size) - position), position),
+      )
       requireValue(part.bytesRead > 0, "source file changed during capture")
       let written = 0
       while (written < part.bytesRead) {
-        const result = await output.write(buffer, written, part.bytesRead - written, position + written)
+        const result = await step(context, () =>
+          output.write(buffer, written, part.bytesRead - written, position + written),
+        )
         requireValue(result.bytesWritten > 0, "private snapshot could not be written")
         written += result.bytesWritten
       }
       position += part.bytesRead
     }
-    const after = await opened.stat({ bigint: true })
+    const after = await step(context, () => opened.stat({ bigint: true }))
     requireValue(
       before.dev === after.dev &&
         before.ino === after.ino &&
@@ -373,7 +682,7 @@ async function copyOpened(opened: FileHandle, target: string, bound: bigint) {
       "source file changed during capture",
     )
   } finally {
-    await output.close()
+    await releaseResource(context, output)
   }
 }
 
@@ -724,76 +1033,131 @@ function relative(file: string) {
 
 /** A scoped private Git view for the entire review collection; callers still enforce their own file/read policy. */
 export async function open(input: Input, options?: { signal?: AbortSignal }): Promise<Repository> {
+  const opening = performance.now() + INTEGRITY.opening
   requireValue(!options?.signal?.aborted, "Git snapshot was cancelled")
   requireValue(process.platform === "linux", "this host has no pinned-directory adapter")
-  const root = await directory(input.directory)
-  const git = await directory(input.gitDirectory)
-  const common = await directory(input.commonDirectory)
-  requireValue(
-    root === path.resolve(input.directory) &&
-      git === path.resolve(input.gitDirectory) &&
-      common === path.resolve(input.commonDirectory),
-    "linked metadata ancestry is unsupported",
-  )
-  requireValue(
-    git === common || inside(path.join(common, "worktrees"), git),
-    "Git metadata is outside the verified repository",
-  )
-  const handles: FileHandle[] = []
-  const created = await fs.mkdtemp(path.join(os.tmpdir(), "vector-readonly-git-"))
-  const temporary = await fs.realpath(created).catch(async () => {
-    await fs.rm(created, { recursive: true, force: true })
-    throw new Unavailable("temporary metadata could not be pinned")
-  })
+  requireValue(retained.size === 0, "prior Git cleanup remains unconfirmed")
+  const resources = new Set<Resource>()
+  const storage: { temporary?: string; resources: Set<Resource> } = { resources }
+  const operations = new Set<Promise<unknown>>()
   let transferred = false
   let closed = false
-  const close = async () => {
-    if (closed) return
+  let cleanupFailed = false
+  let closing: Promise<void> | undefined
+  let execution: Awaited<ReturnType<typeof makeCommands>> | undefined
+  const controller = new AbortController()
+  const cancel = () => controller.abort()
+  options?.signal?.addEventListener("abort", cancel, { once: true })
+  if (options?.signal?.aborted) cancel()
+  const operation = (expires: number): Operation => ({
+    expires,
+    signal: controller.signal,
+    resources,
+    check: () =>
+      requireValue(
+        !closed && !cleanupFailed && !controller.signal.aborted && performance.now() < expires,
+        "Git inspection was cancelled or expired",
+      ),
+    unsafe: () => {
+      cleanupFailed = true
+      controller.abort()
+    },
+  })
+  const startup = operation(opening)
+  const observe = <A>(body: (context: Operation) => Promise<A>) => {
+    const context = operation(performance.now() + INTEGRITY.milliseconds)
+    const pending = Promise.resolve()
+      .then(async () => {
+        context.check()
+        const value = await body(context)
+        context.check()
+        return value
+      })
+      .catch((error) => {
+        throw unavailable(error)
+      })
+    operations.add(pending)
+    void pending.finally(() => operations.delete(pending)).catch(() => {})
+    return pending
+  }
+  const close = () => {
     closed = true
-    try {
-      await Promise.all(handles.map((handle) => handle.close()))
-    } finally {
-      await fs.rm(temporary, { recursive: true, force: true })
-    }
+    controller.abort()
+    return (closing ??= (async () => {
+      options?.signal?.removeEventListener("abort", cancel)
+      await Promise.allSettled([...operations])
+      await execution?.close()
+      const results = await Promise.allSettled([...resources].map((resource) => releaseResource(startup, resource)))
+      requireValue(
+        !cleanupFailed && results.every((result) => result.status === "fulfilled"),
+        "Git cleanup remains unconfirmed",
+      )
+      if (storage.temporary) await fs.rm(storage.temporary, { recursive: true, force: true })
+    })().catch(() => {
+      retained.add(storage)
+      throw new Unavailable("Git cleanup remains unconfirmed; private resources are retained")
+    }))
   }
   try {
+    const root = await directory(input.directory, startup)
+    const git = await directory(input.gitDirectory, startup)
+    const common = await directory(input.commonDirectory, startup)
+    requireValue(
+      root === path.resolve(input.directory) &&
+        git === path.resolve(input.gitDirectory) &&
+        common === path.resolve(input.commonDirectory),
+      "linked metadata ancestry is unsupported",
+    )
+    requireValue(
+      git === common || inside(path.join(common, "worktrees"), git),
+      "Git metadata is outside the verified repository",
+    )
+    startup.check()
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "vector-readonly-git-"))
+    storage.temporary = created
+    startup.check()
+    const temporary = await step(startup, () => fs.realpath(created))
+    storage.temporary = temporary
     requireValue(
       !inside(root, temporary) && !inside(common, temporary) && !inside(path.dirname(common), temporary),
       "temporary metadata would be repository-controlled",
     )
-    await fs.chmod(temporary, 0o700)
-    const rootHandle = await pin(root)
-    handles.push(rootHandle)
-    const gitHandle = await pin(git)
-    handles.push(gitHandle)
-    const commonHandle = await pin(common)
-    handles.push(commonHandle)
-    const commonIdentity = await directoryIdentity(commonHandle, options?.signal)
+    await step(startup, () => fs.chmod(temporary, 0o700))
+    const rootHandle = await pin(root, startup)
+    const gitHandle = await pin(git, startup)
+    const commonHandle = await pin(common, startup)
+    const commonIdentity = await step(startup, () => directoryIdentity(commonHandle, controller.signal))
     requireValue(!options?.signal?.aborted, "Git snapshot was cancelled")
     requireValue(
       !input.commonIdentity || (commonIdentity !== undefined && sameIdentity(input.commonIdentity, commonIdentity)),
       "the admitted common store changed identity",
     )
-    const program = await executable([root, common, path.dirname(common)])
+    const program = await executable([root, common, path.dirname(common)], startup)
     const env = environment(temporary, program)
-    const base = await configuration(program, await read(commonHandle, "config", LIMIT.config), temporary, env)
+    const commands = await makeCommands(program, temporary, env, startup, () => !closed)
+    execution = commands
+    const command: Command = (args, input, maximum, directory) =>
+      commands.command(startup, args, input, maximum, directory)
+    const base = await configuration(command, await read(commonHandle, "config", LIMIT.config, false, startup))
     const local =
       base.get("extensions.worktreeconfig") === "true"
-        ? await configuration(program, await read(gitHandle, "config.worktree", LIMIT.config, true), temporary, env)
+        ? await configuration(command, await read(gitHandle, "config.worktree", LIMIT.config, true, startup))
         : new Map<string, string>()
     const builtin = new Map([...base, ...local])
     requireValue(builtin.get("core.sparsecheckout") !== "true", "sparse worktrees are unsupported")
-    const capturedHead = await head(gitHandle, commonHandle)
-    const capturedRef = (await read(gitHandle, "HEAD", 4096))!.toString("utf8").trim()
+    const capturedHead = await head(gitHandle, commonHandle, undefined, startup)
+    const capturedRef = (await read(gitHandle, "HEAD", 4096, false, startup))!.toString("utf8").trim()
     const branch = capturedRef.startsWith("ref: refs/heads/") ? capturedRef.slice(16) : undefined
-    const index = (await read(gitHandle, "index", LIMIT.index))!
+    const index = (await read(gitHandle, "index", LIMIT.index, false, startup))!
     requireValue(index.byteLength >= 12 && index.subarray(0, 4).toString() === "DIRC", "Git index is unsupported")
     const digest = createHash("sha256").update(index).digest("hex")
     const privateGit = path.join(temporary, "git")
-    await fs.mkdir(path.join(privateGit, "refs"), { recursive: true, mode: 0o700 })
-    await fs.mkdir(path.join(privateGit, "info"), { mode: 0o700 })
-    await fs.writeFile(path.join(privateGit, "HEAD"), capturedHead + "\n", { mode: 0o600, flag: "wx" })
-    await fs.writeFile(path.join(privateGit, "index"), index, { mode: 0o600, flag: "wx" })
+    await step(startup, () => fs.mkdir(path.join(privateGit, "refs"), { recursive: true, mode: 0o700 }))
+    await step(startup, () => fs.mkdir(path.join(privateGit, "info"), { mode: 0o700 }))
+    await step(startup, () =>
+      fs.writeFile(path.join(privateGit, "HEAD"), capturedHead + "\n", { mode: 0o600, flag: "wx" }),
+    )
+    await step(startup, () => fs.writeFile(path.join(privateGit, "index"), index, { mode: 0o600, flag: "wx" }))
     const safe = [
       "[core]",
       "repositoryFormatVersion = 0",
@@ -804,6 +1168,12 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       "untrackedCache = false",
       "sparseCheckout = false",
       "sparseCheckoutCone = false",
+      "commitGraph = false",
+      "multiPackIndex = false",
+      "packedGitWindowSize = 1m",
+      "packedGitLimit = 64m",
+      "deltaBaseCacheLimit = 16m",
+      "bigFileThreshold = 8m",
       `hooksPath = ${JSON.stringify(os.devNull)}`,
       `attributesFile = ${JSON.stringify(os.devNull)}`,
       `excludesFile = ${JSON.stringify(os.devNull)}`,
@@ -815,25 +1185,44 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       "auto = 0",
       "[maintenance]",
       "auto = false",
+      "[pack]",
+      "threads = 1",
+      "[index]",
+      "threads = 1",
       "[protocol]",
       "allow = never",
       "",
     ]
-    await fs.writeFile(path.join(privateGit, "config"), safe.join("\n"), { mode: 0o600, flag: "wx" })
+    await step(startup, () =>
+      fs.writeFile(path.join(privateGit, "config"), safe.join("\n"), { mode: 0o600, flag: "wx" }),
+    )
     for (const name of ["attributes", "exclude"]) {
-      const data = await read(commonHandle, "info/" + name, LIMIT.config, true)
-      if (data) await fs.writeFile(path.join(privateGit, "info", name), data, { mode: 0o600, flag: "wx" })
+      const data = await read(commonHandle, "info/" + name, LIMIT.config, true, startup)
+      if (data)
+        await step(startup, () => fs.writeFile(path.join(privateGit, "info", name), data, { mode: 0o600, flag: "wx" }))
     }
-    const shallow = await read(commonHandle, "shallow", LIMIT.refs, true)
-    if (shallow) await fs.writeFile(path.join(privateGit, "shallow"), shallow, { mode: 0o600, flag: "wx" })
-    await objects(commonHandle, path.join(privateGit, "objects"))
+    const shallow = await read(commonHandle, "shallow", LIMIT.refs, true, startup)
+    if (shallow) {
+      const boundaries = shallow.toString("ascii").split("\n")
+      requireValue(
+        boundaries.pop() === "" &&
+          boundaries.length > 0 &&
+          boundaries.length <= INTEGRITY.objects &&
+          boundaries.every((value) => /^[0-9a-f]{40}$/.test(value)) &&
+          new Set(boundaries).size === boundaries.length &&
+          Buffer.from(boundaries.join("\n") + "\n").equals(shallow),
+        "shallow boundaries are unsupported",
+      )
+      await step(startup, () => fs.writeFile(path.join(privateGit, "shallow"), shallow, { mode: 0o600, flag: "wx" }))
+    }
+    await objects(commonHandle, path.join(privateGit, "objects"), startup)
     const args = ["--no-pager", "--no-optional-locks", `--git-dir=${privateGit}`, `--work-tree=${root}`]
-    const commitType = await command(program, [...args, "cat-file", "-t", capturedHead], temporary, env)
+    const commitType = await command([...args, "cat-file", "-t", capturedHead])
     requireValue(
       commitType.code === 0 && commitType.bytes.equals(Buffer.from("commit\n")),
       "the captured HEAD is not an available commit object",
     )
-    const entries = await command(program, [...args, "ls-files", "--stage", "--sparse", "-z"], temporary, env)
+    const entries = await command([...args, "ls-files", "--stage", "--sparse", "-z"])
     requireValue(entries.code === 0, "split, sparse or invalid index is unsupported")
     let count = 0
     let start = 0
@@ -853,23 +1242,46 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     requireValue(start === entries.bytes.length, "invalid index entry encoding")
     // Rebuild only the private index. Discard every source stat, fsmonitor, sparse and assume-unchanged cache,
     // including otherwise-valid same-size timestamps; the original index is never refreshed or written.
-    const empty = await command(program, [...args, "read-tree", "--empty"], temporary, env)
+    const empty = await command([...args, "read-tree", "--empty"])
     requireValue(empty.code === 0, "private index could not be initialized")
-    const rebuilt = await command(
-      program,
-      [...args, "update-index", "-z", "--index-info"],
-      temporary,
-      env,
-      entries.bytes,
-    )
+    const rebuilt = await command([...args, "update-index", "-z", "--index-info"], entries.bytes)
     requireValue(rebuilt.code === 0, "private index entries could not be restored")
-    const unchanged = async () => {
-      requireValue(!closed, "the private Git view is closed")
-      const after = (await read(gitHandle, "index", LIMIT.index))!
+    const manifest = await command(
+      [
+        ...args,
+        "cat-file",
+        "--batch-all-objects",
+        "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+        "--unordered",
+      ],
+      undefined,
+      INTEGRITY.output,
+    )
+    requireValue(manifest.code === 0, "the expanded object manifest is unavailable")
+    objectManifest(manifest.bytes)
+    const integrity = await command(
+      [
+        ...args,
+        "fsck",
+        "--strict",
+        "--full",
+        "--cache",
+        "--no-reflogs",
+        "--no-dangling",
+        "--no-progress",
+        "--no-name-objects",
+      ],
+      undefined,
+      INTEGRITY.output,
+    )
+    requireValue(integrity.code === 0, "the private Git object graph failed integrity verification")
+    const unchanged = async (context: Operation) => {
+      context.check()
+      const after = (await read(gitHandle, "index", LIMIT.index, false, context))!
       requireValue(
         createHash("sha256").update(after).digest("hex") === digest &&
-          (await head(gitHandle, commonHandle)) === capturedHead &&
-          (await read(gitHandle, "HEAD", 4096))!.toString("utf8").trim() === capturedRef,
+          (await head(gitHandle, commonHandle, undefined, context)) === capturedHead &&
+          (await read(gitHandle, "HEAD", 4096, false, context))!.toString("utf8").trim() === capturedRef,
         "original Git metadata changed during inspection",
       )
     }
@@ -880,8 +1292,8 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       )
       return value === "HEAD" ? capturedHead : value
     }
-    const perform = async (operation: Read) => {
-      requireValue(!closed, "the private Git view is closed")
+    const perform = async (operation: Read, context: Operation) => {
+      context.check()
       const literal = (file: string) => ":(literal)" + relative(file)
       const diff = [
         "--no-color",
@@ -891,7 +1303,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         "--src-prefix=a/",
         "--dst-prefix=b/",
       ]
-      const run = (query: string[], input?: Buffer) => command(program, [...args, ...query], temporary, env, input)
+      const run = (query: string[], input?: Buffer) => commands.command(context, [...args, ...query], input)
       switch (operation.kind) {
         case "status":
           requireValue(
@@ -944,23 +1356,31 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           )
         case "added-diff": {
           const file = relative(operation.file)
-          const snapshot = await fs.mkdtemp(path.join(temporary, "added-"))
+          const snapshot = await step(context, () => fs.mkdtemp(path.join(temporary, "added-")))
           try {
-            const opened = await openWithin(rootHandle, file, constants.O_RDONLY)
+            const opened = await openWithin(rootHandle, file, constants.O_RDONLY, false, context)
             try {
-              await fs.mkdir(path.dirname(path.join(snapshot, file)), { recursive: true, mode: 0o700 })
-              await copyOpened(opened, path.join(snapshot, file), BigInt(LIMIT.index))
-              return await command(
-                program,
+              await step(context, () =>
+                fs.mkdir(path.dirname(path.join(snapshot, file)), { recursive: true, mode: 0o700 }),
+              )
+              await copyOpened(opened, path.join(snapshot, file), BigInt(LIMIT.index), context)
+              return await commands.command(
+                context,
                 [...args, "diff", "--no-index", ...diff, "--unified=3", "--", os.devNull, file],
+                undefined,
+                LIMIT.index,
                 snapshot,
-                env,
               )
             } finally {
-              await opened.close()
+              await releaseResource(context, opened)
             }
           } finally {
-            await fs.rm(snapshot, { recursive: true, force: true })
+            try {
+              await fs.rm(snapshot, { recursive: true, force: true })
+            } catch (error) {
+              context.unsafe()
+              throw error
+            }
           }
         }
         case "object": {
@@ -1068,23 +1488,24 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           throw new Unavailable("Git operation is not supported by the read-only port")
       }
     }
-    const safeRead = (operation: Read) =>
-      perform(operation).catch((error) => {
-        throw unavailable(error)
-      })
-    const status = async () => {
-      await unchanged()
-      const result = await command(
-        program,
-        [...args, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=all"],
-        temporary,
-        env,
-      )
+    const safeRead = (operation: Read) => observe((context) => perform(operation, context))
+    const status = async (context: Operation) => {
+      await unchanged(context)
+      const result = await commands.command(context, [
+        ...args,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--no-renames",
+        "--untracked-files=all",
+        "--ignore-submodules=all",
+      ])
       requireValue(result.code === 0, "private worktree status could not be read")
-      await unchanged()
+      await unchanged(context)
       return { head: capturedHead, dirty: result.bytes.byteLength !== 0 }
     }
-    await status()
+    await status(startup)
+    startup.check()
     transferred = true
     return Object.defineProperty(
       {
@@ -1095,8 +1516,8 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         head: capturedHead,
         branch,
         shallow: !!shallow?.byteLength,
-        isOpen: () => !closed,
-        status,
+        isOpen: () => !closed && !controller.signal.aborted,
+        status: () => observe(status),
         read: safeRead,
         close,
       },

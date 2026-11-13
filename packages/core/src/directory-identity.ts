@@ -442,7 +442,7 @@ async function immutable(file: string, check: Check) {
   for (const directory of directories) check.directories.add(directory)
   return { canonical, info }
 }
-async function bytes(file: string, maximum: number, check: Check) {
+async function capturedBytes(file: string, maximum: number, check: Check) {
   const checked = await immutable(file, check)
   requireValue(checked.info.isFile() && checked.info.size <= BigInt(maximum))
   check()
@@ -456,6 +456,12 @@ async function bytes(file: string, maximum: number, check: Check) {
     requireValue(
       before.dev === checked.info.dev &&
         before.ino === checked.info.ino &&
+        before.uid === 0n &&
+        after.uid === 0n &&
+        before.uid === after.uid &&
+        before.gid === after.gid &&
+        before.mode === after.mode &&
+        (before.mode & 0o6022n) === 0n &&
         before.dev === after.dev &&
         before.ino === after.ino &&
         before.size === after.size &&
@@ -464,11 +470,14 @@ async function bytes(file: string, maximum: number, check: Check) {
         BigInt(result.length) === after.size &&
         result.length <= maximum,
     )
-    return result
+    return { bytes: result, proof: { canonical: checked.canonical, info: after } }
   } finally {
     // Cleanup is unconditional; cancellation never skips closing a leased runtime file.
     await handle.close()
   }
+}
+async function bytes(file: string, maximum: number, check: Check) {
+  return (await capturedBytes(file, maximum, check)).bytes
 }
 const exists = (file: string, check: Check) =>
   step(check, () =>
@@ -542,7 +551,8 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
   await getpathOverrides(executable.canonical, check)
   if (await exists("/etc/ld.so.preload", check))
     requireValue((await bytes("/etc/ld.so.preload", 4096, check)).toString("utf8").trim() === "")
-  const cache = cacheLibraries(await bytes("/etc/ld.so.cache", 8 * 1024 * 1024, check), arch)
+  const cacheImage = await capturedBytes("/etc/ld.so.cache", 8 * 1024 * 1024, check)
+  const cache = cacheLibraries(cacheImage.bytes, arch)
   const visited = new Set<string>(),
     extensions: string[] = []
   let files = 0
@@ -563,12 +573,14 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
   await walk("/usr/lib/python3.12")
   const extension = extensionProfile(extensions, arch)
   const libraries = new Set<string>()
+  const images = new Map<string, typeof executable>()
   const verify = async (file: string): Promise<void> => {
     check()
     // Preserve lexical AND canonical library names: either may supply getpath's dladdr-adjacent ._pth.
     await getpathOverrides(file, check)
     const checked = await immutable(file, check)
     await getpathOverrides(checked.canonical, check)
+    images.set(file, checked)
     if (libraries.has(checked.canonical)) return
     requireValue(libraries.size < LIMIT.libraries)
     libraries.add(checked.canonical)
@@ -602,7 +614,84 @@ async function runtime(arch: "x64" | "arm64", check: Check) {
   await verify(PYTHON)
   await verify(extension)
   check()
-  return executable
+  return { ...executable, images, cache: cacheImage.proof }
+}
+
+/** Internal image lease for fixed trusted consumers; it never accepts process source or a caller-selected image. */
+export interface PythonImage {
+  readonly validate: (expires: number, signal?: AbortSignal) => Promise<boolean>
+  readonly isOpen: () => boolean
+  readonly close: () => void
+}
+export async function pythonImage(expires: number, signal?: AbortSignal): Promise<PythonImage | undefined> {
+  if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return
+  let closed = false
+  const deadline = Math.min(expires, performance.now() + LIMIT.milliseconds - LIMIT.reap)
+  const check: Check = Object.assign(
+    () => requireValue(!closed && !signal?.aborted && Number.isFinite(deadline) && performance.now() < deadline),
+    { directories: new Set<string>() },
+  )
+  try {
+    const proof = await runtime(process.arch === "x64" ? "x64" : "arm64", check)
+    check()
+    return Object.freeze({
+      validate: async (expires: number, launchSignal?: AbortSignal) => {
+        const check: Check = Object.assign(
+          () =>
+            requireValue(
+              !closed &&
+                !signal?.aborted &&
+                !launchSignal?.aborted &&
+                Number.isFinite(expires) &&
+                performance.now() < expires,
+            ),
+          { directories: new Set<string>() },
+        )
+        try {
+          const cache = await immutable("/etc/ld.so.cache", check)
+          requireValue(
+            cache.canonical === proof.cache.canonical &&
+              cache.info.dev === proof.cache.info.dev &&
+              cache.info.ino === proof.cache.info.ino &&
+              cache.info.uid === proof.cache.info.uid &&
+              cache.info.gid === proof.cache.info.gid &&
+              cache.info.mode === proof.cache.info.mode &&
+              cache.info.size === proof.cache.info.size &&
+              cache.info.mtimeNs === proof.cache.info.mtimeNs &&
+              cache.info.ctimeNs === proof.cache.info.ctimeNs,
+          )
+          // The root-owned nonwritable stdlib is trusted for this one lease. Every launch freshly checks all
+          // attested native images, both path spellings/ancestry, and CPython startup-override absence.
+          for (const [file, image] of proof.images) {
+            await getpathOverrides(file, check)
+            const current = await immutable(file, check)
+            await getpathOverrides(current.canonical, check)
+            requireValue(
+              current.canonical === image.canonical &&
+                current.info.dev === image.info.dev &&
+                current.info.ino === image.info.ino &&
+                current.info.mode === image.info.mode &&
+                current.info.size === image.info.size &&
+                current.info.mtimeNs === image.info.mtimeNs &&
+                current.info.ctimeNs === image.info.ctimeNs,
+            )
+          }
+          if (await exists("/etc/ld.so.preload", check))
+            requireValue((await bytes("/etc/ld.so.preload", 4096, check)).toString("utf8").trim() === "")
+          check()
+          return true
+        } catch {
+          return false
+        }
+      },
+      isOpen: () => !closed && !signal?.aborted,
+      close: () => {
+        closed = true
+      },
+    })
+  } catch {
+    return
+  }
 }
 
 /** A leased actual directory FD is the only input capability. Cancellation can refuse; it can never grant identity. */
