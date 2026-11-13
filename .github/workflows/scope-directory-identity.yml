@@ -50,12 +50,15 @@ jobs:
         env:
           VECTOR_DIRECTORY_IDENTITY_CI: "1"
           VECTOR_DIRECTORY_IDENTITY_ROOT_CI: "1"
+          VECTOR_READONLY_GIT_INTEGRITY_CI: "1"
       - name: Check Core types
         working-directory: packages/core
         run: bun typecheck
       - name: Check read-only Git source leases
         working-directory: packages/core
         run: bun test test/read-only-git.test.ts --timeout 60000
+        env:
+          VECTOR_READONLY_GIT_INTEGRITY_CI: "1"
       - name: Check immutable review source bindings
         working-directory: packages/core
         run: bun test test/review/source-binding.test.ts --timeout 60000
