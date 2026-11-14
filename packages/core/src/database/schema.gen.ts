@@ -49,6 +49,12 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`review_memory_fence\` (
+          \`session_id\` text PRIMARY KEY,
+          \`version\` integer DEFAULT 1 NOT NULL
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`review_request\` (
           \`parent_session_id\` text NOT NULL,
           \`request_id\` text NOT NULL,
