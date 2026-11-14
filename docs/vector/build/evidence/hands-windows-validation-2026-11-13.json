@@ -101,7 +101,7 @@
     "followup": "Drain initial fixture observation; independently cover that race with refusal by 200 ms. Every pure group now runs once and all static failure labels are collected before a nonzero failure; no test skip, retry or deadline change.",
     "stagedStop": "not run because units failed"
   },
-  "pending": "Remaining broad PR/integration jobs and final cross-platform packaging, including final packaged helper/Main pin verification; owner-device calibration/takeover and ARM64 privileged/device checks, Mac grants, signing/notarization and owner publication. Helper 1.0.15 remains unreleased. Hosted x64 native checks, passive listener health and normal baseline Stop passed; separate preview x64/ARM64 and Mac core reports passed within their recorded scope.",
+  "pending": "Final cross-platform packaging, including final packaged helper/Main pin verification; owner-device calibration/takeover and ARM64 privileged/device checks, Mac grants, signing/notarization and owner publication. Exact a0e full PR completedSUCCESS with27successful/11skipped/0failed jobs at attempt1. Helper1.0.15 remains unreleased; actual hardware calibration and granted OS behavior are not established.",
   "native6fObservation": {
     "revision": "6f53a6ec9130220bf3fe7a03cc256802d227ee89",
     "run": 43547207683,
@@ -550,16 +550,16 @@
         "failed": 0,
         "assertions": 218
       },
-      "qualification": "Actual downloaded job log confirms exact-once full per-file app inventory and final 244/244 summary, followed by the browser-condition unit suite. No failed child was retried. Remaining broad PR and final packaged helper/Main pin verifiers are pending; not hardware, signing or release proof."
+      "qualification": "Actual downloaded preview job log confirms exact-once full per-file app inventory and final244/244 summary, followed by browser-condition unit suite. No failed child was retried. The exact a0e full PR independently completed success, with actual Linux+Windows app244/244 verified below. Final packaged helper/Main pin verifiers remain pending; not hardware, signing or release proof."
     }
   },
   "integrationA0e": {
     "headRevision": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
-    "qualification": "Application source under validation; subsequent documentation-only commits do not change it. Remaining full PR and preview package jobs are pending. Actual reports and log observations below are independently read; no green job metadata erases named skips.",
+    "qualification": "Application source under validation; subsequent documentation-only commits do not change it. Exact-head PR completed success at attempt1 with27successful/11skipped/0failed jobs. Preview final packages remain pending. Actual reports/log observations below are independently read; no green job metadata erases named skips or the Windows browser flaky case.",
     "fullPR": {
       "run": 43560683817,
       "testedMergeRevision": "3b14e6627b394114efca488d7d256fc0709a6e2f",
-      "conclusion": "pending",
+      "conclusion": "success",
       "windowsNative": {
         "job": 132345115606,
         "logBytes": 291709,
@@ -1228,7 +1228,62 @@
           "failed": 0
         },
         "qualification": "Actual full scripted Chromium suite includes all corrected Hands cases; no physical calibration claim."
-      }
+      },
+      "runAttempt": 1,
+      "observedCompleteAtUtc": "2026-11-14T06:30:48Z",
+      "jobCounts": {
+        "success": 27,
+        "skipped": 11,
+        "failure": 0
+      },
+      "manualWorkflowReruns": 0,
+      "skippedJobs": [
+        {
+          "job": 132343890967,
+          "name": "macOS temporary certificate diagnostic (no release evidence)"
+        },
+        {
+          "job": 132343891164,
+          "name": "production app benchmark"
+        },
+        {
+          "job": 132343891309,
+          "name": "Hands UI (${{ matrix.settings.name }})"
+        },
+        {
+          "job": 132343891368,
+          "name": "Windows Electron overlay/controller diagnostic (no release evidence)"
+        },
+        {
+          "job": 132343891408,
+          "name": "Windows x64 native and staged diagnostics (${{ matrix.diagnostic }}, no release evidence)"
+        },
+        {
+          "job": 132343891489,
+          "name": "published release engine evidence (manual)"
+        },
+        {
+          "job": 132343891570,
+          "name": "offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})"
+        },
+        {
+          "job": 132343891594,
+          "name": "macOS Electron overlay/controller diagnostic (no release evidence)"
+        },
+        {
+          "job": 132343891736,
+          "name": "production app benchmark (manual)"
+        },
+        {
+          "job": 132349620373,
+          "name": "computer-helper / mac-test"
+        },
+        {
+          "job": 132350535489,
+          "name": "computer-helper / windows-arm64-test"
+        }
+      ],
+      "skippedRosterProvenance": "Nine selector-only skip rows retained from earlier exact-run GraphQL discovery; the two native rows and aggregate11skip count reconciled with final authoritative REST snapshot. A skipped selector-only dispatch is not a failed required job or executed diagnostic."
     },
     "unsignedArtifactsOnlyPreview": {
       "run": 43560764334,
