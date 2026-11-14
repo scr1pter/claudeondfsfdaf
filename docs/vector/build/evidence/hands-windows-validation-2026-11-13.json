@@ -7,7 +7,7 @@
   "ownerApprovedW9": true,
   "w9": {
     "source": "Explicit real mouse and same Shift down/up calibration after an actual current listener health acknowledgement. Separate metadata health every two seconds within the original 500 ms; exact scope/context lineage, no synthetic raw evidence or automatic Resume.",
-    "nativeGroups": 46,
+    "nativeGroups": 47,
     "nativeExecution": "pending",
     "passiveHealthCase": "input-listener-health; actual route/thread health cannot grant hardware calibration",
     "reviews": "Independent native and UI source reviews; corrected raw-context relabelling, pre-ack gestures, metadata-fence activation/callbacks and continuation Resume gates."
@@ -32,6 +32,7 @@
     "qualification": "Explicit entropy-domain change, not a claim of 64-bit event entropy. Private channel nonce remains separate. Runtime results pending."
   },
   "localChecks": {
+    "coreComputerSchema": { "passed": 90, "failed": 0, "assertions": 657 },
     "appTypecheck": "passed",
     "desktopTypecheck": "passed",
     "startup": { "passed": 33, "failed": 0, "assertions": 198 },

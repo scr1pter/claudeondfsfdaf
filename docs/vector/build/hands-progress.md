@@ -14,6 +14,8 @@ The dedicated `6d23cdb5` diagnostic `43167720423` instead stopped at the legacy 
 
 Current machine-readable continuation evidence is [hands-windows-validation-2026-11-13.json](./evidence/hands-windows-validation-2026-11-13.json). No native success, release, signing or owner-device proof is claimed by these source changes.
 
+Follow-up review preserves an in-flight private setup health challenge when only the actual session's paused phase changes; the retained setup ticket and deadline cannot authorize the new actual phase. Its regression brings W9 pure coverage to 47 groups, still awaiting native execution. The shared schema fixture now includes the new operation: the focused core file passed 90 tests / 657 assertions after CI identified its missing fixture. The earlier failing run remains recorded rather than being counted as passed.
+
 **Latest native observation.** Independent-VM diagnostic
 [43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805)
 at `b286accd` completed with failure. Baseline job `131006042604` passed core

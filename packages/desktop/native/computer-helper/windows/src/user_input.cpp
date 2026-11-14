@@ -355,7 +355,11 @@ struct UserInputService::State : std::enable_shared_from_this<UserInputService::
     if(scope){scope->failed=true;scope->revoked=true;if(auto notice=detection_locked(scope,false,L"probe_missing"))deferred_notice=std::move(*notice);}
   }
   void session_changed(std::optional<ServerSession> session) {
-    Cancel retire;{std::lock_guard lock(mutex);if(closed)return;retire=retire_locked();scope.reset();
+    Cancel retire;{std::lock_guard lock(mutex);if(closed)return;
+      // A session phase cannot retire the separate challenge of an ongoing explicit setup.
+      // It retains its exact setup ticket and original deadline; actual-session health never does.
+      if(calibration.state!=UserInputSetupState::calibrating || !setup_scope || !challenge || challenge->scope!=setup_scope)retire=retire_locked();
+      scope.reset();
       if(calibration.state!=UserInputSetupState::calibrating)setup_scope.reset();
       if(session && !session->id.empty() && session->run_epoch && session->observation_epoch){scope=make_scope_locked(false,session);if(scope && !calibrated_locked())scope->revoked=true;}
       else if(calibrated_locked())setup_scope=make_scope_locked(true);

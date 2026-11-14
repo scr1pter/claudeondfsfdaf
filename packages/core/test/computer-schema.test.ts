@@ -517,6 +517,15 @@ const helper: Record<Computer.HelperOpName, { args: Record<string, unknown>[]; r
     args: [{ service: "accessibility" }],
     results: [{ screen: "granted", accessibility: "notDetermined", captureBlocked: false }],
   },
+  "input.setup": {
+    args: [{ action: "status" }, { action: "start" }, { action: "reset" }],
+    results: [
+      { state: "needs-calibration", mouse: false, keyboard: false },
+      { state: "calibrating", mouse: true, keyboard: false },
+      { state: "ready", mouse: true, keyboard: true },
+      { state: "unavailable", mouse: false, keyboard: false },
+    ],
+  },
   "session.begin": {
     args: [
       {
