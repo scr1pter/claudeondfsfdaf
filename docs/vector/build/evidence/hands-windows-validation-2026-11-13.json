@@ -1369,6 +1369,19 @@
             ]
           }
         ]
+      },
+      "desktopTests": {
+        "job": 132344208623,
+        "conclusion": "success",
+        "logBytes": 119893,
+        "logSha256": "b0126374ddad17b10ec7ea1ddc3935e99d67e15628751ea231df7820b1a79d63",
+        "filesPassed": 189,
+        "filesTotal": 189,
+        "fakeHelper": {
+          "passed": 149,
+          "failed": 0
+        },
+        "qualification": "Actual log ends Desktop: 189/189 test files passed. Host-specific skips within test files remain skips; not final package verification."
       }
     },
     "ownerOnlyGates": "Real Windows mouse/same-Shift calibration and hardware takeover, privileged ARM64/device/UAC checks, Mac grants and manual device checks, owner signing/notarization, final approvals and publication. Helper 1.0.15 remains unreleased."

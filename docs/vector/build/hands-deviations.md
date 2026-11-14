@@ -1,6 +1,16 @@
 # Vector Hands build: deviations from the contract
 
-Current continuation: independent-VM run
+Current continuation is recorded in [hands-progress.md](./hands-progress.md).
+The owner-approved W9 redesign is implemented. Current-source hosted Windows
+listener health and isolated native Stop, cross-platform core checks, focused
+Hands browser cases, the full Windows browser regression (with its named
+unrelated flaky case and skip), and integrated app tests have passed within
+their recorded scopes. Final packaged helper/Main pin verifiers and owner-device
+hardware/grants/signing/publication gates remain open. Helper 1.0.15 is unreleased.
+
+## Historical 11 November checkpoint
+
+The independent-VM run
 [43165063805](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43165063805)
 at exact `b286accd` completed with failure. Baseline `131006042604` passed core
 30/0/1 and isolated 36/0/11, including all three required fresh worker reads;
