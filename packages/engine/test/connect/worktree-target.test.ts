@@ -15,6 +15,7 @@ import type { SessionID } from "@vectordevai/schema/session-id"
 import { Agent } from "@/agent/agent"
 import { ConnectHub } from "@/connect/hub"
 import { ConnectPlacement } from "@/connect/placement"
+import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
 import { Git } from "@/git"
@@ -141,6 +142,22 @@ const git = Effect.fn("ConnectWorktreeTest.git")(function* (directory: string, a
 const fixture = Effect.fn("ConnectWorktreeTest.fixture")(function* (attributes?: string) {
   const home = yield* InstanceState.context
   const llm = yield* TestLLMServer
+  const config = yield* Config.Service
+  const globalFile = path.join(Global.Path.config, "vector.json")
+  const original = yield* Effect.promise(() => fs.readFile(globalFile, "utf8").catch(() => undefined))
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(async () => {
+      if (original === undefined) await fs.rm(globalFile, { force: true })
+      else await fs.writeFile(globalFile, original)
+    }).pipe(Effect.andThen(config.invalidate())),
+  )
+  // VectorScope's service identity intentionally ignores the project's default agent model.
+  yield* write(
+    Global.Path.config,
+    "vector.json",
+    JSON.stringify({ agent: { vectorscope: { model: "lmstudio/test-model" } } }),
+  )
+  yield* config.invalidate()
   const provider = testProviderConfig(llm.url)
   provider.provider.lmstudio.models["test-model"].cost = { input: 1, output: 1 }
   yield* git(home.directory, ["config", "core.autocrlf", "false"])
