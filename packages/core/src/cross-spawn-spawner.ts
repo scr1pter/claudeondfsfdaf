@@ -407,7 +407,7 @@ export const make = Effect.gen(function* () {
       try: () => {
         if (ProcessIsolation.required() && ProcessIsolation.nativeBuild().enabled) {
           // Native lifetime signals cannot also be owned by the background-job controller. Until a qualified
-          // delegated control adapter exists, refuse this combination before any process is created (Ã‚Â§4.4).
+          // delegated control adapter exists, refuse this combination before any process is created (section 4.4).
           if (ownership) throw new Error(ProcessIsolation.REFUSAL)
           assertNativePipeline(command)
           const selected = ProcessIsolation.commandPlan(command.command, command.args, {

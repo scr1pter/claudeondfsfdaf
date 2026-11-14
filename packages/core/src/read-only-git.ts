@@ -522,7 +522,9 @@ async function makeCommands(
     input?: Buffer,
     maximum = LIMIT.index,
     directory = cwd,
+    index?: string,
   ) => {
+    requireValue(index === undefined || path.dirname(index) === cwd, "Git's private observation index is unavailable")
     requireValue(directory === cwd || inside(cwd, directory), "Git's private working directory is unavailable")
     const expires = Math.min(context.expires, performance.now() + INTEGRITY.milliseconds)
     const stage: CommandDiagnostic["command"] = args.includes("--version")
@@ -567,7 +569,7 @@ async function makeCommands(
         requireValue(!ProcessIsolation.required(), "Git inspection cannot bypass required process isolation")
         const child = spawn(DirectoryIdentityReader.PYTHON, ["-I", "-S", "-c", PROCESS_SOURCE, file, ...args], {
           cwd: directory,
-          env,
+          env: index === undefined ? env : { ...env, GIT_INDEX_FILE: index },
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
           shell: false,
@@ -684,9 +686,16 @@ async function makeCommands(
     }
   }
   return {
-    command: (context: Operation, args: string[], input?: Buffer, maximum?: number, directory?: string) => {
+    command: (
+      context: Operation,
+      args: string[],
+      input?: Buffer,
+      maximum?: number,
+      directory?: string,
+      index?: string,
+    ) => {
       // Track the complete operation, including admission/preflight, until its sole native PID is reaped.
-      const operation = execute(context, [...args], input, maximum, directory)
+      const operation = execute(context, [...args], input, maximum, directory, index)
       pending.add(operation)
       void operation.finally(() => pending.delete(operation)).catch(() => {})
       return operation
@@ -1343,6 +1352,9 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       "fsmonitor = false",
       "useBuiltinFSMonitor = false",
       "untrackedCache = false",
+      "trustctime = true",
+      "checkstat = default",
+      "ignorestat = false",
       "sparseCheckout = false",
       "sparseCheckoutCone = false",
       "commitGraph = false",
@@ -1437,6 +1449,11 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     requireValue(empty.code === 0, "private index could not be initialized")
     const rebuilt = await command([...args, "update-index", "-z", "--index-info"], entries.bytes)
     requireValue(rebuilt.code === 0, "private index entries could not be restored")
+    const capturedTree = await command([...args, "write-tree"], undefined, 41)
+    requireValue(
+      capturedTree.code === 0 && /^[0-9a-f]{40}\n$/.test(capturedTree.bytes.toString("ascii")),
+      "the captured index tree is unavailable",
+    )
     const manifest = await command(
       [
         ...args,
@@ -1470,12 +1487,49 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       INTEGRITY.output,
     )
     requireCommand(integrity, [0], "the private Git object graph failed integrity verification")
+    let observedIndex = digest
+    let observations = 0
     const unchanged = async (context: Operation) => {
       context.check()
       const after = (await read(gitHandle, "index", LIMIT.index, false, context))!
+      const current = createHash("sha256").update(after).digest("hex")
+      if (current !== observedIndex) {
+        // Git status refreshes cached stat fields without changing staged content. Interpret changed bytes only
+        // through a separate private index, pinned Git/runtime and the already-verified private object store.
+        // The captured normalized index used by the review is never replaced or refreshed.
+        requireValue(++observations <= LIMIT.files, "index observation count exceeds its bound")
+        const candidate = path.join(temporary, `index-observation-${observations}`)
+        await step(context, () => fs.writeFile(candidate, after, { mode: 0o600, flag: "wx" }))
+        try {
+          const staged = await commands.command(
+            context,
+            [...args, "ls-files", "--stage", "--sparse", "-z"],
+            undefined,
+            LIMIT.index,
+            undefined,
+            candidate,
+          )
+          requireValue(
+            staged.code === 0 && staged.bytes.equals(entries.bytes),
+            "original Git index content changed during inspection",
+          )
+          const tree = await commands.command(context, [...args, "write-tree"], undefined, 41, undefined, candidate)
+          requireValue(
+            tree.code === 0 && tree.bytes.equals(capturedTree.bytes),
+            "original Git index tree changed during inspection",
+          )
+          context.check()
+          observedIndex = current
+        } finally {
+          // The process has settled before removing its exact private file; cancellation cannot grant success.
+          await fs.unlink(candidate).catch(() => {
+            context.unsafe()
+            throw new Unavailable("private index observation cleanup remains unconfirmed")
+          })
+        }
+      }
       requireValue(
-        createHash("sha256").update(after).digest("hex") === digest &&
-          (await head(gitHandle, commonHandle, undefined, context)) === capturedHead &&
+        (await head(gitHandle, commonHandle, undefined, context)) === capturedHead &&
           (await read(gitHandle, "HEAD", 4096, false, context))!.toString("utf8").trim() === capturedRef,
         "original Git metadata changed during inspection",
       )
@@ -1685,20 +1739,34 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       }
     }
     const safeRead = (operation: Read) => observe((context) => perform(operation, context))
-    const status = async (context: Operation) => {
-      await unchanged(context)
-      const result = await commands.command(context, [
-        ...args,
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--no-renames",
-        "--untracked-files=all",
-        "--ignore-submodules=all",
-      ])
-      requireValue(result.code === 0, "private worktree status could not be read")
-      await unchanged(context)
-      return { head: capturedHead, dirty: result.bytes.byteLength !== 0 }
+    let statusQueue: Promise<unknown> = Promise.resolve()
+    const status = (context: Operation) => {
+      // Refresh only this review's normalized private stat cache. Source stat/skip/fsmonitor flags were discarded;
+      // explicit ctime/full-stat checks remain enabled. Serialize refreshes so status readers never race an index lock.
+      const pending = statusQueue.then(async () => {
+        context.check()
+        await unchanged(context)
+        const refresh = await commands.command(context, [...args, "update-index", "--refresh", "--ignore-submodules"])
+        // One means an ordinary dirty worktree; refresh may not change staged entries or authorize a new snapshot.
+        requireCommand(refresh, [0, 1], "private index stat refresh failed")
+        const result = await commands.command(context, [
+          ...args,
+          "status",
+          "--porcelain=v1",
+          "-z",
+          "--no-renames",
+          "--untracked-files=all",
+          "--ignore-submodules=all",
+        ])
+        requireValue(result.code === 0, "private worktree status could not be read")
+        await unchanged(context)
+        return { head: capturedHead, dirty: result.bytes.byteLength !== 0 }
+      })
+      statusQueue = pending.then(
+        () => undefined,
+        () => undefined,
+      )
+      return pending
     }
     await status(startup)
     startup.check()

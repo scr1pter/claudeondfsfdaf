@@ -30,7 +30,7 @@ env:
 jobs:
   shell:
     name: Shell seam (${{ matrix.runtime }}, ${{ matrix.mode }}, ${{ matrix.family }})
-    if: github.ref == 'refs/heads/build-native-shell' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/native-finish')
+    if: github.ref == 'refs/heads/build-native-shell' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["refs/heads/native-finish","refs/heads/main","refs/heads/release-finish"]'), github.ref))
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:

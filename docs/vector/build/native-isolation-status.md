@@ -116,3 +116,49 @@ The single hosted target-classification diagnostic at `f141ef16` is still queued
 [43621985900](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43621985900).
 No expanded matrix was dispatched. Prepare, cleanup, full bootstrap and production
 activation remain unqualified; source/type/pure test passes do not close these gates.
+
+
+The queued single-cell diagnostic has completed: run `43621985900`, job
+`132529480650`, at `f141ef16` passed all 31 pure Python policy tests, the three
+control-policy tests, compilation, and same-host Node/Bun metadata preflights.
+Actual prepare failed with the exact closed label
+`prepare-keeper-child-exit-log-bwrap-destination-host-temp-info-child-created`.
+The failing construction target is therefore the fixed hosted temporary root,
+`/home/runner/work/_temp`. Keeper startup, Shell lifecycle and Engine-death cells
+were not reached. Cleanup proof also refused. No successful isolation/cleanup
+claim follows. Mask geometry, runner permissions and privilege lifetimes have
+not been relaxed; any ancestor-mask construction needs a complete alias/mount
+proof before a further bounded hosted qualification.
+
+
+## Connect C5 private Git status proof
+
+A live index's stat-cache-only rewrite no longer invalidates a review merely because
+its raw bytes changed. The observer copies changed bytes into its own exact private
+observation file, uses the same pinned runtime/configuration and verified private
+objects, and compares both canonical staged entries and the captured tree OID.
+HEAD and symbolic-ref identity remain exact. Source index bytes, hooks and executable
+configuration are never written or executed. Required-isolation helper refusals remain.
+
+The review's normalized private index now keeps its own refreshed stat cache between
+status checks. Refreshes serialize, retain explicit ctime/full-stat checks, and permit
+only the ordinary clean/dirty return codes; source skip/fsmonitor/stat flags are still
+discarded at capture. Six real Linux regressions cover a harmless live status refresh,
+concurrent checks, actual staged content/mode and HEAD/branch changes, and equal-size
+content modification with the original mtime restored. On Windows these are explicit
+skips pending the existing hosted repository-identity lane; pure/import/refusal checks
+pass. This does not implement startup deletion of stale private directories: that
+requires a separate ownership/liveness/retention proof and must not delete another
+active review's private files.
+
+The native workflow's explicit manual ref allowlist now also permits `main` and
+`release-finish`, so the held qualification lane remains reachable after integration.
+Its diagnostic-cell selector, full matrix, pinned actions, runtime provenance, host
+and cleanup checks are unchanged. No further workflow has been dispatched here.
+
+
+Final C5 source formatting and Core `bun typecheck` pass. Windows import/pure/refusal
+selection reported 7 passes and 65 explicit Linux skips before the final private-cache
+refresh addition; the additional restored-mtime integration case is also Linux-only.
+The six new Linux cases have not been represented as local passes. No hosted lane was
+automatically started for this C5 source change.

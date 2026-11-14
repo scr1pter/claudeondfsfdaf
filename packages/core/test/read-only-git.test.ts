@@ -1261,3 +1261,88 @@ test.skipIf(process.platform === "linux")(
     ).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
   },
 )
+
+local("Git status stat-cache refresh preserves the captured private index and concurrent review status", async () => {
+  const f = await fixture()
+  const repository = await ReadOnlyGit.open(f.input)
+  try {
+    const index = path.join(f.gitDirectory, "index")
+    const before = await fs.readFile(index)
+    await fs.utimes(path.join(f.directory, "probe.txt"), 1_700_000_000, 1_700_000_000)
+    expect((await f.git(["status", "--porcelain=v1"])).stdout).toBe("")
+    const refreshed = await fs.readFile(index)
+    expect(refreshed.equals(before)).toBe(false)
+    expect(await Promise.all([repository.status(), repository.status()])).toEqual([
+      { head: repository.head, dirty: false },
+      { head: repository.head, dirty: false },
+    ])
+    expect(
+      (await repository.read({ kind: "object", action: "blob", revision: "index", file: "probe.txt" })).bytes,
+    ).toEqual(Buffer.from("saved contents\n"))
+    expect(await fs.readFile(index)).toEqual(refreshed)
+    expect(await f.calls()).toBe(0)
+  } finally {
+    await repository.close()
+  }
+})
+
+local.each(["staged-content", "staged-mode", "head", "branch"] as const)(
+  "a real %s change still refuses status against the captured private snapshot",
+  async (change) => {
+    const f = await fixture()
+    const repository = await ReadOnlyGit.open(f.input)
+    try {
+      if (change === "staged-content") {
+        await fs.writeFile(path.join(f.directory, "probe.txt"), "new staged contents\n")
+        await f.git(["add", "probe.txt"])
+      }
+      if (change === "staged-mode") await f.git(["update-index", "--chmod=+x", "probe.txt"])
+      if (change === "head")
+        await f.git([
+          "-c",
+          "user.name=Vector Fixture",
+          "-c",
+          "user.email=fixture@invalid",
+          "commit",
+          "--allow-empty",
+          "--quiet",
+          "-m",
+          "new captured head",
+        ])
+      if (change === "branch") {
+        await f.git(["update-ref", "refs/heads/rebound", repository.head])
+        await f.git(["symbolic-ref", "HEAD", "refs/heads/rebound"])
+      }
+      await expect(repository.status()).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repository.close()
+    }
+  },
+)
+
+local(
+  "a refreshed private stat cache still detects equal-size content edits with the original mtime restored",
+  async () => {
+    const f = await fixture()
+    const file = path.join(f.directory, "probe.txt")
+    await fs.utimes(file, 1_700_000_000, 1_700_000_000)
+    const repository = await ReadOnlyGit.open(f.input)
+    try {
+      expect((await repository.status()).dirty).toBe(false)
+      const before = await fs.stat(file, { bigint: true })
+      const index = await fs.readFile(path.join(f.gitDirectory, "index"))
+      await fs.writeFile(file, "Z".repeat(Number(before.size) - 1) + "\n")
+      await fs.utimes(file, 1_700_000_000, 1_700_000_000)
+      const after = await fs.stat(file, { bigint: true })
+      expect(after.size).toBe(before.size)
+      expect(after.mtimeNs).toBe(before.mtimeNs)
+      expect(after.ctimeNs).not.toBe(before.ctimeNs)
+      expect((await repository.status()).dirty).toBe(true)
+      expect(await fs.readFile(path.join(f.gitDirectory, "index"))).toEqual(index)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repository.close()
+    }
+  },
+)
