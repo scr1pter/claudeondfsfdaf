@@ -13,6 +13,7 @@ on:
       - "packages/web/astro.config.mjs"
       - "api/**"
       - "test/cloud-workspaces-api.test.ts"
+      - "test/account-delete.test.ts"
       - "bun.lock"
       - ".github/workflows/vector-workspaces.yml"
 
@@ -42,7 +43,7 @@ jobs:
         run: bun test test --timeout 30000
       - name: Account gateway and deletion regressions
         working-directory: test
-        run: bun test cloud-workspaces-api.test.ts cloud-workspaces-node.test.ts account-delete-api.test.ts site-publication.test.ts --timeout 30000
+        run: bun test cloud-workspaces-api.test.ts cloud-workspaces-node.test.ts account-delete-api.test.ts account-delete.test.ts site-publication.test.ts --timeout 30000
       - name: Browser client contracts
         working-directory: packages/web
         run: bun test src/lib/cloud-workspaces-client.test.ts --timeout 30000

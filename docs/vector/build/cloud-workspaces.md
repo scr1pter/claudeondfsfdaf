@@ -49,6 +49,8 @@ Pause blocks new model admission before stopping the engine. Unknown model outco
 
 Account deletion first records a durable closed-account fence. It immediately refuses further workspace access and model admission, cancels active publication where possible, and queues container/data cleanup. The reaper retries unfinished cleanup. Deleting workspace data also removes its model guard and local publication receipt. A GitHub request already sent may have completed; deterministic branch/PR checks reconcile uncertain publication replies without force-pushing. Existing GitHub pull requests are not deleted by workspace or account deletion.
 
+On the website, account deletion is Codium's staged deletion (`api/_lib/codium-erase.ts`, WP A57). After it revokes the account's tokens, which already refuses the gateway, its first erase part, `workspaces`, sends the signed `/accounts/close` to the host. A deployment never given a workspace host (neither `VECTOR_WORKSPACES_ORIGIN` nor `VECTOR_WORKSPACES_SECRET`) skips the part; a partial setting, an unreachable host or a refused close fails it. A failed part is handled like every other part: the deletion answers pending, the tombstone records `workspaces`, the account's own Codium records and the identity wait, and the cleanup cron retries it with a backoff and alerts the owner after repeated failures. The close is repeated on every retry and on the follow-up pass after the identity is gone; the host answers `closed` again for an account it already fenced. Inside a deletion the part waits for the host only until the deletion's deadline.
+
 ## Operator setup
 
 Use `packages/cloud-workspaces/.env.example` as a variable reference. Configure gateway variables on the account API deployment and runtime variables on the dedicated Linux supervisor host. Store real keys through the deployment's secret mechanism; none belongs in public website environment variables or the repository.
@@ -141,7 +143,7 @@ bun test test --timeout 30000
 bun typecheck
 
 # From test:
-bun test cloud-workspaces-api.test.ts cloud-workspaces-node.test.ts account-delete-api.test.ts site-publication.test.ts --timeout 30000
+bun test cloud-workspaces-api.test.ts cloud-workspaces-node.test.ts account-delete-api.test.ts account-delete.test.ts site-publication.test.ts --timeout 30000
 
 # From packages/web:
 bun test src/lib/cloud-workspaces-client.test.ts --timeout 30000
