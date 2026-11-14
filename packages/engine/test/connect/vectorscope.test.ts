@@ -1268,7 +1268,24 @@ describe("a review through connect", () => {
 })
 
 describe("whether VectorScope can review", () => {
-  it.instance(
+  const supported = process.platform === "linux" ? it.instance : it.instance.skip
+  const unsupported = process.platform !== "linux" ? it.instance : it.instance.skip
+
+  unsupported(
+    "unsupported private-Git hosts are listed unavailable before resolving a review model",
+    () =>
+      Effect.gen(function* () {
+        const { hub } = yield* setup()
+        const listed = (yield* hub.members()).find((item) => item.id === "vectorscope")
+        expect(listed?.state).toBe("unavailable")
+        expect(listed?.reason).toContain("require Linux")
+        expect(resolved).toEqual([])
+        expect(calls).toEqual([])
+      }),
+    instance,
+  )
+
+  supported(
     "a model that cannot make tool calls shows as unavailable, and a review is refused before anything runs",
     () =>
       Effect.gen(function* () {
@@ -1293,7 +1310,7 @@ describe("whether VectorScope can review", () => {
     instance,
   )
 
-  it.instance(
+  supported(
     "a review model Vector Local keeps off shows as off, through VectorScope's own model resolution",
     () =>
       Effect.gen(function* () {

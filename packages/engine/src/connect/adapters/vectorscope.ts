@@ -367,6 +367,12 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
 
     const describe: ConnectAdapter.Adapter["describe"] = () =>
       Effect.gen(function* () {
+        if (process.platform !== "linux")
+          return member({
+            state: "unavailable",
+            reason:
+              "Git reads cannot be inspected safely on this platform. Connected VectorScope reviews currently require Linux.",
+          })
         const ctx = yield* InstanceState.context
         const root = ctx.worktree === "/" ? ctx.directory : ctx.worktree
         const exit = yield* plan(root).pipe(Effect.exit)
