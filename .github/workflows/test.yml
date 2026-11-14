@@ -378,10 +378,17 @@ jobs:
         run: bunx playwright install chromium
 
       - name: Run app e2e tests
-        run: bun --cwd packages/app test:e2e:local
+        run: bun --cwd packages/app test:e2e
         env:
           CI: true
           # Five browser workers stalled asset loading on both hosted platforms; keep test deadlines intact.
+          PLAYWRIGHT_WORKERS: "1"
+        timeout-minutes: 30
+
+      - name: Build and test the public share viewer
+        run: bun --cwd packages/app test:e2e:viewer
+        env:
+          CI: true
           PLAYWRIGHT_WORKERS: "1"
         timeout-minutes: 30
 
