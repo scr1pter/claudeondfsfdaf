@@ -200,6 +200,9 @@ const replacements = [
   [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
 ] as const
 const it = testEffect(LayerNode.compile(root, replacements))
+// Only genuine private Git snapshot integrations require this supported host.
+const linuxInstance = process.platform === "linux" ? it.instance : it.instance.skip
+const windowsInstance = process.platform === "win32" ? it.instance : it.instance.skip
 
 const TIMEOUT = 30_000
 const ref = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("test-model") }
@@ -523,6 +526,49 @@ for (const reason of ["error", "abort", "reduced"] as const) {
 }
 
 describe("Review.run", () => {
+  windowsInstance(
+    "Windows private review admission refuses before model resolution or the actual review runner",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const git = yield* Git.Service
+        const actual = yield* git.run(["rev-parse", "HEAD"], { cwd: directory })
+        expect(actual.exitCode).toBe(0)
+        const head = actual.text().trim()
+        let resolved = 0
+        let reviewed = 0
+        const result = yield* ReviewService.execute(
+          {
+            version: 1,
+            mode: "review",
+            directory,
+            target: { kind: "working-tree", head },
+            settingsRef: head,
+            model: "lmstudio/test-model",
+          },
+          {
+            resolveModel: (request) => Effect.sync(() => resolved++).pipe(Effect.andThen(resolveReviewModel(request))),
+            runReview: (request) => Effect.sync(() => reviewed++).pipe(Effect.andThen(Review.run(request))),
+            confirm: async () => false,
+            stdout: async () => {},
+            stderr: () => {},
+            posting: async () => {
+              throw new Error("An unsupported private review cannot post")
+            },
+          },
+        )
+        expect(result.exitCode).toBe(2)
+        expect(result.error).toContain("this host has no pinned-directory adapter")
+        expect(result.verdict.verdict).toBe("not-reviewed")
+        expect(result.outcome).toBeUndefined()
+        expect(resolved).toBe(0)
+        expect(reviewed).toBe(0)
+        expect(yield* modelRequests(llm)).toHaveLength(0)
+      }),
+    { git: true },
+    TIMEOUT,
+  )
+
   for (const variant of [false, true])
     it.instance(
       `pinned context survives actual OpenAI Responses ${variant ? "variant" : "model"} instruction options`,
@@ -1402,7 +1448,7 @@ describe("Review.run", () => {
     TIMEOUT,
   )
 
-  it.instance(
+  linuxInstance(
     "the durable local runner preserves actual provider output and stops its factory without a finalizer",
     () =>
       Effect.gen(function* () {
@@ -1537,7 +1583,7 @@ describe("Review.run", () => {
     TIMEOUT,
   )
 
-  it.instance(
+  linuxInstance(
     "completed deletion between attach and registration prevents late actual provider admission",
     () =>
       Effect.gen(function* () {
@@ -1576,7 +1622,7 @@ describe("Review.run", () => {
     TIMEOUT,
   )
 
-  it.instance(
+  linuxInstance(
     "deletion cancels a registered dormant review before its latch can admit an actual provider",
     () =>
       Effect.gen(function* () {
@@ -1617,7 +1663,7 @@ describe("Review.run", () => {
     TIMEOUT,
   )
 
-  it.instance(
+  linuxInstance(
     "deletion without instance context joins the actual provider and refuses reentrant review finalizer deletion",
     () =>
       Effect.gen(function* () {
@@ -2096,7 +2142,7 @@ describe("Review.run", () => {
     TIMEOUT,
   )
 
-  it.instance(
+  linuxInstance(
     "nested service placement roots relative denials in the actual tool worktree",
     () =>
       Effect.gen(function* () {
@@ -2164,7 +2210,7 @@ describe("Review.run", () => {
     TIMEOUT,
   )
 
-  it.instance(
+  linuxInstance(
     "a resolver-time symlink retarget cannot release the admitted canonical read denial",
     () =>
       Effect.gen(function* () {

@@ -93,6 +93,14 @@ jobs:
           PLAYWRIGHT_WORKERS: "1"
           PLAYWRIGHT_PREVIEW: "1"
         timeout-minutes: 30
+      - name: Upload browser traces separately
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vectorscope-traces-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: packages/app/e2e/test-results/**/trace.zip
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

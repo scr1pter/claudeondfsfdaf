@@ -9,6 +9,7 @@ on:
       - packages/engine/test/session/llm-native-recorded.test.ts
       - packages/engine/test/review/memory-boundary.test.ts
       - packages/engine/test/review/memory-owner.test.ts
+      - packages/engine/test/review/run.test.ts
       - packages/engine/test/compliance/egress-inventory.test.ts
       - packages/core/src/review/model-evidence.ts
       - packages/core/test/brain/database.test.ts
@@ -92,6 +93,10 @@ jobs:
         working-directory: packages/engine
         run: GITHUB_ACTIONS=false bun test --timeout 30000 test/compliance/egress-inventory.test.ts
 
+      - name: Check actual review admission on supported and unsupported hosts
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/run.test.ts
+
       - name: Check Brain migration inventory
         working-directory: packages/core
         run: GITHUB_ACTIONS=false bun test --timeout 30000 test/brain/database.test.ts
@@ -130,4 +135,8 @@ jobs:
 
       - name: Check Core types
         working-directory: packages/core
+        run: bun typecheck
+
+      - name: Check Engine types
+        working-directory: packages/engine
         run: bun typecheck
