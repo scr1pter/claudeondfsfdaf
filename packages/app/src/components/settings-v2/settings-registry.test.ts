@@ -4,7 +4,7 @@ import { filterSettingsGroups, isSettingsTab, settingsGroups, settingsItemCount 
 
 describe("settings registry", () => {
   test("keeps every settings page reachable", () => {
-    expect(settingsItemCount(settingsGroups)).toBe(19)
+    expect(settingsItemCount(settingsGroups)).toBe(20)
     expect(settingsGroups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
       "account",
       "roadmap",
@@ -51,10 +51,14 @@ describe("settings registry", () => {
     const computer = items.find((item) => item.value === "computer")!
     expect(computer.icon).toBe("hands")
     expect(items.filter((item) => item.icon === "hands").map((item) => item.value)).toEqual(["computer"])
-    for (const query of ["mouse", "screenshots", "use my computer", "accessibility permission"])
+    for (const query of ["mouse", "use my computer", "accessibility permission"])
       expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
         "computer",
       ])
+    expect(filterSettingsGroups("screenshots").flatMap((group) => group.items.map((item) => item.value))).toEqual([
+      "production",
+      "computer",
+    ])
     for (const word of ["keyboard", "terminal", "workflow", "skills", "effort", "web access", "theme", "instructions"])
       expect(computer.keywords.some((keyword) => keyword.toLocaleLowerCase().includes(word))).toBe(false)
   })
