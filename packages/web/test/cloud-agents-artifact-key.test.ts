@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createHmac } from "node:crypto"
-import { cloudRunArtifactKey } from "../../../api/_lib/cloud-agents-artifact"
+import { cloudRunArtifactKey, cloudBrainArtifactKey } from "../../../api/_lib/cloud-agents-artifact"
 
 const claims = { sub: "17da3820-500b-4d92-8c50-6092ec6ee9bd", repo: "123", gen: 1, thr: "5" }
 const secret = "artifact-fixture-secret-at-least-32-characters"
@@ -28,4 +28,24 @@ test("artifact key fallback uses a separate HMAC domain and missing configuratio
   expect(fallback.key).not.toBe(cloudRunArtifactKey(claims, { VECTOR_RUN_ARTIFACT_SECRET: secret }).key)
   expect(() => cloudRunArtifactKey(claims, {})).toThrow("Run artifacts are unavailable.")
   expect(() => cloudRunArtifactKey(claims, { VECTOR_RUN_ARTIFACT_SECRET: "short" })).toThrow()
+})
+
+test("Brain conversation authority is separately keyed by exact approved digest and visibility under the artifact master", () => {
+  const env = { VECTOR_RUN_ARTIFACT_SECRET: secret }
+  const context = { sha256: "a".repeat(64), publicRepository: false }
+  const ordinary = cloudRunArtifactKey(claims, env)
+  const brain = cloudBrainArtifactKey(claims, context, env)
+  expect(brain).toEqual(cloudBrainArtifactKey(claims, context, env))
+  expect(brain.key).not.toBe(ordinary.key)
+  expect(brain.keyId).toBe(ordinary.keyId)
+  expect(cloudBrainArtifactKey(claims, { ...context, sha256: "b".repeat(64) }, env).key).not.toBe(brain.key)
+  expect(cloudBrainArtifactKey(claims, { ...context, publicRepository: true }, env).key).not.toBe(brain.key)
+  expect(cloudBrainArtifactKey({ ...claims, gen: 2 }, context, env).key).not.toBe(brain.key)
+  expect(cloudBrainArtifactKey({ ...claims, thr: "6" }, context, env).key).not.toBe(brain.key)
+  const label = `vector-brain-conversation-v1|${claims.sub}|123|1|5|owner-desktop|${context.sha256}|private`
+  expect(brain.key).toBe(createHmac("sha256", secret).update(label).digest("base64url"))
+  expect(brain.key).not.toBe(
+    createHmac("sha256", Buffer.from(ordinary.key, "base64url")).update(label).digest("base64url"),
+  )
+  expect(() => cloudBrainArtifactKey(claims, { ...context, sha256: "bad" }, env)).toThrow()
 })

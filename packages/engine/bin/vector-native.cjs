@@ -12,7 +12,7 @@ function run(target) {
   const proof =
     process.env.GITHUB_ACTIONS === "true" &&
     process.env.VECTOR_MODE === "codium" &&
-    process.env.VECTOR_GITHUB_TOOL_PID_NAMESPACE === "pid" &&
+    ["pid", "guard"].includes(process.env.VECTOR_GITHUB_TOOL_PID_NAMESPACE) &&
     process.env.VECTOR_GITHUB_SESSION_PROOF === "fd3"
   const child = childProcess.spawn(target, process.argv.slice(2), {
     stdio: proof ? ["inherit", "inherit", "inherit", 3] : "inherit",

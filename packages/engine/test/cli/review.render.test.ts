@@ -360,4 +360,7 @@ test("Codium footer and passes omit legacy numbers while mixed own passes retain
   expect(mixed).toContain("100 in / 20 out")
   expect(mixed).toContain("Codium")
   expect(mixed).not.toContain("987")
+  // Label plan §2: the Codium model reads "Vector Codium · <model>", never its vector-plan id.
+  expect(mixed).toContain("openai/gpt-4.1 + Vector Codium · vector-flash · $0.12 + Codium · 1m 52s")
+  expect(mixed).not.toContain("vector-plan")
 })

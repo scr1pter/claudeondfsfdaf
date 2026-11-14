@@ -246,7 +246,13 @@ export const SessionApi = HttpApi.make("session")
             SessionDeleteResult,
             "Deleted local session; warnings identify public copies that may remain online",
           ),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, PublicShareRemovalError, PublicSession.Error],
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            PublicShareRemovalError,
+            PublicSession.Error,
+            SessionBusyError,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.delete",
@@ -322,7 +328,10 @@ export const SessionApi = HttpApi.make("session")
         ),
         HttpApiEndpoint.get("sharePreview", `${SessionPaths.share}/preview`, {
           params: { sessionID: SessionID },
-          query: WorkspaceRoutingQuery,
+          query: Schema.Struct({
+            ...WorkspaceRoutingQuery.fields,
+            includeScreenshots: Schema.Literals(["true", "false"]).pipe(Schema.optional),
+          }),
           success: PublicSession.Archive,
           error: [ApiNotFoundError, PublicSession.Error],
         }).annotateMerge(

@@ -5,10 +5,23 @@ import { cloudAgentView } from "../../../api/_lib/codium-cloud-agents"
 
 const now = 1_800_000_000_000
 const snapshot = (plan: CodiumPlan.PlanId): EntitlementSnapshot => ({
-  v: 1, version: 1, livemode: false, account: "00000000-0000-4000-8000-000000000001", state: "active", plan,
-  subscription: "sub_test", periodStart: now - 1000, periodEnd: now + 86_400_000, meterEpoch: `sub_test:${now - 1000}`,
-  cancelAtPeriodEnd: false, caps: ENTITLEMENTS[plan], updatedAt: now, checkedAt: now,
-} as EntitlementSnapshot)
+  v: 1,
+  version: 1,
+  livemode: false,
+  account: "00000000-0000-4000-8000-000000000001",
+  state: "active",
+  plan,
+  subscription: "sub_test",
+  periodStart: now - 1000,
+  periodEnd: now + 86_400_000,
+  meterEpoch: `sub_test:${now - 1000}`,
+  cancelAtPeriodEnd: false,
+  caps: ENTITLEMENTS[plan],
+  updatedAt: now,
+  checkedAt: now,
+  ramp: { hostedUntil: 0, browserFrom: 0 },
+  source: "request",
+})
 
 test("all plans take limits from the canonical snapshot and preserve its meter epoch", () => {
   for (const plan of CodiumPlan.PLANS) {
@@ -26,8 +39,15 @@ test("reserved sources, schedule caps, billing holds and closing never yield an 
   const plus = snapshot("vector-10")
   expect(cloudAgentView(plus, "github-schedule", now)).toEqual({ active: false, reason: "not-in-plan" })
   expect(cloudAgentView(plus, "slack", now)).toEqual({ active: false, reason: "source-unavailable" })
-  for (const [state, reason, refusal] of [["paused", "payment_failed", "payment"], ["frozen", "disputed", "dispute"], ["frozen", "early_fraud_warning", "fraud"], ["ended", "closing", "closing"]] as const)
+  for (const [state, reason, refusal] of [
+    ["paused", "payment_failed", "payment"],
+    ["frozen", "disputed", "dispute"],
+    ["frozen", "early_fraud_warning", "fraud"],
+    ["ended", "closing", "closing"],
+  ] as const)
     expect(cloudAgentView({ ...plus, state, reason }, "desktop", now)).toEqual({ active: false, reason: refusal })
   expect(cloudAgentView(undefined, "desktop", now)).toEqual({ active: false, reason: "none" })
-  expect(() => cloudAgentView({ ...plus, state: "renewing", periodEnd: now - 7 * 86_400_000 }, "desktop", now)).toThrow()
+  expect(() =>
+    cloudAgentView({ ...plus, state: "renewing", periodEnd: now - 7 * 86_400_000 }, "desktop", now),
+  ).toThrow()
 })

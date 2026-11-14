@@ -7,6 +7,9 @@ import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { isFreeModelRef } from "@vectordevai/schema/free-model"
 import { WorkflowPlan } from "@vectordevai/core/orchestration/plan"
 import { WorkflowSpec } from "@vectordevai/core/orchestration/spec"
+import { Playbooks } from "@vectordevai/schema/playbooks"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { Token } from "@/util/token"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { WorkflowCheckpointStore } from "@vectordevai/core/workflow-checkpoint-store"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
@@ -47,6 +50,8 @@ export type Input = {
   readonly retryFailed?: boolean
   /** Owner API option only; the model-facing workflow tool rejects this field. */
   readonly quiet?: boolean
+  /** Private durable source identity, reconstructed only from this run's engine-marked source part. */
+  readonly playbook?: { readonly name: string; readonly hash: string }
 }
 export type Call = { readonly ctx: Tool.Context; readonly input: Input }
 /** Trusted engine planning context; global owner validation never creates a Session or transcript. */
@@ -100,7 +105,11 @@ const layer = Layer.effect(
         const catalog = yield* agents.list()
         const entries = yield* library.list()
         const saved = Object.fromEntries(entries.filter((entry) => entry.spec).map((entry) => [entry.name, entry.spec]))
-        const named = input.name === undefined ? undefined : yield* WorkflowLibrary.select(entries, input.name)
+        const named = input.name === undefined && !input.playbook ? undefined :
+          yield* WorkflowLibrary.select(entries, input.name ?? input.playbook!.name)
+        if (input.playbook && (named?.source !== "user" || !named.spec ||
+          WorkflowPlan.key(named.spec) !== input.playbook.hash))
+          return yield* new Error({ code: "invalid", message: "This Playbook changed. Select its saved name and approve it again." })
         if (input.name !== undefined && (!named?.spec || input.spec !== undefined))
           return yield* new Error({
             code: "invalid",
@@ -158,12 +167,16 @@ const layer = Layer.effect(
         const model = context.model
         const guest = context.guest === true
         const issues = [...built.issues]
+        const playbookWarnings: Workflow.Issue[] = []
+        const roleModels = new Set<string>()
+        const roleStages: Record<string, { producer?: string; verifier?: string }> = {}
         const models: Record<
           string,
           { producer?: string; verifier?: string; effort?: string; verifierEffort?: string }
         > = {}
         for (const expanded of built.stages ?? []) {
           const stage = expanded.stage
+          if (!("prompt" in stage)) continue
           for (const target of [
             {
               agent: stage.agent ?? "general",
@@ -186,6 +199,23 @@ const layer = Layer.effect(
           ]) {
             const next = catalog.find((item) => item.name === target.agent)
             if (!next) continue
+            const role = /^codium:(floor|default|ceiling)$/.exec(target.model ?? "")?.[1]
+            const trustedPlaybook = named?.source === "user" && Playbooks.validName(named.name)
+            if ((target.model ?? "").startsWith("codium:") &&
+              (!role || !trustedPlaybook || !provider.playbookModel || guest || Config.local().enabled)) {
+              issues.push({ path: target.path, message: "Codium roles require a personal Vector Playbook and an available Codium plan." })
+              continue
+            }
+            const resolved = role && provider.playbookModel ? yield* provider.playbookModel(
+              role as "floor" | "default" | "ceiling", Token.estimate(target.verifier ? stage.verify!.prompt : stage.prompt),
+            ) : undefined
+            const chosenModel = resolved ? `${resolved.providerID}/${resolved.modelID}` : target.model
+            if (resolved) {
+              roleModels.add(chosenModel!)
+              roleStages[stage.id] = { ...roleStages[stage.id], [target.verifier ? "verifier" : "producer"]: chosenModel }
+            }
+            if (resolved?.estimate) playbookWarnings.push({ path: target.path,
+              message: `Codium ceiling: one request with this prompt and up to 8,192 output tokens is estimated at ${resolved.estimate} of your month. Tool steps, added context and repeated items use more.` })
             const choice = yield* SubagentModel.choose({
               parent: {
                 model: { providerID: model.providerID, modelID: model.modelID },
@@ -201,37 +231,65 @@ const layer = Layer.effect(
                   : {}),
               },
               next,
-              ask: { model: target.model, effort: target.effort, fork: false },
-              allow: cfg.sizing?.subagents?.models,
+              ask: { model: chosenModel, effort: target.effort, fork: false },
+              allow: resolved ? [...(cfg.sizing?.subagents?.models ?? []), chosenModel!] : cfg.sizing?.subagents?.models,
               local: Config.local().enabled,
             }).pipe(Effect.provideService(Provider.Service, provider), Effect.result)
             if (choice._tag === "Failure") issues.push({ path: target.path, message: choice.failure.message })
-            else
+            else {
+              if (!resolved && target.model !== undefined && choice.success.model.providerID === ModelPlanStatus.PROVIDER_ID) {
+                if (!provider.codiumEstimate) {
+                  issues.push({ path: target.path, message: "Update Vector to preview this Codium model's usage before running." })
+                  continue
+                }
+                const band = yield* provider.codiumEstimate(choice.success.model.modelID, Token.estimate(target.verifier ? stage.verify!.prompt : stage.prompt))
+                playbookWarnings.push({ path: target.path, message: `Codium: one request on ${choice.success.model.modelID} with this prompt and up to 8,192 output tokens is estimated at ${band} of your month. Tool steps, added context and repeated items use more.` })
+              }
               models[stage.id] = {
                 ...models[stage.id],
                 [target.verifier ? "verifier" : "producer"]:
                   `${choice.success.model.providerID}/${choice.success.model.modelID}`,
                 [target.verifier ? "verifierEffort" : "effort"]: choice.success.effort ?? "default",
               }
+            }
           }
         }
         const plan = built.plan && {
           ...built.plan,
-          stages: built.plan.stages.map((stage) => ({
-            ...stage,
-            model: models[stage.id]?.producer ?? stage.model,
-            effort: models[stage.id]?.effort ?? stage.effort,
-          })),
+          stages: built.plan.stages.map((stage) =>
+            stage.kind === "connect"
+              ? stage
+              : {
+                  ...stage,
+                  model: models[stage.id]?.producer ?? stage.model,
+                  effort: models[stage.id]?.effort ?? stage.effort,
+                },
+          ),
           ...(named ? { saved: { name: named.name, source: named.source } } : {}),
         }
         return {
           built: {
             ...built,
+            stages: built.stages?.map((entry) => {
+              const stage = entry.stage
+              if ("connect" in stage) return entry
+              return {
+                ...entry,
+                stage: {
+                  ...stage,
+                  ...(roleStages[stage.id]?.producer ? { model: roleStages[stage.id]!.producer } : {}),
+                  ...(stage.verify && roleStages[stage.id]?.verifier
+                    ? { verify: { ...stage.verify, model: roleStages[stage.id]!.verifier } }
+                    : {}),
+                },
+              }
+            }),
             ok: issues.length === 0,
             issues,
             plan,
             warnings: [
               ...built.warnings,
+              ...playbookWarnings,
               ...(SessionCodiumAuto.isAuto(context.model)
                 ? [
                     {
@@ -245,6 +303,10 @@ const layer = Layer.effect(
           },
           agents: planAgents,
           spec: parsed.spec,
+          ceiling: playbookWarnings.length > 0,
+          roleModels: [...roleModels],
+          playbook: named?.source === "user" && Playbooks.validName(named.name) && roleModels.size
+            ? { name: named.name, hash: WorkflowPlan.key(named.spec) } : undefined,
           models,
         }
       },
@@ -311,6 +373,7 @@ const layer = Layer.effect(
               Schema.Struct({
                 spec: Schema.String,
                 inputs: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+                playbook: Schema.optional(Schema.Struct({ name: Schema.String, hash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)) })),
               }),
             )(old.value)
           : Option.none()
@@ -429,9 +492,11 @@ const layer = Layer.effect(
               ? "mcp"
               : process.env[ChildEnvironment.AGENT_MARKER] !== undefined
                 ? "agent"
-                : prepared.built.large
+                : prepared.built.large || prepared.ceiling
                   ? "large"
                   : undefined
+          // Owner forms already display the checked plan and share bands before Run. Model-facing launches still ask
+          // every time when a Codium estimate is present, even under the ordinary workflow allow setting.
           if (call.ctx.extra?.[WorkflowMarkers.USER_START] !== true)
             yield* call.ctx.ask({
               permission: "workflow",
@@ -441,6 +506,7 @@ const layer = Layer.effect(
                 ...prepared.built.plan,
                 delegated: TaskLimits.resolve(cfg, false).budget,
                 models: prepared.models,
+                warnings: prepared.built.warnings,
               },
             })
           if (yield* guests.marked(parent.id))
@@ -509,7 +575,7 @@ const layer = Layer.effect(
                   sessionID: prompt.sessionID,
                   type: "text",
                   synthetic: true,
-                  text: JSON.stringify({ spec: JSON.stringify(spec), inputs: input.inputs ?? {} }),
+                  text: JSON.stringify({ spec: JSON.stringify(spec), inputs: input.inputs ?? {}, ...(prepared.playbook ? { playbook: prepared.playbook } : {}) }),
                   metadata: { [WorkflowMarkers.SPEC]: true },
                 })
                 const result = yield* WorkflowRunner.run({
@@ -527,6 +593,7 @@ const layer = Layer.effect(
                     ...call.ctx.extra,
                     [WorkflowMarkers.RUN]: undefined,
                     [WorkflowMarkers.USER_START]: undefined,
+                    [WorkflowMarkers.PLAYBOOK_MODELS]: prepared.roleModels,
                   },
                   message: {
                     parentID: userID,

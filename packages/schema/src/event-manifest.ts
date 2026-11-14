@@ -1,6 +1,7 @@
 export * as EventManifest from "./event-manifest"
 
 import { Catalog } from "./catalog"
+import { ComputerEvent } from "./computer-event"
 import { Durable } from "./durable-event-manifest"
 import { Event } from "./event"
 import { FileSystem } from "./filesystem"
@@ -12,6 +13,7 @@ import { LocalEvent } from "./local-event"
 import { LspEvent } from "./lsp-event"
 import { McpEvent } from "./mcp-event"
 import { MemoryEvent } from "./memory-event"
+import { Connect } from "./connect"
 import { ModelCatalog } from "./model-catalog"
 import { Permission } from "./permission"
 import { PermissionV1 } from "./permission-v1"
@@ -77,10 +79,12 @@ export const Definitions = Event.inventory(
   ...Project.Event.Definitions,
   ...SessionStatusEvent.Definitions,
   ...QuestionV1.Event.Definitions,
+  ...ComputerEvent.Definitions,
   ...SessionCompactionEvent.Definitions,
   ...Research.Event.Definitions,
   ...LocalEvent.Definitions,
   ...MemoryEvent.Definitions,
+  ...Connect.Event.Definitions,
   ...VcsEvent.Definitions,
   ...WorkspaceEvent.Definitions,
   ...WorktreeEvent.Definitions,

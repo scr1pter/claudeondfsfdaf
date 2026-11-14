@@ -110,7 +110,8 @@ export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: PtyID) => Effect.Effect<Info, NotFoundError>
   // `owner` is set only in process (the engine's terminal tool); HTTP routes never pass it.
-  readonly create: (input: CreateInput, owner?: Owner) => Effect.Effect<Info>
+  // The internal hook checks dynamic authority after asynchronous setup, immediately before the native spawn.
+  readonly create: (input: CreateInput, owner?: Owner, beforeSpawn?: Effect.Effect<void>) => Effect.Effect<Info>
   readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
   readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError>
   readonly write: (id: PtyID, data: string) => Effect.Effect<void, NotFoundError>
@@ -158,11 +159,19 @@ const layer = Layer.effect(
       notifyEnd(session, {})
     }
 
+    // The location's services end (an hour after their last use, or on a reload): every terminal ends with them, and
+    // clients and the agent are told each is gone rather than finding out on their next call.
     yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        for (const session of sessions.values()) teardown(session)
+      Effect.gen(function* () {
+        const ended = Array.from(sessions.values())
+        for (const session of ended) teardown(session)
         sessions.clear()
         exitOrder.length = 0
+        yield* Effect.forEach(
+          ended,
+          (session) => events.publish(Event.Deleted, { id: session.info.id }).pipe(Effect.ignore),
+          { discard: true },
+        )
       }),
     )
 
@@ -196,7 +205,11 @@ const layer = Layer.effect(
       return (yield* requireSession(id)).info
     })
 
-    const create = Effect.fn("Pty.create")(function* (input: CreateInput, owner?: Owner) {
+    const create = Effect.fn("Pty.create")(function* (
+      input: CreateInput,
+      owner?: Owner,
+      beforeSpawn?: Effect.Effect<void>,
+    ) {
       const id = PtyID.ascending()
       const shell = (yield* config.entries())
         .filter(
@@ -224,6 +237,7 @@ const layer = Layer.effect(
       }
       yield* Effect.logInfo("creating session", { id, cmd: command, args, cwd })
       const { spawn } = yield* Effect.promise(() => pty())
+      if (beforeSpawn) yield* beforeSpawn
       const isolated = ProcessIsolation.launch(command, args, { cwd, env })
       const proc = yield* Effect.sync(() => spawn(isolated.file, isolated.args, { name: "xterm-256color", cwd, env }))
       const info: Info = {

@@ -218,6 +218,12 @@ Set-ItemProperty -Path $key -Name Config -Value $json -Type String`
 
           <h3 id="samples">Samples</h3>
           <p>
+            The samples include company computer policy. Every engine reading these managed files must use
+            <strong>a compatible Vector build that includes Hands</strong>. Put <code>computer</code> only in company
+            policy; user, global, repository, environment and remote org config cannot set it. An app your company
+            allows still needs the user's consent.
+          </p>
+          <p>
             A policy that keeps Vector Local on with your network only, lists your model servers, lets each person add
             servers under <code>corp.example.com</code> and make Web access stricter, and sets the model, a certificate
             authority and the update mirror:

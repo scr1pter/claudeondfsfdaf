@@ -25,6 +25,7 @@ import { PassThrough } from "node:stream"
 import { Duration, Semaphore } from "effect"
 import launch from "cross-spawn"
 import { untrustedChildEnvironment } from "./child-environment"
+import { OwnedProcess } from "./owned-process"
 import { ProcessIsolation } from "./process-isolation"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
@@ -104,6 +105,7 @@ const nativeStopPolicy = (options?: ChildProcess.KillOptions) => {
 export function assertNativePipeline(command: ChildProcess.Command) {
   const flat = flatten(command)
   for (const stage of flat.commands) {
+    if (OwnedProcess.options(stage)) throw new Error(ProcessIsolation.REFUSAL)
     nativeStopPolicy(stage.options)
     const extra = stage.options.additionalFds
     if (extra !== undefined && Reflect.ownKeys(extra).length !== 0) throw new Error(ProcessIsolation.REFUSAL)
@@ -400,9 +402,13 @@ export const make = Effect.gen(function* () {
     command: ChildProcess.StandardCommand,
     opts: NodeChildProcess.SpawnOptions,
   ) {
+    const ownership = OwnedProcess.options(command)
     const isolated = yield* Effect.try({
       try: () => {
         if (ProcessIsolation.required() && ProcessIsolation.nativeBuild().enabled) {
+          // Native lifetime signals cannot also be owned by the background-job controller. Until a qualified
+          // delegated control adapter exists, refuse this combination before any process is created (Ã‚Â§4.4).
+          if (ownership) throw new Error(ProcessIsolation.REFUSAL)
           assertNativePipeline(command)
           const selected = ProcessIsolation.commandPlan(command.command, command.args, {
             cwd: typeof opts.cwd === "string" ? opts.cwd : undefined,
@@ -438,6 +444,7 @@ export const make = Effect.gen(function* () {
         ExitSignal,
         ReturnType<typeof captureOutput>,
         NativeLifetime | undefined,
+        OwnedProcess.Control | undefined,
       ],
       PlatformError.PlatformError
     >((resume) => {
@@ -446,6 +453,7 @@ export const make = Effect.gen(function* () {
       // Bun resumes stdio at native exit, before a delayed Effect reader can attach.
       // Pipe immediately into bounded streams; retain backpressure until consumed.
       const captured = captureOutput(proc)
+      const owned = ownership && proc.pid ? OwnedProcess.track(proc, captured.dispose, ownership) : undefined
       const owner: NativeLifetime | undefined =
         isolated.cancellation === "native-owner"
           ? (() => {
@@ -494,9 +502,10 @@ export const make = Effect.gen(function* () {
       })
       proc.on("spawn", () => {
         spawned = true
-        resume(Effect.succeed([proc, signal, captured, owner]))
+        resume(Effect.succeed([proc, signal, captured, owner, owned]))
       })
       if (owner) return owner.cleanup().pipe(Effect.orDie)
+      if (owned) return Effect.promise(owned.stop).pipe(Effect.asVoid, Effect.ensuring(Effect.sync(captured.dispose)))
       return Effect.sync(() => {
         proc.kill("SIGTERM")
         captured.dispose()
@@ -585,7 +594,7 @@ export const make = Effect.gen(function* () {
           const extra = fds(command.options)
           const dir = yield* cwd(command.options)
 
-          const [proc, signal, captured, owner] = yield* Effect.acquireRelease(
+          const [proc, signal, captured, owner, owned] = yield* Effect.acquireRelease(
             spawn(command, {
               cwd: dir,
               env: env(command.options),
@@ -594,8 +603,13 @@ export const make = Effect.gen(function* () {
               shell: command.options.shell,
               windowsHide: process.platform === "win32",
             }),
-            Effect.fnUntraced(function* ([proc, signal, captured, owner]) {
+            Effect.fnUntraced(function* ([proc, signal, captured, owner, owned]) {
               if (owner) return yield* owner.cleanup().pipe(Effect.orDie)
+              if (owned) {
+                yield* Effect.promise(owned.stop)
+                yield* Effect.sync(captured.dispose)
+                return
+              }
               // A caller may never consume the pipes. Release their backpressure before
               // waiting for native close, which also waits for stdio to close.
               yield* Effect.sync(captured.dispose)
@@ -624,7 +638,7 @@ export const make = Effect.gen(function* () {
           const fd = yield* setupFds(command, proc, extra)
           const out = setupOutput(command, captured, sout, serr)
           let ref = true
-          return makeHandle({
+          const handle = makeHandle({
             pid: ProcessId(proc.pid!),
             stdin: yield* setupStdin(command, proc, sin),
             stdout: out.stdout,
@@ -645,6 +659,16 @@ export const make = Effect.gen(function* () {
             }),
             kill: (opts?: ChildProcess.KillOptions) => {
               if (owner) return owner.stop(opts)
+              if (owned)
+                return Effect.promise(owned.stop).pipe(
+                  Effect.flatMap((result) =>
+                    result.terminated
+                      ? Effect.void
+                      : Effect.fail(
+                          toPlatformError("kill", new Error(result.error ?? "Command cleanup failed"), command),
+                        ),
+                  ),
+                )
               const sig = opts?.killSignal ?? "SIGTERM"
               const send = (s: NodeJS.Signals) =>
                 Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
@@ -668,6 +692,8 @@ export const make = Effect.gen(function* () {
               })
             }),
           })
+          if (owned) OwnedProcess.bind(handle, owned)
+          return handle
         }
         case "PipedCommand": {
           const flat = flatten(command)

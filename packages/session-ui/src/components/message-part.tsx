@@ -66,10 +66,24 @@ import { animate } from "motion"
 import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
+import {
+  copyPartID,
+  groupParts,
+  isContextGroupTool,
+  isPendingQuestion,
+  runOpen,
+  runPartIDs,
+  sameGroups,
+  type PartGroup,
+} from "./message-part-group"
 import { memoryLearned } from "./memory-learned"
+import { hostedJobNote } from "./hosted-job-note"
 import { ReplyFooter } from "./reply-footer"
 import { chipTitle, cites, decorateCitations, delivered, segments, type KnowledgeCard } from "./knowledge-citations"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
+import { Hands } from "@vectordevai/core/computer/hands"
+import { computerLabel } from "./computer-labels"
+import { ComputerRunCard } from "./computer-tool"
 import { WorkflowPart, worktreeChip } from "./workflow-part"
 
 async function writeClipboard(text: string): Promise<boolean> {
@@ -430,9 +444,15 @@ function terminalSubtitle(input: any): string | undefined {
   return input.title ?? input.command ?? input.id ?? input.action
 }
 
-export function getToolInfo(tool: string, input: any = {}): ToolInfo {
+export function getToolInfo(tool: string, input: any = {}, metadata?: Record<string, unknown>): ToolInfo {
   const i18n = useI18n()
   switch (tool) {
+    case Hands.ID:
+      return {
+        icon: "hands",
+        title: Hands.NAME,
+        subtitle: computerLabel(metadata, (key, params) => i18n.t(key, { name: Hands.NAME, ...params }), input),
+      }
     case "read":
       return {
         icon: "glasses",
@@ -595,7 +615,6 @@ function taskSession(
     .sort((a, b) => (b.time.created ?? 0) - (a.time.created ?? 0))[0]?.id
 }
 
-const CONTEXT_GROUP_TOOLS = new Set(["read", "glob", "grep", "list"])
 const HIDDEN_TOOLS = new Set(["todowrite"])
 
 function list<T>(value: T[] | undefined | null, fallback: T[]) {
@@ -610,90 +629,15 @@ function same<T>(a: readonly T[] | undefined, b: readonly T[] | undefined) {
   return a.every((x, i) => x === b[i])
 }
 
-export type PartRef = {
-  messageID: string
-  partID: string
-}
-
-export type PartGroup =
-  | {
-      key: string
-      type: "part"
-      ref: PartRef
-    }
-  | {
-      key: string
-      type: "context"
-      refs: PartRef[]
-    }
-
-function sameRef(a: PartRef, b: PartRef) {
-  return a.messageID === b.messageID && a.partID === b.partID
-}
-
-function sameGroup(a: PartGroup, b: PartGroup) {
-  if (a === b) return true
-  if (a.key !== b.key) return false
-  if (a.type !== b.type) return false
-  if (a.type === "part") {
-    if (b.type !== "part") return false
-    return sameRef(a.ref, b.ref)
-  }
-  if (b.type !== "context") return false
-  if (a.refs.length !== b.refs.length) return false
-  return a.refs.every((ref, i) => sameRef(ref, b.refs[i]!))
-}
-
-export function sameGroups(a: readonly PartGroup[] | undefined, b: readonly PartGroup[] | undefined) {
-  if (a === b) return true
-  if (!a || !b) return false
-  if (a.length !== b.length) return false
-  return a.every((item, i) => sameGroup(item, b[i]!))
-}
-
-export function groupParts(parts: { messageID: string; part: PartType }[]) {
-  const result: PartGroup[] = []
-  let start = -1
-
-  const flush = (end: number) => {
-    if (start < 0) return
-    const first = parts[start]
-    const last = parts[end]
-    if (!first || !last) {
-      start = -1
-      return
-    }
-    result.push({
-      key: `context:${first.part.id}`,
-      type: "context",
-      refs: parts.slice(start, end + 1).map((item) => ({
-        messageID: item.messageID,
-        partID: item.part.id,
-      })),
-    })
-    start = -1
-  }
-
-  parts.forEach((item, index) => {
-    if (isContextGroupTool(item.part)) {
-      if (start < 0) start = index
-      return
-    }
-
-    flush(index - 1)
-    result.push({
-      key: `part:${item.messageID}:${item.part.id}`,
-      type: "part",
-      ref: {
-        messageID: item.messageID,
-        partID: item.part.id,
-      },
-    })
-  })
-
-  flush(parts.length - 1)
-  return result
-}
+export {
+  copyPartID,
+  groupParts,
+  runOpen,
+  runPartIDs,
+  sameGroups,
+  type PartGroup,
+  type PartRef,
+} from "./message-part-group"
 
 function index<T extends { id: string }>(items: readonly T[]) {
   return new Map(items.map((item) => [item.id, item] as const))
@@ -702,7 +646,7 @@ function index<T extends { id: string }>(items: readonly T[]) {
 export function renderable(part: PartType, showReasoningSummaries = true) {
   if (part.type === "tool") {
     if (HIDDEN_TOOLS.has(part.tool)) return false
-    if (part.tool === "question") return part.state.status !== "pending" && part.state.status !== "running"
+    if (part.tool === "question") return !isPendingQuestion(part)
     return true
   }
   if (part.type === "text") return !!part.text?.trim()
@@ -752,12 +696,29 @@ export function AssistantParts(props: {
               part,
             })),
         ),
+        runOpen(
+          props.working,
+          props.messages.map((message) => list(data.store.part?.[message.id], emptyParts)),
+        ),
       ),
     [] as PartGroup[],
     { equals: sameGroups },
   )
 
   const last = createMemo(() => grouped().at(-1)?.key)
+  // A note inside a run card has no row of its own, so the copy target moves to the turn's last text that has one, or,
+  // when none has, stays with the run card holding the last note (see copyPartID).
+  const copyID = createMemo(() => {
+    const id = props.showAssistantCopyPartID
+    const held = runPartIDs(grouped())
+    if (typeof id !== "string" || !held.has(id)) return id
+    return (
+      copyPartID(
+        props.messages.map((message) => list(data.store.part?.[message.id], emptyParts)),
+        held,
+      ) ?? null
+    )
+  })
 
   return (
     <Index each={grouped()}>
@@ -788,6 +749,49 @@ export function AssistantParts(props: {
                 )
               })()}
             </Match>
+            <Match when={entryType() === "computer"}>
+              {(() => {
+                const parts = createMemo(
+                  () => {
+                    const entry = entryAccessor()
+                    if (entry.type !== "computer") return emptyParts
+                    return entry.refs
+                      .map((ref) => part().get(ref.messageID)?.get(ref.partID))
+                      .filter((part): part is PartType => !!part)
+                  },
+                  emptyParts,
+                  { equals: same },
+                )
+                const busy = createMemo(() => props.working && last() === entryAccessor().key)
+                const footer = createMemo(() => {
+                  const id = copyID()
+                  const item = parts().find((part) => part.id === id)
+                  const message = item && msgs().get(item.messageID)
+                  return item?.type === "text" && message ? { item, message } : undefined
+                })
+
+                return (
+                  <Show when={parts().length > 0}>
+                    <ComputerRunCard
+                      parts={parts()}
+                      busy={busy()}
+                      footer={
+                        <Show when={footer()}>
+                          {(value) => (
+                            <ReplyActions
+                              message={value().message}
+                              part={value().item}
+                              turnDurationMs={props.turnDurationMs}
+                              useV2Actions={props.useV2Actions}
+                            />
+                          )}
+                        </Show>
+                      }
+                    />
+                  </Show>
+                )
+              })()}
+            </Match>
             <Match when={entryType() === "part"}>
               {(() => {
                 const message = createMemo(() => {
@@ -807,7 +811,7 @@ export function AssistantParts(props: {
                       <Part
                         part={item()!}
                         message={message()!}
-                        showAssistantCopyPartID={props.showAssistantCopyPartID}
+                        showAssistantCopyPartID={copyID()}
                         turnDurationMs={props.turnDurationMs}
                         useV2Actions={props.useV2Actions}
                         defaultOpen={partDefaultOpen(item()!, props.shellToolDefaultOpen, props.editToolDefaultOpen)}
@@ -822,10 +826,6 @@ export function AssistantParts(props: {
       }}
     </Index>
   )
-}
-
-function isContextGroupTool(part: PartType): part is ToolPart {
-  return part.type === "tool" && CONTEXT_GROUP_TOOLS.has(part.tool)
 }
 
 function contextToolDetail(part: ToolPart): string | undefined {
@@ -964,6 +964,7 @@ export function AssistantMessageDisplay(props: {
   useV2Actions?: boolean
 }) {
   const emptyTools: ToolPart[] = []
+  const emptyParts: PartType[] = []
   const part = createMemo(() => index(props.parts))
   const grouped = createMemo(
     () =>
@@ -1003,6 +1004,25 @@ export function AssistantMessageDisplay(props: {
                 return (
                   <Show when={parts().length > 0}>
                     <ContextToolGroup parts={parts()} />
+                  </Show>
+                )
+              })()}
+            </Match>
+            <Match when={entryType() === "computer"}>
+              {(() => {
+                const parts = createMemo(
+                  () => {
+                    const entry = entryAccessor()
+                    if (entry.type !== "computer") return emptyParts
+                    return entry.refs.map((ref) => part().get(ref.partID)).filter((part): part is PartType => !!part)
+                  },
+                  emptyParts,
+                  { equals: same },
+                )
+
+                return (
+                  <Show when={parts().length > 0}>
+                    <ComputerRunCard parts={parts()} />
                   </Show>
                 )
               })()}
@@ -1167,8 +1187,9 @@ export function UserMessageDisplay(props: {
   const busy = () => state.busy
 
   const textPart = createMemo(
-    () => props.parts?.find((p) => p.type === "text" && !(p as TextPart).synthetic) as TextPart | undefined,
+    () => props.parts?.find((p) => p.type === "text" && (!(p as TextPart).synthetic || hostedJobNote(p))) as TextPart | undefined,
   )
+  const hosted = createMemo(() => hostedJobNote(textPart()))
 
   const text = createMemo(() => cleanVisibleUserText(textPart()?.text || ""))
 
@@ -1196,6 +1217,7 @@ export function UserMessageDisplay(props: {
   })
 
   const metaHead = createMemo(() => {
+    if (hosted()) return "Cloud computer report"
     const agent = props.message.agent
     const items = [agent ? agent[0]?.toUpperCase() + agent.slice(1) : "", model()]
     return items.filter((x) => !!x).join("\u00A0\u00B7\u00A0")
@@ -1231,7 +1253,7 @@ export function UserMessageDisplay(props: {
   }
 
   return (
-    <div data-component="user-message" data-timeline-part-id={textPart()?.id}>
+    <div data-component="user-message" data-kind={hosted() ? "hosted" : undefined} data-timeline-part-id={textPart()?.id}>
       <Show when={attachments().length > 0}>
         <div data-slot="user-message-attachments">
           <For each={attachments()}>
@@ -1293,7 +1315,7 @@ export function UserMessageDisplay(props: {
                 </Show>
               </span>
             </Show>
-            <Show when={props.actions?.revert}>
+            <Show when={props.actions?.revert && !hosted()}>
               <MessageActionButton
                 icon="reset"
                 label={i18n.t("ui.message.revertMessage")}
@@ -1390,6 +1412,8 @@ export function Part(props: MessagePartProps) {
 export interface ToolProps {
   input: Record<string, any>
   metadata: Record<string, any>
+  /** The completed call's files, such as a screenshot. */
+  attachments?: FilePart[]
   tool: string
   sessionID?: string
   output?: string
@@ -1485,6 +1509,10 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   const input = () => part().state?.input ?? emptyInput
   // @ts-expect-error
   const partMetadata = () => part().state?.metadata ?? emptyMetadata
+  const attachments = () => {
+    const state = part().state
+    return state.status === "completed" ? state.attachments : undefined
+  }
   const taskBatch = createMemo(() => part().tool === "task" && taskBatchEntries(input(), partMetadata()))
   const taskBatchError = createMemo(() => {
     const state = part().state
@@ -1515,7 +1543,12 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     <Show when={!hideQuestion()}>
       <div data-component="tool-part-wrapper" data-timeline-part-id={part().id}>
         <Switch>
-          <Match when={!taskBatch() && part().state.status === "error" && (part().state as any).error}>
+          {/* A computer call's raw error is never shown; its renderer labels the step instead (INV-T5). */}
+          <Match
+            when={
+              !taskBatch() && part().tool !== Hands.ID && part().state.status === "error" && (part().state as any).error
+            }
+          >
             {(error) => {
               const cleaned = error().replace("Error: ", "")
               if (part().tool === "question" && cleaned.includes("dismissed this question")) {
@@ -1547,6 +1580,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
               tool={part().tool}
               sessionID={part().sessionID}
               metadata={partMetadata()}
+              attachments={attachments()}
               // @ts-expect-error
               output={part().state.output}
               status={part().state.status}
@@ -1595,11 +1629,19 @@ PART_MAPPING["compaction"] = function CompactionPartDisplay() {
   return <MessageDivider label={i18n.t("ui.messagePart.compaction")} />
 }
 
-PART_MAPPING["text"] = function TextPartDisplay(props) {
+/**
+ * The turn's copy button, details line and reply footer, drawn under its copy target. A Hands run card draws them
+ * when every text of the turn is a note inside run cards (see `copyPartID`).
+ */
+export function ReplyActions(props: {
+  message: MessageType
+  part: TextPart
+  turnDurationMs?: number
+  useV2Actions?: boolean
+}) {
   const data = useData()
   const i18n = useI18n()
   const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
-  const part = () => props.part as TextPart
   const interrupted = createMemo(
     () =>
       props.message.role === "assistant" && (props.message as AssistantMessage).error?.name === "MessageAbortedError",
@@ -1649,6 +1691,49 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     return items.filter((x) => !!x).join(" \u00B7 ")
   })
 
+  const streaming = createMemo(
+    () => props.message.role === "assistant" && typeof (props.message as AssistantMessage).time.completed !== "number",
+  )
+  const [copied, setCopied] = createSignal(false)
+
+  const handleCopy = async () => {
+    const content = readPartText(data.store.part_text_accum_delta, props.part)
+    if (!content) return
+    if (await writeClipboard(content)) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  return (
+    <>
+      <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
+        <MessageActionButton
+          icon={copied() ? "check" : "copy"}
+          label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
+          useV2={props.useV2Actions}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={handleCopy}
+          aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
+        />
+        <Show when={meta()}>
+          <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+            {meta()}
+          </span>
+        </Show>
+      </div>
+      <Show when={props.message.role === "assistant" && !streaming()}>
+        <For each={ReplyFooter.list()}>
+          {(footer) => <Dynamic component={footer} message={props.message as AssistantMessage} />}
+        </For>
+      </Show>
+    </>
+  )
+}
+
+PART_MAPPING["text"] = function TextPartDisplay(props) {
+  const data = useData()
+  const part = () => props.part as TextPart
   const streaming = createMemo(
     () => props.message.role === "assistant" && typeof (props.message as AssistantMessage).time.completed !== "number",
   )
@@ -1703,16 +1788,6 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     if (typeof props.showAssistantCopyPartID === "string") return props.showAssistantCopyPartID === part().id
     return isLastTextPart()
   })
-  const [copied, setCopied] = createSignal(false)
-
-  const handleCopy = async () => {
-    const content = text()
-    if (!content) return
-    if (await writeClipboard(content)) {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }
 
   return (
     <Show when={text()}>
@@ -1726,26 +1801,12 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
           </Show>
         </div>
         <Show when={showCopy()}>
-          <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
-            <MessageActionButton
-              icon={copied() ? "check" : "copy"}
-              label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
-              useV2={props.useV2Actions}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={handleCopy}
-              aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
-            />
-            <Show when={meta()}>
-              <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
-                {meta()}
-              </span>
-            </Show>
-          </div>
-        </Show>
-        <Show when={showCopy() && props.message.role === "assistant" && !streaming()}>
-          <For each={ReplyFooter.list()}>
-            {(footer) => <Dynamic component={footer} message={props.message as AssistantMessage} />}
-          </For>
+          <ReplyActions
+            message={props.message}
+            part={part()}
+            turnDurationMs={props.turnDurationMs}
+            useV2Actions={props.useV2Actions}
+          />
         </Show>
       </div>
     </Show>
@@ -1770,6 +1831,22 @@ PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
     </Show>
   )
 }
+
+// Surfaces that render a lone computer call (not through a run group) show its Vector-built label.
+ToolRegistry.register({
+  name: Hands.ID,
+  render(props) {
+    const info = createMemo(() => getToolInfo(Hands.ID, props.input, props.metadata))
+    return (
+      <BasicTool
+        icon="hands"
+        status={props.status}
+        trigger={{ title: info().title, subtitle: info().subtitle }}
+        hideDetails
+      />
+    )
+  },
+})
 
 ToolRegistry.register({
   name: "read",

@@ -2,6 +2,12 @@
 import DocsPage from "../../layouts/DocsPage.astro"
 
 export const prerender = true
+
+// These sections are built only after the owner lists the corresponding capability and redeploys.
+const listed = new Set((process.env.CODIUM_LISTED_PERKS ?? "").split(",").map((value) => value.trim()))
+const githubCodium = listed.has("github-agents")
+const githubSchedules = githubCodium && listed.has("scheduled")
+const githubNoSecret = githubCodium && listed.has("github-no-secret")
 ---
 
 <DocsPage id="vectorscope">
@@ -37,7 +43,7 @@ export const prerender = true
           <h2 id="choose-a-model">Choose a model</h2>
           <p class="note">After upgrading to 1.99.99, repositories using Vector's GitHub workflow should run <code>vector github install</code> again. The regenerated workflow uses <code>VECTOR_*</code> configuration variables.</p>
           <p>
-            From 1.99.99, reviews and GitHub runs need your own provider credentials. The <code>VECTOR_CLI_TOKEN</code>
+            With your own key selected, reviews and GitHub runs use your provider credentials. The <code>VECTOR_CLI_TOKEN</code>
             secret authenticates your Vector account; it does not provide model access. Add the provider key as a
             repository secret and pass it into each job that calls Vector, using the provider's environment variable,
             such as <code>ANTHROPIC_API_KEY</code> or <code>OPENAI_API_KEY</code>. Set <code>MODEL</code> in the job's
@@ -61,23 +67,106 @@ export const prerender = true
 
           <h2 id="github">Task in, pull request out</h2>
           <p>
-            Run <code>vector github install</code> once inside a repository: it writes a workflow that installs the CLI
-            from npm on every <code>/vector</code> comment, then add the <code>VECTOR_CLI_TOKEN</code> secret from your
-            account page. From then on, commenting <code>/vector fix the flaky auth test</code> on an issue opens a
-            branch and a pull request; commenting on an existing pull request replies on that branch.
+            Vector works in your own repo, on your own Actions minutes. Comment
+            <code>/vector fix the flaky auth test</code> on an issue to ask for a branch and pull request, or comment
+            on an existing pull request to continue its work. Only people with current write access can start a task.
+            Tasks are limited to that repository's software: its code, tests, docs, builds, reviews and maintenance.
           </p>
           <p>
-            Every pull request carries its evidence, not just a diff: a Changes table with line counts per file, the
-            output of any test, typecheck, lint, or build command the agent ran with its exit code, the measured token
-            cost of the run, the judge's PASS or FAIL verdict when a judge pass ran, and a link back to the workflow run.
-            Reviewers see what was checked before they read a line.
+            GitHub runs the workflow and bills its Actions minutes under your account and GitHub's terms. Check your
+            repository's Actions settings and allowance before starting. Your model credentials or Codium plan pay for
+            model access; they do not pay GitHub's runner bill.
+          </p>
+
+          {githubCodium && (
+            <>
+              <h3 id="github-codium">Use Codium</h3>
+              <p>
+                Run <code>vector github install</code> in the repository and select Codium. Install the Vector GitHub
+                App for the repository, merge the generated workflow into its default branch, and follow setup's
+                one-time binding instructions. The binding connects this repository to your Vector account.
+                {githubNoSecret && <> Codium model access uses your plan, with no provider API key or model secret to add.</>}
+              </p>
+              <p>
+                People with write access to a bound repository use the binder's plan when they start a run. Review that
+                access before binding a shared repository. The binder can remove the connection from Settings → GitHub
+                or the GitHub section of their account page. Codium runs require GitHub's runners; runners you manage
+                are refused.
+              </p>
+            </>
+          )}
+
+          <h3 id="github-own-key">Use your own key</h3>
+          <p>
+            Run <code>vector github install --own-key</code>, choose a provider and model, and merge the generated
+            <code>.github/workflows/vector.yml</code> into the default branch. Add <code>VECTOR_CLI_TOKEN</code> from
+            your free Vector account and the selected provider's key as repository secrets. The CLI explains the exact
+            secret names. Your provider bills model usage under your credentials. This path needs no Codium plan.
+          </p>
+          <p>
+            The account token identifies your Vector account; it does not supply model access. Conversation sharing
+            needs your explicit choice. With your own key on a runner you manage, Vector cannot provide the process
+            isolation used on supported GitHub runners. Local Vectorscope review remains available without connecting
+            GitHub: use <code>vector vectorscope</code> with your configured provider.
+          </p>
+
+          <h3 id="github-limits">Agent time and limits</h3>
+          <p>
+            Agent time is how long a run is active, from its start to its last activity, capped at the plan's longest
+            run. Vector measures it; it is not GitHub minutes. See <a href="/docs/codium#plans">Codium plans</a> for the
+            current allowance, simultaneous runs and longest run. A stopped run keeps completed work and gives a plain
+            reason; it does not claim the remaining files were reviewed.
+          </p>
+
+          <h3 id="github-schedules">Scheduled repository work</h3>
+          <p>
+            With your own key, configure repository schedules during setup or in the generated workflow. Each schedule
+            has a stable id and task. A repeat updates that schedule's own bot-created proposal only while its head is
+            unchanged; human edits are preserved. GitHub cron runs on UTC time and is best effort: runs may be delayed
+            or missed, daylight-saving changes can shift local time, and GitHub disables schedules after 60 days of
+            inactivity in a public repository.
+          </p>
+          {githubSchedules && (
+            <p>
+              Codium schedules also use the binder's plan and require its scheduled-work allowance. Setup refuses a
+              schedule that the current plan does not allow. A schedule's agent time and GitHub minutes are separate.
+            </p>
+          )}
+
+          <h3 id="github-run-in-github">Start from Vector</h3>
+          <p>
+            In the desktop app, choose Run in GitHub for a repository with a merged Vector workflow. Sign in to GitHub
+            to select the repository and start its workflow. GitHub keeps the run, branch and pull request available
+            after your computer disconnects. This still runs in your own repo, on your own Actions minutes.
           </p>
           <p class="note">
-            One repository setting is required: under Settings → Actions → General →
-            Workflow permissions, tick "Allow GitHub Actions to create and approve pull requests" (GitHub leaves it off
-            by default; without it the branch is pushed and Vector comments a compare link instead). Pull requests opened
-            with the built-in GitHub token do not trigger the repository's other workflows; use a personal access token
-            if you need CI to run on them.
+            Under Settings → Actions → General → Workflow permissions, enable “Allow GitHub Actions to create and
+            approve pull requests” if you want Vector to open a pull request. Otherwise it can provide a compare link.
+            Pull requests created with the default <code>GITHUB_TOKEN</code> do not start your other CI workflows.
+            Explicitly opting in to Vector App publishing lets eligible tasks start that CI, which can spend additional
+            Actions minutes. Inline review replies and tasks containing non-writer content retain the repository-token
+            publication path.
+          </p>
+
+          <h3 id="github-follow-ups">Continue the conversation</h3>
+          <p>
+            Reply on the issue or pull request with another <code>/vector</code> task to continue. The result links to
+            its workflow run and includes the changes and checks the agent actually completed, with exit codes. If the
+            repository or branch has moved, Vector checks the current head before publishing and preserves human work.
+          </p>
+
+          <h3 id="github-privacy">Repository data and logs</h3>
+          <p>
+            GitHub Actions logs are public on public repositories. Do not put credentials or private material in a task,
+            comment or command output. The workflow keeps conversation state in the repository's private Actions
+            artifacts when available; GitHub controls artifact access and retention. Treat downloaded artifacts as
+            repository data. With your own key, public conversation sharing requires separate explicit approval.
+          </p>
+          <p>
+            On supported GitHub runners, Vector withholds credentials from the commands and servers it starts. This
+            includes a step's own secret-looking environment variables and tokens configured for MCP servers, formatters
+            or language servers; a command that needs one may fail. A missing or unreadable conversation artifact starts
+            from the GitHub thread instead of blocking the task.
           </p>
 
           <h2 id="before-you-push">Before you push</h2>
@@ -253,6 +342,23 @@ vector github review --pr 482 --dry-run</code><button class="doc-cmd-copy" type=
             stay open, and the summary says so.
             Nits, when you turn them on, are listed in the summary without that check. <code>vector review</code> and
             the desktop panel list what each pass spent when a review has more than one pass.
+          </p>
+
+          <h3 id="second-lab">Checked by a second lab</h3>
+          <p>
+            When the first pass and the check run on models from two different labs and the check finishes, the
+            summary's footer says <strong>Checked by a second lab</strong>. Vector reads each model's lab from its
+            vendor; when it can't tell, the footer says nothing about labs. On Vector Codium, a review without a
+            <code>triageModel</code> runs your plan's review pair: the first pass on one lab's model and the check on
+            another lab's. If the two would come from the same lab, the review runs one pass and says so.
+          </p>
+          <p>
+            Set <code>panel</code> to true in <code>.vector/review.json</code> for a three-lab panel: once the check
+            finishes, a judge from a third lab makes the final call on each finding it looked at, and the footer says
+            <strong>Checked by three labs</strong>. The judge is <code>judgeModel</code>, or on Vector Codium your
+            plan's panel judge. The panel needs a first pass, a check and a judge from three labs; without them the
+            review runs without the judge and says why. The judge works within the same step and time limits as the
+            check. Both the panel and the footer line work with your own keys too.
           </p>
 
           <h3 id="noise-control">Noise control</h3>

@@ -11,6 +11,7 @@ import { Project } from "@vectordevai/core/project"
 import { ProjectTable } from "@vectordevai/core/project/sql"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { SessionV2 } from "@vectordevai/core/session"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Snapshot } from "@vectordevai/core/snapshot"
 import { Prompt } from "@vectordevai/core/session/prompt"
 import { SessionProjector } from "@vectordevai/core/session/projector"
@@ -33,6 +34,7 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalProbe } from "@vectordevai/core/local-mode/probe"
 import { afterAll, afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { eq } from "drizzle-orm"
 import path from "node:path"
 import { testEffect } from "../lib/effect"
 import { NetworkGuard } from "../lib/network-guard"
@@ -196,6 +198,17 @@ const turn = Effect.fn("test.turn")(function* (id: string) {
     .onConflictDoNothing()
     .run()
     .pipe(Effect.orDie)
+  const stored = yield* db
+    .select({ parentID: SessionTable.parent_id })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!stored) return yield* Effect.die("Fixture Session was not inserted")
+  const audience = SessionAudience.make({ db })
+  if (stored.parentID && !(yield* audience.knows(stored.parentID)))
+    return yield* Effect.die("Fixture Session parent was not registered")
+  yield* audience.register({ sessionID, parentID: stored.parentID ?? undefined, actor: "owner" }).pipe(Effect.orDie)
   const session = yield* SessionV2.Service
   yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Say hello in one short sentence." }), resume: false })
   yield* session.resume(sessionID).pipe(Effect.ignore)

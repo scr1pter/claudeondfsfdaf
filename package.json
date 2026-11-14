@@ -101,6 +101,7 @@
     "@vectordevai/script": "workspace:*",
     "@vectordevai/sdk": "workspace:*",
     "@vercel/blob": "2.7.0",
+    "@vercel/sandbox": "3.8.0",
     "jose": "6.2.3",
     "resend": "6.18.1",
     "typescript": "catalog:",

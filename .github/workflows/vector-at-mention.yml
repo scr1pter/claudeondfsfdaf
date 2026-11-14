@@ -1,10 +1,82 @@
-name: Vector namespace-entry experiment
+name: Vector at-mention
 
-# One disposable namespace-entry experiment. The actual ShellTool acceptance
-# assertions remain unchanged and held; this is not the production native matrix.
+# The CI lane for the @vector build (docs/vector/build/vector-at-mention-spec.md, V00). test.yml and typecheck.yml run
+# only on main and on pull requests, so this is the only CI a push to the build branch gets. Each later work package
+# appends its test files to the step that owns them. The lane holds no repository secret or token: the checkout keeps
+# no credential, and every service it talks to is a loopback fake or the Valkey container below.
 on:
   push:
-    branches: [build-isolation]
+    branches:
+      - vector-at-mention
+      - build-integrate
+      - build-github-ui
+  pull_request:
+    # No other workflow runs the web GitHub tests, and they load shared api/_lib modules (http, abuse, persistent-store)
+    # and jose, so any hosted API change, the lockfile and the Bun version in package.json start the lane. api/** takes
+    # in the contract's api/github, api/cloud-agents, api/_lib/github-* and api/_lib/cloud-agents-* entries. The shared
+    # engine files the agent phase's own-key seam, pinned policy and posting check live in, and the research runtime its
+    # tests run on, start it too (V18b), as do the session retry module that holds a Codium run's gateway rule and its
+    # test (V18c).
+    paths:
+      - api/**
+      - bun.lock
+      - package.json
+      - packages/core/src/review/**
+      - packages/core/src/github-agents.ts
+      - packages/core/src/process-isolation.ts
+      - packages/core/src/cross-spawn-spawner.ts
+      - packages/core/src/child-environment.ts
+      - packages/core/src/untrusted-git.ts
+      - packages/core/src/pty.ts
+      - packages/core/src/brain/document/ocr.ts
+      - packages/core/src/free-models.ts
+      - packages/core/src/share/transport.ts
+      - packages/engine/src/cli/cmd/github*.ts
+      - packages/engine/src/index.ts
+      - packages/engine/src/tool/shell.ts
+      - packages/engine/src/tool/external-directory.ts
+      - packages/engine/src/tool/read.ts
+      - packages/engine/src/tool/glob.ts
+      - packages/engine/src/tool/grep.ts
+      - packages/engine/src/util/process.ts
+      - packages/engine/src/mcp/**
+      - packages/engine/src/lsp/launch.ts
+      - packages/engine/script/stage-sandbox-probe.ts
+      - packages/engine/src/provider/provider.ts
+      - packages/engine/src/session/llm/request.ts
+      - packages/engine/src/session/posting.ts
+      - packages/engine/src/session/retry.ts
+      - packages/desktop/src/main/github-*.ts
+      - packages/web/test/github-*.ts
+      - packages/web/test/cloud-agents-*.ts
+      - packages/web/test/account-github-agents.test.ts
+      - packages/web/src/components/marketing/account/GithubAgents.tsx
+      - packages/web/src/components/marketing/account/github-agents.css
+      - packages/engine/test/cli/github*.ts
+      - packages/engine/test/lib/research.ts
+      - packages/engine/test/fixture/sandbox-*.ts
+      - packages/engine/test/fixture/sandbox-loader-probe.c
+      - packages/engine/test/tool/registry*.ts
+      - packages/engine/test/session/retry.test.ts
+      - packages/core/test/github-agents.test.ts
+      - packages/core/test/process-isolation.test.ts
+      - packages/core/test/review/**
+      - packages/core/test/child-environment.test.ts
+      - packages/core/test/free-model-route.test.ts
+      - packages/core/test/public-session-share.test.ts
+      - test/api-module-loading.test.ts
+      - test/cli-token.test.ts
+      - packages/cloud/src/workflow-compliance.test.ts
+      - .github/workflows/vector-at-mention.yml
+  workflow_dispatch:
+
+concurrency:
+  # Pull requests share a group and cancel stale runs. Every push and dispatch gets a group of its own, so a newer push
+  # never cancels or drops an older one: each package's commit keeps the result its done-criteria cite.
+  # Expressions have no ternary, so this is the `&&`/`||` idiom; it is safe here only because both format() results are
+  # non-empty strings and can never read as falsy.
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -13,8 +85,156 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  namespace-entry-prototype:
-    name: namespace entry only (Codium, Node)
+  api:
+    name: hosted API
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      valkey:
+        image: valkey/valkey:7.2.14-alpine@sha256:c6c2f0020be34bbf684a53a0ef716ab16ff70295186d4d9f2518435beb7afbff
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      # The hosted API in api/ is checked against the root tsconfig.json, which includes only api/**.
+      - name: Typecheck hosted API
+        working-directory: packages/engine
+        run: bun typecheck --project ../../tsconfig.json
+
+      # Without VECTOR_TEST_REDIS_URL, github-app-api.test.ts registers a single skipped test and the step still passes.
+      # The cloud-agents API tests run here too, named by a glob: Codium's A59 deletes cloud-agents-entitlement.test.ts
+      # (contract 2.3), and the glob keeps this step and the lane policy valid without an edit from it.
+      - name: Run GitHub API tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/web
+        env:
+          VECTOR_TEST_REDIS_URL: redis://127.0.0.1:6379
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-oidc.test.ts test/github-app.test.ts test/github-app-api.test.ts test/cloud-agents-*.test.ts test/account-github-agents.test.ts
+
+      # The repo-root test/ suite is not a workspace; these files cover the hosted API's module loading and CLI tokens.
+      - name: Run hosted API tests
+        if: ${{ !cancelled() }}
+        working-directory: test
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 api-module-loading.test.ts cli-token.test.ts
+
+      # test.yml does not run on this branch's pushes, so the lane checks its own policy.
+      - name: Check the lane policy
+        if: ${{ !cancelled() }}
+        working-directory: packages/cloud
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 src/workflow-compliance.test.ts
+
+  packages:
+    name: engine and core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      # The engine suite runs under the strict network guard, so Vector may not download ripgrep for the tests that
+      # search files: it has to be installed (engine/test/preload.ts).
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@vectordev.ai"
+          git config --global user.name "Vector"
+
+      # Bash expands the globs, so a pattern that matches nothing reaches bun as a literal filter. The lane policy in
+      # packages/cloud/src/workflow-compliance.test.ts requires every pattern to match a file.
+      - name: Run engine GitHub tests
+        timeout-minutes: 20
+        working-directory: packages/engine
+        env:
+          VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/cli/github*.test.ts test/tool/registry*.test.ts
+
+      # retry.ts decides every provider's retries in the desktop and in `vector run`, and a Codium agent phase pins its
+      # gateway rule there (V18c). test.yml has never run on this branch, so the lane runs the module's own test.
+      - name: Run engine session retry tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/session/retry.test.ts
+
+      - name: Run core GitHub tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-agents.test.ts test/process-isolation.test.ts test/review/*.test.ts test/child-environment.test.ts test/free-model-route.test.ts test/public-session-share.test.ts
+
+  # The desktop runs the engine's Node bundle in Electron's utility process, while every engine test runs on Bun, so a
+  # stray Bun API passes them all and still fails every desktop message. This boots the bundle under Node and sends
+  # one prompt through a Read tool call against a fake model, as test.yml's desktop-engine-node job does.
+  node-bundle:
+    name: desktop engine bundle (node)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Build the desktop engine bundle
+        working-directory: packages/engine
+        run: |
+          set -euo pipefail
+          export VECTOR_RELEASE_CATALOG_PATH="$PWD/../web/public/models/api.json"
+          export VECTOR_RELEASE_CATALOG_SHA256="$(sha256sum "$VECTOR_RELEASE_CATALOG_PATH" | cut -d ' ' -f 1)"
+          bun script/build-node.ts
+
+      - name: Smoke-test the bundle under Node
+        working-directory: packages/engine
+        timeout-minutes: 5
+        run: node script/smoke-node-bundle.ts
+
+  sandbox-probe:
+    name: sandbox (${{ matrix.mode }}, ${{ matrix.scenario }}, ${{ matrix.runtime || 'node' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -23,6 +243,19 @@ jobs:
         include:
           - mode: codium
             scenario: success
+          - mode: own-key
+            scenario: success
+          - mode: codium
+            scenario: bundle-refusal
+          - mode: codium
+            scenario: cancelled
+          - mode: codium
+            scenario: seal-refusal
+          - mode: codium
+            scenario: session-replaced
+          - mode: codium
+            scenario: success
+            runtime: bun
     env:
       VECTOR_MODE: ${{ matrix.mode }}
       VECTOR_SECRET_ENV_NAMES: DEEPSEEK_KEY
@@ -54,22 +287,10 @@ jobs:
       - name: Install probe build dependencies
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap apparmor-utils
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends bubblewrap
           bun install --frozen-lockfile --ignore-scripts
           bun run script/prepare-gitlab.ts
           bun run --cwd packages/core fix-node-pty
-
-      - name: Install the Vector-only diagnostic AppArmor label
-        run: |
-          set -euo pipefail
-          for setting in /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/kernel/unprivileged_userns_clone /sys/module/apparmor/parameters/enabled; do
-            if [ -f "$setting" ]; then printf '%s=' "$setting"; cat "$setting"; fi
-          done
-          test ! -e /etc/apparmor.d/vector-isolation-diagnostic
-          if sudo -n grep -q '^vector-isolation-diagnostic ' /sys/kernel/security/apparmor/profiles; then exit 1; fi
-          sudo -n install -o root -g root -m 0444 packages/engine/script/isolation-apparmor-diagnostic.profile /etc/apparmor.d/vector-isolation-diagnostic
-          touch "$RUNNER_TEMP/vector-aa-profile-owned"
-          sudo -n /usr/sbin/apparmor_parser --add /etc/apparmor.d/vector-isolation-diagnostic
 
       - name: Compile and install the disposable probe harness
         run: |
@@ -81,17 +302,8 @@ jobs:
           grep -q 'finish' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
           bun packages/engine/script/stage-sandbox-probe.ts
-          bun build --target=node packages/engine/src/cli/cmd/github.secrets.ts --outfile "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs"
-          bun build --target=node packages/engine/test/fixture/namespace-entry-engine.ts --outfile "$RUNNER_TEMP/vector-probe-tools/namespace-entry-engine.mjs"
-          bun build --target=node packages/engine/test/fixture/namespace-entry-host.ts --outfile "$RUNNER_TEMP/vector-probe-tools/namespace-entry-host.mjs"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
-          # /opt is world writable on this hosted image. Do not change global permissions or trust assets beneath it.
-          test ! -e /usr/libexec/vector-namespace-probe
-          sudo -n mkdir -m 0755 /usr/libexec/vector-namespace-probe
-          sudo -n install -o root -g root -m 0444 packages/engine/test/fixture/namespace-entry-probe.py /usr/libexec/vector-namespace-probe/vector-namespace-entry.py
-          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-engine.mjs" /usr/libexec/vector-namespace-probe/vector-namespace-entry-engine.mjs
-          sudo -n install -o root -g root -m 0555 "$RUNNER_TEMP/vector-probe-tools/namespace-entry-host.mjs" /usr/libexec/vector-namespace-probe/vector-namespace-entry-host.mjs
           sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
           cc -shared -fPIC -O2 packages/engine/test/fixture/sandbox-loader-probe.c -o "$RUNNER_TEMP/vector-probe-tools/loader-probe.so"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/loader-probe.so" /opt/vector-probe-loader.so
@@ -105,25 +317,23 @@ jobs:
       - name: Prepare the agent sandbox
         run: vector github sandbox prepare
 
-      - name: Prepare the secret-free namespace experiment before channel capture
-        id: namespace_prepare
-        run: sudo -n /usr/bin/python3 -I -S /usr/libexec/vector-namespace-probe/vector-namespace-entry.py prepare "$RUNNER_TEMP/vector-sandbox/state.json"
-
-      - name: Run the namespace-entry and host-supervised cancellation experiment
+      - name: Run the unprivileged probe
         id: agent
         shell: env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}
-        run: node /usr/libexec/vector-namespace-probe/vector-namespace-entry-host.mjs
-
-      - name: Stop the disposable UID before releasing the descriptor broker
-        id: namespace_cleanup
-        if: always()
-        working-directory: ${{ runner.temp }}
         run: |
-          if [ -f /usr/libexec/vector-namespace-probe/vector-namespace-entry-private.json ]; then
-            sudo -n /usr/bin/python3 -I -S /usr/libexec/vector-namespace-probe/vector-namespace-entry.py cleanup
+          if [ "$PROBE_SCENARIO" = bundle-refusal ]; then
+            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --bundle-refusal
+          elif [ "$PROBE_SCENARIO" = session-replaced ]; then
+            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --session-replaced
+          elif [ "$PROBE_RUNTIME" = bun ]; then
+            vector github sandbox run -- /opt/vector-probe-bun /opt/vector-sandbox-probe.mjs
           else
-            test '${{ steps.namespace_prepare.outcome }}' = skipped
+            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
           fi
+
+      - name: Observe the synthetic probe report
+        if: always()
+        run: node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --observe
 
       - name: Finish the agent sandbox
         id: sandbox_finish
@@ -131,51 +341,16 @@ jobs:
         continue-on-error: true
         run: vector github sandbox finish
 
-      - name: Assert the limited experiment and actual sandbox cleanup
-        if: always()
+      - name: Artifact boundary sentinel
+        id: artifact_boundary
+        if: always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'
         working-directory: ${{ runner.temp }}
-        env:
-          PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
-          PROBE_NAMESPACE_CLEANUP_OUTCOME: ${{ steps.namespace_cleanup.outcome }}
-          PROBE_AGENT_OUTCOME: ${{ steps.agent.outcome }}
-        run: node /usr/libexec/vector-namespace-probe/vector-namespace-entry-host.mjs --assert
+        run: touch "$RUNNER_TEMP/vector-probe-tools/upload-allowed"
 
-      - name: Observe fixed AppArmor denial categories and remove the diagnostic label
+      - name: Assert isolation, crash protection and cleanup
         if: always()
         working-directory: ${{ runner.temp }}
         env:
           PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
-          PROBE_NAMESPACE_CLEANUP_OUTCOME: ${{ steps.namespace_cleanup.outcome }}
-        run: |
-          set -euo pipefail
-          cleanup_profile() {
-            if [ "$PROBE_FINISH_OUTCOME" != success ] || [ "$PROBE_NAMESPACE_CLEANUP_OUTCOME" != success ]; then
-              echo 'Sandbox UID cleanup was not proven; the owned diagnostic label remains until disposable VM teardown.'
-              return
-            fi
-            if [ -f "$RUNNER_TEMP/vector-aa-profile-owned" ]; then
-              if sudo -n grep -q '^vector-isolation-diagnostic ' /sys/kernel/security/apparmor/profiles; then
-                sudo -n /usr/sbin/apparmor_parser --remove /etc/apparmor.d/vector-isolation-diagnostic || return 1
-              fi
-              sudo -n rm -- /etc/apparmor.d/vector-isolation-diagnostic
-            fi
-          }
-          trap cleanup_profile EXIT
-          # Read at most the fixed probe PIDs' denial events. Emit categories/counts only, never raw log text.
-          # This label has no executable attachment and was created exclusively by this disposable job.
-          # Read only its denied events, emit operation counts, and never print raw kernel records.
-          sudo -n journalctl --kernel --boot --no-pager --output=cat --lines=20 --grep='apparmor="DENIED".*profile="vector-isolation-diagnostic"' | awk '
-            /operation="exec"/ { execs++ }
-            /operation="file_mmap"/ { mmap++ }
-            /operation="capable"/ { capable++ }
-            /operation="file_inherit"/ { inherit++ }
-            /operation="open"/ { opens++ }
-            END { printf "Vector-label denied operations: exec=%d file_mmap=%d capable=%d file_inherit=%d open=%d\n", execs, mmap, capable, inherit, opens }' || test "${PIPESTATUS[0]}" = 1
-          if [ -f "$RUNNER_TEMP/vector-aa-probe-pids.json" ]; then
-            probe_pids="$(python3 -c 'import json,os; v=json.load(open(os.environ["RUNNER_TEMP"]+"/vector-aa-probe-pids.json")); assert len(v["pids"])==2 and all(type(p) is int and p>1 for p in v["pids"]); print("|".join(map(str,v["pids"])))')"
-            sudo -n journalctl --kernel --boot --no-pager --output=cat --lines=20 --grep="apparmor=\"DENIED\".*pid=($probe_pids)( |$)" | awk '
-              /userns_create/ { userns++ }
-              /uid_map/ { uidmap++ }
-              /profile="vector-isolation-diagnostic"/ { vector++ }
-              END { printf "Fixed-probe AppArmor denials: userns_create=%d uid_map=%d vector_profile=%d\n", userns, uidmap, vector }' || test "${PIPESTATUS[0]}" = 1
-          fi
+          PROBE_UPLOAD_OUTCOME: ${{ steps.artifact_boundary.outcome }}
+        run: node /opt/vector-sandbox-probe.mjs --assert

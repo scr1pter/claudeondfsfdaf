@@ -2121,6 +2121,8 @@ test(
     const cloud: CodiumReviewControl = {
       signal: controller.signal,
       stopped: () => state.stop,
+      stepFinished: () => {},
+      reviewFinished: () => {},
       redact: redactCodiumReviewText,
       outcome: () => {},
     }

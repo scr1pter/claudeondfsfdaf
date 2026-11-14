@@ -35,6 +35,11 @@ import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
 import { MAX_STEPS_PROMPT } from "@vectordevai/core/session/runner/max-steps"
 import { ToolRegistry } from "@/tool/registry"
+import { ComputerAvailability } from "@/computer/availability"
+import { ComputerScale } from "@/computer/scale"
+import { ComputerScreens } from "@/computer/screens"
+import { ComputerGeneric } from "@/computer/generic"
+import { Computer } from "@vectordevai/schema/computer"
 import { assertExternalDirectoryEffect, readPatterns } from "@/tool/external-directory"
 import type { Tool } from "@/tool/tool"
 import { MCP } from "../mcp"
@@ -70,6 +75,7 @@ import { TaskNotify } from "@/task/notify"
 import { QUICK_DESCRIPTION } from "@/tool/escalate"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Flag } from "@vectordevai/core/flag/flag"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@vectordevai/core/database/database"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -87,7 +93,7 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
-import { ownerBlock, scopeOf, scopeQuery } from "@vectordevai/core/review/prompt"
+import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -106,12 +112,14 @@ import { TaskSize } from "@vectordevai/core/task-size"
 import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { SessionTaskSize } from "./task-size"
 import { SessionSkillLearn } from "./skill-learn"
+import { SessionBrainHelper } from "./brain-helper"
 import { SessionWorkflow } from "./workflow"
 import { LearnedSkill } from "@/skill/learned"
 import { BackgroundJob } from "@/background/job"
 import { TaskPlace } from "@/task/place"
 import { TaskJobs } from "@/task/jobs"
 import { SessionCodiumAuto } from "./codium-auto"
+import { SecondOpinion } from "./second-opinion"
 import { parseJudgeVerdict } from "./judge-verdict"
 import { isRecord } from "@/util/record"
 import { ResearchRun } from "@/tool/research-run"
@@ -128,6 +136,7 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+const isComputerMention = Schema.is(Computer.MentionMarker)
 const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
 // Sessions whose instruction files are kept between requests; an evicted session reads its files again.
 const MAX_INSTRUCTION_SNAPSHOTS = 256
@@ -135,6 +144,14 @@ const MAX_INSTRUCTION_SNAPSHOTS = 256
 const VECTORSCOPE = "vectorscope."
 // Agents whose output leaves the machine or reaches the web: research workers and the research judge.
 const OUTWARD_AGENTS = new Set(["researcher", "research-judge"])
+
+/** A pinned review cannot substitute ambient files or a lossy summary for its admitted context. */
+export class ReviewContextUnavailable extends Error {
+  constructor(reason: string) {
+    super(`Review incomplete: ${reason} Start a fresh review with the pinned context.`)
+    this.name = "ReviewContextUnavailable"
+  }
+}
 // The kinds of the owner's own entries that say how they work (section 6.4a): their rules, preferences, decisions,
 // lessons and terms.
 const HOW_YOU_WORK = new Set<string>([...Brain.HABIT_KINDS, "rule", "term"])
@@ -297,6 +314,7 @@ const layer = Layer.effect(
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
     const registry = yield* ToolRegistry.Service
+    const computer = yield* ComputerAvailability.Service
     const truncate = yield* Truncate.Service
     const image = yield* Image.Service
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -314,6 +332,7 @@ const layer = Layer.effect(
     const brainDatabase = yield* BrainDatabase.Service
     const knowledge = yield* BrainKnowledge.Service
     const guests = yield* FreeModelGuests.Service
+    const brainHelper = SessionBrainHelper.bind({ brain, provider, guests, instruction, sessions })
     const isolation = yield* TaskIsolation.Service
     const privacy = yield* SessionAudience.Service
     const git = yield* Git.Service
@@ -919,7 +938,14 @@ const layer = Layer.effect(
       message: SessionV1.Assistant
       parent: Agent.Info
       judge: Agent.Info
-      args: { prompt: string; description: string; subagent_type: string; background: false }
+      args: {
+        prompt: string
+        description: string
+        subagent_type: string
+        background: false
+        model?: string
+        effort?: "default"
+      }
       metadata: Record<string, unknown>
       finished: (output: string) => Record<string, unknown>
       failed: string
@@ -1074,6 +1100,19 @@ const layer = Layer.effect(
 
       const round = input.rounds + 1
       const sessionID = input.session.id
+      // Second opinion (WP A35): Codium work is judged on the plan's judge from another lab, when the person turned it
+      // on, no judge model is configured and the catalog lists a usable cross-lab judge for the worker's model.
+      const on = SecondOpinion.enabled(work.requests.flatMap((request) => request.users))
+      const codiumWorker = input.lastUser.model.providerID === ModelPlanStatus.PROVIDER_ID
+      const opinion =
+        on && codiumWorker && !judge.model
+          ? SecondOpinion.judgeModel({
+              worker: input.lastUser.model,
+              models: (yield* provider.list())[ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID)]?.models,
+              configured: false,
+              on,
+            })
+          : undefined
       const message = yield* judgeMessage({ lastUser: input.lastUser, agent: parent.name, size: work.tier })
       const result = yield* launchJudge({
         session: input.session,
@@ -1086,6 +1125,7 @@ const layer = Layer.effect(
           description: round === 1 ? "Check the finished work" : `Check the repairs (round ${round})`,
           subagent_type: "judge",
           background: false,
+          ...(opinion ? { model: `${opinion.providerID}/${opinion.modelID}`, effort: "default" as const } : {}),
         },
         // The size of the work judged: a FAIL raises the request it repairs to it (see SessionTaskSize.size).
         metadata: { judge: { round, size: work.tier } },
@@ -1120,6 +1160,8 @@ const layer = Layer.effect(
         model: input.lastUser.model,
         ...(input.lastUser.selected ? { selected: input.lastUser.selected } : {}),
         executionMode: input.lastUser.executionMode,
+        // The repair's verdict is judged as the work was: with Second opinion while it was on.
+        ...(on ? { secondOpinion: true } : {}),
       }
       yield* sessions.updateMessage(followup)
       yield* sessions.updatePart({
@@ -1337,10 +1379,10 @@ const layer = Layer.effect(
       if (verdicts.length > 0) {
         yield* researchStore.judged(place, runID, verdicts)
         // The report is saved again with the verdicts, so its confidence counts them and unsupported notes are struck.
-        const spent = (yield* guard.snapshot(sessionID))?.spentUsd
+        const spend = SpendGuard.reportSpend(yield* guard.snapshot(sessionID))
         yield* researchStore.report(place, runID, report.value, {
           judged: true,
-          ...(spent ? { spend: `${SpendGuard.formatUsd(spent)} at list prices` } : {}),
+          ...(spend ? { spend } : {}),
           seconds: Math.round((Date.now() - detail.run.created_at) / 1000),
         })
       }
@@ -1384,7 +1426,12 @@ const layer = Layer.effect(
             if (session.revert) {
               yield* revert.cleanup(session)
             }
-            const agent = session.internal ? yield* agents.helper(input.agent) : yield* agents.get(input.agent)
+            const agent = session.internal
+              ? yield* agents.helper(
+                  input.agent,
+                  session.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+                )
+              : yield* agents.get(input.agent)
             if (!agent) {
               const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
               const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -1556,6 +1603,7 @@ const layer = Layer.effect(
       return yield* provider.codiumAuto({
         tier: input.tier,
         contextTokens: SessionCodiumAuto.contextTokens(visible, input.added),
+        learned: workflowSession.autoModels ? yield* workflowSession.autoModels(input.sessionID, input.tier) : [],
       })
     })
 
@@ -1611,7 +1659,10 @@ const layer = Layer.effect(
       const ag = !agentName
         ? yield* agents.defaultInfo()
         : current.internal
-          ? yield* agents.helper(agentName)
+          ? yield* agents.helper(
+              agentName,
+              current.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+            )
           : yield* agents.get(agentName)
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -1668,6 +1719,7 @@ const layer = Layer.effect(
         executionMode: input.executionMode,
         ...(input.size ? { size: input.size } : {}),
         ...(input.judge ? { judge: input.judge } : {}),
+        ...(input.secondOpinion ? { secondOpinion: true } : {}),
       }
 
       if (
@@ -2302,7 +2354,11 @@ const layer = Layer.effect(
       // A run that ends before the provider answers keeps its provisional title without starting another request.
       const answering = yield* Deferred.make<boolean>()
       const ended = yield* Deferred.make<void>()
-      const steps = runSteps(session, answering, Deferred.await(ended), resumed).pipe(
+      const taskAbort = new AbortController()
+      const steps = runSteps(session, answering, Deferred.await(ended), taskAbort.signal, resumed).pipe(
+        // A completed provider request ends only its invocation signal. The attended run owns
+        // cross-request resources, and releases them before waiting for processor settlement.
+        Effect.ensuring(Effect.sync(() => taskAbort.abort())),
         Effect.ensuring(Deferred.succeed(answering, false)),
         // Stop waits for queued snapshots so immediate undo sees all changes from completed steps.
         Effect.ensuring(processor.settle(sessionID)),
@@ -2426,13 +2482,15 @@ const layer = Layer.effect(
       session: Session.Info,
       answering: Deferred.Deferred<boolean>,
       ended: Effect.Effect<void>,
+      taskAbort: AbortSignal,
       resumed?: ResumeFreeModelsInput & { parentID: MessageID },
     ) {
       const ctx = yield* InstanceState.context
       const sessionID = session.id
+      const pinnedReview = session.internal?.startsWith(PINNED_SESSION_PREFIX) === true
       let structured: unknown
       // Invalid StructuredOutput calls this run; the tool is built again for every step, so the count lives here.
-      const invalid = { count: 0 }
+      const invalid: { count: number; refused?: string } = { count: 0 }
       // A json_schema step that could not force the call ("auto" for thinking) and ended without a kept value gets one
       // closing step with thinking off and the call required.
       let closing: "due" | "done" | undefined
@@ -2482,6 +2540,13 @@ const layer = Layer.effect(
         const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
         if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+        // The durable internal identity remains restrictive when a compaction
+        // window loses the original metadata. No summary or provider request may
+        // replace the exact base instructions supplied by the owning service.
+        if (pinnedReview && tasks.some((task) => task.type === "compaction"))
+          throw new ReviewContextUnavailable("Compaction would discard the provided review context.")
+        if (pinnedReview && reviewScope(msgs).instructions !== "provided")
+          throw new ReviewContextUnavailable("The provided review context is no longer available.")
         if (resumed && lastUser.id === resumed.parentID)
           lastUser.model = { providerID: ProviderV2.ID.openrouter, modelID: resumed.modelID }
 
@@ -2701,7 +2766,9 @@ const layer = Layer.effect(
         // An app's own quick-lane message is sized as a build request, so it runs on the build agent once it is work.
         // A helper session's agent may be a Subagent specialist Settings turned off, which only `helper` finds.
         const agentName = onBuild(lastUser) ? "build" : lastUser.agent
-        const agent = session.internal ? yield* agents.helper(agentName) : yield* agents.get(agentName)
+        const agent = session.internal
+          ? yield* agents.helper(agentName, pinnedReview ? { reviewedPrompt: true } : undefined)
+          : yield* agents.get(agentName)
         if (!agent) {
           const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
           const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -2768,7 +2835,7 @@ const layer = Layer.effect(
         // The owner's personal memory never goes to a session an invited guest has acted in, nor to a model that may
         // train on prompts.
         const guest = yield* guests.marked(sessionID)
-        const personal = !guest && !freeModelMayTrain(model)
+        const personal = !pinnedReview && !guest && !freeModelMayTrain(model)
         // Attachments the user marked to remember become documents while this request runs, never at admission. A
         // session a guest is in keeps none.
         if (!guest && !session.parentID && !session.internal)
@@ -2789,7 +2856,7 @@ const layer = Layer.effect(
         // A fork starts from its parent's history, which already carries all that, and must never write to it.
         if (session.parentID && !session.internal && !fork)
           msgs = yield* briefFor({ session, msgs, personal, agent: agent.name })
-        if (session.internal?.startsWith(VECTORSCOPE))
+        if (!pinnedReview && session.internal?.startsWith(VECTORSCOPE))
           msgs = yield* reviewFor({ session, msgs, personal, agent: agent.name })
         // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
         // found for it is not filled in from the owner's personal memory or private documents.
@@ -2923,6 +2990,7 @@ const layer = Layer.effect(
             invokedAgents,
             messages: msgs,
             promptOps,
+            taskAbort,
             // A role whose output leaves the machine gets no pointer to a private document when it reads a linked file,
             // and its memory tool finds nothing personal.
             personal: personal && audience === "owner",
@@ -3028,6 +3096,13 @@ const layer = Layer.effect(
             delete tools.memory
             delete tools.workflow
           }
+          const computerReason = ComputerAvailability.sessionReason({
+            parentID: session.parentID,
+            internal: session.internal,
+            guest,
+            freeModel: model.freeModel,
+          })
+          if (computerReason) delete tools.computer
 
           if (lastUser.format?.type === "json_schema") {
             tools["StructuredOutput"] = createStructuredOutputTool({
@@ -3038,6 +3113,7 @@ const layer = Layer.effect(
               retryCount: lastUser.format.retryCount,
               invalid,
               model,
+              ...(pinnedReview ? { strict: true } : {}),
             })
           }
 
@@ -3055,8 +3131,16 @@ const layer = Layer.effect(
           const offered = Object.keys(
             LLMRequestPrep.resolveTools({ tools, agent: stepAgent, permission: rules, user: lastUser }),
           )
+          const history = ComputerScreens.replay(
+            stepAgent.name === "quick" ? msgs.filter((message) => message.info.id >= opened) : msgs,
+            model,
+            { helper: session.parentID !== undefined || session.internal !== undefined },
+          )
+          const dropMedia = ComputerGeneric.retainHistory(model)
+            ? undefined
+            : ComputerScreens.keep(history, ComputerScale.plan(model, yield* config.get()))
           const [skills, env, snapshot, mcpInstructions, modelMsgs] = yield* Effect.all([
-            quick ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.skills(agent, { learned }),
             quick
               ? Effect.succeed({ stable: [], session: [] })
               : sys.environment(model, {
@@ -3076,11 +3160,11 @@ const layer = Layer.effect(
                   },
                   tools: offered,
                   nested,
-                  workspace: !OUTWARD_AGENTS.has(agent.name),
+                  workspace: !pinnedReview && !OUTWARD_AGENTS.has(agent.name),
                   // The day the history starts on; a later day is noted on the user message that starts it.
                   date: msgs.find((message) => message.info.role === "user")?.info.time.created,
                 }),
-            quick
+            quick || pinnedReview
               ? Effect.succeed({ instructions: [], documents: false, personal: 0 })
               : sessionInstructions(
                   sessionID,
@@ -3105,12 +3189,9 @@ const layer = Layer.effect(
                       : {}),
                   },
                 ).pipe(Effect.orDie),
-            quick ? Effect.succeed(undefined) : sys.mcp(agent, rules),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.mcp(agent, rules),
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
-            MessageV2.toModelMessagesEffect(
-              stepAgent.name === "quick" ? msgs.filter((message) => message.info.id >= opened) : msgs,
-              model,
-            ),
+            MessageV2.toModelMessagesEffect(history, model, { dropMedia }),
           ])
           const instructions = snapshot.instructions
           if (tools.memory && snapshot.documents)
@@ -3134,6 +3215,15 @@ const layer = Layer.effect(
             ...(lastUser.executionMode === "fast" ? [FAST_EXECUTION_SYSTEM_PROMPT] : []),
           ]
           const format = lastUser.format ?? { type: "text" as const }
+          if (
+            !offered.includes("computer") &&
+            lastUserMsg?.parts.some(
+              (part) => part.type === "text" && isComputerMention(part.metadata?.[Computer.MENTION_KEY]),
+            )
+          ) {
+            const reason = computerReason ?? (yield* computer.unavailable()) ?? "disabled"
+            system.push(`Explain in one sentence: ${ComputerAvailability.message(reason)}`)
+          }
           if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
           const closingStep = closing === "due" && format.type === "json_schema"
           if (closing === "due") closing = "done"
@@ -3172,9 +3262,9 @@ const layer = Layer.effect(
               personal,
               audience,
             })
-          // A fork's request (5.E.3). While its parent's step is cached (warm), it sends that step's tools and system
-          // blocks as they were; cold, it sends what it worked out as the root, under the same names. Either way each
-          // tool runs as the fork's own, and the ones a fork may not run refuse. The first request of each run names the
+          // A fork's request (5.E.3). While its parent's step is cached (warm), it reuses that step's tools and system
+          // blocks except attended computer access; cold, it sends its own root-shaped setup under the same names.
+          // Each tool runs as the fork's own, and tools it may not run refuse. The first request of each run names the
           // root's cache key, and the last inherited message takes the non-final cache breakpoint.
           const warm = inherited?.prefix?.request
           const keyed = fork !== undefined && !forkRequested
@@ -3188,10 +3278,23 @@ const layer = Layer.effect(
           const ancestry = new Set(inherited?.messages.map((message) => message.info.id))
           const inheritedCount = inherited
             ? (yield* MessageV2.toModelMessagesEffect(
-                msgs.filter((message) => ancestry.has(message.info.id)),
+                history.filter((message) => ancestry.has(message.info.id)),
                 model,
+                { dropMedia },
               )).length
             : 0
+          if (session.internal === "brain.distill" && Billing.isCodium(model.providerID)) {
+            const floor = yield* provider.getBrainModel()
+            const settings = yield* brain.learnSettings()
+            if (
+              !(settings.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL) ||
+              settings.codiumHelpers !== "on" ||
+              !floor ||
+              floor.id !== model.id ||
+              !(yield* brainHelper.privateInput(session.parentID ?? sessionID))
+            )
+              return "break"
+          }
           const result = yield* handle.process({
             user: lastUser,
             agent: warm?.agent ?? stepAgent,
@@ -3200,6 +3303,9 @@ const layer = Layer.effect(
             permission: warm?.permission ?? rules,
             sessionID,
             parentSessionID: session.parentID,
+            computerRequested: lastUserMsg?.parts.some(
+              (part) => part.type === "text" && isComputerMention(part.metadata?.[Computer.MENTION_KEY]),
+            ),
             stableSystem: warm ? warm.stableSystem : env.stable,
             system: warm?.system ?? system,
             messages: [
@@ -3227,11 +3333,21 @@ const layer = Layer.effect(
             retries: warm ? warm.retries : retries,
             // A Vectorscope review's helper sessions (vectorscope.review, vectorscope.verify, ...) say so to Codium.
             ...(session.internal?.startsWith("vectorscope.") ? { purpose: "review" as const } : {}),
+            ...(session.internal === "brain.distill" ? { purpose: "brain" as const } : {}),
+            ...(pinnedReview ? { pinnedContext: true as const } : {}),
             answering: () => Deferred.doneUnsafe(answering, Effect.succeed(true)),
             // The digest in the system prompt carries the owner's rules, MEMORY.md and pinned entries too.
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },
           })
 
+          if (invalid.refused) {
+            handle.message.error = new SessionV1.StructuredOutputError({
+              message: `Model returned invalid review output: ${invalid.refused}`,
+              retries: invalid.count,
+            }).toObject()
+            yield* sessions.updateMessage(handle.message)
+            return "break" as const
+          }
           if (structured !== undefined) {
             handle.message.structured = structured
             handle.message.finish = handle.message.finish ?? "stop"
@@ -3557,7 +3673,8 @@ const layer = Layer.effect(
       const user = last?.message.info
       // The model learner runs where the user let it: with Vector Local on, by default.
       const allowed =
-        settings.modelLearner === "always" || (settings.modelLearner === "local-only" && Egress.policy().enabled)
+        settings.modelLearner !== "off" &&
+        (settings.modelLearner === "always" || Egress.policy().enabled || settings.codiumHelpers === "on")
       if (!last || user?.role !== "user" || !allowed) return undefined
       // Only a correction the rules found nothing in needs the session: whether it read outside content, and the reply
       // before the correction.
@@ -3597,17 +3714,19 @@ const layer = Layer.effect(
       spend: SpendGuard.Captured
     }) {
       if (yield* input.spend.stopped) return []
+      if (yield* guests.marked(input.session.id)) return []
       const primary = yield* provider
         .getModel(input.user.model.providerID, input.user.model.modelID)
         .pipe(Effect.option)
       if (Option.isNone(primary)) return []
-      const small = yield* provider.getSmallModel(input.user.model.providerID, input.user.model.modelID)
-      // A Codium conversation without a helper model learns nothing rather than spend its own model on it.
-      if (!small && input.user.model.providerID === ModelPlanStatus.PROVIDER_ID) return []
-      const model = small ?? primary.value
-      if (freeModelMayTrain(primary.value) || freeModelMayTrain(model)) return []
+      const model = yield* brainHelper.choose({ setting: "modelLearner", primary: primary.value })
+      if (!model) return []
+      // The existing own-provider learner can retain a tainted typed correction for review. Codium consent does not
+      // authorize sending a held repository or tainted session to a remote Brain helper.
+      if (Billing.isCodium(model.providerID) && (input.tainted || (yield* instruction.place()).held)) return []
       const title = yield* agents.get("title")
       if (!title) return []
+      const settings = yield* brain.learnSettings()
       const usage = TitleUsage.create({
         sessionID: input.session.id,
         model,
@@ -3616,6 +3735,8 @@ const layer = Layer.effect(
         spend: input.spend,
         costKind: yield* helperCostKind(model),
       })
+      if (!(yield* brainHelper.permitted(model, "modelLearner"))) return []
+      if (Billing.isCodium(model.providerID) && !(yield* brainHelper.privateInput(input.session.id))) return []
       const reply = yield* llm
         .stream({
           // Its own instructions on the title helper's: no tools, no repository context.
@@ -3643,7 +3764,7 @@ const layer = Layer.effect(
         const learned = BrainLearn.accept(suggestion, {
           typed: input.typed,
           tainted: input.tainted,
-          facets: input.settings.facets,
+          facets: settings.facets,
         })
         return learned ? [learned] : []
       })
@@ -4306,7 +4427,10 @@ const layer = Layer.effect(
       const agent = !agentName
         ? yield* agents.defaultInfo()
         : currentSession.internal
-          ? yield* agents.helper(agentName)
+          ? yield* agents.helper(
+              agentName,
+              currentSession.internal.startsWith(PINNED_SESSION_PREFIX) ? { reviewedPrompt: true } : undefined,
+            )
           : yield* agents.get(agentName)
       if (!agent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -4457,6 +4581,7 @@ const layer = Layer.effect(
                 ? {}
                 : { size: commandSize(input.arguments) }),
           ...(input.judge ? { judge: input.judge } : {}),
+          ...(input.secondOpinion ? { secondOpinion: true } : {}),
         },
         // @file references in an MCP prompt or a skill are not the user's choice; the user's own attachments are.
         { userFile: (url) => attached.has(url) || cmd.source === "command" },
@@ -4836,6 +4961,10 @@ export const PromptInput = Schema.Struct({
     description:
       "When Vector runs LLM-as-a-judge after the run: off, thorough (after large tasks that changed files) or changes (after every task that changed files). Defaults to the config's sizing.judge.",
   }),
+  secondOpinion: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Second opinion: when the judge checks work done on a Vector Codium model, it runs on the plan's judge from another lab, unless a judge model is configured. Off unless set.",
+  }),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,
@@ -4902,6 +5031,7 @@ export const CommandInput = Schema.Struct({
   // As on PromptInput. Without a size from the sender or the command, Vector sizes the run from the template.
   size: Schema.optional(TaskSize.Choice),
   judge: Schema.optional(TaskSize.JudgeMode),
+  secondOpinion: Schema.optional(Schema.Boolean),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.
@@ -4979,8 +5109,10 @@ export function createStructuredOutputTool(input: {
   onSuccess: (output: unknown) => void
   // Invalid calls answered with an error before a value is kept as it is (the format's retryCount, at most 5).
   retryCount?: number
+  /** Pinned reviews never keep an invalid or unchecked value after retries. */
+  strict?: true
   // The run's count of invalid calls. The tool is built again for every step, so the run keeps the count.
-  invalid?: { count: number }
+  invalid?: { count: number; refused?: string }
   // The model the schema is rendered for: bounds its provider drops are restated in descriptions.
   model?: Provider.Model
 }): AITool {
@@ -4989,7 +5121,7 @@ export function createStructuredOutputTool(input: {
   // The AI SDK does not check a JSON Schema tool's input, so Vector does, for every schema JsonSchemaCheck can enforce
   // in full. Any other schema is passed on and its value kept unchecked.
   const check = JsonSchemaCheck.accept(input.schema)
-  const invalid = input.invalid ?? { count: 0 }
+  const invalid: { count: number; refused?: string } = input.invalid ?? { count: 0 }
   const retryCount = Math.min(input.retryCount ?? 2, STRUCTURED_OUTPUT_MAX_RETRIES)
 
   return tool({
@@ -5001,6 +5133,14 @@ export function createStructuredOutputTool(input: {
     ),
     async execute(args) {
       const problems = check.ok ? JsonSchemaCheck.validate(check.schema, args) : []
+      if (input.strict && (!check.ok || (problems.length > 0 && invalid.count >= retryCount))) {
+        invalid.refused = check.ok ? JsonSchemaCheck.describe(problems) : "The review schema could not be checked."
+        return {
+          output: `Invalid review output: ${invalid.refused}`,
+          title: "Structured Output",
+          metadata: { valid: false, captured: false },
+        }
+      }
       if (problems.length > 0 && invalid.count < retryCount) {
         invalid.count++
         return {
@@ -5053,6 +5193,7 @@ export const node = LayerNode.make({
     MCP.node,
     LSP.node,
     ToolRegistry.node,
+    ComputerAvailability.node,
     Truncate.node,
     Image.node,
     CrossSpawnSpawner.node,

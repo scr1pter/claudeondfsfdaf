@@ -67,6 +67,7 @@ import type {
   Trust,
 } from "@vectordevai/core/review/types"
 import { Git } from "@/git"
+import { ReviewGit } from "@/review/git"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 import { Provider } from "@/provider/provider"
@@ -78,6 +79,9 @@ import type { ReviewModel, ResolvedModel } from "@/review/model"
 import type { Review } from "@/review/run"
 import { ReviewSource } from "@/review/source"
 import { Process } from "@/util/process"
+import type { SessionID } from "@/session/schema"
+import { InstanceRef } from "@/effect/instance-ref"
+import { readAuthority, type ReadAuthority } from "@/review/read-authority"
 import { UI } from "../ui"
 import { effectCmd } from "../effect-cmd"
 import type { ReviewGitHub, ReviewGitHubOptions } from "./github.review-api"
@@ -114,6 +118,18 @@ export interface LocalReviewOptions {
   checks?: boolean
   full?: boolean
   env?: Record<string, string | undefined> // REVIEW_* overrides; process.env by default
+  // Internal service context, never parsed from CLI flags or repository settings.
+  context?: {
+    parentID?: SessionID
+    expectedHead: string
+    settingsRef: string
+    stateless: boolean
+    readDenies?: readonly string[]
+    readRoot?: string
+    admittedReads?: ReadAuthority
+    identity?: "vectorscope"
+    stopSignal?: AbortSignal
+  }
 }
 
 // A pull request's text from `gh pr view`. Its author wrote it, so it only ever goes in the prompt's untrusted blocks.
@@ -194,7 +210,9 @@ export function executeLocalReview<RunR, ModelR>(
   return Effect.gen(function* () {
     const refused = refuseFlags(options)
     if (refused) return yield* new LocalReviewError({ message: refused })
-    const git = yield* Git.Service
+    if (options.context?.identity === "vectorscope" && !(yield* ReviewGit.Current))
+      return yield* new LocalReviewError({ message: "The VectorScope service requires a private Git view." })
+    const git = yield* ReviewGit.client
     const env = options.env ?? process.env
     const now = deps.now ?? Date.now
     const say = (text: string) => deps.stderr(text + "\n")
@@ -207,6 +225,27 @@ export function executeLocalReview<RunR, ModelR>(
       return yield* new LocalReviewError({
         message: "This repository has no commits yet, so there is nothing to compare.",
       })
+    if (options.context && current !== options.context.expectedHead)
+      return yield* new LocalReviewError({
+        message: "The review head changed. Start a new review of the current changes.",
+      })
+    if (options.context && (yield* commitOf(git, root, options.context.settingsRef)) !== options.context.settingsRef)
+      return yield* new LocalReviewError({
+        message: "The pinned review settings commit is not available in this repository.",
+      })
+    const readDenies = options.context?.admittedReads?.absolute ?? options.context?.readDenies
+    const authority = options.context?.admittedReads?.absolute.includes("*")
+      ? options.context.admittedReads
+      : readDenies?.length
+        ? readAuthority(readDenies, {
+            directory: root,
+            worktree: (yield* InstanceRef)?.worktree ?? root,
+            ...(options.context?.readRoot ? { readRoot: options.context.readRoot } : {}),
+          })
+        : undefined
+    const denied = (file: string) => authority?.denied(file) === true
+    if (denied(REVIEW_CONFIG_PATH))
+      return yield* new LocalReviewError({ message: "This conversation cannot read the review settings." })
     const branch = yield* git.branch(root)
     const trust = options.pr === undefined ? ("trusted" as const) : ("untrusted" as const)
     const pull =
@@ -221,21 +260,34 @@ export function executeLocalReview<RunR, ModelR>(
 
     // 2. Settings: your working tree for your own changes, the base for a pull request.
     const setting = (file: string) =>
-      trust === "trusted" ? readWorkingFile(root, file) : readBlob(git, root, base!.sha, file)
+      denied(file)
+        ? Effect.succeed(undefined)
+        : options.context
+          ? readBlob(git, root, options.context.settingsRef, file)
+          : trust === "trusted"
+            ? readWorkingFile(root, file)
+            : readBlob(git, root, base!.sha, file)
     const parsed = parseReviewConfig({ json: yield* setting(REVIEW_CONFIG_PATH), env, trigger: "local" })
     for (const warning of parsed.warnings) say(`Warning: ${warning}`)
-    const config = withFlags(parsed.config, options)
+    const config = withFlags(
+      parsed.config,
+      options.context && options.maxCost !== undefined && parsed.config.maxCostUsd > 0
+        ? { ...options, maxCost: Math.min(options.maxCost, parsed.config.maxCostUsd) }
+        : options,
+    )
     let rulesText: string | undefined
     for (const file of REVIEW_RULES_PATHS) rulesText ??= yield* setting(file)
     const rules = parseReviewRules(rulesText ?? "")
     if (rules.truncated) say("Warning: .vector/review.md is over 16 KB; only the first 16 KB is used.")
     const attributesText = yield* setting(".gitattributes")
     const attributes = attributesText ? parseGitAttributes(attributesText) : undefined
-    const ignored = (file: string) => classifyPath(file, { config, attributes }) !== undefined
+    const ignored = (file: string) => denied(file) || classifyPath(file, { config, attributes }) !== undefined
 
     // 3. What changed. Only a branch keeps "since last review" state, in the repository's git directory.
     const statePath =
-      !worktree && options.pr === undefined && branch ? yield* localStatePath(git, root, branch) : undefined
+      !options.context?.stateless && !worktree && options.pr === undefined && branch
+        ? yield* localStatePath(git, root, branch)
+        : undefined
     const stored = statePath && !options.full ? yield* readLocalState(statePath) : undefined
     const saved = stored?.state
     const range: Range =
@@ -325,7 +377,13 @@ export function executeLocalReview<RunR, ModelR>(
     }
 
     // 4. What to review: path rules first, then generated-file headers, which count only when the base agrees.
-    const classified = classifyFiles(range.files, { config, attributes })
+    const withheld = range.files.filter(
+      (file) => denied(file.path) || (file.oldPath !== undefined && denied(file.oldPath)),
+    )
+    const classified = classifyFiles(
+      range.files.filter((file) => !withheld.includes(file)),
+      { config, attributes },
+    )
     const readHead = (file: string) =>
       range.worktree === "uncommitted"
         ? readWorkingFile(root, file)
@@ -339,14 +397,46 @@ export function executeLocalReview<RunR, ModelR>(
     })
     const review = headers.review
     const skipped: SkippedFile[] = [...classified.skipped, ...headers.skipped]
+    if (!review.length && withheld.length)
+      return yield* new LocalReviewError({
+        message: "The changed files are outside this conversation's read access; no review ran.",
+      })
     if (!review.length) return yield* early(noteNothingToReview(), open)
 
+    yield* ReviewGit.preflight
+
     // 5. The model, and what running tests on this branch would mean.
-    const model = yield* deps.resolveModel({ trigger: "local", flag: options.model, config: config.model, env })
+    // Under "modelEvidence": "warn" (VS-07) a retired model is refused as retired.
+    const evidence = config.modelEvidence === "warn" ? { evidence: true } : {}
+    const model = yield* deps.resolveModel({
+      trigger: "local",
+      flag: options.model,
+      config: config.model,
+      env,
+      ...evidence,
+      ...(options.context?.identity ? { identity: options.context.identity } : {}),
+    })
     // review.json's cheaper first pass; the double-check stays on `model`.
     const triage = config.triageModel
-      ? yield* deps.resolveModel({ trigger: "local", exact: config.triageModel, env })
+      ? yield* deps.resolveModel({
+          trigger: "local",
+          exact: config.triageModel,
+          env,
+          ...evidence,
+          ...(options.context?.identity ? { identity: options.context.identity } : {}),
+        })
       : undefined
+    // The panel's judge (WP A35); on Vector Codium the runner uses the plan's panel judge when judgeModel is unset.
+    const judge =
+      config.panel && config.judgeModel
+        ? yield* deps.resolveModel({
+            trigger: "local",
+            exact: config.judgeModel,
+            env,
+            ...evidence,
+            ...(options.context?.identity ? { identity: options.context.identity } : {}),
+          })
+        : undefined
     const modelName = `${model.providerID}/${model.modelID}`
     if (options.checks) {
       const start = target.kind === "branch" ? range.mergeBase : yield* branchStart(git, root, range.head, base)
@@ -385,6 +475,7 @@ export function executeLocalReview<RunR, ModelR>(
       files: review,
       ignore: [...(config.ignoreDefaults ? DEFAULT_IGNORES.map((rule) => rule.glob) : []), ...config.ignore],
       ignored,
+      ...(options.context ? { instructions: setting } : {}),
     })
     // The specs the change touches, with drift flags, so the reviewer can tell when it breaks one.
     const requirements = deps.requirements
@@ -399,9 +490,10 @@ export function executeLocalReview<RunR, ModelR>(
             files: review,
           })
         : undefined
-    const knownPath = range.worktree
+    const known = range.worktree
       ? (file: string) => Promise.resolve(inTree(root, file))
       : yield* ReviewSource.knownPath({ directory: root, rev: range.head })
+    const knownPath = options.context ? (file: string) => (denied(file) ? Promise.resolve(false) : known(file)) : known
     const commits = yield* subjects(git, root, range.mergeBase, range.head)
     const pr: PromptInput["pr"] | undefined =
       options.pr !== undefined
@@ -417,9 +509,21 @@ export function executeLocalReview<RunR, ModelR>(
           : undefined
 
     // 7. The review.
+    if (options.context?.stopSignal?.aborted)
+      return yield* new LocalReviewError({ message: "The review was cancelled before it started." })
+    if (options.context && (yield* commitOf(git, root, "HEAD")) !== options.context.expectedHead)
+      return yield* new LocalReviewError({ message: "The review head changed before the review could start." })
+    yield* ReviewGit.preflight
     say(`Reviewing ${review.length} ${review.length === 1 ? "file" : "files"} with ${modelName}…`)
-    const reviewed = yield* deps.runReview({
+    const result = yield* deps.runReview({
       directory: root,
+      ...(options.context?.parentID ? { parentID: options.context.parentID } : {}),
+      ...(options.context?.stopSignal ? { stopSignal: options.context.stopSignal } : {}),
+      ...(options.context?.readDenies ? { readDenies: options.context.readDenies } : {}),
+      ...(options.context?.readRoot ? { readRoot: options.context.readRoot } : {}),
+      ...(authority ? { admittedReads: authority } : {}),
+      ...(options.context ? { instructionsFromContext: true } : {}),
+      ...(options.context?.identity ? { identity: options.context.identity } : {}),
       trigger: "local",
       trust,
       base: range.mergeBase,
@@ -442,15 +546,23 @@ export function executeLocalReview<RunR, ModelR>(
       config,
       model,
       ...(triage ? { triage } : {}),
+      ...(judge ? { judge } : {}),
       ...(options.checks ? { checks: true } : {}),
       knownPath,
       onProgress: (event) => {
         if (event.type === "specialist") say(`  ${event.name}: ${event.status}`)
       },
       baseRef: target.baseRef,
-      rulesSource: trust === "trusted" ? "working tree" : "base branch",
+      rulesSource: options.context || trust !== "trusted" ? "base branch" : "working tree",
     })
-    const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify")
+    const reviewed = withheld.length
+      ? {
+          ...result,
+          unreviewed: [...new Set([...result.unreviewed, ...withheld.map((file) => file.path)])],
+          notes: [...result.notes, "Some changed files were not reviewed because this conversation cannot read them."],
+        }
+      : result
+    const reviewers = reviewed.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
     if (!reviewers.some((entry) => entry.status !== "failed")) {
       const detail = (reviewers.find((entry) => entry.detail)?.detail ?? "the model returned no report").replace(
         /[.\s]+$/,
@@ -569,7 +681,7 @@ function countAtOrAbove(findings: { severity: Severity }[], failOn: FailOn): num
 // summary carries no summary marker. One review holds the inline comments; a comment GitHub refuses to attach is
 // listed in the summary instead.
 const postToPull = Effect.fnUntraced(function* (input: {
-  git: Git.Interface
+  git: ReviewGit.Client
   root: string
   pr: number
   remote: string
@@ -778,7 +890,7 @@ function withFlags(config: ReviewConfig, options: LocalReviewOptions): ReviewCon
 
 // Your branch: section 3.4's range planning, with the last local review as the state.
 const branchRange = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   input: {
     head: string
@@ -821,7 +933,7 @@ const branchRange = Effect.fnUntraced(function* (
 
 // Uncommitted or staged changes, against HEAD, or against the merge-base when --base is given.
 const worktreeRange = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   input: { kind: "uncommitted" | "staged"; head: string; branch?: string; base?: Base },
 ) {
@@ -850,7 +962,7 @@ const worktreeRange = Effect.fnUntraced(function* (
 })
 
 // A pull request, fetched into FETCH_HEAD and never checked out.
-const pullRange = Effect.fnUntraced(function* (git: Git.Interface, root: string, pr: number, base: Base) {
+const pullRange = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, pr: number, base: Base) {
   const pulled = yield* fetchPull(git, root, pr)
   const head = pulled.sha
   const mergeBase = yield* mergeBaseOf(git, root, base, head, `pull request #${pr}`)
@@ -865,7 +977,7 @@ const pullRange = Effect.fnUntraced(function* (git: Git.Interface, root: string,
   } satisfies Range
 })
 
-const toplevel = Effect.fnUntraced(function* (git: Git.Interface, directory: string) {
+const toplevel = Effect.fnUntraced(function* (git: ReviewGit.Client, directory: string) {
   const result = yield* git.run(["rev-parse", "--show-toplevel"], { cwd: directory })
   const found = result.exitCode === 0 ? result.text().trim() : ""
   if (!found)
@@ -874,7 +986,7 @@ const toplevel = Effect.fnUntraced(function* (git: Git.Interface, directory: str
   return sameDirectory(directory, found) ? directory : found
 })
 
-const commitOf = Effect.fnUntraced(function* (git: Git.Interface, root: string, ref: string) {
+const commitOf = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, ref: string) {
   if (!ref || ref.startsWith("-")) return undefined
   const result = yield* git.run(["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], {
     cwd: root,
@@ -885,7 +997,7 @@ const commitOf = Effect.fnUntraced(function* (git: Git.Interface, root: string, 
 // --base as given; otherwise the remote-tracking default branch, as a pull request would be compared with it. A pull
 // request's own base, from `gh`, comes first when there is one.
 const resolveBase = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   input: { requested?: string; suggested?: string },
 ) {
@@ -914,7 +1026,7 @@ const resolveBase = Effect.fnUntraced(function* (
 })
 
 const mergeBaseOf = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   base: Base,
   head: string,
@@ -930,7 +1042,7 @@ const mergeBaseOf = Effect.fnUntraced(function* (
 })
 
 // The branch's own commits start at its merge-base with the default branch, when that can be found.
-const branchStart = Effect.fnUntraced(function* (git: Git.Interface, root: string, head: string, base?: Base) {
+const branchStart = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, head: string, base?: Base) {
   const found = base ?? (yield* resolveBase(git, root, {}).pipe(Effect.catch(() => Effect.succeed(undefined))))
   if (!found) return undefined
   return yield* mergeBaseOf(git, root, found, head, "HEAD").pipe(Effect.catch(() => Effect.succeed(undefined)))
@@ -938,7 +1050,7 @@ const branchStart = Effect.fnUntraced(function* (git: Git.Interface, root: strin
 
 // `git fetch <remote> +refs/pull/<n>/head` with no destination and an empty --refmap: the commit lands in FETCH_HEAD
 // and no ref is created or moved.
-const fetchPull = Effect.fnUntraced(function* (git: Git.Interface, root: string, pr: number) {
+const fetchPull = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, pr: number) {
   const remotes = (yield* git.run(["remote"], { cwd: root }))
     .text()
     .split("\n")
@@ -967,7 +1079,7 @@ const fetchPull = Effect.fnUntraced(function* (git: Git.Interface, root: string,
 
 // The working tree (untracked files included) or the index, against `from`, with the same flags as every other diff.
 const worktreeDiff = Effect.fnUntraced(function* (
-  git: Git.Interface,
+  git: ReviewGit.Client,
   root: string,
   from: string,
   kind: "uncommitted" | "staged",
@@ -1040,7 +1152,7 @@ const generatedHeaders = Effect.fnUntraced(function* (input: {
   }
 })
 
-const otherAuthors = Effect.fnUntraced(function* (git: Git.Interface, root: string, from: string, head: string) {
+const otherAuthors = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, from: string, head: string) {
   const log = yield* git.run(["log", "--no-color", "--format=%aE", `${from}..${head}`], { cwd: root })
   const me = (yield* git.run(["config", "user.email"], { cwd: root })).text().trim().toLowerCase()
   const authors = new Set(
@@ -1055,7 +1167,7 @@ const otherAuthors = Effect.fnUntraced(function* (git: Git.Interface, root: stri
 })
 
 // Commit subjects for the prompt, where they are placed as untrusted text.
-const subjects = Effect.fnUntraced(function* (git: Git.Interface, root: string, from: string, head: string) {
+const subjects = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, from: string, head: string) {
   if (from === head) return []
   const log = yield* git.run(["log", "--no-color", "-n", String(MAX_SUBJECTS), "--format=%s", `${from}..${head}`], {
     cwd: root,
@@ -1069,7 +1181,7 @@ const subjects = Effect.fnUntraced(function* (git: Git.Interface, root: string, 
 })
 
 // Tracked changes against HEAD, and with `untracked` new files too.
-const dirty = Effect.fnUntraced(function* (git: Git.Interface, root: string, untracked: boolean) {
+const dirty = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, untracked: boolean) {
   const result = yield* git.run(
     ["status", "--porcelain", `--untracked-files=${untracked ? "normal" : "no"}`, "--no-renames"],
     { cwd: root },
@@ -1077,7 +1189,7 @@ const dirty = Effect.fnUntraced(function* (git: Git.Interface, root: string, unt
   return result.exitCode === 0 && result.text().trim() !== ""
 })
 
-const localStatePath = Effect.fnUntraced(function* (git: Git.Interface, root: string, branch: string) {
+const localStatePath = Effect.fnUntraced(function* (git: ReviewGit.Client, root: string, branch: string) {
   const result = yield* git.run(["rev-parse", "--absolute-git-dir"], { cwd: root })
   const dir = result.exitCode === 0 ? result.text().trim() : ""
   return dir ? path.join(dir, "vector", "review", `${encodeURIComponent(branch)}.json`) : undefined
@@ -1177,7 +1289,7 @@ function readWorkingFile(root: string, file: string) {
 }
 
 // A file at `rev`; an empty `rev` reads the index.
-function readBlob(git: Git.Interface, root: string, rev: string, file: string) {
+function readBlob(git: ReviewGit.Client, root: string, rev: string, file: string) {
   return git
     .run(["cat-file", "blob", `${rev}:${file}`], { cwd: root })
     .pipe(Effect.map((result) => (result.exitCode === 0 && !result.stdout.includes(0) ? result.text() : undefined)))

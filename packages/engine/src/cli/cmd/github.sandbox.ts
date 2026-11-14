@@ -14,8 +14,6 @@ import { LinuxIsolation } from "@vectordevai/core/process-isolation/linux"
 const execute = promisify(execFile)
 const USER = GithubAgents.SANDBOX_USER
 const AGENT_HOME = `/home/${USER}`
-// Diagnostic branch only: the named profile has no executable attachment or transition rule.
-const DIAGNOSTIC_PROFILE = ["/usr/bin/aa-exec", "--profile=vector-isolation-diagnostic", "--"]
 const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 const STAGING_PARENTS = ["/mnt", "/var/lib", "/home"] as const
 const STAGING_CONTAINERS = STAGING_PARENTS.map((parent) => path.join(parent, "vector-agent-sandbox"))
@@ -315,7 +313,7 @@ export function sandboxEnvironment(
     temporary: string
     event: string
     node: string
-    toolIsolation?: "pid"
+    toolIsolation?: "pid" | "guard"
     sessionProof?: true
   },
 ): Record<string, string> {
@@ -347,7 +345,7 @@ export function sandboxEnvironment(
     TMPDIR: absolute(locations.temporary),
     GITHUB_EVENT_PATH: absolute(locations.event),
     VECTOR_SECRET_CHANNEL: "stdin",
-    ...(locations.toolIsolation === "pid" ? { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "pid" } : {}),
+    ...(locations.toolIsolation ? { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: locations.toolIsolation } : {}),
     ...(locations.sessionProof ? { [GithubAgents.SESSION_PROOF_ENV]: "fd3" } : {}),
   }
 }
@@ -551,47 +549,17 @@ export async function prepare(env: Env = process.env) {
   if ((await sudo([...asAgent, "/usr/bin/sudo", "-n", "true"], [0, 1])).code !== (state.sudo ? 0 : 1)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
   if (!state.sudo && native) {
-    // Compile-time CI only. Persist intent before any root installation or native child exists.
+    // Persist native intent before any root installation or native child exists. Never downgrade an intent.
     const adapter = GithubIsolation.fromBuild(env.RUNNER_TEMP)
     if (state.uid === undefined || state.gid === undefined) throw refused()
     state.native = adapter.intent({ uid: state.uid, gid: state.gid, container })
     await writeState(env, state)
     state.native = await adapter.prepare(nativeState(state))
     state.isolatedTools = true
-  } else if (!state.sudo) {
+  } else if (!state.sudo && ProcessIsolation.FLOOR) {
     ProcessIsolation.assertBinary()
-    // Identical UID/GID, clean environment, core limit, no-new-privs, binary and argv; only the root-entered label differs.
-    const probe = [
-      ...asAgent,
-      "/bin/sh",
-      "-c",
-      'printf "vector-userns-probe-pid=%s\\n" "$$"; exec "$@"',
-      "vector-userns-control",
-      ProcessIsolation.BINARY,
-      ...ProcessIsolation.argumentsForTool("/bin/true", [], staged),
-    ]
-    const baseline = await sudo(probe, [0, 1])
-    console.log(`Diagnostic unprofiled tool namespace: exit ${baseline.code}`)
-    if (baseline.code !== 0) console.log(namespaceProbeFailure("unprofiled tool PID/proc", baseline).message)
-    const label = await sudo([...DIAGNOSTIC_PROFILE, ...asAgent, "/usr/bin/cat", "/proc/self/attr/current"])
-    if (label.stdout.trim() !== "vector-isolation-diagnostic (enforce)") throw refused()
-    console.log("Diagnostic agent label: vector-isolation-diagnostic (enforce)")
-    const toolProbe = await sudo([...DIAGNOSTIC_PROFILE, ...probe], [0, 1])
-    const pids = [baseline, toolProbe].map((result) => {
-      const match = /^vector-userns-probe-pid=(\d+)\n$/.exec(result.stdout)
-      if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) < 2) throw refused()
-      return Number(match[1])
-    })
-    await fs.writeFile(
-      path.join(absolute(env.RUNNER_TEMP), "vector-aa-probe-pids.json"),
-      JSON.stringify({ uid: state.uid, pids }),
-      { mode: 0o600, flag: "wx" },
-    )
-    console.log(`Diagnostic profiled tool namespace: exit ${toolProbe.code}`)
-    if (toolProbe.code !== 0) throw namespaceProbeFailure("tool PID/proc", toolProbe)
     const engineProbe = await sudo(
       [
-        ...DIAGNOSTIC_PROFILE,
         ProcessIsolation.BINARY,
         ...ProcessIsolation.engineArguments(
           asAgent[0]!,
@@ -602,6 +570,11 @@ export async function prepare(env: Env = process.env) {
       [0, 1],
     )
     if (engineProbe.code !== 0) throw namespaceProbeFailure("engine mount", engineProbe)
+    const toolProbe = await sudo(
+      [...asAgent, ProcessIsolation.BINARY, ...ProcessIsolation.argumentsForTool("/bin/true", [], staged)],
+      [0, 1],
+    )
+    if (toolProbe.code !== 0) throw namespaceProbeFailure("tool PID/proc", toolProbe)
     state.isolatedTools = true
   }
   for (const name of FILE_COMMANDS) {
@@ -619,16 +592,54 @@ export async function prepare(env: Env = process.env) {
   await writeState(env, state)
 }
 
-function namespaceProbeFailure(kind: string, result: { code: number; stderr: string }) {
-  // Both probes run only fixed /bin/true commands in a clean PATH environment before channel capture.
+/** Both namespace probes run only fixed /bin/true commands in a clean PATH environment before channel capture. */
+export function namespaceProbeFailure(kind: string, result: { code: number; stderr: string }) {
   // No general command stderr is logged: it may contain credentials or repository-controlled output.
   const detail = result.stderr
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/[\r\n\t]+/g, " ")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .trim()
     .slice(0, 800)
   return new Error(
     `The mandatory ${kind} namespace probe failed (exit ${result.code}): ${detail || "no diagnostic"}. The run is refused.`,
   )
+}
+
+/** Whether private state shows a sandbox prepared for this run. Only a floor build requires its verified tools. */
+export function preparedFor(
+  state: State | undefined,
+  run: { workspace: string; mode: string | undefined },
+  floor = ProcessIsolation.FLOOR,
+) {
+  return Boolean(
+    state?.prepared &&
+      state.created &&
+      state.uid &&
+      state.gid &&
+      (state.sudo ||
+        !(floor || state.nativeRequired || state.native || GithubIsolation.enabled()) ||
+        state.isolatedTools) &&
+      state.workspace === run.workspace &&
+      state.mode === run.mode,
+  )
+}
+
+/** sudo's arguments for the engine: under the floor, the engine's mount namespace and empty proc come first. */
+export function engineLaunch(
+  inner: readonly string[],
+  workspace: string,
+  sudo: boolean,
+  floor = ProcessIsolation.FLOOR,
+  scope?: ProcessIsolation.EngineScope,
+) {
+  if (!sudo && floor && (!scope || scope.cwd !== workspace)) throw refused()
+  return [
+    "-n",
+    ...(sudo || !floor
+      ? inner
+      : [ProcessIsolation.BINARY, ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), scope!)]),
+  ]
 }
 
 async function executable(name: string, env: Env) {
@@ -663,19 +674,8 @@ export async function run(args: readonly string[], env: Env = process.env) {
   const binary = await executable(args[0]!, env)
   const hosted = env.RUNNER_ENVIRONMENT === "github-hosted"
   const state = hosted ? await readState(env) : undefined
-  if (
-    hosted &&
-    (!state?.prepared ||
-      !state.created ||
-      !state.uid ||
-      !state.gid ||
-      (!state.sudo && !state.isolatedTools) ||
-      state.workspace !== workspace ||
-      state.mode !== env.VECTOR_MODE)
-  )
-    throw refused()
+  if (hosted && !preparedFor(state, { workspace, mode: env.VECTOR_MODE })) throw refused()
   if (hosted && !state!.sudo && (state!.nativeRequired || state!.native || native)) {
-    // A native intent can never select a legacy launch on missing bytes, changed receipts or another build.
     await GithubIsolation.fromBuild(env.RUNNER_TEMP).validate(nativeState(state!))
     LinuxIsolation.assertUnmaskedRuntime(node)
     LinuxIsolation.assertUnmaskedRuntime(binary)
@@ -688,7 +688,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
   )
     throw refused()
   if (hosted) {
-    if (!state!.sudo) ProcessIsolation.assertBinary()
+    if (!state!.sudo && ProcessIsolation.FLOOR) ProcessIsolation.assertBinary()
     await verifyContainer(state!.container, true)
     await placeholder(workspace)
   }
@@ -707,7 +707,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
     home,
     temporary,
     event: hosted ? `${AGENT_HOME}/event.json` : absolute(env.GITHUB_EVENT_PATH),
-    ...(hosted && !state!.sudo ? { toolIsolation: "pid" as const } : {}),
+    ...(hosted && !state!.sudo ? { toolIsolation: GithubSecrets.toolBoundary() } : {}),
     ...(hosted && state!.mode === "codium" && !state!.sudo ? { sessionProof: true as const } : {}),
   })
   clean.GITHUB_WORKSPACE = working
@@ -764,7 +764,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
   const launcher = hosted ? "/usr/bin/sudo" : binary
   const inner = hosted
     ? [
-        // sudo and bwrap close extra descriptors. Open FD3 only after both, before the UID switch.
+        // sudo and bwrap (under the floor) close extra descriptors. Open FD3 only after both, before the UID switch.
         ...(proofPath
           ? [
               "/bin/bash",
@@ -795,16 +795,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
     : args.slice(1)
   const arguments_ = !hosted
     ? inner
-    : [
-        "-n",
-        ...(state!.sudo
-          ? inner
-          : [
-              ...DIAGNOSTIC_PROFILE,
-              ProcessIsolation.BINARY,
-              ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), scope!),
-            ]),
-      ]
+    : engineLaunch(inner, workspace, state!.sudo, native || ProcessIsolation.FLOOR, scope)
   return new Promise<number>((resolve, reject) => {
     const child = spawn(launcher, arguments_, {
       // GNU env changes to the staged directory only after setpriv. A mode-0700 checkout is owned by the agent.

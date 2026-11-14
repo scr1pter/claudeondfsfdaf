@@ -14,6 +14,21 @@ const updaterHandler = (_: unknown, state: UpdaterState) => {
 let taskBoardSubscribers = 0
 let researchWatchers = 0
 const api: ElectronAPI = {
+  githubAgents: {
+    status: (cwd) => ipcRenderer.invoke("github-agents-status", cwd),
+    preview: (input) => ipcRenderer.invoke("github-agents-setup-preview", input),
+    setup: (input) => ipcRenderer.invoke("github-agents-setup", input),
+    bind: (input) => ipcRenderer.invoke("github-agents-bind", input),
+    run: (input) => ipcRenderer.invoke("github-agents-run", input),
+    schedules: (input) => ipcRenderer.invoke("github-agents-schedules", input),
+    bindings: () => ipcRenderer.invoke("github-agents-bindings"),
+    unbind: (input) => ipcRenderer.invoke("github-agents-unbind", input),
+    runs: () => ipcRenderer.invoke("github-agents-runs"),
+    previewBrain: (cwd) => ipcRenderer.invoke("github-agents-brain-preview", cwd),
+    returnedArtifacts: (input) => ipcRenderer.invoke("github-agents-returned-artifacts", input),
+    previewReturned: (input) => ipcRenderer.invoke("github-agents-returned-preview", input),
+    importReturned: (input) => ipcRenderer.invoke("github-agents-returned-import", input),
+  },
   killSidecar: () => ipcRenderer.invoke("kill-sidecar"),
   awaitInitialization: () => ipcRenderer.invoke("await-initialization"),
   wslServers: {
@@ -59,6 +74,53 @@ const api: ElectronAPI = {
     install: () => ipcRenderer.invoke("updater-install"),
   },
   reportBug: (input) => ipcRenderer.invoke("report-bug", input),
+  reports: {
+    list: () => ipcRenderer.invoke("reports-list"),
+    status: () => ipcRenderer.invoke("reports-status"),
+  },
+  remote: {
+    status: () => ipcRenderer.invoke("remote-status"),
+    setEnabled: (enabled) => ipcRenderer.invoke("remote-set-enabled", enabled),
+    startPairing: () => ipcRenderer.invoke("remote-pair-start"),
+    confirmPairing: (code) => ipcRenderer.invoke("remote-pair-confirm", code),
+    cancelPairing: () => ipcRenderer.invoke("remote-pair-cancel"),
+    unpair: (device) => ipcRenderer.invoke("remote-unpair", device),
+    disconnectAll: () => ipcRenderer.invoke("remote-disconnect-all"),
+    isPhoneTurn: (sessionIDs) => ipcRenderer.invoke("remote-phone-turn", sessionIDs),
+    onChange: (callback) => {
+      const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
+      ipcRenderer.on("remote-changed", handler)
+      return () => ipcRenderer.removeListener("remote-changed", handler)
+    },
+  },
+  phoneAlerts: {
+    send: (alert) => ipcRenderer.invoke("phone-alert-send", alert),
+  },
+  vault: {
+    status: () => ipcRenderer.invoke("vault-status"),
+    configure: (input) => ipcRenderer.invoke("vault-configure", input),
+    backup: () => ipcRenderer.invoke("vault-backup"),
+    versions: () => ipcRenderer.invoke("vault-versions"),
+    restore: (input) => ipcRenderer.invoke("vault-restore", input),
+    forget: (version) => ipcRenderer.invoke("vault-forget", version),
+    remove: () => ipcRenderer.invoke("vault-delete"),
+    onChange: (callback) => {
+      const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
+      ipcRenderer.on("vault-changed", handler)
+      return () => ipcRenderer.removeListener("vault-changed", handler)
+    },
+  },
+  ops: {
+    request: (input) => ipcRenderer.invoke("ops-request", input),
+    image: (input) => ipcRenderer.invoke("ops-image", input),
+    merge: (input) => ipcRenderer.invoke("ops-merge", input),
+  },
+  hosted: {
+    request: (input) => ipcRenderer.invoke("hosted-request", input),
+    liveView: (input) => ipcRenderer.invoke("hosted-live-view", input),
+    files: (input) => ipcRenderer.invoke("hosted-files", input),
+    open: (input) => ipcRenderer.invoke("hosted-open", input),
+  },
   askHelpAssistant: (input) => ipcRenderer.invoke("help-assistant-ask", input),
   agentTeams: {
     list: (scope) => ipcRenderer.invoke("agent-teams-list", scope),
@@ -152,6 +214,40 @@ const api: ElectronAPI = {
     ipcRenderer.on("deep-link", handler)
     return () => ipcRenderer.removeListener("deep-link", handler)
   },
+  computer: {
+    supported: process.platform !== "linux",
+    status: () => ipcRenderer.invoke("computer-status"),
+    state: () => ipcRenderer.invoke("computer-state"),
+    onState: (cb) => {
+      const handler = (_: unknown, state: Parameters<typeof cb>[0]) => cb(state)
+      ipcRenderer.on("computer-state-changed", handler)
+      return () => ipcRenderer.removeListener("computer-state-changed", handler)
+    },
+    command: (command, arg) => ipcRenderer.invoke("computer-command", command, arg),
+    prefs: () => ipcRenderer.invoke("computer-prefs"),
+    setPrefs: (patch) => ipcRenderer.invoke("computer-set-prefs", patch),
+    permissions: () => ipcRenderer.invoke("computer-permissions"),
+    recheck: () => ipcRenderer.invoke("computer-recheck"),
+    inputSetup: (action) => ipcRenderer.invoke("computer-input-setup", action),
+    openPane: (id) => ipcRenderer.invoke("computer-open-pane", id),
+    reset: (id) => ipcRenderer.invoke("computer-reset", id),
+    apps: (query) => ipcRenderer.invoke("computer-apps", query),
+    removeAlways: (key) => ipcRenderer.invoke("computer-remove-always", key),
+    removeAllAlways: () => ipcRenderer.invoke("computer-remove-all-always"),
+    block: (app) => ipcRenderer.invoke("computer-block", { key: app.key, name: app.name }),
+    unblock: (key) => ipcRenderer.invoke("computer-unblock", key),
+    deleteScreenshots: () => ipcRenderer.invoke("computer-delete-screenshots"),
+  },
+  onComputerOpen: (cb) => {
+    const handler = (_: unknown, href: string) => cb(href)
+    ipcRenderer.on("computer-open-session", handler)
+    return () => ipcRenderer.removeListener("computer-open-session", handler)
+  },
+  onComputerScreenshotsRemoved: (cb) => {
+    const handler = (_: unknown, removal: unknown) => cb(removal)
+    ipcRenderer.on("computer-screenshots-removed", handler)
+    return () => ipcRenderer.removeListener("computer-screenshots-removed", handler)
+  },
 
   openDirectoryPicker: (opts) => ipcRenderer.invoke("open-directory-picker", opts),
   openFilePicker: (opts) => ipcRenderer.invoke("open-file-picker", opts),
@@ -194,6 +290,11 @@ const api: ElectronAPI = {
     const handler = (_: unknown, event: Parameters<typeof cb>[0]) => cb(event)
     ipcRenderer.on("browser-agent-page-event", handler)
     return () => ipcRenderer.removeListener("browser-agent-page-event", handler)
+  },
+  onBrowserAgentActivity: (cb) => {
+    const handler = (_: unknown, event: Parameters<typeof cb>[0]) => cb(event)
+    ipcRenderer.on("browser-agent-activity", handler)
+    return () => ipcRenderer.removeListener("browser-agent-activity", handler)
   },
   parallelWorkspaces: {
     list: (scope) => ipcRenderer.invoke("parallel-workspaces-list", scope),
@@ -329,6 +430,7 @@ const api: ElectronAPI = {
     confirmDeletion: () => ipcRenderer.invoke("vector-account-confirm-deletion"),
     cancelDeletion: () => ipcRenderer.invoke("vector-account-cancel-deletion"),
     deleteAccount: (email) => ipcRenderer.invoke("vector-account-delete", email),
+    roadmap: (request) => ipcRenderer.invoke("vector-account-roadmap", request),
     onChange: (callback) => {
       const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
       ipcRenderer.on("vector-account-changed", handler)

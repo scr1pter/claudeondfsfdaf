@@ -39,6 +39,8 @@ import { runtime } from "./runtime"
 import { type Scenario } from "./types"
 import { workspaceScenarios } from "./workspace-scenarios"
 import { sessionScenarios } from "./session-scenarios"
+import { reviewScenarios } from "./review-scenarios"
+import { connectScenarios } from "./connect-scenarios"
 
 function cursor(input: Record<string, unknown>) {
   return Buffer.from(JSON.stringify(input)).toString("base64url")
@@ -77,8 +79,89 @@ function locationData(validate: (value: any) => void) {
 }
 
 const scenarios: Scenario[] = [
+  ...reviewScenarios,
   ...workspaceScenarios,
   ...sessionScenarios,
+  ...connectScenarios,
+  http.protected
+    .get("/computer/protected-paths", "computer.protectedPaths")
+    .seeded((ctx) => ctx.file("AGENTS.md", "Private computer protection instruction fixture."))
+    .json(200, (body, ctx) => {
+      object(body)
+      array(body.paths)
+      array(body.directories)
+      check(
+        [...body.paths, ...body.directories].every(
+          (file) => typeof file === "string" && path.isAbsolute(file) && !file.includes("\0"),
+        ),
+        "protected computer paths must be absolute file names",
+      )
+      check(
+        body.paths.includes(path.join(ctx.directory!, "AGENTS.md")),
+        "protected computer paths should include this project's instruction file",
+      )
+      check(
+        body.directories.includes(exerciseConfigDirectory),
+        "protected computer directories should include the isolated engine config",
+      )
+      check(Buffer.byteLength(JSON.stringify(body)) <= 1024 * 1024, "protected computer metadata must stay bounded")
+      check(
+        !JSON.stringify(body).includes("Private computer protection instruction fixture."),
+        "protected computer metadata must not disclose instruction contents",
+      )
+    }),
+  http.protected
+    .post("/computer/screenshots/prune", "computer.screenshots.prune")
+    .mutating()
+    .probe({ path: "/computer/screenshots/prune", body: { before: 0 } })
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Screenshot retention fixture" })
+        const user = yield* ctx.message(session.id, { text: "Keep the conversation after deleting old screenshots." })
+        const attachmentURL = "data:image/png;base64,aHR0cGFwaS1wcml2YXRlLXNjcmVlbg=="
+        const removed = yield* ctx.toolMessage(user.info, { tool: "computer", attachmentURL, end: 10 })
+        yield* ctx.toolMessage(user.info, { tool: "computer", attachmentURL, end: 30 })
+        yield* ctx.toolMessage(user.info, { tool: "read", attachmentURL, end: 10 })
+        const other = yield* ctx.session({ title: "Unselected screenshot fixture" })
+        const otherUser = yield* ctx.message(other.id)
+        yield* ctx.toolMessage(otherUser.info, { tool: "computer", attachmentURL, end: 10 })
+        return {
+          session,
+          removed,
+          before: yield* ctx.messages(session.id),
+          other,
+          otherBefore: yield* ctx.messages(other.id),
+        }
+      }),
+    )
+    .at((ctx) => ({
+      path: "/computer/screenshots/prune",
+      headers: ctx.headers(),
+      body: { sessionID: ctx.state.session.id, before: 20 },
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        object(body)
+        check(body.removed === 1, "pruning should count only the selected old computer screenshot")
+        const after = yield* ctx.messages(ctx.state.session.id)
+        const parts = after.flatMap((message) => message.parts)
+        const removed = parts.find((part) => part.id === ctx.state.removed.id)
+        check(removed?.type === "tool", "pruning must retain the computer tool part")
+        check(removed.state.status === "completed", "pruning must preserve the completed tool status")
+        check(removed.state.metadata.screenshotRemoved === true, "pruning must mark the removed screenshot")
+        check(!removed.state.attachments?.length, "the selected screenshot attachment must be deleted")
+        check(removed.state.output === "Keep this recorded tool output.", "pruning must preserve tool output")
+        check(
+          stable(parts.filter((part) => part.id !== removed.id)) ===
+            stable(ctx.state.before.flatMap((message) => message.parts).filter((part) => part.id !== removed.id)),
+          "pruning must preserve user text, newer screenshots and ordinary tool attachments",
+        )
+        check(
+          stable(yield* ctx.messages(ctx.state.other.id)) === stable(ctx.state.otherBefore),
+          "pruning must not change another session's screenshots",
+        )
+      }),
+    ),
   http.protected
     .get("/experimental/session/usage", "experimental.session.usage")
     .preserveDatabase()
@@ -921,6 +1004,15 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  http.protected.get("/memory/backup", "memory.backup").json(200, (body) => {
+    object(body)
+    check(Array.isArray(body.files), "a backup should list its memory files")
+  }),
+  http.protected
+    .post("/memory/restore", "memory.restore")
+    .mutating()
+    .at((ctx) => ({ path: "/memory/restore", headers: ctx.headers(), body: { text: "{}", repository: "" } }))
+    .json(400, object, "status"),
   http.protected.get("/memory/settings", "memory.settings.get").json(200, (body) => {
     object(body)
     check(
@@ -928,6 +1020,26 @@ const scenarios: Scenario[] = [
       "learning settings should say each facet and the model learner",
     )
   }),
+  http.protected.post("/memory/bootstrap", "memory.bootstrap.explicit-opt-out")
+    .withLlm()
+    .mutating()
+    .probe({ path: "/memory/bootstrap", body: {} })
+    .seeded((ctx) => Effect.gen(function* () {
+      yield* ctx.file("bootstrap-notes.md", "# Parser notes\n\nTrailing delimiters have a dedicated snapshot fixture.\n")
+      const chooseOff = http.protected.patch("/memory/settings", "bootstrap.fixture.opt-out")
+        .at(() => ({ path: "/memory/settings", headers: ctx.headers(), body: { distillation: false } }))
+        .json(200)
+      const result = yield* call(chooseOff, { ...ctx, state: undefined })
+      check(result.status === 200, "bootstrap fixture must save the owner's explicit opt-out through the real settings route")
+    }))
+    .at((ctx) => ({ path: "/memory/bootstrap", headers: ctx.headers(), body: {} }))
+    .jsonEffect(400, (body, ctx) => Effect.gen(function* () {
+      object(body)
+      object(body.data)
+      check(body.data.code === "refused" && body.data.reason === "off", "bootstrap must respect the owner's saved distillation opt-out")
+      check(typeof body.data.message === "string" && body.data.message.includes("Settings > Memory"), "bootstrap must explain the setting that controls it")
+      check((yield* ctx.llmCalls()) === 0, "refused bootstrap must send no model request")
+    })),
   http.protected
     .patch("/memory/settings", "memory.settings.update")
     .mutating()
@@ -1308,6 +1420,9 @@ const scenarios: Scenario[] = [
   http.protected.get("/experimental/capabilities", "experimental.capabilities.get").json(200, (body) => {
     check(typeof body === "object" && body !== null, "capabilities should be an object")
     check("backgroundSubagents" in body, "capabilities should report background subagents")
+    check("computer" in body && isRecord(body.computer), "capabilities should report computer availability")
+    check(body.computer.available === false, "computer use needs a desktop bridge")
+    check(body.computer.reason === "no_desktop_bridge", "computer availability should explain the missing bridge")
     check(
       typeof (body as { subagentLimits?: unknown }).subagentLimits === "boolean",
       "capabilities should report whether task lists carry subagent limits",
@@ -1375,6 +1490,51 @@ const scenarios: Scenario[] = [
     object(body)
     array(body.workflows)
   }),
+  http.protected.get("/experimental/workflow/playbooks", "experimental.playbooks.list.no-account").json(400, (body) => {
+    object(body)
+    check(typeof body.message === "string", "a signed-out owner gets a readable account refusal")
+  }),
+  http.protected.post("/experimental/workflow/playbooks/install", "experimental.playbooks.install.invalid")
+    .at((ctx) => ({ path: "/experimental/workflow/playbooks/install", headers: ctx.headers(),
+      body: { name: "../project", version: "1.0.0", sha256: "a".repeat(64) } }))
+    .status(400),
+  http.protected.post("/experimental/brain/run-bundle/preview", "experimental.brain.preview")
+    .at((ctx) => ({ path: "/experimental/brain/run-bundle/preview", headers: ctx.headers(),
+      body: { includeBrain: true, publicRepository: true } }))
+    .json(200, (body) => {
+      object(body)
+      check(body.path === "brain/bundle.json", "preview has the fixed approved artifact path")
+      check(typeof body.base64url === "string", "preview has locally encoded bytes")
+      check(typeof body.sha256 === "string" && /^[0-9a-f]{64}$/.test(body.sha256), "preview has an exact digest")
+      const bytes = Buffer.from(body.base64url, "base64url")
+      check(bytes.length === body.bytes && bytes.length <= 512 * 1024, "preview bytes are bounded and counted")
+      const bundle: unknown = JSON.parse(bytes.toString("utf8"))
+      object(bundle)
+      object(bundle.memory)
+      check(bundle.memory.scope === "repository", "preview contains repository context only")
+      array(bundle.memory.documents)
+      check(bundle.memory.documents.length === 0, "preview never includes document contents")
+      check(!Array.isArray(bundle.memory.skills) || bundle.memory.skills.length === 0, "public previews omit procedures")
+    }),
+  http.protected.get("/experimental/session/{sessionID}/hosted-jobs", "experimental.hosted.jobs.child-refused")
+    .seeded((ctx) => Effect.gen(function* () {
+      const parent = yield* ctx.session({ title: "Hosted report origin" })
+      return yield* ctx.session({ parentID: parent.id, title: "Helper cannot receive hosted work" })
+    }))
+    .at((ctx) => ({ path: route("/experimental/session/{sessionID}/hosted-jobs", { sessionID: ctx.state.id }), headers: ctx.headers() }))
+    .json(400, (body) => { object(body); check(typeof body.message === "string", "child refusal is explicit before any account read") }),
+  http.protected.post("/experimental/brain/run-proposals/import", "experimental.brain.importProposals.invalid-digest")
+    .at((ctx) => ({ path: "/experimental/brain/run-proposals/import", headers: ctx.headers(),
+      body: { path: "brain/proposals.json", base64url: "e30", sha256: "a".repeat(64), publicRepository: true } }))
+    .status(400),
+  http.protected.post("/experimental/session/{sessionID}/hosted-jobs", "experimental.hosted.attach.child-refused")
+    .seeded((ctx) => Effect.gen(function* () {
+      const parent = yield* ctx.session({ title: "Hosted report origin" })
+      return yield* ctx.session({ parentID: parent.id, title: "Helper cannot attach hosted work" })
+    }))
+    .at((ctx) => ({ path: route("/experimental/session/{sessionID}/hosted-jobs", { sessionID: ctx.state.id }),
+      headers: ctx.headers(), body: { jobID: `jb_${"a".repeat(26)}` } }))
+    .status(400),
   http.protected
     .post("/experimental/workflow/validate", "experimental.workflow.validate.invalid")
     .withLlm()

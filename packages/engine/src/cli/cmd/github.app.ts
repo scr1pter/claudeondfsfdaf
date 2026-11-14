@@ -3,6 +3,45 @@ import { z } from "zod"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { githubFetch } from "./github.shared"
 
+/** Public setup gates need no account credential. Missing/offline/disabled configuration advertises no perk. */
+export async function githubListedPerks(
+  request: (url: string, init: RequestInit) => Promise<Response> = (url, init) =>
+    Egress.fetch("plans-catalog", url, init),
+) {
+  const response = await request("https://vectordev.ai/api/model-plans/config", {
+    headers: { accept: "application/json" },
+    redirect: "error",
+    credentials: "omit",
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => undefined)
+  if (!response?.ok) {
+    await response?.body?.cancel().catch(() => {})
+    return []
+  }
+  const reader = response.body?.getReader()
+  if (!reader) return []
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    for (;;) {
+      const item = await reader.read()
+      if (item.done) break
+      size += item.value.byteLength
+      if (size > 256_000) return []
+      chunks.push(item.value)
+    }
+    const value = z
+      .object({ enabled: z.literal(true), listed: z.array(z.string().max(80)).max(100) })
+      .safeParse(JSON.parse(Buffer.concat(chunks).toString("utf8")))
+    return value.success ? value.data.listed : []
+  } catch {
+    return []
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+}
+
 // Whether Vector's GitHub App is installed for the repository, as vectordev.ai answers: a Vector service, so with Vector
 // Local on it is decided as one (vector-account).
 export async function githubAppInstallation(

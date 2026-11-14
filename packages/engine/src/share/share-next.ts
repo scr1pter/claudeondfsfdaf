@@ -61,7 +61,8 @@ const layer = Layer.effect(
     })
     return Service.of({
       init: () => Effect.void,
-      create: (sessionID, publish) => sharing.publish({ sessionID, ...publish }),
+      create: (sessionID, publish) =>
+        sharing.publish({ sessionID, ...publish, includeScreenshots: publish.includeScreenshots === true }),
       removeTree: sharing.removeTree,
       publicLinks,
       remove: Effect.fn("ShareNext.remove")(function* (sessionID) {

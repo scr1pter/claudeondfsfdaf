@@ -21,6 +21,8 @@ export type CodiumSummary =
       notice?: ReturnType<typeof ModelPlanStatus.notice>
       /** Whether vectordev.ai keeps billing for this account: a plan or past invoices to manage. */
       billing: boolean
+      /** A founding member's number (WP A31), with the price lock it keeps. */
+      founding?: { number: number }
     }
 
 /**
@@ -59,8 +61,12 @@ export function codiumSummary(status?: ModelPlanStatus.Status): CodiumSummary {
       : {}),
     notice: ModelPlanStatus.notice(status),
     billing: Boolean(plan || status.customer),
+    ...(plan && status.founding ? { founding: { number: status.founding.number } } : {}),
   }
 }
+
+/** The line under a founding member's number: the lock it keeps, in the terms' words. */
+export const FOUNDING_LOCK = "Your price won't go up while you stay subscribed."
 
 /**
  * Which step of deleting the account the page shows. The desktop's own state comes first, so a confirmation still in

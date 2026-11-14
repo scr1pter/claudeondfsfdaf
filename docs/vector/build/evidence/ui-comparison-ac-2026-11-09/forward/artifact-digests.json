@@ -1,0 +1,58 @@
+[
+  {
+    "path": "context.json.gz",
+    "rawBytes": 658,
+    "rawSha256": "03de5d40d486a0cea6441de8a72b5d35d745775dbd8a6970328ce93388eb494b",
+    "storedBytes": 385,
+    "storedSha256": "c66611dbaa55d67faf0c659a518d09fdc6d1afb03c5cfc571924f995768233ec"
+  },
+  {
+    "path": "completion.json.gz",
+    "rawBytes": 175,
+    "rawSha256": "af654e5bc7c127f9e56edb41837e1610e274f403ccf696391df2270a81ef6ed7",
+    "storedBytes": 152,
+    "storedSha256": "4aa4366a223b7871a96d0aa3cf809b5def3a04f612dc4c406fd1e306173546fc"
+  },
+  {
+    "path": "baseline/console.log.gz",
+    "rawBytes": 46432,
+    "rawSha256": "a7dba9789d3a0acfd6c28629c8edc32c7e6370bd8903b2b484a58604172eacc0",
+    "storedBytes": 2735,
+    "storedSha256": "18d5a386c5c9a679cc7f2a66128f6b9f440d123e52090728a210a1c85c988585"
+  },
+  {
+    "path": "baseline/power.jsonl.gz",
+    "rawBytes": 1408,
+    "rawSha256": "fd54034a5f09abe48c8acca814b3d1aa29863a58be7f6c277802ebcea0c7bed2",
+    "storedBytes": 230,
+    "storedSha256": "0d1ebc292c6278c11b95d7c01bdb7bb0e1f8c2bfee2fd68155ff91bc5cabe113"
+  },
+  {
+    "path": "baseline/results.json.gz",
+    "rawBytes": 35721,
+    "rawSha256": "0c06040fa15bc8a73531b0bd0186bffd5b398d93d2268b6d76810aeac686c9c1",
+    "storedBytes": 1693,
+    "storedSha256": "61dac5c893c056f5d2a814f24e542df02aa67b7d7fa6cfe86a41b4be7b2976e7"
+  },
+  {
+    "path": "candidate/console.log.gz",
+    "rawBytes": 46563,
+    "rawSha256": "d5de0b1258f2d041052098241d79cd06784a6309066f1303f1ff9eb129fee9b8",
+    "storedBytes": 2786,
+    "storedSha256": "146d75419934cce892e61971f41f16d95f537542524e529a0378c837e76fcb1d"
+  },
+  {
+    "path": "candidate/power.jsonl.gz",
+    "rawBytes": 1056,
+    "rawSha256": "119fe9a8dc755e5861d670c72af3848a0c6fd5e5ef11837c44f7448fd0f96100",
+    "storedBytes": 202,
+    "storedSha256": "4d333cf1c88bbb394d42f59cf8967ffbb7dbabce262d93555f3fd707970ee318"
+  },
+  {
+    "path": "candidate/results.json.gz",
+    "rawBytes": 35042,
+    "rawSha256": "71bfd363013e487916dc9f2c80538d0973fbb890ce5657dcd396ad96fe60e637",
+    "storedBytes": 1691,
+    "storedSha256": "6f25f2f545a6943d8b88efed177efc08e6b2e60d97c705a5b858c1f13d6dd1bd"
+  }
+]

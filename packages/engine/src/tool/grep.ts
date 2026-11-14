@@ -4,7 +4,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { WebFence } from "@vectordevai/core/research/fence"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryEffect, readPatterns } from "./external-directory"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import DESCRIPTION from "./grep.txt"
 import * as Tool from "./tool"
@@ -80,12 +80,22 @@ export const GrepTool = Tool.define(
           if (info.type !== "Directory" && info.type !== "File")
             return yield* Effect.fail(new Error(`Search path is not a file or directory: ${params.path ?? "."}`))
           const cwd = info.type === "Directory" ? search : path.dirname(search)
+          // The search runs where links resolve to, but a read denial can name a link: every file keeps the name the
+          // caller reached it by as well as the one it resolved to.
+          const spelled = path.resolve(FSUtil.windowsPath(requested))
+          const resources = (...files: string[]) => [
+            ...new Set(
+              [...new Set(files)]
+                .flatMap((file) => readPatterns(ins.worktree, file))
+                .map((resource) => resource.replaceAll("\\", "/")),
+            ),
+          ]
           const candidates =
             info.type === "File"
               ? [
                   {
                     file: `./${path.basename(search)}`,
-                    resource: path.relative(ins.worktree, search).replaceAll("\\", "/"),
+                    resources: resources(spelled, search),
                   },
                 ]
               : (yield* ripgrep.find({
@@ -95,20 +105,20 @@ export const GrepTool = Tool.define(
                   limit: Number.MAX_SAFE_INTEGER,
                 })).map((entry) => ({
                   file: `./${entry.path}`,
-                  resource: path.relative(ins.worktree, path.resolve(cwd, entry.path)).replaceAll("\\", "/"),
+                  resources: resources(path.resolve(spelled, entry.path), path.resolve(cwd, entry.path)),
                 }))
-          const read = { permission: "read", patterns: candidates.map((entry) => entry.resource) }
+          const read = { permission: "read", patterns: [...new Set(candidates.flatMap((entry) => entry.resources))] }
           // The runtime supplies its actual agent/session deny ceiling. Embedders
           // without inspection still authorize the whole batch before any content is read.
           const denied =
             info.type === "Directory" && ctx.deniedResources
               ? new Set(yield* ctx.deniedResources(read))
               : new Set<string>()
-          const admitted = candidates.filter((entry) => !denied.has(entry.resource))
+          const admitted = candidates.filter((entry) => !entry.resources.some((resource) => denied.has(resource)))
           if (!admitted.length) return empty
           yield* ctx.ask({
             ...read,
-            patterns: admitted.map((entry) => entry.resource),
+            patterns: [...new Set(admitted.flatMap((entry) => entry.resources))],
             always: ["*"],
             metadata: { path: params.path, include: params.include },
           })

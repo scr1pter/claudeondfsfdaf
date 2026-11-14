@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto"
+import { timingSafeEqual } from "node:crypto"
 import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { bindingKey, generationKey } from "./cloud-agents-binding.js"
@@ -12,6 +12,7 @@ import {
 } from "./cloud-agents-ledger.js"
 import { ApiError, type ApiRequest } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
+import { signRunTokenPayload } from "./cloud-agents-run-crypto.js"
 
 /*
  * Run tokens and the verifier seam for @vector (vector-at-mention-spec 2.4, V07). V12's mint signs a token with
@@ -32,7 +33,6 @@ import { persistentStore } from "./persistent-store.js"
  */
 
 const PREFIX = "vrt_"
-const DOMAIN = "vector-run-v1"
 const LONGEST = 1024
 const GRACE_MS = GithubAgents.SETTLE_GRACE_SECONDS * 1000
 const TOKEN = /^vrt_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/
@@ -126,7 +126,7 @@ export function mintRunToken(claims: Omit<RunTokenClaims, "v" | "exp">) {
   const decoded = Option.getOrUndefined(decodeClaims({ ...claims, v: 1, exp: claims.dl + GRACE_MS }))
   if (!decoded) throw invalidRequest()
   const payload = Buffer.from(JSON.stringify(ordered(decoded)), "utf8").toString("base64url")
-  return { token: `${PREFIX}${payload}.${sign(payload)}`, deadline: decoded.dl, expiresAt: decoded.exp }
+  return { token: `${PREFIX}${payload}.${signRunTokenPayload(payload)}`, deadline: decoded.dl, expiresAt: decoded.exp }
 }
 
 /** The format, signature and claims, and `now < exp`. No store call. */
@@ -135,7 +135,7 @@ export function readRunToken(token: string, now: number): RunTokenClaims {
   const payload = parts?.[1]
   const signature = parts?.[2]
   if (!payload || !signature) throw invalidToken()
-  const expected = Buffer.from(sign(payload))
+  const expected = Buffer.from(signRunTokenPayload(payload))
   const provided = Buffer.from(signature)
   if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) throw invalidToken()
   const claims = Option.getOrUndefined(decodePayload(Buffer.from(payload, "base64url").toString("utf8")))
@@ -192,7 +192,7 @@ export async function requireSettlementToken(request: Pick<ApiRequest, "headers"
   return claims
 }
 
-/** For Codium's static `registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)` (A59). */
+/** Public service adapter. Codium statically registers the hoisted verifier function to avoid cyclic const reads. */
 export const cloudAgentsRunVerifier = {
   prefix: "vrt_" as const,
   verify: (token: string) => verifyRunToken(token),
@@ -286,20 +286,6 @@ if not decoded or type(run) ~= 'table' or type(run.jti) ~= 'string' then return 
 if run.jti ~= ARGV[4] then return 'replaced' end
 return 'ok'
 `
-
-// A dedicated secret, or a key derived from the license secret for this purpose alone, as cli-token.ts derives its
-// own: the two share no key material unless an operator sets them equal, and their HMAC domains differ even then.
-function key() {
-  const dedicated = process.env.VECTOR_RUN_TOKEN_SECRET ?? ""
-  if (dedicated.length >= 32) return dedicated
-  const base = process.env.VECTOR_LICENSE_SECRET ?? ""
-  if (base.length < 32) throw new ApiError(503, "RUN_TOKENS_UNAVAILABLE", "Vector run tokens are not configured.")
-  return createHmac("sha256", base).update("vector-run-token-key-v1").digest("base64url")
-}
-
-function sign(payload: string) {
-  return createHmac("sha256", key()).update(`${DOMAIN}.${payload}`).digest("base64url")
-}
 
 // One key order, so a token's payload never depends on how the caller built its claims.
 function ordered(claims: typeof Claims.Type): RunTokenClaims {

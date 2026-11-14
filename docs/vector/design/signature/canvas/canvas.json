@@ -1,0 +1,355 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Main.dc.html": {
+      "expand": "fill",
+      "h": 960,
+      "is_interactive": true,
+      "title": "Vector window (click around)",
+      "w": 1440,
+      "x": 0,
+      "y": 0
+    },
+    "Sidebar.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Sidebar states",
+      "w": 1440,
+      "x": 1520,
+      "y": 0
+    },
+    "Chat.dc.html": {
+      "h": 960,
+      "is_interactive": true,
+      "title": "Chat: the blend",
+      "w": 1440,
+      "x": 0,
+      "y": 1420
+    },
+    "Changes.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Changes: today's panel, kept",
+      "w": 1600,
+      "x": 1520,
+      "y": 1420
+    },
+    "Tasks.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Tasks pane",
+      "w": 1600,
+      "x": 3200,
+      "y": 1420
+    },
+    "Browser-A.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Browser A: Beside (docked panel)",
+      "w": 1600,
+      "x": 0,
+      "y": 2840
+    },
+    "Browser-B.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Browser B: Run view (full stage, floating chat)",
+      "w": 1600,
+      "x": 1680,
+      "y": 2840
+    },
+    "Browser-C.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Browser C: Inspect (device preview and console)",
+      "w": 1600,
+      "x": 3360,
+      "y": 2840
+    },
+    "Vectorscope-Home.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Vectorscope: overview",
+      "w": 1600,
+      "x": 0,
+      "y": 4260
+    },
+    "Vectorscope-Review.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Vectorscope: one review run",
+      "w": 1600,
+      "x": 1680,
+      "y": 4260
+    },
+    "Settings-General.dc.html": {
+      "h": 960,
+      "is_interactive": true,
+      "title": "Settings: General",
+      "w": 1440,
+      "x": 0,
+      "y": 5680
+    },
+    "Settings-Models.dc.html": {
+      "h": 960,
+      "is_interactive": true,
+      "title": "Settings: Default models",
+      "w": 1440,
+      "x": 1520,
+      "y": 5680
+    },
+    "Settings-Account.dc.html": {
+      "h": 960,
+      "is_interactive": true,
+      "title": "Settings: Account",
+      "w": 1440,
+      "x": 3040,
+      "y": 5680
+    },
+    "Search.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Search palette (⌘K)",
+      "w": 1600,
+      "x": 0,
+      "y": 7100
+    },
+    "Connections.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Connected tools",
+      "w": 1600,
+      "x": 1680,
+      "y": 7100
+    },
+    "Automations.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Automations",
+      "w": 1600,
+      "x": 3360,
+      "y": 7100
+    },
+    "Plan.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Plan pane (side panel)",
+      "w": 1600,
+      "x": 0,
+      "y": 8520
+    },
+    "Artifacts.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Artifacts pane (side panel)",
+      "w": 1600,
+      "x": 1680,
+      "y": 8520
+    },
+    "Simulator.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "iOS Simulator pane (side panel)",
+      "w": 1600,
+      "x": 3360,
+      "y": 8520
+    },
+    "Oncall.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "On-call: @vector requests from GitHub, Slack, Linear and Jira",
+      "w": 1600,
+      "x": 0,
+      "y": 9940
+    },
+    "Commands.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Computer use and more as commands (/computer, /cloud …)",
+      "w": 1600,
+      "x": 1680,
+      "y": 9940
+    },
+    "Walkthrough.dc.html": {
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Walkthrough: a quick tour for beginners",
+      "w": 1600,
+      "x": 3360,
+      "y": 9940
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-11-11T19:45:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "noteOrder": [
+    "title",
+    "howto",
+    "rowChat",
+    "rowChatNote",
+    "rowBrowser",
+    "rowBrowserNote",
+    "rowScope",
+    "rowScopeNote",
+    "rowSettings",
+    "rowSettingsNote",
+    "rowOther",
+    "rowOtherNote",
+    "rowPanes",
+    "rowPanesNote",
+    "rowAgent",
+    "rowAgentNote"
+  ],
+  "notes": {
+    "howto": {
+      "fill": "purple",
+      "text": "Try the left window: click sessions, New session, the Live items, the sidebar toggle and the side-panel button. Tweaks change theme (dark or light), glass strength, accent colour, collapsed sidebar, side panel and the new-session view.",
+      "w": 400,
+      "x": -480,
+      "y": 0
+    },
+    "title": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Vector Signature: one calm sidebar with the Codex and Claude finish",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "rowChat": {
+      "kind": "title1",
+      "maxW": 4800,
+      "text": "The blend: Signature sidebar, today's buttons made smaller, the Signature chatbar",
+      "x": 0,
+      "y": 1120
+    },
+    "rowChatNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 1420,
+      "text": "Chat is the blended main screen. Today's top buttons are kept, just smaller: branch, Ready, Tasks, Changes, Terminal, usage, context ring. The chatbar follows the Signature design, and the sidebar footer is today's account row (You · Codium Max). Project logos are gone everywhere.\n\nTweaks: view (session, running, permission, new), pickers below or inside the box, purple or neutral active buttons.\n\nChanges is today's panel, unchanged."
+    },
+    "rowBrowser": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "Browser: three ways to show the page Vector is using",
+      "x": 0,
+      "y": 2540
+    },
+    "rowBrowserNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 2840,
+      "text": "A Beside: the page docks in the side panel while you keep chatting. Recommended as the default.\n\nB Run view: the page fills the screen and the chat floats on top. For long browser jobs you want to watch or take over.\n\nC Inspect: a device preview with console and network drawers, and pick-an-element. For building web pages.\n\nThe state tweak on each board shows: empty, idle, Vector driving, you in control, waiting for you."
+    },
+    "rowScope": {
+      "kind": "title1",
+      "maxW": 3280,
+      "text": "Vectorscope as its own screen",
+      "x": 0,
+      "y": 3960
+    },
+    "rowScopeNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 4260,
+      "text": "The overview lists your open pull requests and their review status. A review run shows the findings, with a filter for blocking issues, concerns and nits, plus each finding's evidence.\n\nThis replaces today's full-window Vectorscope popup."
+    },
+    "rowSettings": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Settings with the sidebar still visible",
+      "x": 0,
+      "y": 5380
+    },
+    "rowSettingsNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 5680,
+      "text": "General, Default models and Account. Account keeps today's avatar, name and plan.\n\nThe shell tweak on each board switches to today's full-window settings, so you can compare the two."
+    },
+    "rowOther": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "Search, connected tools and automations",
+      "x": 0,
+      "y": 6800
+    },
+    "rowOtherNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 7100,
+      "text": "Search (⌘K) now also finds settings. Connected tools is where Vectorscope, Hands and the cloud computer link to the agent. Automations lists scheduled and triggered runs, with a create view."
+    },
+    "rowPanes": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "Coming to Vector: Plan, Artifacts and an iOS simulator in the side panel",
+      "x": 0,
+      "y": 8220
+    },
+    "rowPanesNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 8520,
+      "text": "Plan, Artifacts and the iOS Simulator become side-panel tabs next to Changes and Browser. One new Panels button after Terminal opens them (also from ⌘K). Tasks, Changes and Terminal stay as they are.\n\nPlan shows the plan Vector writes in Plan mode, with Approve and run or Keep planning. Artifacts collects the pages, docs and diagrams a session makes. The Simulator runs your iOS app; the sample app is Vector Remote.\n\nThese show where each feature would live. None is built yet."
+    },
+    "rowAgent": {
+      "kind": "title1",
+      "maxW": 4960,
+      "text": "Coming to Vector: On-call, computer use as commands, and a quick tour",
+      "x": 0,
+      "y": 9640
+    },
+    "rowAgentNote": {
+      "fill": "purple",
+      "w": 400,
+      "x": -480,
+      "y": 9940,
+      "text": "On-call is a sixth sidebar item, after Automations. It lists requests from GitHub, Slack, Linear and Jira (@vector), what Vector did, and the result: a pull request or a reply. Its rules and hours cover jobs on this Mac, and Vector never merges or deploys.\n\nComputer use is a command, not a button: /computer, /cloud, /browser, /simulator, /plan, /vectorscope, also in ⌘K. The chatbar cloud button goes away.\n\nThe tour is a welcome card and four short stops: chatbar, sidebar, top buttons, Search. Replay it from Help › Take the tour."
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Sidebar.dc.html",
+    "Chat.dc.html",
+    "Changes.dc.html",
+    "Tasks.dc.html",
+    "Browser-A.dc.html",
+    "Browser-B.dc.html",
+    "Browser-C.dc.html",
+    "Vectorscope-Home.dc.html",
+    "Vectorscope-Review.dc.html",
+    "Settings-General.dc.html",
+    "Settings-Models.dc.html",
+    "Settings-Account.dc.html",
+    "Search.dc.html",
+    "Connections.dc.html",
+    "Automations.dc.html",
+    "Plan.dc.html",
+    "Artifacts.dc.html",
+    "Simulator.dc.html",
+    "Oncall.dc.html",
+    "Commands.dc.html",
+    "Walkthrough.dc.html"
+  ],
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "Page 1"
+    }
+  ],
+  "title": "Vector Glass Sidebar Concept"
+}

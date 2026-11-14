@@ -89,7 +89,15 @@ test("both pages and their sidebar entries name desktop 1.99.110, and the brain 
   expect(documents).toContain("From desktop 1.99.110, you can give Vector a repository's specs")
   // The fixed part goes with every request but a greeting, so the privacy line names it before "only the few lines".
   expect(brain).toContain(
-    "All of it is stored and searched on this computer. Beyond your rules, the start of <code>MEMORY.md</code> and the entries you pinned, which go with every request but a greeting, Vector sends your model only the few lines that bear on each request. Private documents never go to a free model labelled <strong>May train on your prompts</strong>, or to a session a guest is in.",
+    "All of it is stored and searched locally by default. Features you choose can send selected Brain context to a model, an owner-started GitHub run, or an encrypted backup when those features are available. Beyond your rules, the start of <code>MEMORY.md</code> and the entries you pinned, which go with every request but a greeting, Vector sends your model only the few lines that bear on each request. Private documents never go to a free model labelled <strong>May train on your prompts</strong>, or to a session a guest is in.",
+  )
+  expect(brain).not.toContain("All of it is stored and searched on this computer.")
+  expect(brain).toContain(
+    "In builds that offer it, <strong>Use Codium for Brain helpers</strong> in Settings → Memory is a separate opt-in. Subscribing never enables it.",
+  )
+  expect(brain).toContain("Nothing is sent to a model until you confirm.")
+  expect(brain).toContain(
+    "Turning learning or an individual helper off still wins, and Vector Local keeps helpers local.",
   )
   // Redaction is pattern-based, and a kept copy is the file as added, as the app's Keep copies toggle says.
   for (const page of [brain, documents]) {

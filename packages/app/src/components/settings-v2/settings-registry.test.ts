@@ -1,17 +1,23 @@
 import { describe, expect, test } from "bun:test"
+import { Hands } from "@vectordevai/schema/hands"
 import { filterSettingsGroups, isSettingsTab, settingsGroups, settingsItemCount } from "./settings-registry"
 
 describe("settings registry", () => {
   test("keeps every settings page reachable", () => {
-    expect(settingsItemCount(settingsGroups)).toBe(15)
+    expect(settingsItemCount(settingsGroups)).toBe(20)
     expect(settingsGroups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
       "account",
+      "roadmap",
+      "remote",
+      "production",
       "general",
       "memory",
       "local",
       "usage",
       "spend",
+      "github",
       "subagents",
+      "computer",
       "providers",
       "models",
       "servers",
@@ -21,6 +27,40 @@ describe("settings registry", () => {
       "accessibility",
       "about",
     ])
+  })
+
+  test("finds desktop app control by its name and dedicated vocabulary", () => {
+    const agents = settingsGroups.find((group) => group.title === "Agents & environment")
+    expect(agents?.items.find((item) => item.value === "computer")?.label).toBe(Hands.NAME)
+    for (const query of [
+      Hands.NAME,
+      Hands.SHORT,
+      "computer use",
+      "screen recording",
+      "always allowed apps",
+      "blocked apps",
+    ])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "computer",
+      ])
+    expect(isSettingsTab("computer")).toBe(true)
+  })
+
+  test("gives the desktop app control page its own hands icon and keeps unrelated vocabulary elsewhere", () => {
+    const items = settingsGroups.flatMap((group) => group.items)
+    const computer = items.find((item) => item.value === "computer")!
+    expect(computer.icon).toBe("hands")
+    expect(items.filter((item) => item.icon === "hands").map((item) => item.value)).toEqual(["computer"])
+    for (const query of ["mouse", "use my computer", "accessibility permission"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "computer",
+      ])
+    expect(filterSettingsGroups("screenshots").flatMap((group) => group.items.map((item) => item.value))).toEqual([
+      "production",
+      "computer",
+    ])
+    for (const word of ["keyboard", "terminal", "workflow", "skills", "effort", "web access", "theme", "instructions"])
+      expect(computer.keywords.some((keyword) => keyword.toLocaleLowerCase().includes(word))).toBe(false)
   })
 
   test("puts Keyboard shortcuts in the Workspace group, found by what people call them", () => {
@@ -118,6 +158,26 @@ describe("settings registry", () => {
     expect(isSettingsTab("trust")).toBe(true)
   })
 
+  test("finds the Roadmap vote by what people call it, right after Account (WP A34)", () => {
+    const personal = settingsGroups[0]!.items.map((item) => item.value)
+    expect(personal.indexOf("roadmap")).toBe(personal.indexOf("account") + 1)
+    expect(settingsGroups[0]!.items.find((item) => item.value === "roadmap")?.label).toBe("Roadmap vote")
+    for (const query of ["roadmap", "vote", "ballot", "nominate"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["roadmap"])
+    expect(isSettingsTab("roadmap")).toBe(true)
+  })
+
+  test("finds Settings → Production by what people call the ops perks, right after Remote (WP A50)", () => {
+    const personal = settingsGroups[0]!.items.map((item) => item.value)
+    expect(personal.indexOf("production")).toBe(personal.indexOf("remote") + 1)
+    expect(settingsGroups[0]!.items.find((item) => item.value === "production")?.label).toBe("Production")
+    for (const query of ["production", "On Call", "Release Guard", "Ship Desk", "incidents", "revert", "domains"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "production",
+      ])
+    expect(isSettingsTab("production")).toBe(true)
+  })
+
   test("returns the complete registry for whitespace", () => {
     expect(filterSettingsGroups("   ")).toBe(settingsGroups)
   })
@@ -125,5 +185,11 @@ describe("settings registry", () => {
   test("validates tab values before navigation", () => {
     expect(isSettingsTab("providers")).toBe(true)
     expect(isSettingsTab("canvas")).toBe(false)
+  })
+
+  test("finds GitHub bindings, Actions and scheduled runs", () => {
+    for (const query of ["github", "actions", "repository bindings", "run in github", "scheduled runs"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["github"])
+    expect(isSettingsTab("github")).toBe(true)
   })
 })

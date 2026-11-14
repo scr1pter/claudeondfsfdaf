@@ -113,7 +113,9 @@ it.live("owner preview validates without writes; guests and forwarded guests can
     expect((yield* call(() => f.sdk.experimental.capabilities.get())).data?.workflows).toBe(true)
     const valid = (yield* call(() => f.sdk.experimental.workflow.validate({ workflowValidateInput: { spec } }))).data!
     expect(valid).toMatchObject({ ok: true, issues: [] })
-    expect(valid.plan?.stages[0].model).toBe("lmstudio/test-model")
+    const stage = valid.plan?.stages[0]
+    if (!stage || stage.kind === "connect") throw new Error("The legacy workflow preview must contain an agent stage")
+    expect(stage.model).toBe("lmstudio/test-model")
     const invalid = (yield* call(() => f.sdk.experimental.workflow.validate({ workflowValidateInput: { spec: "{" } })))
       .data!
     expect(invalid.ok).toBe(false)
@@ -123,6 +125,12 @@ it.live("owner preview validates without writes; guests and forwarded guests can
       for (const [route, body] of [
         ["/experimental/workflow/saved", undefined],
         ["/experimental/workflow/validate", { spec }],
+        ["/experimental/workflow/playbooks", undefined],
+        ["/experimental/workflow/playbooks/install", { name: "vector-check", version: "1.0.0", sha256: "a".repeat(64) }],
+        ["/experimental/brain/run-bundle/preview", { includeBrain: true, publicRepository: true }],
+        ["/experimental/brain/run-proposals/import", { path: "brain/proposals.json", base64url: "e30", sha256: "a".repeat(64), publicRepository: true }],
+        [`/experimental/session/${allowedID}/hosted-jobs`, undefined],
+        [`/experimental/session/${allowedID}/hosted-jobs`, { jobID: `jb_${"a".repeat(26)}` }],
         [`/experimental/session/${allowedID}/workflow`, { spec }],
         [`/experimental/session/${allowedID}/workflow/ses_missing/resume`, {}],
       ] as const) {

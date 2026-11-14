@@ -18,6 +18,20 @@ afterEach(disposeAllInstances)
 const it = testEffect(layer())
 const off = testEffect(layer({ backgroundSubagents: false }))
 
+it.instance("an inline workflow cannot grant itself Codium Playbook role access", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const runs = yield* WorkflowRuns.Service
+    const result = yield* runs.validate({ ctx: f.ctx, input: { spec: JSON.stringify({ ...spec,
+      stages: [{ id: "a", prompt: "Work", model: "codium:ceiling" }],
+    }) } })
+    expect(result.ok).toBe(false)
+    expect(result.issues.some((issue) => issue.message.includes("personal Vector Playbook"))).toBe(true)
+    expect(f.asks).toHaveLength(0)
+    expect(yield* f.sessions.children(f.parent.id)).toHaveLength(0)
+  }), { trusted: true },
+)
+
 it.instance(
   "validate returns graph and agent issues without asking or creating a child",
   () =>
@@ -62,7 +76,9 @@ it.instance(
       }
       const accepted = yield* runs.validate({ ctx: f.ctx, input: { spec: JSON.stringify(value) } })
       expect(accepted).toMatchObject({ ok: true, issues: [] })
-      expect(accepted.plan?.stages[0].model).toBe("lmstudio/test-model")
+      const stage = accepted.plan?.stages[0]
+      if (stage?.kind === "connect") throw new Error("The fixture must be an agent stage.")
+      expect(stage?.model).toBe("lmstudio/test-model")
       const denied = yield* runs.validate({
         ctx: f.ctx,
         input: {

@@ -2,7 +2,7 @@
 // phase test, in-process against the fake LLM server; V18c: INV-C7 end to end, each 2.9.2 code from a fake Codium
 // gateway in front of the fake LLM server. Temporary git repositories, a loopback fake GitHub and a vectordev.ai
 // recorder only: no CLI or Bun subprocess and no environment change, so the file runs locally as well as in the lane.
-// Git and link controls run on Linux and Windows; POSIX permission/mode assertions remain specific to POSIX hosts.
+// POSIX-only filename and symlink fixtures are selected explicitly; portable git integrity checks run on Windows too.
 
 import { afterAll, describe, expect, test } from "bun:test"
 import { $ } from "bun"
@@ -588,7 +588,8 @@ describe("writeBundle", () => {
     await expectApplies(repo.dir, repo.base)
   })
 
-  test(".github/ paths are listed in heldBack", async () => {
+  // The marker-bearing filename contains <, > and :, which Windows forbids.
+  test.skipIf(process.platform === "win32")(".github/ paths are listed in heldBack", async () => {
     const repo = await repository({
       ".github/workflows/ci.yml": "on: push\n",
       ".github/old.yml": "old\n",
@@ -618,6 +619,33 @@ describe("writeBundle", () => {
     ;[...result.summary.heldBack, marker].forEach((name) => expect(patch).toContain(`diff --git a/${name} b/${name}`))
     await expectApplies(repo.dir, repo.base)
   })
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows .github paths are held back and stay in the applicable patch",
+    async () => {
+      const repo = await repository({
+        ".github/workflows/ci.yml": "on: push\n",
+        ".github/old.yml": "old\n",
+        "src/a.ts": "export const a = 1\n",
+      })
+      await fs.rm(path.join(repo.dir, ".github/old.yml"))
+      await put(repo.dir, {
+        ".github/workflows/ci.yml": "on: [push, pull_request]\n",
+        ".github/actions/x/action.yml": "runs: {}\n",
+        "src/a.ts": "export const a = 2\n",
+      })
+      const result = await bundle(repo.dir, repo.base)
+      expect(result.summary.heldBack).toEqual([
+        ".github/actions/x/action.yml",
+        ".github/old.yml",
+        ".github/workflows/ci.yml",
+      ])
+      const patch = (await written(repo.dir)).patch.toString()
+      result.summary.heldBack.forEach((name) => expect(patch).toContain(`diff --git a/${name} b/${name}`))
+      expect(patch).toContain("diff --git a/src/a.ts b/src/a.ts")
+      await expectApplies(repo.dir, repo.base)
+    },
+  )
 
   const many = (prefix: string, count: number, text: string) =>
     Object.fromEntries(Array.from({ length: count }, (_, index) => [`${prefix}/${index}.txt`, `${text} ${index}\n`]))
@@ -687,7 +715,7 @@ describe("writeBundle", () => {
     const traps = await scratch()
     const hooks = path.join(traps, "hooks")
     const marker = (name: string) => path.join(traps, name)
-    const script = (file: string) => `#!/bin/sh\ntouch '${file}'\n`
+    const script = (file: string) => `#!/bin/sh\ntouch '${file.replaceAll("\\", "/")}'\n`
     await put(traps, {
       "hooks/post-index-change": script(marker("hook-ran")),
       fsmonitor: script(marker("fsmonitor-ran")),
@@ -728,7 +756,7 @@ describe("writeBundle", () => {
       ["core.sparseCheckout", "true"],
       ["core.splitIndex", "true"],
       ["core.untrackedCache", "true"],
-      ["filter.mark.clean", `printenv > '${marker("filter-env")}'; cat`],
+      ["filter.mark.clean", `printenv > '${marker("filter-env").replaceAll("\\", "/")}'; cat`],
       ["protocol.allow", "always"],
     ]
     await hostile.reduce(async (previous, [key, value]) => {
@@ -754,6 +782,7 @@ describe("writeBundle", () => {
     expect(patch).not.toMatch(/^diff --git (?:X\/|[ciow]\/)/m)
     expect(patch).toContain("GIT binary patch")
     expect(patch).toContain("deleted file mode 100644")
+    // NTFS does not track a chmod-only executable-bit change.
     if (process.platform !== "win32") expect(patch).toContain("new mode 100755")
     expect(patch).not.toContain("rename from")
 
@@ -865,7 +894,7 @@ describe("writeBundle", () => {
     })
     const traps = await scratch()
     const marker = (name: string) => path.join(traps, name)
-    const script = (file: string) => `#!/bin/sh\ntouch '${file}'\n`
+    const script = (file: string) => `#!/bin/sh\ntouch '${file.replaceAll("\\", "/")}'\n`
     await put(traps, {
       "hooks/post-index-change": script(marker("hook-ran")),
       fsmonitor: script(marker("fsmonitor-ran")),
@@ -912,78 +941,76 @@ describe("writeBundle", () => {
     )
   })
 
-  test("gitlinks and links that leave the tree are dropped from the patch and listed", async () => {
-    const repo = await repository({ "README.md": "top\n", "docs/readme.md": "doc\n", "tree/inner.txt": "inner\n" })
-    // The base also holds a gitlink and a link.
-    await fs.symlink("README.md", path.join(repo.dir, "long-link"))
-    await sh(repo.dir, ["add", "-A"])
-    await sh(repo.dir, ["update-index", "--add", "--cacheinfo", `160000,${"2".repeat(40)},mod`])
-    await sh(repo.dir, ["commit", "-q", "-m", "links"])
-    const base = (await sh(repo.dir, ["rev-parse", "HEAD"])).trim()
+  // This fixture uses /etc targets and POSIX spelling of paths Git hides on NTFS.
+  test.skipIf(process.platform === "win32")(
+    "gitlinks and links that leave the tree are dropped from the patch and listed",
+    async () => {
+      const repo = await repository({ "README.md": "top\n", "docs/readme.md": "doc\n", "tree/inner.txt": "inner\n" })
+      // The base also holds a gitlink and a link.
+      await fs.symlink("README.md", path.join(repo.dir, "long-link"))
+      await sh(repo.dir, ["add", "-A"])
+      await sh(repo.dir, ["update-index", "--add", "--cacheinfo", `160000,${"2".repeat(40)},mod`])
+      await sh(repo.dir, ["commit", "-q", "-m", "links"])
+      const base = (await sh(repo.dir, ["rev-parse", "HEAD"])).trim()
 
-    // Repositories of their own: one with a commit, which the add would stage as a gitlink, and one without, which
-    // would make the whole add fail.
-    const nested = path.join(repo.dir, "vendor/lib")
-    await fs.mkdir(nested, { recursive: true })
-    await sh(nested, ["init", "-q", "-b", "main"])
-    await put(nested, { "f.txt": "inner\n" })
-    await sh(nested, ["add", "-A"])
-    await sh(nested, ["commit", "-q", "-m", "inner"])
-    await fs.mkdir(path.join(repo.dir, "fixture"))
-    await sh(path.join(repo.dir, "fixture"), ["init", "-q", "-b", "main"])
-    // Names git refuses to stage, which would also make the whole add fail.
-    await put(repo.dir, { "fixture/x.txt": "x\n", "x/.GIT/config": "c\n", "y/git~1": "g\n" })
-    // The base's gitlink becomes a file; a directory becomes a link out of the tree, so resetting it takes back the
-    // deletion of its file too.
-    await put(repo.dir, { mod: "m\n" })
-    await fs.rm(path.join(repo.dir, "tree"), { recursive: true })
-    const outside = await scratch()
-    await put(outside, { "keep.txt": "outside canary\n" })
-    const outsideRelative = path.relative(repo.dir, outside).replaceAll(path.sep, "/")
-    await fs.symlink(process.platform === "win32" ? outsideRelative : "/etc", path.join(repo.dir, "tree"), "dir")
-    expect((await fs.lstat(path.join(repo.dir, "tree"))).isSymbolicLink()).toBe(true)
-    // With core.symlinks=false the add keeps a link's mode and takes a plain file's content as its target.
-    await sh(repo.dir, ["config", "core.symlinks", "false"])
-    await fs.rm(path.join(repo.dir, "long-link"))
-    await put(repo.dir, { "long-link": "x".repeat(5000) })
-    const links: [string, string][] = [
-      ["out", process.platform === "win32" ? `${outsideRelative}/keep.txt` : "/etc/passwd"],
-      ["up", "../outside"],
-      ["sneaky", "docs/../../x"],
-      ["git-config", ".git/config"],
-      ["ok", "docs/readme.md"],
-      ["docs/rel", "../README.md"],
-    ]
-    await Promise.all(links.map(([name, target]) => fs.symlink(target, path.join(repo.dir, name))))
-    await put(repo.dir, { "new.txt": "new\n" })
+      // Repositories of their own: one with a commit, which the add would stage as a gitlink, and one without, which
+      // would make the whole add fail.
+      const nested = path.join(repo.dir, "vendor/lib")
+      await fs.mkdir(nested, { recursive: true })
+      await sh(nested, ["init", "-q", "-b", "main"])
+      await put(nested, { "f.txt": "inner\n" })
+      await sh(nested, ["add", "-A"])
+      await sh(nested, ["commit", "-q", "-m", "inner"])
+      await fs.mkdir(path.join(repo.dir, "fixture"))
+      await sh(path.join(repo.dir, "fixture"), ["init", "-q", "-b", "main"])
+      // Names git refuses to stage, which would also make the whole add fail.
+      await put(repo.dir, { "fixture/x.txt": "x\n", "x/.GIT/config": "c\n", "y/git~1": "g\n" })
+      // The base's gitlink becomes a file; a directory becomes a link out of the tree, so resetting it takes back the
+      // deletion of its file too.
+      await put(repo.dir, { mod: "m\n" })
+      await fs.rm(path.join(repo.dir, "tree"), { recursive: true })
+      await fs.symlink("/etc", path.join(repo.dir, "tree"))
+      // With core.symlinks=false the add keeps a link's mode and takes a plain file's content as its target.
+      await sh(repo.dir, ["config", "core.symlinks", "false"])
+      await fs.rm(path.join(repo.dir, "long-link"))
+      await put(repo.dir, { "long-link": "x".repeat(5000) })
+      const links: [string, string][] = [
+        ["out", "/etc/passwd"],
+        ["up", "../outside"],
+        ["sneaky", "docs/../../x"],
+        ["git-config", ".git/config"],
+        ["ok", "docs/readme.md"],
+        ["docs/rel", "../README.md"],
+      ]
+      await Promise.all(links.map(([name, target]) => fs.symlink(target, path.join(repo.dir, name))))
+      await put(repo.dir, { "new.txt": "new\n" })
 
-    const result = await bundle(repo.dir, base)
-    const dropped = [
-      "fixture",
-      "git-config",
-      "long-link",
-      "mod",
-      "out",
-      "sneaky",
-      "tree",
-      "tree/inner.txt",
-      "up",
-      "vendor/lib",
-      ...(process.platform === "win32" ? [] : ["x/.GIT/config"]),
-      "y/git~1",
-    ]
-    expect(result.summary.dropped).toEqual(dropped)
-    expect(result.summary.outcome).toBe("changes")
-    expect(result.files).toBe(3)
-    const patch = (await written(repo.dir)).patch.toString()
-    dropped.forEach((name) => expect(patch).not.toContain(`diff --git a/${name} `))
-    // Windows Git treats .GIT as its metadata directory and omits it from ls-files; it must still never enter a patch.
-    expect(patch).not.toContain("x/.GIT/config")
-    expect(await fs.readFile(path.join(repo.dir, "x/.GIT/config"), "utf8")).toBe("c\n")
-    expect(await fs.readFile(path.join(outside, "keep.txt"), "utf8")).toBe("outside canary\n")
-    ;["ok", "docs/rel", "new.txt"].forEach((name) => expect(patch).toContain(`diff --git a/${name} b/${name}`))
-    await expectApplies(repo.dir, base, dropped)
+      const result = await bundle(repo.dir, base)
+      const dropped = [
+        "fixture",
+        "git-config",
+        "long-link",
+        "mod",
+        "out",
+        "sneaky",
+        "tree",
+        "tree/inner.txt",
+        "up",
+        "vendor/lib",
+        "x/.GIT/config",
+        "y/git~1",
+      ]
+      expect(result.summary.dropped).toEqual(dropped)
+      expect(result.summary.outcome).toBe("changes")
+      expect(result.files).toBe(3)
+      const patch = (await written(repo.dir)).patch.toString()
+      dropped.forEach((name) => expect(patch).not.toContain(`diff --git a/${name} `))
+      ;["ok", "docs/rel", "new.txt"].forEach((name) => expect(patch).toContain(`diff --git a/${name} b/${name}`))
+      await expectApplies(repo.dir, base, dropped)
+    },
+  )
 
+  test("link targets cannot leave the tree or reach Git metadata", () => {
     const cases: [string, string, boolean][] = [
       ["a", "b", false],
       ["a", "./b/../c", false],
@@ -1001,6 +1028,39 @@ describe("writeBundle", () => {
       expect({ link, target, leaves: GithubBundle.linkLeavesTree(link, target) }).toEqual({ link, target, leaves }),
     )
   })
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows gitlinks and real escaping symlinks are excluded without changing their targets",
+    async () => {
+      const repo = await repository({ "README.md": "top\n" })
+      await sh(repo.dir, ["update-index", "--add", "--cacheinfo", `160000,${"2".repeat(40)},mod`])
+      await sh(repo.dir, ["commit", "-q", "-m", "gitlink"])
+      const base = (await sh(repo.dir, ["rev-parse", "HEAD"])).trim()
+      const outside = await scratch()
+      await put(outside, { "secret.txt": "keep\n" })
+      await sh(repo.dir, ["config", "core.symlinks", "true"])
+      await put(repo.dir, { "README.md": "changed\n", mod: "m\n", "new.txt": "new\n" })
+      await fs.symlink(
+        path.relative(repo.dir, path.join(outside, "secret.txt")).replaceAll("\\", "/"),
+        path.join(repo.dir, "out"),
+        "file",
+      )
+      await fs.symlink(".git/config", path.join(repo.dir, "metadata"), "file")
+      await fs.symlink("README.md", path.join(repo.dir, "ok"), "file")
+      expect((await fs.lstat(path.join(repo.dir, "out"))).isSymbolicLink()).toBe(true)
+      const result = await bundle(repo.dir, base)
+      const dropped = ["metadata", "mod", "out"]
+      expect(result.summary.dropped).toEqual(dropped)
+      expect(result.summary.outcome).toBe("changes")
+      expect(result.files).toBe(3)
+      const patch = (await written(repo.dir)).patch.toString()
+      dropped.forEach((name) => expect(patch).not.toContain(`diff --git a/${name} `))
+      ;["README.md", "ok", "new.txt"].forEach((name) => expect(patch).toContain(`diff --git a/${name} b/${name}`))
+      expect(await fs.readFile(path.join(outside, "secret.txt"), "utf8")).toBe("keep\n")
+      expect(await fs.readdir(outside)).toEqual(["secret.txt"])
+      await expectApplies(repo.dir, base, dropped)
+    },
+  )
 
   test("an index the agent wrote can neither hide nor inject a path", async () => {
     const repo = await repository({ "a.txt": "a\n", "b.txt": "b\n" })
@@ -1106,7 +1166,11 @@ describe("writeBundle", () => {
     const repo = await repository({ "a.txt": "a\n" })
     await put(repo.dir, { "a.txt": "b\n" })
     const outside = await scratch()
-    await fs.symlink(outside, path.join(repo.dir, GithubAgents.BUNDLE_DIR))
+    await fs.symlink(
+      outside,
+      path.join(repo.dir, GithubAgents.BUNDLE_DIR),
+      process.platform === "win32" ? "junction" : "dir",
+    )
     expect((await fs.lstat(path.join(repo.dir, GithubAgents.BUNDLE_DIR))).isSymbolicLink()).toBe(true)
     await expect(bundle(repo.dir, repo.base)).rejects.toThrow("Vector could not record the run's changes.")
     expect(await fs.readdir(outside)).toEqual([])

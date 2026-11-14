@@ -1,0 +1,252 @@
+{
+  "run": 42122694547,
+  "head": "16b16b6b6c5de610c2357df5388903e941053c47",
+  "macJob": 127578981315,
+  "jobConclusion": "failure",
+  "candidateArtifact": {
+    "id": 13459518950,
+    "name": "computer-helper-darwin-lock-candidate-pr-16b16b6b6c5de610c2357df5388903e941053c47",
+    "zipBytes": 477,
+    "zipSha256": "39765c2dd4ca6e3026ef7fc32fc0721dad59e1c3330bb8e0340be02a919fc2b1",
+    "zipDigestMatchesApi": true,
+    "rawBytes": 441,
+    "rawSha256": "06198d7fba8dbc3e98784258caa46c38714e9aacaab95e5359167e730404294f",
+    "artifactHead": "16b16b6b6c5de610c2357df5388903e941053c47",
+    "artifactRun": 42122694547,
+    "createdAt": "2026-11-05T22:51:17Z",
+    "expiresAt": "2026-11-19T22:51:16Z"
+  },
+  "reportsArtifact": {
+    "id": 13459468880,
+    "name": "computer-helper-darwin-reports-pr-16b16b6b6c5de610c2357df5388903e941053c47",
+    "zipBytes": 2219,
+    "zipSha256": "7cdf536d45682ed036060db1d62834664b8d72724ff20e08023e6081c0f8f59c",
+    "zipDigestMatchesApi": true,
+    "artifactHead": "16b16b6b6c5de610c2357df5388903e941053c47",
+    "artifactRun": 42122694547,
+    "createdAt": "2026-11-05T22:51:19Z",
+    "expiresAt": "2026-11-19T22:51:17Z"
+  },
+  "candidate": {
+    "enforce": true,
+    "helperVersion": "1.0.15",
+    "sourceDigest": "55d3ca43a0ad47b925ae5a513c98aba17be9abcd02a910ee86b0c82aa19162a3",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "12b404c0476ff83731fdeab6e81f4b123eff39ce",
+      "arm64": "b5661d181baca554ca938aa686a1dbbe12293825"
+    }
+  },
+  "steps": {
+    "Build the channel universal helper twice": "success",
+    "Require identical shipping bytes": "success",
+    "Run required grant-free native checks": "success",
+    "Run explicitly isolated privileged scenarios": "success",
+    "Enforce the measured production identity lock": "failure",
+    "Preserve measured lock candidate": "success",
+    "Preserve check reports": "success"
+  },
+  "expectedLockFailure": {
+    "expected": true,
+    "enforcedAtMeasuredSource": true,
+    "lockHelperVersion": "1.0.14",
+    "candidateHelperVersion": "1.0.15",
+    "closedMessages": [
+      "The helper version changed; review and commit the measured identity lock.",
+      "The helper source digest changed; review and commit the measured identity lock.",
+      "The x64 helper cdhash changed; review and commit the measured identity lock.",
+      "The arm64 helper cdhash changed; review and commit the measured identity lock."
+    ]
+  },
+  "reports": {
+    "computer-darwin-core.json": {
+      "rawBytes": 2611,
+      "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92",
+      "code": 0,
+      "counts": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        }
+      ],
+      "lifecycle": {
+        "unit": "passed",
+        "probe.first": "passed",
+        "probe.fresh": "passed",
+        "responsible": "passed",
+        "unverified-parent": "passed",
+        "channel-eof": "passed",
+        "parent-death": "passed",
+        "conformance.eof": "passed",
+        "conformance.frame-too-large": "passed",
+        "conformance.heartbeat-loss": "passed",
+        "conformance.shutdown": "passed"
+      }
+    },
+    "computer-darwin-core.json.unit-diagnostic.json": {
+      "rawBytes": 438,
+      "rawSha256": "19c553969a185396f967123ff55944ef565d40b762d4e2561020feb023f938ec",
+      "diagnostic": {
+        "schemaVersion": 1,
+        "trigger": "complete",
+        "spawned": true,
+        "exitObserved": true,
+        "closeObserved": true,
+        "signaled": false,
+        "stdoutBytes": 36,
+        "stderrBytes": 2309,
+        "elapsedMs": 1627,
+        "exitAfterMs": 1627,
+        "closeAfterMs": 1627,
+        "sample": {
+          "status": "target-exited",
+          "suites": [],
+          "waits": []
+        },
+        "progress": {
+          "entered": true,
+          "passed": 24,
+          "complete": true,
+          "invalid": false
+        }
+      }
+    },
+    "computer-darwin-privileged.json": {
+      "rawBytes": 4368,
+      "rawSha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b",
+      "code": 0,
+      "counts": {
+        "passed": 33,
+        "failed": 0,
+        "skipped": 13
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "native-skip"
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.capture-overlay-exclusion",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.ax-counter-increment",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.ax-value-set-and-readback",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.secure-field-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.tagged-click-increments",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.stale-capture-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-ax-without-pointer-or-focus",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-selection-insertion",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.helper-tagged-escape-ignored",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.foreign-escape-stops",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.owned-input-release",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        }
+      ],
+      "lifecycle": {
+        "unit": "passed",
+        "probe.first": "passed",
+        "probe.fresh": "passed",
+        "responsible": "passed",
+        "unverified-parent": "passed",
+        "channel-eof": "passed",
+        "parent-death": "passed",
+        "conformance.eof": "passed",
+        "conformance.frame-too-large": "passed",
+        "conformance.heartbeat-loss": "passed",
+        "conformance.shutdown": "passed"
+      }
+    },
+    "computer-darwin-privileged.json.unit-diagnostic.json": {
+      "rawBytes": 438,
+      "rawSha256": "5b85652d5dd8bd1558b6cdb16832f4873568101971fb7a809c44d251cb08f270",
+      "diagnostic": {
+        "schemaVersion": 1,
+        "trigger": "complete",
+        "spawned": true,
+        "exitObserved": true,
+        "closeObserved": true,
+        "signaled": false,
+        "stdoutBytes": 36,
+        "stderrBytes": 2309,
+        "elapsedMs": 1576,
+        "exitAfterMs": 1576,
+        "closeAfterMs": 1576,
+        "sample": {
+          "status": "target-exited",
+          "suites": [],
+          "waits": []
+        },
+        "progress": {
+          "entered": true,
+          "passed": 24,
+          "complete": true,
+          "invalid": false
+        }
+      }
+    }
+  },
+  "independentSourceDigestVerification": {
+    "sourceCommit": "16b16b6b6c5de610c2357df5388903e941053c47",
+    "method": "Git archive of the exact measured commit, archived workspace packages resolved inside that archive; fresh archived identity generation and sourceDigestFor, then separately imported current generator/builder and fresh current identity generation.",
+    "workspaceResolution": "All 59 workspace dependency links remapped by package name into the archive; the four generator schema imports checked inside archived packages/schema. Current schema imports independently checked inside the current checkout.",
+    "archivedAndCurrentDigest": "55d3ca43a0ad47b925ae5a513c98aba17be9abcd02a910ee86b0c82aa19162a3",
+    "bunLockSha256": "8aba65bc20cf71e0774f8378a8d5da1b465774e5ea7253ece155c19e580bcfa1",
+    "verifierSha256": "9194cbfb53b7466b849273e60d95406e93ac037345c5e32e7c1e1305cba85edf",
+    "result": "passed",
+    "nativeExecution": "CI only; independent local verification generated sources and hashed inputs, without native builds or OS permissions."
+  },
+  "admission": "Root independently reproduced both archived and current source digests, then copied the verified raw candidate byte-for-byte to the enforced macOS identity lock. Enforce remains true. Matching post-admission native and packaging gates remain required.",
+  "scope": "Actual helper15 universal pair reproducibility and native required/isolated-auto reports with disabled/missing-grant skips. Only the expected enforced14 lock gate failed. Later helper15 signing fixtures, staged native proof, matching matrix and final packaging remain unestablished by this run. The separate fast generic ASAR capability proof does not supply native authority.",
+  "releaseReady": false
+}

@@ -13,6 +13,7 @@ import { githubOidcAudiences, type GithubIdentity } from "./github-oidc.js"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { parseReviewCommand } from "../../packages/core/src/review/command.js"
 import { persistentStore } from "./persistent-store.js"
+import type { RepoBinding } from "./cloud-agents-binding.js"
 
 export const githubTokenPermissions = {
   task: {
@@ -468,10 +469,11 @@ export function createGithubApp(
   }
 
   async function verifyBinder(
-    identity: GithubIdentity,
-    options: GithubRunVerification,
+    identity: Pick<GithubIdentity, "repositoryId">,
+    options: Pick<GithubRunVerification, "binder" | "account" | "generation">,
     root: string,
     token: string,
+    fresh = false,
   ): Promise<"ok" | "binder-left"> {
     const key = `vector:cloud-agents:binder-ok:${identity.repositoryId}`
     const value = JSON.stringify({
@@ -485,7 +487,7 @@ export function createGithubApp(
         throw storeUnavailable()
       })
     if (read !== null && typeof read !== "string") throw storeUnavailable()
-    if (read === value) return "ok"
+    if (read === value && !fresh) return "ok"
     if (read !== null) {
       const cached: unknown = (() => {
         try {
@@ -536,14 +538,144 @@ export function createGithubApp(
     return "ok"
   }
 
+  /** Current visibility and fresh binder access for explicitly requested owner attachment/data reads. */
+  async function attachmentRepository(binding: RepoBinding) {
+    const config = configuration()
+    if (!config || !binding.installationId || binding.suspended) throw notConfigured()
+    const jwt = await appJwt(config)
+    const installation = await api(`/app/installations/${githubId(binding.installationId)}`, jwt, { missing: true })
+    if (
+      !installation ||
+      githubId(installation.id) !== binding.installationId ||
+      githubId(installation.app_id) !== config.id ||
+      githubId(githubRecord(installation.account).id) !== binding.ownerId ||
+      installation.suspended_at !== null
+    )
+      throw denied("REPOSITORY_MISMATCH", "Reconnect this repository before attaching context.")
+    const credential = await mint(
+      jwt,
+      binding.installationId,
+      { repositoryId: binding.repositoryId, ownerId: binding.ownerId },
+      { metadata: "read" },
+    )
+    try {
+      const root = `/repos/${credential.repository}`
+      const repository = await api(root, credential.token)
+      if (
+        githubId(repository?.id) !== binding.repositoryId ||
+        githubId(githubRecord(repository?.owner).id) !== binding.ownerId ||
+        typeof repository?.private !== "boolean" ||
+        repository.archived !== false ||
+        repository.disabled !== false ||
+        typeof repository.default_branch !== "string" ||
+        `refs/heads/${repository.default_branch}` !== binding.defaultRef
+      )
+        throw denied("REPOSITORY_MISMATCH", "Reconnect this repository before attaching context.")
+      if (
+        (await verifyBinder(
+          binding,
+          { binder: binding.binder, account: binding.account, generation: binding.generation },
+          root,
+          credential.token,
+          true,
+        )) !== "ok"
+      )
+        throw denied("ACTOR_NOT_ALLOWED", "Reconnect this repository before attaching context.")
+      return {
+        repositoryId: binding.repositoryId,
+        generation: binding.generation,
+        publicRepository: !repository.private,
+      }
+    } finally {
+      await revoke(credential.token)
+    }
+  }
   return {
+    attachmentRepository,
+    async ownerArtifact(
+      binding: RepoBinding,
+      run: { runId: string; thread: string; startedAt: number; endedAt: number },
+      artifactId: string,
+    ) {
+      if (
+        !GithubAgents.THREAD_PATTERN.test(run.thread) ||
+        !Number.isSafeInteger(run.startedAt) ||
+        run.startedAt <= 0 ||
+        !Number.isSafeInteger(run.endedAt) ||
+        run.endedAt < run.startedAt
+      )
+        throw githubUnavailable()
+      const current = await attachmentRepository(binding)
+      const config = configuration()
+      if (!config || !binding.installationId) throw notConfigured()
+      const credential = await mint(
+        await appJwt(config),
+        binding.installationId,
+        { repositoryId: binding.repositoryId, ownerId: binding.ownerId },
+        { actions: "read", metadata: "read" },
+      )
+      try {
+        const root = `/repos/${credential.repository}`
+        const actual = githubRecord(await api(`${root}/actions/runs/${githubId(run.runId)}`, credential.token))
+        const artifact = githubRecord(await api(`${root}/actions/artifacts/${githubId(artifactId)}`, credential.token))
+        const workflow = githubRecord(artifact?.workflow_run)
+        const created = typeof artifact?.created_at === "string" ? Date.parse(artifact.created_at) : NaN
+        const expires = typeof artifact?.expires_at === "string" ? Date.parse(artifact.expires_at) : NaN
+        const at = Date.now()
+        if (
+          githubId(actual?.id) !== run.runId ||
+          actual?.event !== "workflow_dispatch" ||
+          actual.path !== GithubAgents.WORKFLOW_FILE ||
+          githubId(githubRecord(actual.repository).id) !== binding.repositoryId ||
+          githubId(githubRecord(actual.head_repository).id) !== binding.repositoryId ||
+          githubId(artifact?.id) !== artifactId ||
+          artifact.name !== `vector-session-${run.thread}` ||
+          artifact.expired !== false ||
+          githubId(workflow.id) !== run.runId ||
+          githubId(workflow.repository_id) !== binding.repositoryId ||
+          githubId(workflow.head_repository_id) !== binding.repositoryId ||
+          !Number.isSafeInteger(artifact.size_in_bytes) ||
+          Number(artifact.size_in_bytes) < 1 ||
+          Number(artifact.size_in_bytes) > GithubAgents.PATCH_LIMITS.sessionBytes + 65_536 ||
+          !Number.isFinite(created) ||
+          !Number.isFinite(expires) ||
+          !(expires > at) ||
+          created < run.startedAt - 60_000 ||
+          created > run.endedAt + 30 * 60_000 ||
+          created > at + 60_000 ||
+          at - created > GithubAgents.SESSION_DAYS * 86_400_000
+        )
+          throw denied("REPOSITORY_MISMATCH", "This GitHub result is unavailable.")
+        return current
+      } finally {
+        await revoke(credential.token)
+      }
+    },
+    /** Nonpaying global identity probe only; it creates no repository installation credential or grant. */
+    async readiness(): Promise<boolean> {
+      try {
+        const config = configuration()
+        if (!config) return false
+        const metadata = await api("/app", await appJwt(config))
+        return githubId(metadata?.id) === config.id && metadata?.slug === config.slug
+      } catch {
+        return false
+      }
+    },
     configuration() {
       const config = configuration()
       return config ? { available: true, installUrl: installUrl(config) } : { available: false }
     },
     async dispatch(
       repositoryId: string,
-      input: { ref: string; prompt: string; ticket: string; ownerId: string; installationId: string },
+      input: {
+        ref: string
+        prompt: string
+        ticket: string
+        ownerId: string
+        installationId: string
+        brainUpload?: string
+      },
     ) {
       if (
         !/^[1-9]\d{0,15}$/.test(repositoryId) ||
@@ -551,7 +683,8 @@ export function createGithubApp(
         !/^refs\/heads\/[^\s:~^?*\[\\]{1,240}$/.test(input.ref) ||
         typeof input.prompt !== "string" ||
         !input.prompt.trim() ||
-        !/^vtk_[A-Za-z0-9_-]{43}$/.test(input.ticket)
+        !/^vtk_[A-Za-z0-9_-]{43}$/.test(input.ticket) ||
+        (input.brainUpload !== undefined && !/^vbu_[A-Za-z0-9_-]{32}$(?![\s\S])/.test(input.brainUpload))
       )
         throw new ApiError(400, "INVALID_REQUEST", "Send only a supported workflow dispatch.")
       const config = configuration()
@@ -583,7 +716,15 @@ export function createGithubApp(
       try {
         await api(`${root}/actions/workflows/vector.yml/dispatches`, credential.token, {
           method: "POST",
-          body: { ref: input.ref, inputs: { mode: "task", prompt: input.prompt, ticket: input.ticket } },
+          body: {
+            ref: input.ref,
+            inputs: {
+              mode: "task",
+              prompt: input.prompt,
+              ticket: input.ticket,
+              ...(input.brainUpload === undefined ? {} : { brain_upload: input.brainUpload }),
+            },
+          },
         })
       } finally {
         await revoke(credential.token)

@@ -1,0 +1,498 @@
+{
+  "schemaVersion": 1,
+  "kind": "windows-x64-staged-candidate-access-gate",
+  "repository": "scr1pter/claudeondfsfdaf",
+  "branch": "hands",
+  "sourceCommit": "edbb0cdbbb20050eac3a4b293106e05d5f21ddde",
+  "run": {
+    "id": 42135654744,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "createdAt": "2026-11-06T00:16:48Z",
+    "updatedAt": "2026-11-06T00:25:03Z",
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42135654744"
+  },
+  "job": {
+    "id": 127622998258,
+    "name": "Windows x64 native and staged diagnostics (no release evidence)",
+    "status": "completed",
+    "conclusion": "failure",
+    "startedAt": "2026-11-06T00:16:52Z",
+    "completedAt": "2026-11-06T00:25:02Z",
+    "steps": [
+      {
+        "number": 1,
+        "name": "Set up job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:16:53Z",
+        "completedAt": "2026-11-06T00:16:55Z"
+      },
+      {
+        "number": 2,
+        "name": "Reject incompatible diagnostic selectors before setup",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:16:55Z",
+        "completedAt": "2026-11-06T00:16:55Z"
+      },
+      {
+        "number": 3,
+        "name": "Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:16:55Z",
+        "completedAt": "2026-11-06T00:17:07Z"
+      },
+      {
+        "number": 4,
+        "name": "Setup Node",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:17:07Z",
+        "completedAt": "2026-11-06T00:17:11Z"
+      },
+      {
+        "number": 5,
+        "name": "Setup Bun",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:17:11Z",
+        "completedAt": "2026-11-06T00:17:14Z"
+      },
+      {
+        "number": 6,
+        "name": "Configure the MSVC environment",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:17:14Z",
+        "completedAt": "2026-11-06T00:17:18Z"
+      },
+      {
+        "number": 7,
+        "name": "Install frozen dependencies without lifecycle scripts",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:17:18Z",
+        "completedAt": "2026-11-06T00:19:59Z"
+      },
+      {
+        "number": 8,
+        "name": "Build only the x64 native diagnostic artifacts",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:19:59Z",
+        "completedAt": "2026-11-06T00:22:43Z"
+      },
+      {
+        "number": 9,
+        "name": "Run Windows unit and fresh version/probe checks",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:22:43Z",
+        "completedAt": "2026-11-06T00:22:45Z"
+      },
+      {
+        "number": 10,
+        "name": "Run required Windows protocol and lifecycle checks",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:22:45Z",
+        "completedAt": "2026-11-06T00:22:57Z"
+      },
+      {
+        "number": 11,
+        "name": "Run explicitly isolated Windows scenarios",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:22:57Z",
+        "completedAt": "2026-11-06T00:23:16Z"
+      },
+      {
+        "number": 12,
+        "name": "Compile the direct Node Windows self-test diagnostic",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:23:16Z",
+        "completedAt": "2026-11-06T00:23:16Z"
+      },
+      {
+        "number": 13,
+        "name": "Diagnose the same Windows self-test with a direct Node parent",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:23:16Z",
+        "completedAt": "2026-11-06T00:23:16Z"
+      },
+      {
+        "number": 14,
+        "name": "Preserve the bounded x64 diagnostic report",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:23:16Z",
+        "completedAt": "2026-11-06T00:23:17Z"
+      },
+      {
+        "number": 15,
+        "name": "Preserve the separate direct Node diagnostic report",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:23:17Z",
+        "completedAt": "2026-11-06T00:23:17Z"
+      },
+      {
+        "number": 16,
+        "name": "Preserve the optional isolated scenario diagnostic report",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:23:17Z",
+        "completedAt": "2026-11-06T00:23:19Z"
+      },
+      {
+        "number": 17,
+        "name": "Install the pinned Electron runtime for the staged diagnostic",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:23:19Z",
+        "completedAt": "2026-11-06T00:23:23Z"
+      },
+      {
+        "number": 18,
+        "name": "Build the source-bound x64 native overlay diagnostic stage",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:23:23Z",
+        "completedAt": "2026-11-06T00:24:54Z"
+      },
+      {
+        "number": 19,
+        "name": "Run the actual medium-token staged overlay diagnostic",
+        "status": "completed",
+        "conclusion": "failure",
+        "startedAt": "2026-11-06T00:24:54Z",
+        "completedAt": "2026-11-06T00:24:58Z"
+      },
+      {
+        "number": 20,
+        "name": "Preserve the bounded staged overlay diagnostic evidence",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:24:58Z",
+        "completedAt": "2026-11-06T00:24:59Z"
+      },
+      {
+        "number": 38,
+        "name": "Post Setup Bun",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:24:59Z",
+        "completedAt": "2026-11-06T00:24:59Z"
+      },
+      {
+        "number": 39,
+        "name": "Post Setup Node",
+        "status": "completed",
+        "conclusion": "skipped",
+        "startedAt": "2026-11-06T00:24:59Z",
+        "completedAt": "2026-11-06T00:24:59Z"
+      },
+      {
+        "number": 40,
+        "name": "Post Checkout repository",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:24:59Z",
+        "completedAt": "2026-11-06T00:25:01Z"
+      },
+      {
+        "number": 41,
+        "name": "Complete job",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-06T00:25:01Z",
+        "completedAt": "2026-11-06T00:25:01Z"
+      }
+    ]
+  },
+  "artifactCatalog": [
+    {
+      "id": 13465667123,
+      "name": "computer-helper-win32-x64-isolated-diagnostic-edbb0cdbbb20050eac3a4b293106e05d5f21ddde-1",
+      "sizeInBytes": 855,
+      "digest": "sha256:669c4e75ca43ca1c7a6a9cf032ad8dd1e0c0f19c9be2f7278e0ce4467824823e",
+      "expired": false,
+      "createdAt": "2026-11-06T00:23:18Z",
+      "expiresAt": "2026-11-13T00:23:18Z",
+      "workflowRun": {
+        "id": 42135654744,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "edbb0cdbbb20050eac3a4b293106e05d5f21ddde"
+      }
+    },
+    {
+      "id": 13465197756,
+      "name": "computer-overlay-win32-x64-native-diagnostic-edbb0cdbbb20050eac3a4b293106e05d5f21ddde-1",
+      "sizeInBytes": 4411,
+      "digest": "sha256:86f00ad0ac7d29b4deac6d6535d759fafd17f5b256fee8060673216c7e0005ea",
+      "expired": false,
+      "createdAt": "2026-11-06T00:24:59Z",
+      "expiresAt": "2026-11-13T00:24:58Z",
+      "workflowRun": {
+        "id": 42135654744,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "edbb0cdbbb20050eac3a4b293106e05d5f21ddde"
+      }
+    },
+    {
+      "id": 13464914703,
+      "name": "computer-helper-win32-x64-diagnostic-edbb0cdbbb20050eac3a4b293106e05d5f21ddde-1",
+      "sizeInBytes": 554,
+      "digest": "sha256:0f18d1a5c60b79f6ba48a26cb4faf85a184a4f67f9ec00d71067ca17c0cccb19",
+      "expired": false,
+      "createdAt": "2026-11-06T00:23:17Z",
+      "expiresAt": "2026-11-13T00:23:17Z",
+      "workflowRun": {
+        "id": 42135654744,
+        "repository_id": 1322376900,
+        "head_repository_id": 1322376900,
+        "head_branch": "hands",
+        "head_sha": "edbb0cdbbb20050eac3a4b293106e05d5f21ddde"
+      }
+    }
+  ],
+  "closedStagedReceipts": [
+    {
+      "kind": "bootstrap-token",
+      "protocol": 1,
+      "route": "restricted",
+      "owner": "u",
+      "access": "n",
+      "cause": "r"
+    },
+    {
+      "kind": "failure",
+      "protocol": 1,
+      "cause": "missing_report",
+      "phase": "none",
+      "hint": "none"
+    }
+  ],
+  "interpretation": {
+    "nativeX64Build": "pass",
+    "actualNativeUnitVersionAndProbe": "pass; parent-identity group includes direct-reader identity/borrowed-handle/wrong-kind regression",
+    "requiredCore": "30 passed, 0 failed, 1 disabled skip",
+    "sourceBoundStageBuild": "pass",
+    "actualTokenRoute": "restricted",
+    "actualCandidateOwner": "same user",
+    "candidateAccess": "unknown: conservative process access nongrant with generic R/W/X approximation",
+    "candidateAccessIsProvenDenial": false,
+    "repairInvocation": "not reached: explicit driver g-or-d gate refuses n",
+    "electronProperties": "not run",
+    "nativeStop": "not run",
+    "nativeOsStopCredit": false,
+    "arm64ExecutionCredit": false,
+    "releaseReadinessCredit": false,
+    "priorPropertiesFailureCause": "not established"
+  },
+  "readOnlySourceAudit": {
+    "directTokenHandleCategoryBug": "fixed and actual native regression passed",
+    "gate": "driver requires access g or d before calling existing primitive; observed n/r is refused",
+    "existingPrimitive": "ensure_owned_restricted explicitly accepts cause r and requires exact original ACE prefix plus one actual-user grant, unchanged authority and positive conservative postproof",
+    "noFurtherSourceChanges": true
+  },
+  "verifiedArchives": [
+    {
+      "kind": "staged",
+      "zipPath": "/workspace/attachments/2c580436-1c4a-41f0-9f59-3857b24b2151/windows-staged-42135654744.zip",
+      "zipBytes": 4411,
+      "zipSha256": "86f00ad0ac7d29b4deac6d6535d759fafd17f5b256fee8060673216c7e0005ea",
+      "members": [
+        {
+          "member": "_temp/computer-win32-staged-diagnostic.log",
+          "rawBytes": 198,
+          "rawSha256": "f811236b50dc365240265513571c0cbc0e0b83d5cc077ffa1cd39aec82588740",
+          "kind": "staged-log",
+          "closedReceipts": [
+            "computer-smoke-bootstrap-token {\"protocol\":1,\"route\":\"restricted\",\"owner\":\"u\",\"access\":\"n\",\"cause\":\"r\"}",
+            "computer-smoke-failure {\"protocol\":1,\"cause\":\"missing_report\",\"phase\":\"none\",\"hint\":\"none\"}"
+          ]
+        },
+        {
+          "member": "claudeondfsfdaf/claudeondfsfdaf/packages/desktop/native/out/overlay-win32/computer-overlay-smoke.json",
+          "rawBytes": 13215,
+          "rawSha256": "cc1a4e5517fc1a920a2eee81ab94e06f83d9092f9655b413ad6a1c24820ac587",
+          "kind": "stage-manifest",
+          "identity": {
+            "helperVersion": "1.0.15",
+            "protocol": {
+              "min": 1,
+              "max": 1
+            },
+            "platform": "win32",
+            "sourceDigest": "55270c81986a330ec2b381ebcd6c445b83802850d4b1d93793c535f96b57de1f",
+            "toolchain": "cmake version 4.4.5\nmsvc:19.51.36260\nvc-tools:14.51.36231\nwindows-sdk:10.0.26100.0"
+          },
+          "filesCount": 79
+        }
+      ]
+    },
+    {
+      "kind": "core",
+      "zipPath": "/workspace/attachments/104c758e-da01-4b9d-b111-324f10a9c717/windows-core-42135654744.zip",
+      "zipBytes": 554,
+      "zipSha256": "0f18d1a5c60b79f6ba48a26cb4faf85a184a4f67f9ec00d71067ca17c0cccb19",
+      "members": [
+        {
+          "member": "computer-win32-core.json",
+          "rawBytes": 2466,
+          "rawSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+          "kind": "core",
+          "report": {
+            "schemaVersion": 1,
+            "platform": "win32",
+            "privileged": "off",
+            "checks": [
+              {
+                "name": "catalog",
+                "status": "passed"
+              },
+              {
+                "name": "unit",
+                "status": "passed"
+              },
+              {
+                "name": "unprivileged",
+                "status": "passed"
+              },
+              {
+                "name": "packaged",
+                "status": "passed"
+              },
+              {
+                "name": "target-control",
+                "status": "passed"
+              },
+              {
+                "name": "probe.first",
+                "status": "passed"
+              },
+              {
+                "name": "probe.fresh",
+                "status": "passed"
+              },
+              {
+                "name": "responsible",
+                "status": "passed"
+              },
+              {
+                "name": "unverified-parent",
+                "status": "passed"
+              },
+              {
+                "name": "channel-eof",
+                "status": "passed"
+              },
+              {
+                "name": "parent-death",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.cancel-idle",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.eof",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.frame-too-large",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.heartbeat-loss",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.hello",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.malformed-json",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.permissions",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.session",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.shutdown",
+                "status": "passed"
+              },
+              {
+                "name": "conformance.unsupported-action",
+                "status": "passed"
+              },
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              },
+              {
+                "name": "unprivileged.wire-codec",
+                "status": "passed"
+              },
+              {
+                "name": "unprivileged.packaged-pe",
+                "status": "passed"
+              },
+              {
+                "name": "unprivileged.packaged-manifest",
+                "status": "passed"
+              },
+              {
+                "name": "unprivileged.packaged-version",
+                "status": "passed"
+              },
+              {
+                "name": "packaged.wire-codec",
+                "status": "passed"
+              },
+              {
+                "name": "packaged.packaged-pe",
+                "status": "passed"
+              },
+              {
+                "name": "packaged.packaged-manifest",
+                "status": "passed"
+              },
+              {
+                "name": "packaged.packaged-version",
+                "status": "passed"
+              },
+              {
+                "name": "target-control.windows-test-target-control-schema",
+                "status": "passed"
+              }
+            ],
+            "code": 0
+          },
+          "counts": {
+            "passed": 30,
+            "failed": 0,
+            "skipped": 1
+          }
+        }
+      ]
+    }
+  ]
+}

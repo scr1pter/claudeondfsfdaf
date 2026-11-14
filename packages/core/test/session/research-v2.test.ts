@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { LLMClient, LLMEvent, Model, type LLMClientShape, type LLMRequest } from "@vectordevai/llm"
 import { OpenAIChat } from "@vectordevai/llm/protocols/openai-chat"
+import { Billing } from "@vectordevai/schema/billing"
 import type { Permission } from "@vectordevai/schema/permission"
 import { asc, eq } from "drizzle-orm"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
@@ -39,6 +40,7 @@ import { ResearchReader } from "@vectordevai/core/research/reader"
 import { ResearchStore } from "@vectordevai/core/research/store"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { SessionV2 } from "@vectordevai/core/session"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { SessionExecution } from "@vectordevai/core/session/execution"
 import { SessionInput } from "@vectordevai/core/session/input"
 import { SessionMessage } from "@vectordevai/core/session/message"
@@ -257,6 +259,8 @@ const priced = SessionRunnerModel.withPricing(
   Model.make({ id: "priced-model", provider: "fake", route: OpenAIChat.route }),
   [{ input: 2, output: 10, cache: { read: 0, write: 0 } }],
 )
+// A Vector Codium model, scripted like the others: the guard counts its steps as Codium steps, never as dollars.
+const codium = Model.make({ id: "codium-model", provider: Billing.CODIUM_PROVIDER_ID, route: OpenAIChat.route })
 const chosen = { model }
 const replacements: LayerNode.Replacements = [
   [LayerNodePlatform.llmClient, client],
@@ -376,6 +380,17 @@ const setup = (input: { readonly rules?: Permission.Ruleset; readonly research?:
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
+    const stored = yield* db
+      .select({ parentID: SessionTable.parent_id })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    if (!stored) return yield* Effect.die("Fixture Session was not inserted")
+    const audience = SessionAudience.make({ db })
+    if (stored.parentID && !(yield* audience.knows(stored.parentID)))
+      return yield* Effect.die("Fixture Session parent was not registered")
+    yield* audience.register({ sessionID, parentID: stored.parentID ?? undefined, actor: "owner" }).pipe(Effect.orDie)
     const agents = yield* AgentV2.Service
     const location = yield* Location.Service
     yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
@@ -814,6 +829,34 @@ describe("Deep research on the V2 runner", () => {
       for (const request of requests) expect(tools(request)).toEqual(RESEARCH_TOOLS)
       expect(guard.outside()).toEqual([])
     }),
+  )
+
+  // Label plan §3.2: a research run that spent no dollars, one on Vector Codium included, saves no Spend line.
+  it.live("a research run on Vector Codium saves a report whose Method has no Spend line", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* answering()
+      const session = yield* SessionV2.Service
+      const spend = yield* SpendGuard.Service
+      chosen.model = codium
+      for (const item of ResearchScript.calls(web)) turns.push({ events: call(item.tool, item.input) })
+      turns.push({ events: say(ResearchScript.CLOSING) })
+
+      yield* session.prompt({ sessionID, prompt: research(ResearchScript.PROMPT), resume: false })
+      yield* session.resume(sessionID)
+
+      const run = yield* spend.snapshot(sessionID)
+      expect(run?.spentUsd).toBe(0)
+      expect(run?.codiumSteps).toBeGreaterThan(0)
+      const [planned] = yield* recorded("research_plan")
+      const runs = yield* ResearchRunV2.Service
+      const store = yield* ResearchStore.Service
+      const report = (yield* store.get(runs.place(), String(planned?.structured.runID)))?.report ?? ""
+      const method = report.slice(report.indexOf("## Method"))
+      expect(method).toStartWith("## Method")
+      expect(method).not.toContain("- Spend:")
+      expect(report).not.toContain("Codium")
+    }).pipe(Effect.ensuring(Effect.sync(() => (chosen.model = model)))),
   )
 
   it.live("an address no search result, page link or typed message gave is refused, and nothing is fetched", () =>

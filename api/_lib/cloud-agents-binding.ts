@@ -301,9 +301,15 @@ export async function bindingsForAccount(account: string, store = persistentStor
     .sort((a, b) => b.boundAt - a.boundAt || Number(a.repositoryId) - Number(b.repositoryId))
 }
 
-/** Only the binder's account may unbind. The generation moves, so every run token for the repository dies. */
-export async function revokeBinding(repositoryId: string, account: string, store = persistentStore) {
-  if (!Schema.is(Decimal)(repositoryId) || !Schema.is(Uuid)(account)) throw invalidRequest()
+/** Only the displayed binding's account and exact generation may unbind. A later rebind must survive stale consent. */
+export async function revokeBinding(
+  repositoryId: string,
+  account: string,
+  expectedGeneration: number,
+  store = persistentStore,
+) {
+  if (!Schema.is(Decimal)(repositoryId) || !Schema.is(Uuid)(account) || !time(expectedGeneration))
+    throw invalidRequest()
   const reply = await store([
     "EVAL",
     REVOKE,
@@ -313,6 +319,7 @@ export async function revokeBinding(repositoryId: string, account: string, store
     accountKey(account),
     account,
     repositoryId,
+    String(expectedGeneration),
   ])
   if (reply !== 0 && reply !== 1) throw storeUnavailable()
   return reply === 1
@@ -451,9 +458,14 @@ return replies
 
 const MEMBERS = `return redis.call('SMEMBERS', KEYS[1])`
 
-// KEYS: the binding, the generation, the account's set. ARGV: account, repository id.
-const REVOKE = `
+// KEYS: the binding, the generation, the account's set. ARGV: account, repository id, displayed generation.
+const REVOKE = `${STORED_RULES}
 if redis.call('HGET', KEYS[1], 'account') ~= ARGV[1] then return 0 end
+local generation = redis.call('HGET', KEYS[1], 'generation')
+if not decimal(generation) then return 'corrupt' end
+if generation ~= ARGV[3] then return 0 end
+local counter = redis.call('GET', KEYS[2])
+if not decimal(counter) or counter ~= generation or tonumber(counter) >= 9007199254740991 then return 'corrupt' end
 local kind = redis.call('TYPE', KEYS[3]).ok
 if kind ~= 'set' and kind ~= 'none' then return 'corrupt' end
 redis.call('INCR', KEYS[2])

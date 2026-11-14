@@ -27,7 +27,8 @@ let accountID = ""
 let identityDeletions = 0
 let revocationWrites = 0
 let revocationAvailable = false
-// The persistent store's JSON commands, as the deletion grant's single use reads and writes them.
+// The persistent store's JSON commands, as the deletion grant's single use and account deletion's tombstone read and
+// write them.
 const store = new Map<string, string>()
 
 beforeEach(async () => {
@@ -53,11 +54,39 @@ beforeEach(async () => {
         response.end(JSON.stringify({ result: "OK" }))
         return
       }
+      if (command[0] === "SMEMBERS" || command[0] === "ZRANGE") {
+        response.end(JSON.stringify({ result: [] }))
+        return
+      }
+      if (command[0] === "DEL") {
+        const removed = command.slice(1).reduce((count, key) => count + (store.delete(key) ? 1 : 0), 0)
+        response.end(JSON.stringify({ result: removed }))
+        return
+      }
+      // This request-boundary fixture has no Brain uploads or GitHub bindings; populated sibling stores are covered
+      // by their actual Redis suites. All other EVALs still follow the pre-existing lease/rate-limit fixture below.
+      if (command[0] === "EVAL" && command[3] === `vector:cloud-agents:brain:account:${accountID}`) {
+        expect(store.get(`vector:cli-revoked:${accountID}`)).toBe("1")
+        expect(command.slice(3)).toEqual([`vector:cloud-agents:brain:account:${accountID}`, `vector:cli-revoked:${accountID}`, accountID])
+        response.end(JSON.stringify({ result: "OK" }))
+        return
+      }
+      if (command[0] === "EVAL" && command[3] === `vector:cloud-agents:bindings:${accountID}`) {
+        expect(command[1]).toBe("return redis.call('SMEMBERS', KEYS[1])")
+        response.end(JSON.stringify({ result: [] }))
+        return
+      }
+      // Account deletion's scans (WP A57: the outbox and the last erase step). This store holds no Codium records.
+      if (command[0] === "SCAN" || command[0] === "ZSCAN") {
+        response.end(JSON.stringify({ result: ["0", []] }))
+        return
+      }
       response.end(JSON.stringify({ result: [1, 60] }))
       return
     }
     if (request.url?.startsWith("/set/")) {
       revocationWrites++
+      if (revocationAvailable) store.set(`vector:cli-revoked:${accountID}`, "1")
       response.end(JSON.stringify(revocationAvailable ? { result: "OK" } : { error: "Redis write failed" }))
       return
     }

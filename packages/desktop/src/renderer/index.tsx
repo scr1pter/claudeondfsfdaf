@@ -29,6 +29,8 @@ import { subscribeUpdater } from "./updater-state"
 import { resetZoom, setPinchZoomEnabled, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
 import { availableStartupServer, readyWslConnections } from "./wsl/connections"
 import { openPathApplication } from "../main/open-path"
+import { settingsFromWire } from "../main/computer-wire"
+import type { ElectronAPI } from "../preload/types"
 import "./styles.css"
 import { Splash } from "@vectordevai/ui/logo"
 import { useTheme } from "@vectordevai/ui/theme/context"
@@ -195,6 +197,11 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
   return {
     platform: "desktop",
     os,
+    // Older preloads do not expose this API.
+    computer: "computer" in window.api && window.api.computer ? desktopComputer(window.api.computer) : undefined,
+    onComputerScreenshotsRemoved: window.api.onComputerScreenshotsRemoved
+      ? (cb) => window.api.onComputerScreenshotsRemoved(cb)
+      : undefined,
     version: pkg.version,
     windowID: windowState.id,
 
@@ -261,6 +268,14 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     },
 
     vectorAccount: window.api.vectorAccount,
+    reports: window.api.reports,
+    remote: window.api.remote,
+    vault: window.api.vault,
+    ops: window.api.ops,
+    hosted: window.api.hosted,
+    phoneAlerts: {
+      send: async (alert) => void (await window.api.phoneAlerts.send(alert)),
+    },
     serverCredentials: window.api.serverCredentials,
 
     exportDebugLogs: () => window.api.exportDebugLogs(),
@@ -343,6 +358,40 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     },
   }
 }
+
+/**
+ * The app's `platform.computer` over the preload's API. Each method is mapped explicitly (the preload object is a
+ * context-bridge copy), and settings arrive with their company rules as pairs, rebuilt here as the Map the app reads.
+ */
+function desktopComputer(api: ElectronAPI["computer"]): NonNullable<Platform["computer"]> {
+  return {
+    supported: api.supported === true,
+    status: () => api.status(),
+    state: () => api.state(),
+    onState: (cb) => api.onState(cb),
+    command: (command, arg) => api.command(command, arg),
+    prefs: () => api.prefs().then(settingsFromWire),
+    setPrefs: (patch) => api.setPrefs(patch).then(settingsFromWire),
+    permissions: () => api.permissions(),
+    recheck: () => api.recheck(),
+    inputSetup: (action) =>
+      api.inputSetup ? api.inputSetup(action) : Promise.reject(new Error("Input setup is unavailable.")),
+    openPane: (id) => api.openPane(id),
+    reset: (id) => api.reset(id),
+    apps: (query) => api.apps(query),
+    removeAlways: (key) => api.removeAlways(key),
+    removeAllAlways: () => api.removeAllAlways(),
+    block: (app) => api.block(app),
+    unblock: (key) => api.unblock(key),
+    deleteScreenshots: () => api.deleteScreenshots(),
+  }
+}
+
+// A Hands notification names its conversation by the app's own session path, nothing else.
+window.api.onComputerOpen?.((href) => {
+  if (typeof href === "string" && /^\/[A-Za-z0-9_-]{1,8192}\/session\/[A-Za-z0-9_-]{1,128}$/.test(href))
+    handleNotificationClick(href)
+})
 
 let menuTrigger = null as null | ((id: string) => void)
 window.api.onMenuCommand((id) => {

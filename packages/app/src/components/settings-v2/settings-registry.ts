@@ -1,9 +1,13 @@
 import type { IconProps } from "@vectordevai/ui/icon"
 import type { SettingsSection } from "./general"
+import { Hands } from "@vectordevai/schema/hands"
 
 export type SettingsTab =
   | SettingsSection
   | "account"
+  | "roadmap"
+  | "remote"
+  | "production"
   | "providers"
   | "models"
   | "servers"
@@ -12,9 +16,11 @@ export type SettingsTab =
   | "about"
   | "trust"
   | "subagents"
+  | "computer"
   | "memory"
   | "local"
   | "shortcuts"
+  | "github"
 
 export type SettingsItem = {
   value: SettingsTab
@@ -47,6 +53,42 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "billing",
           "subscription",
           "delete",
+        ],
+      },
+      // WP A34: shown only when the account's Codium plan includes the vote (dialog-settings-v2.tsx).
+      {
+        value: "roadmap",
+        label: "Roadmap vote",
+        icon: "checklist",
+        keywords: ["roadmap", "vote", "ballot", "nominate", "nomination", "features", "what vector builds next"],
+      },
+      // WP A42: shown when the account's Codium plan includes the listed Remote, or this computer already has it on
+      // or a phone paired (dialog-settings-v2.tsx), so it can always be turned off.
+      {
+        value: "remote",
+        label: "Remote",
+        icon: "link",
+        keywords: ["remote", "phone", "mobile", "pair", "qr", "passkey", "approve from phone", "devices"],
+      },
+      // WP A50: shown on the desktop when the account's Codium plan includes a listed ops perk (On Call, Release Guard
+      // or Ship Desk; dialog-settings-v2.tsx).
+      {
+        value: "production",
+        label: "Production",
+        icon: "warning",
+        keywords: [
+          "production",
+          "on call",
+          "release guard",
+          "ship desk",
+          "incidents",
+          "revert",
+          "rollback",
+          "domains",
+          "health checks",
+          "monitors",
+          "cards",
+          "screenshots",
         ],
       },
       {
@@ -94,6 +136,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "reports",
           "sources",
           "citations",
+          // WP A45: Settings → Memory → Backup (desktop).
+          "backup",
+          "back up",
+          "brain vault",
+          "restore",
+          "recovery code",
           "skills",
           "learned skills",
           "workflow",
@@ -140,6 +188,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
     title: "Agents & environment",
     items: [
       {
+        value: "github",
+        label: "GitHub",
+        icon: "github",
+        keywords: ["github", "actions", "repository bindings", "run in github", "scheduled runs"],
+      },
+      {
         value: "subagents",
         label: "Agents",
         icon: "task",
@@ -155,6 +209,23 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "spend ceiling",
           "workflows",
           "saved workflows",
+        ],
+      },
+      {
+        value: "computer",
+        label: Hands.NAME,
+        icon: "hands",
+        keywords: [
+          Hands.NAME,
+          Hands.SHORT,
+          "computer use",
+          "use my computer",
+          "screen recording",
+          "accessibility permission",
+          "always allowed apps",
+          "blocked apps",
+          "screenshots",
+          "mouse",
         ],
       },
       {
@@ -187,7 +258,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
         icon: "keyboard",
         keywords: ["keybindings", "keybinds", "key bindings", "hotkeys", "command palette"],
       },
-      { value: "notifications", label: "Notifications", icon: "status", keywords: ["alerts", "sound", "completion"] },
+      {
+        value: "notifications",
+        label: "Notifications",
+        icon: "status",
+        keywords: ["alerts", "sound", "completion", "phone", "push", "quiet hours"],
+      },
       {
         value: "accessibility",
         label: "Accessibility",

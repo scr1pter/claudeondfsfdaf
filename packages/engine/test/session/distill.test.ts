@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import os from "node:os"
 import path from "path"
 import { afterAll, afterEach, beforeEach, expect } from "bun:test"
@@ -83,6 +84,7 @@ const summary = Layer.succeed(
 const mcp = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
+    snapshot: () => Effect.succeed({}),
     status: () => Effect.succeed({}),
     clients: () => Effect.succeed({}),
     instructions: () => Effect.succeed([]),
@@ -184,6 +186,7 @@ const root = LayerNode.group([
   LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
 ])
 
+const purposes: string[] = []
 const it = testEffect(
   LayerNode.compile(root, [
     [SessionSummary.node, summary],
@@ -198,8 +201,16 @@ const it = testEffect(
         Effect.gen(function* () {
           const llm = yield* TestLLMServer
           return ModelPlans.Service.of({
-            catalog: () => Effect.succeed({ enabled: true, models: [codiumModel] }),
-            request: (_url, init) => fetch(`${llm.url}/chat/completions`, init),
+            catalog: () =>
+              Effect.succeed({
+                enabled: true,
+                plan: "vector-10",
+                models: [{ ...codiumModel, role: "floor" as const }],
+              }),
+            request: (_url, init) => {
+              purposes.push(new Headers(init.headers).get("x-vector-purpose") ?? "")
+              return fetch(`${llm.url}/chat/completions`, init)
+            },
           })
         }),
       ).pipe(Layer.provide(TestLLMServer.layer), Layer.orDie),
@@ -333,13 +344,49 @@ const setup = Effect.fn("test.setup")(function* () {
 // Model requests apart from the conversation titles a visible session would ask for.
 const requests = (llm: TestLLMServer["Service"]) =>
   llm.inputs.pipe(
-    Effect.map((bodies) => bodies.filter((body) => !JSON.stringify(body).includes("Generate a title for this conversation"))),
+    Effect.map((bodies) =>
+      bodies.filter((body) => !JSON.stringify(body).includes("Generate a title for this conversation")),
+    ),
   )
 
 const toolNames = (body: Record<string, unknown>) =>
   (Array.isArray(body.tools) ? body.tools : []).flatMap((tool: { function?: { name?: unknown } }) =>
     typeof tool.function?.name === "string" ? [tool.function.name] : [],
   )
+
+it.instance(
+  "Bootstrap previews only bounded tracked repository documents, sends no request and preserves review consent",
+  () =>
+    Effect.gen(function* () {
+      const { llm, knowledge, place, distill } = yield* setup()
+      const dir = (yield* TestInstance).directory
+      const fs = yield* FSUtil.Service
+      for (let index = 0; index < 6; index++)
+        yield* fs.writeWithDirs(
+          path.join(dir, "docs", `notes-${index}.md`),
+          `${BILLING}\nDocument ${"abcdef"[index]}.\n`,
+        )
+      yield* Effect.sync(() => execFileSync("git", ["add", "docs"], { cwd: dir, stdio: "ignore" }))
+      const first = yield* distill.bootstrap(place, "lmstudio/test-model")
+      if (first.type !== "ready") throw new Error(first.message)
+      const documents = (yield* knowledge.documents(place, { personal: false })).filter(
+        (document) => document.origin === "repository",
+      )
+      expect(documents).toHaveLength(6)
+      yield* Effect.forEach(documents, (document) => knowledge.wait(place, document.id, "searchable", 20_000))
+      const preview = yield* distill.bootstrap(place, "lmstudio/test-model")
+      if (preview.type !== "ready") throw new Error(preview.message)
+      expect(preview.documents).toHaveLength(4)
+      expect(preview.maxTokens).toBe(7500)
+      expect(preview.documents.every((item) => documents.some((document) => document.id === item.id))).toBe(true)
+      expect(preview.documents.every((item) => item.estimate.model === "lmstudio/test-model")).toBe(true)
+      expect(yield* requests(llm)).toHaveLength(0)
+      expect(yield* distill.bootstrap({ ...place, held: true })).toMatchObject({ type: "refused", reason: "held" })
+      expect(yield* requests(llm)).toHaveLength(0)
+    }),
+  { git: true },
+  30_000,
+)
 
 it.instance(
   "a verbatim quote is kept as a proposed record and an invented one dropped, in a hidden session that records its spend",
@@ -360,7 +407,11 @@ it.instance(
       expect(estimate.highUsd).toBeGreaterThan(estimate.lowUsd)
       expect(yield* requests(llm)).toHaveLength(0)
 
-      yield* llm.push(reply().tool("StructuredOutput", { records: [VERBATIM, INVENTED] }).usage({ input: 1_400, output: 160 }))
+      yield* llm.push(
+        reply()
+          .tool("StructuredOutput", { records: [VERBATIM, INVENTED] })
+          .usage({ input: 1_400, output: 160 }),
+      )
       const result = yield* distill.run(place, { document, sessionID: launching.id })
       expect(result.type).toBe("distilled")
       if (result.type !== "distilled") return
@@ -395,7 +446,11 @@ it.instance(
       // The run is on the document's History, with what it spent.
       const detail = yield* knowledge.document(place, document, { personal: true })
       const event = detail!.history.find((item) => item.action === "distilled")
-      expect(event?.detail).toMatchObject({ model: "lmstudio/test-model", kept: 1, tokens: { input: 1_400, output: 160 } })
+      expect(event?.detail).toMatchObject({
+        model: "lmstudio/test-model",
+        kept: 1,
+        tokens: { input: 1_400, output: 160 },
+      })
 
       // No session opened for the user: the helper's is hidden, and its spend is in usage under its own name.
       expect((yield* sessions.list()).map((session) => session.id)).toEqual(listed)
@@ -415,9 +470,21 @@ it.instance(
       const db = (yield* Database.Service).db
       const holding = (phrase: string) =>
         Effect.all([
-          db.select({ id: EventTable.id }).from(EventTable).where(sql`${EventTable.data} like ${`%${phrase}%`}`).all(),
-          db.select({ id: MessageTable.id }).from(MessageTable).where(sql`${MessageTable.data} like ${`%${phrase}%`}`).all(),
-          db.select({ id: PartTable.id }).from(PartTable).where(sql`${PartTable.data} like ${`%${phrase}%`}`).all(),
+          db
+            .select({ id: EventTable.id })
+            .from(EventTable)
+            .where(sql`${EventTable.data} like ${`%${phrase}%`}`)
+            .all(),
+          db
+            .select({ id: MessageTable.id })
+            .from(MessageTable)
+            .where(sql`${MessageTable.data} like ${`%${phrase}%`}`)
+            .all(),
+          db
+            .select({ id: PartTable.id })
+            .from(PartTable)
+            .where(sql`${PartTable.data} like ${`%${phrase}%`}`)
+            .all(),
           db
             .select({ id: SessionMessageTable.id })
             .from(SessionMessageTable)
@@ -432,7 +499,9 @@ it.instance(
       // Forgetting the document leaves nothing of it behind, and the spend still counts.
       expect(yield* knowledge.remove(place, document)).toBe("removed")
       expect(yield* holding("paid back to the original card")).toBe(0)
-      expect((yield* sessions.usage()).helpers?.find((item) => item.id === "brain.distill")?.cost).toBeCloseTo(result.cost)
+      expect((yield* sessions.usage()).helpers?.find((item) => item.id === "brain.distill")?.cost).toBeCloseTo(
+        result.cost,
+      )
     }),
   90_000,
 )
@@ -442,6 +511,20 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const { llm, knowledge, place, document, distill } = yield* setup()
+      const brain = yield* Brain.Service
+      expect(yield* distill.estimate(place, { document, model: "vector-plan/vendor/coder" })).toMatchObject({
+        refused: { reason: "no-model" },
+      })
+      yield* brain.setLearnSettings({ codiumHelpers: "on" })
+      yield* Effect.addFinalizer(() => brain.setLearnSettings({ codiumHelpers: "ask" }))
+      expect(yield* distill.estimate(place, { document, model: "vector-plan/previous-floor" })).toMatchObject({
+        refused: { reason: "no-model" },
+      })
+      expect(
+        yield* distill.estimate({ ...place, held: true }, { document, model: "vector-plan/vendor/coder" }),
+      ).toMatchObject({
+        refused: { reason: "held" },
+      })
       const estimate = yield* distill.estimate(place, { document, model: "vector-plan/vendor/coder" })
       expect(estimate).toMatchObject({ enabled: true, model: "vector-plan/vendor/coder", costKind: "codium" })
       expect(estimate.sections).toBeGreaterThan(0)
@@ -464,6 +547,7 @@ it.instance(
       expect(result).not.toHaveProperty("tokens")
       expect(result).not.toHaveProperty("cost")
       expect(yield* requests(llm)).toHaveLength(1)
+      expect(purposes.at(-1)).toBe("brain")
 
       const detail = yield* knowledge.document(place, document, { personal: true })
       const event = detail!.history.find((item) => item.action === "distilled")
@@ -484,10 +568,46 @@ it.instance(
 )
 
 it.instance(
+  "a Codium Brain-share refusal is not retried and quietly leaves no proposal",
+  () =>
+    Effect.gen(function* () {
+      const { llm, place, document, distill } = yield* setup()
+      const brain = yield* Brain.Service
+      yield* brain.setLearnSettings({ codiumHelpers: "on" })
+      yield* Effect.addFinalizer(() => brain.setLearnSettings({ codiumHelpers: "ask" }))
+      yield* llm.push({
+        type: "http-error",
+        status: 429,
+        body: { error: { code: "MODEL_PLAN_BRAIN_SHARE", message: "Brain share used", dispatched: false } },
+      })
+      const result = yield* distill.run(place, { document, model: "vector-plan/vendor/coder" })
+      expect(result).toMatchObject({ type: "distilled", records: [], costKind: "codium" })
+      expect(result).not.toHaveProperty("error")
+      expect(result).not.toHaveProperty("tokens")
+      expect(result).not.toHaveProperty("cost")
+      expect(yield* requests(llm)).toHaveLength(1)
+    }),
+  30_000,
+)
+
+it.instance(
   "the flag defaults off; a guest's session, a model that may train, the Zen gateway and a model that cannot answer are refused before anything is sent",
   () =>
     Effect.gen(function* () {
       const { llm, place, document, distill } = yield* setup()
+      const brain = yield* Brain.Service
+      const database = yield* BrainDatabase.Service
+      // This test also covers the legacy flag; restore its nullable fixture setting, not a new owner preference.
+      const reset = database.db
+        .run(sql`UPDATE brain_state SET knowledge_distill = NULL WHERE repository_id = ''`)
+        .pipe(Effect.orDie)
+      yield* Effect.addFinalizer(() => reset)
+      yield* brain.setLearnSettings({ distillation: false })
+      expect(yield* distill.estimate(place, { document })).toMatchObject({ enabled: false, refused: { reason: "off" } })
+      yield* brain.setLearnSettings({ distillation: true })
+      delete process.env[FLAG]
+      expect(yield* distill.estimate(place, { document })).toMatchObject({ enabled: true })
+      yield* reset
       delete process.env[FLAG]
       expect(yield* distill.estimate(place, { document })).toMatchObject({ enabled: false, refused: { reason: "off" } })
       expect(yield* distill.run(place, { document })).toMatchObject({ type: "refused", reason: "off" })
@@ -496,7 +616,10 @@ it.instance(
       const sessions = yield* Session.Service
       const shared = yield* sessions.create({ title: "Shared" })
       yield* (yield* FreeModelGuests.Service).mark(shared.id)
-      expect(yield* distill.run(place, { document, sessionID: shared.id })).toMatchObject({ type: "refused", reason: "guest" })
+      expect(yield* distill.run(place, { document, sessionID: shared.id })).toMatchObject({
+        type: "refused",
+        reason: "guest",
+      })
       expect(yield* distill.run(place, { document, model: `openrouter/${training.id}` })).toMatchObject({
         type: "refused",
         reason: "may-train",

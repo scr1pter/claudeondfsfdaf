@@ -21,12 +21,15 @@ test("the Host locally page states every runtime rule in plain words", async () 
     "An invite guest can't see, start, message or resume them, or open the terminal one runs in",
     "Host locally is off while Vector is connected to a server elsewhere",
     "reach you as it wrote them",
-    "work without a Vector plan or credits",
+    "work without a Vector plan, and nothing in it is sold as an upgrade",
+    "Vector Codium doesn't pay for these agents",
     "uses none of them to train, evaluate or benchmark anything",
   ])
     expect(text).toContain(rule)
   // The old claim that teammates' messages reach them is gone.
   expect(text).not.toContain("can be told what teammates did")
+  // Codium is a monthly plan with no credits to spend (A29).
+  expect(text).not.toMatch(/\bcredits\b/i)
 })
 
 // The README no longer describes these agents (owner, 24 October 2026), so what it said is held where the docs say it:

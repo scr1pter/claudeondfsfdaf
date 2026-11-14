@@ -81,6 +81,7 @@ const StoredRun = Schema.Struct({
   jti: Jti,
   triggerSource: Schema.optionalKey(TriggerSource),
   triggerPurpose: Schema.optionalKey(TriggerPurpose),
+  ticketHash: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$(?![\s\S])/))),
 }).check(
   Schema.makeFilter(
     (run: {
@@ -93,12 +94,14 @@ const StoredRun = Schema.Struct({
       pur: string
       triggerSource?: string
       triggerPurpose?: string
+      ticketHash?: string
     }) =>
       run.deadline > run.startedAt &&
       (run.deadline - run.startedAt) % 1000 === 0 &&
       run.lastReport >= run.startedAt &&
       (run.lastRequest === undefined || run.lastRequest >= run.startedAt) &&
       (run.counted === undefined || run.src === "github-schedule") &&
+      (run.ticketHash === undefined || run.triggerSource !== undefined) &&
       ((run.triggerSource === undefined && run.triggerPurpose === undefined) ||
         (run.triggerSource !== undefined &&
           run.triggerPurpose !== undefined &&
@@ -145,6 +148,8 @@ export type LiveRun = {
   jti: string
   triggerSource?: RunSource
   triggerPurpose?: Exclude<RunTrigger["purpose"], "scheduled">
+  /** Derived atomically from the exact consumed ticket; never accepted from a token or request body. */
+  ticketHash?: string
 }
 export type ReserveInput = {
   account: string
@@ -459,6 +464,7 @@ export async function liveRun(account: string, rid: string, store = persistentSt
     ...(run.triggerSource !== undefined && run.triggerPurpose !== undefined
       ? { triggerSource: run.triggerSource, triggerPurpose: run.triggerPurpose }
       : {}),
+    ...(run.ticketHash === undefined ? {} : { ticketHash: run.ticketHash }),
   }
 }
 
@@ -539,7 +545,7 @@ local purposes = { task = true, review = true, scheduled = true }
 local triggerSources = { ${RUN_SOURCES.map((source) => `[${JSON.stringify(source)}] = true`).join(", ")} }
 local triggerPurposes = { task = true, review = true, incident = true, changes = true }
 local fields = { startedAt = true, deadline = true, lastReport = true, lastRequest = true, epoch = true, repo = true,
-  thr = true, src = true, pur = true, counted = true, gen = true, jti = true, triggerSource = true, triggerPurpose = true }
+  thr = true, src = true, pur = true, counted = true, gen = true, jti = true, triggerSource = true, triggerPurpose = true, ticketHash = true }
 local function whole(value, least)
   return type(value) == 'number' and value >= least and value <= 9007199254740991 and math.floor(value) == value
 end
@@ -568,6 +574,7 @@ local function decode(raw)
     if not triggerSources[run.triggerSource] or not triggerPurposes[run.triggerPurpose] or run.src ~= 'github-dispatch'
       or run.pur ~= (run.triggerPurpose == 'review' and 'review' or 'task') then return nil end
   end
+  if run.ticketHash ~= nil and (not run.triggerSource or not text(run.ticketHash, '^[0-9a-f]+$', 64) or #run.ticketHash ~= 64) then return nil end
   return run
 end
 local function count(raw)
@@ -592,6 +599,7 @@ local function encode(run)
     parts[#parts + 1] = '"triggerSource":' .. cjson.encode(run.triggerSource)
     parts[#parts + 1] = '"triggerPurpose":' .. cjson.encode(run.triggerPurpose)
   end
+  if run.ticketHash then parts[#parts + 1] = '"ticketHash":' .. cjson.encode(run.ticketHash) end
   return '{' .. table.concat(parts, ',') .. '}'
 end
 local function active(run)
@@ -644,6 +652,8 @@ if ARGV[16] == '1' then
     or redis.call('HEXISTS', KEYS[5], 'suspended') == 1 then return 'binding' end
   ticket = KEYS[7]
 end
+local ticketHash = ticket and string.match(ticket, '^vector:cloud%-agents:ticket:([0-9a-f]+)$')
+if ticket and (not ticketHash or #ticketHash ~= 64) then return 'corrupt' end
 local used = count(redis.call('GET', KEYS[2]))
 local scheduled = count(redis.call('GET', KEYS[3]))
 local runs = read(KEYS[1])
@@ -725,6 +735,7 @@ if type(answer) == 'string' then return answer end
 local run = { startedAt = now, deadline = now + answer * 1000, lastReport = now, epoch = epoch, repo = ARGV[4],
   thr = ARGV[5], src = ARGV[6], pur = ARGV[7], counted = counts or nil, gen = generation, jti = ARGV[9],
   triggerSource = ARGV[17] ~= '' and ARGV[17] or nil, triggerPurpose = ARGV[18] ~= '' and ARGV[18] or nil }
+if run.triggerSource and ticketHash then run.ticketHash = ticketHash end
 redis.call('HSET', KEYS[1], rid, encode(run))
 redis.call('INCRBY', KEYS[2], int(answer))
 redis.call('PEXPIRE', KEYS[2], ARGV[14])

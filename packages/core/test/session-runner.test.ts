@@ -24,6 +24,7 @@ import { ProjectTable } from "@vectordevai/core/project/sql"
 import { QuestionV2 } from "@vectordevai/core/question"
 import { AbsolutePath, RelativePath } from "@vectordevai/core/schema"
 import { SessionV2 } from "@vectordevai/core/session"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Snapshot } from "@vectordevai/core/snapshot"
 import { ContextSnapshotDecodeError } from "@vectordevai/core/session/error"
 import { SessionEvent } from "@vectordevai/core/session/event"
@@ -325,6 +326,19 @@ const insertSession = (id: SessionV2.ID) =>
       })
       .onConflictDoNothing()
       .run()
+      .pipe(Effect.orDie)
+    const stored = yield* db
+      .select({ parentID: SessionTable.parent_id })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, id))
+      .get()
+      .pipe(Effect.orDie)
+    if (!stored) return yield* Effect.die("Fixture Session was not inserted")
+    const audience = SessionAudience.make({ db })
+    if (stored.parentID && !(yield* audience.knows(stored.parentID)))
+      return yield* Effect.die("Fixture Session parent was not registered")
+    yield* audience
+      .register({ sessionID: id, parentID: stored.parentID ?? undefined, actor: "owner" })
       .pipe(Effect.orDie)
   })
 

@@ -4,9 +4,43 @@ on:
   push:
     branches:
       - main
+      - v2
   pull_request:
   workflow_dispatch:
     inputs:
+      computer_helper:
+        description: Run only the native computer-helper build and self-tests
+        type: boolean
+        required: false
+        default: false
+      desktop_engine_node:
+        description: Run only the actual Node desktop engine bundle smoke
+        type: boolean
+        required: false
+        default: false
+      computer_helper_target:
+        description: Select native coverage or one bounded diagnostic (requires computer_helper)
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - linux
+          - windows
+          - windows-units
+          - macos-signing
+          - macos-overlay
+          - windows-overlay
+      hands_benchmark:
+        description: Run only the production app baseline for the desktop app-control work
+        type: boolean
+        required: false
+        default: false
+      hands_ui:
+        description: Run only the focused desktop app-control browser tests
+        type: boolean
+        required: false
+        default: false
       release_evidence:
         description: "Run only the offline study of the pinned published desktop engine"
         type: boolean
@@ -27,8 +61,9 @@ concurrency:
   # Keep every run on main so cancelled checks do not pollute the default branch
   # commit history. PRs and other branches still share a group and cancel stale runs.
   # Expressions have no ternary, so this is the `&&`/`||` idiom; it is safe here only
-  # because both format() results are non-empty strings and can never read as falsy.
-  group: ${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
+  # because every format() result is a non-empty string and can never read as falsy.
+  # Every dispatch selector participates, so neither another valid mode nor an invalid mixed dispatch cancels it.
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-dispatch-native-{1}-{2}-node-{3}-ui-{4}-hands-benchmark-{5}-release-{6}-production-{7}-offline-{8}-{9}', github.workflow, inputs.computer_helper, inputs.computer_helper_target || 'all', inputs.desktop_engine_node, inputs.hands_ui, inputs.hands_benchmark, inputs.release_evidence, inputs.production_benchmark, inputs.offline_footprint, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
   cancel-in-progress: true
 
 permissions:
@@ -39,8 +74,450 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  validate-dispatch:
+    name: Validate workflow selectors
+    # The focused desktop diagnostics must not wait for an unrelated Linux runner pool.
+    # This unchanged builtins-only validator uses the runner's Git for Windows Bash.
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && ((inputs.computer_helper && inputs.computer_helper_target == 'windows-units') || inputs.hands_ui) && 'windows-2025' || 'ubuntu-24.04' }}
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Validate workflow dispatch selectors before setup
+        shell: bash
+        env:
+          COMPUTER_HELPER_TARGET: ${{ inputs.computer_helper_target || 'all' }}
+          COMPUTER_HELPER: ${{ inputs.computer_helper || false }}
+          DESKTOP_ENGINE_NODE: ${{ inputs.desktop_engine_node || false }}
+          HANDS_UI: ${{ inputs.hands_ui || false }}
+          HANDS_BENCHMARK: ${{ inputs.hands_benchmark || false }}
+          RELEASE_EVIDENCE: ${{ inputs.release_evidence || false }}
+          PRODUCTION_BENCHMARK: ${{ inputs.production_benchmark || false }}
+          OFFLINE_FOOTPRINT: ${{ inputs.offline_footprint || false }}
+        run: |
+          set -euo pipefail
+          case "$COMPUTER_HELPER_TARGET" in
+            all|linux|windows|windows-units|macos-signing|macos-overlay|windows-overlay) ;;
+            *) echo "::error::Unsupported computer-helper target."; exit 1 ;;
+          esac
+          for value in "$COMPUTER_HELPER" "$DESKTOP_ENGINE_NODE" "$HANDS_UI" "$HANDS_BENCHMARK" "$RELEASE_EVIDENCE" "$PRODUCTION_BENCHMARK" "$OFFLINE_FOOTPRINT"; do
+            case "$value" in
+              true|false) ;;
+              *) echo "::error::Workflow mode flags must be boolean."; exit 1 ;;
+            esac
+          done
+          if [[ "$COMPUTER_HELPER" != true && "$COMPUTER_HELPER_TARGET" != all ]]; then
+            echo "::error::A computer-helper target requires computer_helper."
+            exit 1
+          fi
+          hands=false
+          if [[ "$HANDS_UI" == true || "$HANDS_BENCHMARK" == true ]]; then hands=true; fi
+          selected=0
+          for value in "$COMPUTER_HELPER" "$DESKTOP_ENGINE_NODE" "$hands" "$RELEASE_EVIDENCE" "$PRODUCTION_BENCHMARK" "$OFFLINE_FOOTPRINT"; do
+            if [[ "$value" == true ]]; then selected=$((selected + 1)); fi
+          done
+          if (( selected > 1 )); then
+            echo "::error::Select one workflow mode; Hands UI and its benchmark may run together."
+            exit 1
+          fi
+
+  computer-helper:
+    needs: validate-dispatch
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint && (!inputs.computer_helper || (inputs.computer_helper_target || 'all') == 'all' || inputs.computer_helper_target == 'linux' || inputs.computer_helper_target == 'windows'))
+    uses: ./.github/workflows/computer-helper.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      artifact-suffix: pr-${{ github.sha }}
+      windows-only: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'windows' || false }}
+      linux-only: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'linux' || false }}
+      # Hosted native jobs use a disposable desktop and the driver's fixed isolated target only. Local and direct
+      # workflow callers retain the off default; missing native scenarios are reported as skipped, never passed.
+      isolated-desktop: true
+
+  computer-helper-windows-units:
+    needs: validate-dispatch
+    name: Windows x64 native and staged diagnostics (${{ matrix.diagnostic }}, no release evidence)
+    if: github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'windows-units' && !inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        diagnostic: [baseline, move-probe]
+    # Includes the separate source-bound stage build; each native/runtime deadline stays unchanged.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Configure the MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Test the Windows packaged Main pin reader
+        timeout-minutes: 2
+        run: |
+          bun --no-env-file test --timeout 30000 --only-failures ./scripts/verify-computer-helper-windows.test.ts
+          if ($LASTEXITCODE -ne 0) { throw "Windows packaged Main pin reader tests failed." }
+      - name: Build only the x64 native diagnostic artifacts
+        id: native_build
+        timeout-minutes: 15
+        run: |
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64 --channel prod --out native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "The x64 native diagnostic build failed." }
+      - name: Run Windows unit and fresh version/probe checks
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          import { spawnSync } from "node:child_process"
+          import path from "node:path"
+          const root = path.resolve("native/out/win32/x64")
+          const contexts = new Set()
+          const run = (file, args) => {
+            const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
+            if (result.error || result.status !== 0) {
+              if (result.stderr) process.stderr.write(result.stderr.slice(0, 8192))
+              throw new Error("A required Windows native check failed.")
+            }
+            for (const line of (result.stderr || "").split(/\r?\n/)) {
+              const match = /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n) c=(s|q|o|g|m|z|i|t|r|v|p|a|e|b)$/.exec(line)
+              if (!match) continue
+              const context = `vector-caller-context initial r=${match[1]} d=${match[2]} o=${match[3]} a=${match[4]} c=${match[5]}`
+              if (contexts.has(context)) continue
+              contexts.add(context)
+              process.stderr.write(context + "\n")
+            }
+            return result.stdout
+          }
+          run(path.join(root, "tests/vector-computer-tests.exe"), [])
+          const executable = path.join(root, "vector-computer.exe")
+          const manifest = JSON.parse(readFileSync(path.join(root, "computer-helper.json"), "utf8"))
+          const version = JSON.parse(run(executable, ["--version", "--json"]))
+          if (version.sourceDigest !== manifest.sourceDigest || version.arch !== "x64") throw new Error("Windows native identity differs from its manifest.")
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const probe = JSON.parse(run(executable, ["--probe", "--json"]))
+            if (probe.permissions?.screen !== "n/a" || probe.permissions?.accessibility !== "n/a" || typeof probe.captureBlocked !== "boolean" || typeof probe.elevated !== "boolean")
+              throw new Error("The Windows native probe is invalid.")
+          }
+          NODE
+
+      - name: Run required Windows protocol and lifecycle checks
+        id: required_protocol
+        timeout-minutes: 8
+        run: |
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
+          if ($LASTEXITCODE -ne 0) { throw "Required Windows conformance failed." }
+      - name: Run explicitly isolated Windows scenarios
+        if: ${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'baseline' }}
+        timeout-minutes: 5
+        continue-on-error: true
+        env:
+          PRIVILEGED_REQUIRED: "false"
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+        run: |
+          $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-privileged.json"
+          if ($LASTEXITCODE -ne 0) { throw "The isolated Windows scenarios failed or were required but skipped." }
+      - name: Compile the direct Node Windows self-test diagnostic
+        id: direct_node_compile
+        if: ${{ failure() && steps.required_protocol.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          bun --no-env-file --eval 'import path from "node:path"; import { buildNodeSelfTest } from "./scripts/computer-helper-selftest-node.ts"; await buildNodeSelfTest(path.resolve("native/build/selftest-direct-node"));'
+          if ($LASTEXITCODE -ne 0) { throw "The direct Node diagnostic did not compile." }
+      - name: Diagnose the same Windows self-test with a direct Node parent
+        if: ${{ failure() && steps.required_protocol.outcome == 'failure' && steps.direct_node_compile.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          node ./native/build/selftest-direct-node/run.mjs --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-direct-node.json"
+          if ($LASTEXITCODE -ne 0) { throw "The separate direct Node diagnostic failed." }
+      - name: Summarize x64 native diagnostic rows
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          VECTOR_WINDOWS_NATIVE_DIAGNOSTICS="$(bun --no-env-file --eval 'import { WINDOWS_NATIVE_CHECKS, WINDOWS_NATIVE_REASONS, WINDOWS_NATIVE_STAGES, WINDOWS_NATIVE_CODES } from "./scripts/computer-helper-selftest-windows.ts"; process.stdout.write(JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged, reasons: WINDOWS_NATIVE_REASONS, stages: WINDOWS_NATIVE_STAGES, codes: WINDOWS_NATIVE_CODES }))')"
+          export VECTOR_WINDOWS_NATIVE_DIAGNOSTICS
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          const native = JSON.parse(process.env.VECTOR_WINDOWS_NATIVE_DIAGNOSTICS)
+          const checks = new Set(native.checks.map(name => "privileged." + name))
+          const reasons = new Set(native.reasons)
+          const stages = new Set(native.stages)
+          const codes = new Set(native.codes)
+          for (const name of ["computer-win32-core.json", "computer-win32-direct-node.json", "computer-win32-privileged.json"]) {
+            const file = path.join(process.env.RUNNER_TEMP, name)
+            if (!existsSync(file)) continue
+            const report = JSON.parse(readFileSync(file, "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            const summary = "\n" + name + ": " + counts + "\n" + report.checks
+              .filter(check => check.status === "skipped" || check.status === "failed")
+              .map(check => {
+                const diagnostic = name === "computer-win32-privileged.json" && check.status === "failed"
+                  && checks.has(check.name) && reasons.has(check.reason) && stages.has(check.stage) && codes.has(check.nativeCode)
+                  ? " [stage=" + check.stage + ", nativeCode=" + check.nativeCode + "]" : ""
+                return "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + diagnostic + "\n"
+              }).join("")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+            process.stdout.write(summary)
+          }
+          NODE
+      - name: Preserve the bounded x64 diagnostic report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
+          path: ${{ runner.temp }}/computer-win32-core.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+      - name: Preserve the separate direct Node diagnostic report
+        if: ${{ always() && steps.required_protocol.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-direct-node-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
+          path: ${{ runner.temp }}/computer-win32-direct-node.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+      - name: Preserve the optional isolated scenario diagnostic report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
+          path: ${{ runner.temp }}/computer-win32-privileged.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+      - name: Install the pinned Electron runtime for the staged diagnostic
+        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw "The pinned diagnostic Electron installation failed." }
+      - name: Build the source-bound x64 native overlay diagnostic stage
+        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
+          if ($LASTEXITCODE -ne 0) { throw "The x64 native overlay diagnostic stage failed to build." }
+      - name: Run the actual medium-token staged overlay diagnostic
+        id: staged_native
+        if: ${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'baseline' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "0"
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-staged-diagnostic.log"
+          $status = $LASTEXITCODE
+          if ($status -eq 77) {
+            "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          } elseif ($status -ne 0) {
+            throw "The actual medium-token staged overlay diagnostic failed."
+          }
+      - name: Run the movement probe first on its fresh VM (no release evidence)
+        id: staged_move_probe
+        if: ${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'move-probe' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          VECTOR_COMPUTER_SMOKE_MOVE_PROBE: "1"
+        run: |
+          "DIAGNOSTIC ONLY: fresh-VM movement-probe-assisted results never replace the independent unchanged baseline Stop." >> $env:GITHUB_STEP_SUMMARY
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 2>&1 | ForEach-Object { "MOVE-PROBE-ONLY $_" } | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-move-probe-diagnostic.log"
+          $status = $LASTEXITCODE
+          "Movement probe exit code: $status (no release evidence)." >> $env:GITHUB_STEP_SUMMARY
+          if ($status -ne 0) { throw "The separate fresh-VM movement probe did not pass; baseline remains independent." }
+      - name: Observe the actual built helper signature through the hidden Windows observer
+        if: ${{ always() && steps.native_build.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          bun --no-env-file --eval 'import path from "node:path"; import { observeWindowsHelperAuthenticode } from "./scripts/verify-computer-helper-windows.ts"; const actual = await observeWindowsHelperAuthenticode(path.resolve("native/out/win32/x64/vector-computer.exe")); if (actual.status !== "NotSigned" || actual.publisher !== null || actual.thumbprint !== null) throw new Error("The built unsigned helper signature observation is invalid."); console.log("native-signature-observer: NotSigned");'
+          if ($LASTEXITCODE -ne 0) { throw "The actual hidden Windows signature observer failed." }
+      - name: Preserve the bounded staged overlay diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.diagnostic }}
+          path: |
+            ${{ runner.temp }}/computer-win32-staged-diagnostic.log
+            ${{ runner.temp }}/computer-win32-move-probe-diagnostic.log
+            packages/desktop/native/out/overlay-win32/computer-overlay-smoke.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+
+  computer-helper-windows-overlay:
+    needs: validate-dispatch
+    name: Windows Electron overlay/controller diagnostic (no release evidence)
+    if: github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'windows-overlay' && !inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Install the exact pinned Electron runtime
+        timeout-minutes: 5
+        run: |
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw "The pinned Electron installation failed." }
+      - name: Run real Electron overlay properties and controller lifecycle
+        timeout-minutes: 3
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-overlay-diagnostic.log"
+          if ($LASTEXITCODE -ne 0) { throw "The actual Electron overlay properties or controller lifecycle failed." }
+      - name: Preserve the bounded overlay diagnostic report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-win32-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/computer-win32-overlay-diagnostic.log
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+
+  computer-helper-macos-signing:
+    needs: validate-dispatch
+    name: macOS temporary certificate diagnostic (no release evidence)
+    if: github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'macos-signing' && !inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        id: checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Require the pinned Xcode
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          xcodebuild -version
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Verify certificate signing with a temporary trusted CI identity
+        timeout-minutes: 5
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-fixture.sh"
+      - name: Remove any interrupted signing fixture trust and keychain
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-cleanup.sh"
+
+  computer-helper-macos-overlay:
+    needs: validate-dispatch
+    name: macOS Electron overlay/controller diagnostic (no release evidence)
+    if: github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_target == 'macos-overlay' && !inputs.desktop_engine_node && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install the exact pinned Electron runtime
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Diagnose installed and copied Electron signatures without release credit
+        continue-on-error: true
+        timeout-minutes: 4
+        run: bun --no-env-file ./scripts/diagnose-computer-overlay-electron-signature.ts --seal-owned-copy
+      - name: Run real Electron overlay properties and controller lifecycle
+        timeout-minutes: 3
+        run: bun --no-env-file ./scripts/computer-overlay-smoke.ts
+
   unit:
-    if: github.event_name != 'workflow_dispatch' || !inputs.release_evidence
+    needs: validate-dispatch
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
     name: unit (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
@@ -122,6 +599,33 @@ jobs:
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+      # Desktop tests otherwise run only in the release workflow (turbo has no vector-desktop#test task). The
+      # computer-use build contract runs desktop main's computer tests on both unit lanes, so they run here even when
+      # an earlier package failed. Each file gets its own Bun process, as scripts/test.ts does, because Electron and
+      # store mocks survive mock.restore(); desktop main's src/main/computer-*.test.ts files join by their name.
+      # The two native workflow-contract tests also run here on both systems, so a workflow edit that breaks them fails
+      # ordinary CI instead of first failing the release workflow's Linux Test (desktop).
+      # The Windows final-location verifier also runs here, including its real ASAR reader separator regression.
+      # Bun's node:http never reports a client that leaves, so the bridge is also bundled and checked under Node.
+      - name: Run desktop computer-use tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        working-directory: packages/desktop
+        run: |
+          status=0
+          for file in ./scripts/computer-helper-identity.test.ts ./scripts/computer-overlay-workflow.test.ts ./scripts/computer-workflow.test.ts ./scripts/verify-computer-helper-windows.test.ts ./test/computer/*.test.ts ./src/main/computer-*.test.ts ./src/main/config-skew.test.ts ./src/main/ipc-security.test.ts ./src/main/keep-awake.test.ts; do
+            echo "Desktop computer-use test: $file"
+            GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --only-failures "$file" || status=1
+          done
+          echo "Desktop computer-use check: the bundled bridge under Node $(node --version)"
+          bun build ./src/main/computer-bridge.ts --target=node --format=esm --outfile "$RUNNER_TEMP/computer-bridge.mjs" &&
+            node ./test/computer/bridge-node.ts "$RUNNER_TEMP/computer-bridge.mjs" || status=1
+          echo "Desktop computer-use check: helper pipes and process lifetime under Node $(node --version)"
+          bun build ./src/main/computer-helper.ts --target=node --format=esm --define 'import.meta.env.VECTOR_CHANNEL="prod"' --outfile "$RUNNER_TEMP/computer-helper.mjs" &&
+            bun build ./test/computer/fake-helper.ts --target=node --format=esm --outfile "$RUNNER_TEMP/computer-fake-helper.mjs" &&
+            node ./test/computer/helper-node.ts "$RUNNER_TEMP/computer-helper.mjs" "$RUNNER_TEMP/computer-fake-helper.mjs" || status=1
+          exit $status
+
       - name: Check generated client
         if: runner.os == 'Linux'
         working-directory: packages/client
@@ -149,11 +653,23 @@ jobs:
           GITHUB_ACTIONS=false bun test test/release-copy.test.ts test/release-113-docs.test.ts
           test/release-113-multiagent-docs.test.ts test/docs-settings.test.ts test/deployed-schemas.test.ts
 
+      # script/ is not a workspace either, so turbo skips the VectorScope eval tooling's tests: the dataset contract,
+      # the budget ledger, the eval workflow's entry point, the replay drivers and the offline report. Each file runs
+      # in its own Bun process. None of them sends a request or uses a key.
+      - name: Run VectorScope eval script tests
+        if: runner.os == 'Linux'
+        working-directory: packages/script
+        run: |
+          for file in ../../script/vectorscope-eval/*.test.ts; do
+            GITHUB_ACTIONS=false bun test --timeout 30000 "$file" || exit 1
+          done
+
   # The desktop runs the engine's Node bundle in Electron's utility process, while every engine test runs on Bun, so a
   # stray Bun API passes them all and still fails every desktop message ("Bun is not defined", 1.99.99). This boots
   # the bundle under Node and sends one prompt through a Read tool call against a fake model.
   desktop-engine-node:
-    if: github.event_name != 'workflow_dispatch' || !inputs.release_evidence
+    needs: validate-dispatch
+    if: github.event_name != 'workflow_dispatch' || (!inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
     name: desktop engine bundle (node)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -197,7 +713,8 @@ jobs:
         run: node script/smoke-node-bundle.ts
 
   engine-linux:
-    if: github.event_name != 'workflow_dispatch' || !inputs.release_evidence
+    needs: validate-dispatch
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
     name: engine (linux, shard ${{ matrix.shard }}/4)
     strategy:
       fail-fast: false
@@ -248,7 +765,8 @@ jobs:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
 
   engine-windows:
-    if: github.event_name != 'workflow_dispatch' || !inputs.release_evidence
+    needs: validate-dispatch
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
     name: engine (windows, shard ${{ matrix.shard }}/12)
     strategy:
       fail-fast: false
@@ -275,6 +793,7 @@ jobs:
       # The engine suite runs under the strict network guard, so Vector may not download ripgrep for the tests that
       # search files: it has to be installed (engine/test/preload.ts).
       - name: Install ripgrep
+        timeout-minutes: 5
         shell: pwsh
         run: |
           choco install ripgrep -y --no-progress
@@ -312,7 +831,8 @@ jobs:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
 
   e2e:
-    if: github.event_name != 'workflow_dispatch' || !inputs.release_evidence
+    needs: validate-dispatch
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
     name: e2e (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
@@ -367,10 +887,19 @@ jobs:
         run: bunx playwright install chromium
 
       - name: Run app e2e tests
-        run: bun --cwd packages/app test:e2e:local
+        run: bun --cwd packages/app test:e2e
         env:
           CI: true
           # Five browser workers stalled asset loading on both hosted platforms; keep test deadlines intact.
+          PLAYWRIGHT_WORKERS: "1"
+        # On Windows the 304-test, one-worker suite reached test 303 before the 30-minute step cap (run 41263948181).
+        # This step also builds and tests the public viewer after that suite; individual test deadlines stay intact.
+        timeout-minutes: ${{ runner.os == 'Windows' && 45 || 30 }}
+
+      - name: Build and test the public share viewer
+        run: bun --cwd packages/app test:e2e:viewer
+        env:
+          CI: true
           PLAYWRIGHT_WORKERS: "1"
         timeout-minutes: 30
 
@@ -385,9 +914,227 @@ jobs:
             packages/app/e2e/test-results
             packages/app/e2e/playwright-report
 
+  hands-ui:
+    needs: validate-dispatch
+    name: Hands UI (${{ matrix.settings.name }})
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && !inputs.computer_helper && inputs.hands_ui && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: ubuntu-24.04
+          - name: windows
+            host: windows-latest
+    runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Match the ordinary e2e job's Chromium extraction workaround.
+          node-version: "24.15"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Read Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -e 'console.log(require("./package.json").workspaces.catalog["@playwright/test"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+
+      - name: Install Playwright system dependencies
+        if: runner.os == 'Linux'
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Run focused Hands browser tests
+        working-directory: packages/app
+        # The development config enables the scripted desktop fixture; these specs start no native helper.
+        run: bunx playwright test --config playwright.config.ts e2e/regression/hands-*.spec.ts --project=chromium --workers=1
+        env:
+          CI: true
+          PLAYWRIGHT_WORKERS: "1"
+        timeout-minutes: 15
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hands-ui-${{ matrix.settings.name }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/app/e2e/test-results
+            packages/app/e2e/playwright-report
+
+  hands-benchmark:
+    needs: validate-dispatch
+    name: production app benchmark
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && !inputs.computer_helper && inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: true
+      VECTOR_CHANNEL: prod
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+      PLAYWRIGHT_PORT: "4568"
+      PLAYWRIGHT_WORKERS: "1"
+      VECTOR_PERFORMANCE_RUN_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # Match the documented production timeline workload; detailed profiling stays off.
+      TIMELINE_CPU_THROTTLE: "4"
+      TIMELINE_DELTA_COUNT: "40"
+      TIMELINE_HISTORY_TURNS: "80"
+      TIMELINE_EVENT_BATCH: "1"
+      TIMELINE_CPU_PROFILE: "0"
+      FORCE_COLOR: "0"
+    steps:
+      - name: Checkout benchmark commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Keep the same Chromium extraction workaround as the ordinary e2e job.
+          node-version: "24.15"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Install Chromium and system dependencies
+        working-directory: packages/app
+        run: bunx playwright install --with-deps chromium
+
+      - name: Record benchmark provenance
+        working-directory: packages/app
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs")
+          const os = require("node:os")
+          const path = require("node:path")
+          const { execFileSync } = require("node:child_process")
+          const directory = path.join(process.env.RUNNER_TEMP, "hands-app-benchmark")
+          fs.mkdirSync(directory, { recursive: true })
+          fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify({
+            commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+            ref: process.env.GITHUB_REF,
+            runID: process.env.VECTOR_PERFORMANCE_RUN_ID,
+            node: process.version,
+            bun: execFileSync("bun", ["--version"], { encoding: "utf8" }).trim(),
+            playwright: execFileSync("bunx", ["playwright", "--version"], { encoding: "utf8" }).trim(),
+            platform: process.platform,
+            arch: process.arch,
+            cpu: os.cpus()[0]?.model,
+            cpuCount: os.availableParallelism(),
+            memoryBytes: os.totalmem(),
+            workers: 1,
+            repeats: 3,
+            channel: process.env.VECTOR_CHANNEL,
+            timeline: { historyTurns: 80, deltas: 40, cpuThrottle: 4, eventBatch: 1, detailedProfiling: false },
+          }, null, 2) + "\n")
+          NODE
+
+      - name: Measure production navigation and timeline
+        working-directory: packages/app
+        run: |
+          set -euo pipefail
+          export PLAYWRIGHT_HTML_OUTPUT_DIR="$RUNNER_TEMP/hands-app-benchmark/report"
+          # This config builds and serves dist, refuses a reused server, and runs serially. It uses HTTP fixtures;
+          # no live engine or model account is needed. Repeat exactly these cases for the after-change comparison.
+          bunx playwright test \
+            --config e2e/performance/playwright.config.ts \
+            e2e/performance/timeline/first-navigation-benchmark.spec.ts \
+            e2e/performance/timeline/session-timeline-benchmark.spec.ts \
+            --project=chromium --workers=1 --retries=0 --repeat-each=3 \
+            --grep 'performance: first navigation paint|streams assistant text in v2 with review pane closed' \
+            --output "$RUNNER_TEMP/hands-app-benchmark/results" \
+            2>&1 | tee "$RUNNER_TEMP/hands-app-benchmark/run.log"
+
+      - name: Verify production JavaScript excludes desktop test fixtures
+        working-directory: packages/app
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs")
+          const path = require("node:path")
+          const scripts = (directory) => fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+            const file = path.join(directory, entry.name)
+            return entry.isDirectory() ? scripts(file) : entry.isFile() && entry.name.endsWith(".js") ? [file] : []
+          })
+          const files = scripts("dist")
+          if (files.length === 0) throw new Error("Production dist contains no JavaScript to inspect")
+          const markers = ["__vectorE2E", "createFakeComputer", "fake-platform"]
+          const leaked = files.flatMap((file) => {
+            const source = fs.readFileSync(file, "utf8")
+            return markers.filter((marker) => source.includes(marker)).map((marker) => `${file}: ${marker}`)
+          })
+          if (leaked.length) throw new Error(`Desktop test fixtures reached production JavaScript:\n${leaked.join("\n")}`)
+          console.log(`Checked ${files.length} production JavaScript files; no desktop test fixture markers found.`)
+          NODE
+
+      - name: Extract structured measurements
+        if: always()
+        working-directory: packages/app
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs")
+          const path = require("node:path")
+          const directory = path.join(process.env.RUNNER_TEMP, "hands-app-benchmark")
+          const log = path.join(directory, "run.log")
+          if (!fs.existsSync(log)) process.exit(0)
+          const metrics = fs.readFileSync(log, "utf8").split("\n").flatMap((line) => {
+            const match = line.match(/BENCHMARK (\{.*\})/)
+            return match ? [JSON.parse(match[1])] : []
+          })
+          fs.writeFileSync(path.join(directory, "metrics.json"), JSON.stringify(metrics, null, 2) + "\n")
+          NODE
+
+      - name: Preserve benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hands-app-benchmark-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hands-app-benchmark/
+          if-no-files-found: warn
+          retention-days: 30
+
   offline-footprint:
+    needs: validate-dispatch
     name: offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})
-    if: github.event_name == 'workflow_dispatch' && inputs.offline_footprint
+    if: github.event_name == 'workflow_dispatch' && inputs.offline_footprint && !inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark
     strategy:
       fail-fast: false
       matrix:
@@ -458,8 +1205,9 @@ jobs:
           path: ${{ runner.temp }}/vector-request-footprint/
 
   production-benchmark:
+    needs: validate-dispatch
     name: production app benchmark (manual)
-    if: github.event_name == 'workflow_dispatch' && inputs.production_benchmark
+    if: github.event_name == 'workflow_dispatch' && inputs.production_benchmark && !inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.offline_footprint
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -537,8 +1285,9 @@ jobs:
             packages/app/e2e/playwright-report/performance
 
   release-evidence:
+    needs: validate-dispatch
     name: published release engine evidence (manual)
-    if: github.event_name == 'workflow_dispatch' && inputs.release_evidence
+    if: github.event_name == 'workflow_dispatch' && inputs.release_evidence && !inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.production_benchmark && !inputs.offline_footprint
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

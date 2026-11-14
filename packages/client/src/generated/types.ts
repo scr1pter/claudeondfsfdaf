@@ -187,6 +187,24 @@ export type SessionsImportArchiveInput = {
               readonly status: "completed" | "error" | "interrupted"
               readonly input: string
               readonly output: string
+              readonly screenshots?: ReadonlyArray<
+                | { readonly name: string; readonly mediaType: "image/png"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/jpeg"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/webp"; readonly url: string }
+              >
+            }
+          | {
+              readonly type: "tool"
+              readonly name: "computer"
+              readonly callID: string
+              readonly status: "completed"
+              readonly input: string
+              readonly output: string
+              readonly screenshots?: ReadonlyArray<
+                | { readonly name: string; readonly mediaType: "image/png"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/jpeg"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/webp"; readonly url: string }
+              >
             }
           | { readonly type: "attachment"; readonly name: string; readonly mediaType: string }
         >
@@ -213,6 +231,24 @@ export type SessionsImportArchiveInput = {
               readonly status: "completed" | "error" | "interrupted"
               readonly input: string
               readonly output: string
+              readonly screenshots?: ReadonlyArray<
+                | { readonly name: string; readonly mediaType: "image/png"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/jpeg"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/webp"; readonly url: string }
+              >
+            }
+          | {
+              readonly type: "tool"
+              readonly name: "computer"
+              readonly callID: string
+              readonly status: "completed"
+              readonly input: string
+              readonly output: string
+              readonly screenshots?: ReadonlyArray<
+                | { readonly name: string; readonly mediaType: "image/png"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/jpeg"; readonly url: string }
+                | { readonly name: string; readonly mediaType: "image/webp"; readonly url: string }
+              >
             }
           | { readonly type: "attachment"; readonly name: string; readonly mediaType: string }
         >
@@ -285,25 +321,36 @@ export type SessionsShareInput = {
     readonly expiresAt: number
     readonly previewHash?: string
     readonly remember?: boolean
+    readonly includeScreenshots?: boolean
   }["consent"]
   readonly expiresAt: {
     readonly consent: { readonly version: 1; readonly public: true; readonly updates: boolean }
     readonly expiresAt: number
     readonly previewHash?: string
     readonly remember?: boolean
+    readonly includeScreenshots?: boolean
   }["expiresAt"]
   readonly previewHash?: {
     readonly consent: { readonly version: 1; readonly public: true; readonly updates: boolean }
     readonly expiresAt: number
     readonly previewHash?: string
     readonly remember?: boolean
+    readonly includeScreenshots?: boolean
   }["previewHash"]
   readonly remember?: {
     readonly consent: { readonly version: 1; readonly public: true; readonly updates: boolean }
     readonly expiresAt: number
     readonly previewHash?: string
     readonly remember?: boolean
+    readonly includeScreenshots?: boolean
   }["remember"]
+  readonly includeScreenshots?: {
+    readonly consent: { readonly version: 1; readonly public: true; readonly updates: boolean }
+    readonly expiresAt: number
+    readonly previewHash?: string
+    readonly remember?: boolean
+    readonly includeScreenshots?: boolean
+  }["includeScreenshots"]
 }
 
 export type SessionsShareOutput = {
@@ -317,7 +364,10 @@ export type SessionsShareOutput = {
   }
 }["data"]
 
-export type SessionsSharePreviewInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+export type SessionsSharePreviewInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly includeScreenshots?: { readonly includeScreenshots?: "true" | "false" | undefined }["includeScreenshots"]
+}
 
 export type SessionsSharePreviewOutput = {
   readonly data: {
@@ -338,6 +388,24 @@ export type SessionsSharePreviewOutput = {
             readonly status: "completed" | "error" | "interrupted"
             readonly input: string
             readonly output: string
+            readonly screenshots?: ReadonlyArray<
+              | { readonly name: string; readonly mediaType: "image/png"; readonly url: string }
+              | { readonly name: string; readonly mediaType: "image/jpeg"; readonly url: string }
+              | { readonly name: string; readonly mediaType: "image/webp"; readonly url: string }
+            >
+          }
+        | {
+            readonly type: "tool"
+            readonly name: "computer"
+            readonly callID: string
+            readonly status: "completed"
+            readonly input: string
+            readonly output: string
+            readonly screenshots?: ReadonlyArray<
+              | { readonly name: string; readonly mediaType: "image/png"; readonly url: string }
+              | { readonly name: string; readonly mediaType: "image/jpeg"; readonly url: string }
+              | { readonly name: string; readonly mediaType: "image/webp"; readonly url: string }
+            >
           }
         | { readonly type: "attachment"; readonly name: string; readonly mediaType: string }
       >
@@ -3087,6 +3155,8 @@ export type ModelsListOutput = {
       readonly locked?: { readonly plan: string; readonly name: string; readonly previewUntil?: number }
       readonly preview?: { readonly until: number }
       readonly auto?: { readonly floor: string; readonly default: string; readonly ceiling: string }
+      readonly judge?: string
+      readonly review?: ReadonlyArray<"triage" | "confirm" | "panelJudge">
     }
   }>
 }

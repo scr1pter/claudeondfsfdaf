@@ -199,6 +199,36 @@
 .model-plans-coming strong {
   color: #eee5f7;
 }
+.model-plans-founding {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid #c5a4ff30;
+}
+.model-plans-founding h3 {
+  margin: 0;
+}
+.model-plans-founding form {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  margin-top: 10px;
+}
+.model-plans-founding label {
+  display: grid;
+  gap: 4px;
+}
+.model-plans-founding label.model-plans-founding-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.model-plans-founding input[type="text"] {
+  min-width: min(280px, 100%);
+}
+.model-plans-founding a {
+  color: #c9b9ff;
+  text-underline-offset: 3px;
+}
 .model-plans-coming .model-plans-badge {
   margin-left: 6px;
 }

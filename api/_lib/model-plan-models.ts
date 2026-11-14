@@ -12,6 +12,7 @@ import {
 } from "./model-plan-catalog-policy.js"
 import { modelPlansEnabled, requireModelPlans } from "./model-plan-config.js"
 import { ApiError, handleApiError, json, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
+import { CodiumModelSelection } from "../../packages/core/src/codium-model-selection.js"
 
 export const CODIUM_AUTO_ID = "vector/codium-auto"
 // A paused or frozen plan is still the account's: its catalog shows what it would serve once the notice is resolved.
@@ -163,4 +164,95 @@ function planCatalog(
     ...(pairs.length ? { judges: Object.fromEntries(pairs) } : {}),
     review: Object.fromEntries(Object.entries(CODIUM_REVIEW_PAIRS[plan]).filter(([, id]) => usable(id))),
   }
+}
+
+/**
+ * WP A55: the Second opinion judges `plan` can use among the models the gateway serves now (worker → judge, as
+ * `/models` lists them), and each served model's lab, for picking a Done by Morning report's judge from another lab.
+ */
+export async function servedJudges(
+  plan: CodiumPlan.PlanId,
+  fetcher: typeof fetch = fetch,
+  options: ModelPlanCatalogOptions = {},
+) {
+  const catalog = planCatalog(await servedPlanModels(options, fetcher), plan, options)
+  return {
+    judges: (catalog.judges ?? {}) as Readonly<Record<string, string>>,
+    labs: Object.fromEntries(catalog.listed.map((model) => [model.id, model.lab])) as Readonly<
+      Record<string, string | undefined>
+    >,
+  }
+}
+
+/**
+ * WP A35: whether Second opinion can be listed. Every plan that includes it must have at least one judge pair it can
+ * use among the models the gateway serves now (catalog minus `models-off` minus routes without accepted evidence), so
+ * the listing never promises a judge nobody can reach. The store read failing throws, and the listing then shows
+ * nothing.
+ */
+export async function secondOpinionServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.filter((plan) => ENTITLEMENTS[plan.id].secondOpinion).every(
+    (plan) => planCatalog(served, plan.id, options).judges !== undefined,
+  )
+}
+
+/**
+ * WP A35: whether the three-lab review panel can be listed. Every plan's review pair must be served whole: a first
+ * pass, a check and a panel judge, usable on that plan and from three different labs.
+ */
+export async function reviewPanelServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    const ids = [catalog.review.triage, catalog.review.confirm, catalog.review.panelJudge]
+    const labs = ids.map((id) => catalog.listed.find((model) => model.id === id)?.lab)
+    return labs.every(Boolean) && new Set(labs).size === 3
+  })
+}
+
+/** Two independent review labs, without requiring the optional third-lab panel judge. No model is invoked. */
+export async function reviewPairsServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    const pair = [catalog.review.triage, catalog.review.confirm].map((id) =>
+      catalog.listed.find((model) => model.id === id && !model.locked && !model.manualOnly),
+    )
+    const labs = pair.map((model) => model?.lab?.trim())
+    return pair.every(Boolean) && pair[0]?.id !== pair[1]?.id && labs.every(Boolean) && new Set(labs).size === 2
+  })
+}
+
+/**
+ * B03 capacity only: use the client's exact strict-floor selector over qualified per-plan catalogs. Personal consent,
+ * private-input checks and release/listing gates remain independent and cannot be granted by this public probe.
+ */
+export async function brainHelpersServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    return (
+      CodiumModelSelection.brain(
+        { enabled: catalog.models.length > 0, plan: plan.id, models: catalog.models },
+        CODIUM_AUTO_ID,
+      ) !== undefined
+    )
+  })
+}
+
+/** B04 learns from checked outcomes. Auto's usable fallback does not authorize a B03 helper or a model call. */
+export async function autoLearnModelsServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    return (
+      CodiumModelSelection.resolve({
+        autoId: CODIUM_AUTO_ID,
+        catalog: { enabled: catalog.models.length > 0, plan: plan.id, models: catalog.models },
+        tier: "standard",
+        contextTokens: 0,
+      }) !== undefined
+    )
+  })
 }

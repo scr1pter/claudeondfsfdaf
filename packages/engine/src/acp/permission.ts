@@ -8,6 +8,7 @@ import type {
 } from "@agentclientprotocol/sdk"
 import type { Event, VectorClient } from "@vectordevai/sdk/v2"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
+import { Hands } from "@vectordevai/schema/hands"
 import { applyPatch } from "diff"
 import { exists, readText } from "@/util/filesystem"
 import type { ACPSession } from "./session"
@@ -67,9 +68,9 @@ export class Handler {
           toolName: permission.permission,
           input: permission.metadata,
         }),
-        // The same rule every Vector client follows: account, browser-sensitive and computer actions offer no
-        // "always", and the server would answer one as "once" anyway.
-        options: PermissionPolicy.canAlwaysApprove(permission.permission, permission.always)
+        // Only eligible per-app computer approvals can be remembered; sensitive actions and commands after screen
+        // content always need a fresh answer. The server enforces the same rule.
+        options: PermissionPolicy.canAlwaysApprove(permission.permission, permission.always, permission.patterns)
           ? permissionOptions
           : permissionOptions.filter((option) => option.optionId !== "always"),
       })
@@ -157,6 +158,18 @@ async function permissionToolCall(input: {
 function permissionTitle(toolName: string, input: ToolInput) {
   const tool = toolName.toLocaleLowerCase()
   switch (tool) {
+    case PermissionPolicy.COMPUTER_APP:
+      return input.level === "observe" ? `${Hands.NAME}: view an app` : `${Hands.NAME}: use an app`
+
+    case PermissionPolicy.COMPUTER_OBSERVE:
+      return `${Hands.NAME}: view an app`
+
+    case PermissionPolicy.COMPUTER_INTERACT:
+      return `${Hands.NAME}: use an app`
+
+    case PermissionPolicy.COMPUTER_SENSITIVE:
+      return `${Hands.NAME}: confirm a sensitive action`
+
     case "external_directory":
       return stringValue(input.description) ?? stringValue(input.command) ?? stringValue(input.parentDir)
 
@@ -176,6 +189,8 @@ function permissionTitle(toolName: string, input: ToolInput) {
       return editTitle(input)
 
     default:
+      // Only the ids above take Hands' copy. Another tool's `computer_*` id (an MCP server named `computer use` asks
+      // `computer_use_<tool>`) is no Hands ask, so its heading is its id, as for any tool, never its metadata.
       return undefined
   }
 }

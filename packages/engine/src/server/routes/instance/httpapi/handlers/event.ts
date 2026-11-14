@@ -1,3 +1,4 @@
+import { ComputerPrivacy } from "@vectordevai/server/computer-privacy"
 import { Database } from "@vectordevai/core/database/database"
 import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -66,6 +67,8 @@ function isOwnJoin(event: EventV2.Payload, clientID: string) {
 
 export function eventResponse(events: EventV2.Interface, request: HttpServerRequest.HttpServerRequest, self: Presence) {
   return Effect.gen(function* () {
+    const principal = yield* RequestPrincipal
+    const project = yield* ComputerPrivacy.projector
     const database = yield* Database.Service
     const instance = yield* InstanceState.context
     const workspaceID = yield* InstanceState.workspaceID
@@ -150,6 +153,7 @@ export function eventResponse(events: EventV2.Interface, request: HttpServerRequ
         Stream.filterEffect((event) =>
           SessionAudienceHttp.envelope(event, owner).pipe(Effect.provideService(SessionAudience.Service, audience)),
         ),
+        Stream.mapEffect((event) => (principal.kind === "owner" && owner ? Effect.succeed(event) : project(event))),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,

@@ -9,6 +9,7 @@ import release from "../../../desktop/package.json"
 import { DEFAULT_MENTIONS, parseReviewCommand } from "./command"
 import { PAUSED_LABEL } from "./skip"
 import { PublicSession } from "@vectordevai/schema/public-session"
+import { validCron } from "./schedule"
 
 export { WORKFLOW_FILE } from "../github-agents"
 export const CLI_PACKAGE = "@vectordevai/cli"
@@ -450,6 +451,7 @@ function workflowOptions(value: unknown): AgentsWorkflowOptions {
           !/^[A-Za-z0-9_-]{1,64}$(?![\s\S])/.test(schedule.id) ||
           typeof schedule.cron !== "string" ||
           !/^[0-9*,/\-]+(?: [0-9*,/\-]+){4}$(?![\s\S])/.test(schedule.cron) ||
+          !validCron(schedule.cron) ||
           schedule.cron.length > 100 ||
           typeof schedule.prompt !== "string" ||
           schedule.prompt.length > 100_000,
@@ -458,6 +460,12 @@ function workflowOptions(value: unknown): AgentsWorkflowOptions {
       new Set(opts.schedules.map((schedule) => schedule.id)).size !== opts.schedules.length)
   )
     throw new Error("Invalid workflow schedules")
+  if (
+    new TextEncoder().encode(
+      workflowJson(Object.fromEntries((opts.schedules ?? []).map(({ cron, id, prompt }) => [cron, { id, prompt }]))),
+    ).length > 120_000
+  )
+    throw new Error("Workflow schedules exceed the safe environment size limit")
   return { ...opts, publishAuth: opts.publishAuth ?? "github" }
 }
 

@@ -456,10 +456,10 @@ function integrationTests() {
     try {
       f.github.state.enabled = false
       if (!f.policy.allowance.active) throw new Error("fixture allowance")
-      f.policy.allowance.allowanceSeconds = 299
+      f.policy.allowance = { ...f.policy.allowance, allowanceSeconds: 299 }
       expect((await f.mint()).body.error).toMatchObject({ code: "MODEL_PLAN_RUN_LIMIT", limit: "hours" })
-      f.policy.allowance.allowanceSeconds = 144_000
-      f.policy.allowance.limits.atOnce = 1
+      f.policy.allowance = { ...f.policy.allowance, allowanceSeconds: 144_000 }
+      f.policy.allowance = { ...f.policy.allowance, limits: { ...f.policy.allowance.limits, atOnce: 1 } }
       const proof = await f.github.makeToken("mint")
       const body = { purpose: "task", thread: "17", workflowVersion: "3" }
       expect((await f.send("mint", proof, body)).status).toBe(200)
@@ -478,13 +478,13 @@ function integrationTests() {
     try {
       f.github.state.enabled = false
       if (!f.policy.allowance.active) throw new Error("fixture allowance")
-      f.policy.allowance.limits.scheduledPerDay = 0
+      f.policy.allowance = { ...f.policy.allowance, limits: { ...f.policy.allowance.limits, scheduledPerDay: 0 } }
       const body = { thread: "schedule-0a1b2c3d" }
       expect((await f.mint(body, { event_name: "schedule" })).body.error).toMatchObject({
         code: "CODIUM_PERK_REQUIRED",
         perk: "scheduled",
       })
-      f.policy.allowance.limits.scheduledPerDay = 5
+      f.policy.allowance = { ...f.policy.allowance, limits: { ...f.policy.allowance.limits, scheduledPerDay: 5 } }
       for (let index = 0; index < 5; index++) {
         const minted = await f.mint(body, { event_name: "schedule", check_run_id: String(1001 + index) })
         expect(minted.status).toBe(200)

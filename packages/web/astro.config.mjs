@@ -10,6 +10,8 @@ import config from "./config.mjs"
 import { rehypeHeadingIds } from "@astrojs/markdown-remark"
 import rehypeAutolinkHeadings from "rehype-autolink-headings"
 import { spawnSync } from "child_process"
+import { fileURLToPath } from "node:url"
+import { phoneApp } from "./scripts/phone-app.mjs"
 
 // https://astro.build/config
 export default defineConfig({
@@ -43,8 +45,13 @@ export default defineConfig({
   },
   integrations: [
     configSchema(),
-    react({ include: ["**/components/marketing/**/*.tsx"] }),
-    solidJs({ exclude: ["**/components/marketing/**/*.tsx"] }),
+    // WP A38: the phone app, built by packages/app into dist-phone, is published at /phone (remote.vectordev.ai).
+    phoneApp({
+      from: fileURLToPath(new URL("../app/dist-phone/", import.meta.url)),
+      to: fileURLToPath(new URL("./dist/phone/", import.meta.url)),
+    }),
+    react({ include: ["**/components/marketing/**/*.tsx", "**/components/workspaces/**/*.tsx"] }),
+    solidJs({ exclude: ["**/components/marketing/**/*.tsx", "**/components/workspaces/**/*.tsx"] }),
     starlight({
       title: "Vector",
       defaultLocale: "root",

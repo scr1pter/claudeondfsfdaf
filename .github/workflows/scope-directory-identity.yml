@@ -1,0 +1,138 @@
+name: VectorScope repository identity
+
+on:
+  push:
+    branches: [build-scope, build-scope-witness, build-scope-owner, build-scope-joined, v2-scope, build-candidate, release-finish, v2, main]
+    paths:
+      - .github/workflows/scope-directory-identity.yml
+      - packages/core/src/directory-identity.ts
+      - packages/core/src/read-only-git.ts
+      - packages/core/src/review/**
+      - packages/core/src/brain/review-memory.ts
+      - packages/core/test/brain/review-memory-reopen.test.ts
+      - packages/schema/src/review-memory.ts
+      - packages/schema/test/review-memory.test.ts
+      - packages/core/test/directory-identity.test.ts
+      - packages/core/test/read-only-git.test.ts
+      - packages/core/test/fixture/directory-identity.ts
+      - packages/engine/src/review/**
+      - packages/engine/test/review/**
+      - packages/engine/test/server/httpapi-review-memory.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  identity:
+    name: Same-FD identity and review memory (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15"
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile --ignore-scripts
+      - name: Install isolated syscall observer
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y strace
+      - name: Check actual Node and Bun identity, descriptor closure and private mount refusals
+        working-directory: packages/core
+        run: bun test test/directory-identity.test.ts --timeout 60000
+        env:
+          VECTOR_DIRECTORY_IDENTITY_CI: "1"
+          VECTOR_DIRECTORY_IDENTITY_ROOT_CI: "1"
+          VECTOR_READONLY_GIT_INTEGRITY_CI: "1"
+      - name: Check Core types
+        working-directory: packages/core
+        run: bun typecheck
+      - name: Check strict owner action wire contracts
+        working-directory: packages/schema
+        run: bun test test/review-memory.test.ts
+      - name: Check Schema types
+        working-directory: packages/schema
+        run: bun typecheck
+      - name: Check atomic owner reopening and rollback
+        working-directory: packages/core
+        run: bun test test/brain/review-memory-reopen.test.ts --timeout 60000
+      - name: Check read-only Git source leases
+        working-directory: packages/core
+        run: bun test test/read-only-git.test.ts --timeout 60000
+        env:
+          VECTOR_READONLY_GIT_INTEGRITY_CI: "1"
+      - name: Check immutable review source bindings
+        working-directory: packages/core
+        run: bun test test/review/source-binding.test.ts --timeout 60000
+      - name: Check real Main and Brain erasure witnesses
+        working-directory: packages/core
+        run: bun test test/brain/review-witness.test.ts --timeout 60000
+      - name: Check repository review memory storage
+        working-directory: packages/core
+        run: bun test test/brain/review-memory.test.ts --timeout 60000
+      - name: Check older memory erasure compatibility
+        working-directory: packages/core
+        run: bun test test/brain/review-memory-older-builds.test.ts --timeout 60000
+      - name: Check physical namespace migration and clone separation
+        working-directory: packages/core
+        run: bun test test/brain/review-memory-scope.test.ts --timeout 60000
+      - name: Check physical folder identity and replacement refusal
+        working-directory: packages/engine
+        run: bun test test/review/memory-scope.test.ts --timeout 60000
+      - name: Check review-memory source and deletion boundaries
+        working-directory: packages/engine
+        run: bun test test/review/memory-boundary.test.ts --timeout 60000
+      - name: Check inactive exact committed outcome evidence
+        working-directory: packages/engine
+        run: bun test test/review/memory-outcome.test.ts --timeout 60000
+      - name: Check review and session lifecycle
+        working-directory: packages/engine
+        run: bun test test/review/local-run.test.ts --timeout 60000
+      - name: Check owner consent and service lifetime
+        working-directory: packages/engine
+        run: bun test test/review/memory-owner.test.ts --timeout 60000
+      - name: Check registered public owner API inventory
+        working-directory: packages/engine
+        run: bun test test/server/httpapi-public-openapi.test.ts
+      - name: Check actual default runtime controls capability
+        working-directory: packages/engine
+        run: bun test test/server/httpapi-experimental.test.ts -t "combined server advertises owner memory controls"
+      - name: Check owner route authentication
+        working-directory: packages/server
+        run: bun test src/auth.test.ts
+      - name: Check matched-route authorization
+        working-directory: packages/server
+        run: bun test src/middleware/authorization.test.ts
+      - name: Check Server types
+        working-directory: packages/server
+        run: bun typecheck
+      - name: Check generated SDK types
+        working-directory: packages/sdk/js
+        run: bun typecheck
+      - name: Check real HTTP authorization and lost-response recovery
+        working-directory: packages/engine
+        run: bun test test/server/httpapi-review-memory.test.ts --timeout 60000
+      - name: Check exclusive connected workspace ownership
+        working-directory: packages/engine
+        run: bun test test/project/instance-store-exclusive.test.ts --timeout 60000
+      - name: Check ordinary instance lifecycle compatibility
+        working-directory: packages/engine
+        run: bun test test/project/instance.test.ts --timeout 60000
+      - name: Check genuine connected Task providers with the bounded Git helper
+        working-directory: packages/engine
+        run: bun test test/connect/worktree-target.test.ts --timeout 60000
+      - name: Check Engine types
+        working-directory: packages/engine
+        run: bun typecheck

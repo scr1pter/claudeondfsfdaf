@@ -1,6 +1,7 @@
-import { Menu, Notification, Tray, nativeImage } from "electron"
+import { Menu, Notification, Tray, nativeImage, type MenuItemConstructorOptions } from "electron"
 
 import { backgroundModeStatus, type BackgroundWorkState } from "./background-mode"
+import { computerTrayItems, type ComputerTrayCommand, type ComputerTrayState } from "./computer-tray"
 import { write } from "./logging"
 import type { ScheduledAgentRecord } from "./scheduled-agents"
 
@@ -22,6 +23,14 @@ export type TrayDeps = {
   runNext: () => void
   setAllPaused: (paused: boolean) => void
   quit: () => void
+  // Hands: read live like the rest, so the menu shows the run as it is when opened.
+  computer?: () => ComputerTrayState | undefined
+  computerCommand?: (command: ComputerTrayCommand) => void
+  /** Vector Remote (WP A41): the phones paired with this computer, and "Disconnect all phones". */
+  remote?: {
+    read: () => { phones: number; connected: number; watching: boolean }
+    disconnectAll: () => void
+  }
 }
 
 let tray: Tray | undefined
@@ -70,10 +79,22 @@ export async function updateTray() {
   // The menu can be torn down while the preference is being read.
   if (!tray || !deps) return
   const paused = state.armedTasks === 0 && state.pausedTasks > 0
+  const remote = deps.remote?.read()
 
-  tray.setToolTip(`Vector — ${status.reason}`)
+  const computer = computerTrayItems(deps.computer?.())
+  tray.setToolTip(computer?.tooltip ?? `Vector — ${status.reason}`)
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      ...(computer
+        ? [
+            ...computer.items.map((item) => ({
+              label: item.label,
+              enabled: item.enabled,
+              ...(item.command ? { click: () => deps?.computerCommand?.(item.command!) } : {}),
+            })),
+            { type: "separator" as const },
+          ]
+        : []),
       { label: status.reason, enabled: false },
       { type: "separator" },
       { label: "Open Vector", click: () => deps?.openVector() },
@@ -83,10 +104,26 @@ export async function updateTray() {
         enabled: state.armedTasks + state.pausedTasks > 0,
         click: () => deps?.setAllPaused(!paused),
       },
+      ...remoteItems(remote, () => deps?.remote?.disconnectAll()),
       { type: "separator" },
       { label: "Quit Vector completely", click: () => deps?.quit() },
     ]),
   )
+}
+
+/** The tray's Remote lines, shown once a phone is paired: what is connected, and the way to cut every phone off. */
+export function remoteItems(
+  remote: { phones: number; connected: number; watching: boolean } | undefined,
+  disconnectAll: () => void,
+): MenuItemConstructorOptions[] {
+  if (!remote || remote.phones === 0) return []
+  const paired = `${remote.phones} ${remote.phones === 1 ? "phone" : "phones"} paired`
+  const label = remote.watching
+    ? `Remote: ${paired}, a phone is watching`
+    : remote.connected > 0
+      ? `Remote: ${paired}, ${remote.connected} connected`
+      : `Remote: ${paired}`
+  return [{ type: "separator" }, { label, enabled: false }, { label: "Disconnect all phones", click: disconnectAll }]
 }
 
 export function destroyTray() {

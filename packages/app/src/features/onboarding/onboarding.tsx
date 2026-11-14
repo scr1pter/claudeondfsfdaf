@@ -230,7 +230,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
       {
         title: "Settings",
         where: "The gear or your name at the bottom of the sidebar, Settings in its Help menu, or Cmd+, (Ctrl+, on Windows and Linux).",
-        body: "Everything about how Vector runs. Providers is where you connect your own keys for OpenAI, Anthropic, Google, and more, and Models manages which models appear in your pickers. In the desktop app, Account is where you sign in and see your Vector Codium plan and the credits left, and Spend limits caps what Vector may spend.",
+        body: "Everything about how Vector runs. Providers is where you connect your own keys for OpenAI, Anthropic, Google, and more, and Models manages which models appear in your pickers. In the desktop app, Account is where you sign in and see your Vector Codium plan and how much of this month is left, and Spend limits caps what Vector may spend.",
         tip: "Connect a provider with your API key, then switch models per task from the composer's model chip.",
       },
     ],

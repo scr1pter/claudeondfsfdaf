@@ -24,8 +24,10 @@ import { InstallationVersion } from "../installation/version"
 import { ModelV2 } from "../model"
 import { encodedBody } from "./transport"
 import { BrainSchema } from "../brain/schema"
+import { ComputerScreenshots } from "../util/computer-screenshots"
 import { BrainSkill } from "../brain/skill"
 import { SessionAudience } from "../session/audience"
+import { ReviewMemoryFence } from "../review/memory-fence"
 
 const AncillaryUsage = Schema.Array(SessionEvent.AncillaryUsage.data).pipe(optional)
 // A portable local archive can only tighten its audience, including after importing into another database.
@@ -51,7 +53,7 @@ export const Native = Schema.Struct({
 })
 export type Native = typeof Native.Type
 export type Local = Legacy | Native
-export type Selection = { sessionID: SessionSchema.ID; engine?: "v1" | "v2" }
+export type Selection = { sessionID: SessionSchema.ID; engine?: "v1" | "v2"; includeScreenshots?: boolean }
 
 export interface Interface {
   readonly export: (input: Selection) => Effect.Effect<Local, PublicSession.Error>
@@ -68,6 +70,11 @@ const invalid = () =>
   new PublicSession.Error({
     code: "INVALID",
     message: "This file does not contain a supported Vector session archive.",
+  })
+const fenced = () =>
+  new PublicSession.Error({
+    code: "INVALID",
+    message: "The review-memory history is unavailable for archive transfer.",
   })
 const safeName = (value: string | undefined) => path.basename((value ?? "Attachment").replaceAll("\\", "/"))
 const json = (value: unknown) => JSON.stringify(value) ?? ""
@@ -92,7 +99,23 @@ const importedModel = Schema.decodeUnknownSync(ModelV2.Ref)({
   variant: "default",
 })
 
-export function publicArchive(local: Local): PublicSession.Archive {
+function screenshots(files: readonly { name?: string; mime: string; url?: string; uri?: string }[]) {
+  const seen = new Set<string>()
+  return files.flatMap((file) => {
+    const image = Option.getOrUndefined(
+      Schema.decodeUnknownOption(PublicSession.Screenshot)({
+        name: safeName(file.name),
+        mediaType: file.mime,
+        url: file.url ?? file.uri,
+      }),
+    )
+    if (!image || seen.has(image.url)) return []
+    seen.add(image.url)
+    return [image]
+  })
+}
+
+export function publicArchive(local: Local, options: { includeScreenshots?: boolean } = {}): PublicSession.Archive {
   const messages: PublicSession.Message[] =
     "engine" in local
       ? local.messages.flatMap((message): PublicSession.Message[] => {
@@ -122,9 +145,25 @@ export function publicArchive(local: Local): PublicSession.Archive {
                       output:
                         "content" in part.state
                           ? part.state.content
-                              .map((item) => (item.type === "text" ? item.text : "[Tool attachment omitted]"))
+                              .flatMap((item) =>
+                                item.type === "text"
+                                  ? [item.text]
+                                  : part.name === "computer"
+                                    ? []
+                                    : ["[Tool attachment omitted]"],
+                              )
                               .join("\n") + ("error" in part.state ? `\n${part.state.error.message}` : "")
                           : "",
+                      ...(options.includeScreenshots === true &&
+                      part.name === "computer" &&
+                      part.state.status === "completed"
+                        ? {
+                            screenshots: screenshots([
+                              ...(part.state.attachments ?? []),
+                              ...part.state.content.filter((item) => item.type === "file"),
+                            ]),
+                          }
+                        : {}),
                     }
                   })
                 : [
@@ -176,6 +215,19 @@ export function publicArchive(local: Local): PublicSession.Archive {
                       : part.state.status === "error"
                         ? part.state.error
                         : "",
+                  ...(options.includeScreenshots === true &&
+                  part.tool === "computer" &&
+                  part.state.status === "completed"
+                    ? {
+                        screenshots: screenshots(
+                          (part.state.attachments ?? []).map((file) => ({
+                            name: file.filename,
+                            mime: file.mime,
+                            url: file.url,
+                          })),
+                        ),
+                      }
+                    : {}),
                 },
               ]
             if (part.type === "file")
@@ -197,30 +249,34 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const audience = SessionAudience.make({ db })
+    const memory = ReviewMemoryFence.make(db)
     const events = yield* EventV2.Service
     const projects = yield* ProjectV2.Service
     const exportArchive = Effect.fn("SessionArchive.export")(function* (input: Selection) {
+      const sessionID = input.sessionID
+      const engine = input.engine
       // One read transaction gives the audience flags and the rows one snapshot. A fence only adds rows, so content
       // written after it is not in this snapshot either. Encoding and decoding the history, the slow part, run after the
       // snapshot is released, and a read takes no write lock, so an export never holds back another engine's writes.
       const read = yield* db
-        .transaction(() =>
+        .transaction((tx) =>
           Effect.gen(function* () {
             const row = yield* db
               .select()
               .from(SessionTable)
-              .where(eq(SessionTable.id, input.sessionID))
+              .where(eq(SessionTable.id, sessionID))
               .get()
               .pipe(Effect.orDie)
             if (!row) return undefined
-            const privacy = (yield* audience.isPrivate(input.sessionID)) ? ("owner-only" as const) : undefined
-            const guestInput = (yield* audience.hasGuestInput(input.sessionID)) ? (true as const) : undefined
+            if (yield* ReviewMemoryFence.read(tx, row.id).pipe(Effect.mapError(fenced))) return yield* fenced()
+            const privacy = (yield* audience.isPrivate(sessionID)) ? ("owner-only" as const) : undefined
+            const guestInput = (yield* audience.hasGuestInput(sessionID)) ? (true as const) : undefined
             const usage = yield* db
               .select({ data: EventTable.data })
               .from(EventTable)
               .where(
                 and(
-                  eq(EventTable.aggregate_id, input.sessionID),
+                  eq(EventTable.aggregate_id, sessionID),
                   inArray(EventTable.type, SessionEvent.AncillaryUsageStored),
                 ),
               )
@@ -230,23 +286,23 @@ const layer = Layer.effect(
             const native = yield* db
               .select()
               .from(SessionMessageTable)
-              .where(eq(SessionMessageTable.session_id, input.sessionID))
+              .where(eq(SessionMessageTable.session_id, sessionID))
               .orderBy(asc(SessionMessageTable.seq))
               .all()
               .pipe(Effect.orDie)
-            if (input.engine === "v2" || native.length)
+            if (engine === "v2" || native.length)
               return { row, privacy, guestInput, usage, native, messages: [], parts: [] }
             const messages = yield* db
               .select()
               .from(MessageTable)
-              .where(eq(MessageTable.session_id, input.sessionID))
+              .where(eq(MessageTable.session_id, sessionID))
               .orderBy(asc(MessageTable.id))
               .all()
               .pipe(Effect.orDie)
             const parts = yield* db
               .select()
               .from(PartTable)
-              .where(eq(PartTable.session_id, input.sessionID))
+              .where(eq(PartTable.session_id, sessionID))
               .orderBy(asc(PartTable.id))
               .all()
               .pipe(Effect.orDie)
@@ -258,7 +314,7 @@ const layer = Layer.effect(
       const ancillaryUsage = read.usage.length
         ? read.usage.map((event) => Schema.decodeUnknownSync(SessionEvent.AncillaryUsage.data)(event.data))
         : undefined
-      if (input.engine === "v2" || read.native.length)
+      if (engine === "v2" || read.native.length)
         return Native.make({
           privacy: read.privacy,
           guestInput: read.guestInput,
@@ -266,13 +322,18 @@ const layer = Layer.effect(
           version: 1,
           engine: "v2",
           info: fromRow(read.row),
-          messages: read.native.map((message) =>
-            Schema.decodeUnknownSync(SessionMessage.Message)({ ...message.data, id: message.id, type: message.type }),
-          ),
+          messages: read.native.map((message) => {
+            const value = Schema.decodeUnknownSync(SessionMessage.Message)({
+              ...message.data,
+              id: message.id,
+              type: message.type,
+            })
+            return input.includeScreenshots === true ? value : ComputerScreenshots.stripNative(value)
+          }),
           ancillaryUsage,
         })
       const row = read.row
-      return Schema.decodeUnknownSync(Schema.fromJsonString(Legacy))(
+      const local = Schema.decodeUnknownSync(Schema.fromJsonString(Legacy))(
         JSON.stringify({
           privacy: read.privacy,
           guestInput: read.guestInput,
@@ -326,13 +387,16 @@ const layer = Layer.effect(
             },
           },
           messages: read.messages.map((message) => ({
-            info: { ...message.data, id: message.id, sessionID: input.sessionID },
+            info: { ...message.data, id: message.id, sessionID },
             parts: read.parts
               .filter((part) => part.message_id === message.id)
-              .map((part) => ({ ...part.data, id: part.id, messageID: message.id, sessionID: input.sessionID })),
+              .map((part) => ({ ...part.data, id: part.id, messageID: message.id, sessionID })),
           })),
         }),
       )
+      return input.includeScreenshots === true
+        ? local
+        : { ...local, messages: ComputerScreenshots.stripHistory(local.messages) }
     })
 
     const importArchive = Effect.fn("SessionArchive.import")(function* (input: {
@@ -345,6 +409,11 @@ const layer = Layer.effect(
       )
       const local = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Union([Native, Legacy]))(input.archive))
       if (!archive && !local) return yield* invalid()
+      // Capture the source string once. Serialized display metadata can neither
+      // remove this local history edge nor replace it after asynchronous setup.
+      const localSource = local?.info.id
+      const forkOf = localSource && (yield* audience.knows(localSource)) ? localSource : undefined
+      if (forkOf && (yield* memory.requiresLease(forkOf).pipe(Effect.mapError(fenced)))) return yield* fenced()
       if (
         local?.ancillaryUsage &&
         new Set(local.ancillaryUsage.map((usage) => usage.usageID)).size !== local.ancillaryUsage.length
@@ -596,7 +665,6 @@ const layer = Layer.effect(
       // Local archives preserve historical spend; public transcripts and forks carry no ancillary billing records.
       for (const usage of local?.ancillaryUsage ?? []) append(SessionEvent.AncillaryUsage, { ...usage, sessionID })
       // Local source identity is restriction-only provenance; never an imported filesystem location.
-      const forkOf = local && (yield* audience.knows(local.info.id)) ? local.info.id : undefined
       const provenance = Effect.gen(function* () {
         // Public transcripts have no authenticated local provenance. Importing them must never erase guest history.
         yield* audience.register({ sessionID, forkOf, actor: archive || local?.guestInput ? "guest" : "owner" })
@@ -612,14 +680,20 @@ const layer = Layer.effect(
         ),
       )
       yield* provenance
+      // A mark racing the earlier source read still reaches the newly recorded
+      // fork edge. Refuse before copying when it is already observable here.
+      if (yield* memory.requiresLease(sessionID).pipe(Effect.mapError(fenced))) return yield* fenced()
       yield* events.importAll(sequence)
+      // Keep any partial import's durable lineage; never declassify it to make
+      // a raced transfer appear successful.
+      if (yield* memory.requiresLease(sessionID).pipe(Effect.mapError(fenced))) return yield* fenced()
       return { sessionID, engine: source.engine }
     })
     return Service.of({
       export: exportArchive,
       preview: (input) =>
         exportArchive(input).pipe(
-          Effect.flatMap((value) => Effect.try({ try: () => publicArchive(value), catch: invalid })),
+          Effect.flatMap((value) => Effect.try({ try: () => publicArchive(value, input), catch: invalid })),
         ),
       import: importArchive,
     })

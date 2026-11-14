@@ -1,0 +1,168 @@
+name: Candidate compatibility
+
+on:
+  push:
+    branches: [build-candidate]
+    paths:
+      - .github/workflows/candidate-compat.yml
+      - packages/engine/test/session/structured-output-thinking.test.ts
+      - packages/engine/test/session/llm-native-recorded.test.ts
+      - packages/engine/test/review/memory-boundary.test.ts
+      - packages/engine/test/review/memory-owner.test.ts
+      - packages/engine/test/review/run.test.ts
+      - packages/engine/test/compliance/egress-inventory.test.ts
+      - packages/core/src/review/model-evidence.ts
+      - packages/core/test/brain/database.test.ts
+      - packages/core/test/brain/migration-knowledge.test.ts
+      - packages/core/test/brain/migration-learned.test.ts
+      - packages/core/test/model-plans.test.ts
+      - packages/core/test/review/model-evidence.test.ts
+      - packages/core/test/session-runner.test.ts
+      - packages/core/test/session-runner-recorded.test.ts
+      - packages/core/test/local-mode/v2-model-calls.test.ts
+      - packages/core/test/session/research-v2.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CI: "true"
+  RECORD: "false"
+  VECTOR_RECORDED_SCENARIO: ""
+  RECORDED_PROVIDER: ""
+
+jobs:
+  fixtures:
+    name: Compatibility (${{ matrix.host }})
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Install ripgrep
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ripgrep
+          fi
+          rg --version
+
+      - name: Install ripgrep (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          choco install ripgrep -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Installing ripgrep failed." }
+          # Use the native executable rather than Chocolatey's shim in long trusted paths.
+          $tools = Join-Path $env:ChocolateyInstall 'lib\ripgrep\tools'
+          $native = @(Get-ChildItem -LiteralPath $tools -Filter rg.exe -File -Recurse)
+          if ($native.Count -ne 1) { throw "Expected one native ripgrep executable in $tools." }
+          & ($native[0].FullName) --version
+          if ($LASTEXITCODE -ne 0) { throw "The native ripgrep executable failed." }
+          $native[0].DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure disposable Git fixtures
+        run: |
+          git config --global user.email "bot@vectordev.ai"
+          git config --global user.name "Vector"
+
+      - name: Build Engine test dependencies
+        run: GITHUB_ACTIONS=false bun turbo run build --filter='@vectordevai/engine^...' --log-order=stream
+
+      - name: Check direct structured-output fixtures
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/session/structured-output-thinking.test.ts
+
+      - name: Check recorded native fixtures without provider access
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/session/llm-native-recorded.test.ts
+
+      - name: Check platform-specific review-memory admission
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/memory-boundary.test.ts
+
+      - name: Check owner controls with the real supported identity adapter
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/memory-owner.test.ts
+
+      - name: Check explicit outbound-address inventory
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/compliance/egress-inventory.test.ts
+
+      - name: Check actual review admission on supported and unsupported hosts
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/run.test.ts
+
+      - name: Check Brain migration inventory
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/brain/database.test.ts
+
+      - name: Check knowledge migration data and schema retention
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/brain/migration-knowledge.test.ts
+
+      - name: Check learned-skill migration retention
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/brain/migration-learned.test.ts
+
+      - name: Check controlled catalog refresh and cached listing
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/model-plans.test.ts
+
+      - name: Check review pipeline source attestation
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/review/model-evidence.test.ts
+
+      - name: Check actual audience registration in Core runner fixtures
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/session-runner.test.ts
+
+      - name: Check recorded Core runner without provider access
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/session-runner-recorded.test.ts
+
+      - name: Check local-only V2 model calls
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/local-mode/v2-model-calls.test.ts
+
+      - name: Check V2 research with local fake tools
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/session/research-v2.test.ts
+
+      - name: Check Core types
+        working-directory: packages/core
+        run: bun typecheck
+
+      - name: Check Engine types
+        working-directory: packages/engine
+        run: bun typecheck

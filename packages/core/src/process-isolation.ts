@@ -16,6 +16,14 @@ export const ENGINE_PRIVATE_DIRECTORIES = Object.freeze([
   `${ENGINE_HOME}/tmp/vector-agent`,
 ])
 const ENGINE_CONTAINERS = ["/mnt/vector-agent-sandbox", "/var/lib/vector-agent-sandbox", "/home/vector-agent-sandbox"]
+/**
+ * Build-time selection of the bubblewrap tool floor: each tool in a fresh user, PID, IPC and UTS namespace with its own
+ * proc, and the engine under an empty proc. This build holds it off. GitHub's ubuntu-24.04 image refuses an unconfined,
+ * unprivileged bwrap its user namespace, and a tool's nested bwrap cannot start under the engine's empty proc, so the
+ * floor cannot run on a hosted runner as built (deviations, "V16 bubblewrap floor held"). Native isolation replaces it
+ * before any hosted activation. There is no runtime, environment or configuration switch, and nothing lowers it.
+ */
+export const FLOOR: boolean = false
 let enabled = false
 const externalCode = new WeakSet<object>()
 const guardedExternalCode = new WeakSet<object>()
@@ -25,6 +33,10 @@ export function requireIsolation() {
   enabled = true
 }
 
+/**
+ * Whether this process runs a hosted GitHub agent. The kernel path guard and the native loader refusal then apply to
+ * every tool, whether or not the build has the bubblewrap floor.
+ */
 export function required() {
   return enabled
 }
@@ -291,16 +303,27 @@ export function argumentsForTool(file: string, args: readonly string[], cwd: str
   ]
 }
 
-export function launch(
+type LaunchOptions = { cwd?: string; shell?: boolean | string; env?: NodeJS.ProcessEnv }
+
+export function launch(file: string, args: readonly string[], options: LaunchOptions = {}) {
+  return decide(file, args, options, { guarded: required(), floor: FLOOR })
+}
+
+/** The launch decision for an explicit hosted guard and floor; `launch` passes this process's own. */
+export function decide(
   file: string,
   args: readonly string[],
-  options: { cwd?: string; shell?: boolean | string; env?: NodeJS.ProcessEnv } = {},
+  options: LaunchOptions,
+  boundary: { guarded: boolean; floor: boolean },
 ) {
   assertNativeCompartment()
-  if (!required()) return { file, args: [...args], shell: options.shell }
-  // Native CI cannot let an unmigrated adapter choose the legacy wrapper. Only commandPlan may select native.
+  if (!boundary.guarded) return { file, args: [...args], shell: options.shell }
+  // Native builds may only launch through a typed commandPlan with its single cancellation owner.
   if (LinuxIsolationBuild.enabled) throw new LinuxIsolation.Unavailable()
   assertLoaderEnvironment(options.env ?? process.env)
+  // Hosted agents run on Linux only. Refusing elsewhere keeps every launcher, with or without the floor, in one rule.
+  if (process.platform !== "linux") throw new Error(REFUSAL)
+  if (!boundary.floor) return { file, args: [...args], shell: options.shell }
   assertBinary()
   const executable = typeof options.shell === "string" ? options.shell : options.shell ? "/bin/sh" : file
   const argv = options.shell ? ["-c", [file, ...args].join(" ")] : args

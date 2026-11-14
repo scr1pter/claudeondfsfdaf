@@ -115,6 +115,18 @@ describe("Settings > Memory > Workflow insights", () => {
     expect(armRow(arm({ costUsd: undefined })).cost).toBe("unknown")
   })
 
+  test("shows Codium without quantities and keeps the known or unknown own share of mixed work", () => {
+    expect(armRow(arm({ codium: "only", costUsd: undefined, tokens: 987654 })).cost).toBe("Codium")
+    expect(armRow(arm({ codium: "only", costUsd: 0 })).cost).toBe("Codium")
+    expect(armRow(arm({ codium: "mixed", tokens: 987654 })).cost).toBe("$0.41 + Codium")
+    expect(armRow(arm({ codium: "mixed", costUsd: undefined })).cost).toBe("unknown + Codium")
+    expect(armRow(arm({ codium: "mixed", ownUnpriced: true })).cost).toBe("$0.41 + unknown + Codium")
+    expect(armRow(arm({ codium: "mixed", ownUnpriced: true, costUsd: undefined })).cost).toBe("unknown + Codium")
+    // A retained zero is a measured average from fully priced runs; free and OAuth runs have no costUsd.
+    expect(cost({ costUsd: 0, codium: "mixed" })).toBe("$0.00 + Codium")
+    expect(armRow(arm({ arm: { ...arm().arm, providerID: "vector-plan" }, tokens: 987654 })).cost).toBe("Codium")
+  })
+
   test("covers the sizes Vector learns for, never Chat", () => {
     expect(sized([{ tier: "chat" }, { tier: "light" }, { tier: "thorough" }]).map((item) => item.tier)).toEqual([
       "light",

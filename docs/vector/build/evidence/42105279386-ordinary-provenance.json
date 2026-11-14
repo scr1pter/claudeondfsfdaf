@@ -1,0 +1,382 @@
+{
+  "run": 42105279386,
+  "head": "e6b9794986142b1cfafc3ff12f20f1b2d11561ea",
+  "workflowStatus": "completed",
+  "workflowConclusion": "failure",
+  "latestRunAttempt": 2,
+  "ordinary": {
+    "jobs": 15,
+    "passed": 15,
+    "failed": 0,
+    "active": 0,
+    "retainedInitialExecutions": 14,
+    "executedJobRetries": 1
+  },
+  "jobs": [
+    {
+      "name": "unit (windows)",
+      "initial": {
+        "job": 127518347216,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T20:52:50Z"
+      },
+      "latest": {
+        "job": 127534380171,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T20:52:50Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "unit (linux)",
+      "initial": {
+        "job": 127518347520,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:46:22Z"
+      },
+      "latest": {
+        "job": 127534390938,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:46:22Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (windows, shard 4/6)",
+      "initial": {
+        "job": 127518347542,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T20:54:34Z"
+      },
+      "latest": {
+        "job": 127534385367,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T20:54:34Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "desktop engine bundle (node)",
+      "initial": {
+        "job": 127518347546,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:39:34Z"
+      },
+      "latest": {
+        "job": 127534416290,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:39:34Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "e2e (linux)",
+      "initial": {
+        "job": 127518347673,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:56:34Z"
+      },
+      "latest": {
+        "job": 127534373740,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:56:34Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (windows, shard 2/6)",
+      "initial": {
+        "job": 127518347684,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:56:22Z"
+      },
+      "latest": {
+        "job": 127534416842,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:56:22Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "e2e (windows)",
+      "initial": {
+        "job": 127518347716,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T21:04:19Z"
+      },
+      "latest": {
+        "job": 127534411965,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T21:04:19Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (linux, shard 2/4)",
+      "initial": {
+        "job": 127518347748,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T20:48:36Z"
+      },
+      "latest": {
+        "job": 127534326843,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T20:48:36Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (windows, shard 6/6)",
+      "initial": {
+        "job": 127518347776,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:58:13Z"
+      },
+      "latest": {
+        "job": 127534327895,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:58:13Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (windows, shard 3/6)",
+      "initial": {
+        "job": 127518347784,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:52:10Z"
+      },
+      "latest": {
+        "job": 127534327959,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:52:10Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (windows, shard 1/6)",
+      "initial": {
+        "job": 127518347808,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T21:01:55Z"
+      },
+      "latest": {
+        "job": 127534381709,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:39Z",
+        "completedAt": "2026-11-05T21:01:55Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (linux, shard 4/4)",
+      "initial": {
+        "job": 127518347870,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:46:36Z"
+      },
+      "latest": {
+        "job": 127534327319,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:46:36Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (linux, shard 3/4)",
+      "initial": {
+        "job": 127518347908,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:47:05Z"
+      },
+      "latest": {
+        "job": 127534400744,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:47:05Z"
+      },
+      "retainedInitialExecution": true
+    },
+    {
+      "name": "engine (windows, shard 5/6)",
+      "initial": {
+        "job": 127518348020,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "failure",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:56:53Z"
+      },
+      "latest": {
+        "job": 127534325886,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T21:08:31Z",
+        "completedAt": "2026-11-05T21:29:36Z"
+      },
+      "retainedInitialExecution": false
+    },
+    {
+      "name": "engine (linux, shard 1/4)",
+      "initial": {
+        "job": 127518348060,
+        "runAttempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:46:45Z"
+      },
+      "latest": {
+        "job": 127534380658,
+        "runAttempt": 2,
+        "status": "completed",
+        "conclusion": "success",
+        "startedAt": "2026-11-05T20:38:40Z",
+        "completedAt": "2026-11-05T20:46:45Z"
+      },
+      "retainedInitialExecution": true
+    }
+  ],
+  "apiRetention": {
+    "verifiedAttempts": [1, 2],
+    "latestJobRowIdsDifferFromInitial": true,
+    "retainedRowsHaveExactInitialStartAndCompletionTimes": true,
+    "scope": "GitHub exposes new job row IDs in attempt 2 for the fourteen retained successes. Their start and completion timestamps are identical to attempt 1; only Windows engine shard 5/6 executed again."
+  },
+  "controlledRetry": {
+    "executedCount": 1,
+    "sameSource": true,
+    "source": "e6b9794986142b1cfafc3ff12f20f1b2d11561ea",
+    "sourceOrDeadlineChanged": false,
+    "initial": {
+      "job": 127518348020,
+      "runAttempt": 1,
+      "conclusion": "failure",
+      "counts": {
+        "passed": 714,
+        "skipped": 8,
+        "failed": 1,
+        "tests": 723,
+        "files": 77
+      },
+      "elapsedSeconds": 775.57,
+      "failedTest": {
+        "file": "packages/engine/test/cli/github.review.test.ts",
+        "name": "vector github review against a fake GitHub > 10. a push that merges main: the review's focus leaves main's changes out",
+        "deadlineMs": 60000,
+        "elapsedMs": 60002.98,
+        "outcome": "timeout"
+      },
+      "cause": "unproven"
+    },
+    "retry": {
+      "job": 127534325886,
+      "runAttempt": 2,
+      "conclusion": "success",
+      "counts": {
+        "passed": 715,
+        "skipped": 8,
+        "failed": 0,
+        "tests": 723,
+        "files": 77
+      },
+      "elapsedSeconds": 1015.53,
+      "previouslyTimedOutTest": {
+        "status": "passed",
+        "elapsedMs": 5519.93,
+        "loggedAt": "2026-11-05T21:15:56.8861566Z"
+      },
+      "additionalRetryExecuted": false
+    },
+    "interpretation": "The same-source retry passed without changing the test or its deadline. The initial timeout cause remains unproven."
+  },
+  "evidence": {
+    "apiEndpoints": [
+      "actions/runs/42105279386",
+      "actions/runs/42105279386/attempts/1/jobs?per_page=100",
+      "actions/runs/42105279386/attempts/2/jobs?per_page=100"
+    ],
+    "verifiedLogJobs": [127518348020, 127534325886],
+    "rawLogsSaved": false
+  },
+  "scope": "Ordinary JavaScript, Node bundle and browser regression evidence on the exact recorded source. All fifteen ordinary jobs are green after one executed same-source Windows engine shard retry. The overall workflow still concluded failure in native validation; this record grants no native, packaged artifact, signing, manual OS or release approval.",
+  "nativePassCredit": false,
+  "releaseReady": false
+}

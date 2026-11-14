@@ -8,7 +8,7 @@ export const CONTROL = "/usr/libexec/vector-native-shell-control"
 export const TEMP = "/home/runner/work/_temp"
 export const WORKSPACE = "/home/runner/work/vector-native-shell-checkout"
 export const OUTPUT = `${TEMP}/native-shell-build`
-export const READER_SHA = "ea2b75c02ca96de84b8628bb058b152afa866327f926049df7fa24e5ff9cc05f"
+export const READER_SHA = "c8283da6fea8a33adb803d7004f0b3508535a27ebbf96912e4af90c2f3dcdba8"
 export const CATALOG_SHA = "784309673addec6790370607fa73cdeb6d7cede19a2406b7c39d20de2183aaf3"
 export const ACTIONS = Object.freeze({
   node: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",

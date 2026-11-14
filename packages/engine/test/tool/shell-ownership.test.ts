@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
-import { Cause, Deferred, Effect, Exit, ManagedRuntime } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Database } from "@vectordevai/core/database/database"
@@ -11,6 +11,9 @@ import { FSUtil } from "@vectordevai/core/fs-util"
 import { Shell } from "@vectordevai/core/shell"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
+import { ComputerSession } from "@/computer/session"
+import { Session } from "@/session/session"
+import { ProjectV2 } from "@vectordevai/core/project"
 import { InstanceState } from "@/effect/instance-state"
 import { Plugin } from "@/plugin"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -30,12 +33,35 @@ const it = testEffect(
     LayerNode.group([
       Agent.node,
       Config.node,
+      ComputerSession.node,
+      Session.node,
       CrossSpawnSpawner.node,
       FSUtil.node,
       Plugin.node,
       RuntimeFlags.node,
       Truncate.node,
     ]),
+    [
+      [
+        Session.node,
+        Layer.mock(Session.Service, {
+          // Ownership fixtures use stable root/helper IDs rather than persisted model sessions. Reflect that same family
+          // for the computer-use guard; its actual history is empty, so no screen observation is invented.
+          get: (id) =>
+            Effect.succeed({
+              id,
+              ...(id === base.sessionID ? {} : { parentID: base.sessionID }),
+              slug: "shell-ownership-test",
+              projectID: ProjectV2.ID.make("project_shell_ownership"),
+              directory: "/shell-ownership-test",
+              title: "Shell ownership test",
+              version: "test",
+              time: { created: 1, updated: 1 },
+            }),
+          messages: () => Effect.succeed([]),
+        }),
+      ],
+    ],
   ),
 )
 

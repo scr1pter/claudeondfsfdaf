@@ -35,12 +35,12 @@ export type ModelPlanConfig = {
   models?: ModelPlanModel[]
   listed?: PerkId[]
 }
-/** Purchased credits pool every top-up ever bought, so the server answers their state rather than a share of them. */
-export type PurchasedState = "available" | "low" | "used"
+/** The state of an older server's pooled one-time credits: Codium sells monthly plans only, so it never sends one (H7). */
+export type LegacyCreditState = "available" | "low" | "used"
 
 /**
  * The signed-in account's own balances, as /api/model-plans/status answers: the share of this month's credits left,
- * from 0 to 1, the purchased credits' state and flags the server works out. Credit amounts never leave the server.
+ * from 0 to 1, and flags the server works out. Credit amounts never leave the server.
  */
 export type ModelPlanStatus = {
   active: boolean
@@ -73,7 +73,9 @@ export type ModelPlanStatus = {
     remote?: { computers: number; limit: number }
   }
   velocity?: "coming"
-  purchased?: { bought: boolean; state?: PurchasedState }
+  /** A founding member's number (WP A31); dropped when malformed. */
+  founding?: { number: number }
+  purchased?: { bought: boolean; state?: LegacyCreditState }
   empty?: boolean
   low?: boolean
 }
@@ -107,8 +109,9 @@ export function readModelPlanConfig(value: unknown): ModelPlanConfig {
     }
     return { ...read, caps }
   })
-  const topups = Array.isArray(value.topups) ? value.topups.map(readPlan) : undefined
-  const ids = [...plans, ...(topups ?? [])].map((plan) => plan.id)
+  // An older server's one-time packs are still checked, so a malformed answer fails, and passed on unchanged.
+  const packs = Array.isArray(value.topups) ? value.topups.map(readPlan) : undefined
+  const ids = [...plans, ...(packs ?? [])].map((plan) => plan.id)
   if (new Set(ids).size !== ids.length) throw new Error("Vector could not load model plans. Try again.")
   const models = Array.isArray(value.models)
     ? value.models.map((model: unknown): ModelPlanModel => {
@@ -156,7 +159,7 @@ export function readModelPlanConfig(value: unknown): ModelPlanConfig {
     currency: value.currency,
     interval: value.interval,
     plans,
-    ...(topups === undefined ? {} : { topups }),
+    ...(packs === undefined ? {} : { topups: packs }),
     ...(typeof value.product === "string" ? { product: value.product } : {}),
     ...(models === undefined ? {} : { models }),
     ...(value.listed === undefined ? {} : { listed }),
@@ -171,7 +174,7 @@ export function readModelPlanStatus(value: unknown): ModelPlanStatus {
   )
     throw statusError()
   const plan = value.plan === undefined ? undefined : readStatusPlan(value.plan)
-  const purchased = value.purchased === undefined ? undefined : readPurchased(value.purchased)
+  const legacy = value.purchased === undefined ? undefined : readLegacyCredits(value.purchased)
   const requested = value.listed
   const listed = Array.isArray(requested) ? PERK_IDS.filter((id) => requested.includes(id)) : undefined
   const expected = plan && CodiumPlan.isPlanId(plan.id) ? publicEntitlements(plan.id, new Set(listed)) : {}
@@ -190,13 +193,16 @@ export function readModelPlanStatus(value: unknown): ModelPlanStatus {
     ...(typeof value.customer === "boolean" ? { customer: value.customer } : {}),
     ...(typeof value.access === "boolean" ? { access: value.access } : {}),
     ...(plan ? { plan } : {}),
-    ...(purchased ? { purchased } : {}),
+    ...(legacy ? { purchased: legacy } : {}),
     ...(typeof value.empty === "boolean" ? { empty: value.empty } : {}),
     ...(typeof value.low === "boolean" ? { low: value.low } : {}),
     ...(listed === undefined ? {} : { listed }),
     ...(entitlements === undefined ? {} : { entitlements }),
     ...(meters === undefined ? {} : { meters }),
     ...(value.velocity === "coming" && plan && CodiumPlan.rank(plan.id) >= 3 ? { velocity: "coming" as const } : {}),
+    ...(plan && record(value.founding) && positiveInteger(value.founding.number)
+      ? { founding: { number: value.founding.number } }
+      : {}),
   }
 }
 
@@ -221,12 +227,8 @@ export function modelPlanPurchasable(config: ModelPlanConfig, plan: ModelPlan, s
   return config.enabled && plan.available && status?.active === false
 }
 
-export function modelTopupPurchasable(config: ModelPlanConfig, pack: ModelPlan, status: ModelPlanStatus | undefined) {
-  return config.enabled && pack.available && status !== undefined
-}
-
 /** Only navigate to the Stripe product requested; never trust an arbitrary API redirect. */
-export function modelPlanRedirect(value: unknown, action: "checkout" | "portal" | "topup") {
+export function modelPlanRedirect(value: unknown, action: "checkout" | "portal") {
   if (!record(value) || typeof value.url !== "string" || !URL.canParse(value.url))
     throw new Error("Vector could not open billing. Try again.")
   const url = new URL(value.url)
@@ -358,17 +360,14 @@ function readStatusMeters(value: unknown, listed: ReadonlySet<PerkId>): ModelPla
   return Object.keys(meters).length ? meters : undefined
 }
 
-function readPurchased(purchased: unknown) {
-  if (
-    !record(purchased) ||
-    typeof purchased.bought !== "boolean" ||
-    (purchased.state !== undefined && !purchasedState(purchased.state))
-  )
+/** An older server's pooled one-time credits: whether any were bought and their state, never a share (H7). */
+function readLegacyCredits(value: unknown) {
+  if (!record(value) || typeof value.bought !== "boolean" || (value.state !== undefined && !legacyState(value.state)))
     throw statusError()
-  return { bought: purchased.bought, ...(purchasedState(purchased.state) ? { state: purchased.state } : {}) }
+  return { bought: value.bought, ...(legacyState(value.state) ? { state: value.state } : {}) }
 }
 
-function purchasedState(value: unknown): value is PurchasedState {
+function legacyState(value: unknown): value is LegacyCreditState {
   return value === "available" || value === "low" || value === "used"
 }
 

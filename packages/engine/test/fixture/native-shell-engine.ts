@@ -131,6 +131,8 @@ async function main() {
     const { InstanceStore } = await import("../../src/project/instance-store")
     const { InstanceBootstrap } = await import("../../src/project/bootstrap-service")
     const { ShellTool } = await import("../../src/tool/shell")
+    const { ComputerSession } = await import("../../src/computer/session")
+    const { Session } = await import("../../src/session/session")
     const { ChildProcess, ChildProcessSpawner } = await import("effect/unstable/process")
     const { SessionID, MessageID } = await import("../../src/session/schema")
     const layer = LayerNode.compile(
@@ -143,6 +145,8 @@ async function main() {
         Agent.node,
         RuntimeFlags.node,
         InstanceStore.node,
+        ComputerSession.node,
+        Session.node,
       ]),
       [[InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })]],
     )

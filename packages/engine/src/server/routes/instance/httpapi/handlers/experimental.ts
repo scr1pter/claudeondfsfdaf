@@ -1,6 +1,11 @@
 import { Agent } from "@/agent/agent"
+import { BackgroundJob } from "@/background/job"
+import { ComputerAvailability } from "@/computer/availability"
 import { Permission } from "@/permission"
 import { WorkflowOwner } from "@/orchestration/owner"
+import { PlaybookClient } from "@/orchestration/playbooks"
+import { HostedFollow } from "@/hosted/follow"
+import { CloudBrain } from "@/brain/run-bundle"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MCP } from "@/mcp"
@@ -36,6 +41,7 @@ import {
   WorktreeApiError,
   TaskApiError,
   WorkflowApiError,
+  AccountWorkApiError,
   TaskListQuery,
   TaskMessageInput,
   TaskResumeInput,
@@ -91,8 +97,12 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const worktreeSvc = yield* Worktree.Service
     const sessions = yield* Session.Service
     const flags = yield* RuntimeFlags.Service
+    const computer = yield* ComputerAvailability.Service
     const tasks = yield* TaskManager.Service
     const workflow = yield* Effect.serviceOption(WorkflowOwner.Service)
+    const playbooks = yield* Effect.serviceOption(PlaybookClient.Service)
+    const hosted = yield* Effect.serviceOption(HostedFollow.Service)
+    const cloudBrain = yield* Effect.serviceOption(CloudBrain.Service)
     const desktop = yield* DesktopTasks.Service
     const prompts = yield* SessionPrompt.Service
     // The server provides it to every handler; a test that builds these handlers alone may leave it out.
@@ -321,6 +331,11 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       if (!(yield* RequestOwner.owner))
         return yield* new ForbiddenError({ message: "Only the server owner can validate or start workflows." })
     })
+    const accountOwner = Effect.gen(function* () {
+      if (!(yield* RequestOwner.owner)) return yield* new ForbiddenError({ message: "Only the server owner can manage account work." })
+    })
+    const accountError = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(Effect.mapError((error) => new AccountWorkApiError({ message: error.message })))
     const workflowError = <A, R>(effect: Effect.Effect<A, WorkflowOwner.Error, R>) =>
       effect.pipe(
         Effect.mapError(
@@ -337,6 +352,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       const agent = yield* agents.defaultInfo()
       const disabled = Permission.disabled(["task", "workflow"], agent.permission)
       return {
+        computer: yield* computer.capabilities(),
         workflows: flags.backgroundSubagents && !disabled.has("task") && !disabled.has("workflow"),
         backgroundSubagents: flags.backgroundSubagents,
         subagentLimits: true,
@@ -347,6 +363,11 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         taskAttention: true,
         taskIsolation: true,
         backgroundShells: true,
+        vectorscopeSettings: true,
+        vectorscopeRuns: true,
+        // Owner data controls only; this does not advertise automatic review-context consumption.
+        vectorscopeReviewMemoryControls: true,
+        connections: flags.experimentalConnect,
       }
     })
 
@@ -441,6 +462,47 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
 
     return handlers
+      .handle("brainPreview", ({ payload }) => Effect.gen(function* () {
+        yield* accountOwner
+        if (Option.isNone(cloudBrain)) return yield* new AccountWorkApiError({ message: "Update this engine to preview repository Brain context." })
+        const prepared = yield* cloudBrain.value.preview({ ...payload, ownerStartedDesktop: true }).pipe(
+          Effect.mapError((error) => new AccountWorkApiError({ message: "message" in error ? String(error.message) : "Cannot prepare repository Brain context." })),
+        )
+        return { path: "brain/bundle.json" as const, base64url: prepared.bytes.toString("base64url"),
+          sha256: prepared.sha256, bytes: prepared.bytes.length, entries: prepared.entries, skills: prepared.skills }
+      }))
+      .handle("brainProposalsImport", ({ payload }) => Effect.gen(function* () {
+        yield* accountOwner
+        if (Option.isNone(cloudBrain)) return yield* new AccountWorkApiError({ message: "Update this engine to import returned Brain drafts." })
+        const bytes = Buffer.from(payload.base64url, "base64url")
+        if (bytes.length > 512 * 1024 || bytes.toString("base64url") !== payload.base64url)
+          return yield* new AccountWorkApiError({ message: "Invalid returned Brain attachment encoding." })
+        const imported = yield* accountError(cloudBrain.value.importProposals({ path: payload.path, bytes,
+          sha256: payload.sha256, publicRepository: payload.publicRepository }))
+        return { proposed: imported.entries.length, known: imported.known, refused: imported.refused, over: imported.over }
+      }))
+      .handle("playbooksList", () => Effect.gen(function* () {
+        yield* accountOwner
+        if (Option.isNone(playbooks)) return yield* new AccountWorkApiError({ message: "Update this engine to install Playbooks." })
+        return yield* accountError(playbooks.value.list())
+      }))
+      .handle("playbookInstall", ({ payload }) => Effect.gen(function* () {
+        yield* accountOwner
+        if (Option.isNone(playbooks)) return yield* new AccountWorkApiError({ message: "Update this engine to install Playbooks." })
+        return yield* accountError(playbooks.value.install(payload))
+      }))
+      .handle("hostedJobs", ({ params }) => Effect.gen(function* () {
+        yield* accountOwner
+        yield* access(params.sessionID, true)
+        if (Option.isNone(hosted)) return yield* new AccountWorkApiError({ message: "Update this engine to reconnect hosted jobs." })
+        return yield* accountError(hosted.value.resume(params.sessionID, taskPrompts))
+      }))
+      .handle("hostedJobAttach", ({ params, payload }) => Effect.gen(function* () {
+        yield* accountOwner
+        yield* access(params.sessionID, true)
+        if (Option.isNone(hosted)) return yield* new AccountWorkApiError({ message: "Update this engine to reconnect hosted jobs." })
+        return yield* accountError(hosted.value.attach(params.sessionID, payload.jobID, taskPrompts))
+      }))
       .handle("workflowSaved", () =>
         Effect.gen(function* () {
           yield* workflowOwner

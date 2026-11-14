@@ -187,6 +187,7 @@ export function createCloudAgentsApi(
           ? {}
           : { repository: binding.repository, binder: { login: binding.binder.login } }),
         repositoryId: binding.repositoryId,
+        generation: binding.generation,
         boundAt: binding.boundAt,
         ...(binding.lastUsedAt === undefined ? {} : { lastUsedAt: binding.lastUsedAt }),
         workflowVersion: binding.workflowVersion,
@@ -200,9 +201,15 @@ export function createCloudAgentsApi(
     const user = await account(request, response, "POST")
     await readLimit(request, response, user.id)
     const body = await objectBody(request)
-    if (Object.keys(body).some((key) => key !== "repositoryId") || !Schema.is(Decimal)(body.repositoryId))
+    if (
+      Object.keys(body).some((key) => key !== "repositoryId" && key !== "expectedGeneration") ||
+      !Schema.is(Decimal)(body.repositoryId) ||
+      typeof body.expectedGeneration !== "number" ||
+      !Number.isSafeInteger(body.expectedGeneration) ||
+      body.expectedGeneration < 1
+    )
       throw invalidRequest()
-    if (!(await revokeBinding(body.repositoryId, user.id, store)))
+    if (!(await revokeBinding(body.repositoryId, user.id, body.expectedGeneration, store)))
       throw new ApiError(403, "ACTOR_NOT_ALLOWED", "Only the account that connected this repository may disconnect it.")
     json(response, 200, { ok: true })
   }
@@ -235,7 +242,7 @@ export function createCloudAgentsApi(
     if (Number(body.workflowVersion) < 3)
       throw new ApiError(426, "WORKFLOW_UPDATE_REQUIRED", "Update this repository's Vector workflow.")
     if (identity.runnerEnvironment !== "github-hosted")
-      throw new ApiError(403, "RUNNER_NOT_SUPPORTED", "Use a GitHub-hosted runner.")
+      throw new ApiError(403, "RUNNER_NOT_SUPPORTED", "Use one of GitHub’s runners.")
     const binding = await bindingFor(identity.repositoryId, store)
     if (!binding) throw new ApiError(404, "REPO_NOT_BOUND", "This repository is not connected.")
     await requireUnrevokedAccount(binding.account, fetcher).catch((error: unknown) => {
@@ -381,6 +388,7 @@ export function createCloudAgentsApi(
           generation: binding.generation,
           jti,
           rid,
+          thread: reserved.thread,
           repository: identity.repository,
           repositoryId: identity.repositoryId,
           runId: identity.runId,

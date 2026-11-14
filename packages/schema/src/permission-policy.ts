@@ -6,6 +6,7 @@ const CLOUD_WRITES = new Set([
   "vector_cloud_environment",
   "vector_cloud_hosting",
 ])
+const CONNECT_ALWAYS = new Set(["connect_write"])
 
 // Account mutations must ask again even when configuration or a client normally auto-accepts tools.
 export function requiresCloudApproval(permission?: string, always?: readonly string[]) {
@@ -74,6 +75,53 @@ export const AFTER_WEB_REASON =
   "This conversation read the web, and this address is new: neither you nor an earlier result gave it. A page can steer the agent into putting your data in an address."
 
 /**
+ * Computer permissions (Vector Hands; internal ids stay `computer_*`). Whenever one is raised, a person answers it:
+ * no configuration allow, `"*": "allow"` default, auto-accept or company allow does, and a `deny` still wins.
+ * `computer_app` is the per-app ask, the only one that may be saved as Always allow, and only for `app:` keys; the
+ * desktop, never the engine, keeps that saved list. `computer_sensitive` asks before each risky step and never
+ * offers Always. `computer_observe` and `computer_interact` are copy keys only and are never raised.
+ */
+export const COMPUTER_APP = "computer_app"
+export const COMPUTER_OBSERVE = "computer_observe"
+export const COMPUTER_INTERACT = "computer_interact"
+export const COMPUTER_SENSITIVE = "computer_sensitive"
+
+/**
+ * Whether a request is one of the two asks Vector Hands raises, which clients show as Hands asks. Another tool's
+ * permission can share the `computer_` prefix (an MCP server named `computer use` asks `computer_use_<tool>`, and a
+ * plugin tool can take any id), so the prefix names no Hands ask; it still makes every such permission ask
+ * (`requiresApproval`) and never auto-approve. The engine refuses an MCP server named `computer` in any letter case,
+ * whose tools could otherwise take these two ids.
+ */
+export function handsAsk(permission?: string) {
+  return permission === COMPUTER_APP || permission === COMPUTER_SENSITIVE
+}
+/** The prefix of an app key (`app:macos:<bundleId>`, `app:windows:…`), the only pattern a computer Always may save. */
+export const COMPUTER_APP_PREFIX = "app:"
+/** Why typing an address, recipient or number the user never gave asks once the screen has been read. */
+export const AFTER_SCREEN_REASON =
+  "Text on your screen can steer the agent, and this address or recipient is new: you did not give it."
+/** Reserved comment marker requiring a fresh answer after a computer result, without colliding with executable names. */
+export const AFTER_SCREEN_COMMAND_PREFIX = "#after-screen "
+export const AFTER_SCREEN_COMMAND_REASON =
+  "This conversation used your computer. Check this command before it runs; text on screen can influence the agent."
+const SHELL_PERMISSIONS = new Set(["bash", "shell", "terminal", "pwsh", "powershell", "cmd"])
+
+/** The marker changes approval requirements, not which command the existing permission rules evaluate. */
+export function commandPattern(permission: string, pattern: string) {
+  return SHELL_PERMISSIONS.has(permission) && pattern.startsWith(AFTER_SCREEN_COMMAND_PREFIX)
+    ? pattern.slice(AFTER_SCREEN_COMMAND_PREFIX.length)
+    : pattern
+}
+/** Why a step asks when text on screen reads as instructions to an AI. */
+export const FLAGGED_SCREEN_REASON =
+  "Text on screen looks like instructions to an AI. Check that this step is what you asked for."
+
+// A saved computer approval names one concrete app: a wildcard such as `app:*` or `app:macos:*` is never one.
+const concreteAppKey = (pattern: string) =>
+  pattern.length > COMPUTER_APP_PREFIX.length && pattern.startsWith(COMPUTER_APP_PREFIX) && !/[*?]/.test(pattern)
+
+/**
  * Reading, waiting on, resizing or closing a terminal, asked by the terminal tool for a terminal the agent did not
  * open.
  */
@@ -89,6 +137,21 @@ export const TERMINAL_OWN = "own:"
 export const TERMINAL_OTHER = "other:"
 
 /**
+ * Starting a terminal while the shell sandbox is on: the terminal runs outside it. Its own permission, apart from the
+ * shell tool's unsandboxed_shell, asked every time: neither auto-accept nor Full access answers it, and it has no
+ * "always" (canAutoApprove).
+ */
+export const TERMINAL_UNSANDBOXED = "unsandboxed_terminal"
+
+/** Whether a request is a terminal ask about a terminal the agent did not open: the user's, or another session's. */
+export function otherTerminal(permission?: string, patterns?: readonly string[]) {
+  return (
+    (permission === TERMINAL || permission === TERMINAL_INPUT) &&
+    Boolean(patterns?.some((pattern) => pattern.startsWith(TERMINAL_OTHER)))
+  )
+}
+
+/**
  * A terminal line the shell may have filled from somewhere Vector cannot read: its history, its kill ring, an editor,
  * or a command name tab completion finished. It may run a Vercel or Supabase command on the command-line tool's own
  * login, which the shell asks for every time, so it asks every time too: a Vector Cloud permission with no "always"
@@ -97,32 +160,56 @@ export const TERMINAL_OTHER = "other:"
 export const CLOUD_UNREAD = "vector_cloud_unread"
 
 /**
- * Whether a request asks the user every time: account mutations, changes to memory's own files and to the files
- * Vector's prompts are read from, commands that drop the agent marker, keeping research, and the asks Vector Local adds
- * for the agent's network commands and its new addresses after the web.
+ * Whether a request asks the user every time: account mutations, edits to memory or prompt sources, commands that
+ * drop the agent marker, keeping research, elevated workflows, Vector Local network/address asks, and every
+ * computer permission, including commands that follow a screen observation.
  */
 export function requiresApproval(permission?: string, always?: readonly string[], patterns?: readonly string[]) {
   return (
+    Boolean(permission?.startsWith("computer_")) ||
     permission === MEMORY_SOURCE ||
     permission === PROMPT_SOURCE ||
     permission === AGENT_MARKER ||
+    CONNECT_ALWAYS.has(permission ?? "") ||
     permission === RESEARCH_KEEP ||
     permission === NETWORK_COMMAND ||
+    Boolean(
+      permission &&
+        SHELL_PERMISSIONS.has(permission) &&
+        patterns?.some((pattern) => pattern.startsWith(AFTER_SCREEN_COMMAND_PREFIX)),
+    ) ||
     (permission === WORKFLOW && (!patterns?.length || patterns.some((pattern) => pattern !== "run"))) ||
     Boolean(patterns?.some((pattern) => pattern.startsWith(AFTER_WEB))) ||
     requiresCloudApproval(permission, always)
   )
 }
 
+/**
+ * Whether auto-accept or Full access may answer a request on its own. Never for the user's own terminals or another
+ * session's (an ssh session to production, say: what the agent reads or types there is the user's to allow), nor for
+ * starting a terminal outside the shell sandbox.
+ */
 export function canAutoApprove(permission?: string, always?: readonly string[], patterns?: readonly string[]) {
   return (
     permission !== "doom_loop" &&
     permission !== "browser_sensitive" &&
+    permission !== TERMINAL_UNSANDBOXED &&
     !permission?.startsWith("computer_") &&
+    !otherTerminal(permission, patterns) &&
     !requiresApproval(permission, always, patterns)
   )
 }
 
+/**
+ * Whether a request offers "Always allow". A terminal the agent did not open still may be allowed always, by its own
+ * id, as the user chooses: only auto-accept may not answer for them. `computer_app` qualifies only for concrete app keys;
+ * other computer permissions never qualify.
+ */
 export function canAlwaysApprove(permission?: string, always?: readonly string[], patterns?: readonly string[]) {
-  return canAutoApprove(permission, always, patterns) && Boolean(always?.length)
+  if (permission === COMPUTER_APP) return Boolean(always?.length) && always!.every(concreteAppKey)
+  return (
+    (canAutoApprove(permission, always, patterns) ||
+      (otherTerminal(permission, patterns) && !requiresApproval(permission, always, patterns))) &&
+    Boolean(always?.length)
+  )
 }

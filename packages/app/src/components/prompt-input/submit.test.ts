@@ -1,5 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import type { Computer } from "@vectordevai/schema/computer"
+import { Hands } from "@vectordevai/schema/hands"
 import type { Prompt } from "@/context/prompt"
+import { createFakeComputer } from "@/features/computer/fake-platform"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 let resolveExecutionAgent: typeof import("./submit").resolveExecutionAgent
@@ -52,12 +55,38 @@ let availableModels: Array<{ id: string; provider: { id: string } }> = []
 let providerReady = true
 let engineAgents = [{ name: "build" }, { name: "research" }]
 let providerLoaded = true
+let planEnabled = false
 // The desktop app's Vector account bridge; the web build has none.
 let vectorAccount: object | undefined = {}
-const toasts: Array<{ title?: string; description?: string; actions?: Array<{ label: string; onClick: unknown }> }> = []
+const toasts: Array<{
+  title?: string
+  description?: string
+  variant?: string
+  actions?: Array<{ label: string; onClick: "dismiss" | (() => void) }>
+}> = []
+// The desktop's computer platform and what the destination engine reports about it.
+let platformComputer: Computer.ComputerPlatform | undefined
+const capable = { backgroundSubagents: false, computer: { available: true, protocol: 1 } }
+let capabilities: () => Promise<unknown> = async () => ({ data: capable })
+const capabilityCalls: string[] = []
+// Runs as session creation starts, so a test can change the route while the session is being created.
+let beforeCreate: (() => void) | undefined
+const granted: Computer.PermissionsView = {
+  rows: [
+    { id: "screen", status: "granted", pane: "untrusted:screen" },
+    { id: "accessibility", status: "granted", pane: "untrusted:accessibility" },
+  ],
+  canReset: false,
+  adhoc: false,
+  helperStart: "ok",
+  vectorHoldsGrant: { screen: false, accessibility: false },
+}
+const readyComputer = () => createFakeComputer({ prefs: { enabled: true, consentedAt: 1 }, permissions: granted })
+
+const defaultPrompt: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
+let promptValue: Prompt = defaultPrompt
 
 const typed = (text: string): Prompt => [{ type: "text", content: text, start: 0, end: text.length }]
-let promptValue: Prompt = typed("ls")
 const prompt = {
   ready: Object.assign(() => true, { promise: Promise.resolve(true) }),
   current: () => promptValue,
@@ -90,6 +119,7 @@ const clientFor = (directory: string) => {
     },
     session: {
       create: async (input?: { title?: string }) => {
+        beforeCreate?.()
         createdSessions.push(directory)
         return {
           data: {
@@ -116,6 +146,12 @@ const clientFor = (directory: string) => {
       },
     },
     experimental: {
+      capabilities: {
+        get: async () => {
+          capabilityCalls.push(directory)
+          return capabilities()
+        },
+      },
       session: {
         stop: async (input: Record<string, unknown>) => {
           stops.push({ route: "experimental.session.stop", input })
@@ -186,7 +222,7 @@ beforeAll(async () => {
   }))
 
   mock.module("@/context/plan-mode", () => ({
-    usePlanMode: () => ({ enabled: () => false }),
+    usePlanMode: () => ({ enabled: () => planEnabled }),
   }))
 
   mock.module("@/context/server", () => ({
@@ -302,6 +338,9 @@ beforeAll(async () => {
     usePlatform: () => ({
       fetch: fetch,
       vectorAccount,
+      get computer() {
+        return platformComputer
+      },
     }),
   }))
 
@@ -341,13 +380,18 @@ beforeEach(() => {
   providerReady = true
   engineAgents = [{ name: "build" }, { name: "research" }]
   providerLoaded = true
+  planEnabled = false
   vectorAccount = {}
   toasts.length = 0
+  platformComputer = undefined
+  capabilities = async () => ({ data: capable })
+  capabilityCalls.length = 0
+  commands = []
+  beforeCreate = undefined
+  promptValue = defaultPrompt
   statusSets.length = 0
   stops.length = 0
   promptError = undefined
-  commands = []
-  promptValue = typed("ls")
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -439,6 +483,36 @@ describe("prompt submit worktree selection", () => {
       onNewSessionWorktreeReset: () => undefined,
       onSubmit: () => undefined,
     })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(promotedDrafts).toEqual([{ draftID: "draft-1", server: "project-server", sessionId: "session-1" }])
+  })
+
+  test("promotes the draft tab the send started on when another draft opens while the session is created", async () => {
+    search = { draftId: "draft-1" }
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => "main",
+      onSubmit: () => undefined,
+    })
+    // The router keeps its search object when only the draft id changes.
+    beforeCreate = () => {
+      search.draftId = "draft-2"
+    }
 
     await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
 
@@ -696,12 +770,13 @@ describe("prompt submit worktree selection", () => {
 
 describe("follow-up optimistic echo", () => {
   type SendInput = Parameters<typeof import("./submit").sendFollowupDraft>[0]
-  type SentPart = { id: string; type: string; synthetic?: boolean; text?: string }
+  type SentPart = { id: string; type: string; synthetic?: boolean; text?: string; metadata?: Record<string, unknown> }
   type Step = {
     kind: "echo" | "request"
     parts: SentPart[]
     budget?: unknown
     judge?: unknown
+    secondOpinion?: unknown
     agent?: string
     size?: unknown
   }
@@ -732,17 +807,21 @@ describe("follow-up optimistic echo", () => {
     history: object[] = [],
     config: object = {},
     parts: Record<string, SentPart[]> = {},
+    computer?: SendInput["computer"],
   ) => {
     const { sendFollowupDraft } = await import("./submit")
     // One ordered log, so a test also sees when the echo happens relative to the request.
     const steps: Step[] = []
     await sendFollowupDraft({
+      computer,
       client: {
+        experimental: { capabilities: { get: async () => ({ data: capable }) } },
         session: {
           promptAsync: async (input: {
             parts: SentPart[]
             budget?: unknown
             judge?: unknown
+            secondOpinion?: unknown
             agent?: string
             size?: unknown
           }) => {
@@ -751,6 +830,7 @@ describe("follow-up optimistic echo", () => {
               parts: input.parts,
               budget: input.budget,
               judge: input.judge,
+              secondOpinion: input.secondOpinion,
               agent: input.agent,
               size: input.size,
             })
@@ -811,6 +891,7 @@ describe("follow-up optimistic echo", () => {
             },
           },
         } as unknown as SendInput["sync"],
+        computer: undefined,
         serverSync: { session: { set: () => undefined } } as unknown as SendInput["serverSync"],
         before: () => {
           agents.length = 0
@@ -873,6 +954,7 @@ describe("follow-up optimistic echo", () => {
               },
             },
           } as unknown as SendInput["sync"],
+          computer: undefined,
           serverSync: { session: { set: () => undefined } } as unknown as SendInput["serverSync"],
           before: () => {
             state.enabled = false
@@ -916,6 +998,64 @@ describe("follow-up optimistic echo", () => {
     expectOneEchoBeforeRequest(await withDesktopContext(() => send()), 1)
   })
 
+  test("a queued normal send preserves computer pill markers and their optimistic IDs around desktop context", async () => {
+    const content = `@${Hands.MENTION}`
+    const steps = await withDesktopContext(() =>
+      send(
+        {
+          executionMode: "normal",
+          prompt: [
+            { type: "text", content: `${text} `, start: 0, end: text.length + 1 },
+            { type: "computer", content, start: text.length + 1, end: text.length + content.length + 1 },
+            {
+              type: "text",
+              content: " ",
+              start: text.length + content.length + 1,
+              end: text.length + content.length + 2,
+            },
+            {
+              type: "computer",
+              content: "@Notes",
+              start: text.length + content.length + 2,
+              end: text.length + content.length + 8,
+              app: { key: "app:macos:com.apple.notes", name: "Notes" },
+            },
+            pasted,
+          ],
+        },
+        [],
+        {},
+        {},
+        readyComputer(),
+      ),
+    )
+    expect(steps.map((step) => step.kind)).toEqual(["echo", "request"])
+    const [echo, request] = steps.map((step) => step.parts)
+    const markers = echo.filter((part) => part.metadata?.[Hands.MARKER])
+    expect(
+      markers.map((part) => ({ type: part.type, text: part.text, synthetic: part.synthetic, metadata: part.metadata })),
+    ).toEqual([
+      { type: "text", text: "", synthetic: true, metadata: { [Hands.MARKER]: { kind: "feature" } } },
+      {
+        type: "text",
+        text: "",
+        synthetic: true,
+        metadata: { [Hands.MARKER]: { kind: "app", key: "app:macos:com.apple.notes", name: "Notes" } },
+      },
+    ])
+    expect(
+      request.filter((part) => part.metadata?.[Hands.MARKER]).map((part) => ({ id: part.id, metadata: part.metadata })),
+    ).toEqual(markers.map((part) => ({ id: part.id, metadata: part.metadata })))
+    const echoedIDs = new Set(echo.map((part) => part.id))
+    const added = request.filter((part) => !echoedIDs.has(part.id))
+    expect(added).toHaveLength(1)
+    expect(added[0]).toMatchObject({ type: "text", synthetic: true })
+    expect(added[0].text).toContain("Context note from the desktop bridge.")
+    expect(request.map((part) => part.id)).toEqual([echo[0].id, added[0].id, ...echo.slice(1).map((part) => part.id)])
+    expect(request.map((part) => part.id)).toEqual(request.map((part) => part.id).sort())
+    expect(files(request).map((part) => part.id)).toEqual(files(echo).map((part) => part.id))
+  })
+
   test("sends the judge setting, and the policy an older engine needs to run the judge at all", async () => {
     const steps = await send({ judge: "changes" })
     expect(steps.at(-1)?.judge).toBe("changes")
@@ -931,6 +1071,13 @@ describe("follow-up optimistic echo", () => {
     // Only the build agent: Plan mode has nothing to judge, and a custom agent is never judged by a current engine.
     expectOneEchoBeforeRequest(await send({ judge: "thorough", agent: "plan" }), 0)
     expectOneEchoBeforeRequest(await send({ judge: "thorough", agent: "reviewer" }), 0)
+  })
+
+  test("sends Second opinion only while the judge is on", async () => {
+    expect((await send({ judge: "changes", secondOpinion: true })).at(-1)?.secondOpinion).toBe(true)
+    // Without the judge there is nothing for a second lab to check, so nothing is sent.
+    expect((await send({ secondOpinion: true })).at(-1)?.secondOpinion).toBeUndefined()
+    expect((await send({ judge: "thorough" })).at(-1)?.secondOpinion).toBeUndefined()
   })
 
   test("keeps the echoed ids when the judge is on and the desktop adds task context", async () => {
@@ -1088,6 +1235,7 @@ describe("follow-up optimistic echo", () => {
             },
           },
         } as unknown as SendInput["client"],
+        computer: undefined,
         serverSync: { session: { set: () => undefined } } as unknown as SendInput["serverSync"],
         sync: {
           data: { command: [{ name: "review" }], message: {}, config: { budget: { run: { usd: 20, steps: 60 } } } },
@@ -1205,6 +1353,70 @@ describe("submission agent selection", () => {
 })
 
 describe("queued follow-up submission", () => {
+  test.each([
+    {
+      name: "normal text during a computer ask",
+      plan: false,
+      blocked: true,
+      mode: "normal" as const,
+      queued: 1,
+      sent: 0,
+      shell: 0,
+    },
+    {
+      name: "plan text during a computer ask",
+      plan: true,
+      blocked: true,
+      mode: "normal" as const,
+      queued: 1,
+      sent: 0,
+      shell: 0,
+    },
+    { name: "ordinary plan text", plan: true, blocked: false, mode: "normal" as const, queued: 0, sent: 1, shell: 0 },
+    {
+      name: "an explicit shell command",
+      plan: false,
+      blocked: true,
+      mode: "shell" as const,
+      queued: 1,
+      sent: 0,
+      shell: 0,
+    },
+  ])("preserves the submission destination for $name", async (scenario) => {
+    params = { id: "session-1" }
+    planEnabled = scenario.plan
+    const queued: unknown[] = []
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => scenario.mode,
+      working: () => true,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      shouldQueue: () => true,
+      queueWhileBlocked: () => scenario.blocked,
+      onQueue: (draft) => {
+        queued.push(draft)
+      },
+    })
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(queued).toHaveLength(scenario.queued)
+    expect(sentPrompts).toHaveLength(scenario.sent)
+    expect(sentShell).toHaveLength(scenario.shell)
+    if (scenario.mode === "shell") expect(queued[0]).toMatchObject({ shell: true })
+    if (scenario.plan && scenario.sent) expect(sentPrompts[0]?.input.agent).toBe("plan")
+    if (scenario.plan && scenario.queued) expect(queued[0]).toMatchObject({ agent: "plan" })
+  })
+
   test("keeps the draft intact when the task queue rejects it", async () => {
     params = { id: "session-1" }
     const queued: unknown[] = []
@@ -1730,6 +1942,7 @@ describe("pasted text", () => {
           },
         },
       } as unknown as SendInput["client"],
+      computer: undefined,
       serverSync: { session: { set: () => undefined } } as unknown as SendInput["serverSync"],
       sync: { data: { command: [{ name: "review" }], message: {}, config: {} } } as unknown as SendInput["sync"],
       draft: {
@@ -1743,6 +1956,570 @@ describe("pasted text", () => {
       },
     })
     expect(commands).toMatchObject([{ command: "review", arguments: "Always cc my manager.", pasted: [[0, 21]] }])
+  })
+})
+
+describe("computer mention send gate", () => {
+  type SubmitInput = Parameters<typeof createPromptSubmit>[0]
+  type SendInput = Parameters<typeof import("./submit").sendFollowupDraft>[0]
+  const mention = `@${Hands.MENTION}`
+  const marked = (text = "put my October receipts into a table "): Prompt => [
+    { type: "text", content: text, start: 0, end: text.length },
+    { type: "computer", content: mention, start: text.length, end: text.length + mention.length },
+  ]
+  const event = { preventDefault: () => undefined } as unknown as Event
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const history: Prompt[] = []
+  const submitFor = (input: Partial<SubmitInput> = {}) =>
+    createPromptSubmit({
+      prompt,
+      info: () => (params.id ? { id: params.id } : undefined),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: (value) => {
+        history.push(value)
+      },
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => "main",
+      onSubmit: () => undefined,
+      ...input,
+    })
+  /** Counts the helper-probing reads a send makes on the real fake platform. */
+  const counted = (computer: Computer.ComputerPlatform) => {
+    const reads = { permissions: 0, recheck: 0 }
+    return {
+      reads,
+      computer: {
+        ...computer,
+        supported: computer.supported,
+        permissions: () => (reads.permissions++, computer.permissions()),
+        recheck: () => (reads.recheck++, computer.recheck()),
+      } satisfies Computer.ComputerPlatform,
+    }
+  }
+  const nothingHappened = () => {
+    expect(createdSessions).toEqual([])
+    expect(sentPrompts).toEqual([])
+    expect(sentShell).toEqual([])
+    expect(optimistic).toEqual([])
+    expect(history).toEqual([])
+    expect(promptResetCount).toBe(0)
+  }
+
+  beforeEach(() => {
+    history.length = 0
+  })
+
+  test("not set up: the setup toast offers Set up, and nothing is created, recorded, sent or cleared", async () => {
+    promptValue = marked()
+    platformComputer = createFakeComputer({ permissions: granted })
+    let opened = 0
+    await submitFor({ openComputerSetup: () => opened++ }).handleSubmit(event)
+    await settle()
+    nothingHappened()
+    expect(capabilityCalls).toEqual([])
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toMatchObject({
+      title: "computer.mention.setupFirst",
+      actions: [{ label: "computer.action.setUp" }],
+    })
+    expect(toasts[0].description).toBeUndefined()
+    const action = toasts[0].actions![0].onClick
+    if (typeof action === "function") action()
+    expect(opened).toBe(1)
+  })
+
+  test("a draft for the queue is checked before it is queued", async () => {
+    params = { id: "session-1" }
+    promptValue = marked()
+    platformComputer = createFakeComputer({ prefs: { enabled: true }, permissions: granted })
+    const queued: unknown[] = []
+    await submitFor({
+      working: () => true,
+      shouldQueue: () => true,
+      onQueue: (draft) => void queued.push(draft),
+    }).handleSubmit(event)
+    expect(queued).toEqual([])
+    expect(toasts[0]).toMatchObject({ title: "computer.mention.setupFirst" })
+    nothingHappened()
+  })
+
+  test("what setup cannot fix shows its fixed sentence and no Set up", async () => {
+    promptValue = marked()
+    platformComputer = createFakeComputer({ prefs: { enabled: true, consentedAt: 1 }, policy: { enabled: false } })
+    await submitFor({ openComputerSetup: () => undefined }).handleSubmit(event)
+    expect(toasts).toEqual([{ title: "computer.availability.company", variant: "error" }])
+    nothingHappened()
+  })
+
+  test("an engine without the computer capability, or at another protocol, refuses like an engine without research", async () => {
+    for (const response of [
+      async () => ({ data: undefined, error: { status: 404 } }),
+      async () => ({ data: { backgroundSubagents: false } }),
+      async () => ({ data: { backgroundSubagents: false, computer: { available: true, protocol: 2 } } }),
+      () => Promise.reject(new Error("offline")),
+    ]) {
+      toasts.length = 0
+      capabilities = response
+      promptValue = marked()
+      platformComputer = readyComputer()
+      await submitFor().handleSubmit(event)
+      expect(toasts).toEqual([
+        { title: "This engine cannot run this request", description: "computer.availability.engine" },
+      ])
+      nothingHappened()
+    }
+  })
+
+  test("a pill in shell mode or on a custom command is refused before any read, keeping the draft", async () => {
+    platformComputer = readyComputer()
+    promptValue = marked("echo hi ")
+    await submitFor({ mode: () => "shell" }).handleSubmit(event)
+    commands = [{ name: "review" }]
+    promptValue = marked("/review ")
+    await submitFor().handleSubmit(event)
+    expect(toasts).toEqual([
+      { title: "computer.mention.shell", variant: "error" },
+      { title: "computer.mention.command", variant: "error" },
+    ])
+    expect(capabilityCalls).toEqual([])
+    nothingHappened()
+  })
+
+  test("a Hands pill on the built-in workflow command keeps the draft without opening the workflow form or probing", async () => {
+    const { NO_CAPABILITIES } = await import("@/features/background-tasks/engine-capabilities")
+    const { WORKFLOW_EVENT } = await import("@/features/background-tasks/workflow-model")
+    params = { id: "session-1" }
+    const local = counted(readyComputer())
+    platformComputer = local.computer
+    const draft = marked("/workflow ")
+    promptValue = draft
+    let opened = 0
+    const open = () => opened++
+    window.addEventListener(WORKFLOW_EVENT, open)
+    try {
+      await submitFor({ capabilities: () => ({ ...NO_CAPABILITIES, workflows: true }) }).handleSubmit(event)
+      expect(opened).toBe(0)
+      expect(promptValue).toBe(draft)
+      expect(toasts).toEqual([{ title: "computer.mention.command", variant: "error" }])
+      expect(local.reads).toEqual({ permissions: 0, recheck: 0 })
+      expect(capabilityCalls).toEqual([])
+      nothingHappened()
+    } finally {
+      window.removeEventListener(WORKFLOW_EVENT, open)
+    }
+  })
+
+  test("Quick mode and Deep research, whose agents have no computer tool, refuse a pill before any read", async () => {
+    params = { id: "session-1" }
+    const local = counted(readyComputer())
+    platformComputer = local.computer
+    promptValue = marked()
+    await submitFor({ executionMode: () => "quick" }).handleSubmit(event)
+    promptValue = marked()
+    await submitFor({ executionMode: () => "research", researchDepth: () => "deep" }).handleSubmit(event)
+    // Deep research's greeting lane is the quick agent, which has no computer tool either.
+    promptValue = marked("hi ")
+    await submitFor({ executionMode: () => "research" }).handleSubmit(event)
+    await settle()
+    expect(toasts).toEqual([
+      { title: "computer.mention.quick", variant: "error" },
+      { title: "computer.mention.research", variant: "error" },
+      { title: "computer.mention.research", variant: "error" },
+    ])
+    expect(local.reads).toEqual({ permissions: 0, recheck: 0 })
+    expect(capabilityCalls).toEqual([])
+    nothingHappened()
+  })
+
+  test("Plan mode keeps its own agent in Quick mode, so a pill there is sent", async () => {
+    params = { id: "session-1" }
+    planEnabled = true
+    platformComputer = readyComputer()
+    promptValue = marked()
+    await submitFor({ executionMode: () => "quick" }).handleSubmit(event)
+    await settle()
+    expect(toasts).toEqual([])
+    expect(sentPrompts).toHaveLength(1)
+    expect(sentPrompts[0].input.agent).toBe("plan")
+  })
+
+  test("a model that may train on prompts refuses a pill with Switch model; a no-training one sends it", async () => {
+    params = { id: "session-1" }
+    currentModel = {
+      id: "poolside/laguna-s-2.1:free",
+      provider: { id: "vector" },
+      freeModel: { source: "shared", dataPolicy: "may-train" },
+    } as typeof currentModel
+    availableModels = [currentModel!]
+    platformComputer = readyComputer()
+    promptValue = marked()
+    let switched = 0
+    const asked: unknown[] = []
+    const submit = submitFor({
+      switchModel: () => switched++,
+      confirmFreeModelTraining: async (model) => (asked.push(model), true),
+    })
+    await submit.handleSubmit(event)
+    await settle()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toMatchObject({
+      title: "computer.availability.mayTrain",
+      variant: "error",
+      actions: [{ label: "computer.action.switchModel" }],
+    })
+    const action = toasts[0].actions![0].onClick
+    if (typeof action === "function") action()
+    expect(switched).toBe(1)
+    // Refused before the training question: accepting it could not let Hands act.
+    expect(asked).toEqual([])
+    nothingHappened()
+
+    toasts.length = 0
+    currentModel = {
+      id: "cohere/north-mini-code:free",
+      provider: { id: "vector" },
+      freeModel: { source: "shared", dataPolicy: "no-training" },
+    } as typeof currentModel
+    availableModels = [currentModel!]
+    await submit.handleSubmit(event)
+    await settle()
+    expect(toasts).toEqual([])
+    expect(sentPrompts).toHaveLength(1)
+  })
+
+  test("a ready send carries its marker; it reads permissions once to submit and once to dispatch", async () => {
+    params = { id: "session-1" }
+    promptValue = marked()
+    const local = counted(readyComputer())
+    platformComputer = local.computer
+    await submitFor().handleSubmit(event)
+    await settle()
+    expect(toasts).toEqual([])
+    expect(sentPrompts).toHaveLength(1)
+    expect(sentPrompts[0].input.parts?.filter((part) => part.metadata?.[Hands.MARKER])).toMatchObject([
+      { type: "text", text: "", synthetic: true, metadata: { [Hands.MARKER]: { kind: "feature" } } },
+    ])
+    expect(local.reads).toEqual({ permissions: 2, recheck: 0 })
+    expect(capabilityCalls).toEqual(["/repo/main", "/repo/main"])
+    expect(promptResetCount).toBe(1)
+  })
+
+  test("an unmarked send reads nothing from the platform or the capability route", async () => {
+    params = { id: "session-1" }
+    promptValue = [{ type: "text", content: "fix the failing build", start: 0, end: 21 }]
+    const local = counted(readyComputer())
+    platformComputer = local.computer
+    await submitFor().handleSubmit(event)
+    await settle()
+    expect(sentPrompts).toHaveLength(1)
+    expect(local.reads).toEqual({ permissions: 0, recheck: 0 })
+    expect(capabilityCalls).toEqual([])
+  })
+
+  test("a social app name in a real computer pill keeps submit and dispatch off the quick lane", async () => {
+    params = { id: "session-1" }
+    promptValue = [
+      { type: "text", content: "hi ", start: 0, end: 3 },
+      {
+        type: "computer",
+        content: "@Hello",
+        start: 3,
+        end: 9,
+        app: { key: "app:macos:com.example.hello", name: "Hello" },
+      },
+    ]
+    platformComputer = readyComputer()
+    await submitFor().handleSubmit(event)
+    await settle()
+    expect(sentPrompts).toHaveLength(1)
+    expect(sentPrompts[0].input.agent).toBe("agent")
+    expect(sentPrompts[0].input.parts?.filter((part) => part.metadata?.[Hands.MARKER])).toMatchObject([
+      {
+        metadata: {
+          [Hands.MARKER]: { kind: "app", key: "app:macos:com.example.hello", name: "Hello" },
+        },
+      },
+    ])
+  })
+
+  test("a second Enter while the gate is pending sends the message once", async () => {
+    params = { id: "session-1" }
+    promptValue = marked()
+    platformComputer = readyComputer()
+    const gate = Promise.withResolvers<unknown>()
+    let first = true
+    capabilities = () => {
+      if (!first) return Promise.resolve({ data: capable })
+      first = false
+      return gate.promise
+    }
+    const submit = submitFor()
+    const pending = submit.handleSubmit(event)
+    const again = submit.handleSubmit(event)
+    await settle()
+    gate.resolve({ data: capable })
+    await Promise.all([pending, again])
+    await settle()
+    expect(sentPrompts).toHaveLength(1)
+    expect(history).toHaveLength(1)
+  })
+
+  test("typing while the gate reads keeps the newer draft and sends nothing", async () => {
+    params = { id: "session-1" }
+    promptValue = marked()
+    platformComputer = readyComputer()
+    const gate = Promise.withResolvers<unknown>()
+    capabilities = () => gate.promise
+    const pending = submitFor().handleSubmit(event)
+    await settle()
+    promptValue = marked("put my October receipts into a table and a chart ")
+    gate.resolve({ data: capable })
+    await pending
+    await settle()
+    nothingHappened()
+    expect(toasts).toEqual([])
+  })
+
+  test("an Enter on an edited draft while the gate reads sends the newer draft once, whichever check ends first", async () => {
+    for (const order of ["older first", "newer first"] as const) {
+      sentPrompts.length = 0
+      history.length = 0
+      toasts.length = 0
+      params = { id: "session-1" }
+      promptValue = marked()
+      platformComputer = readyComputer()
+      const older = Promise.withResolvers<unknown>()
+      const newer = Promise.withResolvers<unknown>()
+      let calls = 0
+      // The first two capability reads are the two submits' checks; the dispatch check answers at once.
+      capabilities = () => [older.promise, newer.promise][calls++] ?? Promise.resolve({ data: capable })
+      const submit = submitFor()
+      const first = submit.handleSubmit(event)
+      await settle()
+      const edited = marked("put my October receipts into a table and a chart ")
+      promptValue = edited
+      const second = submit.handleSubmit(event)
+      await settle()
+      for (const gate of order === "older first" ? [older, newer] : [newer, older]) {
+        gate.resolve({ data: capable })
+        await settle()
+      }
+      await Promise.all([first, second])
+      await settle()
+      expect(sentPrompts).toHaveLength(1)
+      expect(sentPrompts[0].input.parts?.[0].text).toBe(`put my October receipts into a table and a chart ${mention}`)
+      expect(history).toEqual([edited])
+      expect(toasts).toEqual([])
+    }
+  })
+
+  test("a superseded check that refuses stays silent; the newest check reports once", async () => {
+    params = { id: "session-1" }
+    promptValue = marked()
+    const fake = readyComputer()
+    await fake.setPrefs({ enabled: false })
+    platformComputer = fake
+    const submit = submitFor({ openComputerSetup: () => undefined })
+    const first = submit.handleSubmit(event)
+    promptValue = marked("put my October receipts into a table and a chart ")
+    const second = submit.handleSubmit(event)
+    await Promise.all([first, second])
+    await settle()
+    nothingHappened()
+    expect(toasts).toMatchObject([{ title: "computer.mention.setupFirst" }])
+  })
+
+  test("switching to another session while the gate reads sends nothing there and keeps the draft", async () => {
+    params = { id: "session-1" }
+    promptValue = marked()
+    platformComputer = readyComputer()
+    const gate = Promise.withResolvers<unknown>()
+    capabilities = () => gate.promise
+    const queued: unknown[] = []
+    const pending = submitFor({ shouldQueue: () => true, onQueue: (draft) => void queued.push(draft) }).handleSubmit(
+      event,
+    )
+    await settle()
+    // The session route keeps its composer, and the router its params object, when only the session id changes.
+    params.id = "session-2"
+    gate.resolve({ data: capable })
+    await pending
+    await settle()
+    nothingHappened()
+    expect(queued).toEqual([])
+    expect(toasts).toEqual([])
+  })
+
+  test("switching to another draft tab while the gate reads creates and promotes nothing", async () => {
+    search = { draftId: "draft-1" }
+    promptValue = marked()
+    platformComputer = readyComputer()
+    const gate = Promise.withResolvers<unknown>()
+    capabilities = () => gate.promise
+    const pending = submitFor().handleSubmit(event)
+    await settle()
+    // A draft tab's route has no session id; only its draft id changes, and the router keeps its search object.
+    search.draftId = "draft-2"
+    gate.resolve({ data: capable })
+    await pending
+    await settle()
+    nothingHappened()
+    expect(promotedDrafts).toEqual([])
+    expect(toasts).toEqual([])
+  })
+
+  test("readiness lost between submit and dispatch is refused at dispatch with the setup toast", async () => {
+    params = { id: "session-1" }
+    promptValue = marked()
+    const fake = readyComputer()
+    platformComputer = fake
+    let checks = 0
+    capabilities = async () => {
+      // Hands is turned off right after the submit-time check passes, before the message is dispatched.
+      if (++checks === 1) await fake.setPrefs({ enabled: false })
+      return { data: capable }
+    }
+    let opened = 0
+    await submitFor({ openComputerSetup: () => opened++ }).handleSubmit(event)
+    await settle()
+    expect(sentPrompts).toEqual([])
+    expect(toasts).toMatchObject([
+      { title: "computer.mention.setupFirst", actions: [{ label: "computer.action.setUp" }] },
+    ])
+  })
+
+  describe("queued dispatch", () => {
+    let sendFollowupDraft: typeof import("./submit").sendFollowupDraft
+    beforeAll(async () => {
+      sendFollowupDraft = (await import("./submit")).sendFollowupDraft
+    })
+    // Returns the send's promise without awaiting it, so a test attaches its rejection check at once.
+    const followup = (input: {
+      computer: Computer.ComputerPlatform | undefined
+      prompt?: Prompt
+      before?: () => Promise<boolean> | boolean
+      command?: boolean
+    }) => {
+      const log: string[] = []
+      const promise = sendFollowupDraft({
+        client: {
+          experimental: {
+            capabilities: {
+              get: async () => {
+                log.push("capabilities")
+                return capabilities()
+              },
+            },
+          },
+          session: {
+            promptAsync: async () => void log.push("promptAsync"),
+            command: async () => void log.push("command"),
+          },
+        } as unknown as SendInput["client"],
+        // Records the status the send writes for the session ("busy" or "idle").
+        serverSync: {
+          session: { set: (_key: string, _id: string, status: { type: string }) => void log.push(status.type) },
+        } as unknown as SendInput["serverSync"],
+        sync: {
+          data: {
+            agent: [{ name: "build" }],
+            command: input.command ? [{ name: "review" }] : [],
+            message: {},
+            config: {},
+          },
+          session: {
+            optimistic: {
+              add: () => void log.push("echo"),
+              remove: () => void log.push("remove"),
+            },
+          },
+        } as unknown as SendInput["sync"],
+        computer: input.computer,
+        optimisticBusy: true,
+        before: input.before && (() => (log.push("before"), input.before!())),
+        draft: {
+          sessionID: "session-1",
+          sessionDirectory: "/repo/main",
+          prompt: input.prompt ?? marked(),
+          context: [],
+          agent: "build",
+          model: { providerID: "p", modelID: "m" },
+        },
+      })
+      return { promise, log }
+    }
+
+    test("a queued draft whose setup was lost since queueing is refused before it is echoed or marks the session", async () => {
+      const fake = readyComputer()
+      await fake.setPrefs({ enabled: false })
+      const sent = followup({ computer: fake })
+      await expect(sent.promise).rejects.toMatchObject({ key: "computer.mention.setupFirst", kind: "setup" })
+      // A refusal never writes a status, so a run still going on the session stays busy.
+      expect(sent.log).toEqual([])
+    })
+
+    test("a refusal after a worktree wait removes the echo it showed", async () => {
+      const fake = readyComputer()
+      await fake.setPrefs({ enabled: false })
+      const sent = followup({ computer: fake, before: () => true })
+      await expect(sent.promise).rejects.toMatchObject({ key: "computer.mention.setupFirst", kind: "setup" })
+      expect(sent.log).toEqual(["busy", "echo", "before", "idle", "remove"])
+    })
+
+    test("a queued draft whose engine lost the capability is refused at dispatch", async () => {
+      capabilities = async () => ({
+        data: { backgroundSubagents: false, computer: { available: false, reason: "policy" } },
+      })
+      const sent = followup({ computer: readyComputer() })
+      await expect(sent.promise).rejects.toMatchObject({ key: "computer.availability.company", kind: "engine" })
+      expect(sent.log).toEqual(["capabilities"])
+    })
+
+    test("a caller with no platform refuses a marked draft and sends an unmarked one", async () => {
+      await expect(followup({ computer: undefined }).promise).rejects.toMatchObject({
+        key: "computer.availability.desktop",
+      })
+      const plain = followup({
+        computer: undefined,
+        prompt: [{ type: "text", content: "fix the failing build", start: 0, end: 21 }],
+      })
+      expect(await plain.promise).toBe(true)
+      expect(plain.log).not.toContain("capabilities")
+    })
+
+    test("the engine is probed only after the worktree is ready", async () => {
+      let ready = false
+      capabilities = async () => {
+        if (!ready) throw new Error("probed before the worktree was ready")
+        return { data: capable }
+      }
+      const sent = followup({
+        computer: readyComputer(),
+        before: async () => {
+          ready = true
+          return true
+        },
+      })
+      expect(await sent.promise).toBe(true)
+      expect(sent.log.filter((step) => step === "before" || step === "capabilities" || step === "promptAsync")).toEqual(
+        ["before", "capabilities", "promptAsync"],
+      )
+    })
+
+    test("a queued custom command with a pill is refused before it starts or reads anything", async () => {
+      const sent = followup({ computer: readyComputer(), prompt: marked("/review "), command: true })
+      await expect(sent.promise).rejects.toMatchObject({ key: "computer.mention.command", kind: "local" })
+      expect(sent.log).toEqual([])
+    })
   })
 })
 
@@ -1873,6 +2650,7 @@ describe("follow-ups while Vector works", () => {
     const ran: Array<{ command: string; agent: string }> = []
     let prompted = false
     const sent = await sendFollowupDraft({
+      computer: undefined,
       client: {
         local: { get: async () => ({ data: undefined }) },
         session: {
@@ -1992,6 +2770,10 @@ describe("the abort scope", () => {
     taskIsolation: true,
     workflows: true,
     backgroundShells: true,
+    vectorscopeSettings: false,
+    vectorscopeRuns: false,
+    vectorscopeReviewMemoryControls: false,
+    connections: false,
   })
   const stopper = (input: {
     scope: "turn" | "all"

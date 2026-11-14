@@ -11,7 +11,8 @@ import {
   type GithubAccess,
   type GithubRepoRef,
 } from "./github-api"
-import { buildWorkflowYaml, WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
+import { WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
+import { agentsWorkflowPreview } from "./github-agents"
 import { githubSignInConfigured, resolveGithubAccess } from "./github-access"
 import {
   requireMergeStrategy,
@@ -23,8 +24,6 @@ import {
   requirePullRequestState,
   requirePullRequestText,
   requireReviewEvent,
-  requireSecretNames,
-  requireWorkflowModel,
 } from "./github-pr-input"
 import { cleanLogLine, failedStepLog, MAX_LOG_BYTES } from "./ci-watch"
 import { checkPost } from "./posting-check"
@@ -332,8 +331,13 @@ export async function submitPullRequestReview(input: {
   const { access, repo } = await pullRequestContext(cwd)
   // The renderer can only make the review stricter: GitHub says whether the pull request is a fork or another
   // author's, and either makes it one Vector cannot trust.
-  return postPullRequestReview(access, repo, number, { body, event, head, comments, fallbackBody }, (parts, untrusted) =>
-    checkPost({ cwd, parts, typed: false, sessionIDs, untrusted: untrusted || input.untrusted === true }),
+  return postPullRequestReview(
+    access,
+    repo,
+    number,
+    { body, event, head, comments, fallbackBody },
+    (parts, untrusted) =>
+      checkPost({ cwd, parts, typed: false, sessionIDs, untrusted: untrusted || input.untrusted === true }),
   )
 }
 
@@ -376,14 +380,14 @@ export async function postPullRequestReview(
     .map((comment, index) => ({ ...comment, body: checked[index + 1] ?? "" }))
     .filter((comment) => comment.body.trim())
     .map((comment) => ({
-    path: comment.path,
-    line: comment.line,
-    side: comment.side,
-    body: comment.body,
-    ...(comment.startLine !== undefined && comment.startLine < comment.line
-      ? { start_line: comment.startLine, start_side: comment.side }
-      : {}),
-  }))
+      path: comment.path,
+      line: comment.line,
+      side: comment.side,
+      body: comment.body,
+      ...(comment.startLine !== undefined && comment.startLine < comment.line
+        ? { start_line: comment.startLine, start_side: comment.side }
+        : {}),
+    }))
   const post = (body: string, lineComments: typeof comments) =>
     githubJson(access, `${repoPath(repo)}/pulls/${number}/reviews`, {
       method: "POST",
@@ -544,7 +548,6 @@ export async function putPullRequestMerge(
 export const AUTO_REVIEW_BRANCH = "vector-automatic-reviews"
 // The monthly review budget `vector github install` suggests.
 const AUTO_REVIEW_MONTHLY_USD = 50
-const VECTOR_TOKEN_URL = "https://vectordev.ai/auth/cli"
 
 export type AutoReviewStatus = {
   // installed: the default branch has the workflow. on-request: it has the workflow `vector github install` writes when
@@ -579,32 +582,14 @@ export type AutoReviewSetup = {
 // The file the pull request adds: `vector github install`'s workflow with automatic reviews on, on the given model,
 // with that command's default monthly limit, the repository's own GITHUB_TOKEN and no public sharing.
 export function autoReviewWorkflow(input: { model: unknown; keys: unknown }, version: string): AutoReviewWorkflow {
-  const model = requireWorkflowModel(input.model)
-  // Vector's shared models sign in with VECTOR_CLI_TOKEN, which every workflow already passes.
-  const keys =
-    model.provider === "vector" ? [] : requireSecretNames(input.keys).filter((name) => name !== "VECTOR_CLI_TOKEN")
   return {
-    path: WORKFLOW_FILE,
-    content: buildWorkflowYaml({
-      provider: model.provider,
-      model: model.model,
-      keys,
-      autoReview: true,
-      auth: "github",
-      share: false,
-      monthlyUsd: AUTO_REVIEW_MONTHLY_USD,
+    ...agentsWorkflowPreview(
+      { mode: "own-key", model: input.model, keys: input.keys, autoReview: true },
       version,
-    }),
-    model: `${model.provider}/${model.model}`,
+      undefined,
+      AUTO_REVIEW_MONTHLY_USD,
+    ),
     monthlyUsd: AUTO_REVIEW_MONTHLY_USD,
-    secrets: [
-      {
-        name: "VECTOR_CLI_TOKEN",
-        detail: "Signs the workflow in to your Vector account. Create one at vectordev.ai/auth/cli.",
-        url: VECTOR_TOKEN_URL,
-      },
-      ...keys.map((name) => ({ name, detail: "Your model provider's API key." })),
-    ],
   }
 }
 

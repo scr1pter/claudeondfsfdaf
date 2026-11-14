@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "before": {
+      "workflowRunID": 41176596041,
+      "jobID": 124465322108,
+      "artifactID": 13032913362,
+      "manifest": "continuation-before-manifest.json",
+      "manifestSha256": "fcb0d0d471b23aaeb8aa6acbcc94112c0c7d6e069be7c551c9308ebb5fa29f2f",
+      "metrics": "continuation-before-metrics.json",
+      "metricsSha256": "57b0309e5938860956a0a55642585420ac3e816e484660c4da3da4fa1b6a88b7",
+      "commit": "0ebc4203db27ae03facd754df69f1415f672fb97"
+    },
+    "after": {
+      "workflowRunID": 41255807800,
+      "jobID": 124698601609,
+      "artifactID": 13063426626,
+      "manifest": "continuation-after-manifest.json",
+      "manifestSha256": "57cc111829f7f360baa7cdba4b76a73ffad34a12c46404493b3eb34f9ccc815e",
+      "metrics": "continuation-after-metrics.json",
+      "metricsSha256": "9aad2f966c2de823238a59f9b1b916d95b86805c2aec58904d19a085b82416e2",
+      "commit": "6a4f225b6ddb26ef42621cad9d30939122dd88e1"
+    }
+  },
+  "matchingEnvironmentFields": [
+    "ref",
+    "node",
+    "bun",
+    "playwright",
+    "platform",
+    "arch",
+    "cpu",
+    "cpuCount",
+    "memoryBytes",
+    "workers",
+    "repeats",
+    "channel",
+    "timeline"
+  ],
+  "interpretation": {
+    "status": "observations_only",
+    "method": "Median of three measurements per case; after minus before. Raw artifact JSON is retained byte for byte.",
+    "limitation": "Both runners report the same CPU model, runtime and workload. Hosted scheduling still varies; no causal attribution or new numerical performance threshold is inferred."
+  },
+  "validation": {
+    "before": {
+      "records": 12,
+      "firstTryPasses": 12,
+      "navigationBlankSamples": 0,
+      "navigationUnknownSamples": 0,
+      "streamingStable": true
+    },
+    "after": {
+      "records": 12,
+      "firstTryPasses": 12,
+      "navigationBlankSamples": 0,
+      "navigationUnknownSamples": 0,
+      "streamingStable": true
+    }
+  },
+  "measurements": [
+    {
+      "name": "performance: first navigation paint > opens an unvisited task without a blank frame",
+      "metric": "firstDestinationObservedMs",
+      "beforeMs": 132.89999999999418,
+      "afterMs": 134.09999999997672,
+      "deltaMs": 1.1999999999825377,
+      "samples": {
+        "before": [131.29999999998836, 142.79999999998836, 132.89999999999418],
+        "after": [134.09999999997672, 126.39999999999418, 148.89999999999418]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens an unvisited task without a blank frame",
+      "metric": "stableDestinationObservedMs",
+      "beforeMs": 150.29999999998836,
+      "afterMs": 151,
+      "deltaMs": 0.7000000000116415,
+      "samples": {
+        "before": [150.29999999998836, 156.5, 142.89999999999418],
+        "after": [148, 151, 172.70000000001164]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens the new session page before its lazy module is used",
+      "metric": "firstDestinationObservedMs",
+      "beforeMs": 163.10000000000582,
+      "afterMs": 162.5,
+      "deltaMs": -0.6000000000058208,
+      "samples": {
+        "before": [163.10000000000582, 146.5, 330.5999999999767],
+        "after": [187.40000000002328, 151.59999999997672, 162.5]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens the new session page before its lazy module is used",
+      "metric": "stableDestinationObservedMs",
+      "beforeMs": 262.3999999999942,
+      "afterMs": 247.10000000000582,
+      "deltaMs": -15.299999999988358,
+      "samples": {
+        "before": [242.89999999999418, 262.3999999999942, 412.69999999998254],
+        "after": [328.1000000000058, 231.5, 247.10000000000582]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens a child session without a blank frame",
+      "metric": "firstDestinationObservedMs",
+      "beforeMs": 101.59999999997672,
+      "afterMs": 91.70000000001164,
+      "deltaMs": -9.899999999965075,
+      "samples": {
+        "before": [101.59999999997672, 95.09999999997672, 113.79999999998836],
+        "after": [109, 91.70000000001164, 89.40000000002328]
+      }
+    },
+    {
+      "name": "performance: first navigation paint > opens a child session without a blank frame",
+      "metric": "stableDestinationObservedMs",
+      "beforeMs": 174.09999999997672,
+      "afterMs": 176.29999999998836,
+      "deltaMs": 2.2000000000116415,
+      "samples": {
+        "before": [174.09999999997672, 173.09999999997672, 182],
+        "after": [183.19999999998254, 176.29999999998836, 162.90000000002328]
+      }
+    },
+    {
+      "name": "performance: session timeline streaming > streams assistant text in v2 with review pane closed",
+      "metric": "endToEndInitialContentObservedMs",
+      "beforeMs": 568.9695119999997,
+      "afterMs": 560.0752240000002,
+      "deltaMs": -8.894287999999506,
+      "samples": {
+        "before": [655.6449119999997, 496.97283099999913, 568.9695119999997],
+        "after": [678.2771949999988, 388.42228499999874, 560.0752240000002]
+      }
+    },
+    {
+      "name": "performance: session timeline streaming > streams assistant text in v2 with review pane closed",
+      "metric": "completionObservedMs",
+      "beforeMs": 10644.899999999994,
+      "afterMs": 10300.600000000006,
+      "deltaMs": -344.29999999998836,
+      "samples": {
+        "before": [10720.900000000023, 10443.099999999977, 10644.899999999994],
+        "after": [10374.700000000012, 10300.600000000006, 10107.799999999988]
+      }
+    },
+    {
+      "name": "performance: session timeline streaming > streams assistant text in v2 with review pane closed",
+      "metric": "rafGapP95Ms",
+      "beforeMs": 16.700000000000728,
+      "afterMs": 16.799999999999272,
+      "deltaMs": 0.09999999999854481,
+      "samples": {
+        "before": [16.700000000000728, 16.799999999999272, 16.700000000000728],
+        "after": [16.700000000000728, 16.799999999999272, 16.799999999999272]
+      }
+    }
+  ],
+  "productionFixtureScan": {
+    "beforeFiles": 844,
+    "afterFiles": 844,
+    "matches": 0
+  }
+}

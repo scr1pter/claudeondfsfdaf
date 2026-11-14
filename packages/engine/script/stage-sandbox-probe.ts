@@ -39,6 +39,14 @@ const result = await Bun.build({
   },
 })
 if (!result.success) throw new AggregateError(result.logs, "The actual tool probe did not build")
+const guard = await Bun.build({
+  target: "node",
+  entrypoints: [path.join(engine, "src/cli/cmd/github.secrets.ts")],
+  outdir: output,
+  naming: { entry: "inspector-guard.mjs" },
+  format: "esm",
+})
+if (!guard.success) throw new AggregateError(guard.logs, "The private-channel inspector guard did not build")
 await fs.writeFile(
   path.join(output, "tool-probe-outputs.json"),
   JSON.stringify(result.outputs.map((item) => path.relative(output, item.path))),

@@ -25,6 +25,11 @@ import type {
   AuthSetResponses,
   CommandListErrors,
   CommandListResponses,
+  ComputerProtectedPathsErrors,
+  ComputerProtectedPathsResponses,
+  ComputerPruneInput,
+  ComputerPruneScreenshotsErrors,
+  ComputerPruneScreenshotsResponses,
   Config as Config3,
   ConfigGetErrors,
   ConfigGetResponses,
@@ -40,6 +45,26 @@ import type {
   ConfigTrustGetResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  ConnectCancelErrors,
+  ConnectCancelResponses,
+  ConnectDirectoryReviewErrors,
+  ConnectDirectoryReviewInput,
+  ConnectDirectoryReviewResponses,
+  ConnectDismissErrors,
+  ConnectDismissInput,
+  ConnectDismissResponses,
+  ConnectGetErrors,
+  ConnectGetResponses,
+  ConnectListErrors,
+  ConnectListResponses,
+  ConnectRegisterErrors,
+  ConnectRegisterInput,
+  ConnectRegisterResponses,
+  ConnectReviewErrors,
+  ConnectReviewInput,
+  ConnectReviewResponses,
+  ConnectRunsErrors,
+  ConnectRunsResponses,
   EgressEvent,
   EventSubscribeErrors,
   EventSubscribeResponses,
@@ -47,6 +72,10 @@ import type {
   EventTuiPromptAppend,
   EventTuiSessionSelect,
   EventTuiToastShow,
+  ExperimentalBrainImportProposalsErrors,
+  ExperimentalBrainImportProposalsResponses,
+  ExperimentalBrainPreviewErrors,
+  ExperimentalBrainPreviewResponses,
   ExperimentalCapabilitiesGetErrors,
   ExperimentalCapabilitiesGetResponses,
   ExperimentalConsoleGetErrors,
@@ -57,6 +86,14 @@ import type {
   ExperimentalConsoleSwitchOrgResponses,
   ExperimentalControlPlaneMoveSessionErrors,
   ExperimentalControlPlaneMoveSessionResponses,
+  ExperimentalHostedAttachErrors,
+  ExperimentalHostedAttachResponses,
+  ExperimentalHostedJobsErrors,
+  ExperimentalHostedJobsResponses,
+  ExperimentalPlaybooksInstallErrors,
+  ExperimentalPlaybooksInstallResponses,
+  ExperimentalPlaybooksListErrors,
+  ExperimentalPlaybooksListResponses,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
   ExperimentalResourceListErrors,
@@ -223,6 +260,11 @@ import type {
   McpRemoveResponses,
   McpStatusErrors,
   McpStatusResponses,
+  MemoryBackupErrors,
+  MemoryBackupResponses,
+  MemoryBootstrapPrepareErrors,
+  MemoryBootstrapPrepareResponses,
+  MemoryCodiumHelpers,
   MemoryCreateErrors,
   MemoryCreateResponses,
   MemoryDistillEstimateErrors,
@@ -298,6 +340,8 @@ import type {
   MemoryResearchListResponses,
   MemoryResearchSourceErrors,
   MemoryResearchSourceResponses,
+  MemoryRestoreErrors,
+  MemoryRestoreResponses,
   MemoryReviewListErrors,
   MemoryReviewListResponses,
   MemoryReviewResolveErrors,
@@ -400,6 +444,28 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  ReviewGetErrors,
+  ReviewGetResponses,
+  ReviewListErrors,
+  ReviewListResponses,
+  ReviewMemoryConfirmErrors,
+  ReviewMemoryConfirmResponses,
+  ReviewMemoryControlConfirmation,
+  ReviewMemoryControlPrepare,
+  ReviewMemoryControlPreviewId,
+  ReviewMemoryDiscardErrors,
+  ReviewMemoryDiscardResponses,
+  ReviewMemoryInspectErrors,
+  ReviewMemoryInspectResponses,
+  ReviewMemoryPrepareErrors,
+  ReviewMemoryPrepareResponses,
+  ReviewRunStart,
+  ReviewStartErrors,
+  ReviewStartResponses,
+  ReviewStopErrors,
+  ReviewStopResponses,
+  ReviewTargetErrors,
+  ReviewTargetResponses,
   RunBudget,
   ServerSessionSessionImportArchiveErrors,
   ServerSessionSessionImportArchiveResponses,
@@ -1836,6 +1902,250 @@ export class Task extends HeyApiClient {
   }
 }
 
+export class Brain extends HeyApiClient {
+  /**
+   * Preview explicitly selected repository Brain bytes without uploading
+   */
+  public preview<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      includeBrain?: true
+      publicRepository?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "includeBrain" },
+            { in: "body", key: "publicRepository" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainPreviewResponses,
+      ExperimentalBrainPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-bundle/preview",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Stage owner-selected returned Brain drafts for review
+   */
+  public importProposals<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: "brain/proposals.json"
+      base64url?: string
+      sha256?: string
+      publicRepository?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "base64url" },
+            { in: "body", key: "sha256" },
+            { in: "body", key: "publicRepository" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainImportProposalsResponses,
+      ExperimentalBrainImportProposalsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-proposals/import",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Playbooks extends HeyApiClient {
+  /**
+   * List owner Playbooks for personal installation
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalPlaybooksListResponses,
+      ExperimentalPlaybooksListErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Install a selected Playbook in owner configuration
+   */
+  public install<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      version?: string
+      sha256?: string
+      replace?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "version" },
+            { in: "body", key: "sha256" },
+            { in: "body", key: "replace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalPlaybooksInstallResponses,
+      ExperimentalPlaybooksInstallErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks/install",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Hosted extends HeyApiClient {
+  /**
+   * Reconnect hosted jobs to their original owner conversation
+   */
+  public jobs<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalHostedJobsResponses,
+      ExperimentalHostedJobsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Return a current-account hosted job report to this owner conversation
+   */
+  public attach<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      jobID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "jobID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalHostedAttachResponses,
+      ExperimentalHostedAttachErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Workflow extends HeyApiClient {
   /**
    * List trusted saved workflows
@@ -2443,6 +2753,21 @@ export class Experimental extends HeyApiClient {
     return (this._task ??= new Task({ client: this.client }))
   }
 
+  private _brain?: Brain
+  get brain(): Brain {
+    return (this._brain ??= new Brain({ client: this.client }))
+  }
+
+  private _playbooks?: Playbooks
+  get playbooks(): Playbooks {
+    return (this._playbooks ??= new Playbooks({ client: this.client }))
+  }
+
+  private _hosted?: Hosted
+  get hosted(): Hosted {
+    return (this._hosted ??= new Hosted({ client: this.client }))
+  }
+
   private _workflow?: Workflow
   get workflow(): Workflow {
     return (this._workflow ??= new Workflow({ client: this.client }))
@@ -2597,6 +2922,83 @@ export class Event extends HeyApiClient {
       url: "/event",
       ...options,
       ...params,
+    })
+  }
+}
+
+export class Computer extends HeyApiClient {
+  /**
+   * Read paths protected from computer input
+   *
+   * Return trusted instruction, memory and configuration paths for the owner's desktop input gate. File contents are never returned.
+   */
+  public protectedPaths<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ComputerProtectedPathsResponses,
+      ComputerProtectedPathsErrors,
+      ThrowOnError
+    >({
+      url: "/computer/protected-paths",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Delete stored computer screenshots
+   *
+   * Delete computer screenshots before a time or in a session. Use all: true to delete every screenshot and reclaim database pages. Only the server owner can delete screenshots.
+   */
+  public pruneScreenshots<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      computerPruneInput?: ComputerPruneInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "computerPruneInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ComputerPruneScreenshotsResponses,
+      ComputerPruneScreenshotsErrors,
+      ThrowOnError
+    >({
+      url: "/computer/screenshots/prune",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
@@ -4883,6 +5285,8 @@ export class Settings extends HeyApiClient {
       modelLearner?: MemoryModelLearner
       skills?: MemorySkillLearning
       skillDrafter?: MemorySkillDrafter
+      codiumHelpers?: MemoryCodiumHelpers
+      distillation?: boolean
       workflow?: MemoryWorkflowLearning
       workflowExplore?: boolean
     },
@@ -4902,6 +5306,8 @@ export class Settings extends HeyApiClient {
             { in: "body", key: "modelLearner" },
             { in: "body", key: "skills" },
             { in: "body", key: "skillDrafter" },
+            { in: "body", key: "codiumHelpers" },
+            { in: "body", key: "distillation" },
             { in: "body", key: "workflow" },
             { in: "body", key: "workflowExplore" },
           ],
@@ -5682,6 +6088,49 @@ export class Documents extends HeyApiClient {
   }
 }
 
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Prepare a repository Brain bootstrap
+   *
+   * Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.
+   */
+  public prepare<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      model?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "model" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      MemoryBootstrapPrepareResponses,
+      MemoryBootstrapPrepareErrors,
+      ThrowOnError
+    >({
+      url: "/memory/bootstrap",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Distill extends HeyApiClient {
   /**
    * Estimate finding more with a model
@@ -5726,7 +6175,7 @@ export class Distill extends HeyApiClient {
   /**
    * Find more with a model
    *
-   * Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
+   * Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
    */
   public run<ThrowOnError extends boolean = false>(
     parameters: {
@@ -6645,6 +7094,79 @@ export class Memory extends HeyApiClient {
   }
 
   /**
+   * Memory for a Brain Vault backup
+   *
+   * Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.
+   */
+  public backup<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<MemoryBackupResponses, MemoryBackupErrors, ThrowOnError>({
+      url: "/memory/backup",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Restore memory from your Brain Vault
+   *
+   * Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.
+   */
+  public restore<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      section?: "memory" | "skills" | "insights"
+      text?: string
+      repository?: string
+      worktree?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "section" },
+            { in: "body", key: "text" },
+            { in: "body", key: "repository" },
+            { in: "body", key: "worktree" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<MemoryRestoreResponses, MemoryRestoreErrors, ThrowOnError>({
+      url: "/memory/restore",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Tidy memory now
    *
    * Merge duplicates, drop what waited for review too long, archive what goes unused and mark stale entries.
@@ -6763,6 +7285,11 @@ export class Memory extends HeyApiClient {
     return (this._documents ??= new Documents({ client: this.client }))
   }
 
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
+  }
+
   private _distill?: Distill
   get distill(): Distill {
     return (this._distill ??= new Distill({ client: this.client }))
@@ -6786,6 +7313,280 @@ export class Memory extends HeyApiClient {
   private _research?: Research
   get research(): Research {
     return (this._research ??= new Research({ client: this.client }))
+  }
+}
+
+export class Connect extends HeyApiClient {
+  /**
+   * List connected tools
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ConnectListResponses, ConnectListErrors, ThrowOnError>({
+      url: "/experimental/connect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List connected tool runs
+   */
+  public runs<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ConnectRunsResponses, ConnectRunsErrors, ThrowOnError>({
+      url: "/experimental/connect/runs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get a connected tool run
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ConnectGetResponses, ConnectGetErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Review changes in a conversation
+   */
+  public review<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      connectReviewInput?: ConnectReviewInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectReviewInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectReviewResponses, ConnectReviewErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/connect",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Review the selected directory
+   */
+  public directoryReview<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      connectDirectoryReviewInput?: ConnectDirectoryReviewInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectDirectoryReviewInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ConnectDirectoryReviewResponses,
+      ConnectDirectoryReviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/connect/review",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel a connected tool run
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectCancelResponses, ConnectCancelErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Bring desktop findings into a conversation
+   */
+  public register<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      connectRegisterInput?: ConnectRegisterInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectRegisterInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectRegisterResponses, ConnectRegisterErrors, ThrowOnError>({
+      url: "/experimental/connect/findings",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Dismiss findings from an owner action
+   */
+  public dismiss<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      connectDismissInput?: ConnectDismissInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "connectDismissInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ConnectDismissResponses, ConnectDismissErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/dismiss",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -7338,6 +8139,333 @@ export class Question extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<QuestionRejectResponses, QuestionRejectErrors, ThrowOnError>({
       url: "/question/{requestID}/reject",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Review2 extends HeyApiClient {
+  /**
+   * Read the local review target
+   *
+   * Read the existing conversation's exact Git head without starting model work. Owner only.
+   */
+  public target<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ReviewTargetResponses, ReviewTargetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/target",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Find local review runs
+   *
+   * Owner-only bounded status summaries for reconnection. No result JSON or code is included.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ReviewListResponses, ReviewListErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start an owner local review
+   *
+   * Opt-in owner-only review of local changes. Placement and read authority come from the existing conversation. No GitHub connection is required; no checks, posting or automatic restart occur.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      reviewRunStart?: ReviewRunStart
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewRunStart", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewStartResponses, ReviewStartErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read an owned local review
+   *
+   * Read the exact retained result without starting or retrying model work.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      runID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ReviewGetResponses, ReviewGetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Stop an owned local review
+   *
+   * Signal and join this engine's exact owned run, retaining completed partial output.
+   */
+  public stop<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      runID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewStopResponses, ReviewStopErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}/stop",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class ReviewMemory extends HeyApiClient {
+  /**
+   * Read this repository's review memory
+   *
+   * Owner-only bounded read in the engine's verified physical repository. Does not start a review.
+   */
+  public inspect<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      offset?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "offset" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ReviewMemoryInspectResponses, ReviewMemoryInspectErrors, ThrowOnError>({
+      url: "/experimental/review-memory",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Preview an owner review-memory change
+   *
+   * Prepare one exact, short-lived approval. Preparing does not apply the change.
+   */
+  public prepare<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      reviewMemoryControlPrepare?: ReviewMemoryControlPrepare
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewMemoryControlPrepare", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewMemoryPrepareResponses, ReviewMemoryPrepareErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/prepare",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Confirm one exact review-memory preview
+   *
+   * Single-use confirmation, bound to fresh owner and repository authority. Read back after a lost response.
+   */
+  public confirm<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      reviewMemoryControlConfirmation?: ReviewMemoryControlConfirmation
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "reviewMemoryControlConfirmation", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ReviewMemoryConfirmResponses, ReviewMemoryConfirmErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/confirm",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Discard an owned review-memory preview
+   *
+   * Retire this owner's exact preview without applying a change or altering stored memory.
+   */
+  public discard<ThrowOnError extends boolean = false>(
+    parameters: {
+      previewId: ReviewMemoryControlPreviewId
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "previewId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      ReviewMemoryDiscardResponses,
+      ReviewMemoryDiscardErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/review-memory/previews/{previewId}",
       ...options,
       ...params,
     })
@@ -8111,6 +9239,7 @@ export class Session2 extends HeyApiClient {
       budget?: RunBudget
       size?: TaskSizeChoice
       judge?: TaskJudgeMode
+      secondOpinion?: boolean
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -8135,6 +9264,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "budget" },
             { in: "body", key: "size" },
             { in: "body", key: "judge" },
+            { in: "body", key: "secondOpinion" },
             { in: "body", key: "parts" },
           ],
         },
@@ -8462,6 +9592,7 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
+      includeScreenshots?: "true" | "false"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -8473,6 +9604,7 @@ export class Session2 extends HeyApiClient {
             { in: "path", key: "sessionID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "query", key: "includeScreenshots" },
           ],
         },
       ],
@@ -8584,6 +9716,7 @@ export class Session2 extends HeyApiClient {
       budget?: RunBudget
       size?: TaskSizeChoice
       judge?: TaskJudgeMode
+      secondOpinion?: boolean
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -8608,6 +9741,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "budget" },
             { in: "body", key: "size" },
             { in: "body", key: "judge" },
+            { in: "body", key: "secondOpinion" },
             { in: "body", key: "parts" },
           ],
         },
@@ -8646,6 +9780,7 @@ export class Session2 extends HeyApiClient {
       budget?: RunBudget
       size?: TaskSizeChoice
       judge?: TaskJudgeMode
+      secondOpinion?: boolean
       parts?: Array<{
         id?: string
         type: "file"
@@ -8676,6 +9811,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "budget" },
             { in: "body", key: "size" },
             { in: "body", key: "judge" },
+            { in: "body", key: "secondOpinion" },
             { in: "body", key: "parts" },
           ],
         },
@@ -10510,7 +11646,7 @@ export class Provider2 extends HeyApiClient {
   }
 }
 
-export class Connect extends HeyApiClient {
+export class Connect2 extends HeyApiClient {
   /**
    * Connect with key
    *
@@ -10784,9 +11920,9 @@ export class Integration extends HeyApiClient {
     })
   }
 
-  private _connect?: Connect
-  get connect(): Connect {
-    return (this._connect ??= new Connect({ client: this.client }))
+  private _connect?: Connect2
+  get connect(): Connect2 {
+    return (this._connect ??= new Connect2({ client: this.client }))
   }
 
   private _attempt?: Attempt
@@ -11720,10 +12856,21 @@ export class Session4 extends HeyApiClient {
   public sharePreview<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
+      includeScreenshots?: "true" | "false"
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "includeScreenshots" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<
       ServerSessionSessionSharePreviewResponses,
       ServerSessionSessionSharePreviewErrors,
@@ -11801,6 +12948,11 @@ export class VectorClient extends HeyApiClient {
     return (this._event ??= new Event({ client: this.client }))
   }
 
+  private _computer?: Computer
+  get computer(): Computer {
+    return (this._computer ??= new Computer({ client: this.client }))
+  }
+
   private _config?: Config2
   get config(): Config2 {
     return (this._config ??= new Config2({ client: this.client }))
@@ -11871,6 +13023,11 @@ export class VectorClient extends HeyApiClient {
     return (this._memory ??= new Memory({ client: this.client }))
   }
 
+  private _connect?: Connect
+  get connect(): Connect {
+    return (this._connect ??= new Connect({ client: this.client }))
+  }
+
   private _project?: Project
   get project(): Project {
     return (this._project ??= new Project({ client: this.client }))
@@ -11884,6 +13041,16 @@ export class VectorClient extends HeyApiClient {
   private _question?: Question
   get question(): Question {
     return (this._question ??= new Question({ client: this.client }))
+  }
+
+  private _review?: Review2
+  get review(): Review2 {
+    return (this._review ??= new Review2({ client: this.client }))
+  }
+
+  private _reviewMemory?: ReviewMemory
+  get reviewMemory(): ReviewMemory {
+    return (this._reviewMemory ??= new ReviewMemory({ client: this.client }))
   }
 
   private _permission?: Permission

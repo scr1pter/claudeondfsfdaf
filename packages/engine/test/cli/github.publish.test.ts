@@ -15,6 +15,7 @@ import {
   type PublishPull,
 } from "../../src/cli/cmd/github.publish"
 import type { RunSummary } from "../../src/cli/cmd/github.bundle"
+import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 
 const REPOSITORY = "fixture-owner/project"
 const BOT = "github-actions[bot]"
@@ -91,6 +92,7 @@ async function fixture(
     fork?: boolean
     files?: Record<string, string | Uint8Array>
     baseFiles?: Record<string, string>
+    schedule?: { id: string; cron: string }
   } = {},
 ) {
   const tmp = await tmpdir()
@@ -147,23 +149,40 @@ async function fixture(
     VECTOR_ROUTE_REF: base,
     VECTOR_AGENT_STATUS: "ok",
   }
+  const scheduled =
+    options.schedule &&
+    lookupSchedule(
+      {
+        VECTOR_SCHEDULE_PROMPTS: JSON.stringify({
+          [options.schedule.cron]: { id: options.schedule.id, prompt: "Maintain the repository" },
+        }),
+      },
+      { schedule: options.schedule.cron },
+    )
+  if (options.schedule && !scheduled) throw new Error("Invalid schedule fixture")
+  if (scheduled) {
+    env.VECTOR_SCHEDULE_PROMPTS = JSON.stringify({ [scheduled.cron]: { id: scheduled.id, prompt: scheduled.prompt } })
+    env.VECTOR_THREAD = scheduled.thread
+    env.VECTOR_ROUTE_PR = ""
+  }
   const event = {
-    name: "issue_comment",
+    name: scheduled ? "schedule" : "issue_comment",
     payload: {
       action: "created",
       repository: { full_name: REPOSITORY, default_branch: "main" },
       issue: { number: 17, ...(options.pr ? { pull_request: {} } : {}) },
       comment: { id: 3, body: "/vector fix the source", user: { id: 7, login: "writer", type: "User" } },
+      ...(scheduled ? { schedule: scheduled.cron } : {}),
     },
   }
   const summary: RunSummary = {
     v: 1,
     mode: "own-key",
     outcome: "changes",
-    kind: options.pr ? "pr" : "issue",
-    thread: "17",
+    kind: scheduled ? "schedule" : options.pr ? "pr" : "issue",
+    thread: scheduled?.thread ?? "17",
     baseSha: base,
-    ...(options.pr ? { pr: 17, headRef } : { issue: 17 }),
+    ...(scheduled ? { scheduleId: scheduled.id } : options.pr ? { pr: 17, headRef } : { issue: 17 }),
     title: "Fix the source",
     body: "Closes #2. @someone",
     comment: "Updated the source.",
@@ -183,6 +202,7 @@ async function fixture(
     auth: [] as boolean[],
     disposed: 0,
     fresh: pull,
+    scheduledPulls: [] as PublishPull[],
   }
   const api: PublishApi = {
     pull: async () => state.fresh,
@@ -191,6 +211,7 @@ async function fixture(
       state.posts.push(body)
     },
     openPulls: async () => [],
+    schedulePulls: async () => state.scheduledPulls,
     createPull: async (request) => {
       state.pulls.push(request)
       return { number: 31 }
@@ -493,5 +514,78 @@ test("checkout plugins, project configuration and repository instructions never 
     expect(await f.text(["diff", "--name-only", f.env.VECTOR_ROUTE_REF!, "HEAD"])).toBe("source.txt")
   } finally {
     await fs.rm(sentinel, { force: true })
+  }
+})
+
+test("a scheduled task creates a schedule-id branch and never closes an issue", async () => {
+  await using f = await fixture({ schedule: { id: "daily", cron: "17 9 * * 1-5" } })
+  expect((await f.run()).outcome).toBe("changes")
+  expect(f.state.pulls[0]).toMatchObject({ head: "vector/schedule-daily-42-1", base: "main", draft: false })
+  expect(f.state.pulls[0]?.body).not.toMatch(/Closes #\d/)
+  expect(f.state.posts.join("\n")).toContain("/pull/31")
+})
+
+test("a schedule refreshes its owned proposal from the latest default tree while retaining proposal history", async () => {
+  await using f = await fixture({
+    schedule: { id: "daily", cron: "17 9 * * 1-5" },
+    author: BOT,
+    headRef: "vector/schedule-daily-41-1",
+  })
+  await f.text(["checkout", "-q", "-b", f.state.fresh.head.ref])
+  await fs.writeFile(path.join(f.directory, "stale-proposal.txt"), "previous generated proposal\n")
+  await f.text(["add", "stale-proposal.txt"])
+  await f.text([
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.test",
+    "commit",
+    "-q",
+    "-m",
+    "previous proposal",
+  ])
+  f.state.fresh.head.sha = await f.text(["rev-parse", "HEAD"])
+  await f.text(["push", "-q", "origin", `HEAD:refs/heads/${f.state.fresh.head.ref}`])
+  await f.text(["checkout", "-q", "main"])
+  await fs.writeFile(path.join(f.directory, "latest-default.txt"), "latest default branch\n")
+  await f.text(["add", "latest-default.txt"])
+  await f.text([
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.test",
+    "commit",
+    "-q",
+    "-m",
+    "advance default",
+  ])
+  await f.text(["push", "-q", "origin", "HEAD:refs/heads/main"])
+  f.env.VECTOR_ROUTE_REF = f.summary.baseSha = await f.text(["rev-parse", "HEAD"])
+  f.state.scheduledPulls.push(f.state.fresh)
+  f.state.fresh.draft = true
+  await f.save()
+  expect(await f.run()).toMatchObject({ outcome: "draft", pullRequest: 17, branch: f.state.fresh.head.ref })
+  expect(f.state.pulls).toEqual([])
+  expect(f.state.updates[0]).toMatchObject({ number: 17, draft: true })
+  const remote = `refs/remotes/origin/${f.state.fresh.head.ref}`
+  expect(await f.text(["show", `${remote}:source.txt`])).toBe("after")
+  expect(await f.text(["show", `${remote}:latest-default.txt`])).toBe("latest default branch")
+  expect((await f.git(["cat-file", "-e", `${remote}:stale-proposal.txt`])).code).not.toBe(0)
+  expect((await f.git(["merge-base", "--is-ancestor", f.state.fresh.head.sha, remote])).code).toBe(0)
+  expect((await f.git(["merge-base", "--is-ancestor", f.summary.baseSha, remote])).code).toBe(0)
+})
+
+test("a schedule reuses neither a human proposal, a fork nor another stable schedule id", async () => {
+  for (const candidate of [
+    { author: "human", fork: false, headRef: "vector/schedule-daily-old" },
+    { author: BOT, fork: true, headRef: "vector/schedule-daily-old" },
+    { author: BOT, fork: false, headRef: "vector/schedule-other-old" },
+    { author: BOT, fork: false, headRef: "vector/schedule-daily-123-41-1" },
+  ]) {
+    await using f = await fixture({ ...candidate, schedule: { id: "daily", cron: "17 9 * * 1-5" } })
+    f.state.scheduledPulls.push(f.state.fresh)
+    expect((await f.run()).outcome).toBe("changes")
+    expect(f.state.pulls[0]).toMatchObject({ head: "vector/schedule-daily-42-1", base: "main" })
+    expect(f.state.updates).toEqual([])
   }
 })

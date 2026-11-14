@@ -237,6 +237,7 @@ export function publishRouting(input: {
     baseSha: input.head,
     ...(route.kind === "pr" ? { pr: route.number, headRef: input.headRef } : {}),
     ...(route.kind === "issue" ? { issue: route.number } : {}),
+    ...(route.kind === "schedule" ? { scheduleId: route.scheduleId } : {}),
     repository: env.GITHUB_REPOSITORY!,
     repositoryId: env.GITHUB_REPOSITORY_ID!,
     runId: env.GITHUB_RUN_ID!,
@@ -260,7 +261,7 @@ export const REFUSAL_COMMENT = {
   "not-in-plan": "This automation is unavailable for this repository right now.",
   "service-off": "Codium agents are off right now.",
   "source-unavailable": "Vector could not start this repository task.",
-  runner: "Codium runs need GitHub-hosted runners.",
+  runner: "Codium runs need GitHub’s runners.",
   hours: "Agent time for this repository is used up right now.",
   "at-once": "Vector is already running the tasks this repository can start at once; try again when one finishes.",
   scheduled: "This repository has reached its automation limit for today.",
@@ -288,6 +289,7 @@ export interface PublishApi {
   }>
   comment: (number: number, body: string) => Promise<void>
   openPulls: (head: string, base: string) => Promise<PublishPull[]>
+  schedulePulls?: (base: string) => Promise<PublishPull[]>
   createPull: (input: {
     head: string
     base: string
@@ -479,6 +481,19 @@ export async function publishBundle(input: {
   const thread = number === undefined ? undefined : await input.api.thread(number, route.kind === "pr")
   const handle = (env.MENTIONS?.split(",").find((value) => /^@[a-z0-9][a-z0-9-]{0,99}$/.test(value)) ?? "").slice(1)
   const bots = [GITHUB_ACTIONS_BOT, ...(handle ? [`${handle}[bot]`] : [])]
+  const schedulePrefix = route.kind === "schedule" ? `vector/schedule-${route.scheduleId}-` : undefined
+  // Stable ids may themselves contain hyphens and digits. A prefix alone would reuse daily-123's PR for daily.
+  const sameSchedule = (candidate: PublishPull) =>
+    schedulePrefix !== undefined &&
+    botOwned(candidate, route, bots) &&
+    candidate.base.ref === route.defaultBranch &&
+    candidate.head.ref.startsWith(schedulePrefix) &&
+    /^[1-9]\d{0,19}-[1-9]\d{0,19}$(?![\s\S])/.test(candidate.head.ref.slice(schedulePrefix.length))
+  const scheduled =
+    schedulePrefix && input.api.schedulePulls
+      ? (await input.api.schedulePulls(route.defaultBranch)).find(sameSchedule)
+      : undefined
+  const scheduleThread = scheduled ? await input.api.thread(scheduled.number, true) : undefined
   const comment = async (text: string, marker?: string) => {
     const body = `${clean(text)}${marker ? `\n\n${marker}` : ""}`
     if (number === undefined) log(text)
@@ -552,7 +567,7 @@ export async function publishBundle(input: {
     env.VECTOR_GITHUB_AUTH === "app" &&
     input.event.name !== "pull_request_review_comment" &&
     !dispatchedByBot &&
-    (thread?.writersOnly ?? true)
+    (thread?.writersOnly ?? scheduleThread?.writersOnly ?? true)
   const authority = await input.authorize(useApp)
   try {
     const git = authority.git
@@ -583,17 +598,53 @@ export async function publishBundle(input: {
       "-m",
       title,
     ])
-    const commit = await gitText(git, ["rev-parse", "HEAD"])
-    const fresh = route.pr === undefined ? undefined : await api.pull(route.pr)
+    let commit = await gitText(git, ["rev-parse", "HEAD"])
+    const freshPr = route.pr === undefined ? undefined : await api.pull(route.pr)
+    let schedule = scheduled ? await api.pull(scheduled.number) : undefined
+    let scheduleMoved = false
+    if (schedule) {
+      if (!sameSchedule(schedule)) schedule = undefined
+      else {
+        await gitText(git, [
+          "fetch",
+          "--no-tags",
+          "--no-recurse-submodules",
+          "origin",
+          `refs/heads/${schedule.head.ref}`,
+        ])
+        if ((await gitText(git, ["rev-parse", "FETCH_HEAD"])) !== schedule.head.sha) {
+          scheduleMoved = true
+          schedule = undefined
+        } else {
+          // The latest automation result replaces its pending proposal, preserving both the earlier proposal's
+          // history and this run's source as parents. No merge tool, hook or repository code is executed.
+          const tree = await gitText(git, ["write-tree"])
+          commit = await gitText(git, [
+            "-c",
+            `user.name=${authority.auth.botLogin}`,
+            "-c",
+            `user.email=${email}`,
+            "commit-tree",
+            tree,
+            ...[...new Set([schedule.head.sha, route.baseSha])].flatMap((parent) => ["-p", parent]),
+            "-m",
+            title,
+          ])
+        }
+      }
+    }
+    const fresh = freshPr ?? schedule
     const stoppedDraft = summary.outcome !== "changes" || summary.draft || summary.stop !== undefined
-    let draft = stoppedDraft || fresh?.draft === true
-    const ownsHead = fresh && botOwned(fresh, route, bots) && fresh.head.sha === route.baseSha && !stoppedDraft
-    let branch = ownsHead
-      ? fresh.head.ref
-      : `vector/${route.kind === "pr" ? `pr${route.pr}` : route.kind === "issue" ? `issue${route.issue}` : "dispatch"}-${route.runId}-${env.GITHUB_RUN_ATTEMPT || "1"}`
+    let draft = stoppedDraft || fresh?.draft === true || scheduleMoved
+    const owned =
+      schedule ??
+      (fresh && botOwned(fresh, route, bots) && fresh.head.sha === route.baseSha && !stoppedDraft ? fresh : undefined)
+    const ownsHead = owned !== undefined
+    const newBranch = `vector/${route.kind === "schedule" ? `schedule-${route.scheduleId}` : route.kind === "pr" ? `pr${route.pr}` : route.kind === "issue" ? `issue${route.issue}` : "dispatch"}-${route.runId}-${env.GITHUB_RUN_ATTEMPT || "1"}`
+    let branch = ownsHead ? owned.head.ref : newBranch
     let base = fresh ? (ownsHead ? fresh.base.ref : fresh.head.ref) : route.defaultBranch
     if (fresh && !ownsHead) draft = true
-    let reused = ownsHead ? fresh.number : undefined
+    let reused = owned?.number
     let pushed = false
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = await git([
@@ -613,8 +664,8 @@ export async function publishBundle(input: {
       }
       if (reused !== undefined) {
         // A moved owned head is never overwritten. Preserve the result on a fresh branch and offer it into that head.
-        branch = `vector/pr${route.pr}-${route.runId}-${env.GITHUB_RUN_ATTEMPT || "1"}`
-        base = fresh!.head.ref
+        branch = newBranch
+        base = route.kind === "schedule" ? route.defaultBranch : fresh!.head.ref
         reused = undefined
         draft = true
       }
@@ -727,6 +778,15 @@ export async function createPublishApi(input: {
       (
         await github.rest.pulls.list({ owner, repo, head: `${owner}:${head}`, base, state: "open", per_page: 100 })
       ).data.map(pull),
+    schedulePulls: async (base) => {
+      const found: PublishPull[] = []
+      for (let page = 1; page <= 10; page++) {
+        const entries = (await github.rest.pulls.list({ owner, repo, base, state: "open", per_page: 100, page })).data
+        found.push(...entries.map(pull))
+        if (entries.length < 100) break
+      }
+      return found
+    },
     createPull: async (request) => {
       const created = await github.rest.pulls.create({ owner, repo, ...request })
       return { number: created.data.number }

@@ -2,9 +2,9 @@ name: typecheck
 
 on:
   push:
-    branches: [main]
+    branches: [main, v2]
   pull_request:
-    branches: [main]
+    branches: [main, v2]
   workflow_dispatch:
 
 jobs:
@@ -28,3 +28,17 @@ jobs:
       - name: Run typecheck
         working-directory: packages/${{ matrix.package }}
         run: bun typecheck
+
+  # script/vectorscope-eval is outside every package's tsconfig, so it has its own.
+  vectorscope-eval:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Typecheck the VectorScope eval scripts
+        working-directory: packages/engine
+        run: bun tsgo -p ../../script/vectorscope-eval/tsconfig.json

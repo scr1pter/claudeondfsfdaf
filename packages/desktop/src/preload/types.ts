@@ -1,3 +1,4 @@
+import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
 import type { VectorAccountPlatform } from "@vectordevai/app/vector-account"
 import type { DesktopMenuAction } from "@vectordevai/app/desktop-menu"
 import type { WslServersPlatform } from "@vectordevai/app/wsl/types"
@@ -19,6 +20,7 @@ import type {
 import type { Observed, PageRead } from "../main/browser-page"
 import type { Chip as ResearchBrowserChip } from "../main/research-browser"
 import type { CloudOverview } from "../main/cloud-overview"
+import type { LocalReport, ReportStatuses } from "../main/bug-report"
 import type { SupabaseCommand, SupabaseProgressEvent } from "../main/cloud-supabase"
 import type { VercelCloudApi } from "../main/cloud-vercel-ipc"
 import type { GithubOauthPushInput, GithubPublishInput, GithubPublishResult, GithubStatus } from "../main/github"
@@ -91,8 +93,74 @@ export type {
   SpendWindowTotal,
 } from "../main/spend-limits"
 import type { FailureMemory } from "../main/failure-memory"
+import type { RemoteStatus } from "../main/remote-link"
+import type { NotifyResult, PhoneAlertEvent } from "../main/remote-notify"
+export type { RemoteStatus } from "../main/remote-link"
+import type { VaultResult, VaultRestoreResult, VaultStatus, VaultVersions } from "../main/vault-backup"
+export type { VaultResult, VaultRestoreResult, VaultStatus, VaultVersions } from "../main/vault-backup"
 export type { FailureMemory, FailureRepair, FailureSignatureRecord } from "../main/failure-memory"
 import type { AgentTeam, TeamCollaborationGraph, TeamMessage, TeamTopology } from "../main/agent-team-model"
+
+export type ReportsPlatform = {
+  list: () => Promise<LocalReport[]>
+  status: () => Promise<ReportStatuses>
+}
+
+/** Vector Remote on this computer (WP A41). Keys, tickets and the sign-in stay in the main process. */
+export type RemoteAPI = {
+  status: () => Promise<RemoteStatus>
+  setEnabled: (enabled: boolean) => Promise<RemoteStatus>
+  startPairing: () => Promise<{ link: string; expiresAt: number; status: RemoteStatus }>
+  confirmPairing: (code?: string) => Promise<RemoteStatus>
+  cancelPairing: () => Promise<RemoteStatus>
+  unpair: (device: string) => Promise<RemoteStatus>
+  disconnectAll: () => Promise<RemoteStatus & { killed: boolean }>
+  /** Whether a phone started the turn any of these sessions runs; the app's auto-accept leaves those to a person. */
+  isPhoneTurn: (sessionIDs: string[]) => Promise<boolean>
+  onChange: (callback: (status: RemoteStatus) => void) => () => void
+}
+
+import type { OpsImageResult, OpsMergeResult, OpsResult } from "../main/ops"
+export type { OpsImageResult, OpsMergeResult, OpsResult } from "../main/ops"
+
+/** Production checks (WP A50): Settings → Production. The account token and GitHub sign-in stay in the main process. */
+export type OpsAPI = {
+  request: (input: unknown) => Promise<OpsResult>
+  image: (input: { card: string; n: number }) => Promise<OpsImageResult>
+  merge: (input: { repository: string; number: number; headSha?: string }) => Promise<OpsMergeResult>
+}
+
+import type { HostedActionResult, HostedResult } from "../main/hosted-client"
+export type { HostedActionResult, HostedResult } from "../main/hosted-client"
+
+/**
+ * The cloud computer (WP A56): the composer's "Run on my cloud computer", the bar above the composer and the live view
+ * window. The account token stays in the main process.
+ */
+export type HostedAPI = {
+  request: (input: unknown) => Promise<HostedResult>
+  liveView: (input: { id: string; mode: "view" | "control" }) => Promise<HostedActionResult>
+  files: (input: { id: string }) => Promise<HostedActionResult>
+  open: (input: { kind: "pull-request" | "recording"; url: string }) => Promise<HostedActionResult>
+}
+
+/** Brain Vault on this computer (WP A45): Settings → Memory → Backup. The vault key stays in the main process. */
+export type VaultAPI = {
+  status: () => Promise<VaultStatus>
+  configure: (input: { enabled?: boolean; backend?: "vector" | "github"; githubRepo?: string }) => Promise<VaultResult>
+  backup: () => Promise<VaultResult>
+  versions: () => Promise<VaultVersions>
+  restore: (input: { version?: string; code?: string }) => Promise<VaultRestoreResult>
+  forget: (version: string) => Promise<VaultResult>
+  remove: () => Promise<VaultResult>
+  onChange: (callback: (status: VaultStatus) => void) => () => void
+}
+
+/** Alerts from this computer to its paired phones, encrypted end to end (WP A41). */
+export type PhoneAlertsAPI = {
+  send: (alert: { event: PhoneAlertEvent; title: string; route?: "sessions" | "approvals" }) => Promise<NotifyResult>
+}
+
 export type { AgentTeam, TeamCollaborationGraph, TeamLink, TeamMessage, TeamTopology } from "../main/agent-team-model"
 export type { LocalMemoryState } from "../main/local-memory"
 export type { DesktopLocalStatus } from "../main/local-mode"
@@ -186,6 +254,20 @@ export type ServerReadyData = {
 }
 
 export type { OpenPathApplication } from "../main/open-path"
+
+/**
+ * `window.api.computer` (section 2.9). Settings cross the context bridge in their wire form (company rules as pairs);
+ * the renderer rebuilds `policy.apps` as a Map before handing this to the app as `platform.computer`.
+ */
+export type ComputerDesktopAPI = Omit<
+  import("@vectordevai/schema/computer").Computer.ComputerPlatform,
+  "prefs" | "setPrefs"
+> & {
+  prefs(): Promise<import("../main/computer-wire").ComputerSettingsWire>
+  setPrefs(
+    patch: Partial<import("@vectordevai/schema/computer").Computer.ComputerPrefs>,
+  ): Promise<import("../main/computer-wire").ComputerSettingsWire>
+}
 
 export type WslServersAPI = WslServersPlatform
 export type UpdaterAPI = {
@@ -381,6 +463,20 @@ export type BrowserAgentPageEvent = {
   loading: boolean
 }
 
+/**
+ * What the agent's browser for one task is doing, sent to every main window whether or not a Preview shows it: its
+ * active page, its tab count, whether a command runs, whether a Preview shows it, and `closed` once it is gone.
+ */
+export type BrowserAgentActivity = {
+  contextId: string
+  url: string
+  title: string
+  tabs: number
+  busy: boolean
+  shown: boolean
+  closed: boolean
+}
+
 export type BrowserAgentBounds = { x: number; y: number; width: number; height: number }
 
 export type BrowserAutomationRun = {
@@ -528,6 +624,10 @@ export type BrowserAgentInput = {
   tabId?: string
   /** selectOption: the option values or visible labels to select. */
   values?: string[]
+  /** click and clickRef: 2 for a double click (1 by default). */
+  clickCount?: number
+  /** click and clickRef: which mouse button (left by default). */
+  button?: "left" | "right"
   /** A driving command runs only while the active tab's page still has this origin: the one the engine checked and asked about. */
   expectOrigin?: string
   /** A click runs only while its target still has this name (clickTargetLabel): the one the engine judged. */
@@ -810,6 +910,7 @@ export type BackgroundTaskRecord = {
 }
 
 export type ElectronAPI = {
+  githubAgents: GithubAgentsAPI
   killSidecar: () => Promise<void>
   awaitInitialization: () => Promise<ServerReadyData>
   wslServers: WslServersAPI
@@ -821,7 +922,17 @@ export type ElectronAPI = {
     set: (url: string, credential: { username?: string; password: string }) => Promise<boolean>
     delete: (url: string) => Promise<void>
   }
-  reportBug: (input: { message: string; email?: string }) => Promise<{ delivered: boolean; error?: string }>
+  reportBug: (input: {
+    message: string
+    email?: string
+  }) => Promise<{ delivered: boolean; tracked?: boolean; error?: string }>
+  /** Bug reports this computer sent and what became of each (WP A33); the report ids stay in the main process. */
+  reports: ReportsPlatform
+  remote: RemoteAPI
+  phoneAlerts: PhoneAlertsAPI
+  vault: VaultAPI
+  ops: OpsAPI
+  hosted: HostedAPI
   askHelpAssistant: (input: {
     messages: { role: "user" | "assistant"; content: string }[]
     context: string
@@ -859,6 +970,11 @@ export type ElectronAPI = {
   getWindowID: () => Promise<string>
   onMenuCommand: (cb: (id: string) => void) => () => void
   onDeepLink: (cb: (urls: string[]) => void) => () => void
+  computer: ComputerDesktopAPI
+  /** A Hands notification was clicked: open this conversation (an app-relative path). */
+  onComputerOpen: (cb: (href: string) => void) => () => void
+  /** The built-in engine deleted computer screenshots; the app decodes the selection and refreshes its history (D23). */
+  onComputerScreenshotsRemoved: (cb: (removal: unknown) => void) => () => void
 
   openDirectoryPicker: (opts?: {
     multiple?: boolean
@@ -899,6 +1015,7 @@ export type ElectronAPI = {
   runBrowserAgent: (input: BrowserAgentInput) => Promise<BrowserAutomationRun>
   prepareAgentTask: (root: string, task: string) => Promise<AgentTaskPreparation>
   onBrowserAgentPageEvent: (cb: (event: BrowserAgentPageEvent) => void) => () => void
+  onBrowserAgentActivity: (cb: (event: BrowserAgentActivity) => void) => () => void
   parallelWorkspaces: {
     list: (scope?: { sourcePath?: string; parentSessionId?: string }) => Promise<ParallelWorkspaceRecord[]>
     create: (input: CreateParallelWorkspaceInput) => Promise<ParallelWorkspaceRecord>

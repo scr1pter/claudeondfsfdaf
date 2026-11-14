@@ -13,6 +13,12 @@ import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { TaskManager } from "@/task/manager"
 import { WorkflowOwner } from "@/orchestration/owner"
+import { PlaybookClient } from "@/orchestration/playbooks"
+import { HostedFollow } from "@/hosted/follow"
+import { CloudBrain } from "@/brain/run-bundle"
+import { ReviewOwner } from "@/review/owner"
+import { ReviewMemoryOwner } from "@/review/memory-owner"
+import { ConnectOwner } from "@/connect/owner"
 import { TaskNotify } from "@/task/notify"
 import { TaskLimits } from "@/task/limits"
 import { TaskRecovery } from "@/task/recovery"
@@ -20,6 +26,9 @@ import { TaskAttention } from "@/task/attention"
 import { TaskSignals } from "@/task/signals"
 import { DesktopTasks } from "@/task/desktop"
 import { Command } from "@/command"
+import { ComputerAvailability } from "@/computer/availability"
+import { ComputerPrune } from "@/computer/prune"
+import { ComputerProtection } from "@/computer/protection"
 import { Config } from "@/config/config"
 import { Workspace } from "@/control-plane/workspace"
 import { Env } from "@/env"
@@ -105,9 +114,12 @@ import { EventApi } from "./groups/event"
 import { PtyConnectApi } from "./groups/pty"
 import { eventHandlers } from "./handlers/event"
 import { configHandlers } from "./handlers/config"
+import { computerHandlers } from "./handlers/computer"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
+import { reviewHandlers } from "./handlers/review"
+import { reviewMemoryHandlers } from "./handlers/review-memory"
 import { teamsHandlers } from "./handlers/teams"
 import { Teams } from "@vectordevai/core/teams"
 import { VectorTeams } from "@/teams"
@@ -117,6 +129,7 @@ import { instanceHandlers } from "./handlers/instance"
 import { localHandlers } from "./handlers/local"
 import { mcpHandlers } from "./handlers/mcp"
 import { memoryHandlers } from "./handlers/memory"
+import { connectHandlers } from "./handlers/connect"
 import { permissionHandlers } from "./handlers/permission"
 import { projectHandlers } from "./handlers/project"
 import { projectCopyHandlers } from "./handlers/project-copy"
@@ -184,13 +197,17 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
 )
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
+    computerHandlers,
     configHandlers,
     experimentalHandlers,
+    reviewHandlers,
+    reviewMemoryHandlers,
     fileHandlers,
     instanceHandlers,
     localHandlers,
     mcpHandlers,
     memoryHandlers,
+    connectHandlers,
     projectHandlers,
     projectCopyHandlers,
     ptyHandlers,
@@ -246,6 +263,8 @@ const app = LayerNode.group([
   Npm.node,
   FSUtil.node,
   Database.node,
+  ComputerPrune.node,
+  ComputerProtection.node,
   Auth.node,
   Teams.node,
   Config.node,
@@ -287,7 +306,13 @@ const app = LayerNode.group([
   BackgroundJob.node,
   TaskManager.node,
   WorkflowOwner.node,
+  ReviewOwner.node,
+  ReviewMemoryOwner.node,
+  ConnectOwner.node,
   TaskNotify.node,
+  PlaybookClient.node,
+  HostedFollow.node,
+  CloudBrain.node,
   TaskLimits.node,
   TaskRecovery.node,
   TaskAttention.node,
@@ -310,6 +335,7 @@ const app = LayerNode.group([
   Command.node,
   Truncate.node,
   ToolRegistry.node,
+  ComputerAvailability.node,
   Format.node,
   Project.node,
   Vcs.node,

@@ -1,6 +1,7 @@
 // The documentation's shape: groups in order, each leaf a page under /docs.
 // Edit here and the sidebar, the pager and the search index all follow.
-import { release111, release113 } from "./vector-releases"
+import { handsReleasePreview, release111, release113 } from "./vector-releases"
+import { Hands } from "@vectordevai/schema/hands"
 
 export type DocLink = { id: string; title: string; blurb: string }
 export type DocGroup = { label: string; links: DocLink[] }
@@ -67,6 +68,11 @@ export const docsNav: DocGroup[] = [
     label: "Features",
     links: [
       {
+        id: Hands.DOCS,
+        title: Hands.NAME,
+        blurb: `${handsReleasePreview.since} work in the local apps you approve, with app permissions, sensitive-step asks and Stop.`,
+      },
+      {
         id: "browser-agent",
         title: "Browser agent",
         blurb: "A real Chromium view inside Vector that the agent drives against your running product.",
@@ -128,6 +134,12 @@ export const docsNav: DocGroup[] = [
         title: "Models, free models and your own keys",
         blurb:
           "Sign in to Vector for free models, connect a provider account or API key, or add an OpenAI-compatible server of your own.",
+      },
+      {
+        id: "codium",
+        title: "Vector Codium",
+        blurb:
+          "Vector's optional monthly plan: coding models without provider keys, usage shown as a percentage, and no top-ups.",
       },
       {
         id: "local",
@@ -244,6 +256,9 @@ export const docsMoved: Record<string, string> = {
   faq: "troubleshooting#faq",
   "delete-account": "troubleshooting#delete-account",
   "local-memory": "brain",
+  // Plans and pricing have no pages of their own: Vector Codium covers both.
+  plans: "codium",
+  pricing: "codium",
 }
 
 export const groupOf = (id: string) => docsNav.find((group) => group.links.some((link) => link.id === id))?.label ?? ""

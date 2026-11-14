@@ -13,7 +13,7 @@ import { buildInlineBody } from "@vectordevai/core/review/format"
 import type { Finding } from "@vectordevai/core/review/types"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { Shell } from "@vectordevai/core/shell"
-import { Config } from "../../src/config/config"
+import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 import { GithubRunCommand } from "../../src/cli/cmd/github"
 import {
   AGENT_NEEDS_CHANNEL,
@@ -126,6 +126,46 @@ const noBundle = async (dir: string) =>
     () => false,
     () => true,
   )
+
+it.instance(
+  "a configured schedule runs its own trusted prompt and records the stable schedule identity",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      yield* Effect.promise(() => commitSetup(test.dir))
+      const github = yield* Effect.acquireRelease(
+        Effect.sync(() => fakeGithub({ roles: {} })),
+        (value) => Effect.sync(() => value.stop()),
+      )
+      const cron = "17 3 * * 1"
+      const configuration = JSON.stringify({
+        [cron]: { id: "weekly", prompt: "Check this repository's maintenance notes" },
+      })
+      const configured = lookupSchedule({ VECTOR_SCHEDULE_PROMPTS: configuration }, { schedule: cron })
+      if (!configured) throw new Error("Missing configured schedule fixture")
+      yield* test.llm.text("Maintenance notes checked.")
+      yield* test.llm.text("Weekly maintenance")
+      const result = yield* phase({
+        env: {
+          ...stepEnv({
+            event: yield* Effect.promise(() => eventFile({ schedule: cron })),
+            eventName: "schedule",
+            thread: configured.thread,
+            github: github.url,
+          }),
+          VECTOR_SCHEDULE_PROMPTS: configuration,
+        },
+        credentials: yield* Effect.promise(() => holder("own-key")),
+      })
+      expect(result.result).toMatchObject({ exitCode: 0, outcome: "no-changes" })
+      const bundle = yield* Effect.promise(() => bundleOf(test.dir))
+      expect(bundle.summary).toMatchObject({ kind: "schedule", thread: configured.thread, scheduleId: "weekly" })
+      const calls = yield* test.llm.inputs
+      expect(userText(calls.find((call) => !isTitle(call))!)).toContain("Check this repository's maintenance notes")
+    }),
+  { git: true },
+  30_000,
+)
 
 function issueComment(input: { number: number; id: number; body: string; pr?: boolean; user?: object }) {
   return {
@@ -379,7 +419,7 @@ describe("the agent phase's task", () => {
         // The edit comes only from the shell, which also points the repository's hooks and fsmonitor at scripts that
         // leave a marker, as an agent can. Every git command after it must run pinned (deviation V18b item 8).
         const traps = yield* Effect.promise(() => folder("vector-traps-"))
-        const trap = (name: string) => `#!/bin/sh\ntouch '${path.join(traps, `${name}-ran`)}'\n`
+        const trap = (name: string) => `#!/bin/sh\ntouch '${path.join(traps, `${name}-ran`).replaceAll("\\", "/")}'\n`
         yield* Effect.promise(async () => {
           await fs.mkdir(path.join(traps, "hooks"))
           const scripts = Object.fromEntries([
@@ -395,26 +435,28 @@ describe("the agent phase's task", () => {
             }),
           )
         })
-        const config = yield* Config.Service
-        const shell = Shell.acceptable((yield* config.get()).shell)
-        const literal = (value: string) => `'${value.replaceAll("'", "''")}'`
+        // Execute the edit and real Git config installation through the actual shell tool on every OS.
+        // Encoding keeps JavaScript paths and quotes out of the shell's argument grammar. `bun -e` evaluates as a
+        // module, where `require` is undefined, so the script loads built-ins the way both Bun and Node allow.
+        const install = Buffer.from(
+          [
+            "const fs = process.getBuiltinModule('node:fs')",
+            "const { execFileSync } = process.getBuiltinModule('node:child_process')",
+            "fs.writeFileSync('README.md', '# Widgets\\n')",
+            "fs.utimesSync('NOTES.md', 1000000000, 1000000000)",
+            `execFileSync('git', ['config', 'core.hooksPath', ${JSON.stringify(path.join(traps, "hooks"))}])`,
+            `execFileSync('git', ['config', 'core.fsmonitor', ${JSON.stringify(path.join(traps, "fsmonitor"))}])`,
+          ].join(";"),
+        ).toString("base64")
+        const shell = Shell.acceptable()
+        const commandArgs = [
+          process.execPath.replaceAll("\\", "/"),
+          "-e",
+          `eval(Buffer.from('${install}','base64').toString())`,
+        ].map((value) => Shell.quote(shell, value))
+        expect(commandArgs.every((value) => value !== undefined)).toBe(true)
         yield* test.llm.tool("bash", {
-          command: Shell.ps(shell)
-            ? [
-                "$ErrorActionPreference = 'Stop'",
-                "[System.IO.File]::WriteAllText('README.md', \"# Widgets`n\", [System.Text.UTF8Encoding]::new($false))",
-                "[System.IO.File]::SetLastWriteTimeUtc('NOTES.md', [DateTimeOffset]::FromUnixTimeSeconds(1000000000).UtcDateTime)",
-                `git config --local core.hooksPath ${literal(path.join(traps, "hooks"))}`,
-                "if ($LASTEXITCODE -ne 0) { throw 'Fixture Git hooks configuration failed.' }",
-                `git config --local core.fsmonitor ${literal(path.join(traps, "fsmonitor"))}`,
-                "if ($LASTEXITCODE -ne 0) { throw 'Fixture Git fsmonitor configuration failed.' }",
-              ].join("; ")
-            : [
-                "printf '# Widgets\\n' > README.md",
-                "touch -d @1000000000 NOTES.md",
-                `git config core.hooksPath '${path.join(traps, "hooks")}'`,
-                `git config core.fsmonitor '${path.join(traps, "fsmonitor")}'`,
-              ].join(" && "),
+          command: `${Shell.ps(shell) ? "& " : ""}${commandArgs.join(" ")}`,
           description: "Tidy the readme",
         })
         yield* test.llm.text("Tidied the readme.")
@@ -483,6 +525,9 @@ describe("the agent phase's task", () => {
         // The shell's config took, and no hook or fsmonitor ran.
         expect(yield* Effect.promise(() => git(test.dir, ["config", "--local", "core.hooksPath"]))).toBe(
           path.join(traps, "hooks"),
+        )
+        expect(yield* Effect.promise(() => git(test.dir, ["config", "--local", "core.fsmonitor"]))).toBe(
+          path.join(traps, "fsmonitor"),
         )
         expect((yield* Effect.promise(() => fs.readdir(traps))).sort()).toEqual(["fsmonitor", "hooks"])
         expect(guard.outside()).toEqual([])
@@ -697,7 +742,7 @@ describe("the agent phase's credentials and policy", () => {
 
 describe("refusals", () => {
   it.instance(
-    "a scheduled run is refused until V22, and on Codium it settles refused",
+    "an unconfigured scheduled run is refused, and on Codium it settles refused",
     () =>
       Effect.gen(function* () {
         const test = yield* setup()

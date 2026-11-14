@@ -1,3 +1,4 @@
+import { ComputerPrivacy } from "@vectordevai/server/computer-privacy"
 import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicShareRemovalError, publicShareWarning } from "@vectordevai/schema/public-share"
@@ -160,7 +161,7 @@ export interface Interface {
   readonly get: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
   readonly remove: (
     id: WorkspaceV2.ID,
-  ) => Effect.Effect<Info | undefined, PublicShareRemovalError | PublicSession.Error>
+  ) => Effect.Effect<Info | undefined, PublicShareRemovalError | PublicSession.Error | Session.BusyError>
   readonly status: () => Effect.Effect<ConnectionStatus[]>
   readonly isSyncing: (workspaceID: WorkspaceV2.ID) => Effect.Effect<boolean>
   readonly waitForSync: (
@@ -251,9 +252,11 @@ const layer = Layer.effect(
       url: URL | string,
       headers: HeadersInit | undefined,
     ) {
+      const outgoing = new Headers(RequestOwner.replicationHeaders(headers))
+      outgoing.set(ComputerPrivacy.WORKSPACE_SYNC_HEADER, "1")
       const response = yield* http.execute(
         HttpClientRequest.get(route(url, "/global/event"), {
-          headers: RequestOwner.replicationHeaders(headers),
+          headers: outgoing,
           accept: "text/event-stream",
         }),
       )
@@ -731,7 +734,8 @@ const layer = Layer.effect(
             sessionID: input.sessionID,
           })
 
-        const batches = Iterable.chunksOf(rows, 10)
+        const projected = yield* ComputerPrivacy.payload(rows, { db })
+        const batches = Iterable.chunksOf(projected, 10)
         const total = Iterable.size(batches)
 
         yield* Effect.forEach(

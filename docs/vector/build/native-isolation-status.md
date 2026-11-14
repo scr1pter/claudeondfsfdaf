@@ -80,3 +80,39 @@ in the Python source/fixture and native TypeScript decoder. AST parsing and
 static vocabulary agreement pass; the new target-classification test and actual
 prepare still require the next bounded hosted cell. Runtime construction and
 cleanup behavior remain unchanged.
+
+
+## Inactive source integration with v2/Hands, 14 November 2026
+
+The native continuation integrates release source `df0e3b1c5` in its own worktree.
+This updates the historical branch-only statement above: source integration is now
+authorized, while native activation and real-host qualification remain separate gates.
+Both source native build switches remain false and the legacy bubblewrap `FLOOR`
+remains explicitly held false. No runtime or environment setting activates either.
+
+The shared spawner preserves typed planning failures and captured-output ownership.
+A command has one lifetime signaler: ordinary background commands retain the owned
+process controller, and native foreground commands retain the native owner. Native
+commands registered with `OwnedProcess` are refused before launch, including a later
+pipeline stage, until a qualified delegated control adapter exists (spawn review §4.4).
+Hands' early and final shell/PTY rechecks and protected-overlay exclusions are retained.
+
+The two fixed Python helper seams (`directory-identity` and `read-only-git`) now refuse
+required process isolation at admission and immediately before spawn. They do not claim
+a fixed-helper exception or run a raw fallback. The CI metadata-reader source digest is
+updated to the exact integrated reviewed reader, not an older adapter implementation.
+The native Shell fixture includes the real new ComputerSession and Session dependencies;
+its only harness omission remains aggregate unrelated InstanceBootstrap.
+
+Validation on Windows in this isolated worktree: Core and Engine `bun typecheck` pass;
+Core native policy/planning/refusal suites: 49 pass, 2 platform skips; Engine sandbox and
+native-adapter pure suites: 50 pass, 2 platform skips; shared-spawner regression suite:
+35 pass. The owned-native pipeline policy case and Linux kernel-alias case are Windows
+skips, not successful Linux witnesses. Fixed-helper refusal runs in a separate process
+with the actual irreversible guard and passes. Both Python sources parse. No local
+native helper, root installer, privileged operation, model call or owner app was run.
+
+The single hosted target-classification diagnostic at `f141ef16` is still queued as run
+[43621985900](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43621985900).
+No expanded matrix was dispatched. Prepare, cleanup, full bootstrap and production
+activation remain unqualified; source/type/pure test passes do not close these gates.

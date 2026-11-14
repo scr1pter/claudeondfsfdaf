@@ -24,6 +24,12 @@ import type {
   CommandListData,
   CommandListErrors,
   CommandListResponses,
+  ComputerProtectedPathsData,
+  ComputerProtectedPathsErrors,
+  ComputerProtectedPathsResponses,
+  ComputerPruneScreenshotsData,
+  ComputerPruneScreenshotsErrors,
+  ComputerPruneScreenshotsResponses,
   ConfigGetData,
   ConfigGetErrors,
   ConfigGetResponses,
@@ -45,9 +51,39 @@ import type {
   ConfigUpdateData,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  ConnectCancelData,
+  ConnectCancelErrors,
+  ConnectCancelResponses,
+  ConnectDirectoryReviewData,
+  ConnectDirectoryReviewErrors,
+  ConnectDirectoryReviewResponses,
+  ConnectDismissData,
+  ConnectDismissErrors,
+  ConnectDismissResponses,
+  ConnectGetData,
+  ConnectGetErrors,
+  ConnectGetResponses,
+  ConnectListData,
+  ConnectListErrors,
+  ConnectListResponses,
+  ConnectRegisterData,
+  ConnectRegisterErrors,
+  ConnectRegisterResponses,
+  ConnectReviewData,
+  ConnectReviewErrors,
+  ConnectReviewResponses,
+  ConnectRunsData,
+  ConnectRunsErrors,
+  ConnectRunsResponses,
   EventSubscribeData,
   EventSubscribeErrors,
   EventSubscribeResponses,
+  ExperimentalBrainImportProposalsData,
+  ExperimentalBrainImportProposalsErrors,
+  ExperimentalBrainImportProposalsResponses,
+  ExperimentalBrainPreviewData,
+  ExperimentalBrainPreviewErrors,
+  ExperimentalBrainPreviewResponses,
   ExperimentalCapabilitiesGetData,
   ExperimentalCapabilitiesGetErrors,
   ExperimentalCapabilitiesGetResponses,
@@ -63,6 +99,18 @@ import type {
   ExperimentalControlPlaneMoveSessionData,
   ExperimentalControlPlaneMoveSessionErrors,
   ExperimentalControlPlaneMoveSessionResponses,
+  ExperimentalHostedAttachData,
+  ExperimentalHostedAttachErrors,
+  ExperimentalHostedAttachResponses,
+  ExperimentalHostedJobsData,
+  ExperimentalHostedJobsErrors,
+  ExperimentalHostedJobsResponses,
+  ExperimentalPlaybooksInstallData,
+  ExperimentalPlaybooksInstallErrors,
+  ExperimentalPlaybooksInstallResponses,
+  ExperimentalPlaybooksListData,
+  ExperimentalPlaybooksListErrors,
+  ExperimentalPlaybooksListResponses,
   ExperimentalProjectCopyGenerateNameData,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
@@ -297,6 +345,12 @@ import type {
   McpStatusData,
   McpStatusErrors,
   McpStatusResponses,
+  MemoryBackupData,
+  MemoryBackupErrors,
+  MemoryBackupResponses,
+  MemoryBootstrapPrepareData,
+  MemoryBootstrapPrepareErrors,
+  MemoryBootstrapPrepareResponses,
   MemoryCreateData,
   MemoryCreateErrors,
   MemoryCreateResponses,
@@ -405,6 +459,9 @@ import type {
   MemoryResearchSourceData,
   MemoryResearchSourceErrors,
   MemoryResearchSourceResponses,
+  MemoryRestoreData,
+  MemoryRestoreErrors,
+  MemoryRestoreResponses,
   MemoryReviewListData,
   MemoryReviewListErrors,
   MemoryReviewListResponses,
@@ -531,6 +588,33 @@ import type {
   QuestionReplyData,
   QuestionReplyErrors,
   QuestionReplyResponses,
+  ReviewGetData,
+  ReviewGetErrors,
+  ReviewGetResponses,
+  ReviewListData,
+  ReviewListErrors,
+  ReviewListResponses,
+  ReviewMemoryConfirmData,
+  ReviewMemoryConfirmErrors,
+  ReviewMemoryConfirmResponses,
+  ReviewMemoryDiscardData,
+  ReviewMemoryDiscardErrors,
+  ReviewMemoryDiscardResponses,
+  ReviewMemoryInspectData,
+  ReviewMemoryInspectErrors,
+  ReviewMemoryInspectResponses,
+  ReviewMemoryPrepareData,
+  ReviewMemoryPrepareErrors,
+  ReviewMemoryPrepareResponses,
+  ReviewStartData,
+  ReviewStartErrors,
+  ReviewStartResponses,
+  ReviewStopData,
+  ReviewStopErrors,
+  ReviewStopResponses,
+  ReviewTargetData,
+  ReviewTargetErrors,
+  ReviewTargetResponses,
   ServerSessionSessionImportArchiveData,
   ServerSessionSessionImportArchiveErrors,
   ServerSessionSessionImportArchiveResponses,
@@ -1444,6 +1528,110 @@ export class Task extends HeyApiClient {
   }
 }
 
+export class Brain extends HeyApiClient {
+  /**
+   * Preview explicitly selected repository Brain bytes without uploading
+   */
+  public preview<ThrowOnError extends boolean = false>(options?: Options<ExperimentalBrainPreviewData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainPreviewResponses,
+      ExperimentalBrainPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-bundle/preview",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Stage owner-selected returned Brain drafts for review
+   */
+  public importProposals<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalBrainImportProposalsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalBrainImportProposalsResponses,
+      ExperimentalBrainImportProposalsErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/brain/run-proposals/import",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Playbooks extends HeyApiClient {
+  /**
+   * List owner Playbooks for personal installation
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<ExperimentalPlaybooksListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      ExperimentalPlaybooksListResponses,
+      ExperimentalPlaybooksListErrors,
+      ThrowOnError
+    >({ url: "/experimental/workflow/playbooks", ...options })
+  }
+
+  /**
+   * Install a selected Playbook in owner configuration
+   */
+  public install<ThrowOnError extends boolean = false>(
+    options?: Options<ExperimentalPlaybooksInstallData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ExperimentalPlaybooksInstallResponses,
+      ExperimentalPlaybooksInstallErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/playbooks/install",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
+export class Hosted extends HeyApiClient {
+  /**
+   * Reconnect hosted jobs to their original owner conversation
+   */
+  public jobs<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedJobsData, ThrowOnError>) {
+    return (options.client ?? this.client).get<
+      ExperimentalHostedJobsResponses,
+      ExperimentalHostedJobsErrors,
+      ThrowOnError
+    >({ url: "/experimental/session/{sessionID}/hosted-jobs", ...options })
+  }
+
+  /**
+   * Return a current-account hosted job report to this owner conversation
+   */
+  public attach<ThrowOnError extends boolean = false>(options: Options<ExperimentalHostedAttachData, ThrowOnError>) {
+    return (options.client ?? this.client).post<
+      ExperimentalHostedAttachResponses,
+      ExperimentalHostedAttachErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/hosted-jobs",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+}
+
 export class Workflow extends HeyApiClient {
   /**
    * List trusted saved workflows
@@ -1722,6 +1910,21 @@ export class Experimental extends HeyApiClient {
     return (this._task ??= new Task({ client: this.client }))
   }
 
+  private _brain?: Brain
+  get brain(): Brain {
+    return (this._brain ??= new Brain({ client: this.client }))
+  }
+
+  private _playbooks?: Playbooks
+  get playbooks(): Playbooks {
+    return (this._playbooks ??= new Playbooks({ client: this.client }))
+  }
+
+  private _hosted?: Hosted
+  get hosted(): Hosted {
+    return (this._hosted ??= new Hosted({ client: this.client }))
+  }
+
   private _workflow?: Workflow
   get workflow(): Workflow {
     return (this._workflow ??= new Workflow({ client: this.client }))
@@ -1842,6 +2045,45 @@ export class Event extends HeyApiClient {
     return (options?.client ?? this.client).sse.get<EventSubscribeResponses, EventSubscribeErrors, ThrowOnError>({
       url: "/event",
       ...options,
+    })
+  }
+}
+
+export class Computer extends HeyApiClient {
+  /**
+   * Read paths protected from computer input
+   *
+   * Return trusted instruction, memory and configuration paths for the owner's desktop input gate. File contents are never returned.
+   */
+  public protectedPaths<ThrowOnError extends boolean = false>(
+    options?: Options<ComputerProtectedPathsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).get<
+      ComputerProtectedPathsResponses,
+      ComputerProtectedPathsErrors,
+      ThrowOnError
+    >({ url: "/computer/protected-paths", ...options })
+  }
+
+  /**
+   * Delete stored computer screenshots
+   *
+   * Delete computer screenshots before a time or in a session. Use all: true to delete every screenshot and reclaim database pages. Only the server owner can delete screenshots.
+   */
+  public pruneScreenshots<ThrowOnError extends boolean = false>(
+    options?: Options<ComputerPruneScreenshotsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ComputerPruneScreenshotsResponses,
+      ComputerPruneScreenshotsErrors,
+      ThrowOnError
+    >({
+      url: "/computer/screenshots/prune",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
     })
   }
 }
@@ -3113,6 +3355,28 @@ export class Documents extends HeyApiClient {
   }
 }
 
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Prepare a repository Brain bootstrap
+   *
+   * Scan eligible tracked repository documents and estimate at most four model requests. No model is called. Confirm the preview before requesting distillation; each request keeps only quote-locked proposals for review.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options?: Options<MemoryBootstrapPrepareData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      MemoryBootstrapPrepareResponses,
+      MemoryBootstrapPrepareErrors,
+      ThrowOnError
+    >({
+      url: "/memory/bootstrap",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+}
+
 export class Distill extends HeyApiClient {
   /**
    * Estimate finding more with a model
@@ -3130,7 +3394,7 @@ export class Distill extends HeyApiClient {
   /**
    * Find more with a model
    *
-   * Off unless VECTOR_KNOWLEDGE_DISTILL is set. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
+   * Enabled in Settings > Memory. A model reads the document's sections where Vector's rules found little, in a hidden helper session, and each suggestion is kept only if its quote is the document's own words. Kept suggestions wait as proposed records. Codium requires explicit Brain-helper consent and its qualified floor model. Refused for a session a guest is in, a model that may train on prompts and the Zen gateway.
    */
   public run<ThrowOnError extends boolean = false>(options: Options<MemoryDistillRunData, ThrowOnError>) {
     return (options.client ?? this.client).post<MemoryDistillRunResponses, MemoryDistillRunErrors, ThrowOnError>({
@@ -3465,6 +3729,34 @@ export class Memory extends HeyApiClient {
   }
 
   /**
+   * Memory for a Brain Vault backup
+   *
+   * Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.
+   */
+  public backup<ThrowOnError extends boolean = false>(options?: Options<MemoryBackupData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<MemoryBackupResponses, MemoryBackupErrors, ThrowOnError>({
+      url: "/memory/backup",
+      ...options,
+    })
+  }
+
+  /**
+   * Restore memory from your Brain Vault
+   *
+   * Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.
+   */
+  public restore<ThrowOnError extends boolean = false>(options?: Options<MemoryRestoreData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<MemoryRestoreResponses, MemoryRestoreErrors, ThrowOnError>({
+      url: "/memory/restore",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
    * Tidy memory now
    *
    * Merge duplicates, drop what waited for review too long, archive what goes unused and mark stale entries.
@@ -3525,6 +3817,11 @@ export class Memory extends HeyApiClient {
     return (this._documents ??= new Documents({ client: this.client }))
   }
 
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
+  }
+
   private _distill?: Distill
   get distill(): Distill {
     return (this._distill ??= new Distill({ client: this.client }))
@@ -3548,6 +3845,110 @@ export class Memory extends HeyApiClient {
   private _research?: Research
   get research(): Research {
     return (this._research ??= new Research({ client: this.client }))
+  }
+}
+
+export class Connect extends HeyApiClient {
+  /**
+   * List connected tools
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<ConnectListData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ConnectListResponses, ConnectListErrors, ThrowOnError>({
+      url: "/experimental/connect",
+      ...options,
+    })
+  }
+
+  /**
+   * List connected tool runs
+   */
+  public runs<ThrowOnError extends boolean = false>(options?: Options<ConnectRunsData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ConnectRunsResponses, ConnectRunsErrors, ThrowOnError>({
+      url: "/experimental/connect/runs",
+      ...options,
+    })
+  }
+
+  /**
+   * Get a connected tool run
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<ConnectGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ConnectGetResponses, ConnectGetErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Review changes in a conversation
+   */
+  public review<ThrowOnError extends boolean = false>(options: Options<ConnectReviewData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectReviewResponses, ConnectReviewErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/connect",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Review the selected directory
+   */
+  public directoryReview<ThrowOnError extends boolean = false>(
+    options?: Options<ConnectDirectoryReviewData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).post<
+      ConnectDirectoryReviewResponses,
+      ConnectDirectoryReviewErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/connect/review",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel a connected tool run
+   */
+  public cancel<ThrowOnError extends boolean = false>(options: Options<ConnectCancelData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectCancelResponses, ConnectCancelErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/cancel",
+      ...options,
+    })
+  }
+
+  /**
+   * Bring desktop findings into a conversation
+   */
+  public register<ThrowOnError extends boolean = false>(options?: Options<ConnectRegisterData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ConnectRegisterResponses, ConnectRegisterErrors, ThrowOnError>({
+      url: "/experimental/connect/findings",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Dismiss findings from an owner action
+   */
+  public dismiss<ThrowOnError extends boolean = false>(options: Options<ConnectDismissData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ConnectDismissResponses, ConnectDismissErrors, ThrowOnError>({
+      url: "/experimental/connect/runs/{runID}/dismiss",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
   }
 }
 
@@ -3762,6 +4163,135 @@ export class Question extends HeyApiClient {
       url: "/question/{requestID}/reject",
       ...options,
     })
+  }
+}
+
+export class Review2 extends HeyApiClient {
+  /**
+   * Read the local review target
+   *
+   * Read the existing conversation's exact Git head without starting model work. Owner only.
+   */
+  public target<ThrowOnError extends boolean = false>(options: Options<ReviewTargetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewTargetResponses, ReviewTargetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/target",
+      ...options,
+    })
+  }
+
+  /**
+   * Find local review runs
+   *
+   * Owner-only bounded status summaries for reconnection. No result JSON or code is included.
+   */
+  public list<ThrowOnError extends boolean = false>(options: Options<ReviewListData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewListResponses, ReviewListErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+    })
+  }
+
+  /**
+   * Start an owner local review
+   *
+   * Opt-in owner-only review of local changes. Placement and read authority come from the existing conversation. No GitHub connection is required; no checks, posting or automatic restart occur.
+   */
+  public start<ThrowOnError extends boolean = false>(options: Options<ReviewStartData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewStartResponses, ReviewStartErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Read an owned local review
+   *
+   * Read the exact retained result without starting or retrying model work.
+   */
+  public get<ThrowOnError extends boolean = false>(options: Options<ReviewGetData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewGetResponses, ReviewGetErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}",
+      ...options,
+    })
+  }
+
+  /**
+   * Stop an owned local review
+   *
+   * Signal and join this engine's exact owned run, retaining completed partial output.
+   */
+  public stop<ThrowOnError extends boolean = false>(options: Options<ReviewStopData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewStopResponses, ReviewStopErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/{runID}/stop",
+      ...options,
+    })
+  }
+}
+
+export class ReviewMemory extends HeyApiClient {
+  /**
+   * Read this repository's review memory
+   *
+   * Owner-only bounded read in the engine's verified physical repository. Does not start a review.
+   */
+  public inspect<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryInspectData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ReviewMemoryInspectResponses, ReviewMemoryInspectErrors, ThrowOnError>({
+      url: "/experimental/review-memory",
+      ...options,
+    })
+  }
+
+  /**
+   * Preview an owner review-memory change
+   *
+   * Prepare one exact, short-lived approval. Preparing does not apply the change.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryPrepareData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ReviewMemoryPrepareResponses, ReviewMemoryPrepareErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/prepare",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Confirm one exact review-memory preview
+   *
+   * Single-use confirmation, bound to fresh owner and repository authority. Read back after a lost response.
+   */
+  public confirm<ThrowOnError extends boolean = false>(options?: Options<ReviewMemoryConfirmData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<ReviewMemoryConfirmResponses, ReviewMemoryConfirmErrors, ThrowOnError>(
+      {
+        url: "/experimental/review-memory/confirm",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Discard an owned review-memory preview
+   *
+   * Retire this owner's exact preview without applying a change or altering stored memory.
+   */
+  public discard<ThrowOnError extends boolean = false>(options: Options<ReviewMemoryDiscardData, ThrowOnError>) {
+    return (options.client ?? this.client).delete<
+      ReviewMemoryDiscardResponses,
+      ReviewMemoryDiscardErrors,
+      ThrowOnError
+    >({ url: "/experimental/review-memory/previews/{previewId}", ...options })
   }
 }
 
@@ -5068,7 +5598,7 @@ export class Provider2 extends HeyApiClient {
   }
 }
 
-export class Connect extends HeyApiClient {
+export class Connect2 extends HeyApiClient {
   /**
    * Connect with key
    *
@@ -5185,9 +5715,9 @@ export class Integration extends HeyApiClient {
     })
   }
 
-  private _connect?: Connect
-  get connect(): Connect {
-    return (this._connect ??= new Connect({ client: this.client }))
+  private _connect?: Connect2
+  get connect(): Connect2 {
+    return (this._connect ??= new Connect2({ client: this.client }))
   }
 
   private _attempt?: Attempt
@@ -5749,6 +6279,11 @@ export class VectorClient extends HeyApiClient {
     return (this._event ??= new Event({ client: this.client }))
   }
 
+  private _computer?: Computer
+  get computer(): Computer {
+    return (this._computer ??= new Computer({ client: this.client }))
+  }
+
   private _config?: Config2
   get config(): Config2 {
     return (this._config ??= new Config2({ client: this.client }))
@@ -5819,6 +6354,11 @@ export class VectorClient extends HeyApiClient {
     return (this._memory ??= new Memory({ client: this.client }))
   }
 
+  private _connect?: Connect
+  get connect(): Connect {
+    return (this._connect ??= new Connect({ client: this.client }))
+  }
+
   private _project?: Project
   get project(): Project {
     return (this._project ??= new Project({ client: this.client }))
@@ -5832,6 +6372,16 @@ export class VectorClient extends HeyApiClient {
   private _question?: Question
   get question(): Question {
     return (this._question ??= new Question({ client: this.client }))
+  }
+
+  private _review?: Review2
+  get review(): Review2 {
+    return (this._review ??= new Review2({ client: this.client }))
+  }
+
+  private _reviewMemory?: ReviewMemory
+  get reviewMemory(): ReviewMemory {
+    return (this._reviewMemory ??= new ReviewMemory({ client: this.client }))
   }
 
   private _permission?: Permission

@@ -287,6 +287,25 @@ describe("browser tool", () => {
       }),
   )
 
+  it.instance("a double or right click goes as a click, with the same asks, and its count and button", () =>
+    Effect.gen(function* () {
+      bridge.answer(showing("https://shop.example.com/checkout", { ref_2: "Pay now", ref_3: "Order row" }))
+      const double = yield* run({ action: "click", ref: "ref_3", count: 2 })
+      expect(double.commands).toEqual(["inspectDom", "clickRef"])
+      expect(double.sent[1]).toMatchObject({ ref: "ref_3", clickCount: 2 })
+      expect(double.sent[1]).not.toHaveProperty("button")
+      expect(double.asked).toEqual(["browser_interact"])
+      // The sensitive ask is the same for a right click on a pay button.
+      const right = yield* run({ action: "click", ref: "ref_2", button: "right" })
+      expect(right.sent[1]).toMatchObject({ ref: "ref_2", button: "right" })
+      expect(right.asked).toEqual(["browser_interact", "browser_sensitive"])
+      // Other actions never carry them.
+      const hover = yield* run({ action: "hover", ref: "ref_3", count: 2, button: "right" })
+      expect(hover.sent.at(-1)).not.toHaveProperty("clickCount")
+      expect(hover.sent.at(-1)).not.toHaveProperty("button")
+    }),
+  )
+
   it.instance("an empty selector beside a ref still asks before a click on a dashboard (B15)", () =>
     Effect.gen(function* () {
       bridge.answer(showing("https://vercel.com/team/shop", { ref_5: "Promote to Production" }))

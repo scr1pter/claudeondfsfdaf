@@ -134,6 +134,10 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}, audience = SessionAudienc
 const it = testEffect(layer())
 const background = testEffect(layer({ backgroundSubagents: true }))
 const foregroundOnly = testEffect(layer({ backgroundSubagents: false }))
+// How long a wait gives a forked task call to launch its subagent. The wait covers the whole launch (agent and model
+// resolution, the child session, the job): about 0.3 s on Linux, 1 to 1.5 s on a Windows runner and twice that when the
+// runner slows (test.yml run 42439545162), where 2 s timed out. A launch that hangs still fails, well inside --timeout.
+const LAUNCH = "15 seconds"
 const unreadable = testEffect(layer({ backgroundSubagents: true }, unreadableFamily))
 
 for (const id of ["acme/coder:free", "acme/coder:FREE"])
@@ -1444,7 +1448,7 @@ describe("tool.task", () => {
       const child = yield* pollWithTimeout(
         Effect.map(jobs.list(), (list) => list.find((job) => job.metadata?.parentSessionId === chat.id)?.id),
         "the task never started",
-        "2 seconds",
+        LAUNCH,
       )
 
       const exit = yield* Effect.exit(
@@ -2993,7 +2997,7 @@ describe("tool.task", () => {
           Effect.as(parent),
         )
       yield* runState.ensureRunning(chat.id, Effect.succeed(parent), turn).pipe(Effect.forkChild)
-      yield* awaitWithTimeout(Deferred.await(childStarted), "the subagent never started", "2 seconds")
+      yield* awaitWithTimeout(Deferred.await(childStarted), "the subagent never started", LAUNCH)
 
       yield* runState.cancel(chat.id)
       yield* Effect.sleep("400 millis")
@@ -5356,7 +5360,7 @@ describe("subagent limits", () => {
         taskContext({ sessionID: chat.id, messageID: assistant.id, promptOps: never }),
       )
       expect(result.output.split("\n").filter((line) => line.includes("subagents are running or waiting"))).toEqual([
-        "8 subagents are running or waiting in this conversation (it runs at most 8 at once). Each one spends on the user's provider keys, so tell the user how many are working.",
+        "8 subagents are running or waiting in this conversation (it runs at most 8 at once). Each one spends on the user's provider keys or Vector Codium plan, so tell the user how many are working.",
       ])
       expect(result.output).not.toContain("Queued:")
     }),

@@ -5,7 +5,7 @@ import { WorkspaceAdapterEntry } from "@/control-plane/types"
 import { Schema, Struct } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { ApiVcsApplyError } from "./instance"
-import { ApiNotFoundError } from "../errors"
+import { ApiNotFoundError, SessionBusyError } from "../errors"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
@@ -108,7 +108,7 @@ export const WorkspaceApi = HttpApi.make("workspace")
           params: { id: Workspace.Info.fields.id },
           query: WorkspaceRoutingQuery,
           success: described(Schema.UndefinedOr(Workspace.Info), "Workspace removed"),
-          error: [PublicShareRemovalError, PublicSession.Error, HttpApiError.BadRequest],
+          error: [PublicShareRemovalError, PublicSession.Error, HttpApiError.BadRequest, SessionBusyError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "experimental.workspace.remove",

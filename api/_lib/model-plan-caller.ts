@@ -1,8 +1,10 @@
 import { CodiumRunTrigger } from "../../packages/schema/src/codium-run-trigger.js"
 import { isPoolPurpose, validRunId, type PoolPurpose } from "./codium-pool.js"
 import { modelPlanRequireMarkedTokens, modelPlansMinClient } from "./model-plan-config.js"
+import { refuseBrowserShaped } from "./hosted-tokens.js"
 import { ApiError, type ApiRequest } from "./http.js"
 import { requireUnrevokedAccount, requireUnrevokedCliToken } from "./revocation.js"
+import { verifyRunToken } from "./cloud-agents-run-token.js"
 
 export type ModelPlanCaller = {
   account: { id: string }
@@ -75,6 +77,10 @@ export function registerRunVerifier(prefix: RunPrefix, verify: RunVerifier) {
   runVerifiers.register(prefix, verify)
 }
 
+// The verifier is a hoisted function: entitlement/reconciliation imports can reach this registry while the run-token
+// module is still initializing. Reading its const adapter here would fail for that legitimate import order.
+registerRunVerifier("vrt_", verifyRunToken)
+
 /** Client hints only choose protocol compatibility. They never establish identity, tier or spending authority. */
 export function requireModelPlanClient(request: Pick<ApiRequest, "headers">) {
   const version = header(request, "x-vector-client")
@@ -107,6 +113,9 @@ export async function requireModelPlanCaller(
   if (authorization.length > 8192 || !/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(authorization))
     throw signInRequired()
   const token = authorization.slice(7)
+  // S7: the cloud computer's run token is added by the provider's proxy for the run-API host only, and a request
+  // carrying it must not look like a browser's, so no page the computer's browser opens can borrow it (WP A53).
+  if (token.startsWith("vht_")) refuseBrowserShaped(request.headers)
   if (token.startsWith("vrt_") || token.startsWith("vht_")) {
     const caller = await registry.verify(token, now)
     await requireUnrevokedAccount(caller.account.id, fetcher)

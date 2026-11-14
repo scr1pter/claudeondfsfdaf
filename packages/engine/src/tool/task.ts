@@ -46,6 +46,8 @@ import path from "path"
 import { isFreeModelRef } from "@vectordevai/schema/free-model"
 import { SessionMemory } from "../session/memory"
 import { ResearchRun } from "./research-run"
+import { SecondOpinion } from "../session/second-opinion"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { FileLock } from "./file-lock"
 import { TaskNotify } from "@/task/notify"
 import { TaskClaims } from "@/task/claims"
@@ -114,7 +116,7 @@ function workflowDisplay(workflow: SubagentRecord["workflow"]) {
   return { ...workflow, progress }
 }
 function busyNote(active: number, limit: number) {
-  return `${active} subagents are running or waiting in this conversation (it runs at most ${limit} at once). Each one spends on the user's provider keys, so tell the user how many are working.`
+  return `${active} subagents are running or waiting in this conversation (it runs at most ${limit} at once). Each one spends on the user's provider keys or Vector Codium plan, so tell the user how many are working.`
 }
 
 function queuedNote(running: number) {
@@ -1100,6 +1102,19 @@ export const TaskTool = Tool.define(
       // The model and effort the child runs with (5.E.1), worked out before the ask and admission, so a refused one asks
       // nothing and takes no slot. The parent's free route holds even if its model became unavailable after the call.
       const freeRoute = isFreeModelRef(msg.info)
+      // The judge uses the same brief resolver and allowed() checks as any other child. Only Vector's own judge
+      // launch may add the exact currently listed cross-lab model the owner explicitly opted into.
+      const opinionUser = !forking && subagentType === "judge" && invoked && params.model && !next.model && !freeRoute
+        ? yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: msg.info.parentID }).pipe(
+            Effect.provideService(Database.Service, database), Effect.orDie,
+          ) : undefined
+      const secondOpinion = opinionUser?.info.role === "user" ? SecondOpinion.fromBrief({
+        model: params.model,
+        worker: { providerID: msg.info.providerID, modelID: msg.info.modelID },
+        on: opinionUser.info.secondOpinion === true,
+        configured: false,
+        models: (yield* provider.list())[ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID)]?.models,
+      }) : undefined
       const resumedModel =
         resumed && params.effort === undefined
           ? yield* provider
@@ -1111,6 +1126,7 @@ export const TaskTool = Tool.define(
       // A resumed fork runs as its first own message asked, whatever this step runs on (5.E.3).
       const shape = resumed?.fork && Option.isSome(forks) ? yield* forks.value.userFields(resumed) : undefined
       const keptEffort = resumed?.effort === "default" || resumed?.effort === "high" ? resumed.effort : undefined
+      const roleModels = ctx.extra?.[WorkflowMarkers.PLAYBOOK_MODELS]
       const choice = yield* SubagentModel.choose({
         parent: {
           model: shape?.model ?? { providerID: msg.info.providerID, modelID: msg.info.modelID },
@@ -1130,7 +1146,12 @@ export const TaskTool = Tool.define(
             ? { resume: { record: resumed, warm: SubagentModel.warm(resumed, resumedModel) } }
             : {}),
         },
-        allow: cfg.sizing?.subagents?.models,
+        allow: [...(cfg.sizing?.subagents?.models ?? []),
+          ...(secondOpinion ? [`${secondOpinion.providerID}/${secondOpinion.modelID}`] : []),
+          ...(workflowAgent && Array.isArray(roleModels) ? roleModels.filter(
+              (ref: unknown): ref is string => typeof ref === "string" && ref.startsWith(`${ModelPlanStatus.PROVIDER_ID}/`),
+            ) : []),
+        ],
         local: Config.local().enabled,
       }).pipe(
         Effect.provideService(Provider.Service, provider),

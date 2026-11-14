@@ -61,12 +61,17 @@ export type ScenarioContext = {
   sessionGet: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined>
   project: () => Effect.Effect<Project.Info>
   message: (sessionID: SessionID, input?: { text?: string }) => Effect.Effect<MessageSeed>
+  toolMessage: (
+    user: SessionV1.User,
+    input: { tool: string; attachmentURL: string; end: number },
+  ) => Effect.Effect<SessionV1.ToolPart>
   messages: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts[]>
   todos: (sessionID: SessionID, todos: TodoInfo[]) => Effect.Effect<void>
   worktree: (input?: { name?: string }) => Effect.Effect<Worktree.Info>
   worktreeRemove: (directory: string) => Effect.Effect<void>
   llmText: TestLLMServer["Service"]["text"]
   llmWait: (count: number) => Effect.Effect<void>
+  llmCalls: () => Effect.Effect<number>
   tuiRequest: (request: { path: string; body: unknown }) => Effect.Effect<void>
 }
 

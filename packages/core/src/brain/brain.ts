@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
 import { Global } from "../global"
 import { Glob } from "../util/glob"
@@ -18,8 +18,9 @@ import { BrainParse } from "./parse"
 import { BrainPaths } from "./paths"
 import { BrainPrivate } from "./private"
 import { BrainScan } from "./scan"
-import type { BrainSchema } from "./schema"
+import { BrainSchema } from "./schema"
 import { SkillStore } from "./skill-store"
+import { ReviewStore } from "./review-store"
 import {
   BrainAnchorTable,
   BrainCodeFileTable,
@@ -136,6 +137,9 @@ export type LearnSettings = {
   readonly modelLearner: ModelLearner
   readonly skills: BrainSchema.SkillLearning
   readonly skillDrafter: BrainSchema.SkillDrafter
+  readonly codiumHelpers: BrainSchema.CodiumHelpers
+  /** Absent until chosen, allowing the legacy development flag to remain a fallback. */
+  readonly distillation?: boolean
   readonly workflow: BrainSchema.WorkflowLearning
   readonly workflowExplore: boolean
 }
@@ -440,6 +444,11 @@ export interface Interface {
     input: { readonly filter?: Filter; readonly query?: string; readonly scope?: BrainSchema.Scope },
   ) => Effect.Effect<BrainSchema.Entry[]>
   readonly propose: (place: Place, proposal: Proposal) => Effect.Effect<WriteResult>
+  /** Owner-click review context only. Ordinary learned proposals cannot write this kind or choose this origin. */
+  readonly dismissReview: (
+    place: Place,
+    input: { readonly text: string; readonly paths: readonly string[]; readonly sessionID: string },
+  ) => Effect.Effect<WriteResult>
   readonly update: (
     place: Place,
     id: string,
@@ -460,6 +469,8 @@ export interface Interface {
     readonly modelLearner?: ModelLearner
     readonly skills?: BrainSchema.SkillLearning
     readonly skillDrafter?: BrainSchema.SkillDrafter
+    readonly codiumHelpers?: BrainSchema.CodiumHelpers
+    readonly distillation?: boolean
     readonly workflow?: BrainSchema.WorkflowLearning
     readonly workflowExplore?: boolean
   }) => Effect.Effect<LearnSettings>
@@ -477,6 +488,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@vector/Brain") {}
 
 type Row = typeof BrainEntryTable.$inferSelect
+type Transaction = Parameters<Parameters<BrainDatabase.Database["transaction"]>[0]>[0]
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -1327,6 +1339,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       modelLearner: row?.model_learner ?? "local-only",
       skills: row?.skill_learning ?? "review",
       skillDrafter: row?.skill_drafter ?? "local-only",
+      codiumHelpers: row?.codium_helpers ?? "ask",
+      ...(row?.knowledge_distill == null ? {} : { distillation: row.knowledge_distill }),
       workflow: row?.workflow_learning ?? "apply",
       workflowExplore: row?.workflow_explore ?? false,
     } satisfies LearnSettings
@@ -1338,6 +1352,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     modelLearner?: ModelLearner
     skills?: BrainSchema.SkillLearning
     skillDrafter?: BrainSchema.SkillDrafter
+    codiumHelpers?: BrainSchema.CodiumHelpers
+    distillation?: boolean
     workflow?: BrainSchema.WorkflowLearning
     workflowExplore?: boolean
   }) {
@@ -1348,6 +1364,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       model_learner: change.modelLearner ?? current.modelLearner,
       skill_learning: change.skills ?? current.skills,
       skill_drafter: change.skillDrafter ?? current.skillDrafter,
+      codium_helpers: change.codiumHelpers ?? current.codiumHelpers,
+      ...(change.distillation === undefined ? {} : { knowledge_distill: change.distillation }),
       workflow_learning: change.workflow ?? current.workflow,
       workflow_explore: change.workflowExplore ?? current.workflowExplore,
     }
@@ -1544,7 +1562,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .pipe(Effect.orDie)
   })
 
-  const propose = Effect.fn("Brain.propose")(function* (place: Place, proposal: Proposal) {
+  const writeProposal = Effect.fn("Brain.writeProposal")(function* (
+    place: Place,
+    proposal: Proposal | (Omit<Proposal, "kind" | "origin"> & { readonly kind: "review"; readonly origin: "user" }),
+  ) {
     if (proposal.supersedes && (yield* skillEntry(proposal.supersedes))) return refuse("skill-entry", SKILL_ENTRY)
     const agent = proposal.origin === "agent"
     // What a file the user imported says waits for them, however it reads, so a changed file cannot plant memory in use.
@@ -1681,6 +1702,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
         and(
           eq(BrainEntryTable.repository_id, repository),
           inArray(BrainEntryTable.origin, [...LEARNED]),
+          // A learned fact cannot become a dismissal, nor may a dismissal be merged into a model's learned fact.
+          proposal.kind === "review" ? eq(BrainEntryTable.kind, "review") : ne(BrainEntryTable.kind, "review"),
           inArray(BrainEntryTable.status, ["active", "proposed", "quarantined", "archived"]),
         ),
       )
@@ -1888,6 +1911,21 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     if (status === "quarantined") return { type: "held" as const, entry, ...extra }
     return { type: "added" as const, entry, ...extra }
   })
+
+  const propose: Interface["propose"] = (place, proposal) =>
+    Schema.is(BrainSchema.LearnedKind)(proposal.kind)
+      ? writeProposal(place, proposal)
+      : Effect.succeed(refuse("user-entry", "Only an owner action can dismiss a review finding."))
+  const dismissReview: Interface["dismissReview"] = (place, input) =>
+    writeProposal(place, {
+      kind: "review",
+      origin: "user",
+      scope: "repository",
+      text: input.text,
+      paths: input.paths,
+      sessionID: input.sessionID,
+      evidence: { type: "user" },
+    })
 
   // The term in use for the same words, in this repository or the user's own, unless it already says these words.
   const sameTerm = Effect.fnUntraced(function* (place: Place, key: string, hash: string) {
@@ -2209,27 +2247,43 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
 
   // Forgetting is a real delete: the row and its evidence go, and only a hash of the text stays so it is not learned
   // again for 180 days.
-  const forgetRow = Effect.fnUntraced(function* (row: Row) {
-    yield* db
-      .transaction((tx) =>
-        Effect.gen(function* () {
-          yield* tx.delete(BrainEntryTable).where(eq(BrainEntryTable.id, row.id)).run()
-          yield* tx
-            .insert(BrainTombstoneTable)
-            .values({ ...tombstoneOf(row), until: Date.now() + 180 * DAY })
-            .onConflictDoUpdate({
-              target: [BrainTombstoneTable.repository_id, BrainTombstoneTable.norm_hash],
-              set: { until: Date.now() + 180 * DAY, terms: row.terms, polarity: BrainLexical.polarity(row.body) },
-            })
-            .run()
-          yield* tx.delete(BrainUseTable).where(eq(BrainUseTable.entry_id, row.id)).run()
-          yield* tx.delete(BrainEventTable).where(eq(BrainEventTable.entry_id, row.id)).run()
-          yield* event(row, "forgotten", "user")
-        }),
-      )
-      .pipe(Effect.orDie)
-    yield* bump(row.repository_id)
+  const bumpIn = (tx: Transaction, repository: string) =>
+    tx
+      .insert(BrainStateTable)
+      .values({ repository_id: repository, revision: 1 })
+      .onConflictDoUpdate({
+        target: BrainStateTable.repository_id,
+        set: { revision: sql`${BrainStateTable.revision} + 1` },
+      })
+      .run()
+
+  // The same forgetting semantics, on the caller's transaction: session erasure cannot partly commit ordinary
+  // memory before discovering an invalid review epoch or a failed skill cleanup.
+  const forgetIn = Effect.fnUntraced(function* (tx: Transaction, row: Row) {
+    yield* tx.delete(BrainEntryTable).where(eq(BrainEntryTable.id, row.id)).run()
+    yield* tx
+      .insert(BrainTombstoneTable)
+      .values({ ...tombstoneOf(row), until: Date.now() + 180 * DAY })
+      .onConflictDoUpdate({
+        target: [BrainTombstoneTable.repository_id, BrainTombstoneTable.norm_hash],
+        set: { until: Date.now() + 180 * DAY, terms: row.terms, polarity: BrainLexical.polarity(row.body) },
+      })
+      .run()
+    yield* tx.delete(BrainUseTable).where(eq(BrainUseTable.entry_id, row.id)).run()
+    yield* tx.delete(BrainEventTable).where(eq(BrainEventTable.entry_id, row.id)).run()
+    yield* tx
+      .insert(BrainEventTable)
+      .values({
+        entry_id: row.id,
+        repository_id: row.repository_id,
+        at: Date.now(),
+        action: "forgotten",
+        actor: "user",
+      })
+      .run()
+    yield* bumpIn(tx, row.repository_id)
   })
+  const forgetRow = (row: Row) => db.transaction((tx) => forgetIn(tx, row)).pipe(Effect.orDie)
 
   const forget = Effect.fn("Brain.forget")(function* (place: Place, id: string) {
     const row = yield* find(place, id, true)
@@ -2274,6 +2328,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     const skills = yield* db
       .transaction((tx) =>
         Effect.gen(function* () {
+          // Validate review epochs/witnesses before any generic tombstone deletion can hide a corrupt component.
+          const reviews = scope === "personal" ? 0 : yield* ReviewStore.eraseScope(tx, repositories)
           yield* tx.delete(BrainEntryTable).where(where).run()
           yield* tx
             .delete(BrainEventTable)
@@ -2355,7 +2411,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             })
             .where(repositories ? inArray(BrainStateTable.repository_id, repositories) : undefined)
             .run()
-          return skills
+          return skills + reviews
         }),
       )
       .pipe(Effect.orDie)
@@ -2420,50 +2476,54 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
   // What Vector learned in one session alone: its entries whose every piece of evidence came from that session. An
   // entry another session also taught, or the user wrote, stays; what goes is forgotten, so it is not learned again.
   const eraseSession = Effect.fn("Brain.eraseSession")(function* (place: Place, sessionID: string) {
-    const rows = yield* db
-      .select()
-      .from(BrainEntryTable)
-      .where(
-        and(
-          inArray(BrainEntryTable.repository_id, [place.repository, PERSONAL]),
-          eq(BrainEntryTable.origin, "agent"),
-          inArray(
-            BrainEntryTable.id,
-            db
-              .select({ id: BrainEvidenceTable.entry_id })
-              .from(BrainEvidenceTable)
-              .where(eq(BrainEvidenceTable.session_id, sessionID)),
-          ),
-        ),
-      )
-      .all()
-      .pipe(Effect.orDie)
-    const others = rows.length
-      ? new Set(
-          (yield* db
-            .selectDistinct({ id: BrainEvidenceTable.entry_id })
-            .from(BrainEvidenceTable)
+    return yield* db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          // Review preflight is first; every ordinary/review/skill mutation below commits or rolls back together.
+          const reviews = yield* ReviewStore.eraseSession(tx, place.repository, sessionID)
+          const rows = yield* tx
+            .select()
+            .from(BrainEntryTable)
             .where(
               and(
+                inArray(BrainEntryTable.repository_id, [place.repository, PERSONAL]),
+                eq(BrainEntryTable.origin, "agent"),
                 inArray(
-                  BrainEvidenceTable.entry_id,
-                  rows.map((row) => row.id),
+                  BrainEntryTable.id,
+                  tx
+                    .select({ id: BrainEvidenceTable.entry_id })
+                    .from(BrainEvidenceTable)
+                    .where(eq(BrainEvidenceTable.session_id, sessionID)),
                 ),
-                or(isNull(BrainEvidenceTable.session_id), ne(BrainEvidenceTable.session_id, sessionID)),
               ),
             )
             .all()
-            .pipe(Effect.orDie)).map((row) => row.id),
-        )
-      : new Set<string>()
-    const only = rows.filter((row) => !others.has(row.id))
-    yield* Effect.forEach(only, forgetRow, { discard: true })
-    // Skills that session taught go back to the text other sessions taught, or go (SkillStore.eraseSession).
-    const skills = yield* db
-      .transaction((tx) => SkillStore.eraseSession(tx, place.repository, sessionID))
+          const others = rows.length
+            ? new Set(
+                (yield* tx
+                  .selectDistinct({ id: BrainEvidenceTable.entry_id })
+                  .from(BrainEvidenceTable)
+                  .where(
+                    and(
+                      inArray(
+                        BrainEvidenceTable.entry_id,
+                        rows.map((row) => row.id),
+                      ),
+                      or(isNull(BrainEvidenceTable.session_id), ne(BrainEvidenceTable.session_id, sessionID)),
+                    ),
+                  )
+                  .all()).map((row) => row.id),
+              )
+            : new Set<string>()
+          const only = rows.filter((row) => !others.has(row.id))
+          yield* Effect.forEach(only, (row) => forgetIn(tx, row), { discard: true })
+          // Keep the existing rollback/retention policy for skills and entries with evidence from another session.
+          const skills = yield* SkillStore.eraseSession(tx, place.repository, sessionID)
+          if (skills.changed > 0) yield* bumpIn(tx, place.repository)
+          return only.length + skills.removed + reviews
+        }),
+      )
       .pipe(Effect.orDie)
-    if (skills.changed > 0) yield* bump(place.repository)
-    return only.length + skills.removed
   })
 
   // --- Tidying ----------------------------------------------------------------------------------------------------
@@ -2813,6 +2873,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     lines,
     list,
     propose,
+    dismissReview,
     update,
     forget,
     erase,
@@ -3025,7 +3086,7 @@ function rank(row: Pick<Row, "origin" | "status">) {
   return row.status === "active" ? 1 : 0
 }
 
-function confidence(proposal: Proposal, verified: boolean) {
+function confidence(proposal: Pick<Proposal, "origin" | "evidence">, verified: boolean) {
   if (proposal.origin === "user") return 1
   if (!verified) return 0.5
   return proposal.evidence?.type === "message" ? 0.9 : 0.8

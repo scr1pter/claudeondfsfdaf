@@ -1,0 +1,29 @@
+{
+  "kind": "cloud-workspace-ui-fixture",
+  "passed": true,
+  "scope": "Test-only intercepted backend; no actual hosted compute, GitHub publication or production account claim",
+  "checks": [
+    "authenticated-create",
+    "server-allocated-canonical-message-ids",
+    "saved-session-and-prompt",
+    "fresh-context-mobile-history",
+    "follow-up",
+    "allow-once",
+    "pause-and-review-diff",
+    "digest-bound-draft-pr-command",
+    "verified-pr-response-link",
+    "responsive-width",
+    "disabled-service",
+    "unavailable-service",
+    "signed-out-gate"
+  ],
+  "allocationRequests": 2,
+  "allocatedMessages": 2,
+  "promptRequests": 2,
+  "permissionReplies": ["once"],
+  "reviewRequests": 1,
+  "publishRequests": 1,
+  "screenshots": ["workspace-desktop.png", "workspace-mobile-restored.png"],
+  "recordedAt": "2026-11-08T21:05:11.687629+00:00",
+  "reviewedSourceRevision": "b258a726be0e451f3805a55246fce579a1e55297"
+}

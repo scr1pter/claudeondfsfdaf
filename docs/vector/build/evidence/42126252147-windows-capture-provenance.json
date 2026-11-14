@@ -1,0 +1,48 @@
+{
+  "repository": "scr1pter/claudeondfsfdaf",
+  "runId": 42126252147,
+  "jobId": 127591110932,
+  "sourceHead": "9193519b0013c441237f67162e14d6eb18b71905",
+  "artifactApiSourceMatched": true,
+  "zipSizeAndApiDigestVerified": true,
+  "zipSingleBoundedEntryVerified": true,
+  "releaseEvidence": false,
+  "artifacts": [
+    {
+      "artifactId": 13462251271,
+      "artifactName": "computer-helper-win32-x64-diagnostic-9193519b0013c441237f67162e14d6eb18b71905-1",
+      "zipPath": "/workspace/attachments/9c0c1a32-0e93-41eb-8918-88b278c9b4df/github-actions-artifact-13462251271.zip",
+      "zipBytes": 554,
+      "zipSha256": "6d74d78a241ea2af17357fa35afea287ffb713571f9aa7597a61c9e0b965d713",
+      "reportName": "computer-win32-core.json",
+      "reportPath": "/tmp/computer-native-42126252147-windows/computer-win32-core.json",
+      "reportBytes": 2466,
+      "reportSha256": "7fda39dd61f03a8ae21a9f48ac4094cfc48d2dcd97b1f9a65c003964e9b656a3",
+      "mode": "off",
+      "code": 0,
+      "totals": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "artifactId": 13460374122,
+      "artifactName": "computer-helper-win32-x64-isolated-diagnostic-9193519b0013c441237f67162e14d6eb18b71905-1",
+      "zipPath": "/workspace/attachments/908f6ed7-e795-4262-bbea-765a8cc62e73/github-actions-artifact-13460374122.zip",
+      "zipBytes": 880,
+      "zipSha256": "1749b46f359dfb3d66e01ddc9a9d03e70248190ce3bff560ca52d190d0cda392",
+      "reportName": "computer-win32-privileged.json",
+      "reportPath": "/tmp/computer-native-42126252147-windows/computer-win32-privileged.json",
+      "reportBytes": 4528,
+      "reportSha256": "b5bd0be8300eaa3b1422a26bc2f09b29e29d00029735c1c2f86d5822666c49fc",
+      "mode": "auto",
+      "code": 1,
+      "totals": {
+        "passed": 33,
+        "failed": 3,
+        "skipped": 10
+      }
+    }
+  ]
+}

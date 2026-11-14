@@ -97,6 +97,7 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { LocalProbe } from "@vectordevai/core/local-mode/probe"
+import { ProviderDeadlines } from "./deadlines"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
@@ -105,12 +106,12 @@ const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 export const LOCAL_HEADER_TIMEOUT = 600_000
 export const LOCAL_CHUNK_TIMEOUT = 120_000
 
-function timeoutController(ms: number) {
+function timeoutController(ms: number, deadlines: ProviderDeadlines.Interface) {
   const ctl = new AbortController()
-  const id = setTimeout(() => ctl.abort(new ProviderError.HeaderTimeoutError(ms)), ms)
+  const cancel = deadlines.schedule(ms, () => ctl.abort(new ProviderError.HeaderTimeoutError(ms)))
   return {
     signal: ctl.signal,
-    clear: () => clearTimeout(id),
+    clear: cancel,
   }
 }
 
@@ -1462,6 +1463,8 @@ export interface Interface {
     query: string[],
   ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderV2.ID, primaryID?: ModelV2.ID) => Effect.Effect<Model | undefined>
+  /** The actual qualified Codium floor for an explicitly permitted Brain helper; never a fallback. */
+  readonly getBrainModel: () => Effect.Effect<Model | undefined>
   /**
    * The Vector Codium model Codium Auto runs one user message on, from the message's size and the context it adds to
    * (CodiumAuto.resolve). Fails like getModel when Codium cannot run, and with a Codium notice when the account's plan
@@ -1470,7 +1473,13 @@ export interface Interface {
   readonly codiumAuto: (input: {
     tier: TaskSize.Tier
     contextTokens: number
+    learned?: readonly CodiumAuto.Suggestion[]
   }) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, ModelNotFoundError>
+  readonly codiumUnits?: (steps: readonly CodiumAuto.Usage[]) => Effect.Effect<number | undefined>
+  readonly codiumEstimate?: (modelID: ModelV2.ID, promptTokens: number) => Effect.Effect<string, ModelNotFoundError>
+  readonly playbookModel?: (role: CodiumAuto.Role, promptTokens: number) => Effect.Effect<{
+    readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID; readonly estimate?: string
+  }, ModelNotFoundError>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, DefaultModelError>
   /** The model a saved choice names today: renamed providers map to their new ID, retired ones give undefined. */
   readonly savedModel: (model: {
@@ -1748,7 +1757,10 @@ export function fromFreeModels(models: readonly FreeModelInfo[], providerID: "ve
  * entry is listed with its `codium` listing metadata, so the pickers, routing and swarms can tell Codium Auto, locked
  * and manual-only entries apart.
  */
-export function fromModelPlans(models: readonly ModelPlans.Model[]): Info {
+export function fromModelPlans(
+  models: readonly ModelPlans.Model[],
+  catalog?: Pick<ModelPlans.Catalog, "judges" | "review">,
+): Info {
   return {
     id: ProviderV2.ID.make(ModelPlans.PROVIDER_ID),
     name: ModelPlans.PROVIDER_NAME,
@@ -1774,7 +1786,7 @@ export function fromModelPlans(models: readonly ModelPlans.Model[]): Info {
           // No dollar price: a Codium step spends credits, so it is recorded unpriced and left out of dollar totals.
           cost: { ...UNPRICED },
           limit: { context: model.contextLength, output: model.maxOutputTokens },
-          codium: ModelPlans.listing(model),
+          codium: ModelPlans.listing(model, catalog),
           capabilities: {
             temperature: true,
             reasoning: false,
@@ -1830,6 +1842,7 @@ const layer = Layer.effect(
     const guests = yield* FreeModelGuests.Service
     const events = yield* EventV2Bridge.Service
     const slots = yield* ModelSlots.Service
+    const deadlines = yield* ProviderDeadlines.Service
     // Servers whose identity changed since they were added: their model calls are refused until the user confirms them.
     const holds = yield* LocalProbe.HoldsService
     const runtimeBridge = yield* EffectBridge.make()
@@ -1853,7 +1866,7 @@ const layer = Layer.effect(
         // Codium is a catalog provider like the free models, so the env loop and custom loaders walk it too.
         if (planCatalog.enabled) {
           catalogIDs[planID] = true
-          catalog.set(planID, fromModelPlans(planCatalog.models))
+          catalog.set(planID, fromModelPlans(planCatalog.models, planCatalog))
         }
         if (freeCatalog.enabled && freeCatalog.models.length) {
           catalogIDs[ProviderV2.ID.vector] = true
@@ -2219,7 +2232,7 @@ const layer = Layer.effect(
         // GitHub run never sends a model request to Codium (INV-K1), whatever MODEL, an agent or small_model names.
         delete providers[planID]
         if (planCatalog.enabled && isProviderAllowed(planID) && !GithubSecrets.ownKeyRun())
-          providers[planID] = fromModelPlans(planCatalog.models)
+          providers[planID] = fromModelPlans(planCatalog.models, planCatalog)
         if (openRouterKey && isProviderAllowed(ProviderV2.ID.openrouter)) {
           providers[ProviderV2.ID.openrouter] ??= fromFreeModels([], "openrouter")
           Object.assign(providers[ProviderV2.ID.openrouter].models, fromFreeModels(ownedFree, "openrouter").models)
@@ -2392,7 +2405,7 @@ const layer = Layer.effect(
         !cfg.disabled_providers?.includes(planID) &&
         (!cfg.enabled_providers || cfg.enabled_providers.includes(planID))
       )
-        s.providers[planID] = fromModelPlans(current.models)
+        s.providers[planID] = fromModelPlans(current.models, current)
       return s.providers
     })
 
@@ -2653,7 +2666,8 @@ const layer = Layer.effect(
           }
           const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
           const headerTimeoutMs = headerTimeout === false ? undefined : headerTimeout
-          const headerTimeoutCtl = typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs) : undefined
+          const headerTimeoutCtl =
+            typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs, deadlines) : undefined
           const signals: AbortSignal[] = []
 
           if (opts.signal) signals.push(opts.signal)
@@ -2700,7 +2714,7 @@ const layer = Layer.effect(
           )
 
           if (!chunkAbortCtl) return res
-          return ResponseStall.wrap(res, chunkTimeout, chunkAbortCtl)
+          return ResponseStall.wrap(res, chunkTimeout, chunkAbortCtl, deadlines)
         }
 
         const bundledLoader = Object.hasOwn(BUNDLED_PROVIDERS, model.api.npm)
@@ -2958,6 +2972,13 @@ const layer = Layer.effect(
       return chosen ? listed?.models[chosen.id] : undefined
     })
 
+    const getBrainModel = Effect.fn("Provider.getBrainModel")(function* () {
+      if (Config.local().enabled) return undefined
+      const listed = (yield* refreshCodium({ wait: true }))[planID]
+      const chosen = CodiumAuto.brain(yield* modelPlans.catalog(yield* freeCredentials.get("vector")))
+      return chosen ? listed?.models[chosen.id] : undefined
+    })
+
     const getSmallModel = Effect.fn("Provider.getSmallModel")(function* (
       providerID: ProviderV2.ID,
       primaryID?: ModelV2.ID,
@@ -3058,9 +3079,33 @@ const layer = Layer.effect(
       return undefined
     })
 
+    const codiumEstimate = Effect.fn("Provider.codiumEstimate")(function* (modelID: ModelV2.ID, promptTokens: number) {
+      const token = yield* freeCredentials.get("vector")
+      const current = yield* modelPlans.catalog(token, { wait: true })
+      const chosen = current.models.find((model) => model.id === modelID && !model.locked && !model.auto)
+      if (!chosen || !token || !current.enabled || !current.plan)
+        return yield* new ModelNotFoundError({ providerID: planID, modelID, codium: "unavailable" })
+      yield* getModel(planID, modelID)
+      return yield* Effect.tryPromise({
+        try: async () => {
+          const response = await ModelPlans.plansCatalog(`${ModelPlans.API_URL}/estimate`, {
+            method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+            headers: { ...ModelPlans.clientHeaders(), Authorization: `Bearer ${token}`, "content-type": "application/json" },
+            body: JSON.stringify({ model: chosen.id, inputTokens: promptTokens, outputTokens: Math.min(chosen.maxOutputTokens, 8192), requests: 1 }),
+          })
+          const value = response.ok ? await response.json() as { share?: unknown } : undefined
+          if (!value || typeof value.share !== "string" || !["under 1%", "1–2%", "2–5%", "5–10%", "10–20%", "20–40%", "over 40%", "more than your month"].includes(value.share))
+            throw new Error("The model's usage estimate is unavailable.")
+          return value.share
+        },
+        catch: () => new ModelNotFoundError({ providerID: planID, modelID, codium: "unavailable" }),
+      })
+    })
+
     const codiumAuto = Effect.fn("Provider.codiumAuto")(function* (input: {
       tier: TaskSize.Tier
       contextTokens: number
+      learned?: readonly CodiumAuto.Suggestion[]
     }) {
       const auto = ModelV2.ID.make(ModelPlans.AUTO_ID)
       // Signed out, Codium off for the account or Vector Local on: the same notice a chosen Codium model gets.
@@ -3070,6 +3115,7 @@ const layer = Layer.effect(
         catalog: yield* modelPlans.catalog(yield* freeCredentials.get("vector"), { wait: true }),
         tier: input.tier,
         contextTokens: input.contextTokens,
+        learned: input.learned,
       })
       if (chosen && listed.models[chosen.id]) return { providerID: planID, modelID: ModelV2.ID.make(chosen.id) }
       // An older gateway, or a plan whose Auto models are not all usable, offers no Auto: say so rather than pick one.
@@ -3170,7 +3216,22 @@ const layer = Layer.effect(
       preconnect,
       closest,
       getSmallModel,
+      getBrainModel,
       codiumAuto,
+      codiumEstimate,
+      codiumUnits: (steps) => Effect.gen(function* () {
+        if (steps.some((step) => step.providerID !== planID)) return undefined
+        return CodiumAuto.units(yield* modelPlans.catalog(yield* freeCredentials.get("vector")), steps)
+      }),
+      playbookModel: (role, promptTokens) => Effect.gen(function* () {
+        const token = yield* freeCredentials.get("vector")
+        const current = yield* modelPlans.catalog(token, { wait: true })
+        const chosen = CodiumAuto.role(current, role)
+        if (!chosen) return yield* new ModelNotFoundError({ providerID: planID, modelID: ModelV2.ID.make(role), codium: "unavailable" })
+        yield* getModel(planID, ModelV2.ID.make(chosen.id))
+        const estimate = role === "ceiling" ? yield* codiumEstimate(ModelV2.ID.make(chosen.id), promptTokens) : undefined
+        return { providerID: planID, modelID: ModelV2.ID.make(chosen.id), ...(estimate ? { estimate } : {}) }
+      }),
       defaultModel,
       savedModel,
       freeSignIn,
@@ -3233,6 +3294,7 @@ export const node = LayerNode.make({
     FreeModelGuests.node,
     EventV2Bridge.node,
     ModelSlots.node,
+    ProviderDeadlines.node,
     LocalProbe.holdsNode,
   ],
 })

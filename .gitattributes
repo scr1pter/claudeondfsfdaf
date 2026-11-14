@@ -17,6 +17,24 @@ packages/core/src/database/migration.gen.ts linguist-generated
 /packages/engine/src/**/*.txt text eol=lf
 /packages/core/src/**/*.txt text eol=lf
 
+# Vector Hands' helper inputs: blocklist.json is compared byte-for-byte with a fresh render and embedded verbatim in
+# the native helpers' generated sources, and the native helpers read the conformance transcripts line by line.
+/packages/desktop/native/computer-helper/*.json text eol=lf
+/packages/desktop/test/fixtures/computer-protocol/*.jsonl text eol=lf
+
+# Native source digests bind actual input bytes across build and prebuilt-verification hosts.
+/packages/desktop/native/computer-helper/**/CMakeLists.txt text eol=lf
+/packages/desktop/native/computer-helper/**/*.cpp text eol=lf
+/packages/desktop/native/computer-helper/**/*.h text eol=lf
+/packages/desktop/native/computer-helper/**/*.in text eol=lf
+/packages/desktop/native/computer-helper/**/*.manifest text eol=lf
+/packages/desktop/native/computer-helper/**/*.swift text eol=lf
+/packages/desktop/native/computer-helper/**/*.plist text eol=lf
+/packages/desktop/native/computer-helper/**/*.template text eol=lf
+/packages/desktop/native/computer-helper/**/*.json text eol=lf
+/packages/desktop/scripts/build-computer-helper.ts text eol=lf
+/packages/desktop/scripts/computer-helper-identity.ts text eol=lf
+/packages/desktop/scripts/channel-ids.ts text eol=lf
 # Exact qualified task and archived matched instrument bytes for the additional round.
 docs/benchmarks/agentic-heavy-v1/harbor/** -text whitespace=cr-at-eol
 scripts/benchmarks/matched-agentic-round-two/** -text whitespace=cr-at-eol

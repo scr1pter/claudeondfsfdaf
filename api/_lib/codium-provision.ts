@@ -358,6 +358,37 @@ async function appliedVersion(provisioner: string, account: string, fetcher: typ
   return version
 }
 
+/**
+ * Account deletion (P5, WP A57), once every service was erased directly: the account's waiting outbox items and dead
+ * letters (provision items `<provisioner>:<account>:<version>` and actions keyed by the account), which carry its
+ * snapshots, and the provisioners' applied versions. An item a drain is applying right now may still write its applied
+ * version back; deletion's follow-up pass runs this again. Returns how many items it removed.
+ */
+export async function forgetAccountOutbox(account: string, fetcher: typeof fetch = fetch) {
+  let removed = 0
+  for (const set of [outboxKey(), deadKey()]) {
+    const ids = new Set<string>()
+    let cursor = "0"
+    do {
+      const page = await persistentStore(["ZSCAN", set, cursor, "MATCH", `*${account}*`, "COUNT", 500], fetcher)
+      if (!Array.isArray(page) || page.length !== 2 || !Array.isArray(page[1])) throw unavailable()
+      cursor = String(page[0])
+      // Members and scores alternate; only ids naming the account as one of their parts are its items.
+      page[1].forEach((member, index) => {
+        if (index % 2 === 0 && String(member).split(":").includes(account)) ids.add(String(member))
+      })
+    } while (cursor !== "0")
+    for (const id of ids) {
+      await persistentStore(["ZREM", set, id], fetcher)
+      await persistentStore(["DEL", itemKey(id)], fetcher)
+      removed++
+    }
+  }
+  const marks = [...provisioners.keys()].map((provisioner) => provKey(provisioner, account))
+  if (marks.length) await persistentStore(["DEL", ...marks], fetcher)
+  return removed
+}
+
 // ── Actions ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Owner holds and their repair action become durable together, including a unique publication token. */

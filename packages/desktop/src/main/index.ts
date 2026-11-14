@@ -31,6 +31,7 @@ import { setupAutoUpdater, showUpdaterDialog } from "./updater"
 import {
   getLastFocusedWindow,
   getMainWindow,
+  getMainWindows,
   registerRendererProtocol,
   setRelaunchHandler,
   setAppQuitting,
@@ -62,6 +63,7 @@ import { readDesktopLocal } from "./local-policy"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { cleanupStoreFiles, removeLegacyAccessFiles } from "./store-cleanup"
 import { startBrowserBridge, stopBrowserBridge } from "./browser-bridge"
+import { setActivityTargets } from "./browser-agent"
 import { startCloudBridge, stopCloudBridge } from "./cloud-bridge"
 import { setupSecureRuntimeSecrets } from "./secure-runtime"
 import { forgetRetiredCloudProviders, handleCloudOAuthDeepLinks } from "./cloud-connections"
@@ -75,7 +77,13 @@ import {
   setAllScheduledAgentsPaused,
 } from "./scheduled-agents"
 import { createTray, destroyTray, notifyScheduledRunFinished, updateTray } from "./tray"
+import { startComputer, type ComputerRuntime } from "./computer-startup"
+import { electronComputerDeps } from "./computer-electron"
+import { setComputerService } from "./computer-ipc"
+import { createComputerLifecycle } from "./computer-lifecycle"
 import { engineEventSource, setDesktopWorkBlocker, startKeepAwake } from "./keep-awake"
+import { remoteLink, startRemote, stopRemote } from "./remote-runtime"
+import { startVault, stopVault } from "./vault-runtime"
 import { getStore } from "./store"
 import { USAGE_STORE } from "./store-keys"
 import { createUsageCheckin, usageCheckinEndpoint } from "./usage-checkin"
@@ -97,6 +105,11 @@ const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 let logger: ReturnType<typeof initLogging>
 let server: SidecarListener | null = null
 let keepAwake: ReturnType<typeof startKeepAwake> | undefined
+let computer: ComputerRuntime | undefined
+const computerLifecycle = createComputerLifecycle<ComputerRuntime>((runtime) => {
+  computer = runtime
+  setComputerService(runtime?.service)
+})
 let trayReady = false
 
 const pendingDeepLinks: string[] = []
@@ -219,11 +232,24 @@ const main = Effect.gen(function* () {
   const unregisterManagedAccount = registerManagedVectorAccount((token, synchronize) =>
     wslServers.replaceAccount(token, synchronize),
   )
-  const stopSidecars = async () => {
+  let sidecarsStopping: Promise<void> | undefined
+  const stopSidecars = () => {
+    if (sidecarsStopping) return sidecarsStopping
     unregisterManagedAccount()
+    stopRemote()
+    stopVault()
     keepAwake?.stop()
     setDesktopWorkBlocker(undefined)
-    await Promise.all([killSidecar(), stopBrowserBridge(), stopCloudBridge(), wslServers.stopAll()])
+    // Hands first releases input and closes its overlays, then stops its helper and bridge (INV-R3, INV-T3).
+    const hands = computerLifecycle.stop()
+    sidecarsStopping = Promise.allSettled([
+      hands,
+      killSidecar(),
+      stopBrowserBridge(),
+      stopCloudBridge(),
+      wslServers.stopAll(),
+    ]).then(() => {})
+    return sidecarsStopping
   }
   const relaunch = () => {
     // A relaunch ends this process, so it counts as an explicit quit: without
@@ -305,13 +331,24 @@ const main = Effect.gen(function* () {
   })
 
   let quitting = false
-  app.on("before-quit", () => {
+  let quitFinished = false
+  let quitPending = false
+  app.on("before-quit", (event) => {
     quitting = true
     // Quitting through the app menu, Cmd+Q, or the updater is just as explicit
     // as the tray's own item, and window-all-closed still fires on the way out.
     requestQuit()
     setAppQuitting()
-    void stopSidecars()
+    if (!quitFinished) {
+      event.preventDefault()
+      if (!quitPending) {
+        quitPending = true
+        void stopSidecars().finally(() => {
+          quitFinished = true
+          app.quit()
+        })
+      }
+    }
   })
 
   app.on("will-quit", () => {
@@ -391,6 +428,8 @@ const main = Effect.gen(function* () {
       }),
     ),
   )
+  // The agent browser's activity reaches every main window, so the app shows it with Preview closed too.
+  setActivityTargets(getMainWindows)
   const browserBridge = yield* Effect.promise(() => startBrowserBridge())
   process.env.VECTOR_BROWSER_BRIDGE_URL = browserBridge.url
   process.env.VECTOR_BROWSER_BRIDGE_TOKEN = browserBridge.token
@@ -502,6 +541,19 @@ const main = Effect.gen(function* () {
     ensureLoopbackNoProxy()
     useEnvProxy()
 
+    // The Hands bridge starts before the engine, because its pair travels only in the engine's start message.
+    const hands = yield* Effect.promise(() =>
+      computerLifecycle
+        .start(() =>
+          startComputer(electronComputerDeps({ warn: (message, ...fields) => logger.warn(message, ...fields) })),
+        )
+        .catch((error: unknown) => {
+          logger.error("Computer use could not start", error instanceof Error ? error.name : "Error")
+          return undefined
+        }),
+    )
+    if (sidecarsStopping) return yield* Effect.interrupt
+
     logger.log("spawning sidecar", { url })
     const { listener, health } = yield* Effect.promise(() =>
       spawnLocalServer(hostname, port, password, {
@@ -510,11 +562,26 @@ const main = Effect.gen(function* () {
         startupHold: firstRun.held(),
         // The engine trusts the certificate authorities from the user's own config that desktop main does.
         authorities: trustedAuthorities(getStore(LOCAL_STORE)),
+        startEnvironment: hands?.environment,
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
-        onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
+        onExit: (code) => {
+          writeLog("utility", "sidecar exited", { code }, "warn")
+          hands?.engineExit()
+          if (hands) void computerLifecycle.retire(hands)
+        },
       }),
+    ).pipe(
+      Effect.tapError(() =>
+        Effect.promise(async () => {
+          if (hands) await computerLifecycle.retire(hands)
+        }),
+      ),
     )
+    if (sidecarsStopping) {
+      yield* Effect.promise(() => listener.stop())
+      return yield* Effect.interrupt
+    }
     server = listener
     yield* Deferred.succeed(serverReady, {
       url,
@@ -522,14 +589,19 @@ const main = Effect.gen(function* () {
       password,
     })
 
-    yield* Effect.promise(() => health.wait).pipe(
+    const healthy = yield* Effect.promise(() => health.wait).pipe(
       Effect.timeout("30 seconds"),
+      Effect.as(true),
       Effect.catch((e) =>
         Effect.sync(() => {
           logger.error("sidecar health check failed", e.toString())
+          hands?.engineExit()
+          if (hands) void computerLifecycle.retire(hands)
+          return false
         }),
       ),
     )
+    if (sidecarsStopping) return yield* Effect.interrupt
 
     // The engine's Vector Local against the app's, and the app's own requests into the engine's network log.
     // A change to Vector Local applies here as soon as the engine says so (local.updated), Chromium included.
@@ -572,11 +644,30 @@ const main = Effect.gen(function* () {
     keepAwake = startKeepAwake({
       source: engineEventSource({ url, username: "vector", password }),
       blocker,
+      // While a paired phone watches, busy sessions keep the computer awake, those waiting on a person included.
+      watching: () => remoteLink()?.watching() ?? false,
       log: (message, meta) => logger.log(message, meta),
     })
     setDesktopWorkBlocker(blocker)
+    // Hands follows the engine's own event stream: asks, replies, session status and engine exit.
+    if (healthy && hands && computer === hands)
+      hands.attach({ url, password, source: engineEventSource({ url, username: "vector", password }) })
 
     yield* Effect.promise(() => vectorAccount.restore())
+    // Vector Remote (WP A41): connects only while Remote is on and a phone is paired or pairing.
+    startRemote({
+      engine: { url, password },
+      packaged: app.isPackaged,
+      watchingChanged: () => {
+        keepAwake?.refresh()
+        void updateTray()
+      },
+      log: (message, meta) => logger.log(message, meta),
+    })
+    app.once("will-quit", () => stopRemote())
+    // Brain Vault (WP A45): Settings → Memory → Backup, and the nightly backup while the app is open.
+    startVault({ engine: { url, password }, log: (message, meta) => logger.log(message, meta) })
+    app.once("will-quit", () => stopVault())
     // The sidebar's name and photo; never holds up startup.
     void vectorAccount.refreshProfile()
     if (process.platform === "win32") {
@@ -648,6 +739,23 @@ const main = Effect.gen(function* () {
     quit: () => {
       requestQuit()
       app.quit()
+    },
+    computer: () => computer?.tray(),
+    computerCommand: (command) => computer?.trayCommand(command),
+    remote: {
+      read: () => {
+        const status = remoteLink()?.status()
+        return {
+          phones: status?.phones.length ?? 0,
+          connected: status?.phones.filter((phone) => phone.connected).length ?? 0,
+          watching: status?.phones.some((phone) => phone.watching) ?? false,
+        }
+      },
+      disconnectAll: () =>
+        void remoteLink()
+          ?.disconnectAll()
+          .then(() => updateTray())
+          .catch((error) => logger.warn("could not disconnect Remote's phones", error)),
     },
   })
   onScheduledAgentsChanged(() => void updateTray())

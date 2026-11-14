@@ -1,20 +1,23 @@
 import { isFreeModel } from "@vectordevai/schema/free-model"
-import { freeModelMayTrain } from "@vectordevai/core/free-model-choice"
+import { Billing } from "@vectordevai/schema/billing"
+import { FREE_MODEL_TRAINING_LABEL, freeModelMayTrain } from "@vectordevai/core/free-model-choice"
 // Which model a review runs on (section 2.9), what it costs (section 5.5), and the 32k context floor.
 
 import { providerCredentialAllowed } from "@vectordevai/core/provider-policy"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { REVIEW_CONFIG_PATH } from "@vectordevai/core/review/config"
+import type { ModelSubject } from "@vectordevai/core/review/model-evidence"
 import { contextRefusal, type ReviewPrice } from "@vectordevai/core/review/plan"
 import { WORKFLOW_FILE } from "@vectordevai/core/review/workflow"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import type { CostKind, Trigger } from "@vectordevai/core/review/types"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import type { ModelV2 } from "@vectordevai/core/model"
+import { VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
 
 export interface ResolvedModel {
   providerID: ProviderV2.ID
@@ -23,6 +26,9 @@ export interface ResolvedModel {
   context: number
   price?: ReviewPrice // only for "priced": the dollar cap needs a price
   costKind: CostKind
+  // What model evidence (VS-07) reads: which setting chose the model, or the default Vector fell back to, and the
+  // catalog's facts about it. Descriptive only; nothing changes which model runs. Absent on models built by hand.
+  subject?: ModelSubject
 }
 
 export class ReviewModelError extends Schema.TaggedErrorClass<ReviewModelError>()("ReviewModelError", {
@@ -35,6 +41,11 @@ export interface ResolveInput {
   config?: string // `model` from .vector/review.json
   env?: Record<string, string | undefined> // MODEL and REVIEW_AUTO_MODEL; process.env by default
   exact?: string // this "provider/model" and no other, such as review.json's triageModel
+  // review.json's "modelEvidence": "warn" (VS-07, off by default). A local model the provider retired is then refused
+  // with that reason, as a workflow's already is, instead of as one that is not available.
+  evidence?: boolean
+  /** Internal service identity; absent preserves the generic review setting. */
+  identity?: "vectorscope"
 }
 
 // CI (auto and command): REVIEW_AUTO_MODEL for automatic runs only, then review.json, then MODEL.
@@ -50,7 +61,13 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   const catalog = yield* ModelCatalog.Service
 
   const ci = input.trigger === "auto" || input.trigger === "command"
-  const agent = ci ? undefined : (yield* config.get()).agent?.["review"]
+  const scope = input.identity === VECTORSCOPE_AGENT
+  if (scope && ci)
+    return yield* new ReviewModelError({ message: "The VectorScope service requires a local review model selection." })
+  const global = scope ? yield* config.getGlobal() : undefined
+  const agent = ci ? undefined : scope ? global?.agent?.[VECTORSCOPE_AGENT] : (yield* config.get()).agent?.["review"]
+  if (scope && agent?.disable)
+    return yield* new ReviewModelError({ message: "VectorScope is disabled in agent.vectorscope." })
   // Each source names its setting, so a workflow's refusal points at the one that chose the model.
   const picked = (
     ci
@@ -64,7 +81,7 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
           { value: input.exact, setting: TRIAGE_SETTING },
           { value: input.flag, setting: "--model" },
           { value: input.config, setting: CONFIG_SETTING },
-          { value: agent?.model, setting: "agent.review.model" },
+          { value: agent?.model, setting: scope ? "agent.vectorscope.model" : "agent.review.model" },
         ]
   )
     .map((source) => ({ ...source, value: source.value?.trim() }))
@@ -77,7 +94,17 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
         Object.values(yield* provider.list())
           .flatMap((item) => Object.values(item.models))
           .find((model) => isFreeModel(model) && !freeModelMayTrain(model))
-  const configured = chosen || ci ? undefined : yield* provider.defaultModel().pipe(Effect.option)
+  // Service defaults come from the owner, never an ambient project model. When
+  // no project model is set the existing provider fallback is owner history and
+  // the available catalog. Explicit/pinned selections above always win.
+  const configured =
+    chosen || ci
+      ? undefined
+      : scope && global?.model
+        ? Option.some(Provider.parseModel(global.model))
+        : scope && (yield* config.get()).model
+          ? undefined
+          : yield* provider.defaultModel().pipe(Effect.option)
   const name =
     chosen ??
     (free ? `${free.providerID}/${free.id}` : undefined) ??
@@ -87,7 +114,9 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
     return yield* new ReviewModelError({
       message: ci
         ? "No review model is set. Set MODEL or REVIEW_AUTO_MODEL in the workflow, or model in .vector/review.json, and provide that provider's key."
-        : "No review model is set. Pass --model, set model in .vector/review.json, or connect a provider in Vector.",
+        : scope
+          ? "No VectorScope model is set. Choose agent.vectorscope.model in your Vector settings or provide an explicit or pinned review model."
+          : "No review model is set. Pass --model, set model in .vector/review.json, or connect a provider in Vector.",
     })
 
   const ref = Provider.parseModel(name)
@@ -101,6 +130,15 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
         // Vector Local keeps the model off: say why, rather than asking for a key.
         if (!ci && error.unavailable?.reason === "off-in-local")
           return yield* new ReviewModelError({ message: `${name} cannot review: ${error.unavailable.message}` })
+        if (!ci && input.evidence) {
+          const provider = (yield* catalog.get())[ref.providerID]
+          const listed =
+            provider && Object.hasOwn(provider.models, ref.modelID) ? provider.models[ref.modelID] : undefined
+          if (listed?.status === "deprecated")
+            return yield* new ReviewModelError({
+              message: `${provider!.name} has retired ${ref.modelID}. Set ${picked?.setting ?? "--model"} to one of its current models.`,
+            })
+        }
         if (!ci)
           return yield* new ReviewModelError({ message: `${name} is not available. Check the provider and its key.` })
         const listed = (yield* catalog.get())[ref.providerID]
@@ -125,7 +163,10 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   // A review on a server on this computer, or on a private one on the model server list in effect (the user's or the
   // company's, without an edit still held for the owner), has no per-token price.
   const local = (yield* provider.line(model))?.local ?? false
+  // Label plan §4.3: a Vector Codium model is "codium" before any catalog price or sign-in, so it has no dollar price
+  // and the runner holds it to the review token stop.
   const costKind = SpendGuard.costKindOf({
+    codium: Billing.isCodium(model.providerID),
     free: isFreeModel(model),
     oauthPlan:
       signIn?.type === "oauth" &&
@@ -134,14 +175,37 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
     local,
   })
 
+  // The agent's variant applies only when the agent's own model was chosen, as elsewhere in the engine.
+  const variant =
+    chosen && chosen === agent?.model && agent.variant && (!scope || picked?.setting === "agent.vectorscope.model")
+      ? agent.variant
+      : undefined
+  const subject: ModelSubject = {
+    model: `${model.providerID}/${model.id}`,
+    ...(variant ? { variant } : {}),
+    free: isFreeModel(model),
+    ...(model.freeModel
+      ? {
+          freeModel: {
+            source: model.freeModel.source,
+            ...(model.freeModel.dataPolicy ? { dataPolicy: model.freeModel.dataPolicy } : {}),
+          },
+        }
+      : {}),
+    status: model.status,
+    choice: picked
+      ? { explicit: true, setting: picked.setting }
+      : { explicit: false, setting: free ? FREE_DEFAULT : "your default model" },
+  }
+
   return {
     providerID: model.providerID,
     modelID: model.id,
-    // The agent's variant applies only when the agent's own model was chosen, as elsewhere in the engine.
-    ...(chosen && chosen === agent?.model && agent.variant ? { variant: agent.variant } : {}),
+    ...(variant ? { variant } : {}),
     context: model.limit.context,
     ...(costKind === "priced" ? { price: SpendGuard.priceOf(model.cost) } : {}),
     costKind,
+    subject,
   } satisfies ResolvedModel
 })
 
@@ -149,6 +213,8 @@ const AUTO_SETTING = `REVIEW_AUTO_MODEL in ${WORKFLOW_FILE}`
 const CONFIG_SETTING = `model in ${REVIEW_CONFIG_PATH}`
 const TRIAGE_SETTING = `triageModel in ${REVIEW_CONFIG_PATH}`
 const MODEL_SETTING = `MODEL in ${WORKFLOW_FILE}`
+// The model an unattended review falls back to without one: the rule above, in words.
+const FREE_DEFAULT = `an available free model not labelled "${FREE_MODEL_TRAINING_LABEL}"`
 
 // Why a workflow's model cannot run. A missing secret is the usual cause: the provider is in the catalog but never
 // loaded, because the review step's env does not pass its key. A retired model never loads, key or not. Only a

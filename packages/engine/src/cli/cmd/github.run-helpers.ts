@@ -36,6 +36,7 @@ import { GITHUB_ACTIONS_BOT, type GithubAuth } from "./github.auth"
 import { downloadGithubAttachment } from "./github.attachment"
 import { TASK_MENTIONS } from "./github.route"
 import { untrustedJson } from "./github.policy"
+import { lookupSchedule } from "./github.schedule"
 import { WRITE_PERMISSIONS, sameLogin, type ReviewGitHub } from "./github.review-api"
 
 type GitHubAuthor = {
@@ -239,6 +240,11 @@ function getReviewCommentContext(ctx: Pick<PromptContext, "context" | "payload">
 }
 
 export async function getUserPrompt(ctx: PromptContext) {
+  if (ctx.context.eventName === "schedule" && process.env.VECTOR_SCHEDULE_PROMPTS !== undefined) {
+    const schedule = lookupSchedule(process.env, ctx.payload)
+    if (!schedule) throw new Error("This schedule is not configured.")
+    return { userPrompt: schedule.prompt, promptFiles: [] }
+  }
   const customPrompt = process.env["PROMPT"]
   // For repo events and issues events, PROMPT is required since there's no comment to extract from
   if (ctx.isRepoEvent || ctx.isIssuesEvent) {

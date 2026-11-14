@@ -4,6 +4,10 @@
   "description": "",
   "type": "module",
   "exports": {
+    "./computer/overlay-page": "./src/features/computer/overlay-page.ts",
+    "./computer/overlay-layout": "./src/features/computer/overlay-layout.ts",
+    "./computer/main-copy": "./src/features/computer/main-copy.ts",
+    "./computer/screenshot-history": "./src/features/computer/screenshot-history.ts",
     ".": "./src/index.ts",
     "./desktop-menu": "./src/desktop-menu.ts",
     "./updater": "./src/updater.ts",
@@ -12,7 +16,9 @@
     "./wsl/types": "./src/wsl/types.ts",
     "./vite": "./vite.js",
     "./index.css": "./src/index.css",
-    "./judge": "./src/features/judge/verified-completion.ts"
+    "./judge": "./src/features/judge/verified-completion.ts",
+    "./ops": "./src/features/cloud/ops/ops-requests.ts",
+    "./hosted": "./src/features/cloud/hosted/hosted-requests.ts"
   },
   "scripts": {
     "typecheck": "tsgo -b",
@@ -20,9 +26,10 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
+    "build:phone": "vite build --mode phone",
     "serve": "vite preview",
     "test": "bun run test:unit && bun run test:browser",
-    "test:unit": "bun test --isolate --only-failures --preload ./happydom.ts ./src",
+    "test:unit": "node --test ./scripts/test-unit.test.mjs && node ./scripts/test-unit.mjs",
     "test:browser": "bun test --isolate --conditions=browser --preload ./happydom.ts ./test-browser",
     "test:unit:watch": "bun test --isolate --watch --preload ./happydom.ts ./src",
     "test:e2e": "playwright test",
@@ -74,6 +81,7 @@
     "@kobalte/core": "catalog:",
     "@lezer/highlight": "1.2.3",
     "@vectordevai/core": "workspace:*",
+    "@vectordevai/relay": "workspace:*",
     "@vectordevai/schema": "workspace:*",
     "@vectordevai/sdk": "workspace:*",
     "@vectordevai/session-ui": "workspace:*",

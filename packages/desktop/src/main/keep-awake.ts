@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect"
+import type { Computer } from "@vectordevai/schema/computer"
 
 /*
  * Keeps the computer awake while the local engine has work running.
@@ -22,6 +23,10 @@ import { Option, Schema } from "effect"
  * Nor is it held for work that waits on the user. A session stays busy while a permission or question prompt is
  * unanswered, so a session with one does not count. Its parent, waiting on it as a foreground subagent, still looks
  * busy; so while any prompt is unanswered, the blocker is released once nothing has moved for `stalledMs`.
+ *
+ * Except while a paired phone watches (Vector Remote, WP A41: `watching`): the person can answer from the phone, so
+ * every busy session holds the blocker, one waiting on a prompt included, for as long as the phone stays. The relay
+ * closes a phone that sends nothing for 30 minutes, which ends the watch.
  */
 
 const SILENCE_MS = 5 * 60_000
@@ -88,6 +93,8 @@ export function startKeepAwake(input: {
   pollMs?: number
   /** The first reconnect delay; it doubles after each failed attempt, up to 30 seconds. */
   retryMs?: number
+  /** Whether a paired phone is attached and watching (Remote); call `refresh()` when it changes. */
+  watching?: () => boolean
   log?: (message: string, meta?: Record<string, unknown>) => void
 }) {
   const silenceMs = input.silenceMs ?? SILENCE_MS
@@ -125,12 +132,17 @@ export function startKeepAwake(input: {
   const apply = () => {
     const sessions = new Set([...busy.keys(), ...drains])
     const blocked = new Set(waiting.values())
-    const working = [...sessions].filter((sessionID) => !blocked.has(sessionID))
-    const stalled = working.length < sessions.size && Date.now() - progressAt > stalledMs
+    const watched = input.watching?.() === true
+    // A watching phone can answer what a session waits on, so then every busy session counts.
+    const working = watched ? [...sessions] : [...sessions].filter((sessionID) => !blocked.has(sessionID))
+    const stalled = !watched && working.length < sessions.size && Date.now() - progressAt > stalledMs
     const hold = !stopped && working.length > 0 && !stalled && Date.now() - heardAt <= silenceMs
     if (hold && held === undefined) {
       held = input.blocker.start()
-      input.log?.("keep awake: holding off idle sleep", { sessions: working.length })
+      input.log?.("keep awake: holding off idle sleep", {
+        sessions: working.length,
+        ...(watched ? { phone: true } : {}),
+      })
     }
     if (!hold && held !== undefined) {
       input.blocker.stop(held)
@@ -354,6 +366,10 @@ export function startKeepAwake(input: {
   void run()
 
   return {
+    /** Decides again now, after `watching` changed. */
+    refresh() {
+      apply()
+    },
     stop() {
       stopped = true
       clearInterval(watchdog)
@@ -380,6 +396,57 @@ export function setDesktopWorkBlocker(blocker: PowerBlocker | undefined) {
   desktopHeld = undefined
   desktopBlocker = blocker
   syncDesktopWork()
+}
+
+/** Hands owns a separate prevent-display-sleep blocker; ordinary engine work may still let the display sleep. */
+export function createComputerKeepAwake(input: {
+  blocker: PowerBlocker
+  clock?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(timer: unknown): void }
+}) {
+  const clock = input.clock ?? {
+    setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms),
+    clearTimeout: (timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  }
+  const state: { held?: number; timer?: unknown; epoch: number } = { epoch: 0 }
+  const cancel = () => {
+    state.epoch++
+    if (state.timer !== undefined) clock.clearTimeout(state.timer)
+    state.timer = undefined
+  }
+  const release = () => {
+    cancel()
+    const held = state.held
+    state.held = undefined
+    if (held !== undefined) input.blocker.stop(held)
+  }
+  return {
+    update(value: { phase: Computer.ComputerPhase; allowed: boolean; away?: boolean; pause?: Computer.PauseReason }) {
+      if (
+        !value.allowed ||
+        value.away ||
+        value.pause === "away" ||
+        value.pause === "locked" ||
+        value.pause === "suspend" ||
+        value.pause === "secure_desktop" ||
+        ["off", "setup", "ready", "done", "stopped"].includes(value.phase)
+      ) {
+        release()
+        return
+      }
+      if (value.phase === "working") {
+        cancel()
+        if (state.held === undefined) state.held = input.blocker.start()
+        return
+      }
+      // Keep one deadline for continuous user waiting; heartbeats and changing ask text cannot postpone it.
+      if (state.held === undefined || state.timer !== undefined) return
+      const epoch = state.epoch
+      state.timer = clock.setTimeout(() => {
+        if (state.epoch === epoch) release()
+      }, 2 * 60_000)
+    },
+    close: release,
+  }
 }
 
 /** Keeps the computer awake while `work` runs, however it ends. */

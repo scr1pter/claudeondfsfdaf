@@ -74,6 +74,7 @@ export namespace ProviderTest {
           getSmallModel: Effect.fn("TestProvider.getSmallModel")((providerID) =>
             Effect.succeed(providerID === row.id ? mdl : undefined),
           ),
+          getBrainModel: Effect.fn("TestProvider.getBrainModel")(() => Effect.succeed(undefined)),
           codiumAuto: Effect.fn("TestProvider.codiumAuto")(() =>
             Effect.die(new Error("ProviderTest.codiumAuto not configured")),
           ),

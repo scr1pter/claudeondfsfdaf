@@ -38,7 +38,7 @@ export const VectorPlanPlugin = define({
             // No dollar price: a Codium step spends credits, so it is recorded unpriced and left out of dollar totals.
             draft.cost = []
             draft.limit = { context: model.contextLength, output: model.maxOutputTokens }
-            draft.codium = ModelPlans.listing(model)
+            draft.codium = ModelPlans.listing(model, current)
             draft.enabled = true
           })
       }),

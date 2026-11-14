@@ -3,6 +3,7 @@ import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { bindingKey, bindingsForAccount, generationKey, revokeBinding } from "./cloud-agents-binding.js"
 import { RUN_SOURCES, type RunSource, type RunTrigger } from "./cloud-agents-entitlement.js"
 import { liveKey, runRecordKey, type LedgerPurpose, type LedgerSource } from "./cloud-agents-ledger.js"
+import { eraseBrainUploads } from "./cloud-agents-brain.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -36,6 +37,9 @@ const Record = Schema.Struct({
   startedAt: Decimal,
   generation: Decimal,
   jti: Jti,
+  thread: Schema.optionalKey(Schema.String.check(Schema.isPattern(GithubAgents.THREAD_PATTERN))),
+  brainSha: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$(?![\s\S])/))),
+  brainPublic: Schema.optionalKey(Schema.Literals(["0", "1"])),
   triggerSource: Schema.optionalKey(Schema.Literals(RUN_SOURCES)),
   triggerPurpose: Schema.optionalKey(Schema.Literals(["task", "review", "incident", "changes"])),
   endedAt: Schema.optionalKey(Decimal),
@@ -56,6 +60,11 @@ const Record = Schema.Struct({
             ? "github-dispatch"
             : "github-comment") &&
       (record.source === "github-schedule") === (record.purpose === "scheduled") &&
+      ((record.brainSha === undefined && record.brainPublic === undefined) ||
+        (record.brainSha !== undefined &&
+          record.brainPublic !== undefined &&
+          record.triggerSource === "desktop" &&
+          record.thread !== undefined)) &&
       ((record.triggerSource === undefined && record.triggerPurpose === undefined) ||
         (record.source === "github-dispatch" &&
           record.triggerSource !== undefined &&
@@ -99,6 +108,7 @@ export type RunStart = RunRecordIdentity & {
   purpose: LedgerPurpose
   startedAt: number
   actor: { login: string; id: string }
+  thread?: string
   trigger?: CloudRun["trigger"]
 }
 
@@ -124,6 +134,7 @@ export async function recordRunStart(input: RunStart, store = persistentStore): 
       startedAt: String(input.startedAt),
       generation: String(input.generation),
       jti: input.jti,
+      ...(input.thread === undefined ? {} : { thread: input.thread }),
       ...(input.trigger ? { triggerSource: input.trigger.source, triggerPurpose: input.trigger.purpose } : {}),
     }),
   )
@@ -231,13 +242,100 @@ export async function listCloudRuns(
   })
 }
 
+/** Private completed-run provenance for explicit desktop data reads; never accepts a caller-selected thread. */
+export async function ownerCloudRun(account: string, rid: string, store = persistentStore) {
+  if (!Schema.is(Account)(account) || !RID.test(rid)) throw invalidRequest()
+  const record = Option.getOrUndefined(decodeRecord(fields(await command(["HGETALL", runRecordKey(rid)], store))))
+  if (
+    !record ||
+    record.account !== account ||
+    record.rid !== rid ||
+    !record.thread ||
+    !record.endedAt ||
+    record.triggerSource !== "desktop" ||
+    record.source !== "github-dispatch" ||
+    record.purpose !== "task" ||
+    record.event !== "workflow_dispatch"
+  )
+    throw new ApiError(404, "RUN_UNAVAILABLE", "This GitHub result is unavailable.")
+  const parts = RID.exec(record.rid)!
+  return {
+    account,
+    rid,
+    repositoryId: record.repositoryId,
+    generation: Number(record.generation),
+    thread: record.thread,
+    runId: parts[2]!,
+    startedAt: Number(record.startedAt),
+    endedAt: Number(record.endedAt),
+    ...(record.brainSha === undefined
+      ? {}
+      : { brain: { sha256: record.brainSha, publicRepository: record.brainPublic === "1" } }),
+  }
+}
+
+/** Records only approved metadata, atomically fenced by the exact current desktop ticket/run/binding. */
+export async function recordRunBrainContext(
+  input: {
+    account: string
+    repositoryId: string
+    generation: number
+    rid: string
+    jti: string
+    thread: string
+    ticketHash: string
+    sha256: string
+    publicRepository: boolean
+    now: number
+  },
+  store = persistentStore,
+) {
+  if (
+    !validIdentity(input) ||
+    !RID.test(input.rid) ||
+    !Schema.is(Decimal)(input.repositoryId) ||
+    !GithubAgents.THREAD_PATTERN.test(input.thread) ||
+    !/^[0-9a-f]{64}$(?![\s\S])/.test(input.ticketHash) ||
+    !/^[0-9a-f]{64}$(?![\s\S])/.test(input.sha256) ||
+    typeof input.publicRepository !== "boolean" ||
+    !Number.isSafeInteger(input.now) ||
+    input.now <= 0
+  )
+    throw invalidRequest()
+  const reply = await command(
+    [
+      "EVAL",
+      BRAIN_CONTEXT,
+      "5",
+      runRecordKey(input.rid),
+      liveKey(input.account),
+      bindingKey(input.repositoryId),
+      generationKey(input.repositoryId),
+      `vector:cli-revoked:${input.account}`,
+      input.account,
+      input.repositoryId,
+      String(input.generation),
+      input.rid,
+      input.jti,
+      input.thread,
+      input.ticketHash,
+      input.sha256,
+      input.publicRepository ? "1" : "0",
+      String(input.now),
+    ],
+    store,
+  )
+  if (reply !== "OK") throw unavailable()
+}
+
 /** A57 revokes the account before erasure. Every delayed writer must observe that same mark atomically. */
 export async function eraseCloudAgentsAccount(account: string, store = persistentStore): Promise<void> {
   if (!Schema.is(Account)(account)) throw invalidRequest()
   if (!(await command(["GET", `vector:cli-revoked:${account}`], store)))
     throw new ApiError(409, "ACCOUNT_REVOCATION_REQUIRED", "Stop this account's access before erasing its run records.")
+  await eraseBrainUploads(account, store)
   for (const binding of await bindingsForAccount(account, store))
-    await revokeBinding(binding.repositoryId, account, store)
+    await revokeBinding(binding.repositoryId, account, binding.generation, store)
   // The index is intentionally capped; scan the record namespace too so trimmed records are erased.
   for (const pattern of [`${PREFIX}run:*`, `${PREFIX}bind-code:*`, `${PREFIX}ticket:*`, `${PREFIX}binder-ok:*`]) {
     await scan(pattern, store, async (key) => {
@@ -349,6 +447,32 @@ const TYPES = `
 local function kind(key) return redis.call('TYPE', key).ok end
 local function permits(key, expected) local got = kind(key); return got == 'none' or got == expected end
 `
+const BRAIN_CONTEXT = `${TYPES}
+for i, expected in ipairs({'hash','hash','hash','string','string'}) do
+ if not permits(KEYS[i], expected) then return 'corrupt' end
+end
+if redis.call('EXISTS', KEYS[5]) == 1 or redis.call('HGET', KEYS[3], 'account') ~= ARGV[1]
+ or redis.call('HGET', KEYS[3], 'generation') ~= ARGV[3] or redis.call('GET', KEYS[4]) ~= ARGV[3]
+ or redis.call('HEXISTS', KEYS[3], 'suspended') == 1 then return 'stale' end
+local raw = redis.call('HGET', KEYS[2], ARGV[4])
+if not raw then return 'stale' end
+local ok, live = pcall(cjson.decode, raw)
+if not ok or type(live) ~= 'table' or type(live.deadline) ~= 'number' then return 'corrupt' end
+if type(live.lastReport) ~= 'number' or (live.lastRequest ~= nil and type(live.lastRequest) ~= 'number') then return 'corrupt' end
+if live.jti ~= ARGV[5] or live.repo ~= ARGV[2] or live.gen ~= tonumber(ARGV[3]) or live.thr ~= ARGV[6]
+ or live.ticketHash ~= ARGV[7] or live.triggerSource ~= 'desktop' or live.src ~= 'github-dispatch' or live.pur ~= 'task' or live.deadline <= tonumber(ARGV[10])
+ or tonumber(ARGV[10]) >= math.max(live.lastReport, live.lastRequest or 0) + ${GithubAgents.IDLE_SECONDS * 1000}
+ then return 'stale' end
+if redis.call('HGET', KEYS[1], 'account') ~= ARGV[1] or redis.call('HGET', KEYS[1], 'generation') ~= ARGV[3]
+ or redis.call('HGET', KEYS[1], 'jti') ~= ARGV[5] or redis.call('HGET', KEYS[1], 'thread') ~= ARGV[6]
+ or redis.call('HGET', KEYS[1], 'repositoryId') ~= ARGV[2] or redis.call('HGET', KEYS[1], 'triggerSource') ~= 'desktop'
+ or redis.call('HEXISTS', KEYS[1], 'endedAt') == 1 then return 'stale' end
+local sha = redis.call('HGET', KEYS[1], 'brainSha')
+local public = redis.call('HGET', KEYS[1], 'brainPublic')
+if (sha and sha ~= ARGV[8]) or (public and public ~= ARGV[9]) or ((sha and not public) or (public and not sha)) then return 'stale' end
+redis.call('HSET', KEYS[1], 'brainSha', ARGV[8], 'brainPublic', ARGV[9])
+return 'OK'
+`
 const START = `${TYPES}
 if not permits(KEYS[1], 'hash') or not permits(KEYS[2], 'hash') or not permits(KEYS[3], 'zset')
   or not permits(KEYS[4], 'hash') or not permits(KEYS[5], 'hash') or not permits(KEYS[6], 'string')
@@ -363,11 +487,13 @@ local decoded, live = pcall(cjson.decode, raw)
 if not decoded or type(live) ~= 'table' then return 'corrupt' end
 if live.jti ~= record.jti or live.gen ~= tonumber(record.generation) or live.startedAt ~= tonumber(record.startedAt)
   or live.repo ~= record.repositoryId or live.src ~= record.source or live.pur ~= record.purpose
+  or (record.thread ~= nil and live.thr ~= record.thread)
   or live.triggerSource ~= record.triggerSource or live.triggerPurpose ~= record.triggerPurpose then return 'stale' end
 local same = redis.call('HGET', KEYS[1], 'account') == record.account
   and redis.call('HGET', KEYS[1], 'generation') == record.generation
   and redis.call('HGET', KEYS[1], 'startedAt') == record.startedAt
 if same and redis.call('HEXISTS', KEYS[1], 'endedAt') == 1 then return 'stale' end
+if same and (redis.call('HGET', KEYS[1], 'thread') or '') ~= (record.thread or '') then return 'stale' end
 if same then
   redis.call('HSET', KEYS[1], 'jti', record.jti)
 else

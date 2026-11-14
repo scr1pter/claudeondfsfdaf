@@ -1,0 +1,89 @@
+name: Vector cloud workspaces
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [cloud-workspaces]
+  pull_request:
+    paths:
+      - "packages/cloud-workspaces/**"
+      - "packages/web/src/components/workspaces/**"
+      - "packages/web/src/lib/cloud-workspaces-client*"
+      - "packages/web/src/pages/workspaces.astro"
+      - "packages/web/astro.config.mjs"
+      - "api/**"
+      - "test/cloud-workspaces-api.test.ts"
+      - "test/account-delete.test.ts"
+      - "bun.lock"
+      - ".github/workflows/vector-workspaces.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vector-workspaces-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ASTRO_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Workspace contracts, storage, lifecycle, publication and service tests
+        working-directory: packages/cloud-workspaces
+        run: bun test test --timeout 30000
+      - name: Account gateway and deletion regressions
+        working-directory: test
+        run: bun test cloud-workspaces-api.test.ts cloud-workspaces-node.test.ts account-delete-api.test.ts account-delete.test.ts site-publication.test.ts --timeout 30000
+      - name: Browser client contracts
+        working-directory: packages/web
+        run: bun test src/lib/cloud-workspaces-client.test.ts --timeout 30000
+      - name: Workspace typecheck
+        working-directory: packages/cloud-workspaces
+        run: bun typecheck
+      - name: Website typecheck
+        working-directory: packages/web
+        run: bun typecheck
+      - name: Build the actual website and retain its public workspace route
+        run: bun --cwd packages/web build && node script/prune-vector-site.mjs
+      - name: Install the isolated browser fixture
+        working-directory: packages/cloud-workspaces
+        run: bunx playwright install --with-deps chromium
+      - name: Two-device production UI regression
+        run: |
+          node packages/cloud-workspaces/script/serve-preview.mjs > "$RUNNER_TEMP/workspaces-preview.log" 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3457/workspaces/ > /dev/null; then break; fi
+            sleep 1
+          done
+          VECTOR_WORKSPACES_TEST_URL=http://127.0.0.1:3457 bun packages/cloud-workspaces/script/browser-smoke.ts
+      - name: Prepare the actual Node engine image
+        run: |
+          bun packages/cloud-workspaces/script/prepare-engine.ts "$RUNNER_TEMP/cloud-engine" --preview
+          docker build --file packages/cloud-workspaces/container/engine.Dockerfile --tag vector-cloud-engine-fixture --iidfile "$RUNNER_TEMP/cloud-engine.id" "$RUNNER_TEMP/cloud-engine"
+      - name: Actual engine write, read-only review and persisted chat after restart
+        run: |
+          export VECTOR_WORKSPACES_TEST_IMAGE="$(cat "$RUNNER_TEMP/cloud-engine.id")"
+          bun packages/cloud-workspaces/script/runtime-smoke.ts
+      - name: Preserve explicitly scoped evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cloud-workspaces-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            /tmp/vector-cloud-workspaces-browser-smoke/
+            /tmp/vector-cloud-workspaces-runtime-smoke/
+            ${{ runner.temp }}/workspaces-preview.log
+          retention-days: 7
+          if-no-files-found: warn

@@ -1,0 +1,29 @@
+{
+  "run": 41972897153,
+  "head": "993b98d92dceeb73d3c7aff09056e6debfb36760",
+  "job": 127065048924,
+  "artifact": 13389864855,
+  "artifactSha256": "c3a66af91e5a71c8ac780dd7c1f6e41e1bd163536cfbb310d94f05383b54630a",
+  "nativeStandaloneUnits": "all-20-suites-pass",
+  "build": "universal-twice-and-repro-pass",
+  "candidate": "absent-core-failed",
+  "reportArtifactZipVerified": true,
+  "core": {
+    "passed": 27,
+    "failed": 2,
+    "skipped": 1,
+    "failures": [
+      {
+        "name": "channel-eof",
+        "reason": "unexpected-lifecycle-frame"
+      },
+      {
+        "name": "parent-death",
+        "reason": "unexpected-lifecycle-frame"
+      }
+    ]
+  },
+  "goldenTranscripts": "all-ten-pass",
+  "windows": "x64-and-arm64-pass",
+  "scope": "grant-free; no native identity candidate accepted; exact unexpected frame not retained"
+}

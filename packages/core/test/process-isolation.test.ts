@@ -121,3 +121,70 @@ test.skipIf(process.platform !== "linux")(
     }
   },
 )
+
+test("this build holds the bubblewrap floor off and launches only through the explicit decision", () => {
+  expect(ProcessIsolation.FLOOR).toBe(false)
+  // Portable tests never call requireIsolation: it has no reset, and test files share one process.
+  expect(ProcessIsolation.required()).toBe(false)
+  const loader = { LD_PRELOAD: "/fixture/loader.so" }
+  expect(ProcessIsolation.launch("/bin/true", ["--fixture"], { env: loader, shell: false })).toEqual({
+    file: "/bin/true",
+    args: ["--fixture"],
+    shell: false,
+  })
+})
+
+test("outside a hosted agent run, launches pass through even with a loader environment", () => {
+  const options = { env: { LD_PRELOAD: "/fixture/loader.so" } }
+  for (const floor of [false, true])
+    expect(ProcessIsolation.decide("/bin/sh", ["-c", "true"], options, { guarded: false, floor })).toEqual({
+      file: "/bin/sh",
+      args: ["-c", "true"],
+      shell: undefined,
+    })
+})
+
+test("a hosted run without the floor keeps the loader refusal and starts the tool itself on Linux only", () => {
+  const boundary = { guarded: true, floor: false }
+  expect(() =>
+    ProcessIsolation.decide("/bin/true", [], { env: { LD_PRELOAD: "/fixture/loader.so" } }, boundary),
+  ).toThrow("native loader environment")
+  if (process.platform !== "linux") {
+    expect(() => ProcessIsolation.decide("/bin/true", [], { env: {} }, boundary)).toThrow(ProcessIsolation.REFUSAL)
+    return
+  }
+  expect(
+    ProcessIsolation.decide(
+      "/bin/echo",
+      ["ordinary"],
+      { cwd: "/tmp", shell: true, env: { PATH: "/usr/bin" } },
+      boundary,
+    ),
+  ).toEqual({ file: "/bin/echo", args: ["ordinary"], shell: true })
+})
+
+test("a hosted run with the floor wraps every tool in its own namespaces or refuses", () => {
+  const boundary = { guarded: true, floor: true }
+  expect(() =>
+    ProcessIsolation.decide("/bin/true", [], { env: { LD_PRELOAD: "/fixture/loader.so" } }, boundary),
+  ).toThrow("native loader environment")
+  const usable = (() => {
+    try {
+      ProcessIsolation.assertBinary()
+      return true
+    } catch {
+      return false
+    }
+  })()
+  const attempt = () =>
+    ProcessIsolation.decide("echo", ["ordinary"], { cwd: "/tmp", shell: true, env: { PATH: "/usr/bin" } }, boundary)
+  if (!usable) {
+    expect(attempt).toThrow(ProcessIsolation.REFUSAL)
+    return
+  }
+  expect(attempt()).toEqual({
+    file: ProcessIsolation.BINARY,
+    args: ProcessIsolation.argumentsForTool("/bin/sh", ["-c", "echo ordinary"], "/tmp"),
+    shell: false,
+  })
+})

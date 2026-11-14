@@ -1,11 +1,14 @@
 import { createContext, useContext, type Accessor, type ParentProps } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
+import { usePlatform } from "@/context/platform"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useSync } from "@/context/sync"
 import { usePrompt, type Prompt } from "@/context/prompt"
+import { ComputerStateContext, createComputerState } from "@/features/computer/use-computer-state"
+import { desktopOwns } from "@/pages/layout-computer-notify"
 import { useLanguage } from "@/context/language"
-import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { createBackgroundTasks, type BackgroundTasks } from "./background-tasks"
@@ -66,5 +69,24 @@ export function BackgroundTasksProvider(props: ParentProps<{ sessionID: Accessor
     compose,
     ask: (agent, rootID) => compose(rootID, (current) => appendTaskQuestion(current, agent)),
   })
-  return <Context.Provider value={value}>{props.children}</Context.Provider>
+  // The desktop owns a Hands run only on its own built-in engine, judged from the page's own server, which in the new
+  // layout can differ from the globally selected one. Anything else follows the engine's computer.state event.
+  const serverSDK = useServerSDK()
+  const sync = useSync()
+  const computer = createComputerState({
+    desktop: desktopOwns(platform.computer, serverSDK().scope) ? platform.computer : undefined,
+    listen: (cb) =>
+      serverSDK().event.listen((event) => {
+        if (event.details.type === "computer.state") cb(event.details.properties)
+      }),
+    working: (sessionID) => {
+      const status = sync().data.session_status[sessionID]
+      return status && status.type !== "idle"
+    },
+  })
+  return (
+    <Context.Provider value={value}>
+      <ComputerStateContext.Provider value={computer}>{props.children}</ComputerStateContext.Provider>
+    </Context.Provider>
+  )
 }

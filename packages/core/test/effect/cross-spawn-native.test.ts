@@ -3,6 +3,7 @@ import { Deferred, Effect, Exit, Fiber, Sink, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { ChildProcess } from "effect/unstable/process"
 import { PassThrough } from "node:stream"
+import { OwnedProcess } from "../../src/owned-process"
 import { CrossSpawnSpawner } from "../../src/cross-spawn-spawner"
 import { it } from "../lib/effect"
 
@@ -250,3 +251,10 @@ it.live("actual capture taps retain buffered bytes while native teardown drains 
     expect(captures.stderr?.destroyed).toBe(true)
   }),
 )
+
+// POSIX-only command ownership cannot be manufactured on Windows. This policy test never starts a payload.
+test.skipIf(process.platform === "win32")("native pipelines refuse owned commands in every stage before launch", () => {
+  const owned = OwnedProcess.command(ChildProcess.make("must-not-run", [], { detached: true }))
+  for (const command of [owned, ChildProcess.pipeTo(ChildProcess.make("head"), owned)])
+    expect(() => CrossSpawnSpawner.assertNativePipeline(command)).toThrow("refused")
+})

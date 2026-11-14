@@ -52,6 +52,12 @@
         overflow: auto;
       }
 
+      [data-slot="image-preview-frame"] {
+        position: relative;
+        display: inline-flex;
+        max-width: 100%;
+      }
+
       [data-slot="image-preview-image"] {
         max-width: 100%;
         max-height: calc(90vh - 100px);

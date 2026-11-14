@@ -1,0 +1,223 @@
+/* The cloud computer in the composer (WP A56). Its purple (#7c3aed, the same edge the computer's own live view page
+   draws) marks everything the computer Vector runs for you is doing: the bar above the composer, its button and the
+   start dialog's chosen tab. */
+.hosted-bar-stack {
+  display: grid;
+  gap: 6px;
+  margin: 0 4px 8px;
+}
+
+.hosted-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 2px solid #7c3aed;
+  border-radius: 14px;
+  background: color-mix(in srgb, #7c3aed 12%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, #7c3aed 18%, transparent);
+  color: var(--vx-text, #ece9f5);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.hosted-bar--control {
+  border-style: dashed;
+}
+
+.hosted-bar--needs-you {
+  box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 35%, transparent);
+}
+
+.hosted-bar-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.hosted-bar-meta {
+  color: var(--vx-muted, #b9b3c9);
+  overflow-wrap: anywhere;
+}
+
+.hosted-bar-alert {
+  color: #fcd34d;
+}
+
+.hosted-bar-error,
+.hosted-error {
+  margin: 0;
+  color: #fda4af;
+}
+
+.hosted-bar-actions,
+.hosted-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.hosted-actions--start {
+  justify-content: flex-start;
+}
+
+.hosted-bar-jobs {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.hosted-bar-link {
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: #c4b5fd;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.hosted-run-button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: #a78bfa;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.hosted-run-button:hover {
+  background: color-mix(in srgb, #7c3aed 18%, transparent);
+  color: #ddd6fe;
+}
+
+.hosted-dialog .hosted-form {
+  display: grid;
+  gap: 12px;
+  padding: 0 24px 24px;
+  font-size: 13px;
+}
+
+.hosted-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.hosted-tab {
+  padding: 5px 12px;
+  border: 1px solid var(--vx-line-strong, #3b3648);
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.hosted-tab[aria-selected="true"] {
+  border-color: #7c3aed;
+  background: color-mix(in srgb, #7c3aed 20%, transparent);
+}
+
+.hosted-field {
+  display: grid;
+  gap: 5px;
+}
+
+.hosted-field > span {
+  color: var(--vx-muted, #b9b3c9);
+  font-size: 12px;
+}
+
+.hosted-field textarea,
+.hosted-field select,
+.hosted-field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--vx-line-strong, #3b3648);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+
+.hosted-field--inline {
+  flex: 1 1 160px;
+}
+
+.hosted-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.hosted-ceiling {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid #7c3aed;
+  border-radius: 6px;
+  background: color-mix(in srgb, #7c3aed 10%, transparent);
+}
+
+.hosted-muted {
+  margin: 0;
+  color: var(--vx-muted, #b9b3c9);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hosted-jobs,
+.hosted-results {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hosted-job {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--vx-line-strong, #3b3648);
+  border-radius: 12px;
+}
+
+.hosted-job-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hosted-report {
+  display: grid;
+  gap: 4px;
+}
+
+.hosted-report p {
+  margin: 0;
+}
+
+.hosted-results {
+  gap: 2px;
+  font-size: 12px;
+}
+
+.hosted-pass {
+  color: #86efac;
+}
+
+.hosted-fail {
+  color: #fda4af;
+}

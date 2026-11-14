@@ -1,6 +1,7 @@
 export * as WorkflowSpec from "./spec"
 
 import { Option, Result, Schema, SchemaIssue } from "effect"
+import { Connect } from "@vectordevai/schema/connect"
 import { JsonSchemaCheck } from "../json-schema-check"
 
 const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max))
@@ -109,6 +110,24 @@ export const NestedStage = Schema.Struct({
   inputs: optional(Schema.Record(InputID, Schema.Json).check(Schema.isMaxProperties(16))),
   after: optional(list(StageID, 32)),
 })
+export const ConnectStage = Schema.Struct({
+  id: StageID,
+  title: optional(text(60)),
+  after: optional(list(StageID, 32)),
+  if: optional(Predicate),
+  connect: Schema.Struct({
+    to: Connect.MemberID,
+    action: Connect.ActionID,
+    input: optional(
+      Schema.Struct({
+        target: Connect.ReviewInput.fields.target,
+        security: Connect.ReviewInput.fields.security,
+        budget: Connect.ReviewInput.fields.budget,
+        since: Connect.ReviewInput.fields.since,
+      }),
+    ),
+  }),
+})
 export const Spec = Schema.Struct({
   version: Schema.Literal(1),
   title: text(80),
@@ -125,7 +144,7 @@ export const Spec = Schema.Struct({
   ),
   defaults: optional(Settings),
   limits: optional(Limits),
-  stages: list(Schema.Union([AgentStage, NestedStage]), 32, 1),
+  stages: list(Schema.Union([AgentStage, NestedStage, ConnectStage]), 32, 1),
   result: optional(
     Schema.Struct({
       stages: optional(list(StageID, 32)),
@@ -137,6 +156,8 @@ export const Spec = Schema.Struct({
 export type Spec = typeof Spec.Type
 export type AgentStage = typeof AgentStage.Type
 export type NestedStage = typeof NestedStage.Type
+export type ConnectStage = typeof ConnectStage.Type
+export type ExecutableStage = AgentStage | ConnectStage
 export type Stage = Spec["stages"][number]
 export type Source = typeof Source.Type
 export type Predicate = typeof Predicate.Type
@@ -183,6 +204,20 @@ export function parse(value: unknown, options: { source?: keyof typeof BYTES } =
   const spec = decoded.success
   const issues: Issue[] = []
   spec.stages.forEach((stage, i) => {
+    if ("connect" in stage) {
+      const strings = (value: unknown): string[] =>
+        typeof value === "string"
+          ? [value]
+          : value && typeof value === "object"
+            ? Object.values(value).flatMap(strings)
+            : []
+      if (strings(stage.connect.input).some((value) => value.includes("{{") || value.includes("}}")))
+        issues.push({
+          path: `/stages/${i}/connect/input`,
+          message: "Connected stage inputs are literal JSON; template references are unavailable.",
+        })
+      return
+    }
     if (!("prompt" in stage)) return
     if (new TextEncoder().encode(stage.prompt).byteLength > 16 * 1024)
       issues.push({ path: `/stages/${i}/prompt`, message: "Prompt exceeds 16 KiB." })
@@ -266,7 +301,24 @@ function unknownKeys(value: unknown): Issue[] {
   root.stages.forEach((stage: Record<string, unknown>, i) => {
     if (!stage || typeof stage !== "object") return
     const at = `/stages/${i}`
-    visit(stage, "workflow" in stage ? Object.keys(NestedStage.fields) : Object.keys(AgentStage.fields), at)
+    visit(
+      stage,
+      "workflow" in stage
+        ? Object.keys(NestedStage.fields)
+        : "connect" in stage
+          ? Object.keys(ConnectStage.fields)
+          : Object.keys(AgentStage.fields),
+      at,
+    )
+    if ("connect" in stage) {
+      visit(stage.connect, ["to", "action", "input"], `${at}/connect`)
+      if (stage.connect && typeof stage.connect === "object")
+        visit(
+          (stage.connect as Record<string, unknown>).input,
+          ["target", "security", "budget", "since"],
+          `${at}/connect/input`,
+        )
+    }
     visit(stage.output, ["schema"], `${at}/output`)
     predicate(stage.if, `${at}/if`)
     predicate(stage.when, `${at}/when`)

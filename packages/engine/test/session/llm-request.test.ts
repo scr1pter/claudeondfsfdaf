@@ -657,3 +657,65 @@ describe("automatic title output budget", () => {
     }
   })
 })
+
+describe("pinned review Responses instructions", () => {
+  test("the real SDK preserves runtime-owned OAuth instructions after filtering model and variant replacements", async () => {
+    const selected: Input["model"] = {
+      ...gpt,
+      options: { instructions: "AMBIENT_OAUTH_MODEL_MARKER", systemMessageMode: "remove", truncation: "auto" },
+      variants: {
+        high: {
+          instructions: "AMBIENT_OAUTH_VARIANT_MARKER",
+          systemMessageMode: "remove",
+          truncation: "auto",
+          previousResponseId: "resp_ambient_oauth",
+        },
+      },
+    }
+    const base = input({ model: selected, directory: "/work/pinned", oauth: true })
+    const prepared = await prepare({
+      ...base,
+      pinnedContext: true,
+      agent: { ...base.agent, prompt: "FIXED_REVIEW_ENGINE_ROLE_MARKER" },
+      user: { ...base.user, system: undefined, model: { ...base.user.model, variant: "high" } },
+      system: ["PINNED_BASE_INSTRUCTIONS_MARKER"],
+    })
+    const requests: Array<Record<string, unknown>> = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        requests.push((await request.json()) as Record<string, unknown>)
+        return new Response(
+          [
+            { type: "response.created", response: { id: "resp_pinned", created_at: 1, model: selected.api.id } },
+            { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+          ]
+            .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    try {
+      const sdk = createOpenAI({ apiKey: "local-test-only", baseURL: `${server.url.origin}/v1` })
+      await streamText({
+        model: sdk.responses(selected.api.id),
+        messages: prepared.messages,
+        tools: prepared.tools,
+        providerOptions: ProviderTransform.providerOptions(selected, prepared.params.options),
+      }).consumeStream()
+    } finally {
+      server.stop(true)
+    }
+    expect(requests).toHaveLength(1)
+    const body = requests[0]!
+    expect(body.instructions).toBe(prepared.params.options.instructions)
+    expect(body.instructions).toContain("FIXED_REVIEW_ENGINE_ROLE_MARKER")
+    expect(body.truncation).toBe("disabled")
+    expect(body.previous_response_id).toBeUndefined()
+    expect(JSON.stringify(body.input)).toContain("PINNED_BASE_INSTRUCTIONS_MARKER")
+    expect(JSON.stringify(body)).not.toContain("AMBIENT_OAUTH_")
+    expect(prepared.messageTransformOptions).toBe(prepared.params.options)
+  })
+})

@@ -1,4 +1,14 @@
-import { initializeVectorAccount, vectorAccount } from "./vector-account-runtime"
+import {
+  initializeVectorAccount,
+  vectorAccount,
+  vectorAccountAuthorityRevision,
+  onVectorAccountAuthorityChange,
+} from "./vector-account-runtime"
+import { createGithubAgents } from "./github-agents"
+import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
+import { isComputerOverlay } from "./computer-overlay-registry"
+import { registerComputerOverlayIpc } from "./computer-overlay-ipc"
+import { registerComputerIpc } from "./computer-ipc"
 import { execFile } from "node:child_process"
 import { realpath, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
@@ -13,7 +23,13 @@ import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attach
 import { getStore, removeStoreFileIfEmpty } from "./store"
 import { isRendererStoreName } from "./store-keys"
 import { write } from "./logging"
-import { sendBugReport } from "./bug-report"
+import { listReports, reportStatuses, sendBugReport } from "./bug-report"
+import { REMOTE_STARTING, remoteLink, remoteNotify } from "./remote-runtime"
+import { vaultBackup, vaultStarting } from "./vault-runtime"
+import { createDesktopOps } from "./ops"
+import { createHostedClient } from "./hosted-client"
+import { openLiveViewWindow } from "./hosted-window"
+import { resolveGithubAccess } from "./github-access"
 import { askHelpAssistant, type HelpInput } from "./help-assistant"
 import { clearLocalMemory, readLocalMemory, writeLocalMemory } from "./local-memory"
 import { desktopLocalStatus } from "./local-mode"
@@ -42,6 +58,7 @@ import {
   pullRequestAccessStatus,
   pullRequestChecks,
   pullRequestDiff,
+  putPullRequestMerge,
   setUpAutomaticReviews,
   submitPullRequestReview,
   viewPullRequest,
@@ -253,6 +270,19 @@ function on<T extends unknown[]>(channel: string, listener: (event: IpcMainEvent
 }
 
 export function registerIpcHandlers(deps: Deps) {
+  const githubAgents = createGithubAgents({
+    version: app.getVersion(),
+    token: () => vectorAccount.token(),
+    authorityRevision: vectorAccountAuthorityRevision,
+    engine: deps.awaitInitialization,
+  })
+  const stopAccountAuthority = onVectorAccountAuthorityChange(githubAgents.invalidateAuthority)
+  app.once("will-quit", stopAccountAuthority)
+  registerComputerOverlayIpc({
+    handle: (channel, callback) => ipcMain.handle(channel, callback),
+    on: (channel, callback) => ipcMain.on(channel, callback),
+  })
+  registerComputerIpc(handle, on, { assert: assertTrustedRenderer })
   initializeVectorAccount(deps.awaitInitialization)
   // Pull requests, reviews and commits Vector makes are checked against the owner's memory by the engine first.
   usePostingEngine(deps.awaitInitialization)
@@ -260,7 +290,10 @@ export function registerIpcHandlers(deps: Deps) {
   handle("vector-account-status", () => vectorAccount.status())
   handle("vector-account-start", () => vectorAccount.start())
   handle("vector-account-cancel", () => vectorAccount.cancel())
-  handle("vector-account-logout", () => vectorAccount.logout())
+  handle("vector-account-logout", async () => {
+    githubAgents.invalidateAuthority()
+    return vectorAccount.logout()
+  })
   handle("vector-account-codium", () => vectorAccount.codium())
   handle("vector-account-offers", () => vectorAccount.offers())
   handle("vector-account-refresh-models", () => vectorAccount.refreshModels())
@@ -268,6 +301,35 @@ export function registerIpcHandlers(deps: Deps) {
   handle("vector-account-confirm-deletion", () => vectorAccount.confirmDeletion())
   handle("vector-account-cancel-deletion", () => vectorAccount.cancelDeletion())
   handle("vector-account-delete", (_event, email: unknown) => vectorAccount.deleteAccount(email))
+  handle("vector-account-roadmap", (_event, input: unknown) => vectorAccount.roadmap(input))
+  handle("github-agents-status", (_event, cwd: string) => githubAgents.status(cwd))
+  handle("github-agents-setup-preview", (_event, input: Parameters<GithubAgentsAPI["preview"]>[0]) =>
+    githubAgents.preview(input),
+  )
+  handle("github-agents-setup", (_event, input: Parameters<GithubAgentsAPI["setup"]>[0]) => githubAgents.setup(input))
+  handle("github-agents-bind", (_event, input: Parameters<GithubAgentsAPI["bind"]>[0]) => githubAgents.bind(input))
+  handle("github-agents-run", (_event, input: Parameters<GithubAgentsAPI["run"]>[0]) => githubAgents.run(input))
+  handle("github-agents-schedules", (_event, input: Parameters<GithubAgentsAPI["schedules"]>[0]) =>
+    githubAgents.schedules(input),
+  )
+  handle("github-agents-bindings", () => githubAgents.bindings())
+  handle("github-agents-unbind", (_event, input: Parameters<GithubAgentsAPI["unbind"]>[0]) =>
+    githubAgents.unbind(input),
+  )
+  handle("github-agents-runs", () => githubAgents.runs())
+  handle("github-agents-brain-preview", (_event, cwd: string) => githubAgents.previewBrain(cwd))
+  handle("github-agents-returned-artifacts", (_event, input: Parameters<GithubAgentsAPI["returnedArtifacts"]>[0]) =>
+    githubAgents.returnedArtifacts(input),
+  )
+  handle("github-agents-returned-preview", (_event, input: Parameters<GithubAgentsAPI["previewReturned"]>[0]) =>
+    githubAgents.previewReturned(input),
+  )
+  handle("github-agents-returned-import", (_event, input: Parameters<GithubAgentsAPI["importReturned"]>[0]) =>
+    githubAgents.importReturned(input),
+  )
+  app.once("will-quit", () => {
+    void githubAgents.clearBrain()
+  })
 
   const voiceOwners = new Set<number>()
   const updaterSubscriptions = createUpdaterSubscriptions()
@@ -359,7 +421,77 @@ export function registerIpcHandlers(deps: Deps) {
     )
     event.sender.once("destroyed", () => updaterSubscriptions.delete(id))
   })
-  handle("report-bug", (_event, input: { message: string; email?: string }) => sendBugReport(input))
+  // A signed-in report carries the account token from the main process, never the renderer (WP A33).
+  handle("report-bug", (_event, input: { message: string; email?: string }) =>
+    sendBugReport(input, { token: () => vectorAccount.token() }),
+  )
+  handle("reports-list", () => listReports())
+  handle("reports-status", () => reportStatuses())
+  // Vector Remote (WP A41). Keys, tickets and the desktop sign-in stay in the main process; the renderer gets status.
+  const remote = () => {
+    const link = remoteLink()
+    if (!link) throw new Error("Vector is still starting. Try again in a moment.")
+    return link
+  }
+  handle("remote-status", () => remoteLink()?.status() ?? REMOTE_STARTING)
+  handle("remote-set-enabled", (_event, enabled: unknown) => remote().setEnabled(enabled === true))
+  handle("remote-pair-start", () => remote().startPairing())
+  handle("remote-pair-confirm", (_event, code: unknown) =>
+    remote().confirmPairing(typeof code === "string" ? code : undefined),
+  )
+  handle("remote-pair-cancel", () => remote().cancelPairing())
+  handle("remote-unpair", (_event, device: unknown) => remote().unpair(typeof device === "string" ? device : ""))
+  handle("remote-disconnect-all", () => remote().disconnectAll())
+  // Asked before the app's auto-accept answers a request: a turn a phone started is left to a person (S6). Until
+  // Remote has started no phone can have started one.
+  handle("remote-phone-turn", (_event, sessionIDs: unknown) => remoteLink()?.isPhoneTurn(sessionIDs) ?? false)
+  handle(
+    "phone-alert-send",
+    (_event, alert: unknown) => remoteNotify()?.send(alert) ?? { sent: false, reason: "not-paired" as const },
+  )
+  // Brain Vault (WP A45). The vault key stays in the main process; the renderer gets status and results, and a new
+  // vault's recovery code once, from the backup that created it.
+  const vault = () => {
+    const backup = vaultBackup()
+    if (!backup) throw new Error("Vector is still starting. Try again in a moment.")
+    return backup
+  }
+  handle("vault-status", () => vaultBackup()?.status() ?? vaultStarting())
+  handle("vault-configure", (_event, input: unknown) =>
+    vault().configure(input && typeof input === "object" ? (input as Record<string, unknown>) : {}),
+  )
+  handle("vault-backup", () => vault().backup())
+  handle("vault-versions", () => vault().versions())
+  handle("vault-restore", (_event, input: unknown) => {
+    const value = input && typeof input === "object" ? (input as Record<string, unknown>) : {}
+    return vault().restore({
+      ...(typeof value.version === "string" ? { version: value.version } : {}),
+      ...(typeof value.code === "string" ? { code: value.code } : {}),
+    })
+  })
+  handle("vault-forget", (_event, version: unknown) => vault().forget(typeof version === "string" ? version : ""))
+  handle("vault-delete", () => vault().remove())
+  // Production checks (WP A50): Settings → Production. The account token and the GitHub sign-in stay in the main
+  // process; the renderer gets vectordev.ai's answers, screenshots as data URLs, and the outcome of a merge it asked for.
+  const desktopOps = createDesktopOps({
+    token: () => vectorAccount.token(),
+    github: () => resolveGithubAccess(),
+    merge: (access, repo, number, merge) => putPullRequestMerge(access, repo, number, merge),
+  })
+  handle("ops-request", (_event, input: unknown) => desktopOps.request(input))
+  handle("ops-image", (_event, input: unknown) => desktopOps.image(input))
+  handle("ops-merge", (_event, input: unknown) => desktopOps.merge(input))
+  // The cloud computer (WP A56). The account token stays in the main process; the renderer gets vectordev.ai's answers,
+  // and the live view opens in its own sandboxed window (hosted-window.ts), never in the app's window.
+  const hosted = createHostedClient({
+    token: () => vectorAccount.token(),
+    openLiveView: (target) => openLiveViewWindow(target, BrowserWindow.getFocusedWindow()),
+    openExternal: (url) => shell.openExternal(url),
+  })
+  handle("hosted-request", (_event, input: unknown) => hosted.request(input))
+  handle("hosted-live-view", (_event, input: unknown) => hosted.liveView(input))
+  handle("hosted-files", (_event, input: unknown) => hosted.files(input))
+  handle("hosted-open", (_event, input: unknown) => hosted.open(input))
   handle("help-assistant-ask", (_event, input: HelpInput) => askHelpAssistant(input))
   handle("agent-teams-list", (_event, scope?: { sourcePath?: string; parentSessionId?: string }) =>
     listAgentTeams(scope),
@@ -568,7 +700,7 @@ export function registerIpcHandlers(deps: Deps) {
   // Cloud screen, the preview panel or the agent changed it.
   watchCloudChanges(() =>
     BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) window.webContents.send("cloud-changed")
+      if (!window.isDestroyed() && !isComputerOverlay(window)) window.webContents.send("cloud-changed")
     }),
   )
   handle("cloud-overview", (_event: IpcMainInvokeEvent, directory: string) =>
@@ -583,9 +715,13 @@ export function registerIpcHandlers(deps: Deps) {
     startDeviceLogin({ workflow: input?.workflow === true }),
   )
   handle("github-auth-open-verification", () => openVerification())
-  handle("github-auth-complete", () => completeDeviceLogin())
+  handle("github-auth-complete", () => {
+    githubAgents.invalidateAuthority()
+    return completeDeviceLogin()
+  })
   handle("github-auth-cancel", () => cancelDeviceLogin())
   handle("github-auth-logout", () => {
+    githubAgents.invalidateAuthority()
     logoutGithub()
     // A clone Vector couldn't clean up may have left the token in its private auth config.
     void sweepGithubCloneSecrets()
