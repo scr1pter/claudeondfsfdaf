@@ -558,6 +558,189 @@ describe("lifecycle", () => {
 })
 
 describe("checks before anything is asked", () => {
+  it.instance(
+    "verified subdirectory aliases retain secret diff asks and denies without inheriting sibling authority",
+    () =>
+      Effect.gen(function* () {
+        const outside = yield* Effect.acquireRelease(
+          Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-subtree-alias-"))),
+          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+        )
+        const repository = path.join(outside, "repository")
+        const alias = path.join(outside, "requested")
+        yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+        yield* write(repository, "pkg/.env", "WITHHELD_SUBTREE_SECRET")
+        yield* write(repository, "pkg/nested/public.ts", "export {}")
+        yield* write(repository, "pkg2/.env", "SIBLING_NOT_ALIAS_AUTHORITY")
+        yield* Effect.promise(() =>
+          fs.symlink(path.join(repository, "pkg"), alias, process.platform === "win32" ? "junction" : "dir"),
+        )
+        const canonical = yield* Effect.promise(() => fs.realpath(repository))
+        for (const action of ["ask", "deny"] as const) {
+          const { hub, requester } = yield* setup([
+            { permission: "read", pattern: "*", action: "allow" },
+            { permission: "read", pattern: path.join(alias, ".env"), action },
+          ])
+          const checks: boolean[][] = []
+          script.handle = (_request, context) =>
+            Effect.gen(function* () {
+              const capability = context.reviewService!
+              expect((yield* ConnectReviewService.scope(capability)).readRoot).toBe(canonical)
+              const outcomes = yield* Effect.forEach(
+                ["pkg/.env", "pkg/nested/public.ts", "pkg2/.env", "other/.env"],
+                (file) =>
+                  ConnectReviewService.checkReads(capability, [file]).pipe(Effect.exit, Effect.map(Exit.isSuccess)),
+              )
+              checks.push(outcomes)
+              return clean()
+            })
+          for (const directory of [alias, path.join(alias, "nested")]) {
+            const { ops } = recorder()
+            const run = yield* hub.run({
+              request: review(requester.id, directory),
+              call: { ...asker(), promptOps: ops },
+            })
+            expect(run.result?.state).toBe("completed")
+          }
+          expect(checks).toEqual([
+            [false, true, true, true],
+            [false, true, true, true],
+          ])
+        }
+      }),
+  )
+
+  it.instance("subdirectory alias read rules refuse nonsecret descendants before consent or adapter work", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-subtree-preflight-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const alias = path.join(outside, "requested")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "pkg/deep/private.txt", "WITHHELD_SUBTREE_SOURCE")
+      yield* write(repository, "pkg/deep/nested/public.ts", "export {}")
+      yield* Effect.promise(() =>
+        fs.symlink(path.join(repository, "pkg/deep"), alias, process.platform === "win32" ? "junction" : "dir"),
+      )
+      for (const action of ["ask", "deny"] as const) {
+        const { hub, requester } = yield* setup([
+          { permission: "read", pattern: "*", action: "allow" },
+          { permission: "read", pattern: path.join(alias, "private.txt"), action },
+        ])
+        for (const directory of [alias, path.join(alias, "nested")]) {
+          const { ops } = recorder()
+          const { asks, ask } = asker()
+          const run = yield* hub.run({ request: review(requester.id, directory), call: { ask, promptOps: ops } })
+          expect(run.result?.refusal).toBe("read-rule")
+          expect(asks).toEqual([])
+          expect(seen).toEqual([])
+        }
+      }
+    }),
+  )
+
+  it.instance("an observed subdirectory alias retarget retires its original qualified read authority", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-subtree-retarget-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const other = path.join(outside, "other")
+      const alias = path.join(outside, "requested")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "pkg/public.ts", "export {}")
+      yield* write(other, "public.ts", "WITHHELD_REPLACEMENT_SOURCE")
+      yield* Effect.promise(() =>
+        fs.symlink(path.join(repository, "pkg"), alias, process.platform === "win32" ? "junction" : "dir"),
+      )
+      const { hub, requester } = yield* setup([{ permission: "read", pattern: "*", action: "allow" }])
+      const checks: boolean[] = []
+      script.handle = (_request, context) =>
+        Effect.gen(function* () {
+          const capability = context.reviewService!
+          checks.push(
+            Exit.isSuccess(yield* ConnectReviewService.checkReads(capability, ["pkg/public.ts"]).pipe(Effect.exit)),
+          )
+          expect(Exit.isSuccess(yield* ConnectReviewService.scope(capability).pipe(Effect.exit))).toBe(true)
+          yield* Effect.promise(async () => {
+            expect((await fs.lstat(alias)).isSymbolicLink()).toBe(true)
+            await fs.unlink(alias)
+            await fs.symlink(other, alias, process.platform === "win32" ? "junction" : "dir")
+          })
+          checks.push(
+            Exit.isSuccess(yield* ConnectReviewService.checkReads(capability, ["pkg/public.ts"]).pipe(Effect.exit)),
+          )
+          expect(Exit.isFailure(yield* ConnectReviewService.scope(capability).pipe(Effect.exit))).toBe(true)
+          expect(
+            Exit.isFailure(yield* ConnectReviewService.service(capability, () => Effect.void).pipe(Effect.exit)),
+          ).toBe(true)
+          yield* Effect.promise(async () => {
+            await fs.unlink(alias)
+            await fs.symlink(path.join(repository, "pkg"), alias, process.platform === "win32" ? "junction" : "dir")
+          })
+          checks.push(
+            Exit.isSuccess(yield* ConnectReviewService.checkReads(capability, ["pkg/public.ts"]).pipe(Effect.exit)),
+          )
+          expect(Exit.isFailure(yield* ConnectReviewService.scope(capability).pipe(Effect.exit))).toBe(true)
+          return clean()
+        })
+      const { ops } = recorder()
+      const run = yield* hub.run({ request: review(requester.id, alias), call: { ...asker(), promptOps: ops } })
+      expect(run.result?.state).toBe("completed")
+      expect(checks).toEqual([true, false, false])
+    }),
+  )
+
+  it.instance("subdirectory aliases preserve ordered absolute allows without overriding another namespace", () =>
+    Effect.gen(function* () {
+      const outside = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "connect-subtree-order-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
+      const repository = path.join(outside, "repository")
+      const alias = path.join(outside, "requested")
+      yield* write(repository, ".git/HEAD", "ref: refs/heads/main\n")
+      yield* write(repository, "pkg/.env", "OWNER_EXPLICITLY_ALLOWS_THIS_ALIAS")
+      yield* write(repository, "pkg/nested/public.ts", "export {}")
+      yield* write(repository, "pkg2/.env", "WITHHELD_CANONICAL_SIBLING")
+      yield* Effect.promise(() =>
+        fs.symlink(path.join(repository, "pkg"), alias, process.platform === "win32" ? "junction" : "dir"),
+      )
+      for (const action of ["ask", "deny"] as const) {
+        for (const relativeAsk of [false, true]) {
+          const { hub, requester } = yield* setup([
+            { permission: "read", pattern: "*", action: "allow" },
+            ...(relativeAsk ? [{ permission: "read", pattern: "pkg/.env", action: "ask" as const }] : []),
+            { permission: "read", pattern: path.join(alias, ".env"), action },
+            { permission: "read", pattern: path.join(alias, ".env"), action: "allow" },
+            { permission: "read", pattern: path.join(repository, "pkg2/.env"), action: "deny" },
+          ])
+          const checks: boolean[] = []
+          script.handle = (_request, context) =>
+            Effect.gen(function* () {
+              for (const file of ["pkg/.env", "pkg2/.env"])
+                checks.push(
+                  Exit.isSuccess(
+                    yield* ConnectReviewService.checkReads(context.reviewService!, [file]).pipe(Effect.exit),
+                  ),
+                )
+              return clean()
+            })
+          const { ops } = recorder()
+          const run = yield* hub.run({
+            request: review(requester.id, path.join(alias, "nested")),
+            call: { ...asker(), promptOps: ops },
+          })
+          expect(run.result?.state).toBe("completed")
+          expect(checks).toEqual([!relativeAsk, false])
+        }
+      }
+    }),
+  )
+
   it.instance("source aliases retain absolute secret asks and denies from root and subfolder reviews", () =>
     Effect.gen(function* () {
       const outside = yield* Effect.acquireRelease(

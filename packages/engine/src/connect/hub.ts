@@ -1016,17 +1016,41 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             ]).pipe(Effect.catch(() => refusal("read-rule", "Connect could not resolve the review's read authority.")))
           : []
         const readRules = rules.map((rule) => ({ ...rule }))
+        const originRules: PermissionV1.Ruleset = [
+          { permission: "read", pattern: "*", action: "allow" },
+          ...readRules.filter(
+            (rule) => readRule(rule) && (rule.pattern.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rule.pattern)),
+          ),
+        ]
+        const originAuthority = { valid: true }
         const service =
           readPlace && ops
             ? ConnectReviewService.qualify({
                 helper: helperFor(entry, ops, adapter.id, true),
-                active: () => entry.run.status === "running" && !entry.finishing,
+                active: () => originAuthority.valid && entry.run.status === "running" && !entry.finishing,
                 readRoot: placed?.directory ?? readPlace.root,
                 readDenies: entry.readDenies?.map((rule) => rule.pattern) ?? ConnectPolicy.readPatterns(rules),
-                checkReads: (paths) => {
-                  const block = ConnectPolicy.diffReadBlock(paths, readRules, readOrigins)
-                  return block ? Effect.fail(ConnectPolicy.readRefusal(block)) : Effect.void
-                },
+                checkReads: (paths) =>
+                  Effect.gen(function* () {
+                    if (!originAuthority.valid)
+                      return yield* refusal("read-rule", "The review's original read aliases are no longer available.")
+                    yield* Effect.tryPromise(() => verifyReadOrigins(readPlace.origins)).pipe(
+                      Effect.catch(() => {
+                        originAuthority.valid = false
+                        return refusal("read-rule", "The review's original read aliases are no longer available.")
+                      }),
+                    )
+                    const block = ConnectPolicy.diffReadBlock(paths, readRules, readOrigins)
+                    if (block) return yield* ConnectPolicy.readRefusal(block)
+                    for (const file of paths) {
+                      const names = readPlace.origins.flatMap((origin) => {
+                        const candidate = originCandidatePath(readPlace.root, file, origin)
+                        return candidate === undefined ? [] : [candidate]
+                      })
+                      const alias = ConnectPolicy.diffReadBlock(names, originRules)
+                      if (alias) return yield* ConnectPolicy.readRefusal({ ...alias, path: file })
+                    }
+                  }),
               })
             : undefined
         const context: ConnectAdapter.HandoffContext = {
@@ -1109,7 +1133,9 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           const prefixes = [...new Set([...place.prefixes, ...roots, place.root, ...aliases])].map((root) =>
             root.replaceAll("\\", "/").replace(/\/$/, ""),
           )
-          return scan(place.root, patterns, rules, { prefixes })
+          const scanned = await scan(place.root, patterns, rules, { prefixes, origins: place.origins })
+          await verifyReadOrigins(place.origins)
+          return scanned
         }).pipe(Effect.orElseSucceed(() => ({ error: true as const })))
         if ("error" in scanned)
           return yield* refusal(
@@ -1884,18 +1910,43 @@ function aborted(signal: AbortSignal) {
  * folder outside the instance (a task's own worktree) is checked from the nearest folder at or above it that holds
  * `.git`, its repository's top level, or from the folder itself.
  */
+interface ReadOrigin {
+  readonly alias: string
+  readonly canonical: string
+}
+
 export async function reviewRoot(
   directory: string,
   instance: { readonly directory: string; readonly worktree: string },
-): Promise<{ readonly root: string; readonly prefixes: readonly string[] }> {
+): Promise<{ readonly root: string; readonly prefixes: readonly string[]; readonly origins: readonly ReadOrigin[] }> {
   const folder = await realpath(directory)
   const place = async (root: string, prefixes: readonly string[] = []) => {
+    const origins: ReadOrigin[] = []
+    let lexical = path.resolve(directory)
+    let canonical = folder
+    for (let depth = 0; ; depth++) {
+      if (depth >= 128) throw new Error("The review's read aliases exceed their bounded depth")
+      // A lexical parent need not name the canonical parent when a junction enters a repository subdirectory.
+      // Keep only independently verified subtree mappings and stop before inventing an unrelated root alias.
+      if (path.relative(await realpath(lexical), canonical) !== "") break
+      if (path.relative(lexical, canonical) !== "") origins.push(Object.freeze({ alias: lexical, canonical }))
+      if (path.relative(canonical, root) === "") break
+      const parent = path.dirname(lexical)
+      if (parent === lexical) break
+      lexical = parent
+      canonical = path.dirname(canonical)
+    }
     const requested = path.resolve(directory, path.relative(folder, root))
-    const canonical = await realpath(requested)
+    const observed = await realpath(requested)
     // An absolute rule may use a junction or Windows short-name spelling. Retain it only when its derived root
     // really names this repository; a link into a subfolder must not invent authority for its unrelated parent.
-    const alias = path.relative(canonical, root) === "" && path.relative(requested, root) !== ""
-    return { root, prefixes: alias ? [...new Set([...prefixes, requested])] : prefixes }
+    const alias = path.relative(observed, root) === "" && path.relative(requested, root) !== ""
+    await verifyReadOrigins(origins)
+    return {
+      root,
+      prefixes: alias ? [...new Set([...prefixes, requested])] : prefixes,
+      origins: Object.freeze(origins),
+    }
   }
   const worktree = instance.worktree === "/" ? undefined : await realpath(instance.worktree).catch(() => undefined)
   if (worktree && FSUtil.contains(worktree, folder)) return place(worktree)
@@ -1908,6 +1959,20 @@ export async function reviewRoot(
     if (await exists(path.join(current, ".git"))) return place(current)
     if (path.dirname(current) === current) return place(folder)
   }
+}
+
+async function verifyReadOrigins(origins: readonly ReadOrigin[]) {
+  for (const origin of origins)
+    if (path.relative(await realpath(origin.alias), origin.canonical) !== "")
+      throw new Error("The review's original read aliases changed")
+}
+
+function originCandidatePath(root: string, relative: string, origin: ReadOrigin) {
+  // Names come from repository-relative Git paths or the bounded walk. Never map a traversal into alias authority.
+  if (path.isAbsolute(relative) || relative.split(/[\\/]/).includes("..")) return undefined
+  const target = path.resolve(root, relative)
+  if (!FSUtil.contains(origin.canonical, target)) return undefined
+  return path.join(origin.alias, path.relative(origin.canonical, target)).replaceAll("\\", "/")
 }
 
 /**
@@ -1924,24 +1989,39 @@ export async function scan(
   root: string,
   patterns: readonly string[],
   rules: PermissionV1.Ruleset,
-  options: { readonly limit?: number; readonly prefixes?: readonly string[] } = {},
+  options: {
+    readonly limit?: number
+    readonly prefixes?: readonly string[]
+    readonly origins?: readonly ReadOrigin[]
+  } = {},
 ): Promise<{ readonly block?: NonNullable<ReturnType<typeof ConnectPolicy.readBlock>> } | { readonly tooMany: true }> {
   const limit = options.limit ?? MAX_SCAN
   const prefixes = options.prefixes ?? []
+  const origins = options.origins ?? []
   const review = ConnectPolicy.reviewRules()
   // Every pattern that can decide a read: the requester's read rules, the ask when none matches, and VectorScope's.
   const deciders = [...new Set(["*", ...[...rules, ...review].filter(readRule).map((rule) => rule.pattern)])]
   const home = await realpath(root)
   const visited = new Set<string>([home])
-  const names = (relative: string) => [
+  const plainNames = (relative: string) => [
     relative,
     ...prefixes.map((prefix) => (relative ? `${prefix}/${relative}` : prefix)),
+  ]
+  const names = (relative: string) => [
+    ...plainNames(relative),
+    ...origins.flatMap((origin) => {
+      const candidate = originCandidatePath(root, relative, origin)
+      return candidate === undefined ? [] : [candidate]
+    }),
   ]
   const absolute = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)
   // Relative read rules decide the tool-relative name. Only an explicit absolute pattern needs another namespace;
   // applying a relative default ask there would erase a valid relative allow for the very same file.
   const relevant = (name: string) => (absolute(name) ? patterns.filter(absolute) : patterns)
   const beneath = (relative: string) =>
+    // An origin can begin deeper than this entry. Walk its ancestors to reach it, without assigning those
+    // ancestors any alias names or authority (pkg must not become the alias of pkg/deep).
+    origins.some((origin) => FSUtil.contains(path.resolve(root, relative), origin.canonical)) ||
     names(relative).some((name) => relevant(name).some((pattern) => ConnectPolicy.overlaps(pattern, `${name}/*`)))
   const blocked = (relative: string) => {
     for (const name of names(relative)) {
@@ -1952,8 +2032,14 @@ export async function scan(
     return undefined
   }
   const telling = (link: string, real: string) => {
-    const reals = names(real)
-    return names(link).some((name, index) => !ConnectPolicy.sameBeneath(deciders, name, reals[index]!))
+    const reals = plainNames(real)
+    if (plainNames(link).some((name, index) => !ConnectPolicy.sameBeneath(deciders, name, reals[index]!))) return true
+    return origins.some((origin) => {
+      const linked = originCandidatePath(root, link, origin)
+      const target = originCandidatePath(root, real, origin)
+      if (linked === undefined || target === undefined) return linked !== target
+      return !ConnectPolicy.sameBeneath(deciders, linked, target)
+    })
   }
   const stack = [""]
   let seen = 0
