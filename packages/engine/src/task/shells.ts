@@ -89,6 +89,14 @@ export function timeoutRefusal(timeout: number | undefined) {
   return undefined
 }
 
+/**
+ * Why a hosted GitHub agent may not start a background command on Windows: the holder spawns PowerShell itself and
+ * never reaches ProcessIsolation.launch, which refuses every hosted launch off Linux. Nothing when it may.
+ */
+export function isolationRefusal(input: { platform: NodeJS.Platform; required: boolean }) {
+  return input.platform === "win32" && input.required ? ProcessIsolation.REFUSAL : undefined
+}
+
 export type StartInput = {
   /** The session that starts it: the main agent's, never a subagent's. */
   sessionID: SessionID
@@ -452,13 +460,11 @@ const layer = Layer.effect(
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const refused =
         refusal({ subagent: session.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
-        timeoutRefusal(input.timeout)
+        timeoutRefusal(input.timeout) ??
+        isolationRefusal({ platform: process.platform, required: ProcessIsolation.required() })
       if (refused) return yield* Effect.die(new Error(refused))
       if (input.process._tag !== "StandardCommand")
         return yield* Effect.die(new Error("A background command must be one prepared shell process."))
-      // The Windows holder launches outside the POSIX spawner. It must not bypass a required isolation boundary.
-      if (process.platform === "win32" && ProcessIsolation.required())
-        return yield* Effect.die(new Error(ProcessIsolation.REFUSAL))
       const processCommand = input.process
       const lease = yield* background.lease()
       if (!lease) return yield* Effect.die(new Error("A background command requires a durable owner lease."))

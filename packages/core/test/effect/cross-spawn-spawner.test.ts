@@ -567,6 +567,60 @@ await new Promise((resolve, reject) => process.stdout.write(${method === "exitCo
     )
   })
 
+  describe("hosted isolation", () => {
+    // requireIsolation has no reset and test files share one process, so a child process turns it on.
+    fx.live(
+      "a refused isolation plan fails the spawn with a platform error instead of a defect",
+      Effect.gen(function* () {
+        const script = `
+import { Cause, Effect, Exit } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+ProcessIsolation.requireIsolation()
+const exit = await Effect.runPromiseExit(
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    return yield* spawner.string(ChildProcess.make("node", ["-e", "0"], { env: { LD_PRELOAD: "/fixture/loader.so" } }))
+  }).pipe(Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.scoped),
+)
+const failure = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined
+console.log(JSON.stringify({
+  failed: Exit.isFailure(exit),
+  died: Exit.isFailure(exit) && Cause.hasDies(exit.cause),
+  platform: failure?._tag === "Some" && failure.value?._tag === "PlatformError",
+  method: failure?._tag === "Some" ? failure.value?.reason?.method : undefined,
+  refusal: Exit.isFailure(exit) && Cause.pretty(exit.cause).includes("native loader environment"),
+}))
+`
+        const output = yield* Effect.promise(
+          () =>
+            new Promise<string>((resolve, reject) => {
+              const child = spawn(process.execPath, ["-e", script], {
+                cwd: path.join(import.meta.dir, "..", ".."),
+                stdio: ["ignore", "pipe", "inherit"],
+              })
+              const parts: Buffer[] = []
+              child.stdout.on("data", (part: Buffer) => parts.push(part))
+              child.once("error", reject)
+              child.once("close", (code) =>
+                code === 0 ? resolve(Buffer.concat(parts).toString()) : reject(new Error(`child exited ${code}`)),
+              )
+            }),
+        )
+        expect(JSON.parse(output.trim().split("\n").at(-1)!)).toEqual({
+          failed: true,
+          died: false,
+          platform: true,
+          method: "spawn",
+          refusal: true,
+        })
+      }),
+      30_000,
+    )
+  })
+
   describe("pipeline", () => {
     fx.effect(
       "pipes stdout of one command to stdin of another",

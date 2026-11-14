@@ -78,10 +78,11 @@ async function command(file: string, args: readonly string[], allowed = [0], tim
     timeout,
     maxBuffer: 65_536,
   }).then(
-    (value) => ({ code: 0, stdout: value.stdout }),
-    (error: { code?: unknown; stdout?: unknown }) => ({
+    (value) => ({ code: 0, stdout: value.stdout, stderr: value.stderr }),
+    (error: { code?: unknown; stdout?: unknown; stderr?: unknown }) => ({
       code: typeof error.code === "number" ? error.code : -1,
       stdout: typeof error.stdout === "string" ? error.stdout : "",
+      stderr: typeof error.stderr === "string" ? error.stderr : "",
     }),
   )
   if (!allowed.includes(result.code)) {
@@ -274,7 +275,7 @@ export function sandboxEnvironment(
     temporary: string
     event: string
     node: string
-    toolIsolation?: "pid"
+    toolIsolation?: "pid" | "guard"
     sessionProof?: true
   },
 ): Record<string, string> {
@@ -305,7 +306,7 @@ export function sandboxEnvironment(
     RUNNER_TEMP: absolute(locations.temporary),
     GITHUB_EVENT_PATH: absolute(locations.event),
     VECTOR_SECRET_CHANNEL: "stdin",
-    ...(locations.toolIsolation === "pid" ? { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: "pid" } : {}),
+    ...(locations.toolIsolation ? { [GithubAgents.TOOL_PID_NAMESPACE_ENV]: locations.toolIsolation } : {}),
     ...(locations.sessionProof ? { [GithubAgents.SESSION_PROOF_ENV]: "fd3" } : {}),
   }
 }
@@ -498,29 +499,23 @@ export async function prepare(env: Env = process.env) {
   if (groups !== String(state.gid)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/sudo", "-n", "true"], [0, 1])).code !== (state.sudo ? 0 : 1)) throw refused()
   if ((await sudo([...asAgent, "/usr/bin/docker", "info"], [0, 1])).code === 0) throw refused()
-  if (!state.sudo) {
+  // Without the bubblewrap floor (ProcessIsolation.FLOOR) there is no namespace to verify; the engine applies the
+  // kernel path guard and native loader refusal to its tools instead.
+  if (!state.sudo && ProcessIsolation.FLOOR) {
     ProcessIsolation.assertBinary()
-    if (
-      (
-        await sudo(
-          [
-            ProcessIsolation.BINARY,
-            ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
-          ],
-          [0, 1],
-        )
-      ).code !== 0
+    const engineProbe = await sudo(
+      [
+        ProcessIsolation.BINARY,
+        ...ProcessIsolation.engineArguments(asAgent[0]!, [...asAgent.slice(1), "/bin/true"], container),
+      ],
+      [0, 1],
     )
-      throw refused()
-    if (
-      (
-        await sudo(
-          [...asAgent, ProcessIsolation.BINARY, ...ProcessIsolation.argumentsForTool("/bin/true", [], staged)],
-          [0, 1],
-        )
-      ).code !== 0
+    if (engineProbe.code !== 0) throw namespaceProbeFailure("engine mount", engineProbe)
+    const toolProbe = await sudo(
+      [...asAgent, ProcessIsolation.BINARY, ...ProcessIsolation.argumentsForTool("/bin/true", [], staged)],
+      [0, 1],
     )
-      throw refused()
+    if (toolProbe.code !== 0) throw namespaceProbeFailure("tool PID/proc", toolProbe)
     state.isolatedTools = true
   }
   for (const name of FILE_COMMANDS) {
@@ -536,6 +531,52 @@ export async function prepare(env: Env = process.env) {
   }
   state.prepared = true
   await writeState(env, state)
+}
+
+/** Both namespace probes run only fixed /bin/true commands in a clean PATH environment before channel capture. */
+export function namespaceProbeFailure(kind: string, result: { code: number; stderr: string }) {
+  // No general command stderr is logged: it may contain credentials or repository-controlled output.
+  const detail = result.stderr
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .trim()
+    .slice(0, 800)
+  return new Error(
+    `The mandatory ${kind} namespace probe failed (exit ${result.code}): ${detail || "no diagnostic"}. The run is refused.`,
+  )
+}
+
+/** Whether private state shows a sandbox prepared for this run. Only a floor build requires its verified tools. */
+export function preparedFor(
+  state: State | undefined,
+  run: { workspace: string; mode: string | undefined },
+  floor = ProcessIsolation.FLOOR,
+) {
+  return Boolean(
+    state?.prepared &&
+      state.created &&
+      state.uid &&
+      state.gid &&
+      (state.sudo || !floor || state.isolatedTools) &&
+      state.workspace === run.workspace &&
+      state.mode === run.mode,
+  )
+}
+
+/** sudo's arguments for the engine: under the floor, the engine's mount namespace and empty proc come first. */
+export function engineLaunch(
+  inner: readonly string[],
+  workspace: string,
+  sudo: boolean,
+  floor = ProcessIsolation.FLOOR,
+) {
+  return [
+    "-n",
+    ...(sudo || !floor
+      ? inner
+      : [ProcessIsolation.BINARY, ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), workspace)]),
+  ]
 }
 
 async function executable(name: string, env: Env) {
@@ -569,17 +610,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
   const binary = await executable(args[0]!, env)
   const hosted = env.RUNNER_ENVIRONMENT === "github-hosted"
   const state = hosted ? await readState(env) : undefined
-  if (
-    hosted &&
-    (!state?.prepared ||
-      !state.created ||
-      !state.uid ||
-      !state.gid ||
-      (!state.sudo && !state.isolatedTools) ||
-      state.workspace !== workspace ||
-      state.mode !== env.VECTOR_MODE)
-  )
-    throw refused()
+  if (hosted && !preparedFor(state, { workspace, mode: env.VECTOR_MODE })) throw refused()
   if (
     hosted &&
     ((await fs.readFile("/proc/sys/kernel/core_pattern", "utf8")).trim() !== "/dev/null" ||
@@ -588,7 +619,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
   )
     throw refused()
   if (hosted) {
-    if (!state!.sudo) ProcessIsolation.assertBinary()
+    if (!state!.sudo && ProcessIsolation.FLOOR) ProcessIsolation.assertBinary()
     await verifyContainer(state!.container, true)
     await placeholder(workspace)
   }
@@ -607,7 +638,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
     home,
     temporary,
     event: hosted ? `${AGENT_HOME}/event.json` : absolute(env.GITHUB_EVENT_PATH),
-    ...(hosted && !state!.sudo ? { toolIsolation: "pid" as const } : {}),
+    ...(hosted && !state!.sudo ? { toolIsolation: GithubSecrets.toolBoundary() } : {}),
     ...(hosted && state!.mode === "codium" && !state!.sudo ? { sessionProof: true as const } : {}),
   })
   clean.GITHUB_WORKSPACE = working
@@ -625,7 +656,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
   const launcher = hosted ? "/usr/bin/sudo" : binary
   const inner = hosted
     ? [
-        // sudo and bwrap close extra descriptors. Open FD3 only after both, before the UID switch.
+        // sudo and bwrap (under the floor) close extra descriptors. Open FD3 only after both, before the UID switch.
         ...(proofPath
           ? [
               "/bin/bash",
@@ -654,14 +685,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
         ...args.slice(1),
       ]
     : args.slice(1)
-  const arguments_ = !hosted
-    ? inner
-    : [
-        "-n",
-        ...(state!.sudo
-          ? inner
-          : [ProcessIsolation.BINARY, ...ProcessIsolation.engineArguments(inner[0]!, inner.slice(1), workspace)]),
-      ]
+  const arguments_ = !hosted ? inner : engineLaunch(inner, workspace, state!.sudo)
   return new Promise<number>((resolve, reject) => {
     const child = spawn(launcher, arguments_, {
       // GNU env changes to the staged directory only after setpriv. A mode-0700 checkout is owned by the agent.
