@@ -2,6 +2,7 @@ import { $ } from "bun"
 import { afterEach, describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { clearTimeout, setTimeout } from "node:timers"
 import { Cause, ConfigProvider, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { inArray } from "drizzle-orm"
 import { HttpServer } from "effect/unstable/http"
@@ -163,6 +164,7 @@ function data<S extends Schema.Top>(response: Response, schema: S) {
   return call(() => response.json()).pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)))
 }
 type Diagnostic = {
+  passive: boolean
   case: "discovery" | "read-asks"
   phase: "fixture" | "post" | "get-run" | "get-list" | "idle"
   runID?: string
@@ -183,23 +185,31 @@ type Diagnostic = {
     | "query-timeout"
     | "query-failed"
   sample?: Effect.Effect<void>
+  calls?: Effect.Effect<number>
 }
-const diagnostic = (kind: Diagnostic["case"]): Diagnostic | undefined =>
-  process.env.VECTOR_REVIEW_HTTP_DIAGNOSTICS === "1"
-    ? {
-        case: kind,
-        phase: "fixture",
-        runStatus: "unavailable",
-        modelRequests: "unavailable",
-        backgroundRunning: "unavailable",
-        jobStatus: "unavailable",
-        stores: new Map(),
-        storeObserved: false,
-      }
-    : undefined
+const diagnostic = (kind: Diagnostic["case"]): Diagnostic | undefined => {
+  const mode = process.env.VECTOR_REVIEW_HTTP_DIAGNOSTICS
+  if (mode !== "1" && mode !== "passive") return
+  return {
+    passive: mode === "passive",
+    case: kind,
+    phase: "fixture",
+    runStatus: "unavailable",
+    modelRequests: "unavailable",
+    backgroundRunning: "unavailable",
+    jobStatus: "unavailable",
+    stores: new Map(),
+    storeObserved: false,
+  }
+}
 const captureDiagnostic = (state: Diagnostic | undefined, f: Effect.Success<ReturnType<typeof fixture>>) =>
   Effect.gen(function* () {
     if (!state) return
+    state.calls = f.llm.calls
+    if (state.passive) {
+      state.phase = "idle"
+      return
+    }
     state.sample = Effect.gen(function* () {
       state.modelRequests = yield* f.llm.calls
       const store = state.stores.get(f.directory)
@@ -217,6 +227,23 @@ const captureDiagnostic = (state: Diagnostic | undefined, f: Effect.Success<Retu
     })
     state.phase = "idle"
   })
+const reportPassiveDiagnostic = (state: Diagnostic, trigger: "watchdog" | "failure") =>
+  console.error(
+    "review-http-diagnostic",
+    JSON.stringify({
+      mode: "passive",
+      case: state.case,
+      trigger,
+      phase: state.phase,
+      runStatus: state.runStatus,
+      runKnown: state.runID !== undefined,
+      // The captured test server implements this as Effect.sync(() => hits.length).
+      modelRequests: state.calls ? Effect.runSync(state.calls) : "unavailable",
+      backgroundRunning: "unavailable",
+      storeObserved: false,
+      jobStatus: "unavailable",
+    }),
+  )
 const reportDiagnostic = (state: Diagnostic, trigger: "watchdog" | "failure") =>
   Effect.gen(function* () {
     const phase = state.phase
@@ -257,6 +284,17 @@ const diagnosed =
   (state: Diagnostic | undefined) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) => {
     if (!state) return effect
+    if (state.passive)
+      return Effect.acquireUseRelease(
+        Effect.sync(() => setTimeout(() => reportPassiveDiagnostic(state, "watchdog"), 25_000).unref()),
+        () =>
+          effect.pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) ? Effect.sync(() => reportPassiveDiagnostic(state, "failure")) : Effect.void,
+            ),
+          ),
+        (timer) => Effect.sync(() => clearTimeout(timer)),
+      )
     return Effect.gen(function* () {
       const hooks = yield* Effect.serviceOption(InstanceHooks.Service)
       if (Option.isSome(hooks))

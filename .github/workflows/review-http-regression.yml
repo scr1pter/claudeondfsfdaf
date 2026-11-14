@@ -1,11 +1,18 @@
 name: Review HTTP regression
 
 on:
-  push:
-    branches: [build-candidate]
-    paths:
-      - .github/workflows/review-http-regression.yml
   workflow_dispatch:
+    inputs:
+      scope:
+        description: HTTP file alone or the full original Linux shard
+        type: choice
+        options: [local, shard]
+        default: local
+      diagnostics:
+        description: Passive counts, active observation, or no diagnostics
+        type: choice
+        options: [passive, "1", "off"]
+        default: passive
 
 permissions:
   contents: read
@@ -15,7 +22,7 @@ env:
 
 jobs:
   engine-linux-four:
-    name: Owner HTTP review in Linux shard 4
+    name: Owner HTTP review (${{ inputs.scope }}, ${{ inputs.diagnostics }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -56,12 +63,18 @@ jobs:
         timeout-minutes: 20
         run: GITHUB_ACTIONS=false bun turbo run build --filter='@vectordevai/engine^...' --log-order=stream
 
-      - name: Reproduce the full shard with bounded HTTP diagnostics
+      - name: Run the selected HTTP diagnostic scope
         timeout-minutes: 30
         working-directory: packages/engine
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=4/4
+        run: |
+          if [ "$REVIEW_HTTP_SCOPE" = local ]; then
+            GITHUB_ACTIONS=false bun test --timeout 30000 test/server/httpapi-review.test.ts
+          else
+            GITHUB_ACTIONS=false bun test --timeout 30000 --shard=4/4
+          fi
         env:
-          VECTOR_REVIEW_HTTP_DIAGNOSTICS: "1"
+          REVIEW_HTTP_SCOPE: ${{ inputs.scope }}
+          VECTOR_REVIEW_HTTP_DIAGNOSTICS: ${{ inputs.diagnostics }}
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
           CI: "true"
           RECORD: "false"
