@@ -1375,6 +1375,31 @@ describe("P5: deleting an account erases every Codium and hosted record (WP A57)
     expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
   })
 
+  test("a follow-up pass stuck past the revocation mark's 100 days renews it, so the deletion can still finish", async () => {
+    restore()
+    restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
+    const w = deletionWorld()
+    await seedEverything(w)
+    w.services.workspacesLeft = 1
+    expect((await deleteRoute(w)).status).toBe(200)
+    advance(w, DELETION_RECHECK_MS)
+    expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    // The host keeps one workspace for longer than the mark lives; the passes keep failing on it alone.
+    for (let day = 0; day < 101; day++) {
+      advance(w, DAY)
+      expect((await cronRoute(w)).body).toMatchObject({ due: 1, pending: 1 })
+    }
+    expect(await readTombstone(ACCOUNT, w.fetcher)).toMatchObject({
+      stage: "check",
+      failed: ["workspaces", "codium", "keys"],
+    })
+    expect(w.fakes.store.pttl(`vector:cli-revoked:${ACCOUNT}`)).toBeGreaterThan(99 * DAY)
+    w.services.workspacesLeft = 0
+    advance(w, DAY)
+    expect((await cronRoute(w)).body).toEqual({ due: 1, deleted: 0, checked: 1, pending: 0, busy: 0 })
+    expect(w.fakes.store.zset(tombstonesDueKey()).size).toBe(0)
+  })
+
   test("the follow-up pass erases what a request already past its checks created after the erase", async () => {
     const w = deletionWorld()
     await seedEverything(w)
