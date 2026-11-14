@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { Wildcard } from "@vectordevai/core/util/wildcard"
+import { readAuthority } from "@/review/read-authority"
 import type { Agent } from "./agent"
 
 /**
@@ -15,6 +16,7 @@ import type { Agent } from "./agent"
  */
 export function deriveSubagentSessionPermission(input: {
   parentSessionPermission: PermissionV1.Ruleset
+  parentWorktree?: string
   subagent: Agent.Info
 }): PermissionV1.Ruleset {
   // Only a rule that grants the tool counts: a rule denying one specialist still leaves the rest denied by default.
@@ -22,9 +24,25 @@ export function deriveSubagentSessionPermission(input: {
   const canTodo = input.subagent.permission.some((rule) => rule.permission === "todowrite" && rule.action !== "deny")
   // A connected fix acts for its requester, unlike ordinary specialist delegation. Carry read questions into its
   // session without granting any permission; keep its own effective denies last so a question cannot reopen one.
+  const tree = input.parentWorktree
+  const requester =
+    input.subagent.name === ConnectPolicy.FIX_AGENT && tree
+      ? input.parentSessionPermission.flatMap((rule) =>
+          rule.action !== "allow" && Wildcard.match("read", rule.permission)
+            ? [
+                rule,
+                ...readAuthority([rule.pattern], {
+                  directory: tree,
+                  worktree: tree,
+                  readRoot: tree,
+                }).patterns.map((pattern) => ({ ...rule, permission: "read", pattern })),
+              ]
+            : [rule],
+        )
+      : input.parentSessionPermission
   const asks =
     input.subagent.name === ConnectPolicy.FIX_AGENT
-      ? input.parentSessionPermission
+      ? requester
           .filter((rule) => rule.action === "ask" && Wildcard.match("read", rule.permission))
           .map((rule) => ({ ...rule, permission: "read" }))
       : []
@@ -40,9 +58,7 @@ export function deriveSubagentSessionPermission(input: {
   return [
     ...asks,
     ...denies,
-    ...input.parentSessionPermission.filter(
-      (rule) => rule.permission === "external_directory" || rule.action === "deny",
-    ),
+    ...requester.filter((rule) => rule.permission === "external_directory" || rule.action === "deny"),
     ...(canTodo ? [] : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
     ...(canTask ? [] : [{ permission: "task" as const, pattern: "*" as const, action: "deny" as const }]),
   ]
