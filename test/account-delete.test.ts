@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test"
 import { RedisClient } from "bun"
 import { createHash, randomUUID } from "node:crypto"
+import { createServer } from "node:http"
 import { Readable } from "node:stream"
 import { __test, handleAccountDelete } from "../api/account/delete"
 import { handleAccountDeletions } from "../api/account/deletions"
@@ -916,20 +917,41 @@ describe("running a deletion (WP A57)", () => {
     restore()
     restore = deletionEnvironment(WORKSPACES_ENVIRONMENT)
     const w = deletionWorld()
-    const hanging = ((_input: RequestInfo | URL, init?: RequestInit) =>
-      new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason))
-      })) as typeof fetch
-    const started = performance.now()
-    const result = await eraseAccountData(ACCOUNT, {
-      fetcher: hanging,
-      now: w.clock(),
-      deadline: Date.now() + 1_000,
-      parts: ERASE_PARTS.filter((part) => part.id === "workspaces"),
+    // This case measures AbortSignal's real timer, not billing's fixed fixture date. Restore the real clock before
+    // creating the signal/deadline; the surrounding afterEach still restores it on every exit.
+    setSystemTime()
+    let requests = 0
+    // A real held HTTP request gives the native abort timer an I/O handle. An otherwise-unreferenced promise that
+    // only listens to AbortSignal.timeout can keep Bun's test runner spinning without advancing its timeout.
+    const host = createServer(() => { requests++ })
+    await new Promise<void>((resolve, reject) => {
+      host.once("error", reject)
+      host.listen(0, "127.0.0.1", () => { host.off("error", reject); resolve() })
     })
-    expect(result).toEqual({ erased: false, failed: ["workspaces"], skipped: [] })
-    // Its own limit is 30 seconds; inside a deletion it waits only until the deadline (at least a second).
-    expect(performance.now() - started).toBeLessThan(10_000)
+    try {
+      const address = host.address()
+      if (!address || typeof address === "string") throw new Error("Missing hanging-host fixture address")
+      const hanging = ((input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe(`https://${WORKSPACES_HOST}/accounts/close`)
+        return fetch(`http://127.0.0.1:${address.port}/accounts/close`, init)
+      }) as typeof fetch
+      const started = performance.now()
+      const result = await eraseAccountData(ACCOUNT, {
+        fetcher: hanging,
+        now: w.clock(),
+        deadline: Date.now() + 1_000,
+        parts: ERASE_PARTS.filter((part) => part.id === "workspaces"),
+      })
+      expect(requests).toBe(1)
+      expect(result).toEqual({ erased: false, failed: ["workspaces"], skipped: [] })
+      expect(w.services.identities).toEqual([])
+      expect(w.fakes.mail.sent).toEqual([])
+      // Its own limit is 30 seconds; inside a deletion it waits only until the deadline (at least a second).
+      expect(performance.now() - started).toBeLessThan(10_000)
+    } finally {
+      host.closeAllConnections()
+      await new Promise<void>((resolve) => host.close(() => resolve()))
+    }
   })
 
   test("parts not started by the deadline are left for the cron", async () => {

@@ -44,3 +44,28 @@ is claimed here.
 
 No deployment, account deletion against a real service, paid provider request, or production configuration change is
 part of this source change.
+
+## Combined cloud-workspace validation, 2026-11-14
+
+After integration with cloud workspaces on `release-finish` (parent `2e992c59fdc1bce9c23f871dcdd35b939a9790ce`), the
+existing workspace deadline test stalled at its timer-only fake fetch. The retained initial run had no terminal
+totals and was stopped by its owner. An isolated attempt that restored the real system clock still stalled and was
+terminated by an independent 40-second process watchdog; that attempt is not a passed test.
+
+The fixture now makes a genuine HTTP request to an ephemeral `127.0.0.1` server that holds the response open. The
+production abort signal reaches the real fetch implementation, with the original 1,000 ms deletion deadline. The
+fixture checks that one request actually reached the server, that the workspace part failed, and that no identity
+deletion or email occurred. A `finally` closes every connection and the server. Production timeouts and deletion
+policy are unchanged. The observed result establishes the corrected fixture, not a general diagnosis of Bun internals.
+
+Both commands ran serially from `test`, with streamed logs and independent process bounds:
+
+| Command | Result |
+| --- | --- |
+| `bun test ./account-delete.test.ts -t "cloud workspaces: a host that never answers" --timeout 30000` | 1 passed, 1 existing Valkey-only skip, 6 assertions, exit 0; native request aborted in about 1.04 seconds |
+| `bun test ./account-delete.test.ts --timeout 30000` | 34 passed, 1 existing Valkey-only skip, 369 assertions, exit 0, 1.59 seconds |
+
+Logs: `account-deadline-clock-fix.log` (stalled isolated attempt), `account-deadline-http-fixture.log` and
+`account-deletion-http-fixture-full.log` under the coordinator's `release-audit-20261114` evidence directory. The
+disposable-Valkey case remains explicitly unexecuted locally. No new API code or public contract changed in this
+fixture repair.
