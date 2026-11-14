@@ -73,6 +73,10 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
       const uncachedDisposals = new Map<string, Deferred.Deferred<void>>()
       let draining = false
       let closed = false
+      // Exclusive (fresh) instances exist only with Connect on. With it off, ordinary load, reload and disposal keep
+      // main's contract exactly: a waiter gets the context it awaited, a closed store does not refuse, and an uncached
+      // disposal is not tracked. Every other Connect-only branch below is inert while no fresh owner can exist.
+      const connect = flags.experimentalConnect
 
       const boot = (input: LoadInput & { directory: string }, owner?: Fresh) =>
         Effect.gen(function* () {
@@ -162,7 +166,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
         return Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             while (true) {
-              if (closed) return yield* Effect.die(new Error("Instance store is closed"))
+              if (connect && closed) return yield* Effect.die(new Error("Instance store is closed"))
               if (failedFresh.has(directory))
                 return yield* Effect.die(new Error("Exclusive instance cleanup was not confirmed"))
               const owner = fresh.get(directory)
@@ -184,7 +188,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
               const existing = cache.get(directory)
               if (existing) {
                 const context = yield* restore(Deferred.await(existing.deferred))
-                if (fresh.has(directory) || cache.get(directory) !== existing) continue
+                if (connect && (fresh.has(directory) || cache.get(directory) !== existing)) continue
                 return context
               }
 
@@ -199,7 +203,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
                 }),
               ).pipe(Effect.forkIn(scope, { startImmediately: true }))
               const context = yield* restore(Deferred.await(entry.deferred))
-              if (fresh.has(directory) || cache.get(directory) !== entry) continue
+              if (connect && (fresh.has(directory) || cache.get(directory) !== entry)) continue
               return context
             }
           }),
@@ -211,7 +215,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
         return Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             while (true) {
-              if (closed) return yield* Effect.die(new Error("Instance store is closed"))
+              if (connect && closed) return yield* Effect.die(new Error("Instance store is closed"))
               if (failedFresh.has(directory))
                 return yield* Effect.die(new Error("Exclusive instance cleanup was not confirmed"))
               const owner = fresh.get(directory)
@@ -247,7 +251,8 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
                 }),
               ).pipe(Effect.forkIn(scope, { startImmediately: true }))
               const context = yield* restore(Deferred.await(entry.deferred))
-              if (fresh.has(directory) || cache.get(directory) !== entry) return yield* restore(load(input))
+              if (connect && (fresh.has(directory) || cache.get(directory) !== entry))
+                return yield* restore(load(input))
               return context
             }
           }),
@@ -267,6 +272,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
         if (pending) return yield* Deferred.await(pending)
         const entry = cache.get(ctx.directory)
         if (!entry) {
+          if (!connect) return yield* disposeContext(ctx)
           const settled = Deferred.makeUnsafe<void>()
           uncachedDisposals.set(ctx.directory, settled)
           return yield* disposeContext(ctx).pipe(
