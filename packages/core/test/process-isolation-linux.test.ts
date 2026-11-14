@@ -18,6 +18,18 @@ const fixture = () => ({
   socketIdentity: { device: 5, inode: 123 },
 })
 const options = (cwd: string) => ({ platform: "linux" as const, parentPID: 4123, cwd })
+const maskProofFixture = () => ({
+  v: 2 as const,
+  sourceDigest: "b".repeat(64),
+  constructionNamespace: {
+    mount: { device: 4, inode: 1012 },
+    parentMount: { device: 4, inode: 1010 },
+    user: { device: 4, inode: 1001 },
+    root: { device: 8, inode: 2 },
+  },
+  keeperNamespace: { device: 4, inode: 12 },
+  protectedMountTargets: [...LinuxIsolation.MASKS, "/run/credentials", "/tmp/private"].sort(),
+})
 
 test("the first supported hosted temporary root is fixed, never selected by a caller", () => {
   expect(LinuxIsolation.hostedTemporary("/home/runner/work/_temp")).toBe(LinuxIsolation.HOST_TEMP)
@@ -66,6 +78,200 @@ test("a protected nested filesystem is unsupported even when its outside alias u
       LinuxIsolation.Unavailable,
     )
   expect(() => LinuxIsolation.assertMaskMountTargets([])).toThrow(LinuxIsolation.Unavailable)
+})
+
+test("v2 mask evidence accepts a bound nested closure and freezes copied identities and targets", () => {
+  const raw = maskProofFixture()
+  const proof = LinuxIsolation.parseMaskProof(raw, LinuxIsolation.parseSpec(fixture()))
+  expect(proof).toEqual(raw)
+  raw.constructionNamespace.mount.inode = 999
+  raw.constructionNamespace.parentMount.device = 999
+  raw.constructionNamespace.user.inode = 999
+  raw.constructionNamespace.root.inode = 999
+  raw.keeperNamespace.inode = 999
+  raw.protectedMountTargets.push("/tmp/later")
+  expect(proof.constructionNamespace.mount.inode).toBe(1012)
+  expect(proof.constructionNamespace.parentMount.device).toBe(4)
+  expect(proof.constructionNamespace.user.inode).toBe(1001)
+  expect(proof.constructionNamespace.root.inode).toBe(2)
+  expect(proof.keeperNamespace.inode).toBe(12)
+  expect(proof.protectedMountTargets).not.toContain("/tmp/later")
+  for (const value of [
+    proof,
+    proof.constructionNamespace,
+    ...Object.values(proof.constructionNamespace),
+    proof.keeperNamespace,
+    proof.protectedMountTargets,
+  ])
+    expect(Object.isFrozen(value)).toBe(true)
+  // Raw target arrays retain their legacy refusal of nested mounts.
+  expect(() => LinuxIsolation.assertMaskMountTargets(proof.protectedMountTargets)).toThrow(LinuxIsolation.Unavailable)
+})
+
+test("v2 mask evidence rejects stale or conflated namespaces using both device and inode", () => {
+  const spec = LinuxIsolation.parseSpec(fixture())
+  const proof = maskProofFixture()
+  for (const value of [
+    { ...proof, keeperNamespace: { ...proof.keeperNamespace, device: 5 } },
+    { ...proof, keeperNamespace: { ...proof.keeperNamespace, inode: 13 } },
+    {
+      ...proof,
+      constructionNamespace: { ...proof.constructionNamespace, mount: proof.constructionNamespace.parentMount },
+    },
+    { ...proof, constructionNamespace: { ...proof.constructionNamespace, mount: proof.keeperNamespace } },
+    { ...proof, constructionNamespace: { ...proof.constructionNamespace, parentMount: proof.keeperNamespace } },
+    {
+      ...proof,
+      constructionNamespace: {
+        ...proof.constructionNamespace,
+        user: { device: spec.devices.user, inode: spec.namespaces.user },
+      },
+    },
+  ])
+    expect(() => LinuxIsolation.parseMaskProof(value, spec)).toThrow(LinuxIsolation.Unavailable)
+  expect(() =>
+    LinuxIsolation.parseMaskProof(
+      {
+        ...proof,
+        constructionNamespace: {
+          ...proof.constructionNamespace,
+          mount: { device: 5, inode: spec.namespaces.mnt },
+          parentMount: { device: 6, inode: spec.namespaces.mnt },
+          user: { device: 5, inode: spec.namespaces.user },
+        },
+      },
+      spec,
+    ),
+  ).not.toThrow()
+  expect(() =>
+    LinuxIsolation.parseMaskProof(
+      proof,
+      LinuxIsolation.parseSpec({ ...fixture(), namespaces: { user: 11, mnt: 15, pid: 13 } }),
+    ),
+  ).toThrow(LinuxIsolation.Unavailable)
+})
+
+test("v2 mask evidence has an exact versioned shape and safe positive identity fields", () => {
+  const spec = LinuxIsolation.parseSpec(fixture())
+  const proof = maskProofFixture()
+  for (const value of [
+    undefined,
+    null,
+    [],
+    {},
+    { ...proof, v: 1 },
+    { ...proof, v: "2" },
+    { ...proof, sourceDigest: "B".repeat(64) },
+    { ...proof, sourceDigest: "b".repeat(63) },
+    { ...proof, sourceDigest: "b".repeat(65) },
+    { ...proof, sourceDigest: 12 },
+    { ...proof, masks: true },
+    { ...proof, constructionNamespace: null },
+    { ...proof, constructionNamespace: { ...proof.constructionNamespace, host: { device: 4, inode: 1 } } },
+    { ...proof, keeperNamespace: { ...proof.keeperNamespace, host: true } },
+    { ...proof, protectedMountTargets: null },
+    { ...proof, protectedMountTargets: {} },
+  ])
+    expect(() => LinuxIsolation.parseMaskProof(value, spec)).toThrow(LinuxIsolation.Unavailable)
+  for (const field of ["mount", "parentMount", "user", "root"] as const) {
+    expect(() =>
+      LinuxIsolation.parseMaskProof(
+        {
+          ...proof,
+          constructionNamespace: {
+            ...proof.constructionNamespace,
+            [field]: { device: 4, inode: 1, extra: true },
+          },
+        },
+        spec,
+      ),
+    ).toThrow(LinuxIsolation.Unavailable)
+    for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, "4", null])
+      for (const part of ["device", "inode"] as const)
+        expect(() =>
+          LinuxIsolation.parseMaskProof(
+            {
+              ...proof,
+              constructionNamespace: {
+                ...proof.constructionNamespace,
+                [field]: { ...proof.constructionNamespace[field], [part]: value },
+              },
+            },
+            spec,
+          ),
+        ).toThrow(LinuxIsolation.Unavailable)
+  }
+  for (const part of ["device", "inode"] as const)
+    expect(() =>
+      LinuxIsolation.parseMaskProof({ ...proof, keeperNamespace: { ...proof.keeperNamespace, [part]: 0 } }, spec),
+    ).toThrow(LinuxIsolation.Unavailable)
+})
+
+test("v2 target evidence requires all five roots, hidden canonical paths, uniqueness and code point order", () => {
+  const spec = LinuxIsolation.parseSpec(fixture())
+  const proof = maskProofFixture()
+  const sparse = [...proof.protectedMountTargets]
+  sparse.length += 1
+  for (const targets of [
+    [],
+    proof.protectedMountTargets.filter((target) => target !== "/run"),
+    [...proof.protectedMountTargets, "/tmp/private"].sort(),
+    [...proof.protectedMountTargets].reverse(),
+    ...[
+      "/mnt/leak",
+      "/runaway/nested",
+      "/tmp/./nested",
+      "/tmp/",
+      "/tmp/\n",
+      "/tmp/\0",
+      "/tmp/\uD800",
+      "/tmp/" + "x".repeat(4092),
+    ].map((target) => [...proof.protectedMountTargets, target].sort()),
+    [...proof.protectedMountTargets, 7],
+    sparse,
+  ])
+    expect(() => LinuxIsolation.parseMaskProof({ ...proof, protectedMountTargets: targets }, spec)).toThrow(
+      LinuxIsolation.Unavailable,
+    )
+  const targets = [
+    "/home/runner/work/_temp",
+    "/home/vector-agent",
+    "/run",
+    "/tmp",
+    "/tmp/\uE000",
+    "/tmp/\u{10000}",
+    "/var/tmp",
+  ]
+  expect(() => LinuxIsolation.parseMaskProof({ ...proof, protectedMountTargets: targets }, spec)).not.toThrow()
+  expect(() => LinuxIsolation.parseMaskProof({ ...proof, protectedMountTargets: [...targets].sort() }, spec)).toThrow(
+    LinuxIsolation.Unavailable,
+  )
+})
+
+test("v2 mask evidence bounds the complete serialized proof and the number of distinct targets", () => {
+  const spec = LinuxIsolation.parseSpec(fixture())
+  const proof = maskProofFixture()
+  const targets = [
+    ...LinuxIsolation.MASKS,
+    ...Array.from({ length: 59 }, (_, index) => `/tmp/${String(index).padStart(2, "0")}`),
+  ].sort()
+  expect(targets).toHaveLength(64)
+  expect(() => LinuxIsolation.parseMaskProof({ ...proof, protectedMountTargets: targets }, spec)).not.toThrow()
+  expect(() =>
+    LinuxIsolation.parseMaskProof({ ...proof, protectedMountTargets: [...targets, "/tmp/extra"].sort() }, spec),
+  ).toThrow(LinuxIsolation.Unavailable)
+  expect(() =>
+    LinuxIsolation.parseMaskProof(
+      {
+        ...proof,
+        protectedMountTargets: [
+          ...LinuxIsolation.MASKS,
+          ...Array.from({ length: 8 }, (_, index) => `/tmp/${index}${"x".repeat(4090)}`),
+        ].sort(),
+      },
+      spec,
+    ),
+  ).toThrow(LinuxIsolation.Unavailable)
 })
 
 test("the fixed ABI keeps arbitrary command arguments behind its separator without executing or selecting a helper", () => {

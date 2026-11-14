@@ -48,6 +48,8 @@ LIBC.prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ul
 LIBC.prctl.restype = ctypes.c_int
 LIBC.renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
 LIBC.renameat2.restype = ctypes.c_int
+LIBC.mount.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p)
+LIBC.mount.restype = ctypes.c_int
 _DIAGNOSTIC_STAGE = "entry-start"
 
 
@@ -303,7 +305,8 @@ def validate_descriptors(value, descriptors):
     for kind in ("mnt", "pid"):
         owner_fd = fcntl.ioctl(descriptors[kind], NS_GET_USERNS)
         try:
-            require(os.fstat(owner_fd).st_ino == value["namespaces"]["user"])
+            require(os.fstat(owner_fd).st_ino == value["namespaces"]["user"] and
+                    os.fstat(owner_fd).st_dev == value["devices"]["user"])
         finally:
             os.close(owner_fd)
 
@@ -351,6 +354,9 @@ def broker(parent, listener_fd, descriptors):
     arm_parent(parent)
     state = read_state()
     value = validate_spec(state["public"], partial=True)
+    current = identity(os.getpid(), 0)
+    require(current and current["state"] not in ("Z", "X", "x"))
+    validate_source_view(os.getpid(), current["start"], state["maskSources"])
     validate_descriptors(value, descriptors)
     require(3 <= listener_fd < 128 and all(3 <= fd < 128 for fd in descriptors.values()) and
             len({listener_fd, *descriptors.values()}) == 4)
@@ -917,30 +923,81 @@ def runtime_images():
     return images
 
 
+def object_identity(value):
+    exact(value, ("device", "inode"))
+    require(all(integer(item) for item in value.values()))
+    return value
+
+
+def construction_namespace(value):
+    exact(value, ("mount", "parentMount", "user", "root"))
+    for item in value.values():
+        object_identity(item)
+    require(value["mount"] != value["parentMount"])
+    return value
+
+
+def filesystem(value):
+    require(type(value) is str and 3 <= len(value) <= 32 and value.count(":") == 1 and
+            all(part.isascii() and part.isdigit() and str(int(part)) == part for part in value.split(":")))
+    return value
+
+
+def json_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+def digest_value(value):
+    require(type(value) is str and len(value) == 64 and all(char in "0123456789abcdef" for char in value))
+
+
 def mask_records(records):
-    require(type(records) is list and len(records) == len(MASKS))
-    for target, record in zip(MASKS, records, strict=True):
-        exact(record, ("path", "device", "inode", "filesystem", "root"))
-        require(record["path"] == target and integer(record["device"]) and integer(record["inode"]))
+    # Cleanup reads this durable record before stopping owned processes. This validation is deliberately
+    # structural: live topology/source drift may refuse admission, but cannot revoke teardown ownership.
+    exact(records, ("v", "namespace", "topology", "roots", "origins", "digest"))
+    require(type(records["v"]) is int and records["v"] == 2)
+    construction_namespace(records["namespace"])
+    digest_value(records["topology"])
+    digest_value(records["digest"])
+    require(type(records["roots"]) is list and len(records["roots"]) == len(MASKS) and
+            type(records["origins"]) is list and len(records["roots"]) + len(records["origins"]) <= 64 and
+            len(json.dumps(records, separators=(",", ":"), ensure_ascii=True).encode("ascii")) <= 32768)
+    for record in records["roots"] + records["origins"]:
+        exact(record, ("path", "device", "inode", "mountID", "filesystem", "root", "kind", "mode", "uid", "gid"))
+        canonical(record["path"])
         canonical(record["root"])
-        device = record["filesystem"]
-        require(type(device) is str and 3 <= len(device) <= 32 and device.count(":") == 1 and
-                all(part.isascii() and part.isdigit() for part in device.split(":")))
+        filesystem(record["filesystem"])
+        require(hidden(record["path"]) and all(integer(record[key]) for key in ("device", "inode", "mountID", "mode")) and
+                all(type(record[key]) is int and 0 <= record[key] <= 9007199254740991 for key in ("uid", "gid")) and
+                record["mode"] <= 65535 and (stat.S_ISDIR(record["mode"]) or stat.S_ISREG(record["mode"])) and
+                type(record["kind"]) is str and re.fullmatch(r"[A-Za-z0-9._+-]{1,64}", record["kind"]))
+        require(record["filesystem"] == f"{os.major(record['device'])}:{os.minor(record['device'])}")
+    require([record["path"] for record in records["roots"]] == list(MASKS))
+    require(all(stat.S_ISDIR(record["mode"]) for record in records["roots"]))
+    require(records["origins"] == sorted(records["origins"], key=lambda record: (record["path"], record["mountID"])))
+    require(len({record["mountID"] for record in records["origins"]}) == len(records["origins"]) and
+            all(record["path"] not in MASKS for record in records["origins"]))
+    require(records["digest"] == json_digest({key: value for key, value in records.items() if key != "digest"}))
     return records
 
 
-def mount_path(value):
+def mount_field(value):
     # Decode the kernel's escaped fields once. Replacing backslashes in multiple passes corrupts literal aliases.
+    require(type(value) is str and re.fullmatch(r"(?:[^\\]|\\(?:040|011|012|134))*", value))
     def decode(match):
         require(match[1] in ("040", "011", "012", "134"))
         return chr(int(match[1], 8))
-    return canonical(re.sub(r"\\([0-7]{3})", decode, value))
+    result = re.sub(r"\\([0-7]{3})", decode, value)
+    require(0 < len(result.encode("utf-8", "strict")) <= 4096 and
+            not any(ord(char) < 32 or ord(char) == 127 for char in result))
+    return result
 
 
-def mount_table(pid=None):
-    name = "/proc/self/mountinfo" if pid is None else f"/proc/{pid}/mountinfo"
-    with open(name, "rb") as stream:
-        data = stream.read(2097153)
+def mount_path(value):
+    return canonical(mount_field(value))
+
+
+def parse_mount_table(data):
     require(len(data) <= 2097152)
     lines = data.decode("utf-8", "strict").splitlines()
     require(0 < len(lines) <= 4096)
@@ -948,11 +1005,45 @@ def mount_table(pid=None):
     for line in lines:
         fields = line.split()
         middle = fields.index("-")
-        require(middle >= 6 and len(fields) >= middle + 4 and fields[2].count(":") == 1 and
-                all(part.isascii() and part.isdigit() for part in fields[2].split(":")))
-        result.append({"filesystem": fields[2], "root": mount_path(fields[3]), "target": mount_path(fields[4]),
-                       "readOnly": "ro" in fields[5].split(","), "kind": fields[middle + 1]})
-    return result
+        require(middle >= 6 and len(fields) == middle + 4 and
+                all(part.isascii() and part.isdigit() and str(int(part)) == part and integer(int(part))
+                    for part in fields[:2]))
+        optional = fields[6:middle]
+        require(len(optional) == len(set(optional)) and all(item == "unbindable" or
+                (re.fullmatch(r"(?:shared|master|propagate_from):[1-9][0-9]{0,15}", item) and
+                 integer(int(item.split(":")[1]))) for item in optional))
+        require(len({item.split(":")[0] for item in optional}) == len(optional))
+        options, super_options = fields[5].split(","), fields[middle + 3].split(",")
+        require(all(options) and len(options) == len(set(options)) and all(super_options) and
+                len(super_options) == len(set(super_options)) and
+                (("ro" in options) != ("rw" in options)) and
+                (("ro" in super_options) != ("rw" in super_options)) and
+                re.fullmatch(r"[A-Za-z0-9._+-]{1,64}", fields[middle + 1]))
+        result.append({"id": int(fields[0]), "parent": int(fields[1]), "filesystem": filesystem(fields[2]),
+                       "root": mount_path(fields[3]), "target": mount_path(fields[4]), "options": options,
+                       "propagation": optional, "kind": fields[middle + 1], "source": mount_field(fields[middle + 2]),
+                       "superOptions": super_options, "readOnly": "ro" in options})
+    indexed = {row["id"]: row for row in result}
+    require(len(indexed) == len(result))
+    roots = [row for row in result if row["parent"] not in indexed]
+    require(len(roots) == 1 and roots[0]["target"] == "/")
+    for row in result:
+        seen = set()
+        current = row
+        while current["parent"] in indexed:
+            require(current["id"] not in seen)
+            seen.add(current["id"])
+            parent = indexed[current["parent"]]
+            require(beneath(current["target"], parent["target"]))
+            current = parent
+        require(current["id"] == roots[0]["id"])
+    return sorted(result, key=lambda row: row["id"])
+
+
+def mount_table(pid=None):
+    name = "/proc/self/mountinfo" if pid is None else f"/proc/{pid}/mountinfo"
+    with open(name, "rb") as stream:
+        return parse_mount_table(stream.read(2097153))
 
 
 def beneath(name, parent):
@@ -963,15 +1054,8 @@ def hidden(name):
     return any(beneath(name, parent) for parent in MASKS)
 
 
-def refuse_nested_mask_mounts(mounts):
-    # A nested source can belong to another filesystem and also be mounted outside the mask. Tracking only
-    # the protected root's device cannot prove that other origin safe, so this first host contract refuses it.
-    require(not any(row["target"] != parent and beneath(row["target"], parent)
-                    for row in mounts for parent in MASKS), "Nested mounts beneath protected parents are unsupported")
-
-
 def refuse_mask_aliases(records, mounts):
-    for source in mask_records(records):
+    for source in mask_records(records)["roots"] + records["origins"]:
         for candidate in mounts:
             if candidate["filesystem"] != source["filesystem"]:
                 continue
@@ -983,7 +1067,116 @@ def refuse_mask_aliases(records, mounts):
                 require(hidden(candidate["target"]), "A protected subtree has an alternate mounted destination")
 
 
-def supported_mask_sources(uid, gid):
+def require_private_mounts(mounts):
+    require(all(not row["propagation"] or row["propagation"] == ["unbindable"] for row in mounts),
+            "A construction mount can propagate outside its private namespace")
+
+
+def require_known_mask_origins(records, mounts, replacements):
+    known = {(record["path"], record["filesystem"], record["root"], record["kind"])
+             for record in records["roots"] + records["origins"]}
+    for row in mounts:
+        if hidden(row["target"]) and row["id"] not in replacements:
+            require((row["target"], row["filesystem"], row["root"], row["kind"]) in known,
+                    "An uncaptured origin exists beneath a protected parent")
+
+
+def require_capture_closure(records, mounts):
+    mask_records(records)
+    require(json_digest(mounts) == records["topology"])
+    require([(record["path"], record["mountID"]) for record in records["origins"]] ==
+            sorted((row["target"], row["id"]) for row in mounts
+                   if hidden(row["target"]) and row["target"] not in MASKS))
+    sources = records["roots"] + records["origins"]
+    require(all(any(record["path"] == row["target"] and record["mountID"] == row["id"]
+                    for record in sources) for row in mounts if hidden(row["target"])),
+            "A covered or uncaptured source mount cannot be pinned")
+    require_known_mask_origins(records, mounts, set())
+
+
+def stat_identity(info):
+    return {"device": info.st_dev, "inode": info.st_ino}
+
+
+def mount_descriptor(fd):
+    fields = [line.split() for line in pathlib.Path(f"/proc/self/fdinfo/{fd}").read_text().splitlines()
+              if line.startswith("mnt_id:")]
+    require(len(fields) == 1 and len(fields[0]) == 2 and fields[0][1].isascii() and fields[0][1].isdigit())
+    value = int(fields[0][1])
+    require(integer(value))
+    return value
+
+
+def pin_source(root_fd, name):
+    # Walk every component with O_NOFOLLOW; a final-only check would follow mutable intermediate symlinks.
+    canonical(name)
+    fd = os.dup(root_fd)
+    try:
+        parts = name.lstrip("/").split("/") if name != "/" else []
+        for index, part in enumerate(parts):
+            opened = os.open(part, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC |
+                             (os.O_DIRECTORY if index < len(parts) - 1 else 0), dir_fd=fd)
+            os.close(fd)
+            fd = opened
+        info = os.fstat(fd)
+        require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def source_record(fd, name, row):
+    info = os.fstat(fd)
+    require(beneath(name, row["target"]) and mount_descriptor(fd) == row["id"] and
+            row["filesystem"] == f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}")
+    return {"path": name, "device": info.st_dev, "inode": info.st_ino, "mountID": row["id"],
+            "filesystem": row["filesystem"],
+            "root": os.path.normpath(os.path.join(row["root"], os.path.relpath(name, row["target"]))),
+            "kind": row["kind"], "mode": info.st_mode, "uid": info.st_uid, "gid": info.st_gid}
+
+
+def capture_mount_namespace():
+    # This is called only in the existing Root PREPARE child. The broker retains the resulting namespace
+    # through membership. No construction namespace descriptor is inherited by the broker or a client.
+    before = os.open("/proc/self/ns/mnt", os.O_RDONLY | os.O_CLOEXEC)
+    user = os.open("/proc/self/ns/user", os.O_RDONLY | os.O_CLOEXEC)
+    after = None
+    try:
+        require(fcntl.ioctl(before, NS_GET_NSTYPE) == KINDS["mnt"] and
+                fcntl.ioctl(user, NS_GET_NSTYPE) == KINDS["user"])
+        owner = fcntl.ioctl(before, NS_GET_USERNS)
+        try:
+            require(stat_identity(os.fstat(owner)) == stat_identity(os.fstat(user)))
+        finally:
+            os.close(owner)
+        os.unshare(KINDS["mnt"])
+        require(LIBC.mount(None, b"/", None, 16384 | 262144, None) == 0,
+                "The construction namespace could not be made recursively private")
+        after = os.open("/proc/self/ns/mnt", os.O_RDONLY | os.O_CLOEXEC)
+        require(fcntl.ioctl(after, NS_GET_NSTYPE) == KINDS["mnt"])
+        namespace = {"mount": stat_identity(os.fstat(after)), "parentMount": stat_identity(os.fstat(before)),
+                     "user": stat_identity(os.fstat(user)), "root": stat_identity(os.stat("/"))}
+        construction_namespace(namespace)
+        require(namespace["user"] == stat_identity(os.stat("/proc/self/ns/user")) and
+                namespace["mount"] == stat_identity(os.stat("/proc/self/ns/mnt")))
+        owner = fcntl.ioctl(after, NS_GET_USERNS)
+        try:
+            require(stat_identity(os.fstat(owner)) == namespace["user"])
+        finally:
+            os.close(owner)
+        require_private_mounts(mount_table())
+        return namespace, after
+    except BaseException:
+        if after is not None:
+            os.close(after)
+        raise
+    finally:
+        os.close(before)
+        os.close(user)
+
+
+def supported_mask_sources(uid, gid, namespace, pins):
     # OS/layout metadata only. Neither a runner UID nor Root ownership is guessed for the hosted temporary root.
     global _DIAGNOSTIC_STAGE
     _DIAGNOSTIC_STAGE = "prepare-mask-os-chain"
@@ -1012,14 +1205,9 @@ def supported_mask_sources(uid, gid):
     require(integer(runner.pw_uid) and runner.pw_uid != uid)
     _DIAGNOSTIC_STAGE = "prepare-mask-mount-table"
     mounts = mount_table()
+    require_private_mounts(mounts)
     # These labels are fixed metadata categories, never path strings supplied by a caller.
     labels = {"/home/vector-agent":"home", "/tmp":"tmp", "/var/tmp":"var-tmp", "/run":"run", HOST_TEMP:"host-temp"}
-    _DIAGNOSTIC_STAGE = "prepare-mask-nested"
-    for target in MASKS:
-        if any(row["target"] != target and beneath(row["target"], target) for row in mounts):
-            _DIAGNOSTIC_STAGE = f"prepare-mask-{labels[target]}-nested"
-            break
-    refuse_nested_mask_mounts(mounts)
     records = []
     for target in MASKS:
         label = labels[target]
@@ -1054,60 +1242,217 @@ def supported_mask_sources(uid, gid):
         _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-mount-present"
         containing = [row for row in mounts if beneath(target, row["target"])]
         require(containing)
-        row = max(containing, key=lambda value: len(value["target"]))
+        fd = pin_source(pins["root"], target)
+        pins["sources"].append(fd)
+        matching = [row for row in containing if row["id"] == mount_descriptor(fd)]
+        require(len(matching) == 1)
+        row = matching[0]
+        require(len(row["target"]) == max(len(item["target"]) for item in containing))
         _DIAGNOSTIC_STAGE = f"prepare-mask-{label}-mount-device"
         require(row["filesystem"] == f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}")
-        source_root = os.path.normpath(os.path.join(row["root"], os.path.relpath(target, row["target"])))
-        records.append({"path": target, "device": info.st_dev, "inode": info.st_ino,
-                        "filesystem": row["filesystem"], "root": source_root})
+        record = source_record(fd, target, row)
+        require((record["device"], record["inode"], record["mode"], record["uid"], record["gid"]) ==
+                (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid))
+        records.append(record)
+    _DIAGNOSTIC_STAGE = "prepare-mask-origins"
+    nested = sorted((row for row in mounts if hidden(row["target"]) and row["target"] not in MASKS),
+                    key=lambda row: (row["target"], row["id"]))
+    require(len(records) + len(nested) <= 64)
+    origins = []
+    for row in nested:
+        fd = pin_source(pins["root"], row["target"])
+        pins["sources"].append(fd)
+        # A covered/ambiguous source mount cannot be attested through its visible path. Refuse it here;
+        # copied keeper rows may be covered later, but still receive the complete alias/origin checks.
+        origins.append(source_record(fd, row["target"], row))
+    result = {"v": 2, "namespace": namespace, "topology": json_digest(mounts), "roots": records, "origins": origins}
+    result["digest"] = json_digest(result)
+    mask_records(result)
     _DIAGNOSTIC_STAGE = "prepare-mask-aliases"
-    refuse_mask_aliases(records, mounts)
-    return records
+    require_capture_closure(result, mounts)
+    refuse_mask_aliases(result, mounts)
+    validate_source_view(os.getpid(), identity(os.getpid(), 0)["start"], result, pins["sources"])
+    return result
+
+
+def validate_source_view(pid, start, records, original_pins=None):
+    mask_records(records)
+    descriptors = []
+    sources = []
+    try:
+        process = os.pidfd_open(pid, 0)
+        descriptors.append(process)
+        before = identity(pid, 0)
+        require(before and before["start"] == start and before["state"] not in ("Z", "X", "x"))
+        mount = os.open(f"/proc/{pid}/ns/mnt", os.O_RDONLY | os.O_CLOEXEC)
+        descriptors.append(mount)
+        user = os.open(f"/proc/{pid}/ns/user", os.O_RDONLY | os.O_CLOEXEC)
+        descriptors.append(user)
+        namespace = records["namespace"]
+        require(fcntl.ioctl(mount, NS_GET_NSTYPE) == KINDS["mnt"] and
+                fcntl.ioctl(user, NS_GET_NSTYPE) == KINDS["user"] and
+                stat_identity(os.fstat(mount)) == namespace["mount"] and
+                stat_identity(os.fstat(user)) == namespace["user"])
+        owner = fcntl.ioctl(mount, NS_GET_USERNS)
+        try:
+            require(stat_identity(os.fstat(owner)) == namespace["user"])
+        finally:
+            os.close(owner)
+        root = os.open(f"/proc/{pid}/root", os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+        descriptors.append(root)
+        require(stat_identity(os.fstat(root)) == namespace["root"])
+        mounts = mount_table(pid)
+        require_private_mounts(mounts)
+        require_capture_closure(records, mounts)
+        refuse_mask_aliases(records, mounts)
+        indexed = {row["id"]: row for row in mounts}
+        all_records = records["roots"] + records["origins"]
+        if original_pins is not None:
+            require(len(original_pins) == len(all_records))
+        for index, record in enumerate(all_records):
+            require(record["mountID"] in indexed)
+            row = indexed[record["mountID"]]
+            if original_pins is not None:
+                require(source_record(original_pins[index], record["path"], row) == record)
+            fd = pin_source(root, record["path"])
+            sources.append(fd)
+            require(source_record(fd, record["path"], row) == record)
+        # Reopen every route while its first descriptor remains pinned. Equality of two arbitrary mount
+        # snapshots is insufficient: each identity must equal the digest-bound construction capture.
+        for record, fd in zip(all_records, sources, strict=True):
+            row = indexed[record["mountID"]]
+            require(source_record(fd, record["path"], row) == record)
+            again = pin_source(root, record["path"])
+            try:
+                require(source_record(again, record["path"], row) == record)
+            finally:
+                os.close(again)
+        require(json_digest(mount_table(pid)) == records["topology"] and
+                stat_identity(os.stat(f"/proc/{pid}/ns/mnt")) == namespace["mount"] and
+                stat_identity(os.stat(f"/proc/{pid}/ns/user")) == namespace["user"] and
+                stat_identity(os.stat(f"/proc/{pid}/root")) == namespace["root"])
+        after = identity(pid, 0)
+        require(after and after["start"] == start and after["state"] not in ("Z", "X", "x"))
+        poll = select.poll()
+        poll.register(process, select.POLLIN)
+        require(not poll.poll(0))
+    finally:
+        for fd in sources + descriptors:
+            os.close(fd)
+
+
+def validate_keeper_identity(pid, start, uid, gid):
+    current = identity(pid, uid)
+    require(current and current["start"] == start and current["state"] not in ("Z", "X", "x"))
+    status = dict(line.split(":", 1) for line in pathlib.Path(f"/proc/{pid}/status").read_text().splitlines() if ":" in line)
+    require(status["Pid"].split() == [str(pid)] and
+            status["Uid"].split() == [str(uid)] * 4 and status["Gid"].split() == [str(gid)] * 4 and
+            status["Groups"].split() == [] and status["NSpid"].split()[-1] == "1" and
+            all(int(status[name].strip(), 16) == 0 for name in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")) and
+            status["NoNewPrivs"].strip() == "1" and
+            pathlib.Path(f"/proc/{pid}/uid_map").read_text().split() == ["0", str(uid), "1"] and
+            pathlib.Path(f"/proc/{pid}/gid_map").read_text().split() == ["0", str(gid), "1"])
 
 
 def validate_masks(pid, start, uid, gid, records):
     # Host Root observes only metadata/empty directory listings through its own proc. No handle reaches the model.
     mask_records(records)
+    state = read_state()
+    value = state["public"]
+    require(state["maskSources"] == records and value["keeper"] == {"pid": pid, "start": start} and
+            value["uid"] == uid and value["gid"] == gid)
+    source = value.get("broker")
+    if source is None:
+        # The unpublished setup child is the only source authority before broker adoption.
+        require(state["phase"] == "keeper-ready")
+        source = identity(os.getpid(), 0)
+        require(source and source["state"] not in ("Z", "X", "x"))
+    else:
+        require(state["phase"] in ("broker-pending", "adopted"))
+    validate_source_view(source["pid"], source["start"], records)
     pin = os.pidfd_open(pid, 0)
+    descriptors = {}
+    visible_fds = []
+    keeper_root = None
     try:
-        before = identity(pid, uid)
-        require(before and before["start"] == start and before["state"] not in ("Z", "X", "x"))
+        validate_keeper_identity(pid, start, uid, gid)
+        for kind in KINDS:
+            descriptors[kind] = os.open(f"/proc/{pid}/ns/{kind}", os.O_RDONLY | os.O_CLOEXEC)
+        validate_descriptors(value, descriptors)
+        keeper_namespace = stat_identity(os.fstat(descriptors["mnt"]))
+        require(keeper_namespace != records["namespace"]["mount"] and
+                stat_identity(os.fstat(descriptors["user"])) != records["namespace"]["user"])
         mounts = mount_table(pid)
-        # Repeat on the actual copied namespace before publication, without skipping any filesystem device.
-        refuse_nested_mask_mounts(mounts)
+        require_private_mounts(mounts)
+        keeper_root = os.open(f"/proc/{pid}/root", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NONBLOCK)
+        root_mounts = [row for row in mounts if row["target"] == "/" and row["id"] == mount_descriptor(keeper_root)]
+        require(len(root_mounts) == 1 and root_mounts[0]["readOnly"] and
+                stat_identity(os.fstat(keeper_root)) == records["namespace"]["root"] and
+                os.fstatvfs(keeper_root).f_flag & os.ST_RDONLY)
+        root_record = source_record(keeper_root, "/", root_mounts[0])
+        # Every row participates, including old covered rows and unrelated filesystem devices.
         refuse_mask_aliases(records, mounts)
-        for record in records:
+        replacements = set()
+        visible_records = []
+        for record in records["roots"]:
             target = record["path"]
             fd = os.open(f"/proc/{pid}/root" + target,
                          os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            visible_fds.append(fd)
+            visible = os.fstat(fd)
+            matching = [row for row in mounts if row["target"] == target and row["id"] == mount_descriptor(fd)]
+            require(len(matching) == 1 and matching[0]["kind"] == "tmpfs" and matching[0]["root"] == "/" and
+                    matching[0]["readOnly"] and matching[0]["filesystem"] not in
+                    {source["filesystem"] for source in records["roots"] + records["origins"]})
+            require(stat.S_ISDIR(visible.st_mode) and visible.st_uid == uid and visible.st_gid == gid and
+                    stat.S_IMODE(visible.st_mode) == 0o755 and
+                    matching[0]["filesystem"] == f"{os.major(visible.st_dev)}:{os.minor(visible.st_dev)}" and
+                    os.fstatvfs(fd).f_flag & os.ST_RDONLY and not os.listdir(fd))
+            replacements.add(matching[0]["id"])
+            visible_records.append(source_record(fd, target, matching[0]))
+        require_known_mask_origins(records, mounts, replacements)
+        validate_source_view(source["pid"], source["start"], records)
+        for record, fd in zip(visible_records, visible_fds, strict=True):
+            matching = next(row for row in mounts if row["id"] == record["mountID"])
+            require(source_record(fd, record["path"], matching) == record and
+                    os.fstatvfs(fd).f_flag & os.ST_RDONLY and not os.listdir(fd))
+            again = os.open(f"/proc/{pid}/root" + record["path"],
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
             try:
-                visible = os.fstat(fd)
-                # Covered old mounts can remain in mountinfo. Identify the actual visible mount by its device;
-                # an empty pinned root proves no old nested directory/mount is reachable through this view.
-                matching = [row for row in mounts if row["target"] == target and
-                            row["filesystem"] == f"{os.major(visible.st_dev)}:{os.minor(visible.st_dev)}"]
-                require(len(matching) == 1 and matching[0]["kind"] == "tmpfs" and matching[0]["root"] == "/" and
-                        matching[0]["readOnly"])
-                require(stat.S_ISDIR(visible.st_mode) and visible.st_uid == uid and visible.st_gid == gid and
-                        stat.S_IMODE(visible.st_mode) == 0o755 and
-                        (visible.st_dev, visible.st_ino) != (record["device"], record["inode"]) and
-                        matching[0]["filesystem"] == f"{os.major(visible.st_dev)}:{os.minor(visible.st_dev)}" and
-                        os.fstatvfs(fd).f_flag & os.ST_RDONLY and not os.listdir(fd))
+                require(source_record(again, record["path"], matching) == record and
+                        os.fstatvfs(again).f_flag & os.ST_RDONLY and not os.listdir(again))
             finally:
-                os.close(fd)
-        after = identity(pid, uid)
-        require(after and after["start"] == start and after["state"] not in ("Z", "X", "x"))
+                os.close(again)
+        require(mount_table(pid) == mounts)
+        require(source_record(keeper_root, "/", root_mounts[0]) == root_record and
+                os.fstatvfs(keeper_root).f_flag & os.ST_RDONLY)
+        root_again = os.open(f"/proc/{pid}/root", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            require(source_record(root_again, "/", root_mounts[0]) == root_record and
+                    os.fstatvfs(root_again).f_flag & os.ST_RDONLY)
+        finally:
+            os.close(root_again)
+        validate_descriptors(value, descriptors)
+        require(all(stat_identity(os.stat(f"/proc/{pid}/ns/{kind}")) == stat_identity(os.fstat(fd))
+                    for kind, fd in descriptors.items()))
+        validate_keeper_identity(pid, start, uid, gid)
         poll = select.poll()
         poll.register(pin, select.POLLIN)
         require(not poll.poll(0))
-        protected_targets = [row["target"] for row in mounts if hidden(row["target"])]
-        require(len(protected_targets) <= 64 and len(json.dumps(protected_targets).encode("ascii")) <= 2048)
-        return protected_targets
+        protected_targets = sorted({row["target"] for row in mounts if hidden(row["target"])})
+        proof = {"v": 2, "sourceDigest": records["digest"], "constructionNamespace": records["namespace"],
+                 "keeperNamespace": keeper_namespace, "protectedMountTargets": protected_targets}
+        require(len(protected_targets) <= 64 and len(json.dumps(proof, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) <= 32768)
+        return proof
     finally:
         os.close(pin)
+        if keeper_root is not None:
+            os.close(keeper_root)
+        for fd in list(descriptors.values()) + visible_fds:
+            os.close(fd)
 
 
-def prepare(uid, gid, container):
+def prepare_in_capture(uid, gid, container, namespace, pins):
     global _DIAGNOSTIC_STAGE
     _DIAGNOSTIC_STAGE = "prepare-input"
     require(os.geteuid() == 0 and sys.version_info >= (3, 12) and container in CONTAINERS)
@@ -1131,7 +1476,7 @@ def prepare(uid, gid, container):
              "scratch": container + "/tool-scratch", "directory": container + "/tool-namespaces",
              "socket": container + "/tool-namespaces/broker.sock", "nonce": os.urandom(16).hex()}
     _DIAGNOSTIC_STAGE = "prepare-masks"
-    masks = supported_mask_sources(uid, gid)
+    masks = supported_mask_sources(uid, gid, namespace, pins)
     _DIAGNOSTIC_STAGE = "prepare-images"
     state = {"v": 1, "public": value, "phase": "recorded", "brokerPending": False, "runtimeImages": runtime_images(),
              "maskSources": masks}
@@ -1196,7 +1541,6 @@ def prepare(uid, gid, container):
         mounts = pathlib.Path(f"/proc/{pid}/mountinfo").read_text().splitlines()
         require(all(not any(field.startswith(("shared:", "master:", "propagate_from:"))
                             for field in line.split()[6:line.split().index("-")]) for line in mounts))
-        require("ro" in next(line.split()[5] for line in mounts if line.split()[4] == "/").split(","))
         _DIAGNOSTIC_STAGE = "prepare-mask-proof"
         validate_masks(pid, observed["start"], uid, gid, masks)
         _DIAGNOSTIC_STAGE = "prepare-endpoint"
@@ -1234,6 +1578,9 @@ def prepare(uid, gid, container):
         require(wait_json(value["directory"] + "/broker-adopted.json", 0, service) == expected)
         state["phase"] = "adopted"
         save_state(state)
+        _DIAGNOSTIC_STAGE = "prepare-broker-mask-proof"
+        validate_masks(value["keeper"]["pid"], value["keeper"]["start"], uid, gid, masks)
+        validate_source_view(os.getpid(), identity(os.getpid(), 0)["start"], masks, pins["sources"])
         _DIAGNOSTIC_STAGE = "prepare-publish"
         write_json(SPEC, validate_spec(value), 0o444)
     finally:
@@ -1241,6 +1588,30 @@ def prepare(uid, gid, container):
             listener.close()
         for fd in descriptors.values():
             os.close(fd)
+
+
+def prepare(uid, gid, container):
+    global _DIAGNOSTIC_STAGE
+    _DIAGNOSTIC_STAGE = "prepare-construction-input"
+    require(os.geteuid() == 0 and sys.version_info >= (3, 12) and container in CONTAINERS)
+    account = pwd.getpwnam("vector-agent")
+    require(integer(uid) and integer(gid) and account.pw_uid == uid and account.pw_gid == gid)
+    require(not os.path.lexists(PRIVATE) and not os.path.lexists(SPEC))
+    secure_chain(ROOT)
+    secure_chain(ROOT + "/private")
+    _DIAGNOSTIC_STAGE = "prepare-construction-private"
+    namespace, capture = capture_mount_namespace()
+    pins = {"root": None, "sources": []}
+    try:
+        pins["root"] = os.open("/", os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+        require(stat_identity(os.fstat(pins["root"])) == namespace["root"])
+        prepare_in_capture(uid, gid, container, namespace, pins)
+    finally:
+        for fd in pins["sources"]:
+            os.close(fd)
+        if pins["root"] is not None:
+            os.close(pins["root"])
+        os.close(capture)
 
 
 def cleanup():

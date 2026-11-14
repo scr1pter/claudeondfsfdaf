@@ -36,6 +36,7 @@ export const DESCRIPTORS = Object.freeze({
 type Container = (typeof CONTAINERS)[number]
 type Namespace = Readonly<{ user: number; mnt: number; pid: number }>
 type ProcessIdentity = Readonly<{ pid: number; start: string }>
+type DeviceInode = Readonly<{ device: number; inode: number }>
 export interface PublicSpec {
   readonly v: 1
   readonly container: Container
@@ -51,6 +52,18 @@ export interface PublicSpec {
   readonly keeper: ProcessIdentity
   readonly broker: ProcessIdentity & Readonly<{ uid: 0; gid: 0 }>
   readonly socketIdentity: Readonly<{ device: number; inode: number }>
+}
+export interface MaskProof {
+  readonly v: 2
+  readonly sourceDigest: string
+  readonly constructionNamespace: Readonly<{
+    mount: DeviceInode
+    parentMount: DeviceInode
+    user: DeviceInode
+    root: DeviceInode
+  }>
+  readonly keeperNamespace: DeviceInode
+  readonly protectedMountTargets: readonly string[]
 }
 
 export class Unavailable extends Error {
@@ -76,6 +89,53 @@ export function assertMaskMountTargets(value: unknown) {
   }
   requireValue(MASKS.every((parent) => targets.includes(parent)))
 }
+/** Structural v2 evidence only; native code must prove the bound source closure and live visible masks. */
+export function parseMaskProof(value: unknown, spec: PublicSpec): MaskProof {
+  const publicSpec = parseSpec(spec)
+  shape(value, ["v", "sourceDigest", "constructionNamespace", "keeperNamespace", "protectedMountTargets"])
+  requireValue(value.v === 2 && typeof value.sourceDigest === "string" && /^[0-9a-f]{64}$/.test(value.sourceDigest))
+  shape(value.constructionNamespace, ["mount", "parentMount", "user", "root"])
+  const constructionNamespace = Object.freeze({
+    mount: deviceInode(value.constructionNamespace.mount),
+    parentMount: deviceInode(value.constructionNamespace.parentMount),
+    user: deviceInode(value.constructionNamespace.user),
+    root: deviceInode(value.constructionNamespace.root),
+  })
+  const keeperNamespace = deviceInode(value.keeperNamespace)
+  requireValue(
+    (constructionNamespace.mount.device !== constructionNamespace.parentMount.device ||
+      constructionNamespace.mount.inode !== constructionNamespace.parentMount.inode) &&
+      keeperNamespace.device === publicSpec.devices.mnt &&
+      keeperNamespace.inode === publicSpec.namespaces.mnt &&
+      (keeperNamespace.device !== constructionNamespace.mount.device ||
+        keeperNamespace.inode !== constructionNamespace.mount.inode) &&
+      (keeperNamespace.device !== constructionNamespace.parentMount.device ||
+        keeperNamespace.inode !== constructionNamespace.parentMount.inode) &&
+      (constructionNamespace.user.device !== publicSpec.devices.user ||
+        constructionNamespace.user.inode !== publicSpec.namespaces.user),
+  )
+  requireValue(Array.isArray(value.protectedMountTargets) && value.protectedMountTargets.length <= 64)
+  const protectedMountTargets = Array.from(value.protectedMountTargets, (target: unknown) => {
+    canonical(target)
+    requireValue(MASKS.some((parent) => target === parent || target.startsWith(parent + "/")))
+    return target
+  })
+  requireValue(
+    MASKS.every((parent) => protectedMountTargets.includes(parent)) &&
+      protectedMountTargets.every(
+        (target, index) => index === 0 || codepointBefore(protectedMountTargets[index - 1]!, target),
+      ),
+  )
+  const proof = Object.freeze<MaskProof>({
+    v: 2,
+    sourceDigest: value.sourceDigest,
+    constructionNamespace,
+    keeperNamespace,
+    protectedMountTargets: Object.freeze(protectedMountTargets),
+  })
+  requireValue(Buffer.byteLength(JSON.stringify(proof)) <= 32_768)
+  return proof
+}
 /** An immutable engine/runtime placed under a hidden parent cannot be exposed as an exception. */
 export function assertUnmaskedRuntime(value: string) {
   canonical(value)
@@ -96,8 +156,24 @@ function canonical(value: unknown): asserts value is string {
       Buffer.byteLength(value) <= LIMITS.pathBytes &&
       path.posix.isAbsolute(value) &&
       path.posix.normalize(value) === value &&
+      (value === "/" || !value.endsWith("/")) &&
       !/[\x00-\x1f\x7f]/.test(value),
   )
+}
+function deviceInode(value: unknown): DeviceInode {
+  shape(value, ["device", "inode"])
+  integer(value.device)
+  integer(value.inode)
+  return Object.freeze({ device: value.device, inode: value.inode })
+}
+function codepointBefore(left: string, right: string) {
+  const candidate = right[Symbol.iterator]()
+  for (const character of left) {
+    const next = candidate.next()
+    if (next.done) return false
+    if (character !== next.value) return character.codePointAt(0)! < next.value.codePointAt(0)!
+  }
+  return !candidate.next().done
 }
 function identity(value: unknown): ProcessIdentity {
   shape(value, ["pid", "start"])
