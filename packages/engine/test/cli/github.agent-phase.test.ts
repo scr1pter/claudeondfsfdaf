@@ -436,11 +436,12 @@ describe("the agent phase's task", () => {
           )
         })
         // Execute the edit and real Git config installation through the actual shell tool on every OS.
-        // Encoding keeps JavaScript paths and quotes out of the shell's argument grammar.
+        // Encoding keeps JavaScript paths and quotes out of the shell's argument grammar. `bun -e` evaluates as a
+        // module, where `require` is undefined, so the script loads built-ins the way both Bun and Node allow.
         const install = Buffer.from(
           [
-            "const fs = require('node:fs')",
-            "const { execFileSync } = require('node:child_process')",
+            "const fs = process.getBuiltinModule('node:fs')",
+            "const { execFileSync } = process.getBuiltinModule('node:child_process')",
             "fs.writeFileSync('README.md', '# Widgets\\n')",
             "fs.utimesSync('NOTES.md', 1000000000, 1000000000)",
             `execFileSync('git', ['config', 'core.hooksPath', ${JSON.stringify(path.join(traps, "hooks"))}])`,
