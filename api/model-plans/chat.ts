@@ -1,3 +1,4 @@
+import "../_lib/hosted-run.js"
 import { handleModelPlanChat } from "../_lib/model-plan-chat.js"
 import type { ApiRequest, ApiResponse } from "../_lib/http.js"
 

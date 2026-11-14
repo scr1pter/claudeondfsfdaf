@@ -3155,6 +3155,8 @@ export type ModelsListOutput = {
       readonly locked?: { readonly plan: string; readonly name: string; readonly previewUntil?: number }
       readonly preview?: { readonly until: number }
       readonly auto?: { readonly floor: string; readonly default: string; readonly ceiling: string }
+      readonly judge?: string
+      readonly review?: ReadonlyArray<"triage" | "confirm" | "panelJudge">
     }
   }>
 }

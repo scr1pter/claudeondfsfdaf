@@ -1,0 +1,238 @@
+---
+import DocsPage from "../../layouts/DocsPage.astro"
+import { codiumDocs } from "../../lib/codium-docs"
+
+export const prerender = true
+
+// A build never captures what the server lists: the prerender shows no perk, and the script below adds the perks the
+// live configuration lists once the page has loaded. Every number comes from CodiumCopy and ENTITLEMENTS.
+const view = codiumDocs([])
+const daily = view.plans.filter((plan) => plan.limits[2] !== "No daily limit")
+const unlimited = view.plans.filter((plan) => plan.limits[2] === "No daily limit")
+---
+
+<DocsPage id="codium">
+
+          <p>
+            Vector is free with your own keys and free models. Vector Codium is its optional monthly plan: coding models
+            from several labs without provider keys, every request routed to zero-data-retention endpoints, and more on
+            Max and Ultra. Plans are monthly only, with no top-ups or overage charges. While Codium is not on sale, the
+            buttons on <a href="/codium">vectordev.ai/codium</a> say Coming soon.
+          </p>
+
+          <h2 id="plans">Plans</h2>
+          <p>
+            There are four plans. Each includes everything in the cheaper plans, with more usage and higher limits.
+            A plan's features are listed here and on <a href="/codium">vectordev.ai/codium</a> once they are offered.
+          </p>
+          {
+            view.plans.map((plan) => (
+              <>
+                <h3 id={`plan-${plan.name.toLowerCase()}`}>
+                  {plan.name} · ${plan.price} a month
+                </h3>
+                <p data-codium-tagline={plan.id}>{plan.tagline}</p>
+                <dl class="doc-rows">
+                  <div>
+                    <dt>Monthly usage</dt>
+                    <dd>{plan.usage}</dd>
+                  </div>
+                  <div>
+                    <dt>Limits</dt>
+                    <dd>{plan.limits.join(" · ")}</dd>
+                  </div>
+                  {view.coming
+                    .filter((item) => item.plans.includes(plan.name))
+                    .map((item) => (
+                      <div>
+                        <dt>Coming</dt>
+                        <dd>
+                          <a href="#coming">{item.name}</a>
+                        </dd>
+                      </div>
+                    ))}
+                </dl>
+                <ul class="feature-list" data-codium-features={plan.id} hidden />
+              </>
+            ))
+          }
+          <p>Every plan includes:</p>
+          <ul>
+            {view.everyPlan.map((item) => <li>{item}</li>)}
+          </ul>
+          <p class="note">New Max and Ultra accounts start with lower limits while trust builds.</p>
+
+          <h2 id="models">Models</h2>
+          <p>
+            Codium's models come from several labs. The models each plan can use, and the longest context each gets,
+            are listed on <a href="/codium">vectordev.ai/codium</a> while Codium offers them. In the desktop app and
+            the terminal they appear under <strong>Vector Codium</strong> in the model picker; a model above your plan
+            shows the plan that includes it, and choosing it offers <strong>Change plan</strong>.
+          </p>
+          <p>
+            Vector never moves you to Codium by itself: a new session, a review, a swarm or a scripted run uses a Codium
+            model only after you choose one or name one in your configuration. Once you have chosen Codium, Vector may
+            use another model of your plan for parts of that work, such as titles and helpers, and
+            <strong>Codium Auto</strong> picks one of your plan's models for each message by its size.
+          </p>
+          <p>
+            Codium requests, including the code and tool output a task sends, go through Vector and OpenRouter to the
+            provider serving the model, and only to endpoints listed as zero data retention. OpenRouter still screens
+            requests for child sexual abuse material and keeps request metadata, and some providers hold a short-lived
+            prompt cache. Read the <a href="/legal/privacy#codium">privacy policy</a> before sending code.
+          </p>
+
+          <h2 id="usage">Usage</h2>
+          <p>
+            Codium shows how much of your month you have used as a whole percentage, and the same figure appears in
+            Settings → Usage, Settings → Account, <code>vector codium</code> and your <a href="/account">account page</a>.
+            It can lag a little behind requests that are still finishing. Larger models, longer conversations and more
+            agents working at once use more. Usage does not roll over: each renewal starts a new month.
+          </p>
+          <dl class="doc-rows">
+            {
+              view.plans.map((plan) => (
+                <div>
+                  <dt>{plan.name}</dt>
+                  <dd>
+                    {plan.usage} · {plan.limits[2]}
+                  </dd>
+                </div>
+              ))
+            }
+          </dl>
+          <p>
+            In sessions, Settings → Usage and the terminal, work on Codium shows the label <strong>Codium</strong>
+            instead of tokens or a price. Session costs and dollar spend limits leave Codium steps out, and step and loop
+            limits still apply to them; see <a href="/docs/tokenomics">Tokenomics</a>.
+          </p>
+
+          <h2 id="used-up">When the month is used up</h2>
+          <p>
+            Codium pauses until your plan renews, and Settings → Usage, Settings → Account and <code>vector codium</code>
+            show the renewal date. Your own keys, Vector Local and free models keep working. There are no top-ups or
+            overage charges. You can upgrade on your <a href="/account">account page</a> and keep what's left of this
+            month: the bigger plan starts a new month today, charged in full.
+          </p>
+          <p>
+            A daily limit pauses Codium for the rest of the UTC day once that day's share of the month is used:
+            {daily.map((plan) => `${plan.name}, ${plan.limits[2]!.replace(/^Up to/, "up to")}`).join("; ")}.
+            {unlimited.map((plan) => plan.name).join(" and ")} {unlimited.length === 1 ? "has" : "have"} no daily
+            limit.
+          </p>
+
+          <h2 id="github">GitHub</h2>
+          <p>
+            Vectorscope reviews and GitHub agents work with your own key as a repo secret, as part of the free
+            workspace. Where your plan includes GitHub agents on Codium, they need no key: they run in your own repo, on
+            your own Actions minutes, and their model use counts toward your month. GitHub bills Actions minutes on
+            private repos beyond your GitHub plan's included minutes.
+          </p>
+          <p>
+            Each plan sets how many of these runs go at once, how many agent hours a month it includes and how long one
+            run may take; <a href="/codium">vectordev.ai/codium</a> shows the numbers once GitHub agents on Codium are
+            offered. Setup and use are described in <a href="/docs/vectorscope#github">Vectorscope's GitHub runs</a>.
+          </p>
+
+          <h2 id="hosted">Services Vector hosts</h2>
+          <p>
+            Some plan features run on computers Vector hosts for you rather than on your own. Each one is described here,
+            with your plan's limits, once it is offered.
+          </p>
+          <ul class="feature-list" data-codium-hosted hidden />
+          <p data-codium-hosted-empty>None yet.</p>
+
+          <h2 id="coming">Coming</h2>
+          <p>
+            Items tagged Coming are in development, have no date and are not part of what a plan buys today.
+          </p>
+          {
+            view.coming.length ? (
+              <dl class="doc-rows">
+                {view.coming.map((item) => (
+                  <div>
+                    <dt>
+                      {item.name}
+                      <span class="doc-soon">{item.label}</span>
+                    </dt>
+                    <dd>{item.text}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p>Nothing is tagged Coming.</p>
+            )
+          }
+
+          <h2 id="payments">Payments and plan changes</h2>
+          <ul class="feature-list">
+            <li><strong>Prices</strong><span>In US dollars, charged monthly to your card through Stripe until you cancel. Any taxes and the total are shown before you pay, and your bank may ask you to confirm a payment.</span></li>
+            <li><strong>Upgrading</strong><span>The bigger plan starts a new month today, charged in full. What's left of this month carries into that new month only.</span></li>
+            <li><strong>Downgrading</strong><span>The smaller plan starts on your renewal date and nothing is charged now. <strong>Keep my plan</strong> cancels the switch before then.</span></li>
+            <li><strong>Cancelling</strong><span>Cancel any time from your account page. Codium keeps working until the end of the month you paid for.</span></li>
+            <li><strong>A failed payment</strong><span>Codium and your plan's features pause until the payment goes through: use <strong>Update card</strong> or <strong>Confirm payment</strong> on your account page. The month is not extended.</span></li>
+            <li><strong>Refunds and disputes</strong><span>A full refund or a dispute ends what that payment bought.</span></li>
+          </ul>
+          <p>
+            Manage your plan on your <a href="/account">account page</a> or in Settings → Account in the desktop app. The
+            <a href="/legal/terms#codium">Codium terms</a> apply.
+          </p>
+
+          <h2 id="free">What stays free</h2>
+          <p>You don't need Codium to use Vector. Without a plan, all of this is included:</p>
+          <ul>
+            {view.free.map((item) => <li>{item}</li>)}
+          </ul>
+</DocsPage>
+
+<script>
+  import { codiumDocs, refreshCodiumDocs, type CodiumDocsView } from "../../lib/codium-docs"
+
+  // One row as the feature lists draw it: a bold label, then its text.
+  const row = (label: string, text: string) => {
+    const item = document.createElement("li")
+    const name = document.createElement("strong")
+    const detail = document.createElement("span")
+    name.textContent = label
+    detail.textContent = text
+    item.append(name, detail)
+    return item
+  }
+
+  // Replaces whatever the page showed with exactly what this listing allows, so a perk switched off disappears.
+  const apply = (view: CodiumDocsView) => {
+    for (const plan of view.plans) {
+      const tagline = document.querySelector(`[data-codium-tagline="${plan.id}"]`)
+      if (tagline) tagline.textContent = plan.tagline
+      const list = document.querySelector<HTMLElement>(`[data-codium-features="${plan.id}"]`)
+      if (!list) continue
+      const rows = plan.features.map((perk) => row(perk.label, perk.text))
+      if (plan.hostedLabels.length) rows.push(row(plan.hostedLabels.join(", "), "Described under Services Vector hosts."))
+      list.replaceChildren(...rows)
+      list.hidden = rows.length === 0
+    }
+    const hosted = document.querySelector<HTMLElement>("[data-codium-hosted]")
+    const empty = document.querySelector<HTMLElement>("[data-codium-hosted-empty]")
+    if (hosted && empty) {
+      const rows = view.hosted.flatMap((perk) => perk.offers.map((offer) => row(`${perk.label} · ${offer.plan}`, offer.text)))
+      hosted.replaceChildren(...rows)
+      hosted.hidden = rows.length === 0
+      empty.hidden = rows.length > 0
+    }
+  }
+
+  let generation = 0
+  const refresh = () => {
+    const current = ++generation
+    void refreshCodiumDocs().then((view) => {
+      if (current === generation) apply(view)
+    })
+  }
+  refresh()
+  window.addEventListener("pageshow", (event: PageTransitionEvent) => {
+    if (!event.persisted) return
+    // A page restored from the back-forward cache may outlive the listing it showed.
+    apply(codiumDocs([]))
+    refresh()
+  })
+</script>

@@ -51,6 +51,19 @@ const fixture = Effect.fnUntraced(function* () {
 })
 
 describe("saved workflow library", () => {
+  it.live("project files cannot shadow or case-poison personal Vector Playbooks", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      yield* f.write(path.join(f.user, "workflows", "vector-check.json"), spec("Personal Playbook"))
+      yield* f.approve("workflow/vector-check.json", spec("Project shadow"))
+      yield* f.approve("workflows/Vector-check.json", spec("Project case poison"))
+      const entries = yield* WorkflowLibrary.load(f.input)
+      expect(entries).toHaveLength(1)
+      expect(entries[0]).toMatchObject({ name: "vector-check", source: "user", title: "Personal Playbook" })
+      expect(entries[0].issues).toBeUndefined()
+      expect((yield* WorkflowLibrary.select(entries, "vector-check"))?.spec?.title).toBe("Personal Playbook")
+    }),
+  )
   it.live("project exact names override user files and preserve input metadata", () =>
     Effect.gen(function* () {
       const f = yield* fixture()

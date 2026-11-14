@@ -30,6 +30,24 @@ export function selectUnitTests(tracked: readonly string[], changed: readonly st
     .sort()
 }
 
+// The hosted services lane (.github/workflows/vector-hosted-ci.yml, WP A58) runs on pull requests that touch the hosted
+// API, the Workers, the cloud computer, the schema, Vault, WebAuthn or the desktop's Remote, Vault and hosted modules. It
+// takes the hosted API suite in test/ and the tests of those parts, whatever the branch changed.
+export const HOSTED_TESTS = [
+  /^test\/[^/]+\.test\.tsx?$/,
+  /^packages\/(?:relay|ops-worker|hosted-computer|schema)\//,
+  /^packages\/core\/test\/(?:vault|webauthn|remote)\//,
+  /^packages\/desktop\/src\/main\/(?:remote|vault|hosted)-[^/]+\.test\.tsx?$/,
+  /^packages\/cloud\/src\/(?:hosted-[^/]+|workflow-compliance)\.test\.ts$/,
+]
+
+export function selectHostedTests(tracked: readonly string[]) {
+  return tracked
+    .filter((file) => UNIT_TEST.test(file) && !file.split("/").some((part) => NOT_UNIT.has(part)))
+    .filter((file) => HOSTED_TESTS.some((pattern) => pattern.test(file)))
+    .sort()
+}
+
 export function selectBrowserSpecs(tracked: readonly string[], changed: readonly string[]) {
   const touched = new Set(changed)
   return tracked
@@ -65,6 +83,14 @@ export function browserCommand(specs: readonly string[]) {
   return ["run", "test:e2e", ...specs.map((spec) => path.posix.relative(BROWSER_DIRECTORY, spec))]
 }
 
+/** Runs an attempt until it exits 0, waiting each delay in turn after a failure, and answers the last exit status. */
+export async function retried(attempt: () => Promise<number>, delays: readonly number[]): Promise<number> {
+  const status = await attempt()
+  if (status === 0 || !delays.length) return status
+  await Bun.sleep(delays[0])
+  return retried(attempt, delays.slice(1))
+}
+
 function git(root: string, ...args: string[]) {
   const result = Bun.spawnSync(["git", ...args], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.toString().trim()}`)
@@ -72,6 +98,14 @@ function git(root: string, ...args: string[]) {
     .toString()
     .split(/[\0\n]/)
     .filter(Boolean)
+}
+
+function changedSinceMain(root: string) {
+  // CI checks the branch out with its whole history, so the fork point with main is known.
+  const base = process.env.CODIUM_CI_BASE || "origin/main"
+  const fork = git(root, "merge-base", base, "HEAD")[0]
+  if (!fork) throw new Error(`No merge base between ${base} and HEAD; fetch ${base} first.`)
+  return git(root, "diff", "--name-only", "-z", fork, "HEAD")
 }
 
 async function run(command: string[], cwd: string, label: string) {
@@ -87,11 +121,9 @@ async function main(argv: readonly string[]) {
   const root = path.resolve(import.meta.dir, "../../..")
   const exists = (relative: string) => existsSync(path.join(root, relative))
   const tracked = git(root, "ls-files", "-z")
-  // CI checks the branch out with its whole history, so the fork point with main is known.
-  const base = process.env.CODIUM_CI_BASE || "origin/main"
-  const fork = git(root, "merge-base", base, "HEAD")[0]
-  if (!fork) throw new Error(`No merge base between ${base} and HEAD; fetch ${base} first.`)
-  const changed = git(root, "diff", "--name-only", "-z", fork, "HEAD")
+  // The hosted lane's set does not depend on what the branch changed, so it needs no history.
+  const hosted = argv.includes("--hosted")
+  const changed = hosted ? [] : changedSinceMain(root)
 
   if (argv.includes("--browser")) {
     const specs = selectBrowserSpecs(tracked, changed)
@@ -106,19 +138,24 @@ async function main(argv: readonly string[]) {
     return run([process.execPath, ...browserCommand(specs)], path.join(root, BROWSER_DIRECTORY), "Playwright")
   }
 
-  const files = selectUnitTests(tracked, changed)
+  const files = hosted ? selectHostedTests(tracked) : selectUnitTests(tracked, changed)
   if (argv.includes("--list")) {
     for (const file of files) console.log(file)
     return 0
   }
-  if (!files.length) throw new Error("No Codium test files found")
+  if (!files.length) throw new Error(hosted ? "No hosted test files found" : "No Codium test files found")
   const owners = new Map(files.map((file) => [file, owningDirectory(file, exists)]))
 
   // Desktop packaging fixtures need the locked Electron runtime, as packages/desktop/scripts/test.ts installs it.
+  // GitHub's release download can fail for a moment (a 504 in Vector Codium run 42464293147). The installer writes
+  // path.txt only after a whole download and extract, so an attempt that failed starts over when it is tried again.
   if ([...owners.values()].includes("packages/desktop")) {
     const desktop = path.join(root, "packages/desktop")
     const installer = createRequire(path.join(desktop, "package.json")).resolve("electron/install.js")
-    const status = await run([process.execPath, "--no-env-file", installer], desktop, "Electron runtime")
+    const status = await retried(
+      () => run([process.execPath, "--no-env-file", installer], desktop, "Electron runtime"),
+      [15_000, 60_000],
+    )
     if (status !== 0) return status
   }
 
@@ -127,7 +164,7 @@ async function main(argv: readonly string[]) {
     const status = await run([process.execPath, ...unitCommand(file, directory)], path.join(root, directory), file)
     if (status !== 0) failed.push(file)
   }
-  console.log(`\nCodium: ${files.length - failed.length}/${files.length} test files passed`)
+  console.log(`\n${hosted ? "Hosted" : "Codium"}: ${files.length - failed.length}/${files.length} test files passed`)
   if (failed.length) console.error(`Failed test files:\n${failed.join("\n")}`)
   return failed.length ? 1 : 0
 }

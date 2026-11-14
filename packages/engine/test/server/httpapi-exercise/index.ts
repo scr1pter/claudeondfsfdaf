@@ -1000,6 +1000,15 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  http.protected.get("/memory/backup", "memory.backup").json(200, (body) => {
+    object(body)
+    check(Array.isArray(body.files), "a backup should list its memory files")
+  }),
+  http.protected
+    .post("/memory/restore", "memory.restore")
+    .mutating()
+    .at((ctx) => ({ path: "/memory/restore", headers: ctx.headers(), body: { text: "{}", repository: "" } }))
+    .json(400, object, "status"),
   http.protected.get("/memory/settings", "memory.settings.get").json(200, (body) => {
     object(body)
     check(
@@ -1007,6 +1016,26 @@ const scenarios: Scenario[] = [
       "learning settings should say each facet and the model learner",
     )
   }),
+  http.protected.post("/memory/bootstrap", "memory.bootstrap.explicit-opt-out")
+    .withLlm()
+    .mutating()
+    .probe({ path: "/memory/bootstrap", body: {} })
+    .seeded((ctx) => Effect.gen(function* () {
+      yield* ctx.file("bootstrap-notes.md", "# Parser notes\n\nTrailing delimiters have a dedicated snapshot fixture.\n")
+      const chooseOff = http.protected.patch("/memory/settings", "bootstrap.fixture.opt-out")
+        .at(() => ({ path: "/memory/settings", headers: ctx.headers(), body: { distillation: false } }))
+        .json(200)
+      const result = yield* call(chooseOff, { ...ctx, state: undefined })
+      check(result.status === 200, "bootstrap fixture must save the owner's explicit opt-out through the real settings route")
+    }))
+    .at((ctx) => ({ path: "/memory/bootstrap", headers: ctx.headers(), body: {} }))
+    .jsonEffect(400, (body, ctx) => Effect.gen(function* () {
+      object(body)
+      object(body.data)
+      check(body.data.code === "refused" && body.data.reason === "off", "bootstrap must respect the owner's saved distillation opt-out")
+      check(typeof body.data.message === "string" && body.data.message.includes("Settings > Memory"), "bootstrap must explain the setting that controls it")
+      check((yield* ctx.llmCalls()) === 0, "refused bootstrap must send no model request")
+    })),
   http.protected
     .patch("/memory/settings", "memory.settings.update")
     .mutating()
@@ -1457,6 +1486,51 @@ const scenarios: Scenario[] = [
     object(body)
     array(body.workflows)
   }),
+  http.protected.get("/experimental/workflow/playbooks", "experimental.playbooks.list.no-account").json(400, (body) => {
+    object(body)
+    check(typeof body.message === "string", "a signed-out owner gets a readable account refusal")
+  }),
+  http.protected.post("/experimental/workflow/playbooks/install", "experimental.playbooks.install.invalid")
+    .at((ctx) => ({ path: "/experimental/workflow/playbooks/install", headers: ctx.headers(),
+      body: { name: "../project", version: "1.0.0", sha256: "a".repeat(64) } }))
+    .status(400),
+  http.protected.post("/experimental/brain/run-bundle/preview", "experimental.brain.preview")
+    .at((ctx) => ({ path: "/experimental/brain/run-bundle/preview", headers: ctx.headers(),
+      body: { includeBrain: true, publicRepository: true } }))
+    .json(200, (body) => {
+      object(body)
+      check(body.path === "brain/bundle.json", "preview has the fixed approved artifact path")
+      check(typeof body.base64url === "string", "preview has locally encoded bytes")
+      check(typeof body.sha256 === "string" && /^[0-9a-f]{64}$/.test(body.sha256), "preview has an exact digest")
+      const bytes = Buffer.from(body.base64url, "base64url")
+      check(bytes.length === body.bytes && bytes.length <= 512 * 1024, "preview bytes are bounded and counted")
+      const bundle: unknown = JSON.parse(bytes.toString("utf8"))
+      object(bundle)
+      object(bundle.memory)
+      check(bundle.memory.scope === "repository", "preview contains repository context only")
+      array(bundle.memory.documents)
+      check(bundle.memory.documents.length === 0, "preview never includes document contents")
+      check(!Array.isArray(bundle.memory.skills) || bundle.memory.skills.length === 0, "public previews omit procedures")
+    }),
+  http.protected.get("/experimental/session/{sessionID}/hosted-jobs", "experimental.hosted.jobs.child-refused")
+    .seeded((ctx) => Effect.gen(function* () {
+      const parent = yield* ctx.session({ title: "Hosted report origin" })
+      return yield* ctx.session({ parentID: parent.id, title: "Helper cannot receive hosted work" })
+    }))
+    .at((ctx) => ({ path: route("/experimental/session/{sessionID}/hosted-jobs", { sessionID: ctx.state.id }), headers: ctx.headers() }))
+    .json(400, (body) => { object(body); check(typeof body.message === "string", "child refusal is explicit before any account read") }),
+  http.protected.post("/experimental/brain/run-proposals/import", "experimental.brain.importProposals.invalid-digest")
+    .at((ctx) => ({ path: "/experimental/brain/run-proposals/import", headers: ctx.headers(),
+      body: { path: "brain/proposals.json", base64url: "e30", sha256: "a".repeat(64), publicRepository: true } }))
+    .status(400),
+  http.protected.post("/experimental/session/{sessionID}/hosted-jobs", "experimental.hosted.attach.child-refused")
+    .seeded((ctx) => Effect.gen(function* () {
+      const parent = yield* ctx.session({ title: "Hosted report origin" })
+      return yield* ctx.session({ parentID: parent.id, title: "Helper cannot attach hosted work" })
+    }))
+    .at((ctx) => ({ path: route("/experimental/session/{sessionID}/hosted-jobs", { sessionID: ctx.state.id }),
+      headers: ctx.headers(), body: { jobID: `jb_${"a".repeat(26)}` } }))
+    .status(400),
   http.protected
     .post("/experimental/workflow/validate", "experimental.workflow.validate.invalid")
     .withLlm()

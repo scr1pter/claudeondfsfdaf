@@ -1,0 +1,297 @@
+{
+  "kind": "release-coordination-local-validation-v1",
+  "observedAtUtc": "2026-11-10T03:33:01.018821+00:00",
+  "sourceBaseline": "0dcbb8e2d1cc01d22d4b98695d651430f10f1d2c",
+  "branch": "release-coordination",
+  "scope": "Local Windows compatibility diagnostics and narrowly scoped test-fixture correction; not full release qualification.",
+  "environment": {
+    "platform": "win32-x64",
+    "bun": "1.3.14",
+    "shell": "Windows PowerShell 5.1",
+    "modelProvider": "synthetic loopback fixtures only"
+  },
+  "accountingCompatibility": {
+    "command": "From packages/core: bun run test test/spend-guard.test.ts test/session-runner-billed-cost.test.ts test/session-accounting-scale.test.ts",
+    "execution": "Three files batched for local diagnostics; no full release-gate claim.",
+    "passed": 94,
+    "failed": 0,
+    "assertions": 10453,
+    "seconds": 54.51,
+    "simulatedScale": "One billion logical input tokens across 10000 priced attempts; no billion-token provider inference or production-scale performance claim."
+  },
+  "initialEngineDiagnostics": {
+    "command": "From packages/engine: bun run test test/session/usage.test.ts test/session/title-usage.test.ts test/session/skill-credit.test.ts test/session/fork-cache.test.ts",
+    "passed": 51,
+    "failed": 2,
+    "assertions": 244,
+    "seconds": 90.49,
+    "qualification": "Batched execution differs from release runbook one-file-at-a-time procedure; failure was isolated before attribution."
+  },
+  "isolatedNegativeControl": {
+    "sourceFixtureGitObject": "f3abd1d4cdcb00caa22afd38f3777e1642f1e3d1",
+    "command": "From packages/engine: bun run test test/session/skill-credit.test.ts",
+    "passed": 0,
+    "failed": 2,
+    "seconds": 39.95,
+    "failure": "Both cases reached skill.id with no draft because the prerequisite check never passed."
+  },
+  "causeProbe": {
+    "originalPackageScript": "test -f src/fixed.ts",
+    "beforeFileExistsExit": 1,
+    "afterRegularFileExistsExit": 1,
+    "redactedStderr": "bun: command not found: test",
+    "attribution": "Fixture portability failure on this machine; not evidence of a production learning failure.",
+    "replacementSemantics": {
+      "missingFileExit": 1,
+      "regularFileExit": 0,
+      "directoryExit": 1
+    }
+  },
+  "correctedFixture": {
+    "file": "packages/engine/test/session/learning-fixture.ts",
+    "sha256": "8324270ea3de4b9bc380d9d6c840daf630bc0c25fcdc028a6684d978981df1f4",
+    "change": "Five package scripts use the installed Bun runtime to test regular-file existence; outer CHECK, fake-model sequence and all learning assertions unchanged.",
+    "command": "From packages/engine: bun run test test/session/skill-credit.test.ts",
+    "passed": 2,
+    "failed": 0,
+    "assertions": 7,
+    "seconds": 49.64,
+    "postTestEdit": "Prettier changed formatting only; corrected command strings and behavior unchanged."
+  },
+  "productionCodeChanged": false,
+  "otherAgentsBranchesModified": false,
+  "ciRerunsDispatched": 0,
+  "realProviderCalls": 0,
+  "providerCredentialReads": 0,
+  "remainingQualification": [
+    "Full timeline and platform performance qualification; selected AC first-navigation comparison is recorded separately",
+    "Full exact-candidate CI and SDK/generated checks",
+    "Authenticated Mac and Windows release-candidate acceptance",
+    "Owner privacy/residual-risk review",
+    "Protected publication approval; no release published by these checks"
+  ],
+  "observerValidation": {
+    "sourceRevision": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+    "command": "From scripts/release-readiness: python -B -m unittest test_observer.py",
+    "passed": 27,
+    "failed": 0,
+    "rootVerificationSeconds": 19.081,
+    "qualification": "Synthetic APIs and isolated Git repositories, including a real depth-one file:// clone; no live provider calls. Peer-review findings on shallow history, inherited askpass and malformed API state were fixed before this result."
+  },
+  "prePushTypechecks": [
+    {
+      "revision": "57d615df9366a0a940a605b4b9ecb2c34d2bc7a7",
+      "workspacesPassed": 23,
+      "workspacesFailed": 0,
+      "cached": 0,
+      "seconds": 144.514
+    },
+    {
+      "revision": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+      "workspacesPassed": 23,
+      "workspacesFailed": 0,
+      "cached": 21,
+      "seconds": 29.074
+    },
+    {
+      "revision": "1df6150a454868f3d00dd6370712bfba230e843b",
+      "workspacesPassed": 23,
+      "workspacesFailed": 0,
+      "cached": 21,
+      "seconds": 21.218
+    },
+    {
+      "revision": "82a7d26ce2bea3751f59076e6a26469eea632b00",
+      "workspacesPassed": 23,
+      "workspacesFailed": 0,
+      "cached": 23,
+      "seconds": 0.92
+    }
+  ],
+  "productionUiCompletion": {
+    "sourceRevision": "02098b2b6d971b5346bdd368e95236d8d2d939dc",
+    "command": "From packages/app: bun x --no-install playwright test --config e2e/performance/playwright.config.ts timeline/first-navigation-benchmark.spec.ts --project chromium --workers 1 --repeat-each 1 --retries 0",
+    "environment": {
+      "productionBuild": true,
+      "platform": "win32-x64",
+      "node": "24.22.0",
+      "bun": "1.3.14",
+      "chromiumHeadlessShellRevision": 1217,
+      "port": 4487,
+      "syntheticApiFixtures": true,
+      "traceCapture": true,
+      "power": "Battery; GetSystemPowerStatus reported ACLineStatus=0 before and after run."
+    },
+    "initialAttempt": {
+      "outcome": "All three scenarios failed before application setup because the matching browser executable was missing.",
+      "exitCode": null,
+      "exitCodeQualification": "Original process exit code was not retained; failed report/error-context artifacts were retained.",
+      "repair": "Installed pinned chromium-headless-shell 1217 with browser garbage collection disabled; no application or test change."
+    },
+    "retry": {
+      "passed": 3,
+      "failed": 0,
+      "exitCode": 0,
+      "blankSamplesEach": 0,
+      "unknownSamplesEach": 0,
+      "rawEvidence": "ui-completion-2026-11-09/",
+      "existingAssertionsUnchanged": true
+    },
+    "timingComparison": "Not run: battery power, one run, no baseline; no speed or cost claim.",
+    "userAppRestarted": false,
+    "nativeDesktopAcceptance": false,
+    "laterComparison": "Separate source-pinned AC comparison is recorded under acCommonHarnessComparison; original battery-run timing limitation remains historical."
+  },
+  "powerObservationAfterUi": {
+    "api": "kernel32.GetSystemPowerStatus",
+    "readSucceeded": true,
+    "ACLineStatus": 0,
+    "batteryPercent": 52,
+    "observedAtUtc": "2026-11-10T02:56:04.2287717Z"
+  },
+  "releaseSnapshot": {
+    "path": "release-status-2026-11-09.json",
+    "observedAtUtc": "2026-11-10T02:57:14.580005+00:00",
+    "state": "incomplete",
+    "reason": "GitHub API HTTP 403 during metadata collection. Complete unchanged Git inventory; uncollected metadata and final API-head consistency remain unknown. Collected main and finish-checks evidence retained on their pinned heads.",
+    "releaseApproval": "not_assessed"
+  },
+  "acCommonHarnessComparison": {
+    "path": "ui-comparison-ac-2026-11-09/README.md",
+    "summary": "ui-comparison-ac-2026-11-09/summary.json",
+    "baseline": "4299d7432aaac8b1937c5986729360e6b9f176f5",
+    "candidate": "82a7d26ce2bea3751f59076e6a26469eea632b00",
+    "totalPassed": 60,
+    "totalFailed": 0,
+    "scenarioCount": 3,
+    "repeatsPerScenarioPerRevision": 10,
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "powerSamples": 46,
+    "allPowerSamplesAC": true,
+    "realProviderCalls": 0,
+    "qualification": "Selected first-navigation DOM-observation comparison on one Windows host, not full timeline/platform/model-cost qualification. Existing-conversation medians modestly slower in both orders; no general speedup claim."
+  },
+  "releaseCopyFollowup": {
+    "observedAtUtc": "2026-11-10T05:03:54.702596+00:00",
+    "failedRevision": "4cf195e933bdfe4726eccad37049d7c05b1d2431",
+    "job": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42750351623/job/129612337257",
+    "jobExitCode": 1,
+    "failedStep": "Run website release copy tests",
+    "otherJobSteps": "Application unit tests, generated-client check, HttpApi exerciser and hosted API tests passed on the failed job.",
+    "cause": "Two negative caveats in the coordinator-added owner draft contained a term prohibited by the existing release-copy rules.",
+    "repair": "Reword provider-retention and invoice caveats while retaining their meaning; no copy assertion or application behavior changed.",
+    "targetedLocalVerification": {
+      "platform": "Windows x64",
+      "command": "From packages/web: GITHUB_ACTIONS=false bun test test/release-113-docs.test.ts test/release-113-multiagent-docs.test.ts --test-name-pattern \"copy rules\"",
+      "passed": 2,
+      "failed": 0,
+      "filtered": 17,
+      "assertions": 426,
+      "seconds": 0.464,
+      "exitCode": 0
+    },
+    "fullLocalCommandBeforeRepair": {
+      "command": "From packages/web: GITHUB_ACTIONS=false bun test test/release-copy.test.ts test/release-113-docs.test.ts test/release-113-multiagent-docs.test.ts test/docs-settings.test.ts test/deployed-schemas.test.ts",
+      "passed": 23,
+      "reportedFailed": 4,
+      "reportedErrors": 1,
+      "assertions": 678,
+      "seconds": 3.94,
+      "exitCode": 1,
+      "additionalObservedWindowsIssues": [
+        "MAX_RUNNING source extraction did not match its expected constant pattern.",
+        "release-copy.test.ts raised ENOENT for a Windows file-URL-derived pathname."
+      ],
+      "qualification": "These additional local failures were not repaired or included in the targeted two-test pass. No full website-suite pass is claimed."
+    },
+    "linuxVerification": "Await fresh exact-head CI after this correction; no local Linux run or old-head success reused."
+  },
+  "windowsReleaseCopyFollowUp": {
+    "observedAtUtc": "2026-11-11T19:24:32.334677+00:00",
+    "parentRevision": "9aece4c4b7802bf81e2d17deeaf730ee91739260",
+    "cause": "URL.pathname yields a URL path instead of a native Windows filesystem path. After conversion, Windows Bun.Glob backslash labels failed existing src/data/ comparisons, treating historical release notes as current copy and omitting them from placeholder checks.",
+    "repair": "Use fileURLToPath for the same root URL; normalize source labels only to forward slashes while retaining original raw paths for reads. Existing assertions and active/historical scope unchanged; no product copy or feature code changed.",
+    "firstNamedRunAfterUrlOnly": {
+      "passed": 10,
+      "skipped": 1,
+      "failed": 1,
+      "assertions": 33,
+      "seconds": 1.398,
+      "exitCode": 1,
+      "failure": "Existing Check for Updates Mac-only assertion saw historical src\\data\\ labels as active; no content exception was added."
+    },
+    "finalNamedCheck": {
+      "command": "packages/web: bun --no-env-file test --timeout 30000 ./test/release-copy.test.ts",
+      "passed": 11,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 33,
+      "seconds": 0.572,
+      "exitCode": 0
+    },
+    "qualification": "Single Windows fixture check only. Existing light-theme skip remains skipped. No full website or release-approval claim; multiagent MAX_RUNNING source-alignment issue remains with its owner."
+  },
+  "freshCoordinatorCiTriage": {
+    "revision": "9aece4c4b7802bf81e2d17deeaf730ee91739260",
+    "run": 42759785901,
+    "url": "https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42759785901/job/129642515363",
+    "failedCase": "revert handles large mixed batches across chunk boundaries",
+    "observed": "30022.83ms under unchanged30000ms timeout, one dangling process killed, then the same fixture initial snapshot.track() yielded empty text and its assertion continued aftertimeout.",
+    "qualification": "Failure happened before patch/revert, so it does not demonstrate a batch-revert defect. No write/track race found; initial101filewrites awaited. Exact Git/setup phase that stalled is unknown; no transient-flake claim.",
+    "sourceReview": "Snapshot Git failure may return empty text; existing Effect.runPromise test harness has no Bun-timeout abort signal. These observations explain the late empty assertion, not the initiating stall.",
+    "nextCheck": "One exact-source focused Windows diagnostic with existing30s timeout and101files/allassertions, bounded setup/Git phase/child-exit tracing. No blind retry, deadline increase or weakened assertion applied.",
+    "status": "unresolved; current coordinator and main release gates remain unpassed",
+    "jobId": 129642515363,
+    "jobName": "engine (windows, shard4/12)"
+  },
+  "coordinatorPushVerification20261111": {
+    "revision": "f9773571",
+    "branch": "release-coordination",
+    "normalPush": "succeeded; no hooks disabled or bypassed",
+    "requiredPrePushTypecheck": {
+      "passedPackages": 23,
+      "totalPackages": 23,
+      "cacheHits": 22,
+      "seconds": 185.387
+    },
+    "freshWebsiteTypecheck": {
+      "files": 202,
+      "errors": 0,
+      "warnings": 0,
+      "hints": 184
+    },
+    "scope": "Standard coordinator-worktree push hook; not a Hands checkout Turbo/native build or a full release qualification."
+  },
+  "windowsConstantExtractionFollowUp20261113": {
+    "parentRevision": "0c4a0dbd499bfeba61c02f46c3cc2cd5af88bf7f",
+    "cause": "release-113-multiagent-docs.test.ts read engine number constants with a pattern that required LF right after the value. In a Windows checkout with CRLF line endings, MAX_RUNNING (and the later constants in the same test) did not match.",
+    "repair": "Accept an optional carriage return before the line feed. No assertion, product copy or feature code changed.",
+    "localCheck": {
+      "platform": "macOS arm64, with the engine task sources that test reads as text (limits, note-window, attention, shells; isolation too after the repair) converted to CRLF, then restored",
+      "command": "packages/web: bun test --timeout 30000 test/release-113-multiagent-docs.test.ts",
+      "beforeRepair": "10 passed, 1 failed (MAX_RUNNING is not a number constant in its file)",
+      "afterRepairCrlf": "11 passed, 0 failed",
+      "afterRepairLf": "11 passed, 0 failed, 554 assertions"
+    },
+    "fileUrlIssue": "The other recorded Windows issue, the release-copy.test.ts file-URL ENOENT, was repaired in f9773571 (windowsReleaseCopyFollowUp).",
+    "qualification": "CI runs the website release copy tests on Linux only, so no Windows CI run exercises these files. No full website-suite pass is claimed."
+  },
+  "windowsGuideExtractionFollowUp20261114": {
+    "parentRevision": "220c50662281ce0611dfd04804e280aa90049dad",
+    "cause": "The 2026-11-13 local check converted only the engine task sources to CRLF. With every file the test reads as text converted, the same test file still failed one case: the workflows-page test read the guide's examples with a pattern that required LF after the json fence and before the closing fence, so packages/engine/src/orchestration/guide.txt with CRLF yielded no examples.",
+    "repair": "Accept an optional carriage return at both fence line ends. No assertion, product copy or feature code changed.",
+    "localCheck": {
+      "platform": "macOS arm64, with 21 of the 22 repository files the test reads as text converted to CRLF, then restored. The remaining docs page is read only through whitespace folding, which removes carriage returns.",
+      "command": "packages/web: bun test --timeout 30000 test/release-113-multiagent-docs.test.ts",
+      "beforeRepairCrlf": "10 passed, 1 failed (the workflows page shows the guide's three examples: expected length 3, received 0)",
+      "afterRepairCrlf": "11 passed, 0 failed, 554 assertions",
+      "afterRepairLf": "11 passed, 0 failed, 554 assertions"
+    },
+    "qualification": "A simulated CRLF checkout on macOS, not a Windows run. CI still runs these website tests on Linux only. No full website-suite pass is claimed."
+  }
+}

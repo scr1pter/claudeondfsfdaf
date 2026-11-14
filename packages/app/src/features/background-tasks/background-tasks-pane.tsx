@@ -134,6 +134,14 @@ export function BackgroundTasksPane() {
 
 function Pane(props: { tasks: BackgroundTasks }) {
   const tasks = props.tasks
+  const sdk = useSDK()
+  const dialog = useDialog()
+  const race = () => {
+    const sessionID = tasks.rootID()
+    if (!sessionID || !tasks.capabilities().workflows) return
+    const client = sdk().client
+    void import("@/features/race/dialog").then((module) => dialog.show(() => <module.DialogRace client={client} sessionID={sessionID} />))
+  }
   const pane = backgroundTasksPane
   const language = useLanguage()
   const [finishedOpen, setFinishedOpen] = createSignal(false)
@@ -147,9 +155,7 @@ function Pane(props: { tasks: BackgroundTasks }) {
   // The pinned Hands card, while this conversation holds or waits for the computer.
   const computer = useComputerState()
   const sync = useSync()
-  const sdk = useSDK()
   const settings = useSettings()
-  const dialog = useDialog()
   const navigate = useNavigate()
   const params = useParams<{ serverKey?: string; id?: string }>()
   const computerCard = createMemo(() => cardModel(computer?.state(), tasks.rootID()))
@@ -414,6 +420,9 @@ function Pane(props: { tasks: BackgroundTasks }) {
         <h2 id="vector-bg-tasks-title" class="vector-bg-tasks-title" tabIndex={-1}>
           Background tasks
         </h2>
+        <Show when={tasks.capabilities().workflows}>
+          <button type="button" class="vector-bg-tasks-icon-btn" onClick={race} aria-label="Race models" title="Race models">Race</button>
+        </Show>
         <button
           type="button"
           class="vector-bg-tasks-icon-btn"

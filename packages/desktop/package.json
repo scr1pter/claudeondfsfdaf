@@ -51,6 +51,7 @@
     "@playwright/test": "catalog:",
     "@vectordevai/app": "workspace:*",
     "@vectordevai/core": "workspace:*",
+    "@vectordevai/relay": "workspace:*",
     "@vectordevai/ui": "workspace:*",
     "@sentry/solid": "catalog:",
     "@sentry/vite-plugin": "catalog:",

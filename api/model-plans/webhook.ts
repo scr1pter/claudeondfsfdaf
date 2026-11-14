@@ -1,3 +1,4 @@
+import { releaseFoundingSlot, validFoundingToken } from "../_lib/codium-founding.js"
 import { recordCodiumCharge } from "../_lib/codium-ledger.js"
 import { codiumKey } from "../_lib/codium-keys.js"
 import { enqueueAction } from "../_lib/codium-provision.js"
@@ -128,6 +129,26 @@ export async function eventSubject(
 }
 
 /**
+ * `checkout.session.expired`: the founding slot that checkout reserved goes back (WP A31). The session is read again
+ * at the pinned version, and only an expired one carrying a founding token releases it. Best effort: a slot also lapses
+ * on its own two days after its checkout closed.
+ */
+export async function releaseExpiredCheckout(event: Record<string, unknown>, fetcher: typeof fetch = fetch) {
+  if (String(event.type) !== "checkout.session.expired") return
+  const object = eventObject(event)
+  const id = typeof object?.id === "string" && /^cs_[A-Za-z0-9_]{1,250}$/.test(object.id) ? object.id : undefined
+  if (!id) return
+  await modelPlanStripe(`checkout/sessions/${encodeURIComponent(id)}`, {}, fetcher)
+    .then(async (session) => {
+      const token = stripeRecord(session.metadata) ? session.metadata.vector_founding : undefined
+      if (session.status === "expired" && validFoundingToken(token)) await releaseFoundingSlot(token, fetcher)
+    })
+    .catch((error: unknown) => {
+      console.warn("Vector Codium: a founding slot waits to lapse", { event: event.id, error: describe(error) })
+    })
+}
+
+/**
  * Handles one notification without a time budget, throwing when any step fails: reconcile, then the private ledger for
  * the charge it names, or, for `invoice.created`, the renewal queued. Replay (WP A08) and the tests use this; the route
  * itself uses `handleModelPlanEvent`.
@@ -143,6 +164,7 @@ export async function reconcileModelPlanEvent(
     if (object) await queueRenewal(object, fetcher, now)
     return
   }
+  await releaseExpiredCheckout(event, fetcher)
   const subject = await eventSubject(event, fetcher)
   if (!subject) return
   await reconcileModelPlanAccount(subject.account, fetcher, now, {
@@ -190,6 +212,7 @@ export async function handleModelPlanEvent(
     await markDone(event, fetcher, now)
     return { outcome: "ignored" }
   }
+  await withinBudget(releaseExpiredCheckout(event, fetcher), deadline).catch(() => undefined)
   // Until the account is known nothing can be queued for it, so a failure here asks Stripe to send the event again.
   const subject = await withinBudget(eventSubject(event, fetcher), deadline).catch((error: unknown) => {
     throw retryLater(error)

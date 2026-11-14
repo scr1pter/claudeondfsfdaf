@@ -16,7 +16,13 @@ import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attach
 import { getStore, removeStoreFileIfEmpty } from "./store"
 import { isRendererStoreName } from "./store-keys"
 import { write } from "./logging"
-import { sendBugReport } from "./bug-report"
+import { listReports, reportStatuses, sendBugReport } from "./bug-report"
+import { REMOTE_STARTING, remoteLink, remoteNotify } from "./remote-runtime"
+import { vaultBackup, vaultStarting } from "./vault-runtime"
+import { createDesktopOps } from "./ops"
+import { createHostedClient } from "./hosted-client"
+import { openLiveViewWindow } from "./hosted-window"
+import { resolveGithubAccess } from "./github-access"
 import { askHelpAssistant, type HelpInput } from "./help-assistant"
 import { clearLocalMemory, readLocalMemory, writeLocalMemory } from "./local-memory"
 import { desktopLocalStatus } from "./local-mode"
@@ -45,6 +51,7 @@ import {
   pullRequestAccessStatus,
   pullRequestChecks,
   pullRequestDiff,
+  putPullRequestMerge,
   setUpAutomaticReviews,
   submitPullRequestReview,
   viewPullRequest,
@@ -276,6 +283,7 @@ export function registerIpcHandlers(deps: Deps) {
   handle("vector-account-confirm-deletion", () => vectorAccount.confirmDeletion())
   handle("vector-account-cancel-deletion", () => vectorAccount.cancelDeletion())
   handle("vector-account-delete", (_event, email: unknown) => vectorAccount.deleteAccount(email))
+  handle("vector-account-roadmap", (_event, input: unknown) => vectorAccount.roadmap(input))
 
   const voiceOwners = new Set<number>()
   const updaterSubscriptions = createUpdaterSubscriptions()
@@ -367,7 +375,77 @@ export function registerIpcHandlers(deps: Deps) {
     )
     event.sender.once("destroyed", () => updaterSubscriptions.delete(id))
   })
-  handle("report-bug", (_event, input: { message: string; email?: string }) => sendBugReport(input))
+  // A signed-in report carries the account token from the main process, never the renderer (WP A33).
+  handle("report-bug", (_event, input: { message: string; email?: string }) =>
+    sendBugReport(input, { token: () => vectorAccount.token() }),
+  )
+  handle("reports-list", () => listReports())
+  handle("reports-status", () => reportStatuses())
+  // Vector Remote (WP A41). Keys, tickets and the desktop sign-in stay in the main process; the renderer gets status.
+  const remote = () => {
+    const link = remoteLink()
+    if (!link) throw new Error("Vector is still starting. Try again in a moment.")
+    return link
+  }
+  handle("remote-status", () => remoteLink()?.status() ?? REMOTE_STARTING)
+  handle("remote-set-enabled", (_event, enabled: unknown) => remote().setEnabled(enabled === true))
+  handle("remote-pair-start", () => remote().startPairing())
+  handle("remote-pair-confirm", (_event, code: unknown) =>
+    remote().confirmPairing(typeof code === "string" ? code : undefined),
+  )
+  handle("remote-pair-cancel", () => remote().cancelPairing())
+  handle("remote-unpair", (_event, device: unknown) => remote().unpair(typeof device === "string" ? device : ""))
+  handle("remote-disconnect-all", () => remote().disconnectAll())
+  // Asked before the app's auto-accept answers a request: a turn a phone started is left to a person (S6). Until
+  // Remote has started no phone can have started one.
+  handle("remote-phone-turn", (_event, sessionIDs: unknown) => remoteLink()?.isPhoneTurn(sessionIDs) ?? false)
+  handle(
+    "phone-alert-send",
+    (_event, alert: unknown) => remoteNotify()?.send(alert) ?? { sent: false, reason: "not-paired" as const },
+  )
+  // Brain Vault (WP A45). The vault key stays in the main process; the renderer gets status and results, and a new
+  // vault's recovery code once, from the backup that created it.
+  const vault = () => {
+    const backup = vaultBackup()
+    if (!backup) throw new Error("Vector is still starting. Try again in a moment.")
+    return backup
+  }
+  handle("vault-status", () => vaultBackup()?.status() ?? vaultStarting())
+  handle("vault-configure", (_event, input: unknown) =>
+    vault().configure(input && typeof input === "object" ? (input as Record<string, unknown>) : {}),
+  )
+  handle("vault-backup", () => vault().backup())
+  handle("vault-versions", () => vault().versions())
+  handle("vault-restore", (_event, input: unknown) => {
+    const value = input && typeof input === "object" ? (input as Record<string, unknown>) : {}
+    return vault().restore({
+      ...(typeof value.version === "string" ? { version: value.version } : {}),
+      ...(typeof value.code === "string" ? { code: value.code } : {}),
+    })
+  })
+  handle("vault-forget", (_event, version: unknown) => vault().forget(typeof version === "string" ? version : ""))
+  handle("vault-delete", () => vault().remove())
+  // Production checks (WP A50): Settings → Production. The account token and the GitHub sign-in stay in the main
+  // process; the renderer gets vectordev.ai's answers, screenshots as data URLs, and the outcome of a merge it asked for.
+  const desktopOps = createDesktopOps({
+    token: () => vectorAccount.token(),
+    github: () => resolveGithubAccess(),
+    merge: (access, repo, number, merge) => putPullRequestMerge(access, repo, number, merge),
+  })
+  handle("ops-request", (_event, input: unknown) => desktopOps.request(input))
+  handle("ops-image", (_event, input: unknown) => desktopOps.image(input))
+  handle("ops-merge", (_event, input: unknown) => desktopOps.merge(input))
+  // The cloud computer (WP A56). The account token stays in the main process; the renderer gets vectordev.ai's answers,
+  // and the live view opens in its own sandboxed window (hosted-window.ts), never in the app's window.
+  const hosted = createHostedClient({
+    token: () => vectorAccount.token(),
+    openLiveView: (target) => openLiveViewWindow(target, BrowserWindow.getFocusedWindow()),
+    openExternal: (url) => shell.openExternal(url),
+  })
+  handle("hosted-request", (_event, input: unknown) => hosted.request(input))
+  handle("hosted-live-view", (_event, input: unknown) => hosted.liveView(input))
+  handle("hosted-files", (_event, input: unknown) => hosted.files(input))
+  handle("hosted-open", (_event, input: unknown) => hosted.open(input))
   handle("help-assistant-ask", (_event, input: HelpInput) => askHelpAssistant(input))
   handle("agent-teams-list", (_event, scope?: { sourcePath?: string; parentSessionId?: string }) =>
     listAgentTeams(scope),

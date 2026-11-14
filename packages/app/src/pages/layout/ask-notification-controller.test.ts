@@ -48,6 +48,7 @@ function fixture() {
     notifications: [] as { title: string; href: string }[],
     toasts: [] as { kind: string; href: string }[],
     dismissed: [] as number[],
+    phones: [] as string[],
   }
   const controller = createAskNotificationController({
     resolve: async () => state.session,
@@ -58,6 +59,9 @@ function fixture() {
     notify: (title, _description, href) => state.notifications.push({ title, href }),
     sound: () => {
       state.sounds++
+    },
+    phoneAlert: (alerted) => {
+      state.phones.push(alerted.id)
     },
     viewed: () => state.viewed,
     toast(kind, _title, _description, href) {
@@ -180,4 +184,85 @@ test("auto-answered permissions, absent conversations and internal helper sessio
   expect(fake.state.toasts).toEqual([])
   expect(fake.state.sounds).toBe(0)
   fake.controller.close()
+})
+
+// v2 integration: Codium's Remote phone alert (WP A41) moved out of the legacy layout into this shared dispatcher, so
+// both layouts send it from one place, once per alerted ask.
+test("the phone alert fires once per alerted ask through the shared dispatcher, whoever owns the OS notification", async () => {
+  const fake = fixture()
+  // A Hands app ask the desktop owns: the renderer skips its OS notification, but the phone still hears of it.
+  await fake.controller.observe(permission("per_app"))
+  expect(fake.state.notifications).toEqual([])
+  expect(fake.state.phones).toEqual([sessionID])
+  // Within the five-second cooldown a second ask sends nothing more.
+  fake.state.now += 4999
+  await fake.controller.observe(question("que_too_soon"))
+  expect(fake.state.phones).toEqual([sessionID])
+  // The next ask after the cooldown sends exactly one more, while the conversation is open on screen too.
+  fake.state.now++
+  fake.state.viewed = true
+  await fake.controller.observe(permission("per_bash", "bash"))
+  expect(fake.state.phones).toEqual([sessionID, sessionID])
+  expect(fake.state.notifications.map((item) => item.title)).toEqual(["permission"])
+  fake.controller.close()
+})
+
+test("asks auto-accept will answer, including the desktop's asynchronous phone-turn check, send no phone alert", async () => {
+  const phones: string[] = []
+  const answer = Promise.withResolvers<boolean>()
+  const controller = createAskNotificationController({
+    resolve: async () => session,
+    autoResponds: () => answer.promise,
+    desktopOwns: () => false,
+    preferences: () => ({ agent: true, permissions: true, permissionSound: true }),
+    copy: (kind) => ({ title: kind, description: "Fixture alert" }),
+    notify() {},
+    sound() {},
+    phoneAlert: (alerted) => {
+      phones.push(alerted.id)
+    },
+    viewed: () => false,
+    toast: () => 1,
+    dismissToast() {},
+    now: () => 10_000,
+  })
+  const pending = controller.observe(permission("per_auto", "bash"))
+  answer.resolve(true)
+  await pending
+  expect(phones).toEqual([])
+  const fake = fixture()
+  fake.state.auto = true
+  await fake.controller.observe(permission("per_auto_sync", "bash"))
+  fake.state.auto = false
+  fake.state.session = { ...session, internal: "vectorscope.review" }
+  await fake.controller.observe(question("que_internal"))
+  expect(fake.state.phones).toEqual([])
+  fake.controller.close()
+  controller.close()
+})
+
+test("closing a subscription while the auto-accept check is pending fences the phone alert", async () => {
+  const phones: string[] = []
+  const answer = Promise.withResolvers<boolean>()
+  const controller = createAskNotificationController({
+    resolve: async () => session,
+    autoResponds: () => answer.promise,
+    desktopOwns: () => false,
+    preferences: () => ({ agent: true, permissions: true, permissionSound: true }),
+    copy: (kind) => ({ title: kind, description: "Fixture alert" }),
+    notify() {},
+    sound() {},
+    phoneAlert: (alerted) => {
+      phones.push(alerted.id)
+    },
+    viewed: () => false,
+    toast: () => 1,
+    dismissToast() {},
+    now: () => 10_000,
+  })
+  const pending = controller.observe(permission("per_late_phone", "bash"))
+  controller.close()
+  answer.resolve(false)
+  await pending
+  expect(phones).toEqual([])
 })

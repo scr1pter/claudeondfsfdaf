@@ -11,7 +11,8 @@ export const prerender = true
           <p>
             From desktop 1.99.110, Vector keeps a brain for each repository and one for you: the rules you write, what
             you tell it about yourself, what it learns while it works, and the documents you give it. All of it is
-            stored and searched on this computer. Beyond your rules, the start of <code>MEMORY.md</code> and the entries
+            stored and searched locally by default. Features you choose can send selected Brain context to a model,
+            an owner-started GitHub run, or an encrypted backup when those features are available. Beyond your rules, the start of <code>MEMORY.md</code> and the entries
             you pinned, which go with every request but a greeting, Vector sends your model only the few lines that bear
             on each request. Private documents never go to a free model labelled <strong>May train on your
             prompts</strong>, or to a session a guest is in.
@@ -69,6 +70,24 @@ export const prerender = true
             What it learns in a session that read web pages or other outside content, ran MCP tools, or had a guest or
             a subagent in it waits for your review instead. Turn learning off with <strong>Let Vector learn as it
             works</strong> in Settings → Memory, or <code>vector memory learning off</code>.
+          </p>
+
+          <h2 id="brain-helpers">Brain helpers and document suggestions</h2>
+          <p>
+            In builds that offer it, <strong>Use Codium for Brain helpers</strong> in Settings → Memory is a separate
+            opt-in. Subscribing never enables it. Vector asks once after confirming your subscription; closing that
+            question leaves it off, and you can choose later in Memory. With your permission, bounded excerpts from
+            corrections, skill drafts and selected document sections go to a qualified Codium model with zero data
+            retention. The helpers share a separate cap of about 10% of the month's Codium. Turning learning or an
+            individual helper off still wins, and Vector Local keeps helpers local.
+          </p>
+          <p>
+            <strong>Suggest records from documents</strong> is a separate setting, initially off. It works with your
+            own model without a subscription. <strong>Bootstrap this repo</strong> first scans eligible tracked docs
+            locally and previews up to four documents, their actual model and the applicable estimate. Nothing is
+            sent to a model until you confirm. The selected requests run one at a time; each suggestion must quote
+            its document and waits in Documents for you to keep or drop. Documents still being read need a new
+            preview and confirmation. A refresh does not send them automatically.
           </p>
 
           <h2 id="about-you">Learning about you</h2>
@@ -162,10 +181,13 @@ export const prerender = true
             <a href="/docs/skills-and-commands#learned">Skills and custom commands</a>.
           </p>
           <p>
-            {release113.since} learned skills and workflow insights are stored only in <code>brain.db</code> on this
-            computer. Vector sends them nowhere, except that the optional skill drafter, when you set it to Always, sends
-            one run's commands, file names and a short redacted error excerpt to your model provider. By default it runs
-            only with Vector Local on. Turn skills off, or choose when a model may word drafts, in Settings → Memory →
+            {release113.since} learned skills and workflow insights are stored locally in <code>brain.db</code> by
+            default. The optional skill drafter, when you set it to Always, sends one run's commands, file names and a
+            short redacted error excerpt to your model provider. Codium Brain helpers require a separate opt-in;
+            a subscription alone grants no permission. Without that opt-in, the default model
+            helper runs only with Vector Local on. Explicit Brain attachment to a GitHub run you start from the
+            desktop and encrypted Brain Vault backup are separate opt-in transfers; their controls appear only in
+            builds where they are available. Turn skills off, or choose when a model may word drafts, in Settings → Memory →
             Skills. A run with <code>--pure</code> drafts nothing and lists no learned skill.
           </p>
           <p>
@@ -230,7 +252,9 @@ export const prerender = true
           </dl>
           <p>
             The lines each role gets come out of its own small budget, and a greeting still carries none. Reviews that run
-            in GitHub Actions have no brain, because <code>brain.db</code> is on your computer.
+            in GitHub Actions have no Brain by default, because <code>brain.db</code> is on your computer. Where a build
+            offers it, only an explicit Brain attachment to a run you start from the desktop sends selected context
+            to that run; a GitHub mention does not copy your local Brain automatically.
           </p>
           <p>
             Before Vector posts a pull request or a review, or makes a commit, it checks the text against what it knows

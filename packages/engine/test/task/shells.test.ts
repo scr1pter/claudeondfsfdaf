@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -145,7 +145,15 @@ const alive = (pid: number) => {
 
 const dead = (pid: number, message: string) =>
   pollWithTimeout(
-    Effect.sync(() => (alive(pid) ? undefined : true)),
+    Effect.sync(() => {
+      if (!alive(pid)) return true
+      // A reparented zombie has stopped executing even when this test container's PID 1 has not reaped it yet.
+      if (posix) {
+        const state = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" })
+        if (state.status === 0 && state.stdout.trim().startsWith("Z")) return true
+      }
+      return undefined
+    }),
     message,
     "10 seconds",
   )
@@ -191,6 +199,14 @@ const refusalOf = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   )
 
 describe("background shell commands", () => {
+  test("shutdown without persisted cleanup proof never claims the command stopped", () => {
+    for (const cause of ["disposed", "shutdown"] as const) {
+      const note = ShellJobs.interrupted({ id: "shl_unknown", cause, metadata: { command: "sleep", pid: 4242 } })
+      expect(note).toContain("may still be running as pid 4242")
+      expect(note).not.toContain("confirmed")
+    }
+  })
+
   it.instance("a late pre-spawn refusal releases its reserved slot and starts no process", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -225,6 +241,82 @@ describe("background shell commands", () => {
       expect(existsSync(marker)).toBe(false)
       expect(yield* shells.full(root.id)).toBe(false)
       expect(yield* shells.list(root.id)).toEqual([])
+    }),
+  )
+
+  // v2 integration: #26 writes a durable row in background.start and spawns later, inside the job's run. Hands'
+  // recheck may ask the user, so it must finish before that row exists, on both the POSIX and the Windows path.
+  it.instance("the pre-spawn recheck runs before the durable job row, and a refusal leaves no row", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const jobs = yield* BackgroundJob.Service
+      const root = yield* sessions.create()
+      const shellJobs = () =>
+        jobs
+          .list()
+          .pipe(
+            Effect.map((all) => all.filter((job) => job.type === "shell" && job.metadata?.parentSessionId === root.id)),
+          )
+      const checking = yield* Deferred.make<void>()
+      const answer = yield* Deferred.make<void>()
+      const running = yield* shells
+        .start({
+          sessionID: root.id,
+          command: "refused after the recheck",
+          process: sleeper(),
+          ops,
+          agent: "build",
+          beforeSpawn: Effect.gen(function* () {
+            yield* Deferred.succeed(checking, undefined)
+            yield* Deferred.await(answer)
+            return yield* Effect.die(new Error("Vector Hands holds the computer; this command was refused."))
+          }),
+        })
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(checking)
+      // While the recheck waits (it could be a permission prompt), nothing durable or running exists yet.
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shellJobs()).toEqual([])
+      yield* Deferred.succeed(answer, undefined)
+      const result = yield* Fiber.join(running)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result))
+        expect(String(Cause.squash(result.cause))).toContain(
+          "Vector Hands holds the computer; this command was refused.",
+        )
+      expect(yield* store.forParent(root.id)).toEqual([])
+      expect(yield* shellJobs()).toEqual([])
+      expect(yield* shells.list(root.id)).toEqual([])
+      expect(yield* shells.full(root.id)).toBe(false)
+    }),
+  )
+
+  it.instance("an allowed pre-spawn recheck runs once, before the row, and the command then starts", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const root = yield* sessions.create()
+      const seen: number[] = []
+      const shell = yield* shells.start({
+        sessionID: root.id,
+        command: "allowed after the recheck",
+        process: script("console.log('allowed')"),
+        ops,
+        agent: "build",
+        beforeSpawn: store.forParent(root.id).pipe(
+          Effect.map((rows) => {
+            seen.push(rows.length)
+          }),
+        ),
+      })
+      // The recheck ran exactly once, when the session had no job row yet.
+      expect(seen).toEqual([0])
+      expect((yield* shells.wait([shell.id], 20_000))[0]).toMatchObject({ status: "completed", exitCode: 0 })
+      expect((yield* store.forParent(root.id)).map((row) => row.id)).toEqual([shell.id])
+      expect(seen).toEqual([0])
     }),
   )
 
@@ -355,6 +447,38 @@ describe("background shell commands", () => {
       // Stopping an ended command changes nothing.
       expect(yield* shells.stop(shell.id)).toMatchObject({ status: "stopped" })
       expect(yield* shells.stop("shl_unknown")).toBeUndefined()
+    }),
+  )
+
+  onPosix("a successful leader exit cleans its remaining group before the job completes", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const shells = yield* ShellJobs.Service
+      const store = yield* BackgroundJobStore.Service
+      const { directory } = yield* TestInstance
+      const root = yield* sessions.create()
+      const pidfile = path.join(directory, "remaining-child.pid")
+      const child = `process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(pidfile)},String(process.pid));setInterval(()=>{},1000)`
+      const code = `const fs=require('node:fs');const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});child.unref();const poll=setInterval(()=>{if(fs.existsSync(${JSON.stringify(pidfile)})){clearInterval(poll);process.exit(0)}},5)`
+      const shell = yield* shells.start({
+        sessionID: root.id,
+        command: "start child and exit",
+        process: script(code),
+        ops,
+        agent: "build",
+      })
+      const pid = yield* readPid(pidfile)
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (alive(pid)) process.kill(pid, "SIGKILL")
+        }),
+      )
+      const [ended] = yield* shells.wait([shell.id], 15_000)
+      expect(ended).toMatchObject({ status: "completed", exitCode: 0 })
+      yield* dead(pid, "a successful leader must not leave its owned child running")
+      const [row] = yield* store.forParent(root.id)
+      expect(row?.metadata?.cleanup).toBe("confirmed")
+      expect(yield* shells.full(root.id)).toBe(false)
     }),
   )
 
@@ -559,7 +683,7 @@ describe("background shell commands", () => {
   )
 
   onPosix(
-    "stopping a command is bounded when a descendant that left its process group holds its output",
+    "uncertain cleanup is bounded, reported as failed, and retains the command's admission",
     () =>
       Effect.gen(function* () {
         const sessions = yield* Session.Service
@@ -584,14 +708,35 @@ describe("background shell commands", () => {
           agent: "build",
         })
         const escaped = yield* readPid(pidfile)
+        const others: string[] = []
         yield* Effect.gen(function* () {
+          for (let index = 1; index < ShellJobs.LIMIT; index++)
+            others.push(
+              (yield* shells.start({ sessionID: root.id, command: "sleep", process: sleeper(), ops, agent: "build" }))
+                .id,
+            )
+          expect(yield* shells.full(root.id)).toBe(true)
           const started = Date.now()
           const stopped = yield* shells.stop(shell.id).pipe(Effect.timeout("20 seconds"))
-          expect(stopped).toMatchObject({ id: shell.id, status: "stopped" })
+          expect(stopped).toMatchObject({ id: shell.id, status: "failed" })
           expect(Date.now() - started).toBeLessThan(15_000)
-          // The command's place is free again.
-          expect(yield* shells.full(root.id)).toBe(false)
-        }).pipe(Effect.ensuring(Effect.sync(() => alive(escaped) && process.kill(escaped, "SIGKILL"))))
+          expect(yield* shells.full(root.id)).toBe(true)
+          expect(alive(escaped)).toBe(true)
+          const sent = yield* noteFor(shell.id)
+          expect(sent.noReply).toBe(true)
+          expect(textOf(sent)).toContain("a process may still be running")
+          const store = yield* BackgroundJobStore.Service
+          const row = (yield* store.forParent(root.id)).find((row) => row.id === shell.id)
+          expect(row?.metadata?.cleanup).toBe("unknown")
+          expect(row?.metadata?.ended).toMatchObject({ state: "failed" })
+        }).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              for (const id of others) yield* shells.stop(id)
+              if (alive(escaped)) process.kill(escaped, "SIGKILL")
+            }),
+          ),
+        )
       }),
     30_000,
   )
@@ -759,70 +904,69 @@ describe("background shell commands after a restart", () => {
       }),
   )
 
-  recovering.instance(
-    "a command Vector stopped when it closed the folder or shut down is reported as no longer running, with no pid",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Session.Service
-        const store = yield* BackgroundJobStore.Service
-        const recovery = yield* TaskRecovery.Service
-        const { directory } = yield* TestInstance
-        const root = yield* sessions.create()
-        const here = BackgroundJobStore.current()
-        // An instance of this process that was disposed: its lease is closed, and the process itself is alive.
-        const disposed = BackgroundJobStore.open()
-        BackgroundJobStore.close(disposed)
-        const rows = [
-          { id: "shl_0123456789abDisposedRow001", owner: disposed, word: "reloaded this folder" },
-          {
-            id: "shl_0123456789abShutdownRow001",
-            owner: {
-              runtime: `${randomUUID()}:${randomUUID()}`,
-              pid: exited(),
-              boot: here.boot,
-              machine: here.machine,
-            },
-            word: "shut down",
+  recovering.instance("only confirmed shutdown cleanup describes the owned group as stopped, with no pid", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const store = yield* BackgroundJobStore.Service
+      const recovery = yield* TaskRecovery.Service
+      const { directory } = yield* TestInstance
+      const root = yield* sessions.create()
+      const here = BackgroundJobStore.current()
+      // An instance of this process that was disposed: its lease is closed, and the process itself is alive.
+      const disposed = BackgroundJobStore.open()
+      BackgroundJobStore.close(disposed)
+      const rows = [
+        { id: "shl_0123456789abDisposedRow001", owner: disposed, word: "reloaded this folder" },
+        {
+          id: "shl_0123456789abShutdownRow001",
+          owner: {
+            runtime: `${randomUUID()}:${randomUUID()}`,
+            pid: exited(),
+            boot: here.boot,
+            machine: here.machine,
           },
-        ]
-        for (const row of rows) {
-          yield* store.started({
-            id: row.id,
-            type: "shell",
-            title: "bun test",
-            parentSessionID: root.id,
-            directory,
+          word: "shut down",
+        },
+      ]
+      for (const row of rows) {
+        yield* store.started({
+          id: row.id,
+          type: "shell",
+          title: "bun test",
+          parentSessionID: root.id,
+          directory,
+          background: true,
+          startedAt: Date.now() - 60_000,
+          owner: row.owner,
+          metadata: {
+            parentSessionId: root.id,
             background: true,
-            startedAt: Date.now() - 60_000,
-            owner: row.owner,
-            metadata: {
-              parentSessionId: root.id,
-              background: true,
-              command: "bun test",
-              outputPath: ShellJobs.outputPath(row.id),
-              pid: 4242,
-            },
-          })
-          // The engine killed the command's process tree, then settled its row as interrupted.
-          yield* store.settled(row.id, { owner: row.owner.runtime, status: "interrupted", completedAt: Date.now() })
-        }
+            command: "bun test",
+            outputPath: ShellJobs.outputPath(row.id),
+            pid: 4242,
+            cleanup: "confirmed",
+          },
+        })
+        // The engine killed the command's process tree, then settled its row as interrupted.
+        yield* store.settled(row.id, { owner: row.owner.runtime, status: "interrupted", completedAt: Date.now() })
+      }
 
-        yield* recovery.reconcile()
+      yield* recovery.reconcile()
 
-        for (const row of rows) {
-          const sent = yield* noteFor(row.id)
-          expect(sent.noReply).toBe(true)
-          const text = textOf(sent)
-            .split("</shell-notification>")
-            .find((item) => item.includes(`<shell-notification id="${row.id}"`))!
-          expect(text).toContain(`<shell-notification id="${row.id}" state="interrupted">`)
-          expect(text).toContain(row.word)
-          expect(text).toContain("it is no longer running")
-          expect(text).toContain(ShellJobs.outputPath(row.id))
-          expect(text).not.toContain("may still be running")
-          expect(text).not.toMatch(/\bpid\b/)
-          expect(text).not.toContain("4242")
-        }
-      }),
+      for (const row of rows) {
+        const sent = yield* noteFor(row.id)
+        expect(sent.noReply).toBe(true)
+        const text = textOf(sent)
+          .split("</shell-notification>")
+          .find((item) => item.includes(`<shell-notification id="${row.id}"`))!
+        expect(text).toContain(`<shell-notification id="${row.id}" state="interrupted">`)
+        expect(text).toContain(row.word)
+        expect(text).toContain("the owned command process group stopped")
+        expect(text).toContain(ShellJobs.outputPath(row.id))
+        expect(text).toContain("A process that escaped that group may still be running")
+        expect(text).not.toMatch(/\bpid\b/)
+        expect(text).not.toContain("4242")
+      }
+    }),
   )
 })

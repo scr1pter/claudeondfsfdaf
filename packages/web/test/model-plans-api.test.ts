@@ -44,6 +44,7 @@ import {
 } from "../../../api/_lib/model-plan-config"
 import { handleModelPlanModels } from "../../../api/_lib/model-plan-models"
 import { handleModelPlanStatus, modelPlanBalance } from "../../../api/_lib/model-plan-status"
+import { readUsageHistory } from "../../../api/_lib/codium-usage-history"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { publicEntitlements } from "../../../packages/schema/src/codium-entitlements"
@@ -1629,10 +1630,17 @@ describe("Codium credits used from Vector", () => {
       },
       listed: [],
       entitlements: publicEntitlements("vector-10", new Set()),
+      // A32: every date of the period so far, from its first, as shares; nothing has settled.
+      history: expect.any(Array),
       purchased: { bought: false },
       empty: false,
       low: false,
     })
+    expect(body.history[0].day).toBe(
+      new Date(current.items.data[0]!.current_period_start * 1000).toISOString().slice(0, 10),
+    )
+    expect(body.history.at(-1).day).toBe(new Date().toISOString().slice(0, 10))
+    expect(body.history.every((entry: { used: number }) => entry.used === 0)).toBe(true)
     expect(body.plan.today.resetsAt % 86_400_000).toBe(0)
     expect(body.plan.today.resetsAt).toBeGreaterThan(Date.now())
     // Neither the allowance (5), what was used nor what is left reaches the app, the CLI or the browser: every number
@@ -2236,6 +2244,28 @@ describe("A17 admission and chat", () => {
     expect(ModelPlans.gatewayFailure(429, JSON.stringify(payload))?.kind).not.toBe("credits")
     // Other purposes still have the month.
     expect((await chat(body, token, { "x-vector-purpose": "chat" })).status).toBe(200)
+  })
+
+  test("a run token's settled spend is in this period's history, so runs count while the desktop is closed (A32)", async () => {
+    await subscribed()
+    state.charge = 0.001
+    runs(() => runCaller("run-history"))
+    const served = await chat(undefined, "vrt_fixture.run-history")
+    expect(served.status).toBe(200)
+    await served.text()
+    const snapshot = (await readSnapshot(user.id, fetcher))!
+    const pool = (await readModelPlanAccount(user.id, fetcher))!.key!.hash
+    const today = new Date().toISOString().slice(0, 10)
+    const history = () =>
+      readUsageHistory({ account: user.id, pool, periodStart: snapshot.periodStart, now: Date.now() }, fetcher)
+    // Settlement runs in the gateway's finally, just after the answer is written.
+    for (let tries = 0; tries < 200 && ((await history())?.at(-1)?.micro ?? 0) === 0; tries++) await Bun.sleep(10)
+    const days = await history()
+    expect(days?.[0]?.day).toBe(new Date(snapshot.periodStart).toISOString().slice(0, 10))
+    expect(days?.at(-1)).toEqual({ day: today, micro: 1_000 })
+    // Status sends that date as a share of the month: under 1% of Plus's month, so it reads "<1%".
+    const body = await status()
+    expect(body.history.at(-1)).toEqual({ day: today, used: 0 })
   })
 
   test("a run's ceiling is atomic under parallel requests", async () => {

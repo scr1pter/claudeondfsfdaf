@@ -5,10 +5,17 @@ import { TabsV2 } from "@vectordevai/ui/v2/tabs-v2"
 import { Icon } from "@vectordevai/ui/icon"
 import { useDialog } from "@vectordevai/ui/context/dialog"
 import { usePlatform } from "@/context/platform"
-import type { VectorAccountStatus } from "@/vector-account"
+import { newestRead, onCodiumChange, type VectorAccountStatus } from "@/vector-account"
 import { settingsIdentity } from "./account-model"
 import { SettingsAccountV2 } from "./account"
+import { SettingsRoadmapV2 } from "./roadmap"
+import { roadmapTab } from "./roadmap-model"
+import { SettingsRemoteV2 } from "./remote"
+import { remoteTab } from "./remote-model"
+import { SettingsProduction } from "@/features/cloud/ops/ops-settings"
+import { opsTab } from "@/features/cloud/ops/ops-model"
 import { SettingsGeneralV2 } from "./general"
+import { SettingsNotificationsV2 } from "./notifications"
 import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
 import { SettingsServersV2 } from "./servers"
@@ -52,12 +59,40 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   let searchInput: HTMLInputElement | undefined
   const [query, setQuery] = createSignal("")
   const [section, setSection] = createSignal<SettingsTab>(props.section ?? "general")
+  // The Roadmap vote tab (WP A34) shows only when the signed-in account's Codium plan includes the listed vote, as
+  // vectordev.ai's status says; vectordev.ai still decides every vote.
+  const [voting, setVoting] = createSignal(false)
+  // The Remote tab (WP A42) shows on the desktop when the plan includes the listed Remote, or when this computer
+  // already has Remote on or a phone paired.
+  const [remoting, setRemoting] = createSignal(false)
+  // The Production tab (WP A50) shows on the desktop when the plan includes a listed ops perk (On Call, Release Guard
+  // or Ship Desk); vectordev.ai still decides every action.
+  const [producing, setProducing] = createSignal(false)
+  const votingRead = newestRead()
+  const readVoting = async (signedIn: boolean) => {
+    const account = platform.vectorAccount
+    const newest = votingRead()
+    const local = await platform.remote?.status().catch(() => undefined)
+    if (!signedIn || !account?.codium) {
+      setVoting(false)
+      setProducing(false)
+      return setRemoting(Boolean(platform.remote) && remoteTab(undefined, local))
+    }
+    const status = await account.codium().catch(() => undefined)
+    if (!newest()) return
+    setVoting(Boolean(account.roadmap) && roadmapTab(status))
+    setRemoting(Boolean(platform.remote) && remoteTab(status, local))
+    setProducing(Boolean(platform.ops) && opsTab(status))
+  }
   // Spend limits live in the desktop ledger and the account in the desktop main process, which the web build does
   // not have.
   const available = (item: SettingsTab) => {
     if (item === "spend") return !!spendLimitsApi()
     if (item === "account") return !!platform.vectorAccount
     if (item === "computer") return !!platform.computer
+    if (item === "roadmap") return voting()
+    if (item === "remote") return remoting()
+    if (item === "production") return producing()
     return true
   }
   const groups = createMemo(() =>
@@ -76,16 +111,33 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
 
   onMount(() => {
     const vectorAccount = platform.vectorAccount
+    // Pairing or turning Remote on shows its tab even before the plan is read again.
+    if (platform.remote)
+      onCleanup(platform.remote.onChange((next) => setRemoting((shown) => shown || remoteTab(undefined, next))))
     if (!vectorAccount) return
-    onCleanup(vectorAccount.onChange((next) => setHeader("account", reconcile(next))))
+    onCleanup(
+      vectorAccount.onChange((next) => {
+        // Signing in, out or as someone else reads whether the vote is included again.
+        if (next.email !== header.account.email || next.authenticated !== header.account.authenticated)
+          void readVoting(next.authenticated)
+        setHeader("account", reconcile(next))
+      }),
+    )
+    onCleanup(onCodiumChange(() => void readVoting(header.account.authenticated)))
     void vectorAccount
       .status()
-      .then((next) => setHeader("account", reconcile(next)))
+      .then((next) => {
+        setHeader("account", reconcile(next))
+        void readVoting(next.authenticated)
+      })
       .catch(() => undefined)
   })
 
   const panel = (item: SettingsTab) => {
     if (item === "account") return <SettingsAccountV2 onUsage={() => setSection("usage")} />
+    if (item === "roadmap") return <SettingsRoadmapV2 />
+    if (item === "remote") return <SettingsRemoteV2 />
+    if (item === "production") return <SettingsProduction />
     if (item === "usage") return <SettingsUsageV2 />
     if (item === "spend") return <SettingsSpendLimitsV2 />
     if (item === "about") return <SettingsAboutV2 />
@@ -97,6 +149,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "memory")
       return <SettingsMemoryV2 repositoryPath={props.repositoryPath} sessionDirectory={props.sessionDirectory} />
     if (item === "local") return <SettingsLocalV2 />
+    if (item === "notifications") return <SettingsNotificationsV2 />
     if (item === "providers") return <SettingsProvidersV2 />
     if (item === "models") return <SettingsModelsV2 />
     if (item === "servers") return <SettingsServersV2 />

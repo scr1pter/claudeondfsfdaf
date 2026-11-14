@@ -9,12 +9,15 @@ type Kind = "permission" | "question"
 /** Shared by both visual layouts; only observed asks create alerts, never a re-read of a pending list. */
 export function createAskNotificationController(input: {
   resolve(sessionID: string): Promise<Session | undefined>
-  autoResponds(request: PermissionRequest, directory: string): boolean
+  /** Whether auto-accept answers the request; it may ask the desktop whether a paired phone started the turn. */
+  autoResponds(request: PermissionRequest, directory: string): boolean | Promise<boolean>
   desktopOwns(): boolean
   preferences(): { permissions: boolean; agent: boolean; permissionSound: boolean }
   copy(kind: Kind, session: Session, directory: string): { title: string; description: string }
   notify(title: string, description: string, href: string): unknown
   sound(): unknown
+  /** Tells the paired phones a request is waiting on a person (Vector Remote, WP A41); once per alerted ask. */
+  phoneAlert?(session: Session): unknown
   viewed(session: Session, directory: string): boolean
   toast(kind: Kind, title: string, description: string, href: string): number
   dismissToast(id: number): void
@@ -47,7 +50,9 @@ export function createAskNotificationController(input: {
         return
       }
       if (detail.type !== "permission.asked" && detail.type !== "question.asked") return
-      if (detail.type === "permission.asked" && input.autoResponds(detail.properties, event.name)) return
+      // A request auto-accept answers needs nobody; one in a turn a phone started is left to a person (WP A41).
+      if (detail.type === "permission.asked" && (await input.autoResponds(detail.properties, event.name))) return
+      if (closed) return
       const session = await input.resolve(detail.properties.sessionID).catch(() => undefined)
       if (closed || !session || isInternalSession(session)) return
       const sessionKey = key(event.name, detail.properties.sessionID)
@@ -59,6 +64,8 @@ export function createAskNotificationController(input: {
       const href = `/${base64Encode(event.name)}/session/${detail.properties.sessionID}`
       const notifies = rendererNotifies(detail, input.desktopOwns())
       const preferences = input.preferences()
+      // The paired phones hear of every ask that alerts here, whoever owns the OS notification or is looking at it.
+      void input.phoneAlert?.(session)
       if (kind === "permission" && preferences.permissionSound) void input.sound()
       if (notifies && (kind === "permission" ? preferences.permissions : preferences.agent))
         void input.notify(copy.title, copy.description, href)

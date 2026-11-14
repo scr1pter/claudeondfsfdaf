@@ -13,6 +13,8 @@ export const GUARD_PARENT = "vector.workflow.guard-parent"
 export const TASK_OFFERED = "vector.workflow.task-offered"
 export const OWNER_START = "vector.workflow.owner-start"
 export const SPEC = "vector.workflow.spec"
+/** Concrete role models from a validated personal Playbook; supplied only to its trusted coordinator's launches. */
+export const PLAYBOOK_MODELS = "vector.workflow.playbook-models"
 
 export type Run = {
   readonly title: string

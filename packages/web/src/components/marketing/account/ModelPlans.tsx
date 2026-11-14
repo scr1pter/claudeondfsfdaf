@@ -16,6 +16,7 @@ import {
   type ModelPlanConfig,
   type ModelPlanStatus,
 } from "../../../lib/model-plans"
+import { FoundingMember } from "./FoundingMember"
 import "./model-plans.css"
 
 export type ModelPlansPreview = { config: ModelPlanConfig; status: ModelPlanStatus }
@@ -259,6 +260,9 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
               </div>
             )}
           </dl>
+          {status?.founding && !preview && (
+            <FoundingMember accessToken={props.accessToken} number={status.founding.number} />
+          )}
           {status?.velocity === "coming" && caps?.velocity && (
             <div className="model-plans-coming">
               <p>

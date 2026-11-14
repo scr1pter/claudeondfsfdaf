@@ -1,12 +1,18 @@
 import { createEffect, createSignal, on, Show } from "solid-js"
 
 type ReportBugApi = {
-  reportBug?: (input: { message: string; email?: string }) => Promise<{ delivered: boolean; error?: string }>
+  reportBug?: (input: {
+    message: string
+    email?: string
+  }) => Promise<{ delivered: boolean; tracked?: boolean; error?: string }>
 }
 
 // Desktop routes through the main process; the web build has no window.api and
 // can reach the endpoint directly since it is served from the same origin.
-async function submitReport(input: { message: string; email?: string }) {
+async function submitReport(input: {
+  message: string
+  email?: string
+}): Promise<{ delivered: boolean; tracked?: boolean; error?: string }> {
   const api = (globalThis.window as unknown as { api?: ReportBugApi } | undefined)?.api
   if (api?.reportBug)
     return api.reportBug(input).catch(() => ({ delivered: false, error: "Vector could not reach the report service." }))
@@ -35,6 +41,8 @@ export function DialogReportBug(props: { open: boolean; onClose: () => void; ini
   const [sending, setSending] = createSignal(false)
   const [error, setError] = createSignal<string>()
   const [sent, setSent] = createSignal(false)
+  // The desktop keeps the report's id, so Settings > Account can show what becomes of it (WP A33).
+  const [tracked, setTracked] = createSignal(false)
 
   createEffect(
     on(
@@ -44,6 +52,7 @@ export function DialogReportBug(props: { open: boolean; onClose: () => void; ini
         setMessage((props.initialMessage ?? "").slice(0, 8_000))
         setError(undefined)
         setSent(false)
+        setTracked(false)
       },
     ),
   )
@@ -67,6 +76,7 @@ export function DialogReportBug(props: { open: boolean; onClose: () => void; ini
       setError(result.error ?? "The report could not be delivered.")
       return
     }
+    setTracked(result.tracked === true)
     setSent(true)
   }
 
@@ -96,6 +106,9 @@ export function DialogReportBug(props: { open: boolean; onClose: () => void; ini
                 <p class="text-[12.5px] text-white/60">
                   Your report reached the Vector team. If you left an email, we may reply there.
                 </p>
+                <Show when={tracked()}>
+                  <p class="text-[12.5px] text-white/60">Settings &gt; Account shows what becomes of it.</p>
+                </Show>
                 <button
                   type="button"
                   class="self-end rounded-[6px] bg-[color:var(--vx-purple)] px-3 py-1.5 text-[12.5px] font-medium text-white"
@@ -110,7 +123,8 @@ export function DialogReportBug(props: { open: boolean; onClose: () => void; ini
               <h2 class="text-[15px] font-semibold text-white">Report a bug</h2>
               <p class="text-[12.5px] text-white/55">
                 Review the report and remove private details before sending. The desktop app adds its version and
-                platform.
+                platform, and links the report to your Vector account when you are signed in, so your plan's tag
+                applies.
               </p>
               <textarea
                 autofocus

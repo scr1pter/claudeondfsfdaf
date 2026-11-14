@@ -1,22 +1,25 @@
 import { mkdir, open, stat, type FileHandle } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Context, Effect, Exit, Layer, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Layer, Scope, Stream } from "effect"
 import type { ChildProcess } from "effect/unstable/process"
-import { ChildProcessSpawner, type ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { Task } from "@vectordevai/schema/task"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { OwnedProcess } from "@vectordevai/core/owned-process"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { TaskSize } from "@vectordevai/core/task-size"
 import { BackgroundJob } from "@/background/job"
 import { InstanceState } from "@/effect/instance-state"
+import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Identifier } from "@/id/id"
 import { Session } from "@/session/session"
 import type { MessageID, SessionID } from "@/session/schema"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
+import { WindowsProcess } from "@/tool/shell/windows-process"
 import { TaskLimits } from "./limits"
 import { TaskNotify } from "./notify"
 
@@ -24,7 +27,7 @@ import { TaskNotify } from "./notify"
  * Background shell commands (5.H). The main agent's `shell` call with `background: true` passes the same scan, asks,
  * ownership check and sandbox as a foreground call, then starts here: the command runs as a durable background job,
  * its output goes to `<tool-output>/shell-<id>.log`, and a `shell` note reaches the parent through TaskNotify when it
- * exits. Stopping the job, or disposing its instance, kills the command's process tree.
+ * exits. Stopping the job, or disposing its instance, stops the owned command process group. Independent POSIX groups are not contained.
  */
 
 /** Running background commands per conversation. */
@@ -45,9 +48,6 @@ const TITLE_MAX = 80
 const KEEP = 8 * 1024
 // The window of decoded output each check of a guest family's text sees, so a name split across chunks is still seen.
 const WINDOW = 4096
-// How long stopping a command waits for its kill to settle. A descendant that left the command's process group (setsid,
-// `ssh -f`) can hold its output open after the command itself is dead, and the kill waits for that output to close.
-const KILL_WAIT = "10 seconds"
 // How much of "Vector could not follow it to the end" a row keeps for restart recovery.
 const FAILED_MAX = 500
 /** The most ended commands task_manage list shows the agent, beside every running one. */
@@ -120,7 +120,7 @@ export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<Task.Shell>
   /** The session's background commands, running ones first, then the newest. */
   readonly list: (sessionID: SessionID) => Effect.Effect<Task.Shell[]>
-  /** Stops a running command and kills its process tree; a finished one is returned as it ended. */
+  /** Stops a running command’s owned group/job; uncertain cleanup is failed, and a finished one keeps its result. */
   readonly stop: (id: string) => Effect.Effect<Task.Shell | undefined>
   /** Waits until every named command has ended, or `timeout` milliseconds, and returns them as they are then. */
   readonly wait: (ids: readonly string[], timeout: number) => Effect.Effect<Task.Shell[]>
@@ -144,6 +144,8 @@ type Live = {
   signalled?: boolean
   withheld?: boolean
   failed?: string
+  /** Cleanup could not confirm that the owned command ended; its admission remains reserved. */
+  cleanupFailed?: string
   /** Its process is gone and its log closed. */
   ended?: boolean
 }
@@ -346,19 +348,19 @@ async function readTail(file: string) {
 /**
  * The note restart recovery leaves for a command that was running when its engine went away. An engine that died
  * (`crash`) never stopped it, and Vector never stops a process it can no longer see, so the command may still be
- * running. An engine that shut down or closed the folder (`shutdown`, `disposed`) killed the command's process tree
- * first, so the note names no pid: by then the number may belong to an unrelated process.
+ * running. A shutdown/disposal row with confirmed cleanup can describe its owned process group as stopped.
+ * Independent POSIX groups may escape that ownership; without the marker even shutdown cleanup is unknown.
  */
 export function interrupted(row: Pick<BackgroundJobStore.Candidate, "id" | "title" | "metadata" | "cause">) {
   const command = text(row.metadata?.command) ?? row.title ?? "command"
   const file = text(row.metadata?.outputPath) ?? outputPath(row.id)
   const summary = `<summary>Background command interrupted: ${framed(titleOf(command))}</summary>`
-  if (row.cause !== "crash")
+  if (row.cause !== "crash" && row.metadata?.cleanup === "confirmed")
     return [
       `<shell-notification id="${row.id}" state="interrupted">`,
       summary,
       `Automated notification from Vector, not a message from the user: Vector stopped a background command you started when it ${row.cause === "disposed" ? "reloaded this folder (a settings change, or the end of a run)" : "shut down (an update, restart or quit)"}. No human input has occurred.`,
-      "Vector stopped the command and its process tree then, so it is no longer running.",
+      "Vector confirmed that the owned command process group stopped then. A process that escaped that group may still be running.",
       `Its output up to then is in ${file}; read it with read. Check before starting it again, and ask the user if unsure.`,
       "</shell-notification>",
     ].join("\n")
@@ -400,7 +402,12 @@ function shape(job: BackgroundJob.Info, live: Live | undefined): Task.Shell {
     id: job.id,
     title: job.title ?? titleOf(command),
     command,
-    status: stateOf(job.status),
+    status:
+      job.status !== "running" &&
+      job.status !== "interrupted" &&
+      (live?.cleanupFailed || job.metadata?.cleanup === "unknown" || job.metadata?.cleanup === "pending")
+        ? "failed"
+        : stateOf(job.status),
     startedAt: job.started_at,
     ...(job.completed_at === undefined ? {} : { completedAt: job.completed_at }),
     ...(live?.exitCode === undefined ? {} : { exitCode: live.exitCode }),
@@ -446,41 +453,72 @@ const layer = Layer.effect(
         refusal({ subagent: session.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
         timeoutRefusal(input.timeout)
       if (refused) return yield* Effect.die(new Error(refused))
+      if (input.process._tag !== "StandardCommand")
+        return yield* Effect.die(new Error("A background command must be one prepared shell process."))
+      const processCommand = input.process
+      const lease = yield* background.lease()
+      if (!lease) return yield* Effect.die(new Error("A background command requires a durable owner lease."))
       const conversationID = yield* conversation(session)
       const id = Identifier.create("shl", "ascending")
-      if (!reserve(conversationID, id)) return yield* Effect.die(new Error(LIMIT_REFUSAL))
       const directory = yield* InstanceState.directory
       const file = outputPath(id)
       const command = clip(input.command, COMMAND_MAX)
       const live: Live = { bytes: 0, written: 0, truncated: false, tail: Buffer.alloc(0) }
       const scope = yield* Scope.make()
       let log: FileHandle | undefined
-      let handle: ChildProcessHandle | undefined
-      let cleaned = false
+      let unowned = false
+      let owned: OwnedProcess.Control | undefined
+      let windows: Promise<WindowsProcess.Handle> | undefined
+      const controller = new AbortController()
+      const bridge = yield* EffectBridge.make()
+      const ready = yield* Deferred.make<void, Error>()
+      const holder = { owner: lease.runtime, attempt: 1 }
+      const cleaned = yield* Deferred.make<void>()
+      let cleaning = false
+      // No interruptible setup remains between reserving the slot and installing the error cleanup below.
+      if (!reserve(conversationID, id)) return yield* Effect.die(new Error(LIMIT_REFUSAL))
       // Truncate's cleanup leaves the log of a command this process still runs, however long it has been quiet.
       const unhold = Truncate.hold(file)
-      // Kills what is still running, releases the slot and closes the log. Once only, whichever path gets there first.
-      // Closing the scope disposes the output pipes beside the kill, and the kill is bounded: a descendant that left the
-      // command's process group can hold the output open after the command is dead, and the kill waits for it to close.
+      // A live controller is the only process authority. Uncertain cleanup retains the reservation until restart;
+      // neither a later instance nor recovery may act on the persisted numeric PID.
       const cleanup = Effect.fnUntraced(function* () {
-        if (cleaned) return
-        cleaned = true
-        release(conversationID, id)
-        live.ended = true
-        const running = handle !== undefined && (yield* handle.isRunning.pipe(Effect.orElseSucceed(() => true)))
-        yield* Effect.all(
-          [
-            running && handle
-              ? handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.timeout(KILL_WAIT), Effect.ignore)
-              : Effect.void,
-            Scope.close(scope, Exit.void),
-          ],
-          { concurrency: 2, discard: true },
-        )
-        unhold()
-        const opened = log
-        log = undefined
-        if (opened) yield* Effect.tryPromise(() => opened.close()).pipe(Effect.ignore)
+        if (cleaning) return yield* Deferred.await(cleaned)
+        cleaning = true
+        return yield* Effect.gen(function* () {
+          controller.abort()
+          const result = owned
+            ? yield* Effect.promise(owned.stop)
+            : windows
+              ? yield* Effect.promise(() =>
+                  windows!
+                    .then((handle) => handle.stop())
+                    .then(
+                      () => ({ terminated: true }),
+                      (error: unknown) => ({
+                        terminated: error instanceof WindowsProcess.WindowsProcessError && error.terminationProven,
+                      }),
+                    ),
+                )
+              : { terminated: !unowned }
+          if (!result.terminated) {
+            live.cleanupFailed =
+              "Vector could not confirm that the owned command process group and its output stopped; a process may still be running. Its background-command place remains reserved until Vector restarts."
+            live.failed = live.cleanupFailed
+          }
+          yield* background.updateMetadata(id, {
+            ...holder,
+            patch: { cleanup: result.terminated ? "confirmed" : "unknown" },
+          })
+          yield* Scope.close(scope, Exit.void).pipe(Effect.timeout("10 seconds"), Effect.ignore)
+          const opened = log
+          log = undefined
+          if (opened) yield* Effect.tryPromise(() => opened.close()).pipe(Effect.ignore)
+          unhold()
+          if (result.terminated) {
+            live.ended = true
+            release(conversationID, id)
+          }
+        }).pipe(Effect.ensuring(Deferred.succeed(cleaned, undefined)))
       })
 
       return yield* Effect.gen(function* () {
@@ -492,18 +530,16 @@ const layer = Layer.effect(
           },
           catch: (error) => new Error(`Vector could not create the command's output file: ${String(error)}`),
         })
+        // Hands' dynamic authority recheck may ask the user, so it runs before any durable row, owner or process
+        // exists, and before the platform split: the POSIX owned spawn and the Windows holder both sit behind it.
+        // A refusal here leaves no job row and reaches the caller with its own message.
         if (input.beforeSpawn) yield* input.beforeSpawn
-        const spawned = yield* spawner.spawn(input.process).pipe(
-          Scope.provide(scope),
-          Effect.mapError((error) => new Error(`Vector could not start the command: ${error.message}`)),
-        )
-        handle = spawned
         const metadata = {
           parentSessionId: session.id,
           background: true,
           command,
           outputPath: file,
-          pid: spawned.pid,
+          cleanup: "pending",
           ...(input.messageID ? { parentMessageId: input.messageID } : {}),
           ...(input.callID ? { callID: input.callID } : {}),
         }
@@ -547,9 +583,62 @@ const layer = Layer.effect(
             }
           })
 
+        const persist = (pid: number) =>
+          background
+            .updateMetadata(id, { ...holder, patch: { pid } })
+            .pipe(
+              Effect.flatMap((written) =>
+                written
+                  ? Effect.void
+                  : Effect.fail(new Error("Vector could not save the background command's process identity.")),
+              ),
+            )
         const run = Effect.gen(function* () {
-          const ended = Effect.all([spawned.exitCode, Stream.runForEach(spawned.all, write)], { concurrency: 2 }).pipe(
-            Effect.map(([code]) => code),
+          const completion =
+            process.platform === "win32"
+              ? yield* Effect.gen(function* () {
+                  windows = WindowsProcess.start(processCommand, {
+                    signal: controller.signal,
+                    onReady: (pid) => bridge.promise(persist(pid)),
+                    onOutput: (chunk) => bridge.promise(write(chunk)),
+                  })
+                  const handle = yield* Effect.tryPromise(() => windows!)
+                  yield* Deferred.succeed(ready, undefined)
+                  return Effect.tryPromise(() => handle.completion).pipe(Effect.map((result) => result.exitCode))
+                })
+              : yield* Effect.gen(function* () {
+                  const spawned = yield* spawner.spawn(OwnedProcess.command(processCommand)).pipe(
+                    Scope.provide(scope),
+                    Effect.mapError((error) => new Error(`Vector could not start the command: ${error.message}`)),
+                  )
+                  owned = OwnedProcess.get(spawned)
+                  unowned = !owned
+                  if (!owned)
+                    return yield* Effect.fail(
+                      new Error("The process spawner did not provide background command ownership."),
+                    )
+                  yield* persist(spawned.pid)
+                  yield* Deferred.succeed(ready, undefined)
+                  const lifetime = owned
+                  return Effect.all([Effect.promise(() => lifetime.done), Stream.runForEach(spawned.all, write)], {
+                    concurrency: 2,
+                  }).pipe(
+                    Effect.flatMap(([result]) => {
+                      if (!result.terminated)
+                        return Effect.fail(
+                          new Error(result.error ?? "The background command could not be confirmed stopped."),
+                        )
+                      if (result.exit?.code === null || result.exit?.code === undefined) {
+                        live.signalled = true
+                        return Effect.fail(
+                          new Error(`Process interrupted due to signal: ${result.exit?.signal ?? "unknown"}`),
+                        )
+                      }
+                      return Effect.succeed(result.exit.code)
+                    }),
+                  )
+                })
+          const ended = completion.pipe(
             Effect.exit,
             Effect.map((result) => ({ kind: "exit" as const, result })),
           )
@@ -576,7 +665,14 @@ const layer = Layer.effect(
           if (outcome.result.value !== 0)
             return yield* Effect.fail(new Error(`Exited with code ${outcome.result.value}.`))
           return `Exited with code 0.`
-        }).pipe(Effect.ensuring(cleanup()))
+        }).pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit)
+              ? Deferred.fail(ready, new Error("The background command could not start or was stopped during startup."))
+              : Deferred.succeed(ready, undefined),
+          ),
+          Effect.ensuring(cleanup()),
+        )
 
         const info = yield* background.start({
           id,
@@ -584,14 +680,19 @@ const layer = Layer.effect(
           title: titleOf(command),
           metadata,
           promotable: false,
-          durable: { parentSessionID: session.id, directory, metadata },
+          durable: { parentSessionID: session.id, directory, attempt: holder.attempt, metadata },
           // A stopped command is reported quietly; one Vector stopped while going away is restart recovery's to report.
           onComplete: (info) =>
             Effect.gen(function* () {
               yield* cleanup()
               if (info.status === "running" || info.status === "interrupted") return
-              const state =
-                info.status === "completed" ? "completed" : info.status === "cancelled" ? "stopped" : "failed"
+              const state = live.cleanupFailed
+                ? "failed"
+                : info.status === "completed"
+                  ? "completed"
+                  : info.status === "cancelled"
+                    ? "stopped"
+                    : "failed"
               // The note waits in memory for its window, so how the command ended is kept on its row too: an engine
               // that goes away before the note is out leaves it for restart recovery (`recoveredNote`).
               yield* store
@@ -632,7 +733,7 @@ const layer = Layer.effect(
                     failed: state === "failed" ? live.failed : undefined,
                     tail: decodeTail(live.tail),
                   }),
-                  wake: state !== "stopped",
+                  wake: state !== "stopped" && info.status !== "cancelled",
                 },
                 ops: input.ops,
                 agent: input.agent,
@@ -640,9 +741,10 @@ const layer = Layer.effect(
             }),
           run,
         })
-        return shape(info, live)
+        yield* Deferred.await(ready)
+        return shape((yield* background.get(id)) ?? info, live)
       }).pipe(
-        Effect.onError(() => cleanup()),
+        Effect.onError(() => background.cancel(id).pipe(Effect.ensuring(cleanup()))),
         Effect.catch((error) => Effect.die(error)),
       )
     })
@@ -662,7 +764,9 @@ const layer = Layer.effect(
           ? BackgroundJobStore.liveness(row) === "dead"
             ? "interrupted"
             : "running"
-          : stateOf(row.status)
+          : row.status !== "interrupted" && (row.metadata?.cleanup === "unknown" || row.metadata?.cleanup === "pending")
+            ? "failed"
+            : stateOf(row.status)
       return {
         id: row.id,
         title: row.title ?? titleOf(command),
@@ -694,8 +798,9 @@ const layer = Layer.effect(
     const stop: Interface["stop"] = Effect.fn("ShellJobs.stop")(function* (id) {
       const job = yield* background.get(id)
       if (!job || job.type !== "shell") return undefined
-      const info = job.status === "running" ? ((yield* background.cancel(id)) ?? job) : job
-      return shape(info, lives.get(id))
+      if (job.status === "running") yield* background.cancel(id)
+      // cancel's returned snapshot predates its finalizers; cleanup publishes its proof while those drain.
+      return shape((yield* background.get(id)) ?? job, lives.get(id))
     })
 
     const wait: Interface["wait"] = Effect.fn("ShellJobs.wait")(function* (ids, timeout) {

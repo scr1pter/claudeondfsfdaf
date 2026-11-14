@@ -75,6 +75,7 @@ import { TaskNotify } from "@/task/notify"
 import { QUICK_DESCRIPTION } from "@/tool/escalate"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Flag } from "@vectordevai/core/flag/flag"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@vectordevai/core/database/database"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -111,12 +112,14 @@ import { TaskSize } from "@vectordevai/core/task-size"
 import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { SessionTaskSize } from "./task-size"
 import { SessionSkillLearn } from "./skill-learn"
+import { SessionBrainHelper } from "./brain-helper"
 import { SessionWorkflow } from "./workflow"
 import { LearnedSkill } from "@/skill/learned"
 import { BackgroundJob } from "@/background/job"
 import { TaskPlace } from "@/task/place"
 import { TaskJobs } from "@/task/jobs"
 import { SessionCodiumAuto } from "./codium-auto"
+import { SecondOpinion } from "./second-opinion"
 import { parseJudgeVerdict } from "./judge-verdict"
 import { isRecord } from "@/util/record"
 import { ResearchRun } from "@/tool/research-run"
@@ -321,6 +324,7 @@ const layer = Layer.effect(
     const brainDatabase = yield* BrainDatabase.Service
     const knowledge = yield* BrainKnowledge.Service
     const guests = yield* FreeModelGuests.Service
+    const brainHelper = SessionBrainHelper.bind({ brain, provider, guests, instruction, sessions })
     const isolation = yield* TaskIsolation.Service
     const privacy = yield* SessionAudience.Service
     const git = yield* Git.Service
@@ -926,7 +930,7 @@ const layer = Layer.effect(
       message: SessionV1.Assistant
       parent: Agent.Info
       judge: Agent.Info
-      args: { prompt: string; description: string; subagent_type: string; background: false }
+      args: { prompt: string; description: string; subagent_type: string; background: false; model?: string; effort?: "default" }
       metadata: Record<string, unknown>
       finished: (output: string) => Record<string, unknown>
       failed: string
@@ -1081,6 +1085,19 @@ const layer = Layer.effect(
 
       const round = input.rounds + 1
       const sessionID = input.session.id
+      // Second opinion (WP A35): Codium work is judged on the plan's judge from another lab, when the person turned it
+      // on, no judge model is configured and the catalog lists a usable cross-lab judge for the worker's model.
+      const on = SecondOpinion.enabled(work.requests.flatMap((request) => request.users))
+      const codiumWorker = input.lastUser.model.providerID === ModelPlanStatus.PROVIDER_ID
+      const opinion =
+        on && codiumWorker && !judge.model
+          ? SecondOpinion.judgeModel({
+              worker: input.lastUser.model,
+              models: (yield* provider.list())[ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID)]?.models,
+              configured: false,
+              on,
+            })
+          : undefined
       const message = yield* judgeMessage({ lastUser: input.lastUser, agent: parent.name, size: work.tier })
       const result = yield* launchJudge({
         session: input.session,
@@ -1093,6 +1110,7 @@ const layer = Layer.effect(
           description: round === 1 ? "Check the finished work" : `Check the repairs (round ${round})`,
           subagent_type: "judge",
           background: false,
+          ...(opinion ? { model: `${opinion.providerID}/${opinion.modelID}`, effort: "default" as const } : {}),
         },
         // The size of the work judged: a FAIL raises the request it repairs to it (see SessionTaskSize.size).
         metadata: { judge: { round, size: work.tier } },
@@ -1127,6 +1145,8 @@ const layer = Layer.effect(
         model: input.lastUser.model,
         ...(input.lastUser.selected ? { selected: input.lastUser.selected } : {}),
         executionMode: input.lastUser.executionMode,
+        // The repair's verdict is judged as the work was: with Second opinion while it was on.
+        ...(on ? { secondOpinion: true } : {}),
       }
       yield* sessions.updateMessage(followup)
       yield* sessions.updatePart({
@@ -1344,10 +1364,10 @@ const layer = Layer.effect(
       if (verdicts.length > 0) {
         yield* researchStore.judged(place, runID, verdicts)
         // The report is saved again with the verdicts, so its confidence counts them and unsupported notes are struck.
-        const spent = (yield* guard.snapshot(sessionID))?.spentUsd
+        const spend = SpendGuard.reportSpend(yield* guard.snapshot(sessionID))
         yield* researchStore.report(place, runID, report.value, {
           judged: true,
-          ...(spent ? { spend: `${SpendGuard.formatUsd(spent)} at list prices` } : {}),
+          ...(spend ? { spend } : {}),
           seconds: Math.round((Date.now() - detail.run.created_at) / 1000),
         })
       }
@@ -1563,6 +1583,7 @@ const layer = Layer.effect(
       return yield* provider.codiumAuto({
         tier: input.tier,
         contextTokens: SessionCodiumAuto.contextTokens(visible, input.added),
+        learned: workflowSession.autoModels ? yield* workflowSession.autoModels(input.sessionID, input.tier) : [],
       })
     })
 
@@ -1675,6 +1696,7 @@ const layer = Layer.effect(
         executionMode: input.executionMode,
         ...(input.size ? { size: input.size } : {}),
         ...(input.judge ? { judge: input.judge } : {}),
+        ...(input.secondOpinion ? { secondOpinion: true } : {}),
       }
 
       if (
@@ -3227,6 +3249,18 @@ const layer = Layer.effect(
                 { dropMedia },
               )).length
             : 0
+          if (session.internal === "brain.distill" && Billing.isCodium(model.providerID)) {
+            const floor = yield* provider.getBrainModel()
+            const settings = yield* brain.learnSettings()
+            if (
+              !(settings.distillation ?? Flag.VECTOR_KNOWLEDGE_DISTILL) ||
+              settings.codiumHelpers !== "on" ||
+              !floor ||
+              floor.id !== model.id ||
+              !(yield* brainHelper.privateInput(session.parentID ?? sessionID))
+            )
+              return "break"
+          }
           const result = yield* handle.process({
             user: lastUser,
             agent: warm?.agent ?? stepAgent,
@@ -3265,6 +3299,7 @@ const layer = Layer.effect(
             retries: warm ? warm.retries : retries,
             // A Vectorscope review's helper sessions (vectorscope.review, vectorscope.verify, ...) say so to Codium.
             ...(session.internal?.startsWith("vectorscope.") ? { purpose: "review" as const } : {}),
+            ...(session.internal === "brain.distill" ? { purpose: "brain" as const } : {}),
             answering: () => Deferred.doneUnsafe(answering, Effect.succeed(true)),
             // The digest in the system prompt carries the owner's rules, MEMORY.md and pinned entries too.
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },
@@ -3595,7 +3630,8 @@ const layer = Layer.effect(
       const user = last?.message.info
       // The model learner runs where the user let it: with Vector Local on, by default.
       const allowed =
-        settings.modelLearner === "always" || (settings.modelLearner === "local-only" && Egress.policy().enabled)
+        settings.modelLearner !== "off" &&
+        (settings.modelLearner === "always" || Egress.policy().enabled || settings.codiumHelpers === "on")
       if (!last || user?.role !== "user" || !allowed) return undefined
       // Only a correction the rules found nothing in needs the session: whether it read outside content, and the reply
       // before the correction.
@@ -3635,17 +3671,19 @@ const layer = Layer.effect(
       spend: SpendGuard.Captured
     }) {
       if (yield* input.spend.stopped) return []
+      if (yield* guests.marked(input.session.id)) return []
       const primary = yield* provider
         .getModel(input.user.model.providerID, input.user.model.modelID)
         .pipe(Effect.option)
       if (Option.isNone(primary)) return []
-      const small = yield* provider.getSmallModel(input.user.model.providerID, input.user.model.modelID)
-      // A Codium conversation without a helper model learns nothing rather than spend its own model on it.
-      if (!small && input.user.model.providerID === ModelPlanStatus.PROVIDER_ID) return []
-      const model = small ?? primary.value
-      if (freeModelMayTrain(primary.value) || freeModelMayTrain(model)) return []
+      const model = yield* brainHelper.choose({ setting: "modelLearner", primary: primary.value })
+      if (!model) return []
+      // The existing own-provider learner can retain a tainted typed correction for review. Codium consent does not
+      // authorize sending a held repository or tainted session to a remote Brain helper.
+      if (Billing.isCodium(model.providerID) && (input.tainted || (yield* instruction.place()).held)) return []
       const title = yield* agents.get("title")
       if (!title) return []
+      const settings = yield* brain.learnSettings()
       const usage = TitleUsage.create({
         sessionID: input.session.id,
         model,
@@ -3654,6 +3692,8 @@ const layer = Layer.effect(
         spend: input.spend,
         costKind: yield* helperCostKind(model),
       })
+      if (!(yield* brainHelper.permitted(model, "modelLearner"))) return []
+      if (Billing.isCodium(model.providerID) && !(yield* brainHelper.privateInput(input.session.id))) return []
       const reply = yield* llm
         .stream({
           // Its own instructions on the title helper's: no tools, no repository context.
@@ -3681,7 +3721,7 @@ const layer = Layer.effect(
         const learned = BrainLearn.accept(suggestion, {
           typed: input.typed,
           tainted: input.tainted,
-          facets: input.settings.facets,
+          facets: settings.facets,
         })
         return learned ? [learned] : []
       })
@@ -4495,6 +4535,7 @@ const layer = Layer.effect(
                 ? {}
                 : { size: commandSize(input.arguments) }),
           ...(input.judge ? { judge: input.judge } : {}),
+          ...(input.secondOpinion ? { secondOpinion: true } : {}),
         },
         // @file references in an MCP prompt or a skill are not the user's choice; the user's own attachments are.
         { userFile: (url) => attached.has(url) || cmd.source === "command" },
@@ -4874,6 +4915,10 @@ export const PromptInput = Schema.Struct({
     description:
       "When Vector runs LLM-as-a-judge after the run: off, thorough (after large tasks that changed files) or changes (after every task that changed files). Defaults to the config's sizing.judge.",
   }),
+  secondOpinion: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Second opinion: when the judge checks work done on a Vector Codium model, it runs on the plan's judge from another lab, unless a judge model is configured. Off unless set.",
+  }),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,
@@ -4940,6 +4985,7 @@ export const CommandInput = Schema.Struct({
   // As on PromptInput. Without a size from the sender or the command, Vector sizes the run from the template.
   size: Schema.optional(TaskSize.Choice),
   judge: Schema.optional(TaskSize.JudgeMode),
+  secondOpinion: Schema.optional(Schema.Boolean),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.

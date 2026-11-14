@@ -17,3 +17,16 @@ Independent source review is clear. The server slice passed 53 focused cases acr
 Hosted API, Schema and Web types passed (Web: 196 files, zero errors or warnings; 177 informational hints). Initial Web checks caught only test declaration issues: Bun's `fetch` type needs a compatible request signature and explicit response return for a throwing fake, and plan/model literals need canonical ID narrowing. Those declarations were corrected without changing production behavior. The final Web check passed after those corrections. The normal 23-package pre-push hook and exact-head scoped CI remain publication gates. No public Protocol or Server schema changed, so SDK/client generation is not required.
 
 The implementation checkpoint is `4e993a62928a0384a356e2e4ea8b0318147c6b41`. Its normal pre-push hook passed all 23 package checks (19 cached, 1m19.434s). Scoped run [41270832389](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41270832389) completed with all eight package type checks and browser specs passing. The Codium test job failed only the repository wording policy: the FAQ said “demanding projects.” The correction says “demanding tasks,” preserving the established repository terminology without weakening the policy. Both cases in `test/no-project-wording.test.ts` pass after that correction; the same job's HttpApi and generated-client gates passed. The next exact revision run must verify the correction before A27 is declared fully accepted.
+
+**Status, 8 Nov 2026 (P4d).** The "next exact revision run" above is run 41272142017 (Vector Codium, push, head
+`d13d91e3`, whose parent is `b12f3cab`); `b12f3cab` had no run of its own. It completed with success, 10 of 10 jobs:
+Codium tests 124746918153, Codium browser specs 124746918066 and the typecheck jobs cloud 124746918144, app
+124746918163, core 124746918165, desktop 124746918202, web 124746918277, api 124746918281, schema 124746918315 and
+engine 124746918360. Its "Run the Codium test files" step runs every `test/*.test.ts`, `test/no-project-wording.test.ts`
+among them, and fails if any file fails; that file's own log lines were not read, so its pass there is inferred from
+the step's success (P4 F72). Run 41270832389 (head `4e993a62`) failed only in Codium tests 124743088404, as the
+paragraph above says. P4's review (`codium-p4-repairs.md`, "A27 copy and listing") found no listing, number, price or
+percentage defect. The copy that differs from the contract's text, the planned 550B+ Velocity wording and the absent
+Labs row among it, is recorded there as owner decisions O1 to O8 and was not changed. This package's edits to
+`api/_lib/model-plan-config.ts` and `api/_lib/model-plan-status.ts` are listed in P4's F67, since its commit message
+lists none.

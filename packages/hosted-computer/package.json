@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@vectordevai/hosted-computer",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./actions": "./src/actions.ts",
+    "./limits": "./src/limits.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "build": "bun build ./src/hostd.ts ./src/viewer-proxy.ts --target=node --format=esm --outdir=dist --entry-naming=[name].mjs",
+    "bake": "bun script/bake-snapshot.ts"
+  },
+  "dependencies": {
+    "@vectordevai/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "@vercel/sandbox": "3.8.0"
+  }
+}
