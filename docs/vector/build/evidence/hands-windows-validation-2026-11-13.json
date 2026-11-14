@@ -552,5 +552,727 @@
       },
       "qualification": "Actual downloaded job log confirms exact-once full per-file app inventory and final 244/244 summary, followed by the browser-condition unit suite. No failed child was retried. Remaining broad PR and final packaged helper/Main pin verifiers are pending; not hardware, signing or release proof."
     }
+  },
+  "integrationA0e": {
+    "headRevision": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
+    "qualification": "Application source under validation; subsequent documentation-only commits do not change it. Remaining full PR and preview package jobs are pending. Actual reports and log observations below are independently read; no green job metadata erases named skips.",
+    "fullPR": {
+      "run": 43560683817,
+      "testedMergeRevision": "3b14e6627b394114efca488d7d256fc0709a6e2f",
+      "conclusion": "pending",
+      "windowsNative": {
+        "job": 132345115606,
+        "logBytes": 291709,
+        "logSha256": "82e469b159c87036937eea61e0daec3b2559b5414792492c21c53d1ec166c2d4",
+        "conclusion": "success",
+        "artifact": 14100649087,
+        "archiveBytes": 1367,
+        "archiveSha256": "e0dd817fee00fc74643fe1d74679b018507016c86a8760b48c40ce9c72883089",
+        "reports": [
+          {
+            "name": "computer-win32-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          },
+          {
+            "name": "computer-win32-privileged.json",
+            "code": 0,
+            "counts": {
+              "passed": 37,
+              "failed": 0,
+              "skipped": 11
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "native-skip"
+              },
+              {
+                "name": "privileged.apps-installed-target",
+                "status": "skipped",
+                "reason": "target_not_installed"
+              },
+              {
+                "name": "privileged.uia-counter-increment",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.uia-value-set-and-readback",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.secure-field-refusal",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.tagged-click-increments",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.unicode-type-readback",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.stale-capture-refusal",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.owned-input-release",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.input-detection-probe",
+                "status": "skipped",
+                "reason": "input_detection_unavailable"
+              },
+              {
+                "name": "privileged.hardware-user-input-pauses",
+                "status": "skipped",
+                "reason": "hardware_input_required"
+              }
+            ],
+            "listenerHealth": [
+              {
+                "name": "privileged.input-listener-health",
+                "status": "passed"
+              }
+            ]
+          }
+        ],
+        "overlayObservations": [
+          {
+            "protocol": 1,
+            "platform": "win32",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": true
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_harness_unavailable"
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              }
+            ]
+          },
+          {
+            "protocol": 1,
+            "platform": "win32",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": true
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": true
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              }
+            ]
+          }
+        ],
+        "nativeStopResults": [
+          {
+            "protocol": 1,
+            "kind": "result",
+            "phase": "exit",
+            "stop": {
+              "ok": true
+            },
+            "exitCode": 0
+          }
+        ],
+        "qualification": "Normal invocation retained native_harness_unavailable skip. Later source-bound isolated invocation passed native Stop with stop.ok true and exitCode 0. Hardware calibration and granted foreground actions remain unverified."
+      },
+      "macNative": {
+        "job": 132345115555,
+        "logBytes": 70379,
+        "logSha256": "52d8ab85811e5c1d8584ac3256bde12f881813794740e18ac169027433afa790",
+        "conclusion": "success",
+        "artifact": 14100432409,
+        "archiveBytes": 2218,
+        "archiveSha256": "6690a6d4c160336146949d3c8f7610b07a97a52e94b6c3207d8dc56873c20cbb",
+        "reports": [
+          {
+            "name": "computer-darwin-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          },
+          {
+            "name": "computer-darwin-privileged.json",
+            "code": 0,
+            "counts": {
+              "passed": 33,
+              "failed": 0,
+              "skipped": 13
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "native-skip"
+              },
+              {
+                "name": "privileged.capture-color-patch",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.capture-overlay-exclusion",
+                "status": "skipped",
+                "reason": "screen_denied"
+              },
+              {
+                "name": "privileged.ax-counter-increment",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.ax-value-set-and-readback",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.secure-field-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.tagged-click-increments",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.stale-capture-refusal",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-ax-without-pointer-or-focus",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.background-selection-insertion",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.helper-tagged-escape-ignored",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.foreign-escape-stops",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              },
+              {
+                "name": "privileged.owned-input-release",
+                "status": "skipped",
+                "reason": "accessibility_denied"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ],
+        "overlayObservations": [
+          {
+            "protocol": 1,
+            "platform": "darwin",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": true
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_harness_unavailable"
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_harness_unavailable"
+              }
+            ]
+          },
+          {
+            "protocol": 1,
+            "platform": "darwin",
+            "electron": "42.11.4",
+            "checks": [
+              {
+                "name": "overlay-count",
+                "ok": true
+              },
+              {
+                "name": "overlay-bounds",
+                "ok": true
+              },
+              {
+                "name": "overlay-window-properties",
+                "ok": true
+              },
+              {
+                "name": "overlay-stack-level",
+                "ok": true
+              },
+              {
+                "name": "overlay-ignore-pointer",
+                "ok": true
+              },
+              {
+                "name": "overlay-workspaces",
+                "ok": true
+              },
+              {
+                "name": "overlay-content-protection",
+                "ok": false,
+                "skipped": true,
+                "reason": "not_applicable"
+              },
+              {
+                "name": "overlay-banner-copy",
+                "ok": true
+              },
+              {
+                "name": "overlay-sandbox",
+                "ok": true
+              },
+              {
+                "name": "overlay-ipc-rejected",
+                "ok": true
+              },
+              {
+                "name": "transparent-theme-switch",
+                "ok": true
+              },
+              {
+                "name": "window-all-closed",
+                "ok": true
+              },
+              {
+                "name": "focus-preserved",
+                "ok": true
+              },
+              {
+                "name": "controller-stop-cancels-helper",
+                "ok": true
+              },
+              {
+                "name": "heartbeat-loss-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "helper-crash-removes-overlays",
+                "ok": true
+              },
+              {
+                "name": "native-os-stop",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_grants_unavailable"
+              },
+              {
+                "name": "native-capture-exclusion",
+                "ok": false,
+                "skipped": true,
+                "reason": "native_grants_unavailable"
+              }
+            ]
+          }
+        ],
+        "nativeStopResults": [
+          {
+            "protocol": 1,
+            "kind": "result",
+            "phase": "exit",
+            "stop": {
+              "ok": false,
+              "skipped": true,
+              "reason": "screen_denied"
+            },
+            "capture": {
+              "ok": false,
+              "skipped": true,
+              "reason": "screen_denied"
+            },
+            "exitCode": 77
+          }
+        ],
+        "qualification": "Actual denial-aware checks; screen/accessibility-denied rows and native Stop/capture skips remain skips. No granted Mac proof. Separate PR Mac matrix was skipped."
+      },
+      "linuxElectron": {
+        "job": 132345115536,
+        "logBytes": 199390,
+        "logSha256": "a4e0a10c171f66c7a97620aac4e04d98eaa42c86a3000f3b432960e79e7fb059",
+        "conclusion": "success",
+        "passed": 1,
+        "skipped": 1,
+        "passedCase": "Actual unsupported Hands platform in dev Electron",
+        "skippedCase": "Onboarding, app approval, sensitive approval and UI Stop journey",
+        "skipReason": "The product does not support Hands on Linux; the preceding test asserts that actual state.",
+        "qualification": "The full Hands journey did not run on Linux."
+      },
+      "arm64": "skipped in this PR; independent preview core matrix recorded separately"
+    },
+    "unsignedArtifactsOnlyPreview": {
+      "run": 43560764334,
+      "headRevision": "a0e5ce8e85fde301a93b5a4d38b33ea0243c5075",
+      "inputs": {
+        "tag": "v1.99.112",
+        "dry_run": true,
+        "allow_unsigned": true,
+        "prerelease": false
+      },
+      "conclusion": "pending",
+      "windowsX64Native": {
+        "job": 132345214986,
+        "logBytes": 189522,
+        "logSha256": "ec0f215e8b94c77bce35e0665097b30b697d2e6b96121c7758414a37c803aea7",
+        "conclusion": "success",
+        "artifact": 14100622060,
+        "archiveBytes": 554,
+        "archiveSha256": "666a1cd972a1682c408fe2df552bc044fe6b7ba821a99e9d0b99afafabe17326",
+        "reports": [
+          {
+            "name": "computer-win32-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ]
+      },
+      "windowsArm64Native": {
+        "job": 132349432974,
+        "logBytes": 36621,
+        "logSha256": "7ade50e3f74d2ed01867c3ae4267d9ea22b277e0faa7d762b19cd714c1c52abb",
+        "conclusion": "success",
+        "artifact": 14100564177,
+        "archiveBytes": 556,
+        "archiveSha256": "a99a1617a700f6a4e5feed1be3c2a451ad306933574d3639ac012ff0a7344fa5",
+        "reports": [
+          {
+            "name": "computer-win32-arm64.json",
+            "code": 0,
+            "counts": {
+              "passed": 30,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ],
+        "qualification": "Native ARM64 core/protocol execution; final packaged Main pins/helper verifier remains pending."
+      },
+      "macNativeBuild": {
+        "job": 132345214931,
+        "logBytes": 49169,
+        "logSha256": "7c2b3c24a858ac9631e300b0f855f1cc74496347ce8b0dbe0eef0a3438bb26fb",
+        "conclusion": "success",
+        "artifact": 14100852196,
+        "archiveBytes": 995,
+        "archiveSha256": "c38e4caf671e83dc797ab0ea8c074dd4afa2059f555cd4d063c04e0c3e749acf",
+        "reports": [
+          {
+            "name": "computer-darwin-core.json",
+            "code": 0,
+            "counts": {
+              "passed": 31,
+              "failed": 0,
+              "skipped": 1
+            },
+            "skips": [
+              {
+                "name": "privileged",
+                "status": "skipped",
+                "reason": "disabled"
+              }
+            ],
+            "listenerHealth": []
+          }
+        ]
+      },
+      "shippingSourceManifests": {
+        "qualification": "Independently rehashed archive ZIPs; manifests read in memory from bounded tar contents. No extracted or executed binaries.",
+        "prMac": {
+          "artifact": 14101420225,
+          "archiveBytes": 4001325,
+          "archiveSha256": "b5466fdee894cf75c7413c394649913966893e69bd520cf32c86c7dd630d41d0",
+          "helperVersion": "1.0.15",
+          "sourceDigest": "55d3ca43a0ad47b925ae5a513c98aba17be9abcd02a910ee86b0c82aa19162a3",
+          "qualification": "PR Mac source artifact, not the preview package."
+        },
+        "previewWindows": {
+          "artifact": 14101126379,
+          "archiveBytes": 2087867,
+          "archiveSha256": "c59a1dc23b01f4db316a966cfa542fc98e11df196f738f2720e6bff9caafe6b1",
+          "helperVersion": "1.0.15",
+          "sourceDigest": "d3309cc9422609dba810a9e3ab1fb40b825c7b41405dbef300dd3077fc44345b",
+          "architectures": [
+            "x64",
+            "arm64"
+          ],
+          "toolchain": "cmake version 4.4.5; msvc:19.51.36260; vc-tools:14.51.36231; windows-sdk:10.0.26100.0",
+          "qualification": "Both architecture manifests match this actual digest/toolchain; do not substitute the earlier 60300433 digest."
+        }
+      },
+      "remaining": "Mac OS matrix, remaining broad tests/build smokes and final macOS/Windows/Linux package verifiers, including the separate final ARM64 actual packed Main/helper verifier."
+    },
+    "ownerOnlyGates": "Real Windows mouse/same-Shift calibration and hardware takeover, privileged ARM64/device/UAC checks, Mac grants and manual device checks, owner signing/notarization, final approvals and publication. Helper 1.0.15 remains unreleased."
   }
 }
