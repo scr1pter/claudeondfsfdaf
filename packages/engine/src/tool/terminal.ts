@@ -1,4 +1,4 @@
-import { Clock, Effect, Option, Schema } from "effect"
+import { Clock, Context, Effect, Option, Schema, Semaphore } from "effect"
 import stripAnsi from "strip-ansi"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -7,6 +7,8 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { Location } from "@vectordevai/core/location"
 import { LocationServiceMap } from "@vectordevai/core/location-services"
 import { Pty } from "@vectordevai/core/pty"
+import { PtyHold } from "@vectordevai/core/pty/hold"
+import { PtyProcess } from "@vectordevai/core/pty/process"
 import { PtyID } from "@vectordevai/core/pty/schema"
 import { WebFence } from "@vectordevai/core/research/fence"
 import { AbsolutePath, NonNegativeInt, PositiveInt } from "@vectordevai/core/schema"
@@ -16,7 +18,11 @@ import { Config } from "@/config/config"
 import { ComputerSession } from "@/computer/session"
 import { Session } from "@/session/session"
 import { InstanceState } from "@/effect/instance-state"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Plugin } from "@/plugin"
+import { TaskNotify } from "@/task/notify"
+import { TaskPlace } from "@/task/place"
+import type { TaskPromptOps } from "./task"
 import { ShellPermission } from "./shell"
 import { Sandbox } from "./shell/sandbox"
 import { Tool } from "./tool"
@@ -61,13 +67,27 @@ const Key = Schema.Literals([
 type Key = Schema.Schema.Type<typeof Key>
 
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["list", "open", "read", "type", "keys", "wait", "resize", "close", "reveal"]).annotate({
+  action: Schema.Literals([
+    "list",
+    "open",
+    "read",
+    "type",
+    "keys",
+    "wait",
+    "signal",
+    "resize",
+    "rename",
+    "close",
+    "reveal",
+  ]).annotate({
     description: "The terminal action to perform",
   }),
   id: Schema.optional(Schema.String).annotate({
     description: "The terminal (pty_…) from list or open. Required for every action but list and open.",
   }),
-  title: Schema.optional(Schema.String.check(Schema.isMaxLength(80))).annotate({ description: "open: the tab title" }),
+  title: Schema.optional(Schema.String.check(Schema.isMaxLength(80))).annotate({
+    description: "open, rename: the tab title",
+  }),
   command: Schema.optional(Schema.String).annotate({
     description:
       "open: a command line, run by your shell as the shell tool runs it. With args, the program to start directly. Omit for an interactive shell.",
@@ -105,6 +125,17 @@ export const Parameters = Schema.Struct({
   rows: Schema.optional(PositiveInt).annotate({ description: "open, resize: rows" }),
   focus: Schema.optional(Schema.Boolean).annotate({ description: "reveal: also move the user's keyboard focus to it" }),
   reveal: Schema.optional(Schema.Boolean).annotate({ description: "open: show it to the user right away" }),
+  notify: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "open: send you a note when the program exits, and when notify_pattern first appears, so you need not poll",
+  }),
+  notify_pattern: Schema.optional(Schema.String.check(Schema.isMaxLength(500))).annotate({
+    description: "open with notify: a regular expression whose first appearance in the output sends a note",
+  }),
+  signal: Schema.optional(Schema.Literals(["interrupt", "terminate", "kill"])).annotate({
+    description:
+      "signal: interrupt (ctrl-c), terminate (SIGTERM) or kill (SIGKILL) the terminal's foreground program, which keeps the terminal and its output",
+  }),
 })
 type Params = Schema.Schema.Type<typeof Parameters>
 
@@ -116,6 +147,7 @@ type Metadata = {
   exitCode?: number
   cursor?: number
   matched?: "pattern" | "exit" | "quiet" | "timeout"
+  signal?: "interrupt" | "terminate" | "kill"
 }
 
 // Polling actions: the same read or wait repeated is progress, not a loop (session/processor.ts).
@@ -123,6 +155,14 @@ export const POLLING_ACTIONS: ReadonlySet<string> = new Set(["list", "read", "wa
 
 const OFFLINE =
   "Vector did not use the terminal. With Web access None in Vector Local, commands run only inside Vector's sandbox, and a terminal cannot run there. Use the shell tool, or change Web access in Vector Local."
+
+/** The most running terminals the agents of one conversation keep open in one place, as background commands are capped. */
+export const LIMIT = 8
+export const LIMIT_REFUSAL = `This conversation's agents already run ${LIMIT} terminals here. Close one you no longer need with action close, or use the shell tool for a command that finishes.`
+export const SUBAGENT_REFUSAL =
+  "Background subagents are turned off, so helpers do not open terminals: use the shell tool with a timeout, or leave long-running programs to the main agent."
+const NOTIFY_UNAVAILABLE =
+  "Notes are not available here, so notify cannot be used. Open the terminal without notify and wait on it with action wait."
 
 const GUESTED =
   "In a session an invited guest has acted in, you can use only the terminals you opened: the user's terminals and other sessions' stay with the user."
@@ -152,6 +192,25 @@ const FOREIGN = new Set(["fish", "nu"])
 // line from it again (zsh's `r`, `fc -s` and `fc -e -` in bash and zsh, PowerShell's `r`, `ihy` and Invoke-History), so
 // the line as typed does not say what runs. A `!` before a blank, `=` or `(` is never expanded (`!=`, `[ ! -f x ]`).
 const HISTORY = /![^\s=(]|^\s*\^|(?:^|[\s;&|(`{])(?:r|fc|ihy|invoke-history)(?=$|[\s;&|)}])/i
+// A line that sets something an interactive shell runs later, on its own, whatever comes next: a prompt variable or a
+// prompt hook (bash's PROMPT_COMMAND and PS0-PS4, zsh's PROMPT and RPROMPT with prompt_subst, precmd and preexec,
+// TRAP functions), a startup file (BASH_ENV, ENV, ZDOTDIR), an alias, a key binding or a widget (bind, bindkey, zle),
+// a line pushed into the next prompt or the history (zsh's print -z and print -s, vared, history -s), an option
+// (setopt, shopt), a trap, a script read into the shell (source, `.`), or PowerShell's prompt and PSReadLine handlers.
+// The line scanned alone says nothing of what runs at the next prompt, so it asks every time, and so does every line
+// typed into that terminal after it, an empty Enter included.
+const HOOKS = new RegExp(
+  [
+    String.raw`(?:^|[\s;&|(\`{])(?:PROMPT_COMMAND|PS[0-4]|PROMPT[234]?|RPROMPT2?|RPS[12]|BASH_ENV|ENV|ZDOTDIR|precmd_functions|preexec_functions|chpwd_functions|zle_\w+)(?:\[[^\]]*\])?\+?=`,
+    String.raw`(?:^|[;&|({\n]|\b(?:then|do|else))\s*(?:\w+=\S*\s+)*(?:builtin\s+|command\s+)?(?:alias|unalias|bind|bindkey|zle|vared|setopt|unsetopt|shopt|source|trap|enable|autoload|zmodload|doskey|Set-PSReadLineOption|Set-PSReadLineKeyHandler|Register-EngineEvent|\.(?=\s+\S))(?=$|\s)`,
+    String.raw`\bprint\s+(?:-\w*\s+)*-\w*[zs]`,
+    String.raw`\bhistory\s+(?:-\w*\s+)*-\w*s`,
+    String.raw`(?:^|[;&|({\n]\s*)(?:function\s+)?(?:precmd|preexec|chpwd|periodic|zshexit|zshaddhistory|command_not_found_handler?|TRAP[A-Z]+|prompt)\s*(?:\(\s*\)|\{)`,
+    String.raw`\bfunction\s+(?:global:)?prompt\b`,
+    String.raw`\$function:(?:global:)?prompt\b`,
+  ].join("|"),
+  "i",
+)
 // Keys that may put text in the line Vector never sees: history (arrows, page keys, ctrl-p and ctrl-n, ctrl-r's search),
 // the kill ring (ctrl-y), and keys after which the next ones are commands (escape for Meta or vi's command mode, where
 // `k` recalls a line, and ctrl-x, whose ctrl-e hands the line to an editor).
@@ -188,6 +247,7 @@ export const TerminalTool = Tool.define<
   | FreeModelGuests.Service
   | ComputerSession.Service
   | Session.Service
+  | RuntimeFlags.Service
 >(
   "terminal",
   Effect.gen(function* () {
@@ -196,8 +256,26 @@ export const TerminalTool = Tool.define<
     const locations = yield* LocationServiceMap.Service
     const permission = yield* ShellPermission
     const guests = yield* FreeModelGuests.Service
+    const flags = yield* RuntimeFlags.Service
+    // Exit and pattern notes (notify). A build that leaves TaskNotify out (a test of the tool alone) refuses notify.
+    const notifier = yield* Effect.serviceOption(TaskNotify.Service)
     // By terminal. Lines the user types themselves are not here: the scan sees only what the agent typed.
     const pending = new Map<PtyID, Line>()
+    // Terminals whose shell the agent gave a hook (HOOKS): every line it types there after asks every time.
+    const tainted = new Set<PtyID>()
+    // One input at a time per terminal, from reading its pending line to the last keystroke: two calls of one message
+    // run at once, and each must scan the line the other left, not the one before it.
+    const locks = new Map<PtyID, Semaphore.Semaphore>()
+    const locked = (id: PtyID) => {
+      const lock = locks.get(id) ?? Semaphore.makeUnsafe(1)
+      locks.set(id, lock)
+      return lock.withPermits(1)
+    }
+    const forget = (id: PtyID) => {
+      pending.delete(id)
+      tainted.delete(id)
+      locks.delete(id)
+    }
 
     // In a session an invited guest has acted in, the terminals the agent did not open (the user's, such as the one a
     // Host locally agent runs in, and other sessions') are neither listed nor used: what the agent reads there would
@@ -244,6 +322,18 @@ export const TerminalTool = Tool.define<
       const pty = yield* Pty.Service
       if (params.args !== undefined && params.command === undefined)
         return usage(params, "args needs command: the program to start with them.")
+      if (params.notify_pattern !== undefined && params.notify !== true)
+        return usage(params, "notify_pattern needs notify: true.")
+      // Refused before anything is asked: a helper while background subagents are off, a conversation that already
+      // runs the most terminals here, and notify where no note can reach the session.
+      if (ctx.parentID !== undefined && !flags.backgroundSubagents) return yield* Effect.die(new Error(SUBAGENT_REFUSAL))
+      const root = conversation(ctx.sessionID)
+      const running = (yield* pty.list()).filter(
+        (info) => info.status === "running" && info.owner?.kind === "agent" && conversation(info.owner.sessionID) === root,
+      )
+      if (running.length >= LIMIT) return yield* Effect.die(new Error(LIMIT_REFUSAL))
+      const ops = ctx.extra?.promptOps as TaskPromptOps | undefined
+      if (params.notify && (Option.isNone(notifier) || !ops)) return usage(params, NOTIFY_UNAVAILABLE)
       const shell = Shell.acceptable((yield* config.get()).shell)
       const cwd = params.cwd ? yield* permission.resolvePath(params.cwd, directory, shell) : directory
       // What the scan reads: the command line as the shell gets it, or the program and its arguments as one. An
@@ -287,6 +377,19 @@ export const TerminalTool = Tool.define<
         { kind: "agent", sessionID: ctx.sessionID },
         permission.beforeRun([scan]),
       )
+      // The terminal keeps its location alive while it runs, and its watch sends the notes notify asked for.
+      const send =
+        params.notify && Option.isSome(notifier) && ops
+          ? noteSender(notifier.value, ops, ctx, created, yield* Effect.context<never>())
+          : undefined
+      const watching = yield* PtyHold.whileRunning(
+        locations,
+        Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+        created.id,
+        send ? watcher(created, params.notify_pattern, send) : {},
+      )
+      // A program that ended before the watch began is told of at once.
+      if (!watching && send && created.status === "exited") send("exited")
       if (params.cols !== undefined || params.rows !== undefined)
         yield* pty.update(created.id, { size: size(params.cols ?? 80, params.rows ?? 24) })
       if (params.reveal) yield* pty.reveal(created.id, { focus: false })
@@ -357,43 +460,60 @@ export const TerminalTool = Tool.define<
           ...(params.keys === undefined ? {} : { keys: params.keys }),
         },
       })
-      const known = Shell.posix(info.command) || Shell.ps(info.command) || Shell.name(info.command) === "cmd"
-      const shell = known ? info.command : Shell.acceptable((yield* config.get()).shell)
-      const continuation = Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\"
-      let line = pending.get(info.id) ?? EMPTY
-      const typed = submit(line, strokes, continuation)
-      const scans = yield* Effect.forEach(typed.lines, (line) =>
+      // Who reads what is typed: an interactive shell, whose lines the scan reads as the commands they are; fish or nu,
+      // whose grammar it does not read; or a program (a command line's, a REPL, a dev server, ssh), for which a line is
+      // its own input and no shell command at all, so it goes as written, unread, with no shell history to recall.
+      const reader = readerOf(info)
+      const shell = reader === "shell" ? info.command : Shell.acceptable((yield* config.get()).shell)
+      const from = yield* locked(info.id)(
         Effect.gen(function* () {
-          const recalled = line.recalled === true || HISTORY.test(line.text)
-          return yield* permission.ask(ctx, {
-            command: line.text,
-            cwd: info.cwd,
-            shell,
-            ...(Sandbox.sandboxEnabled() ? { first: unsandboxed(line.text) } : {}),
-            unread: !line.exact || recalled || FOREIGN.has(Shell.name(info.command)),
-            // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and tab).
-            recalled:
-              recalled ||
-              (!line.exact &&
-                line.text
-                  .split(/[\s;&|()`{}]+/)
-                  .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
-          })
+          const continuation = Shell.ps(shell) ? "`" : Shell.name(shell) === "cmd" ? "^" : "\\"
+          let line = pending.get(info.id) ?? EMPTY
+          const typed = submit(
+            line,
+            strokes,
+            continuation,
+          )
+          const scans = yield* Effect.forEach(typed.lines, (line) =>
+            Effect.gen(function* () {
+              if (reader === "program")
+                return yield* permission.ask(ctx, { command: line.text, cwd: info.cwd, shell, unread: true })
+              // A hook set now, or before, runs commands at the next prompt that no line says.
+              const hooked = tainted.has(info.id) || HOOKS.test(line.text)
+              if (HOOKS.test(line.text)) tainted.add(info.id)
+              const recalled = line.recalled === true || HISTORY.test(line.text) || hooked
+              return yield* permission.ask(ctx, {
+                command: line.text,
+                cwd: info.cwd,
+                shell,
+                unread: !line.exact || recalled || reader === "foreign",
+                // A word of an unknown line that tab completion may have finished as a cloud CLI's name (`verc` and
+                // tab).
+                recalled:
+                  recalled ||
+                  (!line.exact &&
+                    line.text
+                      .split(/[\s;&|()`{}]+/)
+                      .some((word) => word !== "" && CLOUD_CLIS.some((cli) => cli.startsWith(word.toLowerCase())))),
+              })
+            }),
+          )
+          // One admission for every line the strokes submit, before the first keystroke: a line refused above or here
+          // types nothing, and leaves no claim on a file an earlier line of the same call names.
+          yield* permission.admit(ctx, scans)
+          const from = (yield* pty.read(info.id, { limit: 0 })).end
+          for (const [index, data] of writes.entries()) {
+            // A program reads escape and the key right after it as one Alt combination, unless they come apart.
+            if (index > 0 && writes[index - 1] === "\x1b") yield* Effect.sleep("50 millis")
+            yield* permission.beforeRun(scans)
+            yield* pty.write(info.id, data)
+            // Retain only the prefix actually written if a later admission refuses the remaining strokes.
+            line = writes.length === 1 ? typed.line : submit(line, strokes.slice(index, index + 1), continuation).line
+            pending.set(info.id, line)
+          }
+          return from
         }),
       )
-      // One admission for every line the strokes submit, before the first keystroke: a line refused above or here types
-      // nothing, and leaves no claim on a file an earlier line of the same call names.
-      yield* permission.admit(ctx, scans)
-      const from = (yield* pty.read(info.id, { limit: 0 })).end
-      for (const [index, data] of writes.entries()) {
-        // A program reads escape and the key right after it as one Alt combination, unless they come apart.
-        if (index > 0 && writes[index - 1] === "\x1b") yield* Effect.sleep("50 millis")
-        yield* permission.beforeRun(scans)
-        yield* pty.write(info.id, data)
-        // A late refusal leaves the terminal's existing prefix in place. Advance only for bytes actually written.
-        line = writes.length === 1 ? typed.line : submit(line, strokes.slice(index, index + 1), continuation).line
-        pending.set(info.id, line)
-      }
       yield* Effect.sleep("300 millis")
       const read = yield* pty.read(info.id, { cursor: from, limit: 32_000 })
       const shown = clean(read.output)
@@ -439,7 +559,9 @@ export const TerminalTool = Tool.define<
           // Enough to match a ready line in a chatty log, without cleaning megabytes on every poll.
           state.raw = (state.raw + read.output).slice(-512_000)
           state.text = clean(state.raw)
-          state.found = pattern?.test(state.text) === true
+          // The model's pattern runs on the last MATCH_WINDOW characters only: a pattern that backtracks badly over a
+          // long log would otherwise hold the engine on every poll.
+          state.found = pattern?.test(state.text.slice(-MATCH_WINDOW)) === true
           state.changed = now
         }
         const matched = state.found
@@ -478,12 +600,26 @@ export const TerminalTool = Tool.define<
       const pty = yield* Pty.Service
       yield* askOther(params, ctx, info)
       if (params.action === "close") {
+        const was = { ...info }
         yield* pty.remove(info.id)
-        pending.delete(info.id)
+        forget(info.id)
+        // The close hangs the program up; one that ignores it is killed with its process group (PtyProcess.ended).
+        const gone = was.status === "running" ? yield* PtyProcess.ended(was.pid) : true
         return {
-          title: info.title,
-          metadata: metadata(params, info),
-          output: `Closed ${describe(info, ctx)}.`,
+          title: was.title,
+          metadata: metadata(params, was),
+          output: gone
+            ? `Closed ${describe(was, ctx)}.`
+            : `Closed the terminal ${was.id}, but its program (pid ${was.pid}) is still running and could not be ended.`,
+        }
+      }
+      if (params.action === "rename") {
+        if (params.title === undefined || params.title.trim() === "") return usage(params, "rename needs a title.")
+        const updated = yield* pty.update(info.id, { title: params.title.trim() })
+        return {
+          title: updated.title,
+          metadata: metadata(params, updated),
+          output: `Renamed ${updated.id} to "${WebFence.escape(updated.title)}".`,
         }
       }
       if (params.cols === undefined || params.rows === undefined)
@@ -500,6 +636,33 @@ export const TerminalTool = Tool.define<
       }
     })
 
+    // Interrupts, terminates or kills the terminal's foreground program and keeps the terminal, its output and its shell.
+    const signal = Effect.fn("TerminalTool.signal")(function* (params: Params, ctx: Tool.Context, info: Pty.Info) {
+      const pty = yield* Pty.Service
+      if (params.signal === undefined) return usage(params, "signal needs signal: interrupt, terminate or kill.")
+      yield* askOther(params, ctx, info)
+      if (info.status === "exited")
+        return { title: info.title, metadata: metadata(params, info), output: `${describe(info, ctx)}. Nothing was signalled.` }
+      const sent =
+        params.signal === "interrupt"
+          ? yield* pty.write(info.id, "\x03").pipe(Effect.as(true))
+          : process.platform === "win32"
+            ? false
+            : PtyProcess.signal(PtyProcess.foreground(info.pid), params.signal === "kill" ? "SIGKILL" : "SIGTERM")
+      if (params.signal === "interrupt") pending.set(info.id, EMPTY)
+      yield* Effect.sleep("300 millis")
+      const after = yield* pty.get(info.id)
+      return {
+        title: after.title,
+        metadata: { ...metadata(params, after), signal: params.signal },
+        output: sent
+          ? `Sent ${params.signal} to the foreground program of ${describe(after, ctx)}.`
+          : process.platform === "win32"
+            ? "On Windows a terminal's program can be interrupted (signal interrupt) or ended with the terminal (action close); terminate and kill are not available."
+            : `${describe(after, ctx)}. Vector found no program to signal.`,
+      }
+    })
+
     const reveal = Effect.fn("TerminalTool.reveal")(function* (params: Params, info: Pty.Info) {
       const pty = yield* Pty.Service
       yield* pty.reveal(info.id, { focus: params.focus === true })
@@ -513,8 +676,10 @@ export const TerminalTool = Tool.define<
     const run = Effect.fn("TerminalTool.run")(function* (params: Params, ctx: Tool.Context, directory: string) {
       const offline = Egress.policy()
       // Refused before anything is asked: a terminal runs outside the sandbox Web access None keeps every command in.
-      if (["open", "type", "keys"].includes(params.action) && offline.enabled && offline.web === "none")
+      if (["open", "type", "keys", "signal"].includes(params.action) && offline.enabled && offline.web === "none")
         return yield* Effect.die(new Error(OFFLINE))
+      if (params.pattern !== undefined && params.pattern.length > PATTERN_MAX)
+        return usage(params, `The pattern is longer than ${PATTERN_MAX} characters. Wait for a shorter one.`)
       if (params.action === "list") return yield* list(ctx)
       if (params.action === "open") return yield* open(params, ctx, directory)
       if (params.id === undefined)
@@ -528,7 +693,9 @@ export const TerminalTool = Tool.define<
       if (params.action === "read") return yield* read(params, ctx, info)
       if (params.action === "wait") return yield* wait(params, ctx, info)
       if (params.action === "reveal") return yield* reveal(params, info)
-      if (params.action === "resize" || params.action === "close") return yield* change(params, ctx, info)
+      if (params.action === "signal") return yield* signal(params, ctx, info)
+      if (params.action === "resize" || params.action === "close" || params.action === "rename")
+        return yield* change(params, ctx, info)
       if (params.action === "keys") {
         if (!params.keys?.length) return usage(params, "keys needs at least one key to press.")
         return yield* input(
@@ -663,6 +830,10 @@ function tail(text: string, lines: number, chars: number) {
   return text.split("\n").slice(-lines).join("\n").slice(-chars)
 }
 
+// How much of the latest output a wait pattern is matched against, and the longest pattern taken.
+const MATCH_WINDOW = 64_000
+const PATTERN_MAX = 500
+
 // The pattern as a regular expression, or as literal text when it is not a valid one.
 function matcher(pattern: string) {
   try {
@@ -676,20 +847,112 @@ function size(cols: number, rows: number) {
   return { cols: Math.min(Math.max(cols, 20), 500), rows: Math.min(Math.max(rows, 5), 200) }
 }
 
+// A terminal runs outside the shell sandbox, the one that bounds what auto-approved commands can do, so starting one
+// with the sandbox on asks under a permission of its own: never the shell tool's unsandboxed_shell (whose "always" and
+// auto-accept would then start every terminal, and every command whose sandbox failed, without a word), never answered
+// by auto-accept or Full access, and with no "always" (PermissionPolicy.canAutoApprove).
 function unsandboxed(command: string) {
   return {
-    permission: "unsandboxed_shell",
+    permission: PermissionPolicy.TERMINAL_UNSANDBOXED,
     patterns: [process.platform],
-    always: [process.platform],
+    always: [],
     metadata: { command, platform: process.platform, reason: "Terminals run outside the shell sandbox." },
   }
 }
 
-// A terminal the session's agent opened, or its parent's when this is a subagent.
+// What reads the lines typed into a terminal (see input).
+function readerOf(info: Pty.Info): "shell" | "foreign" | "program" {
+  if (Shell.interactive(info.command, info.args)) return "shell"
+  if (FOREIGN.has(Shell.name(info.command)) && info.args.every((arg) => /^-(?:l|i|-login|-interactive)$/.test(arg)))
+    return "foreign"
+  return "program"
+}
+
+// A terminal the session's agent opened, its parent's when this is a subagent, or one of its own helpers' (a subagent
+// it started, or theirs): the main agent reads its helper's dev server as its own.
 function own(info: Pty.Info, ctx: Tool.Context) {
-  return (
-    info.owner?.kind === "agent" && (info.owner.sessionID === ctx.sessionID || info.owner.sessionID === ctx.parentID)
-  )
+  if (info.owner?.kind !== "agent") return false
+  if (info.owner.sessionID === ctx.sessionID || info.owner.sessionID === ctx.parentID) return true
+  return lineage(info.owner.sessionID).includes(ctx.sessionID)
+}
+
+// The conversation a session belongs to: its topmost ancestor this engine knows of.
+function conversation(sessionID: string) {
+  return lineage(sessionID).at(-1) ?? sessionID
+}
+
+// What a terminal's watch does for notify: one note when notify_pattern first appears, and one when the program exits
+// on its own. A terminal closed or removed sends none: the agent closed it, or its session or location ended.
+function watcher(info: Pty.Info, pattern: string | undefined, send: (state: "exited" | "matched") => void): PtyHold.Watch {
+  const regex = pattern === undefined ? undefined : matcher(pattern)
+  const state = { raw: "", matched: false, timer: undefined as ReturnType<typeof setTimeout> | undefined }
+  const check = () => {
+    state.timer = undefined
+    if (state.matched || !regex) return
+    if (!regex.test(clean(state.raw).slice(-MATCH_WINDOW))) return
+    state.matched = true
+    state.raw = ""
+    send("matched")
+  }
+  return {
+    onData: (chunk) => {
+      if (state.matched || !regex) return
+      state.raw = (state.raw + chunk).slice(-MATCH_WINDOW * 2)
+      // At most one match every 200 ms, whatever the output rate.
+      state.timer ??= setTimeout(check, 200)
+    },
+    onEnd: () => {
+      if (state.timer) clearTimeout(state.timer)
+      if (!state.matched && regex) check()
+      if (info.status === "exited") send("exited")
+    },
+  }
+}
+
+// Sends a terminal's notes to the session that opened it, through TaskNotify, as a background command's exit note goes.
+// The note names the terminal and where to read from; the output itself stays in the terminal, read as data.
+function noteSender(
+  notify: TaskNotify.Interface,
+  ops: TaskPromptOps,
+  ctx: Tool.Context,
+  info: Pty.Info,
+  context: Context.Context<never>,
+) {
+  const run = Effect.runForkWith(context)
+  return (state: "exited" | "matched") => {
+    const title = WebFence.escape(info.title)
+    const text =
+      state === "exited"
+        ? `Terminal ${info.id} "${title}" exited with code ${info.exitCode ?? "unknown"}. Read its output with the terminal tool: action read, id ${info.id}.`
+        : `Terminal ${info.id} "${title}" printed what notify_pattern waits for. Read its output with the terminal tool: action read, id ${info.id}.`
+    run(
+      notify
+        .enqueue({
+          parentID: ctx.sessionID,
+          note: {
+            kind: "terminal",
+            terminalID: info.id,
+            state,
+            ...(info.exitCode === undefined ? {} : { exitCode: info.exitCode }),
+            text,
+            wake: true,
+          },
+          ops,
+          agent: ctx.agent,
+        })
+        .pipe(Effect.catchCause((cause) => Effect.logWarning("a terminal's note was not sent", { id: info.id, cause }))),
+    )
+  }
+}
+
+// A session's ancestors, nearest first, as far as this engine started them (TaskPlace keeps who started whom).
+function lineage(sessionID: string) {
+  const found: string[] = []
+  for (let id = TaskPlace.parentOf(sessionID); id !== undefined && found.length < 32; id = TaskPlace.parentOf(id)) {
+    if (found.includes(id)) break
+    found.push(id)
+  }
+  return found
 }
 
 function describe(info: Pty.Info, ctx: Tool.Context) {

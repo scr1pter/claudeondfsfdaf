@@ -88,6 +88,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { syncSessionModel } from "@/pages/session/session-model-helpers"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { BackgroundTasksPane } from "@/features/background-tasks/background-tasks-pane"
+import { BrowserActivity } from "@/features/browser-agent/browser-activity"
 import { backgroundTasksPane } from "@/features/background-tasks/background-tasks-state"
 import { BackgroundTasksProvider } from "@/features/background-tasks/use-background-tasks"
 import { SessionReviewEmptyChangesV2 } from "@vectordevai/session-ui/v2/session-review-empty-changes-v2"
@@ -2318,7 +2319,7 @@ export default function Page() {
       <SessionTaskCommands />
       <SessionRouteFrame>
         <SessionHeader />
-        <div data-vector-session-split class="flex-1 min-h-0 flex flex-col md:flex-row">
+        <div data-vector-session-split class="relative flex-1 min-h-0 flex flex-col md:flex-row">
           <Show when={!isDesktop() && !!params.id && !settings.general.newLayoutDesigns()}>{mobileTabs()}</Show>
 
           <div
@@ -2380,6 +2381,10 @@ export default function Page() {
           />
 
           <BackgroundTasksPane />
+          <BrowserActivity
+            sessionID={params.id}
+            parentOf={(sessionID) => sync().session.get(sessionID)?.parentID}
+          />
         </div>
 
         <TerminalPanel />

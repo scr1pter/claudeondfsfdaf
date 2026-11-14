@@ -336,6 +336,8 @@ const layer = Layer.effect(
           learned_skill: "ask",
           workflow: "ask",
           unsandboxed_shell: "ask",
+          // A terminal started while the shell sandbox is on runs outside it: asked every time (PermissionPolicy).
+          unsandboxed_terminal: "ask",
           // Terminals the agent did not open (the user's, or another session's) ask before the agent reads, waits
           // on, types into, resizes or closes them, and a submitted line also goes through the shell's own rules.
           // Its own terminals ask nothing to read.

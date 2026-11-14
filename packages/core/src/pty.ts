@@ -159,11 +159,19 @@ const layer = Layer.effect(
       notifyEnd(session, {})
     }
 
+    // The location's services end (an hour after their last use, or on a reload): every terminal ends with them, and
+    // clients and the agent are told each is gone rather than finding out on their next call.
     yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        for (const session of sessions.values()) teardown(session)
+      Effect.gen(function* () {
+        const ended = Array.from(sessions.values())
+        for (const session of ended) teardown(session)
         sessions.clear()
         exitOrder.length = 0
+        yield* Effect.forEach(
+          ended,
+          (session) => events.publish(Event.Deleted, { id: session.info.id }).pipe(Effect.ignore),
+          { discard: true },
+        )
       }),
     )
 

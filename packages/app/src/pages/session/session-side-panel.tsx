@@ -1,3 +1,4 @@
+import { OPEN_PREVIEW } from "@/features/browser-agent/activity"
 import {
   For,
   Match,
@@ -4823,6 +4824,10 @@ export function SessionSidePanel(props: {
     tabs().setActive("preview")
     announceWorkspaceMode("agent")
   }
+  // "Show" on the browser indicator: Preview on this session's own browser.
+  const onOpenPreview = () => openPreviewTab()
+  globalThis.window?.addEventListener(OPEN_PREVIEW, onOpenPreview)
+  onCleanup(() => globalThis.window?.removeEventListener(OPEN_PREVIEW, onOpenPreview))
 
   // Deep research's Sources tab: offered once the session has a research run, and opened by the report card's
   // citations and Sources button.

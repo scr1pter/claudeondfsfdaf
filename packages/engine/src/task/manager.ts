@@ -8,6 +8,7 @@ import { PartTable } from "@vectordevai/core/session/sql"
 import { BackgroundJob } from "@/background/job"
 import { TaskJobs } from "./jobs"
 import { TaskPlace } from "./place"
+import { BrowserBridge } from "@/tool/browser-bridge"
 import { TaskIsolation } from "./isolation"
 import { RequestOwner } from "@vectordevai/server/request-owner"
 import { Session } from "@/session/session"
@@ -1481,6 +1482,8 @@ const layer = Layer.effect(
           ],
           (info) => info.owner?.kind === "agent" && lineage.has(info.owner.sessionID),
         )
+      // Their browsers too: a helper's pages run in a browser of its own that no Preview shows.
+      if (lineage.size > 0) yield* BrowserBridge.close([...lineage])
       // Desktop workspaces and swarms keep their own runners and are left running; the ones Vector cannot reach
       // right now are counted apart.
       const left = board.filter((task) => !helper(task))

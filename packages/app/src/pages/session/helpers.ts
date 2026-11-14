@@ -129,15 +129,30 @@ export const typingTerminal = (tabs: readonly { id: string; agent?: string }[], 
   return tab?.agent === undefined ? tab?.id : undefined
 }
 
-/** Follows an agent's requests to show a terminal. Each new reveal opens the panel. One without focus leaves its tab
-    quiet, the returned id: neither the panel nor the terminal takes the keyboard focus for it until another tab is
-    active or the panel closes, so the user's focus stays where it was. */
+/** Whether the user is typing in a field right now (the composer, a search box, a terminal): an agent's reveal with
+    focus then leaves the keyboard where it is, so what they type next does not land in the agent's program. */
+export const userTyping = (doc: Pick<Document, "activeElement"> | undefined = globalThis.document) => {
+  const element = doc?.activeElement as HTMLElement | null | undefined
+  if (!element || element === (doc as Document | undefined)?.body) return false
+  if (element.isContentEditable || element.tagName === "TEXTAREA" || element.tagName === "SELECT") return true
+  if (element.tagName !== "INPUT") return false
+  return !["button", "checkbox", "radio", "submit", "reset", "range", "color", "file", "image"].includes(
+    (element as HTMLInputElement).type,
+  )
+}
+
+/** Follows an agent's requests to show a terminal. Each new reveal opens the panel. One without focus, or one asking
+    for focus while the user types elsewhere, leaves its tab quiet, the returned id: neither the panel nor the terminal
+    takes the keyboard focus for it until another tab is active or the panel closes, so the user's focus stays where it
+    was. */
 export const createTerminalReveal = (input: {
   revealed: Accessor<TerminalReveal | undefined>
   active: Accessor<string | undefined>
   opened: Accessor<boolean>
   open: (revealed: TerminalReveal) => void
+  typing?: () => boolean
 }) => {
+  const typing = input.typing ?? (() => userTyping())
   createEffect(
     on(
       input.revealed,
@@ -151,7 +166,7 @@ export const createTerminalReveal = (input: {
     on(
       [input.revealed, input.active, input.opened],
       ([revealed, active, opened], previous, quiet: string | undefined) => {
-        if (revealed !== previous?.[0]) return revealed && !revealed.focus ? revealed.id : undefined
+        if (revealed !== previous?.[0]) return revealed && (!revealed.focus || typing()) ? revealed.id : undefined
         if (!opened) return undefined
         return quiet === active ? quiet : undefined
       },

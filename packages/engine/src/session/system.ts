@@ -372,7 +372,7 @@ const layer = Layer.effect(
           offered("browser") &&
             [
               "<browser_engineering_policy>",
-              "When the browser tool is available, it controls the same task-specific browser the user sees in Vector.",
+              "When the browser tool is available, it controls this task's own browser in Vector: the user sees it in Preview when Preview is open, and otherwise sees that you are using it, with a way to stop it. It closes when the conversation is deleted, and after it sits idle with Preview closed.",
               "For user-facing web changes, start the local preview in the terminal tool, or find one already running, open it in the browser, inspect DOM and console/network/runtime evidence, exercise the affected flow, repair failures, and retest before declaring the task complete.",
               "Prefer evidence from the running application over assumptions from source code alone.",
               "External websites require approval. Never enter credentials, one-time codes, card data, make purchases, send messages, or perform destructive remote actions; pause for the user at those boundaries.",
